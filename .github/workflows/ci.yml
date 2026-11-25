@@ -820,12 +820,16 @@ jobs:
       # parallel groups; workers remain at 1. Include platform-skipped tests
       # in the allocation even though their execution cost is negligible.
       #
-      # Fit 77:91:104:133 to the 405 collected tests on all three platforms.
-      # The input includes every platform skip and 216 complete groups;
-      # failed and interrupted measurement lanes are excluded.
-      # It minimizes the sum of each platform's longest modeled lane over
-      # all contiguous group allocations. See docs/desktop-e2e-shard-timings.md
-      # for current measurements, exclusions, and the reproducible fit.
+      # Fit 55:114:112:115 to the 396 collected tests on Linux and Windows.
+      # The input includes every platform skip and 209 complete groups from
+      # three main runs. Lane 1 holds only the first 55 a11y tests; the rest
+      # of a11y starts lane 2. Over all contiguous group allocations, the fit
+      # minimizes the largest share of a test budget used by either platform's
+      # longest modeled lane: 590s inside this step's 10-minute limit, and
+      # 800s inside the Windows job's 15 minutes. That keeps lane 1 under the
+      # limit on a runner 1.4x slower than the median. See
+      # docs/desktop-e2e-shard-timings.md for measurements and the
+      # reproducible fit.
       #
       # Linux and Windows share the four-lane allocation. macOS uses a
       # separate five-lane allocation to reduce job wall time.
@@ -886,7 +890,7 @@ jobs:
             [[ ${#tests[@]} -gt 0 ]]
           else
             # Lane sizes by test count; see the strategy comment above.
-            export PWTEST_SHARD_WEIGHTS="77:91:104:133"
+            export PWTEST_SHARD_WEIGHTS="55:114:112:115"
             tests=(--shard=${{ matrix.lane }}/4)
           fi
           xvfb-run --auto-servernum \
@@ -1401,7 +1405,7 @@ jobs:
         id: e2e-tests
         continue-on-error: true
         env:
-          PWTEST_SHARD_WEIGHTS: "77:91:104:133"
+          PWTEST_SHARD_WEIGHTS: "55:114:112:115"
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json

@@ -35,9 +35,13 @@ def summarize(groups, weights, platforms):
     }
 
 
-def fit(groups, platforms):
+def fit(groups, platforms, budgets=None):
     # Every distinct assignment is a partition at three group boundaries.
     # Using its collected test counts as weights reproduces that partition.
+    # Without budgets, minimize the sum of each platform's longest lane.
+    # With per-platform budgets in seconds, minimize the largest fraction of
+    # a budget any platform's longest lane uses, then that sum, so the
+    # platform with the tightest deadline gets the headroom.
     counts = [0]
     durations = [[0] for _ in platforms]
     for group in groups:
@@ -52,6 +56,8 @@ def fit(groups, platforms):
             for prefix in durations
         ]
         score = sum(maxima)
+        if budgets:
+            score = (max(seconds / budget for seconds, budget in zip(maxima, budgets)), score)
         if best is None or score < best[0]:
             best = (score, edges)
     if best is None:
@@ -64,6 +70,7 @@ def main():
     parser.add_argument("--data", type=Path, default=Path(__file__).resolve().parents[2] / "docs/desktop-e2e-shard-durations.json")
     parser.add_argument("--weights", default="9:12:12:14")
     parser.add_argument("--fit", action="store_true")
+    parser.add_argument("--budgets", help="per-platform test seconds available in each lane, colon-separated in data order")
     args = parser.parse_args()
     try:
         weights = [int(weight) for weight in args.weights.split(":")]
@@ -80,9 +87,17 @@ def main():
         for group in groups
     ):
         parser.error("data requires ordered nonempty groups with nonnegative durations for each platform")
+    budgets = None
+    if args.budgets:
+        try:
+            budgets = [float(budget) for budget in args.budgets.split(":")]
+            if len(budgets) != len(platforms) or min(budgets) <= 0:
+                raise ValueError()
+        except ValueError:
+            parser.error(f"--budgets requires {len(platforms)} positive numbers separated by colons")
     print(json.dumps(summarize(groups, weights, platforms), indent=2))
     if args.fit:
-        print(json.dumps(summarize(groups, fit(groups, platforms), platforms), indent=2))
+        print(json.dumps(summarize(groups, fit(groups, platforms, budgets), platforms), indent=2))
 
 
 if __name__ == "__main__":

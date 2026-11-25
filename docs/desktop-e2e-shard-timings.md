@@ -8,12 +8,90 @@ the worst observed setup, build, reporting, and other job overhead (3:14).
 The 20-minute job deadline gives slow runners additional time for retries,
 reporting, and cleanup. Each lane runs one Playwright worker.
 
-Linux and Windows share `77:91:104:133` across four lanes. Those weights were
-fit to 405 tests in 216 groups.
-See the [2026-11-18 timing refresh](desktop-e2e-shard-timing-refresh-2026-11-18.md)
-for native measurements, phase comparisons, source identities and coverage checks.
-The [November 18 fitter input](desktop-e2e-shard-durations.json) includes every test ID
-and platform skip from that refresh.
+Linux and Windows share `55:114:112:115` across four lanes, so a Windows-only
+failure is never an artifact of a different lane split. Those weights were fit
+to 396 tests in 209 groups; see [November 24 allocation](#november-24-allocation).
+The [current fitter input](desktop-e2e-shard-durations.json) includes every test ID,
+platform skip and per-run sample from that fit.
+The previous `77:91:104:133` allocation is described in the
+[2026-11-18 timing refresh](desktop-e2e-shard-timing-refresh-2026-11-18.md),
+with its [November 18 fitter input](desktop-e2e-shard-durations-2026-11-18.json).
+
+## November 24 allocation
+
+On main run [45525513730](https://github.com/pwrdrvr/PwrAgent/actions/runs/45525513730)
+attempt 1, Linux lane 1 passed all 78 of its tests, but Playwright took 9.8
+minutes and the step's 10-minute limit killed it. That job's runner was slow:
+each test took a median of about 1.4 times as long as on the other runs. The cause was
+structural. `77:91:104:133` put all 63 `a11y.spec.ts` tests and 15 other tests
+in lane 1, so lane 1 needed about 6.5 minutes on a normal runner. Lanes 2 to 4
+needed 4 to 6 minutes.
+
+`a11y.spec.ts` runs in `parallel` mode, so each of its tests is its own shard
+group. The new split ends lane 1 after the first 55 accessibility tests. Lane 2
+starts with the other 8. No test is removed, skipped or changed.
+
+### Measurements
+
+The input uses Playwright HTML reports from every Linux and Windows lane of
+three complete main runs. No E2E spec, Playwright configuration or patch
+changed between them:
+
+- [45517722507](https://github.com/pwrdrvr/PwrAgent/actions/runs/45517722507), commit `639472090`.
+- [45520142822](https://github.com/pwrdrvr/PwrAgent/actions/runs/45520142822), commit `1e3fea050`.
+- [45525513730](https://github.com/pwrdrvr/PwrAgent/actions/runs/45525513730) attempt 1, commit `7881915d8`.
+
+The killed Linux lane 1 still wrote a complete report, with 78 of 78 tests
+passing. It is included: its slow runner is the case this allocation must
+survive. Each group's `seconds` is the median of the three samples. The
+per-run sums are in `sampleSeconds`.
+
+Measured "Run desktop replay-backed Electron tests" step times, in minutes:
+
+| Run | Linux lane 1 / 2 / 3 / 4 | Windows lane 1 / 2 / 3 / 4 |
+| --- | --- | --- |
+| 45517722507 | 6:45 / 4:36 / 4:38 / 5:51 | 9:26 / 5:43 / 7:32 / 10:03 |
+| 45520142822 | 7:12 / 5:28 / 6:19 / 4:56 | 6:11 / 5:08 / 7:24 / 6:51 |
+| 45525513730 | 10:05 (killed) / 4:02 / 5:43 / 5:21 | 9:42 / 7:22 / 7:37 / 9:40 |
+
+### Fit
+
+The Linux step has a 10-minute limit. Windows has no step limit, but its job has
+a 15-minute limit. The fitter now accepts a test budget for each platform. It
+then minimizes the largest fraction of a budget that either platform's longest
+lane uses, instead of the sum of the maxima. The budgets are 590 seconds for
+Linux: 600 seconds minus about 10 seconds of step overhead. Windows gets 800
+seconds: 900 seconds minus about 100 seconds of setup, step and teardown
+overhead. Measured lane sums, in seconds:
+
+```sh
+python3 scripts/ci/fit-desktop-e2e-shards.py --weights 77:91:104:133 --budgets 590:800 --fit
+```
+
+| Allocation | Platform | Lane 1 / 2 / 3 / 4, medians | Longest lane |
+| --- | --- | --- | ---: |
+| `77:91:104:133` | Linux | 416.1 / 260.2 / 313.0 / 300.9 | 416.1 |
+| `55:114:112:115` | Linux | 341.5 / 341.1 / 344.5 / 263.3 | 344.5 |
+| `77:91:104:133` | Windows | 520.0 / 318.5 / 412.1 / 539.7 | 539.7 |
+| `55:114:112:115` | Windows | 408.0 / 437.8 / 470.9 / 473.6 | 473.6 |
+
+Applied to each run's own measurements, the new split's Linux lanes would have been:
+
+| Run | Old Linux lanes, seconds | New Linux lanes, seconds |
+| --- | --- | --- |
+| 45517722507 | 389 / 259 / 256 / 331 | 321 / 335 / 290 / 289 |
+| 45520142822 | 415 / 304 / 349 / 281 | 340 / 385 / 378 / 246 |
+| 45525513730 | 580 / 226 / 314 / 304 | 481 / 328 / 350 / 264 |
+
+On the slow runner, lane 1 would have needed 481 seconds of tests (8:01)
+instead of 580. A runner 1.4 times slower than the median, across the longest
+new Linux lane, needs 482 seconds. Four lanes cannot do much better: the median
+Linux test total is 1,310 seconds, so a perfect four-way split is 328 seconds
+per lane, or 459 seconds at 1.4 times.
+
+Optimizing for Linux alone (`48:110:102:136`) would bring the Linux maximum to
+330.8 seconds, but it would raise Windows' maximum to 573.5. Optimizing the
+old sum-of-maxima objective (`58:121:105:112`) would leave Linux at 358.7.
 
 ## November 4 allocation
 

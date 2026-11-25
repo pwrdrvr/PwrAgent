@@ -111,6 +111,13 @@ test("retry inventory, PR unit plans, and full test shards match their workflow 
     assert.match(section, /uses: \.\/\.github\/actions\/flake-slice/);
   }
   assert.match(workflow, /sample: \$\{\{ fromJSON\(contains\(github\.event\.pull_request\.labels\.\*\.name, 'ci:windows-shutdown-diagnostics'\) && '\[1, 2, 3\]' \|\| '\[1\]'\) \}\}/);
+  // Linux and Windows share one four-lane split, so a Windows-only failure
+  // is attributable to Windows rather than to a different lane assignment.
+  const linuxWeights = workflow.match(/export PWTEST_SHARD_WEIGHTS="([\d:]+)"/)?.[1];
+  const windowsSection = workflow.split("\n  windows-e2e:\n")[1];
+  const windowsWeights = windowsSection?.match(/PWTEST_SHARD_WEIGHTS: "([\d:]+)"/)?.[1];
+  assert.equal(linuxWeights?.split(":").length, 4, "Linux E2E weights must cover four lanes");
+  assert.equal(windowsWeights, linuxWeights, "Windows E2E must use the Linux lane weights");
 });
 
 test("the CLI produces a consolidated report including incomplete and absent slices", async () => {
