@@ -600,7 +600,7 @@ function observeStackAttachments(checkouts: ReadonlyMap<string, Checkout>, obser
 
 async function resolveAttachmentCheckouts(
   rows: readonly StackThreadRow[], checkouts: ReadonlyMap<string, Checkout>, clones: ReadonlyMap<string, Checkout>,
-  observation: StackReadObservation,
+  observation: StackReadObservation, lookup?: (cwd: string) => Promise<CheckoutLookup>,
 ): Promise<Map<string, CheckoutLookup>> {
   const { hints, inventoryDemand } = observation;
   const resolved = new Map<string, CheckoutLookup>();
@@ -632,9 +632,7 @@ async function resolveAttachmentCheckouts(
       const registered = physical && rosteredRoots.get(physical);
       if (registered) return [cwd, registered.checkout] as const;
     }
-    // An unrecognized or inconclusive filesystem result needs Git. Keep the
-    // fallback local to this projection so a retarget is observed on retry.
-    return [cwd, await locateCheckout(cwd, inventoryDemand)] as const;
+    return [cwd, await (lookup ? lookup(cwd) : locateCheckout(cwd, inventoryDemand))] as const;
   }, STACK_CHECKOUT_SCAN_LIMITS);
   for await (const [cwd, checkout] of scan) resolved.set(cwd, checkout);
   return resolved;
@@ -934,10 +932,11 @@ export class StackReader {
     const hasHints = options.hasHints !== false;
     const allowUnavailableCache = options.allowUnavailableCache === true;
     const budgetTtlRevalidation = options.budgetTtlRevalidation === true;
-    const ready = hasHints && useWorktreeInventory ? observation.readyWorktreeInventory(candidates[0]!) : undefined;
+    const nearest = candidates[0];
+    const ready = nearest && hasHints && useWorktreeInventory ? observation.readyWorktreeInventory(nearest) : undefined;
     const identity = hasHints && candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
     const before = identity && candidates.includes(identity.commonDir) ? identity : undefined;
-    const checkRegistration = hasHints && useWorktreeInventory && before?.registeredWorktree;
+    const checkRegistration = hasHints && useWorktreeInventory && before?.commonDir === nearest && before?.registeredWorktree;
     // If hints find a repository but cannot verify its checkout, the .git
     // marker alone cannot witness changes such as edits to config.worktree.
     const version = before?.version
@@ -1124,7 +1123,10 @@ export class StackReader {
       && (demand.priority?.() ?? PR_METADATA_PRIORITY.background) === PR_METADATA_PRIORITY.background) {
       for (const cwd of admitted) {
         const candidates = possible.get(cwd);
-        if (candidates?.length === 1) checkoutCounts.set(candidates[0]!, (checkoutCounts.get(candidates[0]!) ?? 0) + 1);
+        // Enclosing repositories remain possible if Git rejects the nearer
+        // marker, but only a matching registered checkout can use a roster.
+        const nearest = candidates?.[0];
+        if (nearest) checkoutCounts.set(nearest, (checkoutCounts.get(nearest) ?? 0) + 1);
       }
     }
     let retargetedHints: typeof hints | undefined;
@@ -1134,7 +1136,7 @@ export class StackReader {
       const candidates = possible.get(cwd)!;
       // A seed, config read and roster must save work even when the clone
       // has a primary checkout alongside its linked worktrees.
-      const useWorktreeInventory = candidates.length === 1 && (checkoutCounts.get(candidates[0]!) ?? 0) >= 5;
+      const useWorktreeInventory = (checkoutCounts.get(candidates[0]!) ?? 0) >= 5;
       const checkout = hinted.has(cwd)
         ? await this.readInventoryCheckout(cwd, observation, candidates, useWorktreeInventory, {
             allowUnavailableCache: backgroundNavigation,
@@ -1214,7 +1216,16 @@ export class StackReader {
       return { ...row, prs: await validateAttachments({ ...row, prs: row.prs }, attachments.demand) };
     })) : local;
     demand.signal?.throwIfAborted();
-    const attachmentCheckouts = await resolveAttachmentCheckouts(rows, checkouts, cloneCheckouts, observation);
+    // Installed Git still establishes each alias's own result. A corroborated
+    // background read can reuse it while that spelling and checkout match.
+    // Scoped evidence and retries observe the alias with Git again.
+    const lookupAttachment = backgroundNavigation && hints.installedGitVersion && !retried
+      ? async (cwd: string) => {
+        const candidates = await hints.possibleCommonDirs(cwd);
+        return candidates?.length ? await this.readInventoryCheckout(cwd, observation, candidates)
+          : await observation.checkoutLookup(cwd, inventoryDemand);
+      } : undefined;
+    const attachmentCheckouts = await resolveAttachmentCheckouts(rows, checkouts, cloneCheckouts, observation, lookupAttachment);
     // Scoped admission used the initial catalog. A change during discovery
     // requires fresh admission before projection can assert settlement.
     if (scopedClones.size && (await Promise.all(

@@ -6,6 +6,7 @@ import * as git from "../app-server/git-executable";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 import { clearGitHubRemoteCache, parseForgeRemote, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
+import { filterStoredDiscoveredPullRequests } from "../pr-status/pr-detection";
 import { PR_METADATA_PRIORITY } from "../pr-status/pr-metadata-process";
 import * as checkoutConfig from "../pr-status/pr-remote-heads";
 import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
@@ -35,6 +36,75 @@ async function ordinaryWorktrees() {
   }
   return { root, clone, checkouts };
 }
+
+it.skipIf(process.platform === "win32")("shares a conventional SSH origin's Git config while retaining SSH and action authority", async () => {
+  const { clone, checkouts } = await ordinaryWorktrees();
+  const sshOrigin = "git@fixture-alias:fixture/original.git";
+  await git.runGitCommand(clone, ["remote", "set-url", "origin", sshOrigin]);
+  const expected = await Promise.all(checkouts.map(async (cwd) => {
+    const remote = parseForgeRemote((await git.runGitCommand(cwd, ["remote", "get-url", "origin"])).stdout);
+    return { ...remote, host: "github.com" };
+  }));
+  const runner = vi.spyOn(git, "runGitCommand");
+  onTestFinished(() => { runner.mockRestore(); });
+
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  const resolveSshHostname = vi.fn(async () => "github.com");
+  const read = (cwd: string, fresh = false) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig, resolveSshHostname, fresh });
+  const configStarts = () => runner.mock.calls.filter(([, args, options]) =>
+    options?.purpose === "pr-remotes" && args[0] === "config");
+  expect(await Promise.all(checkouts.map((cwd) => read(cwd)))).toEqual(expected);
+  expect(resolveSshHostname).toHaveBeenCalledWith("fixture-alias");
+  // Checkout-independent config gets one Git sample. The raw SSH URL still
+  // goes through the same resolver that a per-checkout read would use.
+  expect(configStarts()).toHaveLength(1);
+
+  const [selected] = checkouts;
+  await git.runGitCommand(selected, ["config", "--worktree", `url.${editedOrigin}.insteadOf`, sshOrigin]);
+  const current = await git.runGitCommand(selected, ["remote", "get-url", "origin"]);
+  expect(parseForgeRemote(current.stdout)).toEqual(parseForgeRemote(editedOrigin));
+  expect(await read(selected, true)).toEqual(parseForgeRemote(current.stdout));
+  expect(configStarts()).toHaveLength(2);
+});
+
+it.skipIf(process.platform === "win32")("refreshes stored default branches without listing proved remote names again", async () => {
+  const { clone, checkouts } = await ordinaryWorktrees();
+  await git.runGitCommand(clone, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+  const epoch = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(epoch);
+  const runner = vi.spyOn(git, "runGitCommand");
+  onTestFinished(() => { clock.mockRestore(); runner.mockRestore(); });
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  await Promise.all(checkouts.map((cwd) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig })));
+  const attachments = checkouts.map((cwd, index) => ({
+    number: index + 1, provider: "github.com" as const, org: "fixture", repo: "original",
+    lifecycleState: "open" as const, state: "passing" as const,
+    url: `https://github.com/fixture/original/pull/${index + 1}`,
+    linkedDirectoryPaths: [cwd], headRefName: "topic",
+  }));
+  const read = () => filterStoredDiscoveredPullRequests(attachments);
+  const lists = () => runner.mock.calls.filter(([, args, options]) => options?.purpose === "pr-discovery" && args[0] === "remote");
+  expect(await read()).toEqual(attachments);
+
+  runner.mockClear();
+  clock.mockReturnValue(epoch + 62_000);
+  expect(await read()).toEqual(attachments);
+  expect(lists()).toHaveLength(0);
+
+  // Git's current default still governs expiry when remote names remain the
+  // same. A changed config must return name authority to native Git as well.
+  await git.runGitCommand(clone, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/topic"]);
+  expect((await git.runGitCommand(clone, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).stdout.trim()).toBe("origin/topic");
+  clock.mockReturnValue(epoch + 124_000);
+  expect(await read()).toEqual([]);
+  expect(lists()).toHaveLength(0);
+
+  await git.runGitCommand(clone, ["remote", "rename", "origin", "renamed"]);
+  await git.runGitCommand(clone, ["symbolic-ref", "refs/remotes/renamed/HEAD", "refs/remotes/renamed/main"]);
+  clock.mockReturnValue(epoch + 186_000);
+  expect(await read()).toEqual(attachments);
+  expect(lists()).toHaveLength(checkouts.length);
+});
 
 it.skipIf(process.platform === "win32").each(["common", "global", "worktree"] as const)(
   "keeps per-checkout Git authority when %s config changes during the seed read",

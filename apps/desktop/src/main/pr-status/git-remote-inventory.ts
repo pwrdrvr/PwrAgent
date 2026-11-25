@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { bundledGitLfsExecutable } from "../bundled-git";
-import { isGitConfigNoMatch, nextRemoteSampleOrder, parseForgeRemote, REMOTE_CONFIG_KEYS, type InventoryRemoteConfigReader } from "./git-remote";
+import { isGitConfigNoMatch, nextRemoteSampleOrder, parseForgeRemote, readSshHost, REMOTE_CONFIG_KEYS, type InventoryRemoteConfigReader } from "./git-remote";
 import type { GitRemoteConfiguration } from "./git-remote-config";
 import { parsePrConfigWithOrigins, readPrConfigInputs } from "./pr-config-observation";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
@@ -25,8 +25,10 @@ function shareableConfig(parsed: ReturnType<typeof parsePrConfigWithOrigins>, co
   const { configuration, sources, records } = parsed;
   const remote = configuration?.remotes[0];
   if (!sources?.localOrigins.has(path.join(commonDir, "config")) || configuration?.hasConditionalIncludes
-    || configuration?.remotes.length !== 1 || !remote?.url.startsWith("https://")
-    || remote.name !== "origin" || !parseForgeRemote(remote.url)) return undefined;
+    || configuration?.remotes.length !== 1 || remote?.name !== "origin"
+    || (!remote.url.startsWith("https://") && !readSshHost(remote.url)) || !parseForgeRemote(remote.url)) return undefined;
+  // Share the raw URL. Each lookup still resolves its SSH hostname through
+  // the same resolver used when the checkout supplies its own config.
   let ordinaryFormat = false;
   for (let i = 0; i < records.length; i += 2) {
     const record = records[i + 1];
@@ -85,8 +87,9 @@ async function sampleConfig(cwd: string, checkout: LinkedCheckout, inputs: NonNu
         return undefined;
       }
     };
-    const unchanged = async (reader: PrMetadataDemand) => {
-      const witness = await (watched ??= confirmIncludes(reader));
+    const unchanged = async (reader: PrMetadataDemand, confirm = true) => {
+      if (confirm) watched ??= confirmIncludes(reader);
+      const witness = await watched;
       if (!witness) return undefined;
       const [seed, config] = await Promise.all([checkout.unchanged(reader), witness.files.unchanged(reader)]);
       return seed && config && inputsUnchanged() ? witness.sampleOrder : undefined;
@@ -130,8 +133,13 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
       groups.set(checkout.commonDir, group);
     }
     const sample = await group.sample.read(demand);
-    if (group.seed === cwd) return sample?.exact;
     const verify = sample?.unchanged;
+    if (group.seed === cwd) {
+      return sample && verify ? {
+        ...sample.exact,
+        remoteNamesStillMatch: async (reader) => await verify(reader, false) !== undefined,
+      } : sample?.exact;
+    }
     if (!sample || !verify) return undefined;
     // The shared verification must start after this checkout was observed.
     // Recheck the checkout afterward so both proofs cover the same interval.
@@ -156,8 +164,11 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
       checking = current.checking = next;
     }
     const sampleOrder = await checking.result.read(demand);
-    return sampleOrder !== undefined && await checkout.unchanged()
-      ? { ...sample.exact, sampleOrder: Math.max(sampleOrder, observed.sampleOrder) }
-      : undefined;
+    if (sampleOrder === undefined || !await checkout.unchanged()) return undefined;
+    return {
+      ...sample.exact,
+      sampleOrder: Math.max(sampleOrder, observed.sampleOrder),
+      remoteNamesStillMatch: async (reader) => await verify(reader, false) !== undefined && await checkout.unchanged(reader) === true,
+    };
   };
 }
