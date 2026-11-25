@@ -96,8 +96,10 @@ const TESTING_LIBRARY_WRAPPER_PATTERN =
   /(?:^|\/)phase-probes(?:\.[cm]?[jt]sx?)?$/;
 
 const RENDER_NAMES = new Set(["render", "renderHook"]);
+const FC_RUNNER_METHODS = new Set(["assert", "check"]);
 
 const DIRECTIVE_COMMENT_PATTERN = /^(?:eslint|oxlint|@ts-)/i;
+const DYNAMIC_BINDING = Object.freeze({ kind: "dynamic" });
 
 function toPosixPath(value) {
   return value.replaceAll("\\", "/");
@@ -122,6 +124,42 @@ function walkAst(node, visitor) {
       walkAst(value, visitor);
     }
   }
+}
+
+function unwrapExpression(node) {
+  let current = node;
+  while (
+    current
+    && (current.type === "ParenthesizedExpression"
+      || current.type === "TSAsExpression"
+      || current.type === "TSSatisfiesExpression"
+      || current.type === "TSNonNullExpression"
+      || current.type === "TSTypeAssertion")
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function collectPatternIdentifiers(pattern, names = []) {
+  if (!pattern || typeof pattern !== "object") return names;
+  if (pattern.type === "Identifier") {
+    names.push(pattern.name);
+  } else if (pattern.type === "AssignmentPattern") {
+    collectPatternIdentifiers(pattern.left, names);
+  } else if (pattern.type === "RestElement") {
+    collectPatternIdentifiers(pattern.argument, names);
+  } else if (pattern.type === "ArrayPattern") {
+    for (const element of pattern.elements ?? []) {
+      collectPatternIdentifiers(element, names);
+    }
+  } else if (pattern.type === "ObjectPattern") {
+    for (const prop of pattern.properties ?? []) {
+      if (prop?.type === "RestElement") collectPatternIdentifiers(prop.argument, names);
+      else if (prop?.type === "Property") collectPatternIdentifiers(prop.value, names);
+    }
+  }
+  return names;
 }
 
 function computeLineStarts(source) {
@@ -155,20 +193,29 @@ function getPropertyKeyName(property) {
 }
 
 function isStringLiteral(node) {
-  return node?.type === "Literal" && typeof node.value === "string";
+  const unwrapped = unwrapExpression(node);
+  return unwrapped?.type === "Literal" && typeof unwrapped.value === "string";
+}
+
+function getStringLiteralValue(node) {
+  const unwrapped = unwrapExpression(node);
+  return unwrapped?.type === "Literal" && typeof unwrapped.value === "string"
+    ? unwrapped.value
+    : null;
 }
 
 function isGitCommandArg(argNode, callName) {
-  if (!argNode) return false;
-  if (isStringLiteral(argNode)) {
-    const text = argNode.value.trim();
+  const unwrapped = unwrapExpression(argNode);
+  if (!unwrapped) return false;
+  if (unwrapped.type === "Literal" && typeof unwrapped.value === "string") {
+    const text = unwrapped.value.trim();
     if (text === "git" || /(?:^|[\\/])git(?:\.exe)?$/i.test(text)) return true;
     if ((callName === "exec" || callName === "execSync") && /^git(?:\.exe)?\s/i.test(text)) {
       return true;
     }
   }
-  if (argNode.type === "TemplateLiteral" && argNode.quasis?.length > 0) {
-    const head = argNode.quasis[0]?.value?.raw ?? "";
+  if (unwrapped.type === "TemplateLiteral" && unwrapped.quasis?.length > 0) {
+    const head = unwrapped.quasis[0]?.value?.raw ?? "";
     if ((callName === "exec" || callName === "execSync") && /^\s*git(?:\.exe)?\s/i.test(head)) {
       return true;
     }
@@ -214,13 +261,14 @@ function hasAdjacentComment(source, comments, lineStarts, targets) {
       }
 
       // Immediately preceding comment (possibly part of a multi-line comment
-      // block) with no code tokens and no blank line between it and the target.
+      // block or followed by a directive comment) with no code tokens and no
+      // blank line in raw source between it and the target.
       if (comment.end <= target.start) {
         const between = source.slice(comment.end, target.start);
         const nonComment = between
           .replace(/\/\/[^\r\n]*/g, "")
           .replace(/\/\*[\s\S]*?\*\//g, "");
-        if (/^\s*$/.test(nonComment) && !/\r?\n[ \t]*\r?\n/.test(nonComment)) {
+        if (/^\s*$/.test(nonComment) && !/\r?\n[ \t]*\r?\n/.test(between)) {
           return true;
         }
       }
@@ -248,6 +296,7 @@ export function analyzePropertyBudgetSource(
     requireFastCheck
     && !source.includes("fast-check")
     && !source.includes("fc.assert")
+    && !source.includes("fc.check")
     && !source.includes("configureGlobal")
   ) {
     return { heavyFixtures: [], violations: [] };
@@ -258,7 +307,7 @@ export function analyzePropertyBudgetSource(
   const lineStarts = computeLineStarts(source);
 
   // 1. Collect vi.mock / vi.doMock mocked module specifiers so mocked
-  //    child_process or git modules are not mistaken for real subprocesses.
+  //    child_process, dugite, or StateDb modules are not mistaken for real ones.
   const mockedModules = new Set();
   walkAst(program, (node) => {
     if (
@@ -270,23 +319,36 @@ export function analyzePropertyBudgetSource(
       && (node.callee.property.name === "mock" || node.callee.property.name === "doMock")
       && isStringLiteral(node.arguments?.[0])
     ) {
-      mockedModules.add(node.arguments[0].value);
+      mockedModules.add(getStringLiteralValue(node.arguments[0]));
     }
   });
 
   const childProcessMocked =
     mockedModules.has("node:child_process") || mockedModules.has("child_process");
 
-  // 2. Collect fast-check bindings and heavy fixture signals from imports.
+  // 2. Collect fast-check bindings, mocked local bindings, child_process
+  //    bindings, and heavy fixture signals from imports.
   const heavyFixtures = new Set();
   const fcNamespaces = new Set(["fc"]);
-  const fcAssertFns = new Set();
+  const fcRunnerFns = new Set();
   const fcConfigureGlobalFns = new Set();
   const testingLibraryNamespaces = new Set();
+  const mockedLocalNames = new Set();
+  const childProcessNamespaces = new Set();
+  const childProcessCallLocalNames = new Map();
 
   for (const stmt of program.body ?? []) {
     if (stmt.type !== "ImportDeclaration" || stmt.importKind === "type") continue;
     const mod = stmt.source.value;
+    const isChildProcessMod = mod === "node:child_process" || mod === "child_process";
+    const isModMocked = mockedModules.has(mod) || (isChildProcessMod && childProcessMocked);
+
+    if (isModMocked) {
+      for (const spec of stmt.specifiers ?? []) {
+        if (spec.importKind === "type") continue;
+        if (spec.local?.name) mockedLocalNames.add(spec.local.name);
+      }
+    }
 
     if (mod === "fast-check") {
       for (const spec of stmt.specifiers ?? []) {
@@ -294,32 +356,43 @@ export function analyzePropertyBudgetSource(
         if (spec.type === "ImportDefaultSpecifier" || spec.type === "ImportNamespaceSpecifier") {
           fcNamespaces.add(spec.local.name);
         } else if (spec.type === "ImportSpecifier") {
-          if (spec.imported?.name === "assert") fcAssertFns.add(spec.local.name);
+          if (FC_RUNNER_METHODS.has(spec.imported?.name)) fcRunnerFns.add(spec.local.name);
           if (spec.imported?.name === "configureGlobal") fcConfigureGlobalFns.add(spec.local.name);
         }
       }
     }
 
-    if ((mod === "node:child_process" || mod === "child_process") && !childProcessMocked) {
+    if (isChildProcessMod && !isModMocked) {
       heavyFixtures.add("child_process");
+      for (const spec of stmt.specifiers ?? []) {
+        if (spec.importKind === "type") continue;
+        if (spec.type === "ImportDefaultSpecifier" || spec.type === "ImportNamespaceSpecifier") {
+          childProcessNamespaces.add(spec.local.name);
+        } else if (
+          spec.type === "ImportSpecifier"
+          && CHILD_PROCESS_CALL_NAMES.has(spec.imported?.name)
+        ) {
+          childProcessCallLocalNames.set(spec.local.name, spec.imported.name);
+        }
+      }
     }
-    if (mod === "dugite" && !mockedModules.has("dugite")) {
+    if (mod === "dugite" && !isModMocked) {
       heavyFixtures.add("git");
     }
-    if (mod === "better-sqlite3" && !mockedModules.has("better-sqlite3")) {
+    if (mod === "better-sqlite3" && !isModMocked) {
       heavyFixtures.add("state-db");
     }
-    if (GIT_FIXTURE_PATTERN.test(mod) && !mockedModules.has(mod)) {
+    if (GIT_FIXTURE_PATTERN.test(mod) && !isModMocked) {
       heavyFixtures.add("git");
     }
-    if (STATE_DB_HARNESS_PATTERN.test(mod) && !mockedModules.has(mod)) {
+    if (STATE_DB_HARNESS_PATTERN.test(mod) && !isModMocked) {
       heavyFixtures.add("state-db");
     }
-    if (CHILD_PROCESS_FIXTURE_PATTERN.test(mod) && !mockedModules.has(mod)) {
+    if (CHILD_PROCESS_FIXTURE_PATTERN.test(mod) && !isModMocked) {
       heavyFixtures.add("child_process");
     }
 
-    const isTl = isTestingLibraryModule(mod) && !mockedModules.has(mod);
+    const isTl = isTestingLibraryModule(mod) && !isModMocked;
     for (const spec of stmt.specifiers ?? []) {
       if (spec.importKind === "type") continue;
       const importedName =
@@ -328,10 +401,10 @@ export function analyzePropertyBudgetSource(
           : spec.type === "ImportDefaultSpecifier"
             ? "default"
             : "*";
-      if (importedName && STATE_DB_IMPORT_NAMES.has(importedName) && !mockedModules.has(mod)) {
+      if (importedName && STATE_DB_IMPORT_NAMES.has(importedName) && !isModMocked) {
         heavyFixtures.add("state-db");
       }
-      if (importedName && GIT_IMPORT_NAMES.has(importedName) && !mockedModules.has(mod)) {
+      if (importedName && GIT_IMPORT_NAMES.has(importedName) && !isModMocked) {
         heavyFixtures.add("git");
       }
       if (isTl) {
@@ -344,142 +417,229 @@ export function analyzePropertyBudgetSource(
     }
   }
 
-  // 3. Collect CommonJS require(...) imports, heavy calls, and const bindings.
-  const constNumbers = new Map();
-  const constObjects = new Map();
+  // 3. Collect CommonJS require(...) bindings, promisified child_process aliases,
+  //    and heavy call sites (respecting mocked modules and child_process receivers).
+  walkAst(program, (node) => {
+    if (node.type === "VariableDeclarator" && node.init) {
+      const init = unwrapExpression(node.init);
+      if (
+        init?.type === "CallExpression"
+        && init.callee?.type === "Identifier"
+        && init.callee.name === "require"
+        && isStringLiteral(init.arguments?.[0])
+      ) {
+        const mod = getStringLiteralValue(init.arguments[0]);
+        const isChildProcessMod = mod === "node:child_process" || mod === "child_process";
+        const isModMocked = mockedModules.has(mod) || (isChildProcessMod && childProcessMocked);
+
+        if (isModMocked) {
+          for (const name of collectPatternIdentifiers(node.id)) {
+            mockedLocalNames.add(name);
+          }
+          return;
+        }
+
+        if (mod === "fast-check") {
+          if (node.id?.type === "Identifier") {
+            fcNamespaces.add(node.id.name);
+          } else if (node.id?.type === "ObjectPattern") {
+            for (const prop of node.id.properties ?? []) {
+              if (prop.type !== "Property" || prop.value?.type !== "Identifier") continue;
+              const key = getPropertyKeyName(prop);
+              if (key && FC_RUNNER_METHODS.has(key)) fcRunnerFns.add(prop.value.name);
+              if (key === "configureGlobal") fcConfigureGlobalFns.add(prop.value.name);
+            }
+          }
+        }
+        if (isChildProcessMod) {
+          heavyFixtures.add("child_process");
+          if (node.id?.type === "Identifier") {
+            childProcessNamespaces.add(node.id.name);
+          } else if (node.id?.type === "ObjectPattern") {
+            for (const prop of node.id.properties ?? []) {
+              if (prop.type !== "Property" || prop.value?.type !== "Identifier") continue;
+              const key = getPropertyKeyName(prop);
+              if (key && CHILD_PROCESS_CALL_NAMES.has(key)) {
+                childProcessCallLocalNames.set(prop.value.name, key);
+              }
+            }
+          }
+        }
+        if (mod === "dugite") heavyFixtures.add("git");
+        if (mod === "better-sqlite3") heavyFixtures.add("state-db");
+        if (isTestingLibraryModule(mod)) {
+          if (node.id?.type === "Identifier") {
+            testingLibraryNamespaces.add(node.id.name);
+          } else if (node.id?.type === "ObjectPattern") {
+            for (const prop of node.id.properties ?? []) {
+              const key = getPropertyKeyName(prop);
+              if (key && RENDER_NAMES.has(key)) heavyFixtures.add("testing-library");
+            }
+          }
+        }
+        return;
+      }
+
+      // Track promisify(execFile) / promisify(cp.execFile) wrappers.
+      if (
+        node.id?.type === "Identifier"
+        && init?.type === "CallExpression"
+        && init.callee?.type === "Identifier"
+        && init.callee.name === "promisify"
+      ) {
+        const target = unwrapExpression(init.arguments?.[0]);
+        if (target?.type === "Identifier" && childProcessCallLocalNames.has(target.name)) {
+          childProcessCallLocalNames.set(node.id.name, childProcessCallLocalNames.get(target.name));
+        } else if (
+          target?.type === "MemberExpression"
+          && target.object?.type === "Identifier"
+          && childProcessNamespaces.has(target.object.name)
+          && target.property?.type === "Identifier"
+          && CHILD_PROCESS_CALL_NAMES.has(target.property.name)
+        ) {
+          childProcessCallLocalNames.set(node.id.name, target.property.name);
+        }
+      }
+    }
+  });
+
+  walkAst(program, (node) => {
+    if (
+      node.type === "NewExpression"
+      && node.callee?.type === "Identifier"
+      && node.callee.name === "StateDb"
+      && !mockedLocalNames.has("StateDb")
+    ) {
+      heavyFixtures.add("state-db");
+    }
+
+    if (node.type === "CallExpression") {
+      const callee = unwrapExpression(node.callee);
+      if (
+        callee?.type === "MemberExpression"
+        && callee.object?.type === "Identifier"
+        && callee.property?.type === "Identifier"
+      ) {
+        const objName = callee.object.name;
+        const propName = callee.property.name;
+        if (!mockedLocalNames.has(objName)) {
+          if (objName === "StateDb" && propName === "open") {
+            heavyFixtures.add("state-db");
+          }
+          if (objName === "GitProcess" && propName === "exec") {
+            heavyFixtures.add("git");
+          }
+          if (testingLibraryNamespaces.has(objName) && RENDER_NAMES.has(propName)) {
+            heavyFixtures.add("testing-library");
+          }
+          if (
+            childProcessNamespaces.has(objName)
+            && CHILD_PROCESS_CALL_NAMES.has(propName)
+            && isGitCommandArg(node.arguments?.[0], propName)
+          ) {
+            heavyFixtures.add("git");
+          }
+          if (STATE_DB_CALL_NAMES.has(propName)) heavyFixtures.add("state-db");
+          if (GIT_CALL_NAMES.has(propName)) heavyFixtures.add("git");
+        }
+      } else if (callee?.type === "Identifier" && !mockedLocalNames.has(callee.name)) {
+        const callName = callee.name;
+        if (STATE_DB_CALL_NAMES.has(callName)) heavyFixtures.add("state-db");
+        if (GIT_CALL_NAMES.has(callName)) heavyFixtures.add("git");
+        const childCallKind = childProcessCallLocalNames.get(callName);
+        if (childCallKind && isGitCommandArg(node.arguments?.[0], childCallKind)) {
+          heavyFixtures.add("git");
+        }
+      }
+    }
+  });
+
+  // 4. Single lexically scoped AST traversal to resolve const numbers/objects
+  //    and inspect every fc.assert(...), fc.check(...), and fc.configureGlobal(...) call.
+  const sortedHeavyFixtures = [...heavyFixtures].sort();
+  const violations = [];
+  const scopeStack = [];
+
+  function lookupBinding(name) {
+    for (let index = scopeStack.length - 1; index >= 0; index -= 1) {
+      if (scopeStack[index].has(name)) return scopeStack[index].get(name);
+    }
+    return null;
+  }
 
   function evaluateStaticNumber(node) {
-    if (!node) return null;
-    if (node.type === "Literal" && typeof node.value === "number" && Number.isFinite(node.value)) {
-      return node.value;
+    const unwrapped = unwrapExpression(node);
+    if (!unwrapped) return null;
+    if (unwrapped.type === "Literal" && typeof unwrapped.value === "number" && Number.isFinite(unwrapped.value)) {
+      return unwrapped.value;
     }
-    if (node.type === "Identifier" && constNumbers.has(node.name)) {
-      return constNumbers.get(node.name).value;
+    if (unwrapped.type === "Identifier") {
+      const binding = lookupBinding(unwrapped.name);
+      return binding?.kind === "number" ? binding.value : null;
     }
-    if (node.type === "UnaryExpression" && (node.operator === "+" || node.operator === "-")) {
-      const inner = evaluateStaticNumber(node.argument);
-      return inner === null ? null : (node.operator === "-" ? -inner : inner);
+    if (unwrapped.type === "UnaryExpression" && (unwrapped.operator === "+" || unwrapped.operator === "-")) {
+      const inner = evaluateStaticNumber(unwrapped.argument);
+      return inner === null ? null : (unwrapped.operator === "-" ? -inner : inner);
     }
-    if (node.type === "BinaryExpression") {
-      const left = evaluateStaticNumber(node.left);
-      const right = evaluateStaticNumber(node.right);
+    if (unwrapped.type === "BinaryExpression") {
+      const left = evaluateStaticNumber(unwrapped.left);
+      const right = evaluateStaticNumber(unwrapped.right);
       if (left === null || right === null) return null;
-      if (node.operator === "+") return left + right;
-      if (node.operator === "-") return left - right;
-      if (node.operator === "*") return left * right;
-      if (node.operator === "/" && right !== 0) return left / right;
+      if (unwrapped.operator === "+") return left + right;
+      if (unwrapped.operator === "-") return left - right;
+      if (unwrapped.operator === "*") return left * right;
+      if (unwrapped.operator === "/" && right !== 0) return left / right;
       return null;
     }
-    if (node.type === "ConditionalExpression") {
-      const cons = evaluateStaticNumber(node.consequent);
-      const alt = evaluateStaticNumber(node.alternate);
+    if (unwrapped.type === "ConditionalExpression") {
+      const cons = evaluateStaticNumber(unwrapped.consequent);
+      const alt = evaluateStaticNumber(unwrapped.alternate);
       if (cons !== null && alt !== null) return Math.max(cons, alt);
       return null;
     }
     return null;
   }
 
-  walkAst(program, (node) => {
-    if (node.type === "VariableDeclaration" && node.kind === "const") {
-      for (const decl of node.declarations ?? []) {
-        if (!decl.init) continue;
-        // Handle require("...") bindings.
-        if (
-          decl.init.type === "CallExpression"
-          && decl.init.callee?.type === "Identifier"
-          && decl.init.callee.name === "require"
-          && isStringLiteral(decl.init.arguments?.[0])
-        ) {
-          const mod = decl.init.arguments[0].value;
-          if (mod === "fast-check") {
-            if (decl.id?.type === "Identifier") {
-              fcNamespaces.add(decl.id.name);
-            } else if (decl.id?.type === "ObjectPattern") {
-              for (const prop of decl.id.properties ?? []) {
-                if (prop.type !== "Property" || prop.value?.type !== "Identifier") continue;
-                const key = getPropertyKeyName(prop);
-                if (key === "assert") fcAssertFns.add(prop.value.name);
-                if (key === "configureGlobal") fcConfigureGlobalFns.add(prop.value.name);
-              }
-            }
-          }
-          if ((mod === "node:child_process" || mod === "child_process") && !childProcessMocked) {
-            heavyFixtures.add("child_process");
-          }
-          if (mod === "dugite" && !mockedModules.has("dugite")) {
-            heavyFixtures.add("git");
-          }
-          if (mod === "better-sqlite3" && !mockedModules.has("better-sqlite3")) {
-            heavyFixtures.add("state-db");
-          }
-          if (isTestingLibraryModule(mod) && !mockedModules.has(mod)) {
-            if (decl.id?.type === "Identifier") {
-              testingLibraryNamespaces.add(decl.id.name);
-            } else if (decl.id?.type === "ObjectPattern") {
-              for (const prop of decl.id.properties ?? []) {
-                const key = getPropertyKeyName(prop);
-                if (key && RENDER_NAMES.has(key)) heavyFixtures.add("testing-library");
-              }
-            }
-          }
-          continue;
+  function registerVariableDeclaration(varDecl, scope) {
+    const isConst = varDecl.kind === "const";
+    for (const decl of varDecl.declarations ?? []) {
+      if (isConst && decl.id?.type === "Identifier" && decl.init) {
+        const unwrappedInit = unwrapExpression(decl.init);
+        const num = evaluateStaticNumber(unwrappedInit);
+        if (num !== null) {
+          scope.set(decl.id.name, { kind: "number", value: num, declNode: varDecl });
+        } else if (unwrappedInit?.type === "ObjectExpression") {
+          scope.set(decl.id.name, { kind: "object", objectNode: unwrappedInit, declNode: varDecl });
+        } else {
+          scope.set(decl.id.name, DYNAMIC_BINDING);
         }
-
-        if (decl.id?.type === "Identifier") {
-          const num = evaluateStaticNumber(decl.init);
-          if (num !== null) {
-            constNumbers.set(decl.id.name, { value: num, declNode: node });
-          } else if (decl.init.type === "ObjectExpression") {
-            constObjects.set(decl.id.name, { objectNode: decl.init, declNode: node });
-          }
+      } else {
+        for (const name of collectPatternIdentifiers(decl.id)) {
+          scope.set(name, DYNAMIC_BINDING);
         }
       }
     }
+  }
 
-    if (node.type === "NewExpression" && node.callee?.type === "Identifier" && node.callee.name === "StateDb") {
-      heavyFixtures.add("state-db");
-    }
-
-    if (node.type === "CallExpression") {
-      const callee = node.callee;
-      if (
-        callee?.type === "MemberExpression"
-        && callee.object?.type === "Identifier"
-        && callee.property?.type === "Identifier"
+  function prebindStatements(statements, scope) {
+    for (const stmt of statements ?? []) {
+      if (!stmt) continue;
+      if (stmt.type === "VariableDeclaration") {
+        registerVariableDeclaration(stmt, scope);
+      } else if (stmt.type === "ExportNamedDeclaration" && stmt.declaration) {
+        if (stmt.declaration.type === "VariableDeclaration") {
+          registerVariableDeclaration(stmt.declaration, scope);
+        } else if (stmt.declaration.id?.type === "Identifier") {
+          scope.set(stmt.declaration.id.name, DYNAMIC_BINDING);
+        }
+      } else if (
+        (stmt.type === "FunctionDeclaration" || stmt.type === "ClassDeclaration")
+        && stmt.id?.type === "Identifier"
       ) {
-        if (callee.object.name === "StateDb" && callee.property.name === "open") {
-          heavyFixtures.add("state-db");
-        }
-        if (callee.object.name === "GitProcess" && callee.property.name === "exec") {
-          heavyFixtures.add("git");
-        }
-        if (
-          testingLibraryNamespaces.has(callee.object.name)
-          && RENDER_NAMES.has(callee.property.name)
-        ) {
-          heavyFixtures.add("testing-library");
-        }
-      }
-
-      const callName =
-        callee?.type === "Identifier"
-          ? callee.name
-          : callee?.type === "MemberExpression" && callee.property?.type === "Identifier"
-            ? callee.property.name
-            : null;
-      if (callName) {
-        if (STATE_DB_CALL_NAMES.has(callName)) heavyFixtures.add("state-db");
-        if (GIT_CALL_NAMES.has(callName)) heavyFixtures.add("git");
-        if (
-          CHILD_PROCESS_CALL_NAMES.has(callName)
-          && !childProcessMocked
-          && isGitCommandArg(node.arguments?.[0], callName)
-        ) {
-          heavyFixtures.add("git");
-        }
+        scope.set(stmt.id.name, DYNAMIC_BINDING);
       }
     }
-  });
+  }
 
   function extractNumRunsFromObject(objectNode, inheritedDeclNode = null, seen = new Set()) {
     if (!objectNode || seen.has(objectNode)) {
@@ -490,21 +650,31 @@ export function analyzePropertyBudgetSource(
     let result = { kind: "missing", value: null, numRunsProp: null, declNode: inheritedDeclNode };
     for (const prop of objectNode.properties ?? []) {
       if (prop.type === "SpreadElement") {
-        if (prop.argument?.type === "Identifier" && constObjects.has(prop.argument.name)) {
-          const entry = constObjects.get(prop.argument.name);
-          const spreadResult = extractNumRunsFromObject(entry.objectNode, entry.declNode, seen);
+        const spreadArg = unwrapExpression(prop.argument);
+        if (spreadArg?.type === "ObjectExpression") {
+          const spreadResult = extractNumRunsFromObject(spreadArg, inheritedDeclNode, seen);
           if (spreadResult.kind !== "missing") result = spreadResult;
+        } else if (spreadArg?.type === "Identifier") {
+          const binding = lookupBinding(spreadArg.name);
+          if (binding?.kind === "object") {
+            const spreadResult = extractNumRunsFromObject(binding.objectNode, binding.declNode, seen);
+            if (spreadResult.kind !== "missing") result = spreadResult;
+          } else {
+            result = { kind: "dynamic", value: null, numRunsProp: prop, declNode: inheritedDeclNode };
+          }
         } else {
           result = { kind: "dynamic", value: null, numRunsProp: prop, declNode: inheritedDeclNode };
         }
         continue;
       }
       if (prop.type === "Property" && getPropertyKeyName(prop) === "numRuns") {
-        const val = evaluateStaticNumber(prop.value);
-        const valueDecl =
-          prop.value?.type === "Identifier" && constNumbers.has(prop.value.name)
-            ? constNumbers.get(prop.value.name).declNode
-            : inheritedDeclNode;
+        const unwrappedVal = unwrapExpression(prop.value);
+        const val = evaluateStaticNumber(unwrappedVal);
+        let valueDecl = inheritedDeclNode;
+        if (unwrappedVal?.type === "Identifier") {
+          const binding = lookupBinding(unwrappedVal.name);
+          if (binding?.kind === "number") valueDecl = binding.declNode;
+        }
         if (val !== null) {
           result = { kind: "static", value: val, numRunsProp: prop, declNode: valueDecl };
         } else {
@@ -520,40 +690,38 @@ export function analyzePropertyBudgetSource(
       if (isConfigureGlobal) return { kind: "missing", value: null, numRunsProp: null, declNode: null };
       return { kind: "default", value: DEFAULT_NUM_RUNS, numRunsProp: null, declNode: null };
     }
-    if (optionsArg.type === "ObjectExpression") {
-      const extracted = extractNumRunsFromObject(optionsArg);
+    const unwrappedArg = unwrapExpression(optionsArg);
+    if (unwrappedArg?.type === "ObjectExpression") {
+      const extracted = extractNumRunsFromObject(unwrappedArg);
       if (extracted.kind === "missing") {
         if (isConfigureGlobal) return extracted;
         return { kind: "default", value: DEFAULT_NUM_RUNS, numRunsProp: null, declNode: null };
       }
       return extracted;
     }
-    if (optionsArg.type === "Identifier" && constObjects.has(optionsArg.name)) {
-      const entry = constObjects.get(optionsArg.name);
-      const extracted = extractNumRunsFromObject(entry.objectNode, entry.declNode);
-      if (extracted.kind === "missing") {
-        if (isConfigureGlobal) return extracted;
-        return { kind: "default", value: DEFAULT_NUM_RUNS, numRunsProp: null, declNode: entry.declNode };
+    if (unwrappedArg?.type === "Identifier") {
+      const binding = lookupBinding(unwrappedArg.name);
+      if (binding?.kind === "object") {
+        const extracted = extractNumRunsFromObject(binding.objectNode, binding.declNode);
+        if (extracted.kind === "missing") {
+          if (isConfigureGlobal) return extracted;
+          return { kind: "default", value: DEFAULT_NUM_RUNS, numRunsProp: null, declNode: binding.declNode };
+        }
+        return extracted;
       }
-      return extracted;
     }
     return { kind: "dynamic", value: null, numRunsProp: null, declNode: null };
   }
 
-  // 4. Inspect every fc.assert(...) and fc.configureGlobal(...) call.
-  const sortedHeavyFixtures = [...heavyFixtures].sort();
-  const violations = [];
-
-  walkAst(program, (node) => {
-    if (node.type !== "CallExpression") return;
-    const callee = node.callee;
-    const isFcAssert =
+  function inspectCallExpression(node) {
+    const callee = unwrapExpression(node.callee);
+    const isFcRunner =
       (callee?.type === "MemberExpression"
         && callee.object?.type === "Identifier"
         && fcNamespaces.has(callee.object.name)
         && callee.property?.type === "Identifier"
-        && callee.property.name === "assert")
-      || (callee?.type === "Identifier" && fcAssertFns.has(callee.name));
+        && FC_RUNNER_METHODS.has(callee.property.name))
+      || (callee?.type === "Identifier" && fcRunnerFns.has(callee.name));
 
     const isFcConfigureGlobal =
       (callee?.type === "MemberExpression"
@@ -563,7 +731,7 @@ export function analyzePropertyBudgetSource(
         && callee.property.name === "configureGlobal")
       || (callee?.type === "Identifier" && fcConfigureGlobalFns.has(callee.name));
 
-    if (!isFcAssert && !isFcConfigureGlobal) return;
+    if (!isFcRunner && !isFcConfigureGlobal) return;
 
     const optionsArg = isFcConfigureGlobal ? node.arguments?.[0] : node.arguments?.[1];
     const info = inspectOptionsArg(optionsArg, isFcConfigureGlobal);
@@ -587,7 +755,13 @@ export function analyzePropertyBudgetSource(
     }
 
     if (info.kind === "static" && info.value > HIGH_NUM_RUNS_COMMENT_THRESHOLD) {
-      const commentTargets = [info.numRunsProp, optionsArg, info.declNode].filter(Boolean);
+      const unwrappedOptions = optionsArg ? unwrapExpression(optionsArg) : null;
+      const commentTargets = [
+        info.numRunsProp,
+        optionsArg,
+        unwrappedOptions !== optionsArg ? unwrappedOptions : null,
+        info.declNode,
+      ].filter(Boolean);
       if (!hasAdjacentComment(source, comments, lineStarts, commentTargets)) {
         violations.push({
           rule: RULE_HIGH_NUM_RUNS_COMMENT,
@@ -598,7 +772,105 @@ export function analyzePropertyBudgetSource(
         });
       }
     }
-  });
+  }
+
+  function visitChildren(node) {
+    for (const key of Object.keys(node)) {
+      if (key === "start" || key === "end" || key === "type") continue;
+      const value = node[key];
+      if (Array.isArray(value)) {
+        for (const item of value) visitScoped(item);
+      } else if (value && typeof value === "object" && typeof value.type === "string") {
+        visitScoped(value);
+      }
+    }
+  }
+
+  function visitScoped(node) {
+    if (!node || typeof node !== "object") return;
+
+    if (node.type === "Program" || node.type === "BlockStatement") {
+      const scope = new Map();
+      scopeStack.push(scope);
+      prebindStatements(node.body, scope);
+      for (const stmt of node.body ?? []) visitScoped(stmt);
+      scopeStack.pop();
+      return;
+    }
+
+    if (
+      node.type === "FunctionDeclaration"
+      || node.type === "FunctionExpression"
+      || node.type === "ArrowFunctionExpression"
+    ) {
+      const scope = new Map();
+      if (node.type === "FunctionExpression" && node.id?.type === "Identifier") {
+        scope.set(node.id.name, DYNAMIC_BINDING);
+      }
+      for (const param of node.params ?? []) {
+        for (const name of collectPatternIdentifiers(param)) {
+          scope.set(name, DYNAMIC_BINDING);
+        }
+      }
+      scopeStack.push(scope);
+      for (const param of node.params ?? []) visitScoped(param);
+      visitScoped(node.body);
+      scopeStack.pop();
+      return;
+    }
+
+    if (node.type === "CatchClause") {
+      const scope = new Map();
+      for (const name of collectPatternIdentifiers(node.param)) {
+        scope.set(name, DYNAMIC_BINDING);
+      }
+      scopeStack.push(scope);
+      if (node.param) visitScoped(node.param);
+      visitScoped(node.body);
+      scopeStack.pop();
+      return;
+    }
+
+    if (
+      node.type === "ForStatement"
+      || node.type === "ForInStatement"
+      || node.type === "ForOfStatement"
+    ) {
+      const scope = new Map();
+      if (node.type === "ForStatement" && node.init?.type === "VariableDeclaration") {
+        registerVariableDeclaration(node.init, scope);
+      } else if (
+        (node.type === "ForInStatement" || node.type === "ForOfStatement")
+        && node.left?.type === "VariableDeclaration"
+      ) {
+        registerVariableDeclaration(node.left, scope);
+      }
+      scopeStack.push(scope);
+      visitChildren(node);
+      scopeStack.pop();
+      return;
+    }
+
+    if (node.type === "SwitchStatement") {
+      visitScoped(node.discriminant);
+      const scope = new Map();
+      scopeStack.push(scope);
+      for (const switchCase of node.cases ?? []) {
+        prebindStatements(switchCase.consequent, scope);
+      }
+      for (const switchCase of node.cases ?? []) visitScoped(switchCase);
+      scopeStack.pop();
+      return;
+    }
+
+    if (node.type === "CallExpression") {
+      inspectCallExpression(node);
+    }
+
+    visitChildren(node);
+  }
+
+  visitScoped(program);
 
   return { heavyFixtures: sortedHeavyFixtures, violations };
 }
@@ -797,10 +1069,10 @@ function formatEvaluationFailure(evaluation) {
   lines.push("");
   lines.push("RULES (docs/property-model-oracle-testing.md#what-to-check-in):");
   lines.push(
-    `- Tests using real git, StateDb, child_process, or @testing-library rendering must keep fc.assert numRuns <= ${HEAVY_FIXTURE_MAX_NUM_RUNS} (never left at the default 100). Move the property onto pure in-memory code and keep 1-3 named examples on the real fixture.`,
+    `- Tests using real git, StateDb, child_process, or @testing-library rendering must keep fc.assert/fc.check numRuns <= ${HEAVY_FIXTURE_MAX_NUM_RUNS} (never left at the default 100). Move the property onto pure in-memory code and keep 1-3 named examples on the real fixture.`,
   );
   lines.push(
-    `- Any fc.assert with numRuns > ${HIGH_NUM_RUNS_COMMENT_THRESHOLD} must have an adjacent comment on or directly above numRuns (or its options object) naming the bug that required it.`,
+    `- Any fc.assert/fc.check with numRuns > ${HIGH_NUM_RUNS_COMMENT_THRESHOLD} must have an adjacent comment on or directly above numRuns (or its options object) naming the bug that required it.`,
   );
   lines.push("- Existing violations in scripts/property-budget-baseline.json may only shrink.");
   lines.push("");

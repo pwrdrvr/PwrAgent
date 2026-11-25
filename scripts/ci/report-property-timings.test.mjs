@@ -83,9 +83,10 @@ describe("report-property-timings", () => {
     expect(detectHeavyFixturesLightweight('import { render } from "@testing-library/react";')).toEqual(["testing-library"]);
     expect(detectHeavyFixturesLightweight('import { execFileSync } from "node:child_process"; execFileSync("git", ["status"]);')).toEqual(["child_process", "git"]);
     expect(detectHeavyFixturesLightweight('import { execFileSync } from "node:child_process"; vi.mock("node:child_process");')).toEqual([]);
+    expect(detectHeavyFixturesLightweight('const match = /^git\\s+/.exec("git status");')).toEqual([]);
   });
 
-  it("discovers both flat and per-lane downloaded timing files and formats empty runs cleanly", () => {
+  it("discovers both flat and per-lane downloaded timing files and surfaces parse warnings even when all fail", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "property-timings-"));
     try {
       mkdirSync(path.join(dir, "macos-unit-timings-lane-1"), { recursive: true });
@@ -102,5 +103,12 @@ describe("report-property-timings", () => {
       { reportFilesCount: 0 },
     );
     expect(emptyMd).toContain("No `macos-unit-results.json` timing artifacts were found");
+
+    const parseFailedMd = formatPropertyTimingsMarkdown(
+      { totalPropertyFiles: 0, totalPropertyMs: 0, overBudget: [] },
+      { reportFilesCount: 0, warnings: ["macos-unit-timings-lane-1: Unexpected end of JSON input"] },
+    );
+    expect(parseFailedMd).toContain("none could be parsed");
+    expect(parseFailedMd).toContain("Warnings (1): macos-unit-timings-lane-1: Unexpected end of JSON input");
   });
 });

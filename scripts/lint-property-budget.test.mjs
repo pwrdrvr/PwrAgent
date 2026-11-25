@@ -202,6 +202,125 @@ describe("analyzePropertyBudgetSource", () => {
       RULE_HIGH_NUM_RUNS_COMMENT,
     ]);
   });
+
+  it("scopes const numbers and objects lexically and masks outer constants on shadowing", () => {
+    const source = [
+      'import fc from "fast-check";',
+      'import { openInMemoryStateDb } from "./sqlite-test-utils";',
+      "void openInMemoryStateDb;",
+      "const RUNS = 5;",
+      'it("earlier high runs is not hidden by a later local const", () => {',
+      "  const runs = 500;",
+      "  fc.assert(fc.property(fc.integer(), () => true), { numRuns: runs });",
+      "});",
+      'it("compliant local options object is not clobbered by a later unrelated options", () => {',
+      "  const options = { numRuns: 5 };",
+      "  fc.assert(fc.property(fc.integer(), () => true), options);",
+      "});",
+      'it("later unrelated local declarations", () => {',
+      "  const runs = 5;",
+      "  const options = { cwd: '/tmp' };",
+      "  void runs; void options;",
+      "});",
+      'it("parameter shadows outer static const as dynamic", (RUNS) => {',
+      "  fc.assert(fc.property(fc.integer(), () => true), { numRuns: RUNS });",
+      "});",
+      'it("inner dynamic const shadows outer static const as dynamic", () => {',
+      "  const RUNS = Number(process.env.RUNS ?? 10);",
+      "  fc.assert(fc.property(fc.integer(), () => true), { numRuns: RUNS });",
+      "});",
+    ].join("\n");
+
+    const result = analyzePropertyBudgetSource("scoped.property.test.ts", source);
+    expect(result.violations.map((v) => [v.rule, v.numRunsKind, v.numRuns])).toEqual([
+      [RULE_HEAVY_FIXTURE, "static", 500],
+      [RULE_HIGH_NUM_RUNS_COMMENT, "static", 500],
+      [RULE_HEAVY_FIXTURE, "dynamic", null],
+      [RULE_HEAVY_FIXTURE, "dynamic", null],
+    ]);
+  });
+
+  it("unwraps TypeScript assertions and parenthesized expressions when evaluating numRuns", () => {
+    const failing = [
+      'import fc from "fast-check";',
+      "fc.assert(fc.property(fc.integer(), () => true), { numRuns: 500 } as const);",
+      "fc.assert(fc.property(fc.integer(), () => true), { numRuns: (250) } satisfies { numRuns: number });",
+    ].join("\n");
+    const failingResult = analyzePropertyBudgetSource("ts-unwrap-fail.property.test.ts", failing);
+    expect(failingResult.violations.map((v) => [v.rule, v.numRuns])).toEqual([
+      [RULE_HIGH_NUM_RUNS_COMMENT, 500],
+      [RULE_HIGH_NUM_RUNS_COMMENT, 250],
+    ]);
+
+    const passing = [
+      'import fc from "fast-check";',
+      'import { openInMemoryStateDb } from "./sqlite-test-utils";',
+      "void openInMemoryStateDb;",
+      "const OPTS = ({ numRuns: (2 + 3) as number } as const) satisfies { numRuns: number };",
+      "fc.assert(fc.property(fc.integer(), () => true), OPTS);",
+      "fc.assert(fc.property(fc.integer(), () => true), { ...OPTS } as const);",
+    ].join("\n");
+    const passingResult = analyzePropertyBudgetSource("ts-unwrap-pass.property.test.ts", passing);
+    expect(passingResult.heavyFixtures).toEqual(["state-db"]);
+    expect(passingResult.violations).toEqual([]);
+  });
+
+  it("does not misclassify non-child_process .exec calls or mocked dugite/StateDb modules as heavy", () => {
+    const source = [
+      'import fc from "fast-check";',
+      'import { GitProcess } from "dugite";',
+      'import { StateDb } from "../state/state-db";',
+      'import { openInMemoryStateDb } from "./sqlite-test-utils";',
+      'import { vi } from "vitest";',
+      'vi.mock("dugite", () => ({ GitProcess: { exec: vi.fn() } }));',
+      'vi.mock("../state/state-db", () => ({ StateDb: Object.assign(vi.fn(), { open: vi.fn() }) }));',
+      'vi.mock("./sqlite-test-utils", () => ({ openInMemoryStateDb: vi.fn() }));',
+      'const mockRunner = { exec: (cmd: string) => cmd };',
+      'const match = /^git\\s+/.exec("git status");',
+      'mockRunner.exec("git status");',
+      'GitProcess.exec(["status"], "/tmp");',
+      'StateDb.open(":memory:");',
+      'new StateDb(":memory:");',
+      'openInMemoryStateDb();',
+      "fc.assert(fc.property(fc.integer(), () => Boolean(match)));",
+    ].join("\n");
+
+    const result = analyzePropertyBudgetSource("mocked-and-regex.property.test.ts", source);
+    expect(result.heavyFixtures).toEqual([]);
+    expect(result.violations).toEqual([]);
+  });
+
+  it("inspects fc.check and named check imports alongside fc.assert", () => {
+    const source = [
+      'import fc, { check } from "fast-check";',
+      'import { openInMemoryStateDb } from "./sqlite-test-utils";',
+      "void openInMemoryStateDb;",
+      "fc.check(fc.property(fc.integer(), () => true));",
+      "check(fc.property(fc.integer(), () => true), { numRuns: 200 });",
+      "fc.check(fc.property(fc.integer(), () => true), { numRuns: 5 });",
+    ].join("\n");
+
+    const result = analyzePropertyBudgetSource("check-runner.property.test.ts", source);
+    expect(result.violations.map((v) => [v.rule, v.numRunsKind, v.numRuns])).toEqual([
+      [RULE_HEAVY_FIXTURE, "default", 100],
+      [RULE_HEAVY_FIXTURE, "static", 200],
+      [RULE_HIGH_NUM_RUNS_COMMENT, "static", 200],
+    ]);
+  });
+
+  it("accepts an explanatory comment above numRuns > 100 when a directive comment intervenes without a blank line", () => {
+    const source = [
+      'import fc from "fast-check";',
+      "fc.assert(fc.property(fc.integer(), () => true), {",
+      "  // Bug #3347 required 200 runs to hit the four-step hold race.",
+      "  // oxlint-disable-next-line some-rule",
+      "  numRuns: 200,",
+      "});",
+    ].join("\n");
+
+    const result = analyzePropertyBudgetSource("directive-between.property.test.ts", source);
+    expect(result.violations).toEqual([]);
+  });
 });
 
 describe("property budget baseline ratchet", () => {

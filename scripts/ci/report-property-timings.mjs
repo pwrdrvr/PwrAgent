@@ -21,12 +21,14 @@ export function detectHeavyFixturesLightweight(source) {
   const heavy = new Set();
   const childProcessMocked = /vi\.(?:do)?[Mm]ock\(\s*["'](?:node:)?child_process["']/.test(source);
 
-  if (
+  const hasChildProcessImport =
     !childProcessMocked
-    && (
-      /(?:from|require\()\s*["'](?:node:)?child_process["']/.test(source)
-      || /from\s+["'][^"']*\/outpost-daemon(?:\.[cm]?[jt]s)?["']/.test(source)
-    )
+    && /(?:from|require\()\s*["'](?:node:)?child_process["']/.test(source);
+
+  if (
+    hasChildProcessImport
+    || (!childProcessMocked
+      && /from\s+["'][^"']*\/outpost-daemon(?:\.[cm]?[jt]s)?["']/.test(source))
   ) {
     heavy.add("child_process");
   }
@@ -35,7 +37,7 @@ export function detectHeavyFixturesLightweight(source) {
     /(?:from|require\()\s*["']dugite["']/.test(source)
     || /from\s+["'][^"']*\/(?:isolated-git|managed-git-fixture)(?:\.[cm]?[jt]s)?["']/.test(source)
     || /\b(?:runIsolatedGit(?:Sync)?|GitProcess\.exec)\s*\(/.test(source)
-    || (!childProcessMocked
+    || (hasChildProcessImport
       && /\b(?:execFile|execFileSync|spawn|spawnSync|exec|execSync)\s*\(\s*["']git(?:\.exe)?(?:\s|["'])/.test(source))
   ) {
     heavy.add("git");
@@ -174,7 +176,12 @@ export function formatPropertyTimingsMarkdown(summary, {
   const lines = ["### Property test timing report (macOS unit lanes, informational)", ""];
 
   if (reportFilesCount === 0) {
-    lines.push("No `macos-unit-results.json` timing artifacts were found for this run.");
+    if (warnings.length > 0) {
+      lines.push("Discovered `macos-unit-results.json` timing artifact(s), but none could be parsed.");
+      lines.push("", `Warnings (${warnings.length}): ${warnings.join("; ")}`);
+    } else {
+      lines.push("No `macos-unit-results.json` timing artifacts were found for this run.");
+    }
     return lines.join("\n");
   }
 
