@@ -67,15 +67,9 @@ export function shouldReprobeAcpCapabilities(
 }
 
 /**
- * Decide whether startup may probe an agent's runtime capabilities on its
- * own, without a Settings or setup action.
- *
- * Probing is otherwise reserved for Settings and setup, so this covers only the
- * case where a user action cannot be expected: an agent PwrAgent already knew
- * whose runtime changed underneath it. Startup discovery drops cached
- * capabilities whenever the CLI version or launch identity changes (an upgrade,
- * or a legacy install giving way to a current one). Nothing refills them, and
- * the composer builds its model and effort pickers only from capabilities.
+ * Probe a known agent whose runtime changed during startup discovery or a
+ * managed update. Cached Antigravity model choices can survive the change,
+ * but do not count as a probe of the new executable.
  *
  * The rule never fires in steady state. It requires that no probe has
  * run for the current runtime, and every probe outcome records one: a result
@@ -88,7 +82,7 @@ export function shouldReprobeAcpCapabilities(
  * @param previouslyRecorded Whether a durable record for this agent existed
  *                           before this discovery pass.
  */
-export function shouldProbeAcpCapabilitiesAtStartup(
+export function shouldProbeAcpCapabilitiesAfterRuntimeChange(
   agent: AcpInstalledAgentRecord,
   previouslyRecorded: boolean,
 ): boolean {
@@ -96,10 +90,26 @@ export function shouldProbeAcpCapabilitiesAtStartup(
     previouslyRecorded
     && agent.installStatus === "installed"
     && agent.launchDescriptor !== undefined
-    && agent.runtimeCapabilities === undefined
+    && (agent.runtimeCapabilities === undefined
+      || (agent.registryId === "antigravity" && agent.runtimeCapabilities.status === "stale"))
     && agent.lastDiscoveredAt === undefined
     && agent.lastDiscoveryError === undefined
   );
+}
+
+/** Model IDs and efforts are useful across automatic managed upgrades. Native
+ * modes, protocol capabilities and account errors belong to the old binary. */
+export function retainedManagedAntigravityCatalog(
+  previous: AcpInstalledAgentRecord | undefined,
+  next: AcpInstalledAgentRecord,
+): AcpInstalledAgentRecord["runtimeCapabilities"] {
+  if (next.registryId !== "antigravity"
+    || next.installStatus !== "installed"
+    || next.launchDescriptor?.managedAntigravityFallback !== true
+    || previous?.installStatus !== "installed"
+    || previous.launchDescriptor?.managedAntigravityFallback !== true) return undefined;
+  const models = withAntigravityModelCatalog(previous.runtimeCapabilities)?.models;
+  return models?.availableModels.length ? { schemaVersion: 1, status: "stale", models } : undefined;
 }
 
 /**

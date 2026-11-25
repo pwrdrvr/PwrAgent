@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { resolveActiveProfileDir, resolveBootstrapProfileDir } from "../profile";
 import { getAppStateMode } from "../storage/desktop-runtime-storage";
+import { withAntigravityModelCatalog } from "./acp-capability-freshness.js";
 import { acpDiscoveryActionRequiredMessage } from "./acp-discovery-error.js";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 import { discoverAcpRuntimeCapabilities } from "./acp-runtime-discovery.js";
@@ -48,13 +49,22 @@ export async function probeAcpRuntimeCapabilities(
       ...(options?.signal ? { signal: options.signal } : {}),
       ...(options?.onStage ? { onStage: options.onStage } : {}),
     });
+    let capabilities = result.runtimeCapabilities;
+    if (capabilities && record.registryId === "antigravity" && record.runtimeCapabilities?.status === "stale") {
+      // A sparse response can describe the protocol without answering the
+      // model question. Keep the carried catalog until a model list arrives.
+      const reportedModels = withAntigravityModelCatalog(capabilities)?.models;
+      capabilities = reportedModels
+        ? { ...capabilities, models: reportedModels }
+        : { ...capabilities, status: "stale", models: record.runtimeCapabilities.models };
+    }
     return {
       record: {
         ...record,
-        ...(result.runtimeCapabilities
+        ...(capabilities
           ? {
-              runtimeCapabilities: result.runtimeCapabilities,
-              lastDiscoveredAt: result.runtimeCapabilities.discoveredAt ?? now,
+              runtimeCapabilities: capabilities,
+              lastDiscoveredAt: capabilities.discoveredAt ?? now,
               lastDiscoveryError: undefined,
             }
           : {

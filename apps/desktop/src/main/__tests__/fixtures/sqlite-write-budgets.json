@@ -1,4 +1,5 @@
 {
+  "managed-antigravity-catalog-update": {"commits": 3, "note": "Managed Antigravity update after initial setup, including local discovery and two provider record writes.", "observedWalBytes": 32960, "rowsChanged": 2, "statements": 18},
   "resource-checkout-blocking-abort-race": {"commits": 2, "note": "Interrupted acquire cleanup after enqueue. The cancel reconciles expiry and promotes the waiter, then cleanup releases the grant.", "observedWalBytes": 16480, "rowsChanged": 4, "statements": 4},
   "resource-checkout-blocking-timeout": {"commits": 2, "note": "One queued blocking acquire and automatic cancellation, excluding the existing holder.", "observedWalBytes": 16480, "rowsChanged": 4, "statements": 4},
   "antigravity-workspace-rebind": {"commits": 6, "note": "One destination session replacement and its first completed turn. Prior transcript stays in the ACP rollout.", "observedWalBytes": 61800, "rowsChanged": 6, "statements": 6},

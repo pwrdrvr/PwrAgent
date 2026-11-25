@@ -4,7 +4,7 @@ import { buildAcpLaunchpadOptions } from "../app-server/acp-backend-adapter";
 import {
   ACP_CAPABILITY_MAX_AGE_MS,
   recordWithSessionRuntimeCapabilities,
-  shouldProbeAcpCapabilitiesAtStartup,
+  shouldProbeAcpCapabilitiesAfterRuntimeChange,
   shouldReprobeAcpCapabilities,
 } from "../acp/acp-capability-freshness";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -100,7 +100,7 @@ describe("shouldReprobeAcpCapabilities", () => {
   });
 });
 
-describe("shouldProbeAcpCapabilitiesAtStartup", () => {
+describe("shouldProbeAcpCapabilitiesAfterRuntimeChange", () => {
   // The state startup discovery leaves behind when a known agent's runtime
   // changed: installed and launchable, with every probe field cleared.
   function changedRuntime(
@@ -123,33 +123,33 @@ describe("shouldProbeAcpCapabilitiesAtStartup", () => {
   }
 
   it("probes a known agent whose runtime has never been probed", () => {
-    expect(shouldProbeAcpCapabilitiesAtStartup(changedRuntime(), true)).toBe(
+    expect(shouldProbeAcpCapabilitiesAfterRuntimeChange(changedRuntime(), true)).toBe(
       true,
     );
   });
 
   it("leaves an agent seen for the first time to Settings and setup", () => {
-    expect(shouldProbeAcpCapabilitiesAtStartup(changedRuntime(), false)).toBe(
+    expect(shouldProbeAcpCapabilitiesAfterRuntimeChange(changedRuntime(), false)).toBe(
       false,
     );
   });
 
   it("does not repeat once any probe outcome is recorded", () => {
     expect(
-      shouldProbeAcpCapabilitiesAtStartup(
+      shouldProbeAcpCapabilitiesAfterRuntimeChange(
         changedRuntime({ runtimeCapabilities: { discoveredAt: NOW } as never }),
         true,
       ),
     ).toBe(false);
     // A probe that yielded no capabilities still stamps the runtime.
     expect(
-      shouldProbeAcpCapabilitiesAtStartup(
+      shouldProbeAcpCapabilitiesAfterRuntimeChange(
         changedRuntime({ lastDiscoveredAt: NOW }),
         true,
       ),
     ).toBe(false);
     expect(
-      shouldProbeAcpCapabilitiesAtStartup(
+      shouldProbeAcpCapabilitiesAfterRuntimeChange(
         changedRuntime({ lastDiscoveryError: "timed out" }),
         true,
       ),
@@ -158,13 +158,13 @@ describe("shouldProbeAcpCapabilitiesAtStartup", () => {
 
   it("never probes an agent that cannot be launched", () => {
     expect(
-      shouldProbeAcpCapabilitiesAtStartup(
+      shouldProbeAcpCapabilitiesAfterRuntimeChange(
         changedRuntime({ installStatus: "unavailable" }),
         true,
       ),
     ).toBe(false);
     expect(
-      shouldProbeAcpCapabilitiesAtStartup(
+      shouldProbeAcpCapabilitiesAfterRuntimeChange(
         changedRuntime({ launchDescriptor: undefined }),
         true,
       ),

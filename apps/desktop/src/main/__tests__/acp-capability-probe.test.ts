@@ -9,6 +9,28 @@ vi.mock("../acp/acp-runtime-discovery", () => ({
   discoverAcpRuntimeCapabilities: vi.fn(),
 }));
 
+it("keeps the carried model list when Antigravity only reports protocol capabilities", async () => {
+  const models = { currentModelId: "model-a", availableModels: [{ id: "model-a" }] };
+  vi.mocked(discoverAcpRuntimeCapabilities).mockResolvedValueOnce({
+    runtimeCapabilities: { schemaVersion: 1, status: "discovered", agentCapabilities: { loadSession: true } },
+  });
+  const result = await probeAcpRuntimeCapabilities({
+    backendId: "acp:antigravity",
+    registryId: "antigravity",
+    name: "Antigravity",
+    distributionKind: "local",
+    distributionSource: "agy",
+    installStatus: "installed",
+    authStatus: "not-required",
+    verificationStatus: "not-applicable",
+    allowlistRuleId: "local-antigravity-cli",
+    installedAt: 1,
+    updatedAt: 2,
+    runtimeCapabilities: { schemaVersion: 1, status: "stale", models },
+  }, os.tmpdir());
+  expect(result.record.runtimeCapabilities).toMatchObject({ models, agentCapabilities: { loadSession: true } });
+});
+
 it("recovers Gemini CLI after the consumer account is replaced", async () => {
   const now = Date.now();
   const runtime = {

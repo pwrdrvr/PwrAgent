@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AcpAgentSettingsEntry,
+  BackendAcpRuntimeCapabilities,
   ProviderCatalogRefreshState,
   ReadProviderCatalogRefreshResponse,
 } from "@pwragent/shared/contracts/backend";
@@ -14,6 +15,8 @@ import { DesktopSettingsService } from "../settings/desktop-settings-service";
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
@@ -26,8 +29,12 @@ const listThreadsMock = vi.fn(async () => [] as unknown[]);
 const refreshCodexAfterAuthenticationMock = vi.fn(async () => undefined);
 const listBackendsMock = vi.fn(async () => ({ backends: [], fetchedAt: 1 }));
 const invalidateAcpBackendDiscoveryMock = vi.fn();
+const invalidateProviderRuntimeSelectionsMock = vi.fn();
+const refreshManagedAntigravityCatalogMock = vi.fn();
 const getDesktopBackendRegistryMock = vi.fn(() => ({
   invalidateAcpBackendDiscovery: invalidateAcpBackendDiscoveryMock,
+  invalidateProviderRuntimeSelections: invalidateProviderRuntimeSelectionsMock,
+  refreshManagedAntigravityCatalog: refreshManagedAntigravityCatalogMock,
   listBackends: listBackendsMock,
   refreshCodexAfterAuthentication: refreshCodexAfterAuthenticationMock,
   listThreads: listThreadsMock,
@@ -65,6 +72,11 @@ const localAcpDiscoveryMock = vi.hoisted(() => ({
 }));
 const acpRuntimeDiscoveryMock = vi.hoisted(() => ({
   discoverAcpRuntimeCapabilities: vi.fn(async () => ({} as unknown)),
+}));
+const managedAntigravityInstallMock = vi.hoisted(() => vi.fn());
+vi.mock("../acp/antigravity-managed-runtime", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../acp/antigravity-managed-runtime")>(),
+  installManagedAntigravityRuntime: managedAntigravityInstallMock,
 }));
 const electronMocks = vi.hoisted(() => ({
   openExternal: vi.fn(async (_url: string): Promise<void> => undefined),
@@ -281,6 +293,7 @@ describe("settings ipc", () => {
     handlers.clear();
     disposeDesktopBackendRegistryMock.mockClear();
     invalidateAcpBackendDiscoveryMock.mockClear();
+    refreshManagedAntigravityCatalogMock.mockReset();
     listBackendsMock.mockClear();
     refreshCodexAfterAuthenticationMock.mockClear();
     listThreadsMock.mockClear();
@@ -2832,6 +2845,118 @@ describe("settings ipc", () => {
     // See the override-discovery test above: the app-state import + repeated
     // discovery round-trips need headroom over the 5s default under CI load.
   }, 20_000);
+
+  it("keeps the model choices available when a managed Antigravity upgrade completes", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-antigravity-upgrade-"));
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { initializeAppState, disposeAppState } = await import("../state/app-state");
+    const { AcpAgentService } = await import("../acp/acp-agent-service");
+    const { refreshAcpRuntimeCapabilities } = await import("../acp/acp-capability-probe");
+    const { AcpBackendAdapter, describeInstalledAcpBackend } = await import("../app-server/acp-backend-adapter");
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import("../shell/ipc/settings");
+    const { ANTIGRAVITY_SETUP_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const agent = (version: string) => ({
+      backendId: "acp:antigravity" as const,
+      registryId: "antigravity",
+      name: "Antigravity",
+      version,
+      distributionKind: "local" as const,
+      distributionSource: "agy acp",
+      installStatus: "installed" as const,
+      authStatus: "not-required" as const,
+      verificationStatus: "not-applicable" as const,
+      allowlistRuleId: "local-antigravity-cli",
+      installedAt: 1,
+      updatedAt: Date.now(),
+      launchDescriptor: {
+        backendId: "acp:antigravity" as const,
+        registryId: "antigravity",
+        distributionKind: "local" as const,
+        command: path.join(tempRoot, "versions", version, "agy"),
+        args: ["acp", "--process-per-session"],
+        env: { AGY_CLI_DISABLE_AUTO_UPDATE: "true" },
+        managedAntigravityFallback: true,
+      },
+    });
+    initializeAppState("bootstrap");
+    const store = new AcpAgentService();
+    const discovered = Promise.withResolvers<{ runtimeCapabilities?: BackendAcpRuntimeCapabilities }>();
+    const published = Promise.withResolvers<void>();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: store,
+      acpSessionStore: null,
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      probeAcpRuntimeCapabilities: (record) => refreshAcpRuntimeCapabilities(record, tempRoot),
+      emit: async (event) => {
+        if (event.notification.method === "backend/acpRuntimeCapabilities/updated") published.resolve();
+      },
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      registerSettingsIpcHandlers(service);
+      refreshManagedAntigravityCatalogMock.mockImplementation((command: string) => adapter.refreshManagedAntigravityCatalog(command));
+      const previous = agent("1.5.15");
+      store.upsertInstalledAgent({
+        ...previous,
+        lastDiscoveredAt: previous.updatedAt,
+        runtimeCapabilities: {
+          schemaVersion: 1,
+          status: "discovered",
+          models: { currentModelId: "model-a", availableModels: [{ id: "model-a", label: "Model A" }] },
+        },
+      });
+      const previousModels = describeInstalledAcpBackend(store.getInstalledAgent("acp:antigravity")!)
+        .launchpadOptions?.models;
+      const updated = agent("1.5.16");
+      localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockResolvedValue([updated]);
+      managedAntigravityInstallMock.mockResolvedValueOnce({ version: updated.version, command: updated.launchDescriptor.command });
+      acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities.mockReturnValueOnce(discovered.promise);
+
+      const handleSetup = handlers.get(ANTIGRAVITY_SETUP_CHANNEL)!;
+      const { writes } = await measureSqliteWrites(async () => {
+        await expect(handleSetup({ senderFrame: { parent: null } }, { action: "install" }))
+          .resolves.toMatchObject({ ok: true, runtime: { status: "installed", runtime: { version: updated.version } } });
+
+        // The shared picker catalog remains usable while the new CLI is being probed.
+        const installed = store.getInstalledAgent("acp:antigravity")!;
+        expect(installed.version).toBe(updated.version);
+        expect(installed.lastDiscoveredAt).toBeUndefined();
+        expect(describeInstalledAcpBackend(installed).launchpadOptions?.models).toEqual(previousModels);
+        expect(refreshManagedAntigravityCatalogMock).toHaveBeenCalledExactlyOnceWith(updated.launchDescriptor.command);
+        expect(acpRuntimeDiscoveryMock.discoverAcpRuntimeCapabilities)
+          .toHaveBeenCalledWith(expect.objectContaining({ version: updated.version }), expect.anything());
+
+        discovered.resolve({
+          runtimeCapabilities: {
+            schemaVersion: 1,
+            status: "discovered",
+            models: { currentModelId: "model-b", availableModels: [{ id: "model-b", label: "Model B" }] },
+          },
+        });
+        await published.promise;
+        expect(adapter.getLaunchpadOptions("acp:antigravity")?.models)
+          .toMatchObject([{ id: "model-b", current: true }]);
+      });
+      expectSqliteWriteBudget({
+        scenario: "managed-antigravity-catalog-update",
+        note: "Managed Antigravity update after initial setup, including local discovery and two provider record writes.",
+        writes,
+      });
+    } finally {
+      discovered.resolve({});
+      await adapter.close();
+      disposeSettingsIpcHandlers();
+      disposeAppState();
+    }
+  });
 
   it("coalesces forced ACP refreshes across overlapping provider scopes", async () => {
     const tempRoot = fs.mkdtempSync(

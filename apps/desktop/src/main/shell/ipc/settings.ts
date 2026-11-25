@@ -204,7 +204,7 @@ import {
   ensureAcpRuntimeDiscoveryWorkspace,
   probeAcpRuntimeCapabilities,
 } from "../../acp/acp-capability-probe";
-import { shouldReprobeAcpCapabilities } from "../../acp/acp-capability-freshness";
+import { retainedManagedAntigravityCatalog, shouldReprobeAcpCapabilities } from "../../acp/acp-capability-freshness";
 import { acpDiscoveryActionRequiredMessage } from "../../acp/acp-discovery-error";
 import { acpAgentLaunchIdentity } from "../../acp/acp-launch-descriptor";
 import { describeDistributionSource } from "../../acp/acp-install-provenance";
@@ -351,13 +351,19 @@ function invalidateRecentAcpRefreshes(
   }
 }
 
-async function refreshAntigravitySetup(settingsService: DesktopSettingsService, probeCapabilities: boolean) {
+async function refreshAntigravitySetup(
+  settingsService: DesktopSettingsService,
+  probeCapabilities: boolean,
+  installedCommand?: string,
+) {
   antigravityDiscoveryRevision += 1;
   const registryIds = ["antigravity"];
   invalidateRecentAcpRefreshes(new Set(registryIds));
   const registry = getDesktopBackendRegistry();
   registry.invalidateProviderRuntimeSelections({ acp: true, acpRegistryIds: registryIds, codex: false });
   const store = new AcpAgentService();
+  const previouslyInstalled = installedCommand
+    && store.getInstalledAgent("acp:antigravity")?.installStatus === "installed";
   const env = await settingsService.resolveTerminalSpawnEnvAsync().catch(() => undefined);
   const records = await listInstalledAndLocalAcpAgents(store, {
     permit: issueProviderDiscoveryPermit("settings-user-action"),
@@ -369,6 +375,9 @@ async function refreshAntigravitySetup(settingsService: DesktopSettingsService, 
     env,
   });
   registry.invalidateProviderRuntimeSelections({ acp: true, acpRegistryIds: registryIds, codex: false });
+  if (installedCommand && previouslyInstalled) {
+    registry.refreshManagedAntigravityCatalog(installedCommand);
+  }
   return records.find((record) => record.registryId === "antigravity" && record.installStatus === "installed")?.launchDescriptor;
 }
 
@@ -965,7 +974,7 @@ async function listInstalledAndLocalAcpAgents(
         const nextRecord = {
           ...record,
           runtimeCapabilities: runtimeChanged
-            ? undefined
+            ? retainedManagedAntigravityCatalog(current, record)
             : current?.runtimeCapabilities,
           update: pwrAgentOwnedGrok ? undefined : current?.update,
           updateCommand: pwrAgentOwnedGrok
@@ -1029,7 +1038,7 @@ async function listInstalledAndLocalAcpAgents(
       for await (const outcome of probes) {
         if (superseded(outcome.record.registryId)) continue;
         try {
-          store.upsertInstalledAgent(keepConcurrentAcpRestriction(store, outcome));
+          store.upsertInstalledAgent(keepConcurrentAcpDiscovery(store, outcome));
         } catch (error) {
           storeFailure ??= error;
           continue;
@@ -1070,25 +1079,31 @@ async function listInstalledAndLocalAcpAgents(
   ];
 }
 
-function keepConcurrentAcpRestriction(
+function keepConcurrentAcpDiscovery(
   store: AcpAgentService,
   { record, update }: AcpProbeOutcome,
 ): AcpInstalledAgentRecord {
   const { registryId } = record;
   if ((registryId !== "gemini" && registryId !== "antigravity")
-    || update.status === "succeeded"
+    || (update.status === "succeeded" && record.runtimeCapabilities?.status !== "stale")
     || acpDiscoveryActionRequiredMessage(registryId, record.lastDiscoveryError)) {
     return record;
   }
-  // An ordinary session may have learned the restriction after this probe
-  // started. An inconclusive result must keep it for the same runtime.
   const current = store.getInstalledAgent(record.backendId);
   if (!current || current.version !== record.version
-    || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record)
-    || !acpDiscoveryActionRequiredMessage(registryId, current.lastDiscoveryError)) {
+    || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record)) {
     return record;
   }
-  return { ...record, lastDiscoveryError: current.lastDiscoveryError, runtimeCapabilities: undefined };
+  // A live session can learn an account restriction while this probe runs.
+  if (acpDiscoveryActionRequiredMessage(registryId, current.lastDiscoveryError)) {
+    return { ...record, lastDiscoveryError: current.lastDiscoveryError, runtimeCapabilities: undefined };
+  }
+  // A late probe with only carried models must not replace a fresh catalog.
+  return registryId === "antigravity"
+    && record.runtimeCapabilities?.status === "stale"
+    && current.runtimeCapabilities?.status === "discovered"
+    && current.lastDiscoveredAt !== undefined
+    ? current : record;
 }
 
 function acpAgentSettingsEntry(params: {
@@ -1854,7 +1869,7 @@ export function registerSettingsIpcHandlers(
   registerWorktreeFolderIpc(() => getService(service).resolveWorktreeFolder());
   disposeAntigravitySetup?.();
   disposeAntigravitySetup = registerAntigravitySetupIpc({
-    refresh: (probeCapabilities) => refreshAntigravitySetup(getService(service), probeCapabilities),
+    refresh: (probeCapabilities, installedCommand) => refreshAntigravitySetup(getService(service), probeCapabilities, installedCommand),
     // The same predicate that keeps the Grok vendor check out of E2E captures.
     updateChecksDisabled: grokUpdateChecksDisabled({ isPackaged: app?.isPackaged === true }),
   });
