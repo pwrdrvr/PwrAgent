@@ -49,7 +49,11 @@ import { describeStackAutomationBlock, nextStackAdvance, stackDispatchBlock } fr
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
 import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
-import { selectPrReviewOfferOwner, type PrReviewOfferCandidate } from "../pr-status/pr-review-offer-owner";
+import {
+  ineligiblePrReviewOfferThreads,
+  selectPrReviewOfferOwner,
+  type PrReviewOfferCandidate,
+} from "../pr-status/pr-review-offer-owner";
 import { describePrReviewReadiness } from "../pr-status/pr-review-readiness";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
@@ -366,6 +370,7 @@ import {
   PROJECT_PAUSED_ERROR_CODE,
   projectAllowsAutoFixKind,
   projectAllowsForgePolling,
+  projectAllowsPrOffers,
   projectAllowsPrWatches,
   projectMergeBranches,
   projectMergesPullRequest,
@@ -5523,6 +5528,7 @@ class DesktopAppServerService {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
     const staleKeys: string[] = [];
+    const labelChangedKeys: string[] = [];
     const endedChanged = new Set<string>();
     for (const pr of prs.map(stripPrLinkedDirectoryPaths)) {
       const key = getPrStatusKey(pr);
@@ -5544,6 +5550,11 @@ class DesktopAppServerService {
         if (transition) {
           transition.threadKeys = this.findThreadKeysForPrKey(key);
           transitions.push(transition);
+        }
+        // Labels move no readiness field, but they can make a PR hands-off,
+        // which withdraws its offer cards or lets them return.
+        if (current && JSON.stringify(current.pr.labels ?? null) !== JSON.stringify(pr.labels ?? null)) {
+          labelChangedKeys.push(key);
         }
         if (current && isTerminalPullRequest(current.pr) !== isTerminalPullRequest(pr)) {
           endedChanged.add(key);
@@ -5574,6 +5585,7 @@ class DesktopAppServerService {
       this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source }, options.fetchedAtByKey);
       if (!options.skipMergeBuildWatch) this.armMergeBuildWatches(transitions);
     }
+    if (labelChangedKeys.length > 0) this.prReviewOfferCoordinator?.reevaluate(labelChangedKeys);
     this.publishPrAutoFixPrEndedChanges(endedChanged);
     return changedPrs;
   }
@@ -8652,9 +8664,11 @@ class DesktopAppServerService {
     }
     if (projectNeverMerges(previous) !== projectNeverMerges(next)
       || projectMergeBranches(previous).join("\n") !== projectMergeBranches(next).join("\n")
+      || projectAllowsPrOffers(previous) !== projectAllowsPrOffers(next)
       || handsOffChanged) {
-      // Withdraw an open merge offer now, or offer it again: a reviewed,
-      // green PR may see no further transition to re-evaluate it.
+      // Withdraw an open offer now (a merge offer in a never-merge project,
+      // any offer the project no longer allows), or offer it again: a
+      // reviewed, green PR may see no further transition to re-evaluate it.
       this.prReviewOfferCoordinator?.reevaluate(threadKeys.flatMap((threadKey) => {
         const attachment = this.attachedPrsByThreadKey.get(threadKey);
         return (attachment?.prs ?? [])
@@ -9259,6 +9273,7 @@ class DesktopAppServerService {
     }
     const coordinator = new PrReviewOfferCoordinator({
       ownerThread: async (prKey) => await this.prReviewOfferOwner(prKey),
+      ineligibleThreads: async (prKey) => ineligiblePrReviewOfferThreads(this.prReviewOfferCandidates(prKey)),
       threadPrKeys: (thread) => {
         const attachment = this.attachedPrsByThreadKey.get(
           buildThreadIdentityKey(thread.backend, thread.threadId),
@@ -9387,6 +9402,14 @@ class DesktopAppServerService {
    */
   private async prReviewOfferOwner(prKey: string): Promise<PrReviewOfferThread | undefined> {
     if (!this.backgroundPrPollingEnabled) return undefined;
+    return await selectPrReviewOfferOwner({
+      candidates: this.prReviewOfferCandidates(prKey),
+      readWinner: async () => await this.getOverlayStore().getPrAutoDispatchCandidateWinner({ prKey }),
+    });
+  }
+
+  /** Every thread whose primary PR this is, with what decides its offers. */
+  private prReviewOfferCandidates(prKey: string): PrReviewOfferCandidate[] {
     const current = this.prStatusRegistry.get(prKey)?.pr;
     const candidates: PrReviewOfferCandidate[] = [];
     for (const threadKey of this.primaryPrThreadsByKey.get(prKey) ?? []) {
@@ -9400,10 +9423,7 @@ class DesktopAppServerService {
         ...(current && this.prHandsOff(identity, current) ? { handsOff: true } : {}),
       });
     }
-    return await selectPrReviewOfferOwner({
-      candidates,
-      readWinner: async () => await this.getOverlayStore().getPrAutoDispatchCandidateWinner({ prKey }),
-    });
+    return candidates;
   }
 
   private prReviewOfferDirectories(thread: PrReviewOfferThread, pr: PrSummary): string[] {

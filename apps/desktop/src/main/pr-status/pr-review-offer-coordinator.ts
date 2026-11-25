@@ -49,6 +49,13 @@ export type PrReviewOfferPorts = {
    * parent and its sub-thread is offered once.
    */
   ownerThread(prKey: string): Promise<PrReviewOfferThread | undefined>;
+  /**
+   * Threads that show this PR but may not hold its offers (see
+   * `ineligiblePrReviewOfferThreads`). Each reconcile withdraws an offer
+   * card left open on one of them, so a card raised before its project
+   * paused, turned offers off, or left the PR hands-off does not linger.
+   */
+  ineligibleThreads?(prKey: string): Promise<PrReviewOfferThread[]>;
   /** The primary attached PR keys of one thread, for review events. */
   threadPrKeys(thread: PrReviewOfferThread): string[];
   /**
@@ -190,6 +197,24 @@ export class PrReviewOfferCoordinator {
       const thread = await this.ports.ownerThread(key);
       if (thread) await this.schedule(thread, key, recoveryOnly);
       else this.trackLowers(key, []);
+      await this.withdrawFromIneligible(key);
+    }
+  }
+
+  /** Withdraw this PR's open offer card from every thread that may not hold it. */
+  private async withdrawFromIneligible(prKey: string): Promise<void> {
+    const cardKey = prOfferCardKey(prKey);
+    for (const thread of await this.ports.ineligibleThreads?.(prKey) ?? []) {
+      if (this.closed) return;
+      const card = this.ports.cards.findOpenByKey({ ...thread, key: cardKey });
+      if (!card || parsePrOfferId(card.dependencyId)?.prKey !== prKey) continue;
+      const result = this.ports.cards.reconcileOffer({
+        ...thread,
+        retire: { id: card.id, result: PR_OFFER_RETIRE_RESULTS.not_offered },
+      });
+      if (result.retired) {
+        this.ports.log?.("pr review offer withdrawn", { prKey, threadId: thread.threadId });
+      }
     }
   }
 

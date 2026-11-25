@@ -178,7 +178,7 @@ export type OpenPrOffer = {
   headSha?: string;
 };
 
-export type PrOfferRetireReason = "superseded" | "reviewed" | "stale" | "closed" | "never_merge";
+export type PrOfferRetireReason = "superseded" | "reviewed" | "stale" | "closed" | "never_merge" | "not_offered";
 
 export type PrOfferPlan = {
   retire?: { cardId: string; reason: PrOfferRetireReason };
@@ -264,6 +264,7 @@ export const PR_OFFER_RETIRE_RESULTS: Record<PrOfferRetireReason, string> = {
   stale: "Withdrawn: the head changed since this was offered",
   closed: "The pull request closed",
   never_merge: "Withdrawn: this project never merges its pull requests",
+  not_offered: "Withdrawn: Forge Automation no longer offers this pull request here",
 };
 
 /** Every result PwrAgent gives an offer it withdraws, as opposed to one the operator closed. */
