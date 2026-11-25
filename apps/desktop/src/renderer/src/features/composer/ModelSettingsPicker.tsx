@@ -132,9 +132,9 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
   const ariaLabel = props.ariaLabel ?? "Model settings";
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<ModelSettingsPanelPlacement>();
-  const [abovePlacement, setAbovePlacement] = useState<{ offset: number; maxHeight: number }>();
-  // The pill's left edge when the panel opened; cleared when it closes.
-  const anchorLeftRef = useRef<number>(undefined);
+  const [abovePlacement, setAbovePlacement] = useState<{ offset: number; lift: number; maxHeight: number }>();
+  // Where the pill was when the panel opened; cleared when it closes.
+  const anchorRef = useRef<{ left: number; top: number }>(undefined);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -196,24 +196,29 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
     }
     // Above the composer: it opens over the pill like every composer menu,
     // then stays put while it is open. A pick can change the chips before
-    // the pill (the access mode, the work mode), and a panel that followed
-    // the pill would slide under the pointer choosing in it.
-    anchorLeftRef.current ??= trigger.left;
+    // the pill (the access mode, the work mode) and wrap the toolbar onto
+    // another row, and a panel that followed the pill would slide sideways
+    // or drop under the pointer choosing in it.
+    const anchor = anchorRef.current ??= { left: trigger.left, top: trigger.top };
     const offset = heldPanelOffset({
-      anchor: anchorLeftRef.current,
+      anchor: anchor.left,
       triggerLeft: trigger.left,
       width: panel.offsetWidth || width,
       viewportWidth: window.innerWidth,
     });
-    const maxHeight = Math.max(160, trigger.top - 16);
-    setAbovePlacement((current) => current && current.offset === offset && current.maxHeight === maxHeight
+    // How far the pill has moved down since the panel opened; the panel's
+    // foot rises by as much from the pill to stay where it was.
+    const lift = trigger.top - anchor.top;
+    const maxHeight = Math.max(160, anchor.top - 16);
+    setAbovePlacement((current) => current
+      && current.offset === offset && current.lift === lift && current.maxHeight === maxHeight
       ? current
-      : { offset, maxHeight });
+      : { offset, lift, maxHeight });
   }, [portalled, width]);
 
   useLayoutEffect(() => {
     if (open) place();
-    else anchorLeftRef.current = undefined;
+    else anchorRef.current = undefined;
   });
   useLayoutEffect(() => {
     if (!open) return undefined;
@@ -285,7 +290,11 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
       ? { left: placement.left, top: placement.top, maxHeight: placement.maxHeight }
       : { left: 0, top: 0, visibility: "hidden" as const }
     : abovePlacement
-      ? { left: abovePlacement.offset, maxHeight: abovePlacement.maxHeight }
+      ? {
+        left: abovePlacement.offset,
+        ...(abovePlacement.lift !== 0 ? { transform: `translateY(${-abovePlacement.lift}px)` } : {}),
+        maxHeight: abovePlacement.maxHeight,
+      }
       : undefined;
 
   const panel = open ? (

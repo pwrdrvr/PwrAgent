@@ -135,12 +135,14 @@ describe("ModelSettingsPicker while disabled", () => {
 /**
  * Above the composer the panel opens over its pill, then stays put. A pick
  * can widen or narrow the chips before the pill (a provider with another
- * access mode), and a panel that followed the pill slid sideways under the
- * pointer choosing in it.
+ * access mode) or wrap the toolbar so the pill drops a row, and a panel that
+ * followed the pill slid sideways, then dropped, under the pointer choosing
+ * in it.
  */
 describe("ModelSettingsPicker composer panel position", () => {
   it("holds the panel where it opened while the pill moves under it", async () => {
     let pillLeft = 300;
+    let pillTop = 600;
     const picker = (label: string) => (
       <ModelSettingsPicker
         model={{
@@ -153,25 +155,39 @@ describe("ModelSettingsPicker composer panel position", () => {
     const { rerender } = render(picker("Opus 5.5"));
     const pill = screen.getByRole("button", { name: /^Model settings/ });
     vi.spyOn(pill, "getBoundingClientRect").mockImplementation(() => ({
-      left: pillLeft, right: pillLeft + 120, top: 600, bottom: 624, width: 120, height: 24,
-      x: pillLeft, y: 600, toJSON: () => undefined,
+      left: pillLeft, right: pillLeft + 120, top: pillTop, bottom: pillTop + 24, width: 120, height: 24,
+      x: pillLeft, y: pillTop, toJSON: () => undefined,
     }));
     await act(async () => { fireEvent.click(pill); });
     const panel = screen.getByRole("dialog", { name: "Model settings" });
     const panelLeft = () => pillLeft + Number.parseFloat(panel.style.left || "0");
+    // The panel's foot hangs a fixed gap over the pill's top, then moves by
+    // its translation.
+    const panelFoot = () => pillTop + Number(/translateY\((-?[\d.]+)px\)/.exec(panel.style.transform)?.[1] ?? 0);
     expect(panelLeft()).toBe(300);
+    expect(panelFoot()).toBe(600);
 
-    for (const [left, label] of [[420, "Sonnet 5.5"], [180, "Opus 5.5"], [300, "Sonnet 5.5"]] as const) {
+    for (const [left, top, label] of [
+      [420, 600, "Sonnet 5.5"],
+      [180, 644, "Opus 5.5"],
+      [24, 644, "Sonnet 5.5"],
+      [300, 600, "Opus 5.5"],
+    ] as const) {
       pillLeft = left;
+      pillTop = top;
       await act(async () => { rerender(picker(label)); });
       expect(panelLeft()).toBe(300);
+      expect(panelFoot()).toBe(600);
     }
 
     // Closed and opened again, it opens over the pill where the pill is now.
     pillLeft = 420;
+    pillTop = 644;
     await act(async () => { fireEvent.click(pill); });
     expect(screen.queryByRole("dialog")).toBeNull();
     await act(async () => { fireEvent.click(pill); });
-    expect(pillLeft + Number.parseFloat(screen.getByRole("dialog").style.left || "0")).toBe(420);
+    const reopened = screen.getByRole("dialog");
+    expect(pillLeft + Number.parseFloat(reopened.style.left || "0")).toBe(420);
+    expect(reopened.style.transform).toBe("");
   });
 });
