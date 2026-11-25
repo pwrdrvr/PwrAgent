@@ -122,3 +122,92 @@ it("follows inherited manifests and explicit nested entries when the repository 
     ]);
   });
 });
+
+it("uses the enclosing folder when a skill omits its name", async () => {
+  await withWorkspace(async ({ repo, write }) => {
+    const file = path.join(repo, ".agents", "skills", "release-checks", "SKILL.md");
+    await write(file, "---\ndescription: Check the release.\n---\n");
+    await write(path.join(repo, ".agents", "skills", "blank", "SKILL.md"), "---\n---\n");
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
+    expect(data[0]?.skills).toEqual([
+      expect.objectContaining({ name: "release-checks", path: file }),
+    ]);
+  });
+});
+
+it("applies workspace exclusions to nested personal imports and preserves CLI-global skills", async () => {
+  await withWorkspace(async ({ home, repo, skill, write }) => {
+    const shared = path.join(home, "shared");
+    await skill(shared, "repo-audit", "team/audit");
+    await skill(shared, "private-check", "team/private");
+    const other = await skill(shared, "other-audit", "other/audit");
+    const cli = await skill(path.join(home, ".gemini", "skills"), "cli-audit");
+    await write(path.join(repo, ".agents", "skills.json"), JSON.stringify({ exclude: ["team/audit", "team/private", "cli-audit"] }));
+    await write(path.join(home, ".gemini", "config", "skills.json"), JSON.stringify({
+      entries: [
+        { path: shared, include_only: ["team/audit", "other/audit"] },
+        { path: path.join(shared, "team", "private", "SKILL.md") },
+      ],
+    }));
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
+    expect(data[0]?.skills.map(({ name, path }) => [name, path])).toEqual([
+      ["cli-audit", cli],
+      ["other-audit", other],
+    ]);
+  });
+});
+
+it("keeps enabled workspace plugin skills in their own workspace catalog", async () => {
+  await withWorkspace(async ({ home, repo, cwd, skill, write }) => {
+    const unrelated = path.join(path.dirname(repo), "unrelated");
+    await mkdir(unrelated);
+    const pluginRoot = path.join(repo, ".agents", "plugins");
+    for (const name of ["garden", "disabled"]) {
+      await write(path.join(pluginRoot, name, "plugin.json"), JSON.stringify({ name, version: "1.0.0" }));
+    }
+    const bundled = await skill(path.join(pluginRoot, "garden", "skills"), "audit");
+    await skill(path.join(pluginRoot, "disabled", "skills"), "audit");
+    await write(path.join(home, ".gemini", "config", "config.json"), JSON.stringify({
+      plugins: { disabled: { enabled: false } },
+    }));
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    const { data } = await registry.listSkills({ backend, cwds: [cwd, unrelated], catalog: "skills" });
+    expect(data.map(({ cwd, skills }) => [cwd, skills.map(({ name, path }) => [name, path])])).toEqual([
+      [cwd, [["garden:audit", bundled]]],
+      [unrelated, []],
+    ]);
+  });
+});
+
+it("resolves nested inherited entries at the root of the manifest's own repository", async () => {
+  await withWorkspace(async ({ home, repo, skill, write }) => {
+    const sharedRepo = path.join(home, "shared-repo");
+    const inherited = path.join(sharedRepo, "packages", "api", ".agents", "skills.json");
+    await write(path.join(sharedRepo, ".git", "HEAD"), "ref: refs/heads/main\n");
+    const shared = await skill(path.join(sharedRepo, "tools", "skills"), "shared-audit");
+    await skill(path.join(repo, "tools", "skills"), "wrong-audit");
+    await write(inherited, JSON.stringify({ entries: [{ path: "tools/skills" }] }));
+    await write(path.join(repo, ".agents", "skills.json"), JSON.stringify({ inherits: [{ path: inherited }] }));
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
+    expect(data[0]?.skills).toEqual([expect.objectContaining({ name: "shared-audit", path: shared })]);
+  });
+});
+
+it("enforces one scan allowance across workspaces even when each workspace fits on its own", async () => {
+  await withWorkspace(async ({ home, repo, write }) => {
+    // 100 directory entries per home scan. Multiple distinct workspaces
+    // must spend the same allowance when they read this shared source.
+    const shared = path.join(home, ".gemini", "skills");
+    await Promise.all(Array.from({ length: 100 }, (_, index) => write(path.join(shared, `readme-${index}.md`), "")));
+    const workspaces = Array.from({ length: 101 }, (_, index) => path.join(repo, `project-${index}`));
+    await Promise.all(workspaces.map((cwd) => mkdir(cwd)));
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    await expect(registry.listSkills({ backend, cwds: workspaces.slice(0, 2), catalog: "skills" }))
+      .resolves.toMatchObject({ data: [{ cwd: workspaces[0] }, { cwd: workspaces[1] }] });
+    await expect(registry.listSkills({ backend, cwds: workspaces, catalog: "skills" }))
+      .rejects.toThrow("Antigravity skill discovery exceeded its scan limit.");
+  });
+});

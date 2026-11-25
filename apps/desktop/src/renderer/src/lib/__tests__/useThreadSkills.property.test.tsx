@@ -338,3 +338,29 @@ it("loads Antigravity skills while an unopened launchpad's slash-command probe i
     unmount();
   }
 });
+
+it("retries empty Antigravity command lookups on reopen and reuses the first successful result", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), async (misses) => {
+    const draft = { ...launchpad(0, false), backend: "acp:antigravity" as const };
+    const commands = [{ name: "compact" }];
+    let attempts = 0;
+    const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>(async (request) => ({
+      backend: draft.backend,
+      fetchedAt: 1,
+      data: [{ skills: [], commands: request?.catalog === "commands" && ++attempts > misses ? commands : [] }],
+    }));
+    const { result, unmount } = renderHook(() => useThreadSkills({
+      desktopApi: { listSkills }, launchpad: draft, now: () => 1,
+    }));
+    try {
+      for (let attempt = 0; attempt < misses + 2; attempt += 1) {
+        await act(async () => { await result.current.ensureLoaded({ includeCommands: true }); });
+        expect(result.current.providerCommands).toEqual(attempt < misses ? [] : commands);
+      }
+      expect(attempts).toBe(misses + 1);
+      expect(listSkills.mock.calls.filter(([request]) => request?.catalog === "skills")).toHaveLength(1);
+    } finally {
+      unmount();
+    }
+  }), { numRuns: 8 });
+});

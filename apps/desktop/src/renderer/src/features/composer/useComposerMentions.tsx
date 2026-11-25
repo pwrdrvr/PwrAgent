@@ -103,7 +103,8 @@ export type ComposerMentionSources = {
   navigationLoading?: boolean;
   navigationSettledQuery?: string;
   /** Called when `$` or `/` opens a popover. */
-  ensureSkillsLoaded?: (options?: { force?: boolean }) => void;
+  ensureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void;
+  skillCatalogTargetKey?: string;
   skillLoading?: boolean;
   /**
    * Peer thread search behind `#`. Omitted leaves `#` local-only; the
@@ -398,10 +399,12 @@ export function useComposerMentions(params: {
     Boolean(kind) && !params.disabled && dismissKey !== dismissedKey;
   const activeOption = Math.min(activeIndex, Math.max(optionCount - 1, 0));
 
+  const skillPickerScope = sources?.skillCatalogTargetKey ?? sources?.currentThreadKey ?? "";
+  const isSlashSkillPicker = !skillTrigger && Boolean(slashTrigger);
   const skillPickerLoadKey = skillTrigger
-    ? `${sources?.currentThreadKey ?? ""}:skills:${skillTrigger.start}`
+    ? `${skillPickerScope}:skills:${skillTrigger.start}`
     : slashTrigger
-      ? `${sources?.currentThreadKey ?? ""}:slash:${slashTrigger.start}`
+      ? `${skillPickerScope}:slash:${slashTrigger.start}`
       : undefined;
   const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   const navigationTriggered = Boolean(directoryTrigger || rawHashTrigger);
@@ -418,8 +421,8 @@ export function useComposerMentions(params: {
     }
     if (!ensureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) return;
     loadedSkillPickerRef.current = skillPickerLoadKey;
-    ensureSkillsLoaded();
-  }, [ensureSkillsLoaded, skillPickerLoadKey]);
+    ensureSkillsLoaded(isSlashSkillPicker ? { includeCommands: true } : undefined);
+  }, [ensureSkillsLoaded, isSlashSkillPicker, skillPickerLoadKey]);
   useEffect(() => {
     if (navigationTriggered) ensureNavigationLoaded?.(navigationQuery);
   }, [ensureNavigationLoaded, navigationTriggered, navigationQuery]);

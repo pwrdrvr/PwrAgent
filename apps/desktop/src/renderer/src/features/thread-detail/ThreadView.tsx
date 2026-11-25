@@ -863,7 +863,8 @@ export type ThreadViewProps = {
   transcriptPagination?: AppServerThreadReplayPagination;
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
-  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  skillCatalogTargetKey?: string;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void | Promise<void>;
   codexSkillProfiles?: readonly CodexSkillProfile[];
   onOpenCodexSkillProfiles?: () => void;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
@@ -3338,6 +3339,7 @@ export function ThreadView(props: ThreadViewProps) {
         onDismissFullAccessRiskWarning={
           props.onDismissFullAccessRiskWarning
         }
+        skillCatalogTargetKey={props.skillCatalogTargetKey}
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
         codexSkillProfiles={props.codexSkillProfiles}
         onOpenCodexSkillProfiles={props.onOpenCodexSkillProfiles}

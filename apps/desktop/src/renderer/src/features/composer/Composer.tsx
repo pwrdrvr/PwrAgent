@@ -612,6 +612,7 @@ export type ComposerProps = {
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
+  skillCatalogTargetKey?: string;
   onEnsureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   pendingRequestActive?: boolean;
@@ -7234,10 +7235,11 @@ function useComposerController(props: ComposerProps) {
 
   const onEnsureSkillsLoaded = props.onEnsureSkillsLoaded;
   const isSlashSkillPicker = !trigger && Boolean(slashTrigger);
+  const skillPickerScope = `${composerScopeKey}:${props.skillCatalogTargetKey ?? props.thread?.source ?? props.launchpad?.backend}`;
   const skillPickerLoadKey = trigger
-    ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:skills:${trigger.start}`
+    ? `${skillPickerScope}:skills:${trigger.start}`
     : slashTrigger
-      ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:slash:${slashTrigger.start}`
+      ? `${skillPickerScope}:slash:${slashTrigger.start}`
       : undefined;
   const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   useEffect(() => {

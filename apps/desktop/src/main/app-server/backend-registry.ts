@@ -1,4 +1,4 @@
-import { discoverAntigravitySkills } from "../acp/antigravity-skills";
+import { discoverAntigravitySkillCatalog } from "../acp/antigravity-skills";
 import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import { isResourceCheckoutCleanupCall, type CheckoutToolHandler, type CheckoutToolMode } from "../agent-tools/pwragent-resource-checkout-agent-tools";
@@ -5912,14 +5912,8 @@ export class DesktopBackendRegistry {
 
       // Use the worktree itself for skills. The slash-command cache uses the
       // common repository and can cost an ACP startup on a miss.
-      const workspaces = [...new Set(cwds.flatMap((cwd) => cwd?.trim() ? [path.resolve(cwd)] : []))];
-      const [commands, data] = await Promise.all([
-        params.catalog === "skills" ? undefined : readCommands(),
-        Promise.all((workspaces.length > 0 ? workspaces : [undefined]).map(async (cwd) => ({
-          cwd,
-          skills: await discoverAntigravitySkills(cwd),
-        }))),
-      ]);
+      const data = await discoverAntigravitySkillCatalog(cwds);
+      const commands = params.catalog === "skills" ? undefined : await readCommands();
       return { data: commands ? [{ commands, skills: [] }, ...data] : data };
     }
 

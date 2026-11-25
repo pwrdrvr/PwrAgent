@@ -730,6 +730,59 @@ describe("Composer", () => {
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
+  it("reloads an open Antigravity picker after switching worktrees while a catalog read is pending", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (oldCompletesFirst) => {
+      const thread: NavigationThreadSummary = {
+        id: "antigravity-worktree-picker", title: "Check the release", titleSource: "explicit",
+        source: "acp:antigravity", linkedDirectories: [], inbox: { inInbox: false },
+      };
+      type ListResult = Awaited<ReturnType<NonNullable<DesktopApi["listSkills"]>>>;
+      const first = Promise.withResolvers<ListResult>();
+      const second = Promise.withResolvers<ListResult>();
+      const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>((request) =>
+        request?.cwd === "/first" ? first.promise : second.promise);
+      const desktopApi: DesktopApi = { listSkills };
+      function Picker({ worktreePath }: { worktreePath: string }) {
+        const selected: NavigationThreadSummary = {
+          ...thread, linkedDirectories: [{ id: "repo", path: "/repo", label: "Repo", kind: "local", worktreePath }],
+        };
+        const skills = useThreadSkills({ desktopApi, thread: selected });
+        return <Composer
+          thread={selected}
+          skills={skills.skills}
+          skillCatalogTargetKey={skills.skillCatalogTargetKey}
+          skillLoading={skills.loading}
+          onEnsureSkillsLoaded={skills.ensureLoaded}
+        />;
+      }
+      const view = render(<Picker worktreePath="/first" />);
+      try {
+        const input = screen.getByRole("textbox", { name: "Reply" });
+        fireEvent.change(input, { target: { value: "$release" } });
+        expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first"]);
+
+        view.rerender(<Picker worktreePath="/second" />);
+        expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first", "/second"]);
+
+        const settle = async (pending: typeof first, workspace: string) => {
+          await act(async () => {
+            pending.resolve({ backend: "acp:antigravity", fetchedAt: 1, data: [{
+              skills: [{ name: `release-${workspace}`, path: `/${workspace}/.agents/skills/release/SKILL.md` }],
+            }] });
+          });
+          expect(screen.queryByRole("option", { name: /release-first/ })).toBeNull();
+        };
+        if (oldCompletesFirst) await settle(first, "first");
+        await settle(second, "second");
+        expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
+        if (!oldCompletesFirst) await settle(first, "first");
+        expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
+      } finally {
+        view.unmount();
+      }
+    }), { numRuns: 4, examples: [[false], [true]] });
+  });
+
   it("offers explicit Refresh for a missing skill while reopening reuses the fresh catalog", async () => {
     let names = ["rate-math-paper"];
     let pause = false;

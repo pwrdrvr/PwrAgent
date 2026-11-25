@@ -46,6 +46,7 @@ export function useThreadSkills(params: {
   loading: boolean;
   providerCommands: AppServerAvailableCommandSummary[];
   response?: AppServerListSkillsResponse;
+  skillCatalogTargetKey?: string;
   skills: AppServerSkillSummary[];
 } {
   const { desktopApi, launchpad, thread } = params;
@@ -141,7 +142,11 @@ export function useThreadSkills(params: {
       }
 
       const currentState = stateByThreadKeyRef.current[key];
-      if ((currentState?.loading && !options.replacePending) || (!options.force && currentState?.response)) {
+      // An empty slash response can be a timed-out or cooling-down owner
+      // probe. Reopening the picker should ask again after the owner recovers.
+      const hasCachedResult = currentState?.response && (!options.commandsOnly
+        || currentState.response.data.some(({ commands }) => commands?.length));
+      if ((currentState?.loading && !options.replacePending) || (!options.force && hasCachedResult)) {
         return;
       }
 
@@ -406,6 +411,7 @@ export function useThreadSkills(params: {
     loading: state?.loading ?? false,
     providerCommands,
     response: state?.response,
+    skillCatalogTargetKey: separateCommands ? skillTarget.key : undefined,
     skills,
   };
 }
