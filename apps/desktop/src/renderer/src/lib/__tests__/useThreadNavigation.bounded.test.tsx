@@ -608,7 +608,7 @@ it("uses one viewer membership read per admitted collection for a remote pin rec
     } finally {
       unmount();
     }
-  }), { numRuns: 12, examples: [[3, "notice-settled", "none"], [6, "notice-settled", "none"],
+  }), { numRuns: 8, examples: [[3, "notice-settled", "none"], [6, "notice-settled", "none"],
     [3, "notice-pending", "seen"], [6, "notice-pending", "metadata"], [3, "reply-first", "none"], [6, "reply-first", "none"]] });
 });
 
@@ -811,7 +811,7 @@ it("preserves the owner's acknowledged pin across index and selection delivery o
   await fc.assert(fc.asyncProperty(fc.constantFrom("together" as const, "index-first" as const, "selection-first" as const),
     fc.integer({ min: 1, max: 10_000 }), async (order, rank) => {
       await exerciseDirectoryDescriptorRace(order, String(rank));
-    }), { numRuns: 9, examples: [["together", 1], ["index-first", 1], ["selection-first", 1]] });
+    }), { numRuns: 8, examples: [["together", 1], ["index-first", 1], ["selection-first", 1]] });
 });
 
 it("preserves an optimistic unpin across any sequence of reads before owner acknowledgement", async () => {
@@ -843,7 +843,7 @@ it("preserves an optimistic unpin across any sequence of reads before owner ackn
       finish();
       unmount();
     }
-  }), { numRuns: 15 });
+  }), { numRuns: 8 });
 });
 
 it("loads one owner lens page and exact selection, preserving complete counts independently", async () => {

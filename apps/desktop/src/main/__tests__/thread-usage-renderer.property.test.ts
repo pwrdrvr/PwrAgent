@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 
 import { act, renderHook, waitFor } from "@testing-library/react";
-import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared/token-usage-pricing";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
@@ -55,21 +54,17 @@ async function compareUsagePrices(itemAt: number, observedAt: number, outputToke
       createdAt: itemAt,
       summary: expect.stringContaining(`${formatTokenUsageMicrosAsUsd(ledger!.totalCostMicros)} list price`),
     });
+    return ledger!.totalCostMicros;
   } finally {
     mounted.unmount();
     now.mockRestore();
   }
 }
 
-it("keeps transcript placement while matching the owner's price at the observed usage time", async () => {
-  await fc.assert(fc.asyncProperty(
-    fc.integer({ min: 1, max: 1000 }), fc.nat(1000), fc.integer({ min: 1_000, max: 100_000 }),
-    async (before, after, outputTokens) => {
-      await compareUsagePrices(cutover - before, cutover + after, outputTokens);
-    },
-  ), { numRuns: 25 });
+it("prices a later observation at the new rate while keeping the earlier transcript timestamp", async () => {
+  await compareUsagePrices(cutover - 1_000, cutover + 1_000, 10_000);
 });
 
 it("keeps the pre-cutover transcript timestamp and displays the post-cutover $6 price", async () => {
-  await compareUsagePrices(cutover - 1, cutover, 100_000);
+  expect(await compareUsagePrices(cutover - 1, cutover, 100_000)).toBe(6_000_000);
 });

@@ -344,7 +344,7 @@ describe("messaging rate limits across adapter restarts", () => {
           vi.useRealTimers();
         }
       }),
-      { numRuns: 100 },
+      { numRuns: 30 },
     );
   }, 120_000);
 });

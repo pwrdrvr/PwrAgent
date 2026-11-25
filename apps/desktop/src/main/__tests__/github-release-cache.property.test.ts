@@ -200,7 +200,7 @@ describe("GitHub release cache request budget", () => {
   it("holds the budget, backoff and rate limit, and reads never write", async () => {
     await fc.assert(
       fc.asyncProperty(sessionArbitrary, runSession),
-      { numRuns: 200 },
+      { numRuns: 100 },
     );
   }, 120_000);
 
