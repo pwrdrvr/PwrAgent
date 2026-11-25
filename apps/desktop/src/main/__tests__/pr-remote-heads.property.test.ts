@@ -152,7 +152,7 @@ it("uses per-checkout Git when a shared remote HEAD traverses worktree-private r
   const read = () => expectDiscoveryMatchesGit(attachments(checkouts), {
     storedAttachmentObservation: createStoredAttachmentObservation(async (cwd) => {
       const gitDir = members.get(cwd);
-      return gitDir ? { root: east!, gitDir } : undefined;
+      return gitDir ? { root: east!, gitDir, remoteCandidates: ["origin"] } : undefined;
     }),
   });
   await read();

@@ -71,7 +71,7 @@ type CheckoutLookup = Checkout | "unavailable" | undefined;
 type InventoryCheckoutResult = { cwd: string; checkout: CheckoutLookup; corroborated: boolean };
 type Clone = Checkout & { catalog: CatalogRead };
 type CheckoutIdentity = NonNullable<Awaited<ReturnType<ReturnType<typeof createStackCheckoutHints>["checkoutIdentity"]>>>;
-type WorktreeRoster = { seed: Checkout; roots: ReadonlySet<string>; configVersion: string };
+type WorktreeRoster = { seed: Checkout; roots: ReadonlySet<string>; configVersion: string; remoteCandidates: string[] };
 type RosterMember = { roster: WorktreeRoster; gitDir: string };
 type RegisteredWorktrees = {
   commonVersion: string;
@@ -104,6 +104,15 @@ async function readEffectiveConfig(cwd: string, demand: PrMetadataDemand): Promi
 
 function effectiveConfigVersion(config: string): string {
   return createHash("sha256").update(config).digest("hex");
+}
+
+function rosterRemoteCandidates(config: string): string[] {
+  const names = new Set<string>();
+  for (const setting of config.split("\0")) {
+    const name = /^remote\.(.+)\.[^.]+$/.exec(setting.split("\n", 1)[0])?.[1];
+    if (name) names.add(name);
+  }
+  return [...names];
 }
 
 async function stackJournalInFlight(commonDir: string): Promise<boolean> {
@@ -210,6 +219,20 @@ export class StackReadObservation {
     return this.rosterByCheckout.get(checkout);
   }
 
+  async rostersStillMatch(checkouts: Iterable<Checkout>): Promise<boolean> {
+    const rosters = new Set<WorktreeRoster>();
+    for (const checkout of checkouts) {
+      const member = this.rosterMember(checkout);
+      if (member) rosters.add(member.roster);
+    }
+    const matches = await Promise.all([...rosters].map(async ({ seed, configVersion }) => {
+      const config = await readEffectiveConfig(seed.root, this.inventoryDemand).catch(() => undefined);
+      return config !== undefined && effectiveConfigVersion(config) === configVersion;
+    }));
+    this.demand.signal?.throwIfAborted();
+    return matches.every(Boolean);
+  }
+
   async registeredCheckout(cwd: string, before: CheckoutIdentity, ready?: WorktreeRoster): Promise<Checkout | undefined> {
     if (!before.registeredWorktree || !before.commonVersion || this.hints.requiresGitDiscovery) return undefined;
     let inventory = this.worktreeInventories.get(before.commonDir);
@@ -251,7 +274,9 @@ export class StackReadObservation {
         const roots = new Set(worktreeRecords(output).filter(({ entries, branch }) =>
           (branch || entries.includes("detached")) && !entries.some((entry) => /^prunable(?: |$)/.test(entry)))
           .map(({ path }) => path));
-        if (roots.has(checkout.root)) roster = { seed: checkout, roots, configVersion: effectiveConfigVersion(config) };
+        if (roots.has(checkout.root)) {
+          roster = { seed: checkout, roots, configVersion: effectiveConfigVersion(config), remoteCandidates: rosterRemoteCandidates(config) };
+        }
       }
     } catch {
       demand.signal?.throwIfAborted();
@@ -494,13 +519,15 @@ function rosteredCheckoutRoots(checkouts: ReadonlyMap<string, Checkout>, observa
   return roots;
 }
 
-function observeStackAttachments(checkouts: ReadonlyMap<string, Checkout>, observation: StackReadObservation) {
+function observeStackAttachments(checkouts: ReadonlyMap<string, Checkout>, observation: StackReadObservation, retried: boolean) {
   const { demand, inventoryDemand } = observation;
   // The shared ref proof uses the files backend and no-follow reads.
   const roots = process.platform === "win32" ? undefined : rosteredCheckoutRoots(checkouts, observation);
   const aliasReads = new Map<string, Promise<string | undefined>>();
   const resolveAlias = (cwd: string) => runPrMetadataFileProbe(() => realpath(cwd), inventoryDemand);
-  const representative = (member: RosterMember | undefined) => member && { root: member.roster.seed.root, gitDir: member.gitDir };
+  const representative = (member: RosterMember | undefined) => member && {
+    root: member.roster.seed.root, gitDir: member.gitDir, remoteCandidates: member.roster.remoteCandidates,
+  };
   const storedAttachmentObservation = createStoredAttachmentObservation(async (cwd) => {
     if (!roots?.size) return undefined;
     const exact = checkouts.get(cwd);
@@ -513,24 +540,19 @@ function observeStackAttachments(checkouts: ReadonlyMap<string, Checkout>, obser
     }
     const root = await physical;
     return root ? representative(roots.get(root)) : undefined;
-  });
+  }, retried);
   return {
     demand: { ...demand, storedAttachmentObservation },
     async unchanged() {
-      const used = new Set(storedAttachmentObservation.representativesRead());
-      const configsUnchanged = Promise.all([...used].map(async (seed) => {
-        const current = await readEffectiveConfig(seed, inventoryDemand).catch(() => undefined);
-        return current !== undefined && effectiveConfigVersion(current) === roots?.get(seed)?.roster.configVersion;
-      }));
       // An alias can move into the roster after exact-path validation has
       // rejected its attachment. Recheck even those that did not share Git.
       const aliases = new IterableMapper(aliasReads, async ([cwd, read]) =>
         await resolveAlias(cwd) === await read, STACK_CHECKOUT_SCAN_LIMITS);
       let aliasesUnchanged = true;
       for await (const unchanged of aliases) aliasesUnchanged &&= unchanged;
-      const configsMatch = (await configsUnchanged).every(Boolean);
+      const refsUnchanged = await storedAttachmentObservation.unchanged();
       demand.signal?.throwIfAborted();
-      return aliasesUnchanged && configsMatch;
+      return aliasesUnchanged && refsUnchanged;
     },
   };
 }
@@ -1032,7 +1054,7 @@ export class StackReader {
     }
     const cloneCheckouts = directories ? scopedClones : new Map([...checkouts.values()]
       .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
-    const attachments = validateAttachments && observeStackAttachments(checkouts, observation);
+    const attachments = validateAttachments && observeStackAttachments(checkouts, observation, retried);
     let validatedAny = false;
     const rows = validateAttachments && attachments ? await Promise.all(local.map(async (row) => {
       if (!row.prs?.length || !threadDirectories(row).some((cwd) => {
@@ -1044,10 +1066,6 @@ export class StackReader {
     })) : local;
     demand.signal?.throwIfAborted();
     const attachmentCheckouts = await resolveAttachmentCheckouts(rows, checkouts, cloneCheckouts, observation);
-    if (validatedAny && (!await observation.checkoutsStillMatch(checkouts.values()) || !await attachments!.unchanged())) {
-      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
-      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
-    }
     // Scoped admission used the initial catalog. A change during discovery
     // requires fresh admission before projection can assert settlement.
     if (scopedClones.size && (await Promise.all(
@@ -1136,6 +1154,12 @@ export class StackReader {
     const threadKeys = new Set(stacks.flatMap(({ stack }) => stack.layers.flatMap((layer) => layer.thread ? [layer.thread.key] : [])));
     const activityByThread = new Map(await Promise.all([...threadKeys].map(async (key) => [key, await activity?.(key)] as const)));
     demand.signal?.throwIfAborted();
+    const witnessedCheckouts = validatedAny ? checkouts.values() : [...checkouts.values()].filter((checkout) => observation.rosterMember(checkout));
+    if (!await observation.checkoutsStillMatch(witnessedCheckouts) || !await observation.rostersStillMatch(checkouts.values())
+      || (validatedAny && !await attachments!.unchanged())) {
+      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
+      return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
+    }
     return { stacks: stacks.map(({ stack, observed }) => {
       const layers = stack.layers.map((layer) => {
         const state = layer.thread && activityByThread.get(layer.thread.key);

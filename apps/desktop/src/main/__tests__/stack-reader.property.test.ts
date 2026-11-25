@@ -284,6 +284,73 @@ describe("stack checkout demand", () => {
     }
   });
 
+  it.each(["relative XDG", "relative HOME", "changed onbranch include"])("agrees with Git under %s without attachment validation", async (scenario) => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-config-oracle-")));
+    const primary = path.join(root, "primary");
+    const topic = path.join(root, "00-topic");
+    const home = path.join(root, "home");
+    const xdg = path.join(root, "xdg");
+    const rosterRead = Promise.withResolvers<void>();
+    onTestFinished(() => { rosterRead.resolve(); });
+    try {
+      await Promise.all([mkdir(primary), mkdir(home), mkdir(xdg)]);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", xdg);
+      initialize(primary);
+      git(primary, "checkout", "-b", "main");
+      git(primary, "config", "extensions.worktreeConfig", "true");
+      git(primary, "worktree", "add", topic, "topic");
+      await writeCatalog(topic, "config-oracle");
+      const rows = [row(topic, "topic"), ...Array.from({ length: 5 }, (_, index) => {
+        const branch = `sibling-${index}`;
+        const cwd = path.join(root, branch);
+        git(primary, "worktree", "add", "-b", branch, cwd);
+        return row(cwd, branch);
+      })];
+      const observation = new StackReadObservation();
+      const identity = observation.hints.checkoutIdentity;
+      observation.hints.checkoutIdentity = async (cwd) => {
+        if (cwd === topic) await rosterRead.promise;
+        return await identity(cwd);
+      };
+      const command = gitExecutable.runGitCommand;
+      const run = vi.spyOn(gitExecutable, "runGitCommand");
+      onTestFinished(() => { run.mockRestore(); });
+      if (scenario === "changed onbranch include") {
+        await writeFile(path.join(home, "invalid-config"), "[invalid config\n");
+        let edited = false;
+        run.mockImplementation(async (...args) => {
+          const result = await command(...args);
+          if (!edited && args[1][0] === "worktree" && args[2]?.purpose === "stack-checkout") {
+            edited = true;
+            await writeFile(path.join(home, ".gitconfig"), '[includeIf "onbranch:topic"]\n\tpath = invalid-config\n');
+            rosterRead.resolve();
+          }
+          return result;
+        });
+      } else {
+        run.mockImplementation(async (...args) => {
+          if (args[0] !== topic && args[1][0] === "rev-parse") rosterRead.resolve();
+          return await command(...args);
+        });
+        const config = scenario === "relative HOME" ? path.join("relative", ".gitconfig") : path.join("relative", "git", "config");
+        vi.stubEnv(scenario === "relative HOME" ? "HOME" : "XDG_CONFIG_HOME", "relative");
+        await mkdir(path.join(topic, path.dirname(config)), { recursive: true });
+        await writeFile(path.join(topic, config), "[invalid config\n");
+      }
+      const result = await new StackReader().read(rows, [], undefined, undefined, observation);
+      const args = ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"];
+      const topicDiscovered = await command(topic, args).then(() => true, () => false);
+      await expect(command(rows[1]!.linkedDirectories[0]!.path, args)).resolves.toBeDefined();
+      expect(result.stacks[0]?.layers[0]?.thread?.key).toBe(topicDiscovered ? "codex:topic" : undefined);
+    } finally {
+      rosterRead.resolve();
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes a scoped catalog changed during sibling checkout discovery", async () => {
     const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-catalog-during-discovery-"));
     const primary = path.join(sandbox, "primary");

@@ -24,6 +24,11 @@ async function status(file: string) {
   }
 }
 
+function hasRelativeConfigRoot(env: NodeJS.ProcessEnv): boolean {
+  return [env.HOME, env.XDG_CONFIG_HOME, env.USERPROFILE].some((root) => root !== undefined
+    && (!path.isAbsolute(root) || (process.platform === "win32" && !/^(?:[a-z]:|[\\/]{2})/i.test(root))));
+}
+
 /**
  * Filesystem evidence can rule out stack demand. It cannot admit a checkout.
  * Keep enclosing .git candidates because Git can skip an invalid directory
@@ -147,7 +152,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
       // Nonstandard discovery or runtime settings belong to Git. Do not
       // transfer a confirmed inventory checkout across these environments.
       const env = process.env;
-      if ((requiresGitDiscovery && !installedGitVersion)
+      if ((requiresGitDiscovery && !installedGitVersion) || hasRelativeConfigRoot(env)
         || gitCommandPreference(env) !== configuredGit || hasGitDiscoveryOverrides() || Object.keys(env).some((key) =>
         /^GIT_(?:CONFIG(?:_|$)|TEST_|NAMESPACE$|OBJECT_DIRECTORY$)/i.test(key))) return undefined;
       const runtime = getSelectedManagedGit();

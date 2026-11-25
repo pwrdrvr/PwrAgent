@@ -1415,6 +1415,32 @@ it.each([true, false])("bounds cold and repeated navigation stack discovery with
       await rm(path.join(home, ".gitconfig"));
       source.emit("thread/name/updated");
       expect((await read()).stacks?.[0]?.layers[0]?.pullRequest?.state).toBe("passing");
+
+      await git(primary, "update-ref", "refs/remotes/origin/topic-0", head);
+      afterValidation = async () => {
+        afterValidation = undefined;
+        await git(primary, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/topic-0");
+      };
+      source.emit("thread/name/updated");
+      const newDefault = await read();
+      expect(await git(selected.cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")).toBe("origin/topic-0");
+      expect(newDefault.stacks?.[0]?.layers[0]?.pullRequest?.state).toBeUndefined();
+    }
+
+    if (!extension && process.platform !== "win32") {
+      await git(primary, "symbolic-ref", "--delete", "refs/remotes/origin/HEAD");
+      source.emit("thread/name/updated");
+      expect((await read()).stacks?.[0]?.layers[0]?.pullRequest?.state).toBe("passing");
+      source.emit("thread/name/updated");
+      starts.mockClear();
+      expect((await read()).stacks?.[0]?.layers[0]?.pullRequest?.state).toBe("passing");
+      expect(starts.mock.calls.filter(([, , purpose]) => purpose === "pr-remotes" || purpose === "pr-discovery"))
+        .toHaveLength(0);
+
+      await git(primary, "update-ref", "refs/remotes/origin/topic-0", head);
+      await git(primary, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/topic-0");
+      source.emit("thread/name/updated");
+      expect((await read()).stacks?.[0]?.layers[0]?.pullRequest?.state).toBeUndefined();
     }
 
     // Recovery has a separate journal gate. An explicit observation always
