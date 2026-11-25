@@ -66,9 +66,17 @@ function chipTop(): number {
   });
 }
 
+/** The lane's visible band; a test narrows it to scroll the chip out of view. */
+const laneView = { top: 0, bottom: 900 };
+
 function mockSidebarGeometry(): void {
+  laneView.top = 0;
+  laneView.bottom = 900;
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     if (this.classList.contains("sidebar")) return rect(SIDEBAR.left, SIDEBAR.right, 0, 900);
+    if (this.classList.contains("sidebar-list--dense")) {
+      return rect(SIDEBAR.left, SIDEBAR.right, laneView.top, laneView.bottom);
+    }
     if (this.classList.contains("pr-status-card")) return rect(330, 602, 100, 300);
     if (this.hasAttribute("data-pr-chip")) {
       const top = chipTop();
@@ -151,7 +159,7 @@ type SidebarProps = Layout & { checkState: PrChipState };
 function Sidebar(props: SidebarProps) {
   return (
     <aside className="sidebar">
-      <div className="sidebar-list--dense" data-testid="lane">
+      <div className="sidebar-list--dense" data-testid="lane" style={{ overflowY: "auto" }}>
         <div className="thread-row">
           <span className="thread-row__chips">
             <span className="thread-row__chip" data-row-above-nudge={props.nudged ? "" : undefined}>Claude</span>
@@ -645,6 +653,21 @@ describe("a held sidebar PR card", () => {
     await flushMutations();
     expect(card()).toBe(shown);
     expect(shown.style.top).toBe(`${CHIP_TOP}px`);
+  });
+
+  it("closes a focused chip's card once the lane scrolls the chip out of view", async () => {
+    vi.useFakeTimers();
+    mockSidebarGeometry();
+    stubNativeGeometryObservers();
+    render(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
+    act(() => chip().focus());
+    expect(card()).not.toBeNull();
+
+    // Scrolled so the lane's visible band starts below the chip.
+    laneView.top = CHIP_TOP + CHIP_HEIGHT + 40;
+    fireEvent.scroll(screen.getByTestId("lane"));
+    await flushMutations();
+    expect(card()).toBeNull();
   });
 
   it("follows a chip the pointer still rests on, and closes once the chip moves out from under it", async () => {

@@ -88,15 +88,18 @@ says when to read this document. Relative links were updated for this location.
     counts as held, so a layout move in that window does not close it, and
     the owner's grace (the bridge's, or `dismissAfterGrace`) closes it only
     if the pointer stays out. A pointer that slips out and straight back keeps
-    the card even after its anchor moved.
+    the card even after its anchor moved; once the grace ends, a card whose
+    anchor moved closes, pinned or not.
   - **A card read from its trigger follows the trigger.** While keyboard
     focus is on an enterable card's trigger, or the pointer still rests on
     the trigger where it now sits, the same moves re-anchor the card to the
     trigger's new rectangle instead of closing it. "Rests on" is geometric:
-    the pointer was last over the trigger, by one window-level listener in
+    the pointer was last over the trigger, as recorded by document-level
+    capture listeners (`mousemove`, `mouseover`, `mouseout`) in
     `useViewportTooltip`, and the trigger's new box still contains that
     point. A trigger that moved out from under a stationary pointer has lost
-    it. Any other card closes on a move, as a plain tooltip does; plain
+    it, and one scrolled out of its lane or the viewport has nothing to
+    follow. Any other card closes on a move, as a plain tooltip does; plain
     tooltips never follow. `PrChip.held-card.model.test.tsx` states both
     rules.
   - **A card with content worth hearing needs `aria-describedby`.** Point the
