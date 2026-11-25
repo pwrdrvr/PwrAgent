@@ -93,6 +93,24 @@ describe("reading a long usage period in pieces", () => {
     ));
   });
 
+  it("issues no further owner reads once the viewer has moved on", async () => {
+    await fc.assert(fc.asyncProperty(windowArb, fc.integer({ min: 1, max: 6 }), fc.integer({ min: 1, max: 4 }),
+      async (window, stopAfter, cap) => {
+        // Dense rows so pieces split and the read would otherwise keep going.
+        const rows = Array.from({ length: 40 }, (_, index) => {
+          const startedAt = window.from + Math.floor(index * (window.to - window.from) / 40);
+          return { id: `row-${index}`, startedAt, completedAt: startedAt, updatedAt: index };
+        });
+        const { read, requests } = owner(rows, cap);
+        const unlimited = owner(rows, cap);
+        await readUsageActivityInPieces(unlimited.read, window);
+        const merged = await readUsageActivityInPieces(read, window, { shouldContinue: () => requests.length < stopAfter });
+        expect(requests.length).toBe(Math.min(stopAfter, unlimited.requests.length));
+        if (unlimited.requests.length > stopAfter) expect(merged.truncated).toBe(true);
+      },
+    ));
+  });
+
   it("recovers a period whose newest rows alone exceed one read's bound", async () => {
     const from = Date.UTC(2026, 7, 27, 13, 31);
     const to = from + 90 * DAY;

@@ -78,18 +78,24 @@ export function mergeUsageActivityPieces(pieces: readonly ReadUsageActivityRespo
  * piece that came back truncated (an owner returns at most its newest 5,000
  * rows) until it fits or can no longer be split, within `maxPieces` reads.
  * Account-wide token history is period-independent, so only the first,
- * newest read asks for it.
+ * newest read asks for it. Once `shouldContinue` turns false (the viewer
+ * moved on), no further reads are issued and the partial result is returned
+ * as truncated; the caller discards it.
  */
 export async function readUsageActivityInPieces(
   read: (window: UsageWindow, includeAccountTokenUsage: boolean) => Promise<ReadUsageActivityResponse>,
   window: UsageWindow,
-  options: { includeAccountTokenUsage?: boolean; maxSpan?: number; maxPieces?: number } = {},
+  options: { includeAccountTokenUsage?: boolean; maxSpan?: number; maxPieces?: number; shouldContinue?: () => boolean } = {},
 ): Promise<ReadUsageActivityResponse> {
   const maxPieces = options.maxPieces ?? USAGE_READ_MAX_PIECES;
   const pending = usageReadPieces(window.from, window.to, options.maxSpan);
   const done: ReadUsageActivityResponse[] = [];
   let reads = 0;
   while (pending.length) {
+    if (reads > 0 && options.shouldContinue && !options.shouldContinue()) {
+      done.push({ ...done[0] ?? { readAt: Date.now(), rateLimits: [] }, rows: [], truncated: true, limitHistory: undefined, providerLimitHistory: undefined });
+      break;
+    }
     const piece = pending.shift()!;
     const response = await read(piece, reads === 0 && options.includeAccountTokenUsage === true);
     reads += 1;

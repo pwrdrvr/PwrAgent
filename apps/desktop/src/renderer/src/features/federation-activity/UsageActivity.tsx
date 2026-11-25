@@ -303,7 +303,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     ? accounts.filter((account) => accountTokenUsageAccountKey(account) === accountFilter) : accounts;
 
   const readAll = async (targets: Source[], start: number, end: number,
-    includeAccountTokenUsage: (source: Source) => boolean = () => false) => {
+    includeAccountTokenUsage: (source: Source) => boolean, shouldContinue: () => boolean) => {
     const results: SourceResult[] = [];
     // At most four owners read at once. Each rejects a window over 31 days and
     // returns at most 5,000 rows, so a long or busy period is read in pieces.
@@ -315,7 +315,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
             data: await readUsageActivityInPieces((window, includeTokens) => desktopApi!.readUsageActivity!({
               from: window.from, to: window.to, federationTarget: source.target,
               ...(includeTokens ? { includeAccountTokenUsage: true } : {}),
-            }), { from: start, to: end }, { includeAccountTokenUsage: includeAccountTokenUsage(source) }),
+            }), { from: start, to: end }, { includeAccountTokenUsage: includeAccountTokenUsage(source), shouldContinue }),
           };
         } catch (cause) { return { ...source, error: String(cause) }; }
       })));
@@ -358,7 +358,9 @@ export function UsageActivity({ desktopApi, initialProvider }: {
       setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setBucket(undefined); setFacet(undefined);
       setProviderFilters({}); setModelFilters({});
     }
-    let results = await readAll(enabledSources, start, end, () => true);
+    // A superseded read stops issuing owner reads; its result is discarded below.
+    const current = () => mounted.current && seq === readSeq.current;
+    let results = await readAll(enabledSources, start, end, () => true, current);
     if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
     // Only owners that answered: one that failed the first read asks again below,
@@ -375,7 +377,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
         // Account-wide daily token history is period-independent, so reuse the
         // first pass rather than polling `account/usage/read` a second time.
         results = (await readAll(enabledSources, bounded, end,
-          (source) => !initialTokenUsageBySource.has(sourceId(source.target)))).map((source) => {
+          (source) => !initialTokenUsageBySource.has(sourceId(source.target)), current)).map((source) => {
           const accountTokenUsage = source.data?.accountTokenUsage ?? initialTokenUsageBySource.get(sourceId(source.target));
           return source.data && accountTokenUsage ? { ...source, data: { ...source.data, accountTokenUsage } } : source;
         });
