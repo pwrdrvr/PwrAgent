@@ -21,7 +21,7 @@ import { portableThreadRequest } from "./portable-code-mode-transport.mjs";
 export * from "@pwragent/owner-core/codex-app-server/client";
 
 type DesktopCodexClientOptions = CodexClientOptions & Partial<Pick<StdioJsonRpcTransportOptions,
-  "command" | "args" | "resolveArgs" | "resolveCommand"
+  "command" | "args" | "resolveArgs" | "resolveCommand" | "windowsCodexMcpEnabled" | "windowsCodexMcpRelay"
 >>;
 type ProviderCodexClientOptions = DesktopCodexClientOptions & { portableDiscovery?: boolean };
 
@@ -67,8 +67,7 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
       clientInfo: { name: "pwragent-desktop", title: "PwrAgent" },
       prepareThreadRequest: async (input) => {
         const params = computerUse ? await computerUse.prepare(input) : input.params;
-        await bindCodexAgentToolRuntime(params, () => appServerTransport.ownedProcess());
-        return params;
+        return await bindCodexAgentToolRuntime(params, () => appServerTransport.ownedProcess());
       },
       logger: getMainLogger("pwragent:codex-client"),
       rpcLogger: getMainLogger("pwragent:json-rpc"),

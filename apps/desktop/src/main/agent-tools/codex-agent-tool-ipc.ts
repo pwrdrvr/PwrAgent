@@ -1,9 +1,11 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { chmod, mkdtemp, realpath, rmdir } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
 import { promisify } from "node:util";
+import { WINDOWS_CODEX_MCP_SERVER_PID, type WindowsCodexMcpRuntime } from "../codex-app-server/windows-codex-mcp-runtime";
 import { nativeStdioRelayPath } from "../native-relay-path";
 
 export const CODEX_AGENT_TOOL_SERVER_NAME = "pwragent_apps";
@@ -26,8 +28,13 @@ export type CodexIpcConnection = (stream: Duplex, token: string, isAuthorized: (
 export type CodexIpcListener = Pick<CodexAgentToolIpc, "configuration" | "revoke" | "close">
   & Partial<Pick<CodexAgentToolIpc, "bindRuntime">>;
 
-export type OwnedCodexProcess = { child: ChildProcess; isCurrent: () => boolean };
-type RegisteredRuntime = { process: OwnedCodexProcess; identity: string; sockets: Set<Socket> };
+export type OwnedCodexProcess = {
+  child: ChildProcess;
+  isCurrent: () => boolean;
+  windows?: WindowsCodexMcpRuntime;
+};
+type RegisteredRuntime = { process: OwnedCodexProcess; identity?: string; sockets: Set<Socket> };
+type WindowsRegistration = { endpoint: string; supervisorPid: number };
 type Registration = { runtime?: RegisteredRuntime; binding?: { child: ChildProcess } };
 
 // The thread config crosses the Codex client adapter before reaching the
@@ -38,16 +45,31 @@ const rootProbes = new WeakMap<ChildProcess, Promise<string>>();
 export async function bindCodexAgentToolRuntime(
   params: unknown,
   readOwnedProcess: () => OwnedCodexProcess | undefined,
-): Promise<void> {
+): Promise<unknown> {
   const request = params as { config?: { mcp_servers?: Record<string, Partial<CodexAgentToolStdioConfig>> } } | undefined;
   const server = request?.config?.mcp_servers?.[CODEX_AGENT_TOOL_SERVER_NAME];
   const [mode, endpoint] = Array.isArray(server?.args) ? server.args : [];
   const token = server?.env?.[CODEX_AGENT_TOOL_GRANT];
-  if (mode !== RELAY_MODE || typeof token !== "string" || typeof endpoint !== "string") return;
+  if (mode !== RELAY_MODE || typeof token !== "string" || typeof endpoint !== "string") return params;
   const listener = listeners.get(endpoint);
   const owned = readOwnedProcess();
   if (!listener || !owned) throw new Error("PwrAgent MCP requires a local owned Codex App Server.");
-  await listener.bindRuntime(token, owned);
+  const windows = await listener.bindRuntime(token, owned);
+  if (!windows) return params;
+  return {
+    ...request,
+    config: {
+      ...request?.config,
+      mcp_servers: {
+        ...request?.config?.mcp_servers,
+        [CODEX_AGENT_TOOL_SERVER_NAME]: {
+          ...server,
+          args: [RELAY_MODE, windows.endpoint],
+          env: { ...server?.env, [WINDOWS_CODEX_MCP_SERVER_PID]: String(windows.supervisorPid) },
+        },
+      },
+    },
+  };
 }
 
 export function matchesCodexRelayAncestry(root: string, ancestry: readonly string[]): boolean {
@@ -58,6 +80,7 @@ export function matchesCodexRelayAncestry(root: string, ancestry: readonly strin
 export class CodexAgentToolIpc {
   private readonly sockets = new Set<Socket>();
   private readonly grants = new Map<string, Registration>();
+  private readonly windowsRuntimes = new Map<WindowsCodexMcpRuntime, () => void>();
   private readonly server = createServer({ pauseOnConnect: true }, (socket) => this.accept(socket));
   private pending = 0;
   private directory?: string;
@@ -68,10 +91,21 @@ export class CodexAgentToolIpc {
   constructor(
     private readonly onConnection: CodexIpcConnection,
     private readonly executable: () => string = nativeStdioRelayPath,
+    private readonly allowWindows = false,
   ) {}
 
   async configuration(token: string): Promise<CodexAgentToolStdioConfig> {
     if (this.closed) throw new Error("PwrAgent MCP is shutting down.");
+    if (process.platform === "win32" && this.allowWindows) {
+      // Only the request adapter can turn this owner-local alias into the
+      // endpoint of the selected and verified runtime generation.
+      if (!this.endpoint) {
+        this.endpoint = `pwa-windows-owner:${randomUUID()}`;
+        listeners.set(this.endpoint, this);
+      }
+      if (!this.grants.has(token)) this.grants.set(token, {});
+      return { command: this.executable(), args: [RELAY_MODE, this.endpoint], env: { [CODEX_AGENT_TOOL_GRANT]: token } };
+    }
     if (process.platform !== "darwin" && process.platform !== "linux") {
       throw new Error("PwrAgent tools via MCP require verified local Codex process ancestry, currently available on macOS and Linux.");
     }
@@ -86,16 +120,43 @@ export class CodexAgentToolIpc {
     return { command: this.executable(), args: [RELAY_MODE, endpoint], env: { [CODEX_AGENT_TOOL_GRANT]: token } };
   }
 
-  async bindRuntime(token: string, owned: OwnedCodexProcess): Promise<void> {
+  async bindRuntime(token: string, owned: OwnedCodexProcess): Promise<WindowsRegistration | undefined> {
     const registration = this.grants.get(token);
     if (!registration || !owned.isCurrent() || !owned.child.pid) {
       throw new Error("PwrAgent MCP registration or its owned Codex runtime has ended.");
     }
     const binding = registration.binding?.child === owned.child ? registration.binding : { child: owned.child };
     registration.binding = binding;
+    const windows = owned.windows;
+    if (process.platform === "win32" && (!this.allowWindows || !windows)) {
+      throw new Error("PwrAgent MCP requires a verified Windows Codex launcher. Restart with a supported native runtime.");
+    }
+    const identity = windows ? undefined : await this.pinUnixRuntime(owned);
+    if (windows) await windows.ready;
+    if (this.grants.get(token) !== registration || !owned.isCurrent()) {
+      throw new Error("The Codex runtime changed before PwrAgent MCP could bind its registration.");
+    }
+    if (registration.binding !== binding) {
+      throw new Error("A newer request is binding this PwrAgent MCP registration.");
+    }
+    const previous = registration.runtime;
+    if (previous?.process.child !== owned.child) {
+      for (const socket of previous?.sockets ?? []) socket.destroy();
+      registration.runtime = { process: owned, identity, sockets: new Set() };
+    }
+    if (!windows) return undefined;
+    if (!this.windowsRuntimes.has(windows)) {
+      const detach = windows.acceptStreams((socket) => this.accept(socket, windows));
+      this.windowsRuntimes.set(windows, detach);
+      owned.child.once("close", () => this.windowsRuntimes.delete(windows));
+    }
+    return { endpoint: windows.endpoint, supervisorPid: owned.child.pid };
+  }
+
+  private async pinUnixRuntime(owned: OwnedCodexProcess): Promise<string> {
     let probe = rootProbes.get(owned.child);
     if (!probe) {
-      probe = runProbe(this.executable(), ["--codex-root", String(owned.child.pid)], {
+      probe = runProbe(this.executable(), ["--codex-root", String(owned.child.pid!)], {
         timeout: PROBE_TIMEOUT, maxBuffer: 1024,
       }).then(({ stdout }) => {
         const identity = stdout.trim();
@@ -107,17 +168,7 @@ export class CodexAgentToolIpc {
       });
       rootProbes.set(owned.child, probe);
     }
-    const identity = await probe;
-    if (this.grants.get(token) !== registration || !owned.isCurrent()) {
-      throw new Error("The Codex runtime changed before PwrAgent MCP could bind its registration.");
-    }
-    if (registration.binding !== binding) {
-      throw new Error("A newer request is binding this PwrAgent MCP registration.");
-    }
-    const previous = registration.runtime;
-    if (previous?.process.child === owned.child) return;
-    for (const socket of previous?.sockets ?? []) socket.destroy();
-    registration.runtime = { process: owned, identity, sockets: new Set() };
+    return await probe;
   }
 
   revoke(token: string): void {
@@ -128,6 +179,8 @@ export class CodexAgentToolIpc {
   async close(): Promise<void> {
     this.closed = true;
     this.grants.clear();
+    for (const detach of this.windowsRuntimes.values()) detach();
+    this.windowsRuntimes.clear();
     await this.starting?.catch(() => undefined);
     if (this.endpoint) listeners.delete(this.endpoint);
     for (const socket of this.sockets) socket.destroy();
@@ -164,7 +217,7 @@ export class CodexAgentToolIpc {
     this.directory = undefined;
   }
 
-  private accept(socket: Socket): void {
+  private accept(socket: Socket, windows?: WindowsCodexMcpRuntime): void {
     socket.on("error", () => socket.destroy());
     if (this.closed || this.pending >= MAX_PENDING_ADMISSIONS || this.sockets.size >= MAX_CONNECTIONS) {
       socket.destroy();
@@ -173,7 +226,7 @@ export class CodexAgentToolIpc {
     this.sockets.add(socket);
     socket.once("close", () => this.sockets.delete(socket));
     this.pending++;
-    void this.admit(socket).then((admission) => {
+    void this.admit(socket, windows).then((admission) => {
       if (!admission || !admission.isAuthorized()) {
         socket.destroy();
         return;
@@ -182,13 +235,18 @@ export class CodexAgentToolIpc {
     }).catch(() => socket.destroy()).finally(() => this.pending--);
   }
 
-  private async admit(socket: Socket) {
+  private async admit(socket: Socket, windows?: WindowsCodexMcpRuntime) {
     const token = await readRegistrationPreface(socket);
     if (!token) return undefined;
     const root = this.grants.get(token)?.runtime;
-    if (!root?.process.isCurrent()) return undefined;
-    const ancestry = await inspectPeer(this.executable(), socket);
-    if (!matchesCodexRelayAncestry(root.identity, ancestry)) return undefined;
+    if (!root?.process.isCurrent() || root.process.windows !== windows) return undefined;
+    // Windows supplies the stream only after the supervisor proves the
+    // connected relay. Its object identity scopes the grant to that launch.
+    if (!windows) {
+      if (!root.identity) return undefined;
+      const ancestry = await inspectPeer(this.executable(), socket);
+      if (!matchesCodexRelayAncestry(root.identity, ancestry)) return undefined;
+    }
     const isAuthorized = () => !socket.destroyed && this.grants.get(token)?.runtime === root && root.process.isCurrent();
     if (!isAuthorized()) return undefined;
     root.sockets.add(socket);

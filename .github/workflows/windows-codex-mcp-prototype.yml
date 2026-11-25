@@ -1,4 +1,4 @@
-name: Windows Codex MCP prototype
+name: Windows Codex MCP owner
 
 on:
   pull_request:
@@ -8,6 +8,8 @@ on:
       - 'apps/desktop/scripts/*windows-codex-mcp-prototype.*'
       - 'apps/desktop/src/main/agent-tools/codex-agent-tool-ipc.ts'
       - 'apps/desktop/src/main/agent-tools/agent-tool-mcp-server.ts'
+      - 'apps/desktop/src/main/codex-app-server/*transport.ts'
+      - 'apps/desktop/src/main/codex-app-server/windows-codex-mcp-runtime.ts'
   workflow_dispatch:
 
 permissions:

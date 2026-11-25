@@ -1,222 +1,185 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { Duplex } from "node:stream";
-import type { McpServerStatusUpdatedNotification } from "@pwrdrvr/codex-app-server-protocol";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { AgentToolMcpServer } from "../src/main/agent-tools/agent-tool-mcp-server";
 import { AgentToolRouter } from "../src/main/agent-tools/agent-tool-router";
-import {
-  CODEX_AGENT_TOOL_GRANT,
-  readRegistrationPreface,
-  type CodexAgentToolStdioConfig,
-  type CodexIpcConnection,
-} from "../src/main/agent-tools/codex-agent-tool-ipc";
+import { bindCodexAgentToolRuntime, type CodexAgentToolStdioConfig } from "../src/main/agent-tools/codex-agent-tool-ipc";
 import { buildCurrentTurnInputSourceTool } from "../src/main/agent-tools/current-turn-input-source-tool";
+import { WindowsCodexMcpRuntime } from "../src/main/codex-app-server/windows-codex-mcp-runtime";
+import { buildCodexAgentToolsMcpConfig } from "../src/main/app-server/codex-thread-config";
 
+const name = "pwragent_apps";
 const tool = "get_current_turn_input_source";
-const deadline = 20_000;
 
-/** Quote one argument for CommandLineToArgvW / the Microsoft CRT. */
-function windowsArgument(value: string): string {
-  return '"' + value.replace(/(\\*)"/gu, '$1$1\\"').replace(/(\\+)$/u, "$1$1") + '"';
-}
-
-function launch(supervisor: string, pipe: string, executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
-  const commandLine = [executable, ...args].map(windowsArgument).join(" ");
-  const runtime = spawn(supervisor, ["--codex-windows-supervisor", pipe, executable, commandLine], {
-    cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
-  });
-  runtime.stderr?.pipe(process.stderr, { end: false });
-  return runtime;
-}
-
-function bridge(runtime: ChildProcess): Duplex {
-  const readable = runtime.stdio[4];
-  const writable = runtime.stdio[3];
-  assert(readable && writable);
-  const stream = Duplex.from({ readable, writable });
-  // Owner and runtime death also close an idle or uninitialized channel.
-  runtime.once("exit", () => stream.destroy());
-  stream.on("error", () => stream.destroy());
-  return stream;
-}
-
-function fixtureOwner(runtime: ChildProcess, channel: Duplex, endpoint: string) {
-  assert(runtime.pid);
+function fixtureOwner() {
   const relay = process.env.PWRAGENT_TEST_MCP_STDIO_RELAY;
   assert(relay, "the fixture requires the built Rust stdio relay");
-  const grants = new Set<string>();
-  let acceptConnection: CodexIpcConnection;
-  let activeThread: string | undefined;
+  const active = new Set<string>();
   let dispatches = 0;
   const router = new AgentToolRouter([buildCurrentTurnInputSourceTool(() => {
     dispatches++;
     return "desktop";
   })]);
   const server = new AgentToolMcpServer({
-    verifyCodexThreadId: true,
+    verifyCodexThreadId: true, allowWindowsCodexIpc: true, codexRelayExecutable: () => relay,
     resolveCatalogs: () => [{ id: "app_management", router }],
-    resolveCallContext: ({ threadId }) => threadId && threadId === activeThread
-      ? { backend: "codex", threadId, turnId: "prototype-turn" }
+    resolveCallContext: ({ threadId }) => threadId && active.has(threadId)
+      ? { backend: "codex", threadId, turnId: "fixture-turn" }
       : undefined,
-    createCodexIpcListener: (onConnection) => {
-      acceptConnection = onConnection;
-      return {
-        configuration: async (token) => {
-          grants.add(token);
-          return {
-            command: relay, args: ["--codex-stdio", endpoint], env: {
-              [CODEX_AGENT_TOOL_GRANT]: token,
-              PWRAGENT_CODEX_MCP_SERVER_PID: String(runtime.pid),
-            },
-          };
-        },
-        revoke: (token) => { grants.delete(token); },
-        close: async () => { grants.clear(); channel.destroy(); },
-      };
-    },
   });
   return {
-    server,
-    setActive: (threadId?: string) => { activeThread = threadId; },
-    dispatches: () => dispatches,
-    accept: async () => {
-      if (channel.readableLength === 0) {
-        await Promise.race([
-          once(channel, "readable"),
-          once(channel, "close").then(() => { throw new Error("prototype closed before admission"); }),
-        ]);
-      }
-      const token = await readRegistrationPreface(channel);
-      assert(token && grants.has(token), "admitted relay must present a scoped registration");
-      await acceptConnection(channel, token,
-        () => !channel.destroyed && grants.has(token) && runtime.exitCode === null && runtime.signalCode === null);
+    server, active, dispatches: () => dispatches,
+    async register(runtime: WindowsCodexMcpRuntime, threadId?: string) {
+      const registration = await server.registerCodexClient({ backend: "codex", threadId });
+      const prepared = await bindCodexAgentToolRuntime({ config: buildCodexAgentToolsMcpConfig(registration) }, () => ({
+        child: runtime.child, windows: runtime,
+        isCurrent: () => runtime.child.exitCode === null && runtime.child.signalCode === null,
+      })) as { config: { mcp_servers: Record<string, CodexAgentToolStdioConfig> } };
+      return { registration, config: prepared.config };
     },
   };
 }
 
-async function getLine(stream: NodeJS.ReadableStream) {
-  const lines = createInterface({ input: stream });
+function launch(helper: string, command: string, args: string[], env = process.env) {
+  const runtime = new WindowsCodexMcpRuntime(command, args, env, helper);
+  runtime.child.stderr.pipe(process.stderr, { end: false });
+  return runtime;
+}
+
+async function readLine(stream: NodeJS.ReadableStream) {
+  const reader = createInterface({ input: stream });
   try {
     return await Promise.race([
-      once(lines, "line").then(([line]) => line as string),
-      once(lines, "close").then(() => { throw new Error("process closed before its reply"); }),
+      once(reader, "line").then(([line]) => line as string),
+      once(reader, "close").then(() => { throw new Error("process closed before its reply"); }),
     ]);
-  } finally { lines.close(); }
+  } finally { reader.close(); }
 }
 
 async function relayFixture() {
-  const { config, threadId, wrongThread } = JSON.parse(await getLine(process.stdin)) as {
-    config: CodexAgentToolStdioConfig; threadId: string; wrongThread: string;
-  };
-  const client = new Client({ name: "windows-native-fixture", version: "1" });
-  await client.connect(new StdioClientTransport({
-    command: config.command, args: config.args, env: config.env, stderr: "inherit",
+  console.log("ready");
+  const configs = JSON.parse(await readLine(process.stdin)) as Record<string, CodexAgentToolStdioConfig>;
+  const entries = await Promise.all(Object.entries(configs).map(async ([threadId, config]) => {
+    const client = new Client({ name: "windows-concurrent-fixture", version: "1" });
+    await client.connect(new StdioClientTransport({ ...config, stderr: "inherit" }));
+    return [threadId, client, config] as const;
   }));
-  const names = (await client.listTools()).tools.map(({ name }) => name);
-  const idle = await client.callTool({ name: tool, _meta: { threadId } });
-  assert.equal(idle.isError, true);
-  console.log("idle-rejected");
-  assert.equal(await getLine(process.stdin), "active");
-  const wrong = await client.callTool({ name: tool, _meta: { threadId: wrongThread } });
-  const right = await client.callTool({ name: tool, _meta: { threadId } });
-  assert.deepEqual(names, [tool]);
-  assert.equal(wrong.isError, true);
-  assert.deepEqual(right.structuredContent, { source: "desktop" });
-  console.log("fixture-ok");
-  // Keep the admitted relay alive until the owner closes the bridge.
+  const call = (client: Client, threadId: string) => client.callTool({ name: tool, _meta: { threadId } });
+  await Promise.all(entries.map(async ([threadId, client, config]) => {
+    assert.deepEqual((await client.listTools()).tools.map(({ name }) => name), [tool]);
+    assert.equal((await call(client, threadId === "one" ? "two" : "one")).isError, true);
+    assert.equal((await call(client, threadId)).isError, true);
+    const invalid = new Client({ name: "wrong-grant", version: "1" });
+    await assert.rejects(invalid.connect(new StdioClientTransport({
+      ...config, stderr: "ignore", env: { ...config.env, PWRAGENT_CODEX_MCP_GRANT: "x".repeat(43) },
+    }), { timeout: 3000 }));
+  }));
+  console.log("idle");
+  assert.equal(await readLine(process.stdin), "active");
+  await Promise.all(entries.map(async ([threadId, client]) => {
+    assert.deepEqual((await call(client, threadId)).structuredContent, { source: "desktop" });
+  }));
+  const [, first] = entries[0];
+  const [secondThread, second] = entries[1];
+  await first.close();
+  assert.deepEqual((await call(second, secondThread)).structuredContent, { source: "desktop" });
+  console.log("concurrent-ok");
 }
 
-async function proofOracle(helper: string, cwd: string) {
-  const endpoint = `\\\\.\\pipe\\pwa-codex-prototype-${randomUUID()}`;
-  const runtime = launch(helper, endpoint, process.execPath, [__filename, "--relay-fixture"], cwd, process.env);
-  const closed = once(runtime, "exit");
-  const channel = bridge(runtime);
-  const owner = fixtureOwner(runtime, channel, endpoint);
+async function stop(runtime: WindowsCodexMcpRuntime, root: number) {
+  const closed = runtime.child.exitCode === null && runtime.child.signalCode === null
+    ? once(runtime.child, "close") : Promise.resolve();
+  runtime.stop();
+  await closed;
+  const connection = createConnection(runtime.endpoint);
   try {
-    const registered = await owner.server.registerCodexClient({ backend: "codex", threadId: "fixture-thread" });
-    // Accept cannot begin until the debugger has processed the root startup.
-    const ready = getLine(runtime.stdout!);
-    assert.equal(await ready, "fixture-ready");
-    const duplicate = launch(helper, endpoint, process.execPath, ["-e", "process.exit(0)"], cwd, process.env);
-    const [duplicateCode] = await once(duplicate, "exit");
-    assert.notEqual(duplicateCode, 0, "an occupied pipe must reject a second listener");
-    const unowned = spawn(registered.server.command, registered.server.args, { env: { ...process.env, ...registered.server.env },
-      stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-    let unownedBytes = 0;
-    unowned.stdout.on("data", (chunk: Buffer) => { unownedBytes += chunk.length; });
-    const [unownedCode] = await once(unowned, "exit");
-    assert.notEqual(unownedCode, 0, "the correct grant is insufficient outside the selected launch");
-    assert.equal(unownedBytes, 0);
+    await assert.rejects(once(connection, "connect"), { code: "ENOENT" });
+  } finally { connection.destroy(); }
+  assert.throws(() => process.kill(root, 0), { code: "ESRCH" });
+}
 
-    const idle = getLine(runtime.stdout!);
-    const accepting = owner.accept();
-    runtime.stdin!.write(JSON.stringify({ config: registered.server, threadId: "fixture-thread", wrongThread: "different-thread" }) + "\n");
-    await accepting;
-    assert.equal(await idle, "idle-rejected");
+async function proofOracle(helper: string) {
+  const runtime = launch(helper, process.execPath, [__filename, "--relay-fixture"]);
+  const owner = fixtureOwner();
+  const nativeRoot = await runtime.ready;
+  try {
+    const startup = readLine(runtime.child.stdout);
+    const configurations = await Promise.all(["one", "two"].map(async (threadId) => {
+      const { config } = await owner.register(runtime, threadId);
+      return [threadId, config.mcp_servers[name]] as const;
+    }));
+    assert.equal(await startup, "ready");
+    const outside = spawn(configurations[0][1].command, configurations[0][1].args,
+      { env: { ...process.env, ...configurations[0][1].env }, stdio: "ignore", windowsHide: true });
+    const [outsideExit] = await once(outside, "exit");
+    assert.notEqual(outsideExit, 0);
+    const idle = readLine(runtime.child.stdout);
+    runtime.child.stdin.write(JSON.stringify(Object.fromEntries(configurations)) + "\n");
+    assert.equal(await idle, "idle");
     assert.equal(owner.dispatches(), 0);
-    owner.setActive("fixture-thread");
-    const report = getLine(runtime.stdout!);
-    runtime.stdin!.write("active\n");
-    assert.equal(await report, "fixture-ok");
-    assert.equal(owner.dispatches(), 1);
+    owner.active.add("one");
+    owner.active.add("two");
+    const result = readLine(runtime.child.stdout);
+    runtime.child.stdin.write("active\n");
+    assert.equal(await result, "concurrent-ok");
+    assert.equal(owner.dispatches(), 3);
   } finally {
-    runtime.stdin?.end();
+    await stop(runtime, nativeRoot);
     await owner.server.close();
-    await closed;
   }
-  const after = createConnection(endpoint);
-  try {
-    await assert.rejects(once(after, "connect"), { code: "ENOENT" }, "closing the owner must remove the pipe");
-  } finally {
-    after.destroy();
-  }
-  console.log("Windows native proof, first-instance protection, scope, and teardown passed");
+  console.log("Native concurrent streams, scoped grant and thread checks, independent teardown and job cleanup passed");
 }
 
-function rpc(runtime: ChildProcess) {
+type WireEvent = { method: string; params: { threadId?: string; name?: string; status?: string; turn?: { status?: string } } };
+
+function rpc(runtime: WindowsCodexMcpRuntime) {
   let id = 0;
-  const pending = new Map<number, (value: unknown) => void>();
-  const notifications = new EventEmitter();
-  const lines = createInterface({ input: runtime.stdout! });
-  lines.on("line", (line) => {
-    const response = JSON.parse(line) as { id?: number; method?: string; params?: unknown };
-    if (response.id !== undefined) pending.get(response.id)?.(response);
-    else if (response.method) notifications.emit(response.method, response.params);
+  const signals = new EventEmitter();
+  const history: WireEvent[] = [];
+  const replies = new Map<number, (value: unknown) => void>();
+  createInterface({ input: runtime.child.stdout }).on("line", (line) => {
+    const message = JSON.parse(line) as { id?: number; method?: string };
+    if (message.id !== undefined) replies.get(message.id)?.(message);
+    if (message.method) {
+      const event = message as WireEvent;
+      if (history.length >= 256) history.shift();
+      history.push(event);
+      signals.emit("event", event);
+    }
   });
-  const send = (message: object) => runtime.stdin!.write(JSON.stringify(message) + "\n");
+  const send = (message: object) => runtime.child.stdin.write(JSON.stringify(message) + "\n");
   return {
-    waitForMcpStartup: (name: string) => new Promise<string | null>((resolve, reject) => {
-      function finish(error: Error | null, threadId: string | null) {
-        clearTimeout(timer);
-        notifications.off("mcpServer/startupStatus/updated", read);
-        if (error) reject(error);
-        else resolve(threadId);
-      }
-      function read(event: McpServerStatusUpdatedNotification) {
-        if (event.name !== name || event.status === "starting") return;
-        const error = event.status === "ready" ? null : new Error(`Codex MCP startup: ${event.status} (${event.failureReason ?? "unknown"})`);
-        finish(error, event.threadId);
-      }
-      const timer = setTimeout(() => finish(new Error("Codex did not report MCP startup"), null), deadline);
-      notifications.on("mcpServer/startupStatus/updated", read);
-    }),
     notify: (method: string) => send({ method }),
-    request: <T,>(method: string, params: object): Promise<T> => {
+    wait: (description: string, match: (event: WireEvent) => boolean) => new Promise<WireEvent>((resolve, reject) => {
+      const existing = history.find(match);
+      if (existing) { resolve(existing); return; }
+      const onEvent = (event: WireEvent) => {
+        if (!match(event)) return;
+        clearTimeout(timeout);
+        signals.off("event", onEvent);
+        resolve(event);
+      };
+      const timeout = setTimeout(() => {
+        signals.off("event", onEvent);
+        reject(new Error(`Codex did not report ${description}`));
+      }, 15_000);
+      signals.on("event", onEvent);
+    }),
+    request: <T,>(method: string, params?: object): Promise<T> => {
       const requestId = ++id;
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { pending.delete(requestId); reject(new Error(`Codex ${method} timed out`)); }, deadline);
-        pending.set(requestId, (value) => {
+        const timer = setTimeout(() => { replies.delete(requestId); reject(new Error(`Codex ${method} timed out`)); }, 18_000);
+        replies.set(requestId, (value) => {
           clearTimeout(timer);
-          pending.delete(requestId);
+          replies.delete(requestId);
           const response = value as { result: T; error?: { message?: string } };
           if (response.error) reject(new Error(`Codex ${method}: ${response.error.message}`));
           else resolve(response.result);
@@ -227,61 +190,122 @@ function rpc(runtime: ChildProcess) {
   };
 }
 
-async function realCodex(helper: string, codex: string, cwd: string) {
-  const codexHome = join(cwd, "codex-home");
+async function realCodex(helper: string, executable: string, cwd: string, sandbox: "read-only" | "workspace-write") {
+  // Deterministically persist a real turn without using an account.
+  let modelCalls = 0;
+  const model = createServer(async (request, response) => {
+    for await (const _ of request) { /* Drain the disposable model request. */ }
+    const id = `fixture-${++modelCalls}`;
+    response.setHeader("Content-Type", "text/event-stream");
+    for (const event of [
+      { type: "response.created", response: { id } },
+      { type: "response.output_item.done", item: {
+        type: "message", role: "assistant", id: `msg-${id}`, content: [{ type: "output_text", text: "fixture complete" }],
+      } },
+      { type: "response.completed", response: { id, usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 } } },
+    ]) response.write(`data: ${JSON.stringify(event)}\n\n`);
+    response.end();
+  });
+  await new Promise<void>((resolve) => model.listen(0, "127.0.0.1", resolve));
+  const address = model.address();
+  assert(address && typeof address === "object");
+  const codexHome = join(cwd, sandbox);
   await mkdir(codexHome);
-  await writeFile(join(codexHome, "config.toml"), '[features]\napps = false\nplugins = false\nhooks = false\n');
-  const endpoint = `\\\\.\\pipe\\pwa-codex-prototype-${randomUUID()}`;
-  const runtime = launch(helper, endpoint, codex, ["app-server", "--listen", "stdio://"], cwd,
-    { ...process.env, CODEX_HOME: codexHome, OPENAI_API_KEY: undefined });
-  const closed = once(runtime, "exit");
-  const owner = fixtureOwner(runtime, bridge(runtime), endpoint);
+  await writeFile(join(codexHome, "config.toml"), `model = "gpt-5.5"
+model_provider = "fixture"
+[model_providers.fixture]
+name = "Disposable Windows test"
+base_url = "http://127.0.0.1:${address.port}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+[windows]
+sandbox = "unelevated"
+[features]
+apps = false
+plugins = false
+hooks = false
+`);
+  const owner = fixtureOwner();
+  const start = async () => {
+    const runtime = launch(helper, executable, ["app-server", "--listen", "stdio://"],
+      { ...process.env, CODEX_HOME: codexHome, OPENAI_API_KEY: undefined });
+    const api = rpc(runtime);
+    const nativeRoot = await runtime.ready;
+    await api.request("initialize", { clientInfo: { name: "pwragent-windows-owner", version: "1" }, capabilities: { experimentalApi: true } });
+    api.notify("initialized");
+    return { runtime, nativeRoot, api };
+  };
+  const inventory = async (api: ReturnType<typeof rpc>, threadId: string) => {
+    const result = await api.request<{ data: Array<{ name: string; tools: Record<string, unknown>; toolsError: string | null }> }>("mcpServerStatus/list", {
+      threadId, detail: "toolsAndAuthOnly", limit: 100,
+    });
+    const server = result.data.find((row) => row.name === name);
+    assert(server && Object.hasOwn(server.tools, tool), `Inspector omitted the owner tool (${server?.toolsError ?? "unknown"})`);
+  };
+  const ready = async (api: ReturnType<typeof rpc>, threadId: string) => {
+    const event = await api.wait("thread MCP startup", (entry) => entry.method === "mcpServer/startupStatus/updated"
+      && entry.params.name === name && entry.params.threadId === threadId && entry.params.status !== "starting");
+    assert.equal(event.params.status, "ready");
+  };
+  let generation: Awaited<ReturnType<typeof start>> | undefined;
   try {
-    const appServer = rpc(runtime);
-    await appServer.request("initialize", { clientInfo: { name: "pwragent-windows-prototype", version: "1" }, capabilities: { experimentalApi: true } });
-    appServer.notify("initialized");
-    const registered = await owner.server.registerCodexClient({ backend: "codex" });
-    const accepting = owner.accept();
-    const ready = appServer.waitForMcpStartup("pwragent_apps");
-    const starting = appServer.request<{ thread: { id: string } }>("thread/start", {
-      cwd, ephemeral: true, approvalPolicy: "never", sandbox: "read-only",
-      config: { mcp_servers: { pwragent_apps: { required: true, enabled: true, ...registered.server } } },
+    generation = await start();
+    const original = await owner.register(generation.runtime);
+    const { api } = generation;
+    const { thread } = await api.request<{ thread: { id: string } }>("thread/start", {
+      cwd, model: "gpt-5.5", modelProvider: "fixture", approvalPolicy: "never", sandbox, config: original.config,
     });
-    const [started, readyThreadId] = await Promise.all([starting, ready, accepting]);
-    const threadId = started.thread.id;
-    assert.equal(readyThreadId, threadId);
-    registered.bindThread(threadId);
-    const idle = await appServer.request<{ isError?: boolean; structuredContent?: { code?: string } }>("mcpServer/tool/call", {
-      threadId, server: "pwragent_apps", tool, arguments: {}, _meta: { threadId },
+    original.registration.bindThread(thread.id);
+    await ready(api, thread.id);
+    await inventory(api, thread.id);
+    const idle = await api.request<{ isError: boolean }>("mcpServer/tool/call", { threadId: thread.id, server: name, tool, arguments: {} });
+    assert.equal(idle.isError, true);
+    await api.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: "Save one fixture turn.", text_elements: [] }] });
+    const turn = await api.wait("turn completion", (event) => event.method === "turn/completed" && event.params.threadId === thread.id);
+    assert.equal(turn.params.turn?.status, "completed");
+    await api.request("config/mcpServer/reload");
+    await inventory(api, thread.id);
+    const fork = await owner.register(generation.runtime);
+    const forked = await api.request<{ thread: { id: string } }>("thread/fork", {
+      threadId: thread.id, cwd, approvalPolicy: "never", sandbox, config: fork.config,
     });
-    assert.equal(idle.isError, true, "the real Codex call must be refused while the thread is idle");
-    assert.equal(idle.structuredContent?.code, "forbidden");
-    assert.equal(owner.dispatches(), 0);
-    console.log("Real Codex launched the verified relay, reported MCP ready, and received the owner’s idle-call refusal");
+    assert.notEqual(forked.thread.id, thread.id);
+    fork.registration.bindThread(forked.thread.id);
+    await ready(api, forked.thread.id);
+    await Promise.all([inventory(api, thread.id), inventory(api, forked.thread.id)]);
+    const retiredEndpoint = generation.runtime.endpoint;
+    await stop(generation.runtime, generation.nativeRoot);
+    generation = undefined;
+    generation = await start();
+    assert.notEqual(generation.runtime.endpoint, retiredEndpoint);
+    const resume = await owner.register(generation.runtime, thread.id);
+    await generation.api.request("thread/resume", { threadId: thread.id, cwd, sandbox, approvalPolicy: "never", config: resume.config });
+    await ready(generation.api, thread.id);
+    await inventory(generation.api, thread.id);
+    assert(modelCalls > 0);
+    console.log(`Real Windows Codex ${sandbox}: inspector, reload, fork, restart, and cleanup passed`);
   } finally {
-    runtime.stdin?.end();
+    if (generation) await stop(generation.runtime, generation.nativeRoot);
     await owner.server.close();
-    await closed;
+    await new Promise<void>((resolve) => model.close(() => resolve()));
   }
 }
 
 async function main(helper: string, codex?: string) {
-  const production = new AgentToolMcpServer({ resolveCatalogs: () => [], resolveCallContext: () => undefined });
-  try {
-    await assert.rejects(production.registerCodexClient({ backend: "codex" }), /macOS and Linux/u);
-  } finally {
-    await production.close();
-  }
   const cwd = await mkdtemp(join(tmpdir(), "pwa-win-codex-"));
   try {
-    await proofOracle(helper, cwd);
-    if (codex) await realCodex(helper, codex, cwd);
+    await proofOracle(helper);
+    if (codex) {
+      await realCodex(helper, codex, cwd, "read-only");
+      await realCodex(helper, codex, cwd, "workspace-write");
+    }
   } finally { await rm(cwd, { recursive: true, force: true }); }
 }
 
 const args = process.argv.slice(2);
-const timeout = setTimeout(() => { console.error("Windows MCP prototype exceeded its deadline"); process.exit(1); }, 60_000);
-const run = args[0] === "--relay-fixture"
-  ? (console.log("fixture-ready"), relayFixture())
-  : main(args[0], args[1]);
-void run.then(() => clearTimeout(timeout), (error) => { clearTimeout(timeout); console.error(error); process.exitCode = 1; });
+const timer = setTimeout(() => { console.error("Windows Codex owner test timed out"); process.exit(1); }, 120_000);
+void (args[0] === "--relay-fixture" ? relayFixture() : main(args[0], args[1])).then(
+  () => clearTimeout(timer),
+  (error) => { clearTimeout(timer); console.error(error); process.exitCode = 1; },
+);

@@ -197,6 +197,7 @@ export type AgentToolMcpAuthorization = {
 export type AgentToolMcpServerOptions = {
   verifyCodexThreadId?: boolean;
   codexRelayExecutable?: () => string;
+  allowWindowsCodexIpc?: boolean;
   createCodexIpcListener?: (onConnection: CodexIpcConnection) => CodexIpcListener;
   resolveCatalogs: (
     context: AgentToolMcpClientContext,
@@ -245,7 +246,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const onConnection: CodexIpcConnection = (stream, token, isAuthorized) =>
       this.openCodexSession(stream, token, isAuthorized);
     this.codexIpc = options.createCodexIpcListener?.(onConnection)
-      ?? new CodexAgentToolIpc(onConnection, options.codexRelayExecutable);
+      ?? new CodexAgentToolIpc(onConnection, options.codexRelayExecutable, options.allowWindowsCodexIpc);
   }
 
   async registerClient(

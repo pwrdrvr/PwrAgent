@@ -31,6 +31,7 @@ import {
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
 import type { OwnedCodexProcess } from "../agent-tools/codex-agent-tool-ipc";
+import { WindowsCodexMcpRuntime } from "./windows-codex-mcp-runtime";
 import { resolveWindowsCodexLaunchCommand } from "../codex-windows-launch";
 import { readCodexExecutableIdentity, type CodexExecutableIdentity } from "./executable-identity";
 
@@ -75,6 +76,8 @@ export type CodexAppServerStopReport = {
 };
 
 export type StdioJsonRpcTransportOptions = {
+  windowsCodexMcpEnabled?: () => boolean;
+  windowsCodexMcpRelay?: () => string;
   command: string;
   authenticationRecovery?: boolean;
   onAuthenticationRejected?: (home: string) => void;
@@ -125,6 +128,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
   private requestMethods = new Map<string | number | null, string>();
   private observesParsedEnvelopes = false;
   private unsubscribeAuth?: () => void;
+  private windowsMcp?: WindowsCodexMcpRuntime;
   private childProcess: ChildProcessWithoutNullStreams | null = null;
   private childStartedAt = 0;
   private childExecutable?: CodexExecutableIdentity;
@@ -267,13 +271,19 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
         : {}),
     });
 
-    const child = spawn(invocation.command, invocation.args, {
+    const windows = process.platform === "win32" && this.options.windowsCodexMcpEnabled?.()
+      && path.win32.isAbsolute(invocation.command) && path.win32.basename(invocation.command).toLowerCase() === "codex.exe"
+      && !invocation.windowsVerbatimArguments
+      ? new WindowsCodexMcpRuntime(invocation.command, invocation.args, childEnv, this.options.windowsCodexMcpRelay?.())
+      : undefined;
+    const child = windows?.child ?? spawn(invocation.command, invocation.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env: childEnv,
       detached: process.platform !== "win32",
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     });
 
+    this.windowsMcp = windows;
     this.childProcess = child;
     this.childStartedAt = Date.now();
     this.childExecutable = executable;
@@ -370,6 +380,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     });
     child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
       if (this.childProcess === child) {
+        this.windowsMcp = undefined;
         this.childProcess = null;
       }
       if (generation === this.lifecycleGeneration) this.failResponseFlushes();
@@ -390,6 +401,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
         this.options.onUnexpectedExit?.(exit);
       }
     });
+    if (windows) await windows.ready;
   }
 
   async close(): Promise<void> {
@@ -406,6 +418,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (!child) {
       return;
     }
+    this.windowsMcp?.stop();
     this.closePromise = this.stopChildProcessTree(child)
       .finally(() => {
         if (this.childProcess === child) {
@@ -421,6 +434,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (!child?.pid) return undefined;
     return {
       child,
+      windows: this.windowsMcp,
       isCurrent: () => !this.closeRequested && this.childProcess === child && child.exitCode === null && child.signalCode === null,
     };
   }
