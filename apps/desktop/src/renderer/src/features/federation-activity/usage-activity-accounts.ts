@@ -1,5 +1,6 @@
 import type { OwnedUsageRow } from "./usage-activity-summary";
 import type { LimitAccount } from "./usage-limits";
+import { accountTokenUsageAccountKey, type AccountTokenAccount } from "./usage-account-tokens";
 import { formatBackendPlanType } from "../../lib/backend-status-format";
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -66,7 +67,7 @@ function planLabel(planType: string): string {
  * machine that recorded them, and by provider only when that collides.
  */
 export function buildUsageAccounts(rows: OwnedUsageRow[], limits: LimitAccount[],
-  names: Record<string, string> = {}): UsageAccount[] {
+  names: Record<string, string> = {}, tokenAccounts: AccountTokenAccount[] = []): UsageAccount[] {
   const accounts = new Map<string, { provider: string; accountKey?: string; owners: Set<string>; limitKey?: string; plan?: string }>();
   for (const row of rows) {
     const key = usageAccountKey(row);
@@ -83,6 +84,15 @@ export function buildUsageAccounts(rows: OwnedUsageRow[], limits: LimitAccount[]
     account.limitKey = limit.key;
     account.plan ??= limit.planType ? planLabel(limit.planType) : undefined;
     for (const owner of limit.owners) account.owners.add(owner);
+  }
+  for (const tokenAccount of tokenAccounts) {
+    // A keyless account-usage observation stays owner-scoped and proves no row attribution.
+    const key = accountTokenUsageAccountKey(tokenAccount);
+    if (!key) continue;
+    let account = accounts.get(key);
+    if (!account) accounts.set(key, account = { provider: tokenAccount.provider, accountKey: tokenAccount.accountKey, owners: new Set() });
+    account.plan ??= tokenAccount.planType ? planLabel(tokenAccount.planType) : undefined;
+    for (const owner of tokenAccount.owners) account.owners.add(owner);
   }
   const built = [...accounts].map(([key, account]) => {
     const owners = [...account.owners].sort();
