@@ -7860,6 +7860,11 @@ button.stack-display__thread,
   gap: 12px;
 }
 
+.thread-row.is-batch-selected {
+  border-style: dashed;
+  border-color: var(--text-muted);
+}
+
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);

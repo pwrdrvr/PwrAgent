@@ -4,6 +4,7 @@ import fc from "fast-check";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { _resetKeybindingsStoreForTests } from "../../../lib/keybindings-store";
+import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 
 afterEach(() => {
   cleanup();
@@ -41,6 +42,7 @@ function openSelection(
     backends={[]}
     browseMode="attention"
     directories={[]}
+    selectedItemKey={threadSummaryIdentityKey(threads[0]!)}
     threads={threads}
     loading={false}
     onBrowseModeChange={() => undefined}

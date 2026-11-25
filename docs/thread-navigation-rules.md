@@ -9,6 +9,7 @@ Read this before changing thread lenses, Attention membership/order, unread stat
 - Each lens tab contains only an icon or status indicators.
 - Put the lens name in the `aria-label` and tooltip.
 - A thread can have links to multiple Git directories.
+- The open thread's identity drives the transcript, the active row, and the dock. Keep the active row's accent on that thread during batch selection and while using another row's menu. A dashed border marks rows included in an explicit batch.
 
 ### History and unsubmitted composers
 

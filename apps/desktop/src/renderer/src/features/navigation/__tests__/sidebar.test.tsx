@@ -5502,6 +5502,7 @@ describe("Sidebar", () => {
         directories={directories}
         inboxThreads={[firstThread, secondThread, thirdThread]}
         loading={false}
+        selectedItemKey={threadSummaryIdentityKey(firstThread)}
         threads={[firstThread, secondThread, thirdThread]}
         onArchiveThread={onArchiveThread}
         onBrowseModeChange={() => undefined}
@@ -5534,6 +5535,11 @@ describe("Sidebar", () => {
     expect(firstButton).toHaveAttribute("aria-pressed", "false");
     expect(secondButton).toHaveAttribute("aria-pressed", "true");
     expect(thirdButton).toHaveAttribute("aria-pressed", "true");
+    expect(firstButton).toHaveAttribute("aria-current", "true");
+    expect(threadCard(firstButton)).toHaveClass("is-selected");
+    expect(threadCard(firstButton)).not.toHaveClass("is-batch-selected");
+    expect(threadCard(secondButton)).toHaveClass("is-batch-selected");
+    expect(threadCard(secondButton)).not.toHaveClass("is-selected");
 
     fireEvent.click(firstButton, { metaKey: true, shiftKey: true });
     expect(firstButton).toHaveAttribute("aria-pressed", "true");
@@ -5606,6 +5612,7 @@ describe("Sidebar", () => {
         directories={directories}
         inboxThreads={[pinnedThread, parentThread, childThread, unpinnedThread]}
         loading={false}
+        selectedItemKey={threadSummaryIdentityKey(childThread)}
         threads={[pinnedThread, parentThread, childThread, unpinnedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -8514,6 +8521,7 @@ describe("Sidebar", () => {
     expect(onCopyThreadDiagnostics).toHaveBeenCalledWith(sharedThread);
     expect(onSelectThread).not.toHaveBeenCalled();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(threadCard(screen.getByRole("button", { name: sharedThread.title }))).not.toHaveClass("is-selected");
   });
 
   it("omits Copy Diagnostics Info without a handler", () => {
