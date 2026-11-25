@@ -195,3 +195,58 @@ it.skipIf(process.platform === "win32")("keeps a bounded page independent of an 
     await Promise.allSettled(reads);
   }
 });
+
+it.skipIf(process.platform === "win32").each(["native URL", "deleted checkout"] as const)(
+  "keeps %s authority independent of a competing inventory sample",
+  async (scenario) => {
+    const { clone, checkouts: [cwd] } = await ordinaryWorktrees();
+    const native = scenario === "native URL";
+    const runGit = git.runGitCommand;
+    if (native) await runGit(clone, ["config", "remote.origin.tagOpt", "--no-tags"]);
+    const inventoryReached = Promise.withResolvers<void>();
+    const checkoutReached = Promise.withResolvers<void>();
+    const releaseInventory = Promise.withResolvers<void>();
+    const releaseCheckout = Promise.withResolvers<void>();
+    const runner = vi.spyOn(git, "runGitCommand").mockImplementation(async (directory, args, options) => {
+      if (options?.purpose !== "pr-remotes") return runGit(directory, args, options);
+      const inventory = prGitSubprocessCaller.getStore() === "pr-owner-navigation-inventory";
+      if (!inventory && (native ? args[1] === "get-url" : args[0] === "config")) {
+        checkoutReached.resolve();
+        await releaseCheckout.promise;
+      }
+      const result = await runGit(directory, args, options);
+      if (inventory && args.includes("--show-origin")) {
+        inventoryReached.resolve();
+        await releaseInventory.promise;
+      }
+      return result;
+    });
+    onTestFinished(() => { runner.mockRestore(); });
+
+    const fromInventory = prGitSubprocessCaller.run("pr-owner-navigation-inventory", () =>
+      resolveGitHubRepoForDirectory(cwd, { inventoryConfig: createInventoryRemoteConfigReader() }));
+    let fresh: ReturnType<typeof resolveGitHubRepoForDirectory> | undefined;
+    let joiningFresh: typeof fresh;
+    try {
+      await Promise.race([inventoryReached.promise, fromInventory.then(() => { throw new Error("Inventory did not sample Git"); })]);
+      const checkoutDemand = { fresh: true, demand: { priority: () => PR_METADATA_PRIORITY.selected } };
+      fresh = resolveGitHubRepoForDirectory(cwd, checkoutDemand);
+      await Promise.race([checkoutReached.promise, fresh.then(() => { throw new Error("Checkout did not reach Git"); })]);
+      joiningFresh = resolveGitHubRepoForDirectory(cwd, checkoutDemand);
+      releaseInventory.resolve();
+      await expect(fromInventory).resolves.toEqual(parseForgeRemote(origin));
+      // The fresh native URL is newer than both earlier reads. A vanished
+      // checkout supplies no action authority even if its inventory is warm.
+      if (native) await runGit(cwd, ["remote", "set-url", "origin", editedOrigin]);
+      else await runGit(clone, ["worktree", "remove", cwd]);
+      releaseCheckout.resolve();
+      const expected = native ? parseForgeRemote(editedOrigin) : undefined;
+      await expect(Promise.all([fresh, joiningFresh])).resolves.toEqual([expected, expected]);
+      await expect(resolveGitHubRepoForDirectory(cwd)).resolves.toEqual(parseForgeRemote(native ? editedOrigin : origin));
+    } finally {
+      releaseInventory.resolve();
+      releaseCheckout.resolve();
+      await Promise.allSettled([fromInventory, fresh, joiningFresh]);
+    }
+  },
+);

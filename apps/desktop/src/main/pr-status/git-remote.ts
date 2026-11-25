@@ -113,10 +113,11 @@ type RemoteCacheEntry = {
   fetchedAt: number;
 };
 type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
+type RemoteRead = { checkout: RemoteCacheEntry; polling?: RemoteCacheEntry };
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
-const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
-const inventoryLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
+const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteRead>>();
+const inventoryLookups = new Map<string, SharedPrMetadataRead<RemoteRead>>();
 let remoteCacheGeneration = 0;
 let remoteSampleOrder = 0;
 
@@ -414,10 +415,13 @@ async function readParsedGitRemotes(
   // Only inventory can wait for an inventory batch. Another reader may
   // acquire page or selected demand later through attachment validation.
   const lookups = !confirmEmpty && options.inventoryConfig ? inventoryLookups : remoteLookups;
+  // The polling cache can retain a competing conclusive sample. Checkout
+  // authority needs the Git result from the checkout lookup it waited for.
+  const resultForCaller = (read: RemoteRead) => confirmEmpty ? read.checkout : read.polling ?? read.checkout;
   const checkoutRead = remoteLookups.get(cwd);
   const existing = checkoutRead && !checkoutRead.signal.aborted ? checkoutRead : lookups.get(cwd);
   if (existing && !existing.signal.aborted) {
-    const observation = await existing.read(options.demand);
+    const observation = resultForCaller(await existing.read(options.demand));
     // A checkout-authority read can join a cheaper discovery already in
     // flight. Confirm an ambiguous result once the shared read settles.
     return confirmEmpty && observation.unconfirmedEmpty
@@ -425,7 +429,7 @@ async function readParsedGitRemotes(
       : observation;
   }
 
-  const pending = new SharedPrMetadataRead(async (demand) => {
+  const pending = new SharedPrMetadataRead<RemoteRead>(async (demand) => {
     try {
       const { observation: loaded } = await loadParsedGitRemotes(cwd, options, demand);
       demand.signal?.throwIfAborted();
@@ -438,17 +442,19 @@ async function readParsedGitRemotes(
           const { conclusive } = observedOrigin(observation);
           const currentConclusive = observedOrigin(current).conclusive;
           if ((currentConclusive && !conclusive)
-            || (currentConclusive === conclusive && current.sampleOrder > observation.sampleOrder)) return current;
+            || (currentConclusive === conclusive && current.sampleOrder > observation.sampleOrder)) {
+            return { checkout: observation, polling: current };
+          }
         }
         remoteCache.set(cwd, observation);
       }
-      return observation;
+      return { checkout: observation };
     } finally {
       if (lookups.get(cwd) === pending) lookups.delete(cwd);
     }
   });
   lookups.set(cwd, pending);
-  return pending.read(options.demand);
+  return resultForCaller(await pending.read(options.demand));
 }
 
 async function loadParsedGitRemotes(
@@ -597,24 +603,32 @@ async function defaultReadRemotes(
     && names.every((name, index) => name === previous.names?.[index]) && hasAllRemoteUrls(previous)) {
     return { names, remotes: previous.value, readWithGitRemote: true, hasConditionalIncludes: previous.hasConditionalIncludes };
   }
-  // A native URL read spans several commands. Order it from the remote list
-  // so an overlapping owner sample can supersede this mixed observation.
-  const urlSampleOrder = listSampleOrder ?? nextRemoteSampleOrder();
+  // The list establishes absence. When origin is listed, its successful
+  // URL command establishes the repository and supplies its sample order.
+  const namesSampleOrder = listSampleOrder ?? nextRemoteSampleOrder();
+  let originSampleOrder: number | undefined;
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
+        let urlSampleOrder: number | undefined;
         const result = await runPrMetadataGit(
           cwd,
           ["remote", "get-url", "--all", name],
-          gitOptions, demand,
+          name === "origin" ? { ...gitOptions, beforeSpawn: () => { urlSampleOrder = nextRemoteSampleOrder(); } } : gitOptions,
+          demand,
         );
-        return uniqueNonEmptyLines(result.stdout).map((url) => ({ name, url }));
+        const urls = uniqueNonEmptyLines(result.stdout);
+        if (name === "origin" && urls.length) originSampleOrder = urlSampleOrder ?? nextRemoteSampleOrder();
+        return urls.map((url) => ({ name, url }));
       } catch {
         return [];
       }
     }),
   );
-  return { names, remotes: entries.flat(), readWithGitRemote: true, hasConditionalIncludes: previous?.hasConditionalIncludes, urlSampleOrder };
+  return {
+    names, remotes: entries.flat(), readWithGitRemote: true, hasConditionalIncludes: previous?.hasConditionalIncludes,
+    urlSampleOrder: originSampleOrder ?? namesSampleOrder,
+  };
 }
 
 function uniqueNonEmptyLines(value: string): string[] {
