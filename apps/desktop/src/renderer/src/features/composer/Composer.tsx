@@ -15963,9 +15963,13 @@ function useComposerController(props: ComposerProps) {
           onChange: (speed: CodexSpeed) => applySettings({ fastMode: speed === "fast" }),
         },
       } : {}),
-      ...(props.launchpad && profileModelOption && launchpadDiffersFromProfileDefaults ? {
+      // The row stays while the draft matches the default, stating so, so the
+      // panel does not change height as the operator moves between providers.
+      ...(props.launchpad && profileModelOption ? {
         reset: {
           label: "Use AI Providers default",
+          currentLabel: "Using AI Providers default",
+          current: !launchpadDiffersFromProfileDefaults,
           detail: [
             profileModelOption.label ?? profileModelOption.id,
             profileReasoningOptions.length > 0 ? profileReasoningEffort : undefined,

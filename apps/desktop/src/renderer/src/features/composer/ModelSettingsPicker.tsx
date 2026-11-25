@@ -103,8 +103,12 @@ export type ModelSettingsPickerProps = {
     disabled?: boolean;
     onChange: (value: CodexSpeed) => void;
   };
-  /** A last row that puts the settings back, such as the profile default. */
-  reset?: { label: string; detail?: string; onSelect: () => void };
+  /**
+   * A last row that puts the settings back, such as the profile default.
+   * With `current` the settings already match it: the row states so and takes
+   * no click, and keeps the panel's height while providers change.
+   */
+  reset?: { label: string; currentLabel?: string; detail?: string; current?: boolean; onSelect: () => void };
   /** Rows above the editor, such as the to-do card's This thread and Recent. */
   quickPicks?: (close: () => void) => ReactNode;
   footnote?: ReactNode;
@@ -232,6 +236,15 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
       ?? panel?.querySelector<HTMLElement>('[data-model-settings-list="model"] [role="option"]:not(:disabled)')
       ?? panel?.querySelector<HTMLElement>("button:not(:disabled), [tabindex='0']");
     target?.focus({ preventScroll: true });
+    // The model list scrolls inside a panel of fixed height; bring the chosen
+    // row into it without scrolling the page under the panel.
+    const list = target?.closest<HTMLElement>(".model-settings__models");
+    if (target && list && list.scrollHeight > list.clientHeight) {
+      const row = target.getBoundingClientRect();
+      const box = list.getBoundingClientRect();
+      if (row.bottom > box.bottom) list.scrollTop += row.bottom - box.bottom + 4;
+      else if (row.top < box.top) list.scrollTop -= box.top - row.top + 4;
+    }
   }, [open, placement, portalled]);
 
   const effortIndex = props.effort ? props.effort.stops.indexOf(props.effort.value ?? "") : -1;
@@ -354,7 +367,13 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
           </div>
         </>
       )}
-      {props.reset ? (
+      {props.reset?.current ? (
+        <p className="model-settings__reset model-settings__reset--current">
+          <span aria-hidden="true" className="model-settings__reset-mark">✓</span>
+          <span>{props.reset.currentLabel ?? props.reset.label}</span>
+          {props.reset.detail ? <span className="model-settings__reset-detail">{props.reset.detail}</span> : null}
+        </p>
+      ) : props.reset ? (
         <button
           className="model-settings__reset"
           type="button"
@@ -638,7 +657,7 @@ function ModelList({ model }: { model: ModelSettingsPickerProps["model"] }) {
     if (!model.disabled) model.onChange(value);
   };
   return (
-    <section aria-label="Model" className="model-settings__section">
+    <section aria-label="Model" className="model-settings__section model-settings__models">
       <div aria-hidden="true" className="model-settings__label">Model</div>
       <ChoiceListbox
         groups={[{ choices: primary }, ...groups]}

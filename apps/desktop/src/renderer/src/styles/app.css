@@ -50829,15 +50829,23 @@ button.composer__subthread-source-parent:hover {
   bottom: auto;
 }
 
+/* With a provider rail the body keeps one height whatever the provider
+   offers, so switching providers never moves the panel's free edge: the
+   model list scrolls inside it and Effort and Speed stay at its foot. */
 .model-settings__grid {
   display: grid;
+  height: 320px;
   grid-template-columns: 156px minmax(0, 1fr);
 }
 
 .model-settings__rail {
   min-width: 0;
+  min-height: 0;
   padding-right: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   border-right: 1px solid var(--border-subtle);
+  scrollbar-width: thin;
 }
 
 .model-settings__main {
@@ -50845,7 +50853,22 @@ button.composer__subthread-source-parent:hover {
 }
 
 .model-settings__grid .model-settings__main {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
   padding-left: 8px;
+}
+
+.model-settings__grid .model-settings__section {
+  flex: none;
+}
+
+.model-settings__grid .model-settings__models {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
 }
 
 .model-settings__quick {
@@ -51195,8 +51218,18 @@ button.composer__subthread-source-parent:hover {
   text-align: left;
 }
 
-.model-settings__reset:hover {
+.model-settings__reset:hover:not(.model-settings__reset--current) {
   color: var(--accent-bright);
+}
+
+.model-settings__reset--current {
+  margin-bottom: 0;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.model-settings__reset--current .model-settings__reset-detail {
+  color: var(--text-secondary);
 }
 
 .model-settings__reset-mark {

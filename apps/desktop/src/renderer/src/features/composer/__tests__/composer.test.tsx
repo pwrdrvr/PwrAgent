@@ -24455,6 +24455,59 @@ describe("Composer", () => {
     });
   });
 
+  it("keeps the default row in the model panel while the launchpad already matches it", () => {
+    // The row once came and went with the match, so the panel, anchored at
+    // its foot above the composer, jumped as the operator moved between
+    // providers. Matching, it now states so and takes no click.
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                label: "GPT-5.6-Sol",
+                current: true,
+                defaultReasoningEffort: "low",
+                reasoningEfforts: ["low", "high"],
+                supportsReasoning: true,
+              },
+            ],
+          }),
+        ]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        providerModelDefaults={{
+          codex: { model: "gpt-5.6-sol", reasoningEffortsByModel: { "gpt-5.6-sol": "high" } },
+        }}
+        onUpdateLaunchpad={vi.fn(async () => undefined)}
+        skills={[]}
+      />,
+    );
+
+    const panel = openModelSettings();
+    expect(within(panel).queryByRole("button", { name: /AI Providers default/ })).toBeNull();
+    expect(panel.querySelector(".model-settings__reset")?.textContent).toBe("✓Using AI Providers defaultGPT-5.6-Sol · high");
+  });
+
   it("marks ACP privileged launchpad modes as full-access before materialization", async () => {
     const onUpdateLaunchpad = vi.fn(async () => undefined);
 
