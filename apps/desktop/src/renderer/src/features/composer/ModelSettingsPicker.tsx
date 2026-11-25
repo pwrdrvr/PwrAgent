@@ -22,6 +22,7 @@ import {
   effortStopAtPointer,
   effortStopForKey,
   effortStopLabelled,
+  heldPanelFoot,
   heldPanelOffset,
   modelSettingsSummary,
   placeModelSettingsPanel,
@@ -132,9 +133,10 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
   const ariaLabel = props.ariaLabel ?? "Model settings";
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<ModelSettingsPanelPlacement>();
-  const [abovePlacement, setAbovePlacement] = useState<{ offset: number; lift: number; maxHeight: number }>();
-  // Where the pill was when the panel opened; cleared when it closes.
-  const anchorRef = useRef<{ left: number; top: number }>(undefined);
+  const [abovePlacement, setAbovePlacement] = useState<{ offset: number; rise: number; maxHeight: number }>();
+  // Where the panel opened: the pill's left edge and the panel's foot.
+  // Cleared when it closes.
+  const anchorRef = useRef<{ left: number; foot: number }>(undefined);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -194,26 +196,28 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
         : next);
       return;
     }
-    // Above the composer: it opens over the pill like every composer menu,
-    // then stays put while it is open. A pick can change the chips before
-    // the pill (the access mode, the work mode) and wrap the toolbar onto
-    // another row, and a panel that followed the pill would slide sideways
-    // or drop under the pointer choosing in it.
-    const anchor = anchorRef.current ??= { left: trigger.left, top: trigger.top };
+    // Above the composer: it opens in line with the pill, over the whole
+    // composer, then stays put while it is open. A pick can change the chips
+    // before the pill (the access mode, the work mode) and wrap the toolbar
+    // onto another row; a panel hung from the pill slid sideways or dropped
+    // under the pointer choosing in it, and one held over the pill covered
+    // chips the toolbar moved up under it.
+    const shelf = wrapperRef.current?.closest<HTMLElement>(".composer")?.getBoundingClientRect().top ?? trigger.top;
+    const foot = heldPanelFoot({ held: anchorRef.current?.foot, shelfTop: shelf });
+    const anchor = anchorRef.current = { left: anchorRef.current?.left ?? trigger.left, foot };
     const offset = heldPanelOffset({
       anchor: anchor.left,
       triggerLeft: trigger.left,
       width: panel.offsetWidth || width,
       viewportWidth: window.innerWidth,
     });
-    // How far the pill has moved down since the panel opened; the panel's
-    // foot rises by as much from the pill to stay where it was.
-    const lift = trigger.top - anchor.top;
-    const maxHeight = Math.max(160, anchor.top - 16);
+    // The panel hangs from the pill's top edge; this is how far above it.
+    const rise = Math.round(trigger.top - foot);
+    const maxHeight = Math.max(160, Math.floor(foot - 8));
     setAbovePlacement((current) => current
-      && current.offset === offset && current.lift === lift && current.maxHeight === maxHeight
+      && current.offset === offset && current.rise === rise && current.maxHeight === maxHeight
       ? current
-      : { offset, lift, maxHeight });
+      : { offset, rise, maxHeight });
   }, [portalled, width]);
 
   useLayoutEffect(() => {
@@ -224,6 +228,9 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
     if (!open) return undefined;
     const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(place);
     if (panelRef.current) observer?.observe(panelRef.current);
+    // The composer can grow up into an open panel, which then rises.
+    const shelf = portalled ? null : wrapperRef.current?.closest<HTMLElement>(".composer");
+    if (shelf) observer?.observe(shelf);
     window.addEventListener("resize", place);
     if (portalled) window.addEventListener("scroll", place, true);
     return () => {
@@ -292,7 +299,7 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
     : abovePlacement
       ? {
         left: abovePlacement.offset,
-        ...(abovePlacement.lift !== 0 ? { transform: `translateY(${-abovePlacement.lift}px)` } : {}),
+        bottom: `calc(100% + ${abovePlacement.rise}px)`,
         maxHeight: abovePlacement.maxHeight,
       }
       : undefined;

@@ -138,6 +138,18 @@ export function heldPanelOffset(params: {
 }
 
 /**
+ * The bottom edge of the panel opened above the composer, in window
+ * coordinates. It sits a `gap` over the composer's top (`shelfTop`), so it
+ * never covers the prompt or the toolbar's chips, and holds where it opened
+ * (`held`) while picks rearrange the toolbar. It rises only when the composer
+ * grows up into it, and never drops back.
+ */
+export function heldPanelFoot(params: { held?: number; shelfTop: number; gap?: number }): number {
+  const clear = params.shelfTop - (params.gap ?? 8);
+  return params.held === undefined ? clear : Math.min(params.held, clear);
+}
+
+/**
  * Where a portalled panel goes: under the trigger when it prefers below and
  * fits (or has more room there), otherwise above. It stays `padding` inside
  * the window on every side, and `maxHeight` is the room on the chosen side,

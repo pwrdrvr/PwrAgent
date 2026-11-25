@@ -6,6 +6,7 @@ import {
   effortStopAtPointer,
   effortStopForKey,
   effortStopLabelled,
+  heldPanelFoot,
   heldPanelOffset,
   modelSettingsSummary,
   placeModelSettingsPanel,
@@ -172,6 +173,26 @@ describe("model settings picker rules", () => {
           expect(left + width).toBeLessThanOrEqual(Math.max(viewportWidth - 8, anchor + width));
           // Past the right edge it moves in only as far as it must.
           if (anchor + width > viewportWidth - 8 && anchor >= 8) expect(left).toBe(Math.max(8, viewportWidth - 8 - width));
+        }
+      },
+    ));
+  });
+
+  it("keeps the composer panel's foot over the composer, rising with it and never dropping", () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 0, max: 1600 }),
+      fc.array(fc.integer({ min: 0, max: 1600 }), { maxLength: 12 }),
+      (openedAt, shelves) => {
+        let foot = heldPanelFoot({ shelfTop: openedAt });
+        expect(foot).toBe(openedAt - 8);
+        for (const shelfTop of shelves) {
+          const next = heldPanelFoot({ held: foot, shelfTop });
+          // Never over the composer, never lower than it was.
+          expect(next).toBeLessThanOrEqual(shelfTop - 8);
+          expect(next).toBeLessThanOrEqual(foot);
+          // And it moves only when the composer has reached it.
+          if (shelfTop - 8 >= foot) expect(next).toBe(foot);
+          foot = next;
         }
       },
     ));

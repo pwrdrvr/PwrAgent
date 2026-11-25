@@ -133,61 +133,84 @@ describe("ModelSettingsPicker while disabled", () => {
 });
 
 /**
- * Above the composer the panel opens over its pill, then stays put. A pick
- * can widen or narrow the chips before the pill (a provider with another
- * access mode) or wrap the toolbar so the pill drops a row, and a panel that
- * followed the pill slid sideways, then dropped, under the pointer choosing
- * in it.
+ * Above the composer the panel opens in line with its pill, over the whole
+ * composer, then stays put. A pick can widen or narrow the chips before the
+ * pill (a provider with another access mode) or wrap the toolbar so the pill
+ * changes rows. A panel hung from the pill slid sideways and dropped under
+ * the pointer choosing in it; one held over the pill covered the chips when
+ * the pill moved back up a row.
  */
 describe("ModelSettingsPicker composer panel position", () => {
-  it("holds the panel where it opened while the pill moves under it", async () => {
-    let pillLeft = 300;
-    let pillTop = 600;
+  const rect = (left: number, top: number, width: number, height: number) => ({
+    left, top, right: left + width, bottom: top + height, width, height, x: left, y: top, toJSON: () => undefined,
+  });
+
+  function renderInComposer() {
+    const at = { pillLeft: 300, pillTop: 600, composerTop: 480 };
     const picker = (label: string) => (
-      <ModelSettingsPicker
-        model={{
-          value: "opus", label, kind: "claude",
-          models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
-          onChange: () => undefined,
-        }}
-      />
+      <form className="composer">
+        <ModelSettingsPicker
+          model={{
+            value: "opus", label, kind: "claude",
+            models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+            onChange: () => undefined,
+          }}
+        />
+      </form>
     );
-    const { rerender } = render(picker("Opus 5.5"));
+    const { container, rerender } = render(picker("Opus 5.5"));
     const pill = screen.getByRole("button", { name: /^Model settings/ });
-    vi.spyOn(pill, "getBoundingClientRect").mockImplementation(() => ({
-      left: pillLeft, right: pillLeft + 120, top: pillTop, bottom: pillTop + 24, width: 120, height: 24,
-      x: pillLeft, y: pillTop, toJSON: () => undefined,
-    }));
+    vi.spyOn(pill, "getBoundingClientRect").mockImplementation(() => rect(at.pillLeft, at.pillTop, 120, 24));
+    vi.spyOn(container.querySelector("form")!, "getBoundingClientRect")
+      .mockImplementation(() => rect(0, at.composerTop, 760, at.pillTop + 40 - at.composerTop));
+    const move = async (next: Partial<typeof at>, label: string) => {
+      Object.assign(at, next);
+      await act(async () => { rerender(picker(label)); });
+    };
+    // Where the panel sits in the window: its left from the pill's, and its
+    // foot `calc(100% + rise)` above the pill's top (the stylesheet's 8px
+    // when no inline rule says otherwise), moved by any translation.
+    const placed = (panel: HTMLElement) => {
+      const rise = Number(/calc\(100% \+ (-?[\d.]+)px\)/.exec(panel.style.bottom)?.[1] ?? 8);
+      const shift = Number(/translateY\((-?[\d.]+)px\)/.exec(panel.style.transform)?.[1] ?? 0);
+      return { left: at.pillLeft + Number.parseFloat(panel.style.left || "0"), foot: at.pillTop - rise + shift };
+    };
+    return { at, pill, move, placed };
+  }
+
+  it("opens over the composer and holds there while the pill moves under it", async () => {
+    const { at, pill, move, placed } = renderInComposer();
     await act(async () => { fireEvent.click(pill); });
     const panel = screen.getByRole("dialog", { name: "Model settings" });
-    const panelLeft = () => pillLeft + Number.parseFloat(panel.style.left || "0");
-    // The panel's foot hangs a fixed gap over the pill's top, then moves by
-    // its translation.
-    const panelFoot = () => pillTop + Number(/translateY\((-?[\d.]+)px\)/.exec(panel.style.transform)?.[1] ?? 0);
-    expect(panelLeft()).toBe(300);
-    expect(panelFoot()).toBe(600);
+    // A gap over the composer's top, not over the pill's.
+    expect(placed(panel)).toEqual({ left: 300, foot: 472 });
+    expect(panel.style.maxHeight).toBe("464px");
 
-    for (const [left, top, label] of [
+    for (const [pillLeft, pillTop, label] of [
       [420, 600, "Sonnet 5.5"],
       [180, 644, "Opus 5.5"],
       [24, 644, "Sonnet 5.5"],
       [300, 600, "Opus 5.5"],
     ] as const) {
-      pillLeft = left;
-      pillTop = top;
-      await act(async () => { rerender(picker(label)); });
-      expect(panelLeft()).toBe(300);
-      expect(panelFoot()).toBe(600);
+      await move({ pillLeft, pillTop }, label);
+      expect(placed(panel)).toEqual({ left: 300, foot: 472 });
     }
 
-    // Closed and opened again, it opens over the pill where the pill is now.
-    pillLeft = 420;
-    pillTop = 644;
+    // Closed and opened again, it opens in line with the pill where it is now.
+    at.pillLeft = 420;
     await act(async () => { fireEvent.click(pill); });
     expect(screen.queryByRole("dialog")).toBeNull();
     await act(async () => { fireEvent.click(pill); });
-    const reopened = screen.getByRole("dialog");
-    expect(pillLeft + Number.parseFloat(reopened.style.left || "0")).toBe(420);
-    expect(reopened.style.transform).toBe("");
+    expect(placed(screen.getByRole("dialog"))).toEqual({ left: 420, foot: 472 });
+  });
+
+  it("rises when the composer grows up into it, and never drops back", async () => {
+    const { pill, move, placed } = renderInComposer();
+    await act(async () => { fireEvent.click(pill); });
+    const panel = screen.getByRole("dialog", { name: "Model settings" });
+    await move({ composerTop: 436 }, "Sonnet 5.5");
+    expect(placed(panel).foot).toBe(428);
+    await move({ composerTop: 480 }, "Opus 5.5");
+    expect(placed(panel).foot).toBe(428);
   });
 });
