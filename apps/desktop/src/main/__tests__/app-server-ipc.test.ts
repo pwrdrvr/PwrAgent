@@ -2077,10 +2077,21 @@ describe("app server ipc", () => {
       preferenceChanged: expect.any(Function),
       preferencesChanged: expect.any(Function),
       cancelPending: expect.any(Function),
+      pullRequestChanged: expect.any(Function),
       lockChanged: expect.any(Function),
       sendPendingNow: expect.any(Function),
       inspect: expect.any(Function),
     });
+    // One PR's switch reaches the service, never the thread's own preference.
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const perPr = vi.spyOn(appServerService, "setThreadPullRequestAutoFix").mockResolvedValue();
+    const thread = vi.spyOn(appServerService, "handleThreadPrAutoDispatchPreference");
+    const request = { backend: "codex" as const, threadId: "t", prKey: "github.com/upstream/app#7", enabled: false };
+    await setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0].pullRequestChanged(request);
+    expect(perPr).toHaveBeenCalledWith(request);
+    expect(thread).not.toHaveBeenCalled();
+    perPr.mockRestore();
+    thread.mockRestore();
     expect(setThreadPullRequestWatchToolHandler).toHaveBeenCalledWith(
       expect.any(Function),
     );
