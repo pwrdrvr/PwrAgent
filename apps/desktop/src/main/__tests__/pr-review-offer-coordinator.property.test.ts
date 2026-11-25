@@ -1113,15 +1113,21 @@ describe("PR offers in a never-merge project", () => {
 
       never = true;
       expect(await harness.coordinator.mergeOfferRefusal(THREAD, PR_KEY)).toContain("never merges");
-      harness.world.ci = "failing";
-      await transition(harness, { checkState: { from: "passing", to: "failing" } });
-      harness.world.ci = "passing";
-      await transition(harness, { checkState: { from: "failing", to: "passing" } });
+      // Saving the setting re-evaluates at once; the PR sees no transition.
+      harness.coordinator.reevaluate([PR_KEY]);
+      await harness.coordinator.idle();
       expect(openOfferCards(harness.todos)).toEqual([]);
       const withdrawn = harness.todos.list({ ...THREAD, status: "all" })
         .find((todo) => todo.action?.type === "merge_pull_request");
       expect(withdrawn?.result).toBe("Withdrawn: this project never merges its pull requests");
 
+      // Turning it off offers the merge again for the same reviewed head.
+      never = false;
+      harness.coordinator.reevaluate([PR_KEY]);
+      await harness.coordinator.idle();
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["merge_pull_request"]);
+
+      never = true;
       await push(harness, harness.world.newChange());
       harness.world.ci = "passing";
       await transition(harness, { checkState: { from: "pending", to: "passing" } });

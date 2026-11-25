@@ -312,6 +312,9 @@ function describeNeverMergeReadiness(
   const at = params.headSha ? ` at ${params.headSha.slice(0, 7)}` : "";
   const never = `${params.neverMergeProject} never merges its pull requests, so do not merge ${name}, offer a merge, or raise a merge card.`;
   if (params.readiness === "closed") return `${name} is closed.`;
+  if (params.readiness === "stack_parent_open") {
+    return `${name} is waiting for its lower stack layers to merge and its base to be trunk. ${never}`;
+  }
   if ((params.openFindings ?? 0) > 0) {
     return `${name}'s latest review has ${params.openFindings} unsettled finding(s). Commit and push each fix, then settle the finding with update_review_item. ${never}`;
   }

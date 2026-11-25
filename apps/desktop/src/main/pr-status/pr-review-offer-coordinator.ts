@@ -212,6 +212,17 @@ export class PrReviewOfferCoordinator {
     }
   }
 
+  /**
+   * A project setting that decides which offers a PR gets changed, such as
+   * Never merge. Re-evaluates each PR with its current owner, so an open
+   * merge offer is withdrawn, or raised again, without waiting for the PR's
+   * next transition.
+   */
+  reevaluate(prKeys: Iterable<string>): void {
+    if (this.closed) return;
+    this.track(this.reconcile(new Set(prKeys)));
+  }
+
   /** A review on a thread was recorded, settled, or reopened. */
   handleReviewChanged(review: ThreadReview): void {
     if (this.closed) return;

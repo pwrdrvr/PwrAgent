@@ -341,7 +341,7 @@ describe("probeWorktreeWorkingState", () => {
   it("counts a fork branch's distance from the upstream default branch without another Git process", async () => {
     const headCommit = "a".repeat(40);
     const baseCommit = "b".repeat(40);
-    const probe = async (refs: string[]) => {
+    const probe = async (refs: string[], remoteHead = "origin/main\n") => {
       const { runGit, calls } = fakeGit((args) => {
         if (args.includes("--numstat")) return "";
         if (args.includes("status")) return "";
@@ -349,7 +349,7 @@ describe("probeWorktreeWorkingState", () => {
         if (args.includes("rev-parse") && args.includes("--verify")) return `${headCommit}\n`;
         if (args.includes("rev-parse") && args.includes("--abbrev-ref")) return "test/benchmark\n";
         if (args.includes("config")) return "";
-        if (args.includes("symbolic-ref")) return "origin/main\n";
+        if (args.includes("symbolic-ref")) return remoteHead;
         if (args.includes("for-each-ref")) return refs.join("\n");
         if (args.includes("merge-base")) return `${baseCommit}\n`;
         if (args.includes("rev-list") && args.includes("--count")) return "0\n";
@@ -371,6 +371,23 @@ describe("probeWorktreeWorkingState", () => {
     const forkOnly = await probe([fork]);
     expect(forkOnly.state).not.toHaveProperty("upstreamBranch");
     expect(withUpstream.calls).toHaveLength(forkOnly.calls.length);
+    // The upstream row compares like with like: a release base is never
+    // measured against upstream's main.
+    const release = await probe([
+      `origin/release/4.3\0${"3".repeat(40)}\x002 1`,
+      upstream,
+    ], "");
+    expect(release.state).toMatchObject({ baseBranch: "release/4.3" });
+    expect(release.state).not.toHaveProperty("upstreamBranch");
+    const releaseUpstream = await probe([
+      `origin/release/4.3\0${"3".repeat(40)}\x002 1`,
+      `upstream/release/4.3\0${"4".repeat(40)}\x005 1`,
+    ], "");
+    expect(releaseUpstream.state).toMatchObject({
+      baseBranch: "release/4.3",
+      upstreamBranch: "upstream/release/4.3",
+      upstreamBehindCommitCount: 5,
+    });
   });
 
   it("keeps cold base inference inside the fixed Git subprocess budget", async () => {

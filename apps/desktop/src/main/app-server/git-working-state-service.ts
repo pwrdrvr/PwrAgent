@@ -446,33 +446,29 @@ async function resolveWorktreeBaseState(
   }
   const { sourceRank: _sourceRank, ...state } = best;
   const baseRef = candidates.find((entry) => entry.label === state.baseBranch)?.ref ?? state.baseBranch;
-  const upstream = resolveUpstreamDrift(refStates, baseRef);
+  const upstream = resolveUpstreamDrift(refStates, baseRef, state.baseBranch);
   return upstream ? { ...state, ...upstream } : state;
 }
 
-/** The fork-workflow remote that holds the project's real default branch. */
+/** The fork-workflow remote that holds the project's own branches. */
 const UPSTREAM_REMOTE = "upstream";
-const UPSTREAM_DEFAULT_BRANCHES = ["main", "master"] as const;
 
 /**
- * How far HEAD is behind the `upstream` remote's default branch, from the
- * same `for-each-ref` walk the base was picked from, so it costs no Git
+ * How far HEAD is behind the same branch on the `upstream` remote
+ * (`origin/main` → `upstream/main`, `release/4.3` → `upstream/release/4.3`),
+ * from the `for-each-ref` walk the base was picked from, so it costs no Git
  * process. Undefined when there is no such ref, Git gave no counts, or the
  * base already is on `upstream` (its row says the same thing).
  */
 export function resolveUpstreamDrift(
   refStates: readonly BaseBranchRefState[],
   baseRef: string,
+  baseLabel: string,
 ): Pick<WorktreeBaseState, "upstreamBranch" | "upstreamBehindCommitCount"> | undefined {
   if (baseRef.startsWith(`${UPSTREAM_REMOTE}/`)) return undefined;
-  for (const branch of UPSTREAM_DEFAULT_BRANCHES) {
-    const ref = `${UPSTREAM_REMOTE}/${branch}`;
-    const state = refStates.find((entry) => entry.ref === ref);
-    if (!state) continue;
-    if (state.baseBehindCommitCount === undefined) return undefined;
-    return { upstreamBranch: ref, upstreamBehindCommitCount: state.baseBehindCommitCount };
-  }
-  return undefined;
+  const ref = `${UPSTREAM_REMOTE}/${baseLabel}`;
+  const behind = refStates.find((entry) => entry.ref === ref)?.baseBehindCommitCount;
+  return behind === undefined ? undefined : { upstreamBranch: ref, upstreamBehindCommitCount: behind };
 }
 
 function clampPositiveInteger(

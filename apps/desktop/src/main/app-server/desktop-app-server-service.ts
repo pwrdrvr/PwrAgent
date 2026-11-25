@@ -5204,10 +5204,16 @@ class DesktopAppServerService {
       : autoFixActive && forgeProject && (projectSkipsMergeConflicts || projectSkipsCiFailures)
         ? `${baseGuidance} ${forgeProject.label} skips ${projectSkippedKind} in Forge Automation, so PwrAgent will not start a repair turn for ${projectSkippedKind}.`
         : baseGuidance;
+    // Readiness lines name the project only for PRs this thread owns offers
+    // for; any other thread in a never-merge project still hears it.
+    const neverMergeGuidance = neverMerge && readinessGuidance.length === 0
+      ? [buildProjectNeverMergeRefusal({ projectLabel: neverMerge })]
+      : [];
     const stackGuidance = await this.threadStackGuidance(primaryPrs);
     const stackLines = stackGuidance.map(({ text }) => text);
     const guidance = (stackGuidance.some(({ held }) => held)
-      ? stackLines : [...stackLines, automationGuidance, ...readinessGuidance]).join(" ");
+      ? [...stackLines, ...neverMergeGuidance]
+      : [...stackLines, automationGuidance, ...readinessGuidance, ...neverMergeGuidance]).join(" ");
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -8465,6 +8471,16 @@ class DesktopAppServerService {
         if (identity) await coordinator.cancelPendingDisallowedByProject(identity);
       }
     }
+    if (projectNeverMerges(previous) !== projectNeverMerges(next)) {
+      // Withdraw an open merge offer now, or offer it again: a reviewed,
+      // green PR may see no further transition to re-evaluate it.
+      this.prReviewOfferCoordinator?.reevaluate(threadKeys.flatMap((threadKey) => {
+        const attachment = this.attachedPrsByThreadKey.get(threadKey);
+        return (attachment?.prs ?? [])
+          .filter((pr) => this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey))
+          .map(getPrStatusKey);
+      }));
+    }
     const resumedPolling = !projectAllowsForgePolling(previous) && projectAllowsForgePolling(next);
     if (resumedPolling) {
       // Thaw and poll the project's PRs now rather than on their next slot.
@@ -9126,8 +9142,12 @@ class DesktopAppServerService {
     thread: PrReviewOfferThread,
     pullRequest: string,
   ): Promise<string | undefined> {
-    const coordinator = this.prReviewOfferCoordinator;
     const pr = this.findPrimaryAttachedPr(thread, pullRequest);
+    // Before the owner and coordinator gates: a never-merge project refuses
+    // every merge card, whoever owns the PR's offers.
+    const neverMerge = this.projectNeverMergeRefusal(thread, pr ? `#${pr.number}` : undefined);
+    if (neverMerge) return `${neverMerge} This card was not raised.`;
+    const coordinator = this.prReviewOfferCoordinator;
     if (!coordinator || !pr) return undefined;
     const hold = await this.prStackHold(pr);
     if (hold) return hold;

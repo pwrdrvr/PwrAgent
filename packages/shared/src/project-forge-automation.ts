@@ -166,14 +166,6 @@ export function projectAllowsPrOffers(value: ProjectForgeAutomation | undefined)
 }
 
 /**
- * Whether PwrAgent may raise a "Merge #N" card for the project's pull
- * requests: offers are allowed and the project merges its own PRs.
- */
-export function projectAllowsMergeOffers(value: ProjectForgeAutomation | undefined): boolean {
-  return projectAllowsPrOffers(value) && !projectNeverMerges(value);
-}
-
-/**
  * Whether the project's pull requests are never merged from PwrAgent: no
  * merge card, PR card button, or agent merge. Pausing does not change it.
  * A value without the field, from an owner that predates it, merges.
