@@ -1227,9 +1227,10 @@ it("shows per-provider tokens, cost, cache savings, and model/day breakdown acro
   expect(screen.getByRole("button", { name: "Inspect Grok triage" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
 
-  // Clicking Anthropic a second time flips it to excluded (mixed), leaving xAI included.
+  // Clicking Anthropic a second time flips it to excluded, leaving xAI included.
   fireEvent.click(anthropicButton);
-  expect(anthropicButton).toHaveAttribute("aria-pressed", "mixed");
+  expect(anthropicButton).toHaveAttribute("aria-pressed", "false");
+  expect(anthropicButton).toHaveAccessibleName(/, excluded$/);
   expect(screen.queryByRole("button", { name: "Inspect Claude refactor" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Grok triage" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
@@ -1254,7 +1255,8 @@ it("shows per-provider tokens, cost, cache savings, and model/day breakdown acro
   expect(screen.queryByRole("button", { name: "Inspect Claude refactor" })).not.toBeInTheDocument();
 
   fireEvent.click(gptButton);
-  expect(gptButton).toHaveAttribute("aria-pressed", "mixed");
+  expect(gptButton).toHaveAttribute("aria-pressed", "false");
+  expect(gptButton).toHaveAccessibleName(/, excluded$/);
   expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
 
@@ -1267,6 +1269,51 @@ it("shows per-provider tokens, cost, cache savings, and model/day breakdown acro
   // Switching breakdown tab to Day shows daily totals.
   fireEvent.click(within(overview).getByRole("button", { name: "Day" }));
   expect(overview).toHaveTextContent("3 threads · 3 turns");
+});
+
+it("states an excluded Overview row in its accessible name, not as a half-pressed toggle", async () => {
+  const now = new Date(2026, 10, 24, 15, 0).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const at = { createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR };
+  const readUsageActivity = vi.fn(async () => ({ readAt: now, rateLimits: [], truncated: false,
+    rows: [
+      usageFixture({ ...at, usageLineId: "codex-1", threadId: "codex-thread", turnId: "codex-turn",
+        backend: "codex", provider: "openai", model: "gpt-5.4", modelLabel: "GPT-5.4" }),
+      usageFixture({ ...at, usageLineId: "claude-1", threadId: "claude-thread", turnId: "claude-turn",
+        backend: "claude", provider: "anthropic", model: "claude-opus-4-6", modelLabel: "Claude Opus 4.6" }),
+    ] }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await screen.findByRole("region", { name: "Usage overview" });
+  // Look each row up again after every click, so a re-rendered band cannot
+  // leave the assertions reading a detached node.
+  const overview = () => screen.getByRole("region", { name: "Usage overview" });
+  const rows = {
+    provider: () => within(within(overview()).getByRole("group", { name: "Usage by provider" }))
+      .getByRole("button", { name: /^Anthropic/ }),
+    model: () => within(overview().querySelector<HTMLElement>(".usage-overview__table-body")!)
+      .getByRole("button", { name: /Claude Opus 4\.6/ }),
+  };
+
+  for (const [label, row] of Object.entries(rows)) {
+    expect(row(), label).toHaveAttribute("aria-pressed", "false");
+    expect(row(), label).not.toHaveAccessibleName(/excluded/);
+
+    fireEvent.click(row());
+    expect(row(), label).toHaveAttribute("aria-pressed", "true");
+    expect(row(), label).not.toHaveAccessibleName(/excluded/);
+
+    // The second click removes the row's turns from every total. A toggle
+    // announced as "mixed" reads as partially pressed, so the name says it.
+    fireEvent.click(row());
+    expect(row(), label).toHaveAttribute("data-filter-state", "exclude");
+    expect(row(), label).not.toHaveAttribute("aria-pressed", "mixed");
+    expect(row(), label).toHaveAttribute("aria-pressed", "false");
+    expect(row(), label).toHaveAccessibleName(/, excluded$/);
+
+    fireEvent.click(row());
+    expect(row(), label).toHaveAttribute("aria-pressed", "false");
+    expect(row(), label).not.toHaveAccessibleName(/excluded/);
+  }
 });
 
 it("names a sub-day Overview chart without \"Daily\" and puts the period peak on the top axis label", async () => {
