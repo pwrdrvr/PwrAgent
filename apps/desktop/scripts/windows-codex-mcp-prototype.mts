@@ -136,6 +136,45 @@ async function proofOracle(helper: string) {
   console.log("Native concurrent streams, scoped grant and thread checks, independent teardown and job cleanup passed");
 }
 
+async function crashOracle(helper: string) {
+  const runtime = launch(helper, process.execPath, ["-e", "process.stdin.once('data', () => process.exit(37))"]);
+  const nativeRoot = await runtime.ready;
+  try {
+    const closed = once(runtime.child, "close");
+    runtime.child.stdin.write("exit\n");
+    const [code] = await closed;
+    assert.equal(code, 37, "the supervisor must propagate the actual root's exit without a debugger wait leak");
+  } finally {
+    await stop(runtime, nativeRoot);
+  }
+  console.log("Native debugger propagated unexpected root exit and removed the idle listener");
+}
+
+async function shimOracle(helper: string, cwd: string) {
+  const shim = join(cwd, "codex.cmd");
+  await writeFile(shim, "@echo off\r\nset /p fixture_input=\r\n");
+  const transport = new StdioJsonRpcTransport({
+    command: shim, env: { ...process.env, CODEX_HOME: cwd },
+    resolveCommand: async () => ({ command: shim, source: "path", version: "0.169.0" }),
+    windowsCodexMcpEnabled: () => true, windowsCodexMcpRelay: () => helper,
+  });
+  const owner = fixtureOwner(helper);
+  try {
+    await transport.connect();
+    const processAtLaunch = transport.ownedProcess();
+    assert(processAtLaunch);
+    assert.equal(processAtLaunch.windows, undefined);
+    const registration = await owner.server.registerCodexClient({ backend: "codex" });
+    await assert.rejects(bindCodexAgentToolRuntime(
+      { config: buildCodexAgentToolsMcpConfig(registration) }, () => processAtLaunch,
+    ), /requires a verified Windows Codex launcher/u);
+  } finally {
+    await transport.close();
+    await owner.server.close();
+  }
+  console.log("Windows command shim retained its normal launch and received no MCP registration");
+}
+
 type WireEvent = { method: string; params: { threadId?: string; name?: string; status?: string; turn?: { status?: string } } };
 
 function rpc(runtime: WindowsCodexMcpRuntime) {
@@ -211,6 +250,7 @@ async function realCodex(helper: string, executable: string, cwd: string, sandbo
   await mkdir(codexHome);
   await writeFile(join(codexHome, "config.toml"), `model = "gpt-5.5"
 model_provider = "fixture"
+sandbox_mode = "${sandbox}"
 [model_providers.fixture]
 name = "Disposable Windows test"
 base_url = "http://127.0.0.1:${address.port}/v1"
@@ -265,14 +305,19 @@ hooks = false
     await inventory(api, thread.id);
     const resolved = await api.request<{ config: { windows?: { sandbox?: string } } }>("config/read", { cwd, includeLayers: false });
     assert.equal(resolved.config.windows?.sandbox, "unelevated");
-    const command = await api.request<{ exitCode: number; stdout: string; stderr: string }>("command/exec", {
+    const commandParams = {
       command: [join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe"), "/d", "/c", "echo", "verified-sandbox-child"],
       cwd,
       timeoutMs: 10_000,
-      sandboxPolicy: sandbox === "read-only"
-        ? { type: "readOnly", networkAccess: false }
-        : { type: "workspaceWrite", writableRoots: [cwd], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true },
-    });
+    };
+    if (sandbox === "workspace-write") {
+      await assert.rejects(api.request("command/exec", {
+        ...commandParams,
+        sandboxPolicy: { type: "workspaceWrite", writableRoots: [cwd], networkAccess: false,
+          excludeTmpdirEnvVar: true, excludeSlashTmp: true },
+      }), /cannot enforce split writable root sets/u);
+    }
+    const command = await api.request<{ exitCode: number; stdout: string; stderr: string }>("command/exec", commandParams);
     assert.equal(command.exitCode, 0, command.stderr);
     assert.match(command.stdout, /verified-sandbox-child/u);
     const idle = await api.request<{ isError: boolean }>("mcpServer/tool/call", { threadId: thread.id, server: name, tool, arguments: {} });
@@ -320,6 +365,8 @@ async function main(helper: string, codex?: string) {
   const cwd = await mkdtemp(join(tmpdir(), "pwa-win-codex-"));
   try {
     await proofOracle(helper);
+    await crashOracle(helper);
+    await shimOracle(helper, cwd);
     if (codex) {
       await realCodex(helper, codex, cwd, "read-only");
       await realCodex(helper, codex, cwd, "workspace-write");
