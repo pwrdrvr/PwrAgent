@@ -747,6 +747,15 @@ export type ThreadGitWorkingState = {
   baseAheadCommitCount?: number;
   /** True when `baseBranch` has commits after `baseCommit`. */
   isBehindBase?: boolean;
+  /**
+   * The `upstream` remote's default branch (`upstream/main`), when the
+   * checkout has one and `baseBranch` was found on another remote: a fork's
+   * own `main` only moves when the operator syncs it, so this is the count
+   * that says how stale the branch is.
+   */
+  upstreamBranch?: string;
+  /** Commits on `upstreamBranch` that HEAD does not have. */
+  upstreamBehindCommitCount?: number;
 };
 
 export type AppServerThreadSummary = {

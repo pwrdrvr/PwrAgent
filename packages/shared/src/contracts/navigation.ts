@@ -3475,6 +3475,12 @@ export const THREAD_PULL_REQUEST_MERGE_CAPABILITY =
 export type ReadThreadPullRequestMergeResponse = {
   remembered?: PrMergeMethod;
   fallback: PrMergeMethod;
+  /**
+   * The thread's project label when its Forge Automation never merges its
+   * pull requests. The card offers no merge and the owner refuses one. An
+   * older owner leaves it out.
+   */
+  neverMergeProject?: string;
 };
 
 export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {

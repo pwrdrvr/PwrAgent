@@ -97,6 +97,10 @@ export function MergePullRequestDialog(props: {
           <p role="status">Checking what merging waits for…</p>
         ) : offer.kind === "held" ? (
           <p role="status">Merge waits for {offer.waitingFor.join("; ")}.</p>
+        ) : offer.kind === "never_merge" ? (
+          <p role="status">
+            {offer.projectLabel} never merges its pull requests. Change it from the project menu: Forge Automation.
+          </p>
         ) : offer.kind === "none" ? (
           <p role="status">This pull request cannot be merged now.</p>
         ) : warning ? (

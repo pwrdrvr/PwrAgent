@@ -217,10 +217,26 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
             {option({
               id: `${optionId}-offers`,
               type: "checkbox",
-              title: "Review and merge offers",
-              description: "A Review card when CI passes on unreviewed changes, then a Merge card once the review is settled.",
+              title: draft.neverMerge ? "Review offers" : "Review and merge offers",
+              description: draft.neverMerge
+                ? "A Review card when CI passes on unreviewed changes."
+                : "A Review card when CI passes on unreviewed changes, then a Merge card once the review is settled.",
               checked: draft.prOffers,
               onChange: () => update({ prOffers: !draft.prOffers }),
+            })}
+          </fieldset>
+        )}
+        {draft.paused ? null : (
+          <fieldset className="forge-automation-dialog__group forge-automation-dialog__fieldset">
+            <legend className="forge-automation-dialog__label">Merging</legend>
+            {option({
+              id: `${optionId}-never-merge`,
+              type: "checkbox",
+              title: "Never merge this project's pull requests",
+              description: "For a fork that only sends changes upstream. No Merge cards or Merge buttons, and agents are told not to merge.",
+              checked: draft.neverMerge === true,
+              // Stored only when on, as the owner stores it.
+              onChange: () => update({ neverMerge: draft.neverMerge ? undefined : true }),
             })}
           </fieldset>
         )}

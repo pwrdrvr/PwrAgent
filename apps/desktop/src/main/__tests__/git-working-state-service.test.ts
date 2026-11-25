@@ -338,6 +338,58 @@ describe("probeWorktreeWorkingState", () => {
     });
   });
 
+  it("counts a fork branch's distance from the upstream default branch without another Git process", async () => {
+    const headCommit = "a".repeat(40);
+    const baseCommit = "b".repeat(40);
+    const probe = async (refs: string[], remoteHead = "origin/main\n") => {
+      const { runGit, calls } = fakeGit((args) => {
+        if (args.includes("--numstat")) return "";
+        if (args.includes("status")) return "";
+        if (args[args.length - 1] === "remote") return "origin\nupstream\n";
+        if (args.includes("rev-parse") && args.includes("--verify")) return `${headCommit}\n`;
+        if (args.includes("rev-parse") && args.includes("--abbrev-ref")) return "test/benchmark\n";
+        if (args.includes("config")) return "";
+        if (args.includes("symbolic-ref")) return remoteHead;
+        if (args.includes("for-each-ref")) return refs.join("\n");
+        if (args.includes("merge-base")) return `${baseCommit}\n`;
+        if (args.includes("rev-list") && args.includes("--count")) return "0\n";
+        return undefined;
+      });
+      return { state: await probeWorktreeWorkingState("/repo/wt", { runGit }), calls };
+    };
+    // The fork's main is synced and current; the upstream has moved on.
+    const fork = `origin/main\0${"1".repeat(40)}\x000 3`;
+    const upstream = `upstream/main\0${"2".repeat(40)}\x0037 3`;
+    const withUpstream = await probe([upstream, fork]);
+    expect(withUpstream.state).toMatchObject({
+      baseBranch: "main",
+      baseBehindCommitCount: 0,
+      baseAheadCommitCount: 3,
+      upstreamBranch: "upstream/main",
+      upstreamBehindCommitCount: 37,
+    });
+    const forkOnly = await probe([fork]);
+    expect(forkOnly.state).not.toHaveProperty("upstreamBranch");
+    expect(withUpstream.calls).toHaveLength(forkOnly.calls.length);
+    // The upstream row compares like with like: a release base is never
+    // measured against upstream's main.
+    const release = await probe([
+      `origin/release/4.3\0${"3".repeat(40)}\x002 1`,
+      upstream,
+    ], "");
+    expect(release.state).toMatchObject({ baseBranch: "release/4.3" });
+    expect(release.state).not.toHaveProperty("upstreamBranch");
+    const releaseUpstream = await probe([
+      `origin/release/4.3\0${"3".repeat(40)}\x002 1`,
+      `upstream/release/4.3\0${"4".repeat(40)}\x005 1`,
+    ], "");
+    expect(releaseUpstream.state).toMatchObject({
+      baseBranch: "release/4.3",
+      upstreamBranch: "upstream/release/4.3",
+      upstreamBehindCommitCount: 5,
+    });
+  });
+
   it("keeps cold base inference inside the fixed Git subprocess budget", async () => {
     const headCommit = "a".repeat(40);
     const baseCommit = "b".repeat(40);

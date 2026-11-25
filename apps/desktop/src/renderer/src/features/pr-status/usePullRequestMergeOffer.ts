@@ -20,6 +20,8 @@ export type PullRequestMergeOfferState =
   | { kind: "loading" }
   /** A Continue After wait holds the merge; the strings name what it waits for. */
   | { kind: "held"; waitingFor: string[] }
+  /** The thread's project never merges its pull requests (Forge Automation). */
+  | { kind: "never_merge"; projectLabel: string }
   | PullRequestMergeOffer;
 
 /**
@@ -38,9 +40,9 @@ export function usePullRequestMergeOffer(
   const { backend, threadId, federationTarget } = thread;
   const owner = federationTarget?.scope === "remote" ? federationTarget.instanceId : undefined;
   const key = `${owner ?? ""}\u0000${backend}\u0000${threadId}`;
-  const wantsMethod = base.kind === "merge";
+  // Read for a queue too: the owner also says whether the project merges.
   useEffect(() => {
-    if (!wantsMethod) return;
+    if (!offered) return;
     let disposed = false;
     const read = service.api.readThreadPullRequestMerge;
     if (!read) {
@@ -52,10 +54,13 @@ export function usePullRequestMergeOffer(
       // Unreadable: start on the Settings order over the repository's methods.
       .catch(() => { if (!disposed) setPreference({ key }); });
     return () => { disposed = true; };
-  }, [wantsMethod, key, backend, threadId, owner, service.api]);
+  }, [offered, key, backend, threadId, owner, service.api]);
   // A peer's holds are read from its owner, which also enforces them.
   const holds = useThreadDependencyList(backend, threadId, federationTarget, service.api, offered, pr.url);
   if (!offered) return base;
+  if (preference?.key !== key) return { kind: "loading" };
+  const neverMergeProject = preference.value?.neverMergeProject;
+  if (neverMergeProject) return { kind: "never_merge", projectLabel: neverMergeProject };
   // An owner that cannot answer still refuses a held merge itself.
   if (!holds.ready && !holds.error) return { kind: "loading" };
   const blocking = mergeHoldingDependencies(holds.data);
@@ -66,7 +71,6 @@ export function usePullRequestMergeOffer(
     };
   }
   if (base.kind !== "merge") return base;
-  if (preference?.key !== key) return { kind: "loading" };
   return resolvePullRequestMergeOffer({
     pr,
     ...(preference.value?.remembered ? { remembered: preference.value.remembered } : {}),

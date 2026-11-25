@@ -399,6 +399,14 @@ function readBranchDriftRows(drift: PrBranchDrift | undefined): PrTimelineRow[] 
       value: pluralize(counts.ahead, "commit"),
     });
   }
+  // A fork's base only moves when the operator syncs it; the upstream count
+  // is the one that says how stale the branch is.
+  if (counts.upstream) {
+    rows.push({
+      label: `Behind ${counts.upstream.branch}`,
+      value: pluralize(counts.upstream.behind, "commit"),
+    });
+  }
   return rows;
 }
 

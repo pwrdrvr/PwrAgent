@@ -122,6 +122,12 @@ export function PrCardMergeControl(props: {
         Merge waits for {offer.waitingFor.join("; ")}
       </span>
     );
+  } else if (offer.kind === "never_merge") {
+    control = (
+      <span className="pr-status-card__merge-status">
+        Merging off in Forge Automation
+      </span>
+    );
   } else if (offer.kind === "queue") {
     const noun = offer.noun;
     control = (

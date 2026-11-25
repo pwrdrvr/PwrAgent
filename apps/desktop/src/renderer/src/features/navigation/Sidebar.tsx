@@ -147,6 +147,7 @@ import {
   shouldShowDetachPullRequestWarning,
 } from "../pr-status/DetachPullRequestWarning";
 import { resolvePullRequestMergeOffer } from "@pwragent/shared/pull-request-merge-offer";
+import { projectNeverMerges } from "@pwragent/shared/project-forge-automation";
 import { MergePullRequestDialog } from "../pr-status/MergePullRequestDialog";
 import {
   threadPullRequestMergeTarget,
@@ -171,6 +172,7 @@ import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog
 import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
 import {
   canEditProjectForgeAutomation,
+  findThreadProjectDirectory,
   isProjectForgeActivityPaused,
   withProjectForgePause,
 } from "../forge-automation/forge-automation-view";
@@ -3065,7 +3067,9 @@ function SidebarContent(props: SidebarProps) {
     contextMenuHasLocalWorkspace || contextMenuHasWorktreeWorkspace;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
   const contextMenuPullRequest = contextMenu?.pullRequest;
+  // A project that never merges its pull requests offers no merge here.
   const contextMenuMergeTarget = contextMenuPullRequest && pullRequestMerge
+    && !projectNeverMerges(findThreadProjectDirectory(contextMenu.thread, props.directories)?.forgeAutomation)
     ? threadPullRequestMergeTarget(contextMenu.thread)
     : undefined;
   // Opened from the row, not a chip: one item detaches the thread's PRs.

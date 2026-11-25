@@ -740,6 +740,9 @@ function formatBranchTooltip(
     baseTipCommit ? `Base tip: ${baseTipCommit}` : undefined,
     formatCommitCount(gitWorking.baseBehindCommitCount, "Behind base"),
     formatCommitCount(gitWorking.baseAheadCommitCount, "Ahead of base"),
+    gitWorking.upstreamBranch
+      ? formatCommitCount(gitWorking.upstreamBehindCommitCount, `Behind ${gitWorking.upstreamBranch}`)
+      : undefined,
   ]
     .filter(Boolean)
     .join("\n");
