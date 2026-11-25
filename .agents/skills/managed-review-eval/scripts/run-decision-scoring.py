@@ -4,11 +4,18 @@ produced by `prepare-scoring-batches.mjs` via PwrAgent's built-in Decision
 model (`decisions_invoke` / `gpt-6-luna`).
 
 Pass Args={"scoringDir": "/abs/path/to/scoring"} when invoking `run_workflow`.
+Resumable per chunk and preserves each batch JSONL under `<scoringDir>/jsonl/`
+so PwrAgent's 20-file `decision-batches/` rotation never drops results.
 """
 import json
 import os
+import shutil
 
 SCORING_DIR = args["scoringDir"]
+DONE_DIR = os.path.join(SCORING_DIR, "chunks-done")
+JSONL_DIR = os.path.join(SCORING_DIR, "jsonl")
+os.makedirs(DONE_DIR, exist_ok=True)
+os.makedirs(JSONL_DIR, exist_ok=True)
 
 with open(os.path.join(SCORING_DIR, "chunks-manifest.json")) as f:
     manifest = json.load(f)
@@ -149,7 +156,14 @@ RESULT_SCHEMA = {
 }
 
 
-def make_agent(batch_type, idx, chunk):
+async def score_chunk(batch_type, idx, chunk):
+    done_path = os.path.join(DONE_DIR, f"{batch_type}-{idx}.json")
+    if os.path.exists(done_path):
+        with open(done_path) as f:
+            cached = json.load(f)
+        if cached.get("resultsFile") and os.path.exists(cached["resultsFile"]):
+            return cached
+
     defn_json = json.dumps(DEFINITIONS[batch_type])
     prompt = f"""Score chunk {idx} of {batch_type} ({chunk['count']} items, offset {chunk['start']}).
 
@@ -164,24 +178,30 @@ Steps:
      - `concurrency`: 8
      - `detail`: `"compact"`
 3. Do NOT set `background: true`. Wait for the synchronous batch result.
-4. Immediately call `finish` with:
-   - `batchType`: `"{batch_type}"`
-   - `chunkIndex`: {idx}
-   - `start`: {chunk['start']}
-   - `count`: {chunk['count']}
-   - `batchId`: the returned `batchId` string
-   - `resultsFile`: the returned `resultsFile` path string
-   - `succeeded`: `totals.succeeded` (integer)
-   - `failed`: `totals.failed` (integer)
-   - `estimatedCostUsd`: `totals.estimatedCostUsd` (number, 0 if omitted)
+4. You MUST call the `finish` tool immediately with the required JSON object (`batchType`, `chunkIndex`, `start`, `count`, `batchId`, `resultsFile`, `succeeded`, `failed`, `estimatedCostUsd`). Do not stop with plain text — call `finish`.
 """
-    return agent(
-        prompt,
-        schema=RESULT_SCHEMA,
-        role=f"Score {batch_type} #{idx}",
-        type_name="self",
-        model="flash",
-    )
+    last_err = None
+    for attempt in range(2):
+        try:
+            res = await agent(
+                prompt,
+                schema=RESULT_SCHEMA,
+                role=f"Score {batch_type} #{idx}" + ("" if attempt == 0 else " (retry)"),
+                type_name="self",
+                model="flash",
+            )
+            src_jsonl = res.get("resultsFile")
+            if src_jsonl and os.path.exists(src_jsonl):
+                local_jsonl = os.path.join(JSONL_DIR, f"{batch_type}-{idx}.jsonl")
+                shutil.copyfile(src_jsonl, local_jsonl)
+                res["resultsFile"] = local_jsonl
+            with open(done_path, "w") as f:
+                json.dump(res, f, indent=2)
+            return res
+        except Exception as exc:
+            last_err = exc
+            log(f"Retry {batch_type}#{idx} after attempt {attempt + 1} error: {exc}")
+    raise last_err
 
 
 all_results = {}
@@ -191,7 +211,7 @@ for batch_type in ["recall", "precision", "holistic"]:
     batch_out = []
     for i in range(0, len(chunks), 4):
         wave = [(idx, chunks[idx]) for idx in range(i, min(i + 4, len(chunks)))]
-        res = await parallel(wave, lambda pair: make_agent(batch_type, pair[0], pair[1]))
+        res = await parallel(wave, lambda pair: score_chunk(batch_type, pair[0], pair[1]))
         batch_out.extend(res)
         for r in res:
             log(

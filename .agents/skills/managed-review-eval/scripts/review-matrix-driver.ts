@@ -282,11 +282,17 @@ async function main() {
         && getModels(agyEntry).length === 0
       ) {
         refreshedAgy = true;
-        console.log("[eval] Triggering acp:antigravity capability probe...");
-        const refreshed = await registry.listBackends(
-          { includeUnavailable: true, refreshModels: "acp:antigravity" },
-          issueProviderDiscoveryPermit("settings-user-action"),
-        );
+        console.log("[eval] Hydrating acp:antigravity model catalog via warmup session...");
+        try {
+          await registry.startThread({
+            backend: "acp:antigravity",
+            cwd: repoCwd,
+            executionMode: "full-access",
+          });
+        } catch (err) {
+          console.warn("[eval] acp:antigravity warmup session warning:", String(err));
+        }
+        const refreshed = await registry.listBackends({ includeUnavailable: true });
         backendsList = refreshed.backends;
       }
       const codexOk =
