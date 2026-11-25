@@ -327,8 +327,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/sqlite-storage
       '@pwrdrvr/agent-acp':
-        specifier: ^0.17.0
-        version: 0.17.0(zod@4.6.7)
+        specifier: ^0.17.1
+        version: 0.17.1(zod@4.6.7)
       '@pwrdrvr/agent-client':
         specifier: ^0.8.3
         version: 0.8.3
@@ -1908,8 +1908,8 @@ packages:
   '@protobufjs/utf8@1.1.2':
     resolution: {integrity: sha512-b1UQwcEZ4yCnMCD8DAL1VlbvBJE9/IX4FTIp7BG1xYpf29SLazLSrqUkj4w7Y5y7cCVP6E5tcqqcI0xemPkHug==}
 
-  '@pwrdrvr/agent-acp@0.17.0':
-    resolution: {integrity: sha512-8Jf/A8CwC0ggmXwfgTP+HnDsJmP7v6xfK/YXbU7DkjcLNp81IU1qwmo0bGsH68ze9I0LV1MHW0i3bE+xK5Wn4w==}
+  '@pwrdrvr/agent-acp@0.17.1':
+    resolution: {integrity: sha512-9BGd806ugjJ2F1bkujGsNZp0Rrjj2cdpmEOezo2grVydTJifUGr3dIkgoeRSdYmv+/q5C+6PFe7Uv2CnRXbkSQ==}
 
   '@pwrdrvr/agent-client@0.8.3':
     resolution: {integrity: sha512-o52AtUEeWltal0FN4l/qAb7e2Y4uRpKvvA+Kkncec5I5uv/sdsELgd377B58TcBOxDqvp4CxdtFtfM9cE7698w==}
@@ -7168,7 +7168,7 @@ snapshots:
 
   '@protobufjs/utf8@1.1.2': {}
 
-  '@pwrdrvr/agent-acp@0.17.0(zod@4.6.7)':
+  '@pwrdrvr/agent-acp@0.17.1(zod@4.6.7)':
     dependencies:
       '@agentclientprotocol/sdk': 1.3.0(zod@4.6.7)
       '@pwrdrvr/agent-core': 0.2.0
