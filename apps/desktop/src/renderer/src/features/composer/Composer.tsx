@@ -404,7 +404,7 @@ import {
 } from "./ComposerDropdown";
 import { providerPickerDropdownOptions } from "./provider-picker-options";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
-import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
+import { isSkillOriginShortcut, SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import {
   canPushToRemoteTarget,
@@ -13221,6 +13221,16 @@ function useComposerController(props: ComposerProps) {
         return;
       }
 
+      if (autocompleteKind === "slash" && isSkillOriginShortcut(event)) {
+        const skill = filteredSlashCommands[activeSlashIndex]?.skill;
+        const anchor = autocompleteOptionRefs.current[activeSlashIndex];
+        if (skill && anchor && skillOriginCard.openFromKeyboard(skill, anchor, event.currentTarget)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
+
       const updateActiveAutocompleteIndex = (
         updater: (current: number) => number,
       ): void => {
@@ -15208,6 +15218,7 @@ function useComposerController(props: ComposerProps) {
                 autocompleteOptionRefs.current[index] = node;
               }}
               aria-describedby={command.skill ? skillOriginCard.describedBy(command.skill) : undefined}
+              aria-keyshortcuts={command.skill ? "Shift+F10" : undefined}
               aria-selected={index === activeSlashIndex}
               className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
               role="option"

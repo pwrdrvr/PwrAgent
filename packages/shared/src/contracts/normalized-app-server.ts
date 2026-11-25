@@ -109,6 +109,8 @@ export type AppServerSkillSummary = {
   path?: string;
   enabled?: boolean;
   scope?: string;
+  /** Available through an explicit path mention outside the provider’s native skill catalog. */
+  mentionOnly?: boolean;
   /** Owning plugin, `<plugin>@<marketplace>`, when the skill ships in one. */
   pluginId?: string;
   /**

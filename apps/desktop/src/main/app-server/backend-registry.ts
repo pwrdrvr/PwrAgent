@@ -5901,9 +5901,28 @@ export class DesktopBackendRegistry {
       const session = params.threadId
         ? this.acpBackend.getSession(backend, params.threadId)
         : undefined;
-      const cwds = [session?.cwd, params.cwd, ...(params.cwds ?? [])];
-      const readCommands = async () => session?.availableCommands?.length
-        ? session.availableCommands
+      let cwds = [session?.cwd, params.cwd, ...(params.cwds ?? [])];
+      let commandSession = session;
+      if (backend === "acp:antigravity" && params.threadId) {
+        const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: params.threadId });
+        const directories = overlay?.extraLinkedDirectories;
+        const workspaceCwd = resolveThreadWorkspaceCwd(session && acpSessionToThreadSummary(session), directories);
+        if (directories?.some(isHandoffDirectory)) {
+          // The owner’s handoff supersedes both a stale provider session and
+          // any pre-handoff paths sent by a viewer.
+          cwds = [workspaceCwd, ...directories.filter((directory) => !isHandoffDirectory(directory))
+            .map(({ worktreePath, path }) => worktreePath ?? path)];
+          const providerCwd = session?.antigravityPrimaryCwd ?? session?.cwd;
+          if (session?.requiresAgentSessionRebind || !providerCwd || !workspaceCwd
+            || path.resolve(providerCwd) !== path.resolve(workspaceCwd)) {
+            commandSession = undefined;
+          }
+        } else {
+          cwds[0] = workspaceCwd ?? session?.cwd;
+        }
+      }
+      const readCommands = async () => commandSession?.availableCommands?.length
+        ? commandSession.availableCommands
         : await this.resolveAcpAvailableCommands({ backend, cwds });
 
       if (backend !== "acp:antigravity" || params.catalog === "commands") {

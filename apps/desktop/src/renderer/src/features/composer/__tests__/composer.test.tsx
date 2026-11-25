@@ -783,13 +783,14 @@ describe("Composer", () => {
     }), { numRuns: 4, examples: [[false], [true]] });
   });
 
-  it("shows the project chip for an Antigravity slash skill and inserts the native command", async () => {
+  it("shows the project chip and opens Antigravity slash provenance from the keyboard", async () => {
     const thread: NavigationThreadSummary = {
       id: "slash-skill", title: "Garden release", titleSource: "explicit",
       source: "acp:antigravity", inbox: { inInbox: false },
       linkedDirectories: [{ id: "garden", path: "/garden", label: "Garden", kind: "local" }],
     };
     const description = "Prepare the Garden release.";
+    const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
     const desktopApi: DesktopApi = {
       listSkills: async ({ catalog } = {}) => ({
         backend: thread.source,
@@ -801,13 +802,23 @@ describe("Composer", () => {
     };
     function Picker() {
       const skills = useThreadSkills({ desktopApi, thread });
-      return <Composer thread={thread} skills={skills.skills} providerCommands={skills.providerCommands} onEnsureSkillsLoaded={skills.ensureLoaded} />;
+      return <Composer desktopApi={{ openMarkdownFileViewer }} thread={thread} skills={skills.skills} providerCommands={skills.providerCommands} onEnsureSkillsLoaded={skills.ensureLoaded} />;
     }
     render(<Picker />);
     const input = screen.getByRole("textbox", { name: "Reply" });
     fireEvent.change(input, { target: { value: "/rele" } });
     const option = await screen.findByRole("option", { name: /\/release.*Garden.*Prepare/ });
     expect(within(option).getByText("Garden")).toBeInTheDocument();
+    input.focus();
+    fireEvent.keyDown(input, { key: "F10", shiftKey: true });
+    const copy = await screen.findByRole("button", { name: "Copy path" });
+    expect(copy).toHaveFocus();
+    expect(screen.getByRole("group", { name: /Where.*release comes from/ })).toHaveTextContent("/garden/.agents/skills/release/SKILL.md");
+    await userEvent.tab();
+    const open = screen.getByRole("button", { name: "Open SKILL.md" });
+    expect(open).toHaveFocus();
+    fireEvent.keyDown(open, { key: "Escape" });
+    expect(input).toHaveFocus();
     fireEvent.click(option);
     expect(input).toHaveValue("/release ");
   });

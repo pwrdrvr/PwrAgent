@@ -14,6 +14,9 @@ const SKILL_HEADER = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m;
 
 type Scope = "repo" | "antigravity-user";
 type Filter = { include?: string[]; exclude: string[] };
+type SkillSource = { plugin?: string; cliGlobal?: boolean; mentionOnly?: boolean };
+
+const PLUGIN_MANIFESTS = [".antigravity-plugin/plugin.json", "plugin.json", ".gemini-plugin/plugin.json"];
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -212,22 +215,17 @@ async function discoverAntigravitySkills(
     return names.sort();
   }
 
-  async function add(file: string, scope: Scope, plugin?: string, cliGlobal = false) {
+  async function add(file: string, scope: Scope, source: SkillSource = {}) {
     spendPath();
-    if (!cliGlobal && matchesExcludedFolder(excludes, path.dirname(file))) return;
-    const skill = await readSkill(file, scope, plugin);
-    if (skill && (cliGlobal || !excludes.has(skill.name)) && !skills.has(skill.name)) {
-      skills.set(skill.name, skill);
+    if (!source.cliGlobal && matchesExcludedFolder(excludes, path.dirname(file))) return;
+    const skill = await readSkill(file, scope, source.plugin);
+    if (skill && (source.cliGlobal || !excludes.has(skill.name)) && !skills.has(skill.name)) {
+      skills.set(skill.name, source.mentionOnly ? { ...skill, mentionOnly: true } : skill);
     }
   }
 
-  async function scan(directory: string, scope: Scope, filters: Filter[] = [], plugin?: string, cliGlobal = false) {
+  async function scan(directory: string, scope: Scope, filters: Filter[] = [], source: SkillSource = {}) {
     spendPath();
-    const direct = path.join(directory, "SKILL.md");
-    if ((await fileInfo(direct))?.isFile()) {
-      if (matchesFilters(filters, path.basename(directory))) await add(direct, scope, plugin, cliGlobal);
-      return;
-    }
     // Default discovery is one level deep. Manifest include_only can point
     // directly to a nested skill without recursively crawling the checkout.
     const nested = filters.flatMap(({ include }) => include ?? [])
@@ -235,7 +233,7 @@ async function discoverAntigravitySkills(
     const candidates = new Set([...(await children(directory)), ...nested]);
     for (const candidate of candidates) {
       if (matchesFilters(filters, candidate)) {
-        await add(path.join(directory, candidate, "SKILL.md"), scope, plugin, cliGlobal);
+        await add(path.join(directory, candidate, "SKILL.md"), scope, source);
       }
     }
   }
@@ -271,23 +269,28 @@ async function discoverAntigravitySkills(
       if (path.basename(target).toLowerCase() === "skill.md") {
         if (matchesFilters(entryFilters, path.basename(path.dirname(target)))) await add(target, scope);
       } else {
-        await scan(target, scope, entryFilters);
+        const direct = path.join(target, "SKILL.md");
+        if ((await fileInfo(direct))?.isFile()) {
+          if (matchesFilters(entryFilters, path.basename(target))) await add(direct, scope);
+        } else {
+          await scan(target, scope, entryFilters);
+        }
       }
     }
   }
 
-  await scan(path.join(gemini, "antigravity-cli", "skills"), "antigravity-user", [], undefined, true);
-  await scan(path.join(gemini, "skills"), "antigravity-user", [], undefined, true);
+  await scan(path.join(gemini, "antigravity-cli", "skills"), "antigravity-user", [], { cliGlobal: true });
+  await scan(path.join(gemini, "skills"), "antigravity-user", [], { cliGlobal: true });
   for (const { directory, base, scope, manifest } of configs) {
     await scan(path.join(directory, "skills"), scope);
     await followManifest(manifest, base, (scope === "repo" && repo) || base, scope, [], [path.join(directory, "skills.json")]);
   }
   for (const directory of workspace) {
-    await scan(path.join(directory, ".gemini", "skills"), "repo");
+    await scan(path.join(directory, ".gemini", "skills"), "repo", [], { mentionOnly: true });
   }
   // Keep skills from the shared Agent Skills location available for explicit
   // mentions, even when Antigravity's own slash-command loader omits them.
-  await scan(path.join(home, ".agents", "skills"), "antigravity-user");
+  await scan(path.join(home, ".agents", "skills"), "antigravity-user", [], { mentionOnly: true });
 
   spendPath();
   const plugins = asRecord((await readJson(path.join(globalConfig, "config.json"))).plugins);
@@ -296,9 +299,32 @@ async function discoverAntigravitySkills(
     { directory: path.join(gemini, "antigravity-cli", "plugins"), scope: "antigravity-user" as const },
   ];
   for (const { directory, scope } of pluginRoots) {
-    for (const name of await children(directory)) {
-      if (asRecord(plugins[name]).enabled !== false) {
-        await scan(path.join(directory, name, "skills"), scope, [], name);
+    for (const folder of await children(directory)) {
+      const root = path.join(directory, folder);
+      let manifest: Record<string, unknown> = {};
+      for (const location of PLUGIN_MANIFESTS) {
+        spendPath();
+        const file = path.join(root, location);
+        if ((await fileInfo(file))?.isFile()) {
+          manifest = await readJson(file);
+          break;
+        }
+      }
+      const name = manifest.name;
+      if (typeof name !== "string" || !name.trim()) continue;
+      const enabled = asRecord(plugins[name] ?? plugins[folder]).enabled;
+      if (enabled === false || (enabled !== true && manifest.disabled === true)) continue;
+      const extra = typeof manifest.skills === "string" ? [manifest.skills] : strings(manifest.skills);
+      const roots = new Set(["skills"]);
+      for (const entry of extra) {
+        spendPath();
+        if (!entry.trim() || path.isAbsolute(entry)) continue;
+        const relative = path.relative(root, path.resolve(root, entry));
+        if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+        roots.add(relative);
+      }
+      for (const relative of roots) {
+        await scan(path.join(root, relative), scope, [], { plugin: name });
       }
     }
   }

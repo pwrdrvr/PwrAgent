@@ -377,6 +377,7 @@ it("attributes only unique Antigravity slash skill matches, regardless of catalo
       { name: "compact", description: "Compact this session." },
       { name: "check", description: "Check the project." },
       { name: "unknown" },
+      { name: "plugin-extra", description: "Check the plugin." },
     ];
     const releasePath = "/project-0/.agents/skills/release/SKILL.md";
     const listSkills: NonNullable<DesktopApi["listSkills"]> = (request) =>
@@ -401,6 +402,10 @@ it("attributes only unique Antigravity slash skill matches, regardless of catalo
           { name: "check", description: "Check the project.", path: "/project-0/.agents/skills/check/SKILL.md" },
           { name: "check", description: "Check the project.", path: "/another-project/.agents/skills/check/SKILL.md" },
           { name: "unknown", path: "/project-0/.agents/skills/unknown/SKILL.md" },
+          {
+            name: "garden:plugin-extra", pluginId: "garden", description: "Check the plugin.",
+            path: "/project-0/.agents/plugins/garden/more/extra/SKILL.md",
+          },
         ] }] });
       });
       if (!commandsFirst) await resolveCommands();
@@ -408,11 +413,34 @@ it("attributes only unique Antigravity slash skill matches, regardless of catalo
         name: "/release",
         skill: { path: releasePath, origin: { kind: "project", label: "project-0" } },
       });
-      for (const command of result.current.providerCommands.filter(({ name }) => name !== "/release")) {
+      expect(result.current.providerCommands.find(({ name }) => name === "plugin-extra")).toMatchObject({
+        skill: { name: "garden:plugin-extra", origin: { kind: "plugin", label: "garden" } },
+      });
+      for (const command of result.current.providerCommands.filter(({ name }) => name !== "/release" && name !== "plugin-extra")) {
         expect(command).not.toHaveProperty("skill");
       }
     } finally {
       unmount();
     }
   }), { examples: [[true, false], [false, true]], numRuns: 6 });
+});
+
+it("leaves slash provenance unknown when the matching skill is available only as a mention", async () => {
+  const draft = { ...launchpad(0, false), backend: "acp:antigravity" as const };
+  const command = { name: "compact", description: "Compact this session." };
+  const fallback = { ...command, path: "/fixture/.agents/skills/compact/SKILL.md", scope: "antigravity-user", mentionOnly: true };
+  const desktopApi: DesktopApi = {
+    listSkills: async (request) => ({
+      backend: draft.backend, fetchedAt: 1,
+      data: request?.catalog === "commands" ? [{ commands: [command], skills: [] }] : [{ skills: [fallback] }],
+    }),
+  };
+  const { result, unmount } = renderHook(() => useThreadSkills({ desktopApi, launchpad: draft }));
+  try {
+    await act(async () => { await result.current.ensureLoaded({ includeCommands: true }); });
+    expect(result.current.skills).toEqual([expect.objectContaining(fallback)]);
+    expect(result.current.providerCommands).toEqual([command]);
+  } finally {
+    unmount();
+  }
 });

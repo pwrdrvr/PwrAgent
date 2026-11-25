@@ -62,7 +62,7 @@ import { describeLeadingCommand } from "./composer-command-chip";
 import type { ComposerCommandChip } from "./ComposerInputTypes";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { SkillPickerHeader } from "./SkillPickerHeader";
-import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
+import { isSkillOriginShortcut, SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 
 /**
  * The populations a compact composer's mention popovers pick from.
@@ -674,6 +674,16 @@ export function useComposerMentions(params: {
     }
     if (optionCount === 0) return false;
 
+    if (kind === "commands" && isSkillOriginShortcut(event)) {
+      const skill = commandOptions[activeOption]?.skill;
+      const anchor = optionRefs.current[activeOption];
+      if (skill && anchor && skillOriginCard.openFromKeyboard(skill, anchor, event.currentTarget)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+    }
+
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setActiveIndex((activeOption + 1) % optionCount);
@@ -712,10 +722,12 @@ export function useComposerMentions(params: {
 
   const renderOption = (index: number, content: ReactNode, extra?: {
     describedBy?: string;
+    keyShortcuts?: string;
     title?: string;
   }): ReactNode => (
     <button
       aria-describedby={extra?.describedBy}
+      aria-keyshortcuts={extra?.keyShortcuts}
       aria-selected={index === activeOption}
       className={`compact-composer__mention-option${
         index === activeOption ? " is-active" : ""
@@ -797,7 +809,10 @@ export function useComposerMentions(params: {
             {[skill?.origin ? undefined : command.sourceLabel, command.description].filter(Boolean).join(" · ")}
           </span>
         </>,
-        { describedBy: skill ? skillOriginCard.describedBy(skill) : undefined },
+        {
+          describedBy: skill ? skillOriginCard.describedBy(skill) : undefined,
+          keyShortcuts: skill ? "Shift+F10" : undefined,
+        },
       );
     });
   } else if (kind === "directories") {

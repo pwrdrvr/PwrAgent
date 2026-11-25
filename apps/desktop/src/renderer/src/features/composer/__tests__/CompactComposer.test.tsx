@@ -182,6 +182,30 @@ describe("CompactComposer", () => {
     });
   });
 
+  it("opens slash skill provenance with Shift+F10 in the compact composer", () => {
+    renderComposer({
+      mentionSources: {
+        commands: [{
+          name: "release",
+          sourceLabel: "Antigravity",
+          skill: {
+            name: "release", path: "/garden/.agents/skills/release/SKILL.md",
+            origin: { kind: "project", label: "Garden", directoryIndex: 0 },
+          },
+        }],
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    input.focus();
+    fireEvent.change(input, { target: { value: "/rele" } });
+    fireEvent.keyDown(input, { key: "F10", shiftKey: true });
+    const copy = screen.getByRole("button", { name: "Copy path" });
+    expect(document.activeElement).toBe(copy);
+    fireEvent.keyDown(copy, { key: "Escape" });
+    expect(document.activeElement).toBe(input);
+    expect(screen.queryByRole("button", { name: "Copy path" })).toBeNull();
+  });
+
   it("draws a chipped command and its arguments once the menu closes, and nothing for an unchipped one", async () => {
     const { container } = renderComposer({
       mentionSources: {

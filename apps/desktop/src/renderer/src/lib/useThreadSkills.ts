@@ -50,11 +50,17 @@ function indexAntigravitySlashSkills(
 ): Map<string, AppServerSkillSummary | undefined> {
   const matches = new Map<string, AppServerSkillSummary | undefined>();
   for (const skill of skills ?? []) {
-    if (!skill.path || !skill.origin || skill.enabled === false) continue;
-    const key = slashSkillKey(skill.name, skill.description);
-    // ACP doesn't identify the selected file. Multiple distinct paths with
-    // the same advertisement leave provenance unknown.
-    if (key) matches.set(key, matches.has(key) ? undefined : skill);
+    if (!skill.path || !skill.origin || skill.enabled === false || skill.mentionOnly) continue;
+    const prefix = skill.pluginId ? `${skill.pluginId}:` : undefined;
+    const names = prefix && skill.name.startsWith(prefix)
+      ? [skill.name, skill.name.slice(prefix.length)]
+      : [skill.name];
+    for (const name of names) {
+      const key = slashSkillKey(name, skill.description);
+      // ACP doesn't identify the selected file. Multiple distinct paths with
+      // the same advertisement leave provenance unknown.
+      if (key) matches.set(key, matches.has(key) ? undefined : skill);
+    }
   }
   return matches;
 }

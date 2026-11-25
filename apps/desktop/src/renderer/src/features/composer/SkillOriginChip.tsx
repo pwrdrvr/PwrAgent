@@ -103,9 +103,15 @@ type CardState = {
   skill: OriginSkill;
   left?: number;
   top?: number;
+  returnFocus?: HTMLElement;
 };
 
+export function isSkillOriginShortcut(event: { key: string; shiftKey: boolean }): boolean {
+  return event.key === "ContextMenu" || (event.shiftKey && event.key === "F10");
+}
+
 export type SkillOriginCardController = {
+  openFromKeyboard: (skill: AppServerSkillSummary, anchor: HTMLElement, returnFocus: HTMLElement) => boolean;
   /** Pointer handlers for one row's chip. */
   chipHandlers: (skill: AppServerSkillSummary) => {
     onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -195,6 +201,7 @@ export function useSkillOriginCard(options: {
   }, [clearTimer, commitState]);
 
   const scheduleClose = useCallback(() => {
+    if (stateRef.current?.returnFocus) return;
     clearTimer(openTimerRef);
     clearTimer(closeTimerRef);
     closeTimerRef.current = window.setTimeout(() => {
@@ -217,7 +224,7 @@ export function useSkillOriginCard(options: {
       clearTimer(closeTimerRef);
       clearTimer(openTimerRef);
       const current = stateRef.current;
-      if (current?.anchor === anchor) {
+      if (current?.returnFocus || current?.anchor === anchor) {
         return;
       }
       const next: CardState = { anchor, skill: { ...skill, origin, path } };
@@ -241,6 +248,17 @@ export function useSkillOriginCard(options: {
       onPointerLeave: scheduleClose,
     }),
     [hoverAnchor, scheduleClose],
+  );
+
+  const openFromKeyboard = useCallback<SkillOriginCardController["openFromKeyboard"]>(
+    (skill, anchor, returnFocus) => {
+      if (!skill.origin || !skill.path) return false;
+      clearTimer(openTimerRef);
+      clearTimer(closeTimerRef);
+      commitState({ anchor, skill: { ...skill, origin: skill.origin, path: skill.path }, returnFocus });
+      return true;
+    },
+    [clearTimer, commitState],
   );
 
   // Place below the chip, or above when the viewport has no room. Measured
@@ -267,6 +285,12 @@ export function useSkillOriginCard(options: {
     commitState({ ...state, left, top });
   }, [commitState, state]);
 
+  useLayoutEffect(() => {
+    if (state?.returnFocus && state.left !== undefined) {
+      cardRef.current?.querySelector<HTMLElement>("button")?.focus();
+    }
+  }, [state]);
+
   // The picker re-renders its rows on every keystroke, and closes without
   // telling the card. A card whose chip is gone must not float over the list
   // or come back with the next picker, so check before paint, not after.
@@ -289,7 +313,9 @@ export function useSkillOriginCard(options: {
       // and the next one closes the picker.
       event.preventDefault();
       event.stopPropagation();
+      const returnFocus = stateRef.current?.returnFocus;
       close();
+      if (returnFocus?.isConnected) returnFocus.focus();
     };
     const onPointerDown = (event: PointerEvent): void => {
       const target = event.target;
@@ -376,6 +402,9 @@ export function useSkillOriginCard(options: {
         top={state.top}
         onCopy={copyPath}
         onOpen={openSkillFile}
+        onBlur={state.returnFocus ? (target) => {
+          if (!(target instanceof Node) || !cardRef.current?.contains(target)) close();
+        } : undefined}
         onPointerEnter={() => clearTimer(closeTimerRef)}
         onPointerLeave={scheduleClose}
       />,
@@ -387,6 +416,7 @@ export function useSkillOriginCard(options: {
     cardNode,
     chipHandlers,
     close,
+    openFromKeyboard,
     describedBy: (skill) =>
       state && state.left !== undefined && state.skill.path === skill.path
         ? cardId
@@ -425,6 +455,7 @@ function SkillOriginCard(props: {
   skill: OriginSkill;
   top?: number;
   onCopy: (path: string) => void;
+  onBlur?: (target: EventTarget | null) => void;
   onOpen?: (skill: OriginSkill) => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
@@ -445,6 +476,7 @@ function SkillOriginCard(props: {
         top: props.top,
         visibility: props.left === undefined ? "hidden" : undefined,
       }}
+      onBlur={props.onBlur ? (event) => props.onBlur?.(event.relatedTarget) : undefined}
       onClick={stopHostPropagation}
       onKeyDown={stopHostPropagation}
       onMouseDown={keepComposerFocus}

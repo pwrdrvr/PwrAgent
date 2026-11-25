@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { createKimiAcpRegistry } from "./helpers/backend-registry-fixture";
+import { createKimiAcpRegistry, createOverlayStoreMock } from "./helpers/backend-registry-fixture";
 
 const backend = "acp:antigravity";
 
@@ -209,5 +209,60 @@ it("enforces one scan allowance across workspaces even when each workspace fits 
       .resolves.toMatchObject({ data: [{ cwd: workspaces[0] }, { cwd: workspaces[1] }] });
     await expect(registry.listSkills({ backend, cwds: workspaces, catalog: "skills" }))
       .rejects.toThrow("Antigravity skill discovery exceeded its scan limit.");
+  });
+});
+
+it("uses the owner’s handoff destination even when both the ACP session and the viewer still name the source", async () => {
+  await withWorkspace(async ({ cwd, repo, skill }) => {
+    const target = path.join(repo, "destination");
+    await skill(path.join(cwd, ".agents", "skills"), "source-only");
+    const destination = await skill(path.join(target, ".agents", "skills"), "destination-only");
+    const overlayStore = createOverlayStoreMock();
+    const { registry, acpClient } = createKimiAcpRegistry({ acpBackendId: backend, overlayStore });
+    const session = await acpClient.startSession({ cwd, executionMode: "default" });
+    await overlayStore.replaceWorkspaceLinkedDirectory({
+      backend, threadId: session.sessionId, gitBranch: "HEAD",
+      directory: {
+        id: `pwragent-handoff:${backend}:${session.sessionId}`,
+        path: repo, worktreePath: target, label: "Destination", kind: "worktree",
+      },
+    });
+    const owner = await registry.resolveThreadPrimaryDirectory(backend, session.sessionId);
+    expect(owner?.worktreePath).toBe(target);
+    const { data } = await registry.listSkills({
+      backend, threadId: session.sessionId, cwd, cwds: [cwd], catalog: "skills",
+    });
+    expect(data.map(({ cwd, skills }) => [cwd, skills.map(({ path }) => path)])).toEqual([
+      [owner?.worktreePath, [destination]],
+    ]);
+  });
+});
+
+it("matches Antigravity's plugin validator for default and additional skill directories", async () => {
+  await withWorkspace(async ({ repo, skill, write }) => {
+    const plugins = path.join(repo, ".agents", "plugins");
+    const plugin = path.join(plugins, "garden");
+    const standard = await skill(path.join(plugin, "skills"), "ordinary");
+    const extra = await skill(path.join(plugin, "more"), "extra");
+    await skill(path.join(plugins, "unmanifested", "skills"), "ignored");
+    await write(path.join(plugin, "plugin.json"), JSON.stringify({
+      name: "garden", description: "Garden fixture", version: "1.0.0", skills: ["./more"],
+    }));
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
+    expect(data[0]?.skills.map(({ name, path }) => [name, path]).sort()).toEqual([
+      ["garden:extra", extra], ["garden:ordinary", standard],
+    ]);
+  });
+});
+
+it("keeps standard skill folders visible alongside an unrelated root SKILL.md", async () => {
+  await withWorkspace(async ({ repo, skill, write }) => {
+    const skillRoot = path.join(repo, ".agents", "skills");
+    await write(path.join(skillRoot, "SKILL.md"), "Unrelated notes.");
+    const child = await skill(skillRoot, "child");
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
+    expect(data[0]?.skills.map(({ path }) => path)).toEqual([child]);
   });
 });
