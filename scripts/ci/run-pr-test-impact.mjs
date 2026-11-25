@@ -2,7 +2,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createVitest } from "vitest/node";
-import { unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
+import { e2eFilesForPlatform, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
 
 const [kind, group, lane] = process.argv.slice(2);
 const { plan } = JSON.parse(readFileSync(".local/ci/pr-test-impact/plan.json", "utf8"));
@@ -42,10 +42,11 @@ if (kind === "unit") {
   } finally {
     await ctx.close();
   }
-} else if (kind === "e2e-files") {
+} else if (kind === "e2e-files" || kind === "e2e-windows-files") {
   if (plan.e2e.mode !== "selected") throw new Error("The plan does not narrow the Playwright specs");
+  const platform = kind === "e2e-windows-files" ? "win32" : "linux";
   // Paths for the Playwright command, relative to the desktop package.
-  process.stdout.write(plan.e2e.selected.map(({ file }) => path.posix.relative("apps/desktop", file)).join("\n"));
+  process.stdout.write(e2eFilesForPlatform(plan.e2e, platform).map(({ file }) => path.posix.relative("apps/desktop", file)).join("\n"));
 } else {
   throw new Error(`Unknown narrowed run: ${kind}`);
 }

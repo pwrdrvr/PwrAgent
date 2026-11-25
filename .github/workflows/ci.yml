@@ -54,6 +54,11 @@ jobs:
       # `a11y.spec.ts`, or wherever `full_platforms` is `true`; a narrowed
       # test plan that selects the spec also runs it. Every push runs it.
       a11y: ${{ steps.classify.outputs.a11y }}
+      # `true` runs all four Windows Desktop E2E lanes on a pull request when
+      # `ci:windows-e2e` is present (or wherever `full_platforms` is `true`).
+      # A narrowed test plan with Windows-runnable specs runs one narrowed
+      # Windows E2E lane without needing this label.
+      windows_e2e: ${{ steps.classify.outputs.windows_e2e }}
     steps:
       # Docs-only PRs skip Lint, so the instruction-size guard runs here,
       # where every PR and push passes through.
@@ -82,6 +87,7 @@ jobs:
               core.setOutput("docs_only", "false");
               core.setOutput("full_platforms", "true");
               core.setOutput("a11y", "true");
+              core.setOutput("windows_e2e", "true");
               core.notice(`Running full CI: ${reason}`);
             };
 
@@ -169,6 +175,8 @@ jobs:
               pathsOf(file).includes("apps/desktop/e2e/a11y.spec.ts"));
             const a11y = labels.some((label) => label.name === "ci:a11y") || a11yFile !== undefined;
             core.setOutput("a11y", String(a11y));
+            const windowsE2e = labels.some((label) => label.name === "ci:windows-e2e");
+            core.setOutput("windows_e2e", String(windowsE2e));
 
             const codeImpactingFile = files.find((file) =>
               pathsOf(file).some((path) => !isNonProductPath(path)));
@@ -366,7 +374,8 @@ jobs:
     # job is skipped or fails, and they then run the full suite.
     if: >-
       ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
-      && needs.install-deps.result == 'success' }}
+      && needs.install-deps.result == 'success'
+      && needs.pr-test-impact-plan.outputs.unit_linux_lanes != '[]' }}
     strategy:
       # Keep the other lane running after a failure so it still reports.
       fail-fast: false
@@ -492,7 +501,7 @@ jobs:
     # in the step below rather than gating entry to the job.
     name: Test
     runs-on: ubuntu-latest
-    needs: [changes, test]
+    needs: [changes, pr-test-impact-plan, test]
     if: >-
       always() &&
       needs.changes.outputs.code_impacting == 'true'
@@ -500,11 +509,17 @@ jobs:
     steps:
       - name: Require every Test lane
         env:
+          UNIT_LINUX_LANES: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_linux_lanes || '' }}
           TEST_RESULT: ${{ needs.test.result }}
         run: |
           set -euo pipefail
           # Mirror the result into the job summary, as the Desktop E2E gate
           # does, so the checks page says why the gate failed.
+          if [[ "${UNIT_LINUX_LANES:-}" == "[]" && "$TEST_RESULT" == "skipped" ]]; then
+            echo "- SKIP \`Test\` lanes (the test plan found no unit test that this change affects)" >> "$GITHUB_STEP_SUMMARY"
+            echo "No Test lane needed for this change."
+            exit 0
+          fi
           if [[ "$TEST_RESULT" != "success" ]]; then
             echo "- FAIL \`Test\` lanes ($TEST_RESULT); see the failing \`Test (lane N of 4)\` job" >> "$GITHUB_STEP_SUMMARY"
             echo "::error::A Test lane did not succeed ($TEST_RESULT)."
@@ -1445,15 +1460,25 @@ jobs:
     # and launch, which is exactly the Git-for-Windows launcher-handoff class
     # that CLAUDE.md records as expensive.
     #
-    # Pull requests run it only when `changes` sets `full_platforms`, or with
-    # the shutdown-diagnostics label, which exists to run this job.
+    # Pull requests run all four lanes when `changes` sets `full_platforms` or
+    # `windows_e2e` (`ci:windows-e2e`), or with `ci:windows-shutdown-diagnostics`.
+    # When a pull request's test plan narrows E2E to Windows-runnable specs
+    # (for example a spec-only edit), one lane runs only those selected specs
+    # without turning on all four Windows E2E lanes for ordinary product PRs.
     runs-on: windows-latest
-    needs: [changes, windows-install-deps]
+    needs: [changes, windows-install-deps, pr-test-impact-plan]
     if: >-
-      needs.changes.outputs.code_impacting == 'true' && (
+      ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
+      && needs.windows-install-deps.result == 'success'
+      && (
         needs.changes.outputs.full_platforms == 'true'
+        || needs.changes.outputs.windows_e2e == 'true'
         || contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics')
-      )
+        || (needs.pr-test-impact-plan.result == 'success'
+          && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected'
+          && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != ''
+          && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '[]')
+      ) }}
     strategy:
       # Keep the other lanes running after a failure so their artifacts show
       # whether a failure is isolated or suite-wide, exactly as the Linux and
@@ -1461,7 +1486,7 @@ jobs:
       # so no max-parallel cap is needed.
       fail-fast: false
       matrix:
-        lane: [1, 2, 3, 4]
+        lane: ${{ fromJSON((needs.changes.outputs.full_platforms != 'true' && needs.changes.outputs.windows_e2e != 'true' && !contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected' && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '' && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '[]') && needs.pr-test-impact-plan.outputs.e2e_windows_lanes || '[1, 2, 3, 4]') }}
         # Repeated samples and native observation are opt-in investigation work.
         sample: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && '[1, 2, 3]' || '[1]') }}
     # One budget for setup, build, tests, and reporting. Do not add shorter
@@ -1511,6 +1536,20 @@ jobs:
           }
           "PWRAGENT_WINDOWS_CDB_EXE=$diagnosticCdbPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Download the test plan
+        if: >-
+          ${{ needs.changes.outputs.full_platforms != 'true'
+          && needs.changes.outputs.windows_e2e != 'true'
+          && !contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics')
+          && needs.pr-test-impact-plan.result == 'success'
+          && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected'
+          && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != ''
+          && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '[]' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: pr-test-impact-plan
+          path: .local/ci/pr-test-impact
+
       - name: Run desktop replay-backed Electron tests
         # windows-latest provides an interactive desktop session, so unlike the
         # Linux lane this needs neither xvfb nor a window manager.
@@ -1530,15 +1569,23 @@ jobs:
         id: e2e-tests
         continue-on-error: true
         env:
+          E2E_WINDOWS_SELECTED: ${{ (needs.changes.outputs.full_platforms != 'true' && needs.changes.outputs.windows_e2e != 'true' && !contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected' && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '' && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '[]') && 'true' || 'false' }}
           PWTEST_SHARD_WEIGHTS: "59:121:104:112"
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
           PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
-        run: >-
-          pnpm ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && 'test:desktop-e2e:windows-diagnostics' || 'test:desktop-e2e' }}
-          --shard=${{ matrix.lane }}/4
-          --retries=0
+        run: |
+          if ($env:E2E_WINDOWS_SELECTED -eq "true") {
+            $tests = @(node scripts/ci/run-pr-test-impact.mjs e2e-windows-files)
+            if ($LASTEXITCODE -ne 0 -or $tests.Count -eq 0) {
+              throw "The narrowed test plan selected no Windows Desktop E2E specs."
+            }
+            Remove-Item Env:PWTEST_SHARD_WEIGHTS -ErrorAction SilentlyContinue
+            pnpm test:desktop-e2e @tests --retries=0
+          } else {
+            pnpm ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && 'test:desktop-e2e:windows-diagnostics' || 'test:desktop-e2e' }} --shard=${{ matrix.lane }}/4 --retries=0
+          }
 
       - name: Verify the E2E slice completed
         if: steps.e2e-tests.outcome == 'success'
@@ -1612,17 +1659,20 @@ jobs:
           FLAKE_SAMPLES: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && '3' || '1' }}
           FLAKE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           FULL_PLATFORMS: ${{ needs.changes.outputs.full_platforms }}
+          WINDOWS_E2E_REQUESTED: ${{ needs.changes.outputs.windows_e2e }}
           WINDOWS_DIAGNOSTICS: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') }}
           A11Y_REQUESTED: ${{ (needs.changes.outputs.a11y == 'true' || needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') && 'true' || 'false' }}
+          E2E_WINDOWS_SELECTED: ${{ (needs.changes.outputs.full_platforms != 'true' && needs.changes.outputs.windows_e2e != 'true' && !contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected' && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '' && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '[]') && 'true' || 'false' }}
           # The lanes a pull request's test plan ran. A lane it left out is
           # not a missing slice.
           FLAKE_LANES: >-
             ${{ needs.pr-test-impact-plan.result == 'success' && format(
-            '{{"unit-linux":{0},"unit-windows-main":{1},"unit-windows-renderer":{2},"e2e-linux":{3}}}',
+            '{{"unit-linux":{0},"unit-windows-main":{1},"unit-windows-renderer":{2},"e2e-linux":{3}{4}}}',
             needs.pr-test-impact-plan.outputs.unit_linux_lanes,
             needs.pr-test-impact-plan.outputs.unit_windows_main_lanes,
             needs.pr-test-impact-plan.outputs.unit_windows_renderer_lanes,
-            needs.pr-test-impact-plan.outputs.e2e_lanes) || '' }}
+            needs.pr-test-impact-plan.outputs.e2e_lanes,
+            (needs.changes.outputs.full_platforms != 'true' && needs.changes.outputs.windows_e2e != 'true' && !contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected' && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '' && needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '[]') && format(',"e2e-windows":{0}', needs.pr-test-impact-plan.outputs.e2e_windows_lanes) || '') || '' }}
         # Mirror the `if:` of test-macos, desktop-e2e-macos, windows-e2e and
         # desktop-a11y, so a platform the classifier skipped is not reported
         # as missing.
@@ -1631,7 +1681,7 @@ jobs:
           not_run=""
           if [[ "$FULL_PLATFORMS" != "true" ]]; then
             not_run="unit-macos,e2e-macos"
-            if [[ "$WINDOWS_DIAGNOSTICS" != "true" ]]; then
+            if [[ "$WINDOWS_E2E_REQUESTED" != "true" && "$WINDOWS_DIAGNOSTICS" != "true" && "$E2E_WINDOWS_SELECTED" != "true" ]]; then
               not_run+=",e2e-windows"
             fi
           fi
@@ -1682,6 +1732,7 @@ jobs:
       unit_windows_main_lanes: ${{ steps.lanes.outputs.unit_windows_main_lanes }}
       unit_windows_renderer_lanes: ${{ steps.lanes.outputs.unit_windows_renderer_lanes }}
       e2e_lanes: ${{ steps.lanes.outputs.e2e_lanes }}
+      e2e_windows_lanes: ${{ steps.lanes.outputs.e2e_windows_lanes }}
       # `true` when a narrowed plan selected `a11y.spec.ts`, which the
       # `desktop-a11y` job then runs; the Desktop E2E lane leaves it out.
       e2e_a11y: ${{ steps.lanes.outputs.e2e_a11y }}

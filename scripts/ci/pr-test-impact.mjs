@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import ts from "typescript";
 
 const codeFile = /\.[cm]?[jt]sx?$/;
 // Unit-test inputs that the application bundle never loads.
@@ -198,6 +199,162 @@ export function separateA11y(e2e) {
   return {
     e2e: { ...e2e, selected: e2e.selected.filter(({ file }) => file !== a11ySpec) },
     a11y: e2e.selected.some(({ file }) => file === a11ySpec),
+  };
+}
+
+function isProcessPlatform(node) {
+  return ts.isPropertyAccessExpression(node)
+    && ts.isIdentifier(node.expression) && node.expression.text === "process"
+    && node.name.text === "platform";
+}
+
+function platformSkipMatches(expr, platform) {
+  if (ts.isParenthesizedExpression(expr)) return platformSkipMatches(expr.expression, platform);
+  if (!ts.isBinaryExpression(expr)) return false;
+  if (expr.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+    return platformSkipMatches(expr.left, platform) || platformSkipMatches(expr.right, platform);
+  }
+  const op = expr.operatorToken.kind;
+  if (op !== ts.SyntaxKind.EqualsEqualsEqualsToken && op !== ts.SyntaxKind.ExclamationEqualsEqualsToken) return false;
+  let value;
+  if (isProcessPlatform(expr.left) && ts.isStringLiteralLike(expr.right)) value = expr.right.text;
+  else if (isProcessPlatform(expr.right) && ts.isStringLiteralLike(expr.left)) value = expr.left.text;
+  else return false;
+  return op === ts.SyntaxKind.EqualsEqualsEqualsToken ? value === platform : value !== platform;
+}
+
+function isTestIdentifier(node) {
+  return ts.isIdentifier(node) && node.text === "test";
+}
+
+function isTestProperty(node, names) {
+  return ts.isPropertyAccessExpression(node) && isTestIdentifier(node.expression) && names.includes(node.name.text);
+}
+
+function callbackBody(call) {
+  const last = call.arguments[call.arguments.length - 1];
+  if (!last || !(ts.isArrowFunction(last) || ts.isFunctionExpression(last)) || !ts.isBlock(last.body)) return null;
+  return last.body;
+}
+
+function containsTestCall(node) {
+  if (ts.isCallExpression(node) && (isTestIdentifier(node.expression)
+    || isTestProperty(node.expression, ["only", "fixme", "skip", "describe"]))) return true;
+  return Boolean(ts.forEachChild(node, containsTestCall));
+}
+
+function hasUnconditionalPlatformSkip(statements, platform) {
+  for (const statement of statements) {
+    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) continue;
+    const call = statement.expression;
+    if (isTestProperty(call.expression, ["skip"]) && call.arguments.length > 0
+      && platformSkipMatches(call.arguments[0], platform)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether a Playwright spec can execute at least one test on `platform`
+ * (`"linux"` or `"win32"`). Fails safe (`true`) unless the file declares at
+ * least one literal `test(...)` call (with no dynamic loop/helper test
+ * registration) and every declared test unconditionally skips on `platform`.
+ */
+export function specRunsOnPlatform(sourceText, platform) {
+  const source = ts.createSourceFile("spec.ts", sourceText, ts.ScriptTarget.Latest, true);
+  let testCount = 0;
+  let dynamic = false;
+  let runnable = false;
+  const hooks = ["beforeAll", "afterAll", "beforeEach", "afterEach", "use", "setTimeout"];
+
+  const visitBlock = (statements, inheritedSkip) => {
+    for (const statement of statements) {
+      if (ts.isImportDeclaration(statement) || ts.isTypeAliasDeclaration(statement)
+        || ts.isInterfaceDeclaration(statement) || ts.isExportDeclaration(statement)
+        || ts.isEmptyStatement(statement)) continue;
+      if (ts.isFunctionDeclaration(statement) || ts.isVariableStatement(statement)) {
+        if (containsTestCall(statement)) dynamic = true;
+        continue;
+      }
+      if (ts.isExpressionStatement(statement) && ts.isCallExpression(statement.expression)) {
+        const call = statement.expression;
+        const callee = call.expression;
+        if (isTestProperty(callee, hooks)) continue;
+        if (isTestProperty(callee, ["skip"]) && call.arguments.length <= 2
+          && !(call.arguments[call.arguments.length - 1] && (ts.isArrowFunction(call.arguments[call.arguments.length - 1])
+            || ts.isFunctionExpression(call.arguments[call.arguments.length - 1])))) {
+          continue;
+        }
+        if (isTestProperty(callee, ["describe"]) || (ts.isPropertyAccessExpression(callee)
+          && isTestProperty(callee.expression, ["describe"]) && ["serial", "parallel", "configure"].includes(callee.name.text))) {
+          if (ts.isPropertyAccessExpression(callee) && callee.name.text === "configure") continue;
+          const body = callbackBody(call);
+          if (!body) { dynamic = true; return; }
+          const describeSkip = inheritedSkip || hasUnconditionalPlatformSkip(body.statements, platform);
+          visitBlock(body.statements, describeSkip);
+          if (dynamic || runnable) return;
+          continue;
+        }
+        if (isTestIdentifier(callee) || isTestProperty(callee, ["only"])) {
+          const body = callbackBody(call);
+          if (!body) { dynamic = true; return; }
+          testCount++;
+          if (!inheritedSkip && !hasUnconditionalPlatformSkip(body.statements, platform)) {
+            runnable = true;
+            return;
+          }
+          continue;
+        }
+        if (isTestProperty(callee, ["skip", "fixme"])) {
+          testCount++;
+          continue;
+        }
+      }
+      if (containsTestCall(statement)) { dynamic = true; return; }
+    }
+  };
+
+  visitBlock(source.statements, hasUnconditionalPlatformSkip(source.statements, platform));
+  return dynamic || testCount === 0 || runnable;
+}
+
+export function annotateE2ePlatforms(e2e, root = process.cwd()) {
+  if (e2e.mode !== "selected") return e2e;
+  return {
+    ...e2e,
+    selected: e2e.selected.map((entry) => {
+      try {
+        const text = readFileSync(path.join(root, entry.file), "utf8");
+        return {
+          ...entry,
+          platforms: {
+            linux: specRunsOnPlatform(text, "linux"),
+            win32: specRunsOnPlatform(text, "win32"),
+          },
+        };
+      } catch {
+        return { ...entry, platforms: { linux: true, win32: true } };
+      }
+    }),
+  };
+}
+
+export function e2eFilesForPlatform(e2e, platform) {
+  if (e2e.mode !== "selected") return [];
+  return e2e.selected.filter((entry) => entry.platforms?.[platform] !== false);
+}
+
+export function planE2eLanes(e2e) {
+  if (e2e.mode !== "selected") {
+    // A full E2E plan runs all four Linux lanes and leaves Windows E2E to
+    // `main`, `ci:full`, `ci:windows-e2e`, `ci:windows-shutdown-diagnostics`,
+    // or platform-specific path triggers.
+    return { linux: [1, 2, 3, 4], windows: [] };
+  }
+  return {
+    linux: e2eFilesForPlatform(e2e, "linux").length ? [1] : [],
+    windows: e2eFilesForPlatform(e2e, "win32").length ? [1] : [],
   };
 }
 

@@ -395,3 +395,99 @@ it("moves a selected accessibility audit out of the narrowed lane into its own j
   const full = { mode: "full", reason: "fixture" };
   expect(separateA11y(full)).toEqual({ e2e: full, a11y: false });
 });
+
+it("treats linked Vite/Oxc virtual helpers from `using` declarations as resolved while still widening on real missing imports", async () => {
+  await temporaryTree(async (root, write) => {
+    const resource = `${source}resource.ts`;
+    const resourceTest = `${source}resource.test.ts`;
+    const unrelatedTest = `${source}unrelated.test.ts`;
+    write("fixture.config.mjs", 'export default { test: { include: ["**/*.test.ts"] } };');
+    write(resource, [
+      "export function withResource() {",
+      "  using _disposable = { [Symbol.dispose]() {} };",
+      "  return 1;",
+      "}",
+    ].join("\n"));
+    write(resourceTest, 'import { withResource } from "./resource"; export default withResource();');
+    write(unrelatedTest, "export default 1;");
+    write(spec, "export const spec = 1;");
+    await withVitestImpact(root, async (unit) => {
+      const resourcePlan = await planImpact(changes(resource), { unit });
+      expect(resourcePlan.unit.mode).toBe("selected");
+      expect(resourcePlan.unit.selected?.map(({ file }) => file)).toEqual([resourceTest]);
+      const specOnly = await planImpact(changes(spec), { unit });
+      expect(specOnly.unit.mode).toBe("selected");
+      expect(specOnly.unit.selected).toEqual([]);
+    }, "fixture.config.mjs");
+
+    // Control: a real unresolved static import beside `using` still widens.
+    write(resource, [
+      'import "./missing";',
+      "export function withResource() {",
+      "  using _disposable = { [Symbol.dispose]() {} };",
+      "  return 1;",
+      "}",
+    ].join("\n"));
+    await withVitestImpact(root, async (unit) => {
+      const brokenPlan = await planImpact(changes(resource), { unit });
+      expect(brokenPlan.unit).toMatchObject({
+        mode: "full",
+        reason: "unresolved static import in Vitest graph",
+        specifier: "./missing",
+      });
+    }, "fixture.config.mjs");
+  });
+}, 30_000);
+
+it("excludes unrelated directory-scanning unit tests for e2e-only diffs while keeping e2e guardrails and fixture/product owners", async () => {
+  await temporaryTree(async (root, write) => {
+    const e2eGuard = "apps/desktop/src/main/__tests__/e2e-guardrail.test.mjs";
+    const unrelatedMainScan = "apps/desktop/src/main/__tests__/unrelated-scan.test.mjs";
+    const unrelatedRendererScan = "apps/desktop/src/renderer/src/__tests__/renderer-scan.test.mjs";
+    const fixtureOwner = "apps/desktop/src/main/__tests__/fixture-owner.test.mjs";
+    const literalOwner = "apps/desktop/src/main/__tests__/literal-owner.test.mjs";
+    const sharedFixture = "apps/desktop/e2e/fixtures/shared-helper.mjs";
+    const specA = "apps/desktop/e2e/todo-dispatch-model.spec.ts";
+    const specB = "apps/desktop/e2e/targeted.spec.ts";
+    const product = `${source}product.mjs`;
+    const productOwner = `${source}product.test.mjs`;
+
+    write("fixture.config.mjs", 'export default { test: { include: ["**/*.test.mjs"] } };');
+    write(sharedFixture, "export const helper = () => 1;");
+    write(specA, "export const specA = 1;");
+    write(specB, "export const specB = 1;");
+    write(product, "export const value = 1;");
+    write(e2eGuard, 'import { readdirSync } from "node:fs"; import path from "node:path"; export default readdirSync(path.resolve(import.meta.dirname, "../../../e2e"));');
+    write(unrelatedMainScan, 'import { readdirSync } from "node:fs"; export default readdirSync(".");');
+    write(unrelatedRendererScan, 'import { readdirSync } from "node:fs"; import path from "node:path"; export default readdirSync(path.resolve(import.meta.dirname, ".."));');
+    write(fixtureOwner, 'import { helper } from "../../../e2e/fixtures/shared-helper.mjs"; export default helper();');
+    write(literalOwner, 'export const named = "targeted.spec.ts";');
+    write(productOwner, 'import { value } from "./product.mjs"; export default value;');
+
+    await withVitestImpact(root, async (unit) => {
+      const selectedFor = async (entries) => (await planImpact(entries, { unit })).unit.selected?.map(({ file }) => file);
+      // Exhaustively test every non-empty combination of spec, shared fixture,
+      // and product edits (2^4 - 1 = 15 states).
+      for (let mask = 1; mask < 16; mask++) {
+        const editSpecA = Boolean(mask & 1);
+        const editSpecB = Boolean(mask & 2);
+        const editFixture = Boolean(mask & 4);
+        const editProduct = Boolean(mask & 8);
+        const entries = [
+          ...(editSpecA ? [{ status: "M", file: specA }] : []),
+          ...(editSpecB ? [{ status: "M", file: specB }] : []),
+          ...(editFixture ? [{ status: "M", file: sharedFixture }] : []),
+          ...(editProduct ? [{ status: "M", file: product }] : []),
+        ];
+        const selected = await selectedFor(entries);
+        const label = `mask=${mask}`;
+        expect(selected, label).toContain(e2eGuard);
+        expect(selected.includes(literalOwner), label).toBe(editSpecB);
+        expect(selected.includes(fixtureOwner), label).toBe(editFixture);
+        expect(selected.includes(productOwner), label).toBe(editProduct);
+        expect(selected.includes(unrelatedMainScan), label).toBe(editProduct);
+        expect(selected.includes(unrelatedRendererScan), label).toBe(editProduct);
+      }
+    }, "fixture.config.mjs");
+  });
+}, 30_000);

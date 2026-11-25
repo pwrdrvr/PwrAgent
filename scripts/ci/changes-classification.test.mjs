@@ -38,13 +38,14 @@ async function classify(files, {
       return files;
     } },
   );
-  for (const name of ["code_impacting", "docs_only", "full_platforms", "a11y"]) {
+  for (const name of ["code_impacting", "docs_only", "full_platforms", "a11y", "windows_e2e"]) {
     expect(outputs[name], `${name} output`).toMatch(/^(true|false)$/);
   }
   return {
     fullCi: outputs.code_impacting === "true",
     fullPlatforms: outputs.full_platforms === "true",
     a11y: outputs.a11y === "true",
+    windowsE2e: outputs.windows_e2e === "true",
     lookupCalls,
   };
 }
@@ -91,7 +92,7 @@ it("fails closed for missing or incomplete provider data", async () => {
 
 it("always runs full CI for non-PR events without a changed-file lookup", async () => {
   for (const event of ["push", "workflow_dispatch"]) {
-    expect(await classify([], { event })).toEqual({ fullCi: true, fullPlatforms: true, a11y: true, lookupCalls: 0 });
+    expect(await classify([], { event })).toEqual({ fullCi: true, fullPlatforms: true, a11y: true, windowsE2e: true, lookupCalls: 0 });
   }
 });
 
@@ -209,6 +210,32 @@ it("runs the accessibility audit on PRs only when labelled, when the spec change
   }
 });
 
+it("runs full Windows Desktop E2E on PRs when ci:windows-e2e, ci:full, a platform path, or an untrusted lookup triggers it", async () => {
+  const labelSets = [[], ["ci:windows-e2e"], ["ci:full"], ["ci:windows-e2e", "dependencies"], ["CI:WINDOWS-E2E"], ["ci:windows-e2e-ish"], ["ci:a11y"]];
+  const fileSets = [
+    [{ filename: "apps/desktop/src/main/index.ts" }],
+    [{ filename: "apps/desktop/e2e/thread-view.spec.ts" }],
+    [{ filename: "pnpm-lock.yaml" }],
+    [{ filename: "docs/operator.md" }],
+  ];
+  for (const labels of labelSets) {
+    for (const files of fileSets) {
+      for (const failure of ["none", "labels", "files", "count"]) {
+        const result = await classify(files, {
+          labels,
+          labelError: failure === "labels" ? new Error("labels unavailable") : undefined,
+          lookupError: failure === "files" ? new Error("files unavailable") : undefined,
+          reportedCount: failure === "count" ? files.length + 1 : files.length,
+        });
+        const name = `${labels.join("+") || "no labels"}, ${files.map((f) => f.filename).join("+")}, failure=${failure}`;
+        const expected = labels.includes("ci:windows-e2e") || labels.includes("ci:full")
+          || failure !== "none" || result.fullPlatforms;
+        expect(result.windowsE2e, name).toBe(expected);
+      }
+    }
+  }
+});
+
 it("reads labels live rather than from the event payload", () => {
   expect(source).toContain("github.rest.issues.listLabelsOnIssue");
   expect(source).not.toMatch(/payload\.pull_request\.labels/);
@@ -225,8 +252,25 @@ it("gates every cross-platform job on the classifier and nothing else on it", ()
     expect(condition.includes("needs.changes.outputs.full_platforms == 'true'"), job).toBe(gated.includes(job));
   }
   expect(jobSection("windows-e2e")).toMatch(
-    /full_platforms == 'true'\n\s+\|\| contains\(github\.event\.pull_request\.labels\.\*\.name, 'ci:windows-shutdown-diagnostics'\)/,
+    /full_platforms == 'true'\n\s+\|\| needs\.changes\.outputs\.windows_e2e == 'true'\n\s+\|\| contains\(github\.event\.pull_request\.labels\.\*\.name, 'ci:windows-shutdown-diagnostics'\)\n\s+\|\| \(needs\.pr-test-impact-plan\.result == 'success'\n\s+&& needs\.pr-test-impact-plan\.outputs\.e2e_mode == 'selected'\n\s+&& needs\.pr-test-impact-plan\.outputs\.e2e_windows_lanes != ''\n\s+&& needs\.pr-test-impact-plan\.outputs\.e2e_windows_lanes != '\[\]'\)/,
   );
+});
+
+// Oracle: the required `Test` check passes only when the Linux unit lanes
+// succeeded, or were skipped because the test plan succeeded and explicitly
+// emitted `[]` for `unit_linux_lanes`. Run the step's actual shell.
+it("accepts a skipped Test lane in the Test gate only when the test plan selected no unit test", () => {
+  const gate = jobSection("test-result");
+  const script = gate.split("        run: |\n")[1].split("\n").map((line) => line.slice(10)).join("\n");
+  for (const testResult of ["success", "failure", "cancelled", "skipped"]) {
+    for (const lanes of [undefined, "", "[]", "[1]", "[1,2,3,4]"]) {
+      const env = { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: "/dev/null", TEST_RESULT: testResult };
+      if (lanes !== undefined) env.UNIT_LINUX_LANES = lanes;
+      const run = spawnSync("bash", ["-c", script], { env, encoding: "utf8" });
+      const pass = testResult === "success" || (lanes === "[]" && testResult === "skipped");
+      expect(run.status === 0, `test=${testResult} lanes=${lanes}`).toBe(pass);
+    }
+  }
 });
 
 // Oracle: the required `Desktop E2E` check passes only when Linux succeeded,
@@ -315,23 +359,34 @@ it("tells the flake report exactly which gated platforms did not run", () => {
     .replace(/FLAKE_NOT_RUN="\$not_run" node scripts\/ci\/write-flake-report\.mjs aggregate/, 'printf %s "$not_run"');
   expect(script).toContain('printf %s "$not_run"');
   for (const full of ["true", "false"]) {
-    for (const diagnostics of ["true", "false"]) {
-      for (const a11y of ["true", "false"]) {
-        const run = spawnSync("bash", ["-c", script], {
-          env: { PATH: process.env.PATH, FULL_PLATFORMS: full, WINDOWS_DIAGNOSTICS: diagnostics, A11Y_REQUESTED: a11y },
-          encoding: "utf8",
-        });
-        expect(run.status, run.stderr).toBe(0);
-        const ran = {
-          "unit-macos": full === "true",
-          "e2e-macos": full === "true",
-          "e2e-windows": full === "true" || diagnostics === "true",
-          "e2e-linux-a11y": a11y === "true",
-        };
-        const expected = Object.keys(ran).filter((pair) => !ran[pair]).sort();
-        const name = `full=${full} diagnostics=${diagnostics} a11y=${a11y}`;
-        expect(run.stdout, name).not.toMatch(/^,|,,|,$/);
-        expect(run.stdout.split(",").filter(Boolean).sort(), name).toEqual(expected);
+    for (const windowsE2e of ["true", "false"]) {
+      for (const diagnostics of ["true", "false"]) {
+        for (const a11y of ["true", "false"]) {
+          for (const windowsSelected of ["true", "false"]) {
+            const run = spawnSync("bash", ["-c", script], {
+              env: {
+                PATH: process.env.PATH,
+                FULL_PLATFORMS: full,
+                WINDOWS_E2E_REQUESTED: windowsE2e,
+                WINDOWS_DIAGNOSTICS: diagnostics,
+                A11Y_REQUESTED: a11y,
+                E2E_WINDOWS_SELECTED: windowsSelected,
+              },
+              encoding: "utf8",
+            });
+            expect(run.status, run.stderr).toBe(0);
+            const ran = {
+              "unit-macos": full === "true",
+              "e2e-macos": full === "true",
+              "e2e-windows": full === "true" || windowsE2e === "true" || diagnostics === "true" || windowsSelected === "true",
+              "e2e-linux-a11y": a11y === "true",
+            };
+            const expected = Object.keys(ran).filter((pair) => !ran[pair]).sort();
+            const name = `full=${full} windowsE2e=${windowsE2e} diagnostics=${diagnostics} a11y=${a11y} windowsSelected=${windowsSelected}`;
+            expect(run.stdout, name).not.toMatch(/^,|,,|,$/);
+            expect(run.stdout.split(",").filter(Boolean).sort(), name).toEqual(expected);
+          }
+        }
       }
     }
   }

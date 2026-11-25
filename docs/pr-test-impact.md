@@ -23,13 +23,20 @@ Documentation-only pull requests still skip the test jobs.
   summary of the selection, and the lane list of each job.
 - `Test (lane N of 4)` runs the selected Vitest files on Linux. A lane holds
   about 150 selected files, so a typical plan runs one lane and a wide one
-  runs four. The lane uses the same reporter, completion check and retry step
-  as a full lane.
+  runs four. When the plan selects no unit test, no lane starts and the
+  required `Test` check accepts the skip. The lane uses the same reporter,
+  completion check and retry step as a full lane.
 - `Windows desktop-main` and `Windows renderer + packages` run the selected
   files of their projects, in at most four and two lanes respectively. A job
   with no selected file does not start.
-- `Linux Desktop E2E (lane 1 of 4)` runs the selected specs. When the plan
-  selects no spec, no lane starts and `Desktop E2E` reports the skip.
+- `Linux Desktop E2E (lane 1 of 4)` runs the selected Linux-runnable specs.
+  When the plan selects no Linux-runnable spec, no lane starts and
+  `Desktop E2E` reports the skip.
+- `Windows Desktop E2E (lane 1 of 4)` runs the selected Windows-runnable specs
+  when the plan narrows E2E (`e2e_mode=selected`), without enabling all four
+  Windows E2E lanes for product-code PRs whose E2E plan is `full`. A PR with
+  `ci:windows-e2e`, `ci:full`, `ci:windows-shutdown-diagnostics`, or a
+  platform-specific path still runs all four Windows E2E lanes.
 
 A lane that the plan leaves out is not reported as a missing slice in the
 consolidated retry report.
@@ -65,7 +72,10 @@ or environment reaches the change. The plan adds four rules.
   edge and selects nothing. Typecheck still covers it in `Lint`.
 - **Always-run tests.** A test, or test helper, that lists directories can
   read a file that nothing imports. Every plan includes those tests (79 of
-  2,308 files on 2026-11-20).
+  2,308 files on 2026-11-20), except when every changed non-doc file lives
+  under `apps/desktop/e2e/`: in that case only the directory-scanning tests
+  that resolve the desktop `e2e` directory run, along with any unit test that
+  imports or literally names a changed E2E file.
 - **Tests that run source outside the graph.** A test that bundles source
   with esbuild or Vite, starts a worker, or runs a TypeScript loader executes
   modules that Vitest never links to it. Those tests, and the tests behind a

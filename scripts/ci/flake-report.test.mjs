@@ -74,6 +74,20 @@ test("platforms the classifier skipped are not reported as missing", () => {
     "unit-windows-main-lane-1-sample-1",
     "unit-windows-main-lane-2-sample-1",
   ]);
+  // A narrowed spec-only PR also runs one Windows E2E lane without expecting
+  // lanes 2–4 or marking e2e-windows as notRun.
+  const narrowedWithWindowsE2e = aggregateSlices({
+    slices: [
+      createSlice({ kind: "unit", platform: "linux", lane: 1, sample: 1, first: null, retries: [] }),
+      createSlice({ kind: "unit", platform: "windows-main", lane: 1, sample: 1, first: null, retries: [] }),
+      createSlice({ kind: "e2e", platform: "linux", lane: 1, sample: 1, first: null, retries: [] }),
+      createSlice({ kind: "e2e", platform: "windows", lane: 1, sample: 1, first: null, retries: [] }),
+    ],
+    notRun: ["unit-macos", "e2e-macos", "e2e-linux-a11y"],
+    lanes: { "unit-linux": [1], "unit-windows-main": [1], "unit-windows-renderer": [], "e2e-linux": [1], "e2e-windows": [1] },
+  });
+  assert.equal(narrowedWithWindowsE2e.expectedSlices, 4);
+  assert.deepEqual(narrowedWithWindowsE2e.missingSlices, []);
   assert.deepEqual(parseNotRun(""), []);
   assert.deepEqual(parseNotRun(undefined), []);
   assert.deepEqual(parseNotRun("unit-macos,e2e-macos,e2e-windows"), ["unit-macos", "e2e-macos", "e2e-windows"]);
