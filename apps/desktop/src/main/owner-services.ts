@@ -439,7 +439,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   const registry = initializeDesktopBackendRegistry(() => createDesktopBackendRegistry({
     ownerAdmission: new ProfileThreadOwnerAdmission(() => leaseManager),
     configStore: config,
-    resolveGitHubRepositoryParent: async (fork) => settings.isForgeEnabled("github")
+    resolveGitHubRepositoryParent: (fork) => settings.isForgeEnabled("github")
       ? resolveGitHubRepositoryParent(fork) : undefined,
     useMachineAcpDiscovery: !host.runtimePolicy || host.runtimePolicy.enabledBackends.some(isAcpBackendId),
     useMachineClaudeDiscovery: !host.runtimePolicy || host.runtimePolicy.enabledBackends.includes("claude"),

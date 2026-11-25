@@ -16,7 +16,7 @@ import type {
 import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktree-pathspec";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
 import { forgeRepositoryName, repositoryKey } from "../pr-status/forge-repository-names";
-import { readGitHubFetchRemotes } from "../pr-status/git-remote";
+import { parseGitFetchRemotes, readGitHubFetchRemotes } from "../pr-status/git-remote";
 import type { GitHubRepositoryParentLookup } from "../pr-status/github-repository-parent";
 import { streamGitCommand, runGitCommand } from "./git-executable";
 
@@ -82,7 +82,7 @@ type BaseBranchCandidate = {
   baseAheadCommitCount?: number;
 };
 
-export type BaseBranchRefState = {
+type BaseBranchRefState = {
   ref: string;
   baseTipCommit: string;
   baseBehindCommitCount?: number;
@@ -181,7 +181,7 @@ function parseGitLines(output: string | undefined): string[] {
 function parseBaseBranchRefStates(output: string | undefined): BaseBranchRefState[] {
   return parseGitLines(output).flatMap((line) => {
     const [rawRef, baseTipCommit, rawAheadBehind] = line.split("\0");
-    const ref = normalizeBaseBranchLabel(rawRef ?? "");
+    const ref = rawRef?.trim();
     if (!ref) {
       return [];
     }
@@ -240,15 +240,16 @@ function addBaseBranchCandidate(
   sourceRank: number,
   refStates: ReadonlyMap<string, BaseBranchRefState>,
 ): void {
-  const normalizedRef = normalizeBaseBranchLabel(ref ?? "");
-  const label = remoteAgnosticBranchName(normalizedRef);
-  if (!normalizedRef || !label || label === "HEAD" || seen.has(label)) {
+  const refName = ref?.trim() ?? "";
+  const label = remoteAgnosticBranchName(refName);
+  if (!refName || !label || label === "HEAD" || seen.has(label)) {
     return;
   }
   seen.add(label);
-  const refState = refStates.get(normalizedRef);
+  const refState = refStates.get(refName) ?? refStates.get(`refs/${refName}`)
+    ?? refStates.get(`refs/heads/${refName}`) ?? refStates.get(`refs/remotes/${refName}`);
   candidates.push({
-    ref: normalizedRef,
+    ref: refState?.ref ?? refName,
     label,
     sourceRank,
     ...(refState?.baseTipCommit
@@ -314,7 +315,7 @@ async function resolveWorktreeBaseState(
           `branch.${currentBranch}.vscode-merge-base`,
         ]).catch(() => "")
       : Promise.resolve(""),
-    runGitNoLocks(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
+    runGitNoLocks(["symbolic-ref", "refs/remotes/origin/HEAD"]).catch(
       () => "",
     ),
     runGitNoLocks([
@@ -322,14 +323,14 @@ async function resolveWorktreeBaseState(
       "refs/heads",
       "refs/remotes",
       "--sort=-committerdate",
-      "--format=%(refname:short)%00%(objectname)%00%(ahead-behind:HEAD)",
+      "--format=%(refname)%00%(objectname)%00%(ahead-behind:HEAD)",
     ]).catch(() =>
       runGitNoLocks([
         "for-each-ref",
         "refs/heads",
         "refs/remotes",
         "--sort=-committerdate",
-        "--format=%(refname:short)",
+        "--format=%(refname)",
       ]).catch(() => ""),
     ),
   ]);
@@ -346,7 +347,7 @@ async function resolveWorktreeBaseState(
   for (const refState of refStates) {
     const label = refState.ref;
     if (
-      label === "origin/HEAD" ||
+      label === "refs/remotes/origin/HEAD" ||
       isCurrentBranchRef(label, currentBranch) ||
       !isLikelyBaseBranch(label)
     ) {
@@ -451,65 +452,62 @@ async function resolveWorktreeBaseState(
   }
   const { sourceRank: _sourceRank, ...state } = best;
   const baseRef = candidates.find((entry) => entry.label === state.baseBranch)?.ref ?? state.baseBranch;
-  const upstreamRemote = resolveRepositoryParent
-    ? await resolveForkUpstreamRemote(
-        (await remotes) ?? "", resolveRepositoryParent, baseRef, state.baseBranch, refStateByRef,
-      )
-    : undefined;
-  const upstream = resolveUpstreamDrift(refStates, baseRef, state.baseBranch, upstreamRemote);
+  const upstream = resolveUpstreamDrift(refStateByRef, baseRef, (await remotes) ?? "", resolveRepositoryParent);
   return upstream ? { ...state, ...upstream } : state;
 }
 
 /** Conventional remote name used when the parent cannot be mapped. */
 const UPSTREAM_REMOTE = "upstream";
 
-async function resolveForkUpstreamRemote(
-  remotesOutput: string,
-  resolveRepositoryParent: GitHubRepositoryParentLookup,
-  baseRef: string,
-  baseBranch: string,
+/** Reuse the ref walk's counts and any forge observation already available. */
+function resolveUpstreamDrift(
   refStates: ReadonlyMap<string, BaseBranchRefState>,
-): Promise<string | undefined> {
+  baseRef: string,
+  remotesOutput: string,
+  resolveRepositoryParent?: GitHubRepositoryParentLookup,
+): Pick<WorktreeBaseState, "upstreamBranch" | "upstreamBehindCommitCount"> | undefined {
+  const remotes = parseGitFetchRemotes(remotesOutput);
+  const trackingRef = baseRef.startsWith("refs/remotes/") ? normalizeBaseBranchLabel(baseRef) : undefined;
+  // Remote names can themselves contain slashes. Use the longest configured
+  // prefix before taking the branch suffix.
+  const baseRemote = trackingRef ? remotes.map(({ name }) => name)
+    .filter((name) => trackingRef.startsWith(`${name}/`))
+    .sort((left, right) => right.length - left.length)[0] ?? trackingRef.split("/")[0]
+    : undefined;
+  const branch = trackingRef && baseRemote ? trackingRef.slice(baseRemote.length + 1) : normalizeBaseBranchLabel(baseRef);
+  const upstreamRemote = resolveRepositoryParent && remotes.length > 1
+    ? readForkParentRemote(readGitHubFetchRemotes(remotes), resolveRepositoryParent, baseRemote ?? "origin", branch, refStates)
+    : undefined;
+  const upstreamBranch = `${upstreamRemote ?? UPSTREAM_REMOTE}/${branch}`;
+  const upstreamRef = `refs/remotes/${upstreamBranch}`;
+  if (baseRef === upstreamRef) return undefined;
+  const behind = refStates.get(upstreamRef)?.baseBehindCommitCount;
+  return behind === undefined ? undefined : { upstreamBranch, upstreamBehindCommitCount: behind };
+}
+
+function readForkParentRemote(
+  remotes: ReturnType<typeof readGitHubFetchRemotes>,
+  resolveRepositoryParent: GitHubRepositoryParentLookup,
+  baseRemote: string,
+  branch: string,
+  refStates: ReadonlyMap<string, BaseBranchRefState>,
+): string | undefined {
   try {
-    const remotes = await readGitHubFetchRemotes(remotesOutput);
-    const origin = remotes.find(({ name }) => name === "origin");
-    if (!origin) return undefined;
-    const originKey = repositoryKey(origin.repo);
-    if (!remotes.some(({ repo }) => repositoryKey(repo) !== originKey)) return undefined;
-    const parent = await resolveRepositoryParent(origin.repo);
+    const fork = remotes.find(({ name }) => name === baseRemote);
+    if (!fork) return undefined;
+    const forkKey = repositoryKey(fork.repo);
+    if (!remotes.some(({ repo }) => repositoryKey(repo) !== forkKey)) return undefined;
+    const parent = resolveRepositoryParent(fork.repo);
     if (!parent) return undefined;
     const parentKey = repositoryKey(parent);
     const matches = remotes.filter(({ repo }) =>
       repositoryKey(repo) === parentKey || repositoryKey(forgeRepositoryName(repo)) === parentKey);
-    // A checkout can fetch the parent under several names. Prefer the base
-    // itself to suppress a duplicate row, then an alias with a usable ref.
     const counted = matches.filter(({ name }) =>
-      refStates.get(`${name}/${baseBranch}`)?.baseBehindCommitCount !== undefined);
-    return matches.find(({ name }) => `${name}/${baseBranch}` === baseRef)?.name
-      ?? counted.find(({ name }) => name === UPSTREAM_REMOTE)?.name
-      ?? counted[0]?.name
-      ?? matches[0]?.name;
+      refStates.get(`refs/remotes/${name}/${branch}`)?.baseBehindCommitCount !== undefined);
+    return counted.find(({ name }) => name === UPSTREAM_REMOTE)?.name ?? counted[0]?.name ?? matches[0]?.name;
   } catch {
     return undefined;
   }
-}
-
-/**
- * How far HEAD is behind the same branch on the fork parent's remote,
- * from the `for-each-ref` walk the base was picked from, so it costs no Git
- * process. Undefined when there is no such ref, Git gave no counts, or the
- * base already uses the upstream ref.
- */
-export function resolveUpstreamDrift(
-  refStates: readonly BaseBranchRefState[],
-  baseRef: string,
-  baseLabel: string,
-  upstreamRemote = UPSTREAM_REMOTE,
-): Pick<WorktreeBaseState, "upstreamBranch" | "upstreamBehindCommitCount"> | undefined {
-  const ref = `${upstreamRemote}/${baseLabel}`;
-  if (baseRef === ref) return undefined;
-  const behind = refStates.find((entry) => entry.ref === ref)?.baseBehindCommitCount;
-  return behind === undefined ? undefined : { upstreamBranch: ref, upstreamBehindCommitCount: behind };
 }
 
 function clampPositiveInteger(

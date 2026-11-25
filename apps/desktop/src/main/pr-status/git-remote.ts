@@ -410,23 +410,27 @@ export async function readForgeRepositoryRemotes(cwd: string): Promise<GitHubRep
 
 const fetchRemoteSshHosts = new GitReadCache<string | undefined>({ ttlMs: REMOTE_CACHE_TTL_MS, maxEntries: 512 });
 
-/** Read GitHub identities from an existing `git remote --verbose` observation. */
-export async function readGitHubFetchRemotes(output: string): Promise<Array<{ name: string; repo: GitHubRepoRef }>> {
-  const fetchRemotes = output.split(/\r?\n/).flatMap((line) => {
-    const match = /^([^\t]+)\t(.+) \(fetch\)(?: \[[^\r\n]*\])?$/.exec(line);
-    return match ? [{ name: match[1]!, url: match[2]! }] : [];
+/** The effective fetch URLs (or bare names) from an existing `git remote --verbose` observation. */
+export function parseGitFetchRemotes(output: string): GitRemote[] {
+  return output.split(/\r?\n/).flatMap((line) => {
+    const match = /^([^\t]+)\t(?:(.+) \(fetch\)(?: \[[^\r\n]*\])?)?$/.exec(line);
+    return match ? [{ name: match[1]!, url: match[2] ?? "" }] : [];
   });
-  if (fetchRemotes.length < 2) return [];
-  const identified = await Promise.all(fetchRemotes.map(async ({ name, url }) => {
+}
+
+export function readGitHubFetchRemotes(remotes: GitRemote[]): Array<{ name: string; repo: GitHubRepoRef }> {
+  return remotes.flatMap(({ name, url }) => {
     const repo = parseGitHubRemote(url);
-    if (!repo) return undefined;
-    if (repo.host === "github.com") return { name, repo };
+    if (!repo) return [];
+    if (repo.host === "github.com") return [{ name, repo }];
     const host = readSshHost(url);
-    if (!host || !/^[\w][\w.-]*$/.test(host) || forgeKindForRemoteHost(repo.host)) return undefined;
-    const hostname = await fetchRemoteSshHosts.read(host, () => resolveSshHostInFlight(host, defaultResolveSshHostname, {}));
-    return hostname?.toLowerCase() === "github.com" ? { name, repo: { ...repo, host: "github.com" } } : undefined;
-  }));
-  return identified.filter((remote) => remote !== undefined);
+    if (!host || !/^[\w][\w.-]*$/.test(host) || forgeKindForRemoteHost(repo.host)) return [];
+    const hostname = repo.host === "ssh.github.com" ? repo.host
+      : fetchRemoteSshHosts.readInBackground(host, () => resolveSshHostInFlight(host, defaultResolveSshHostname, {}))
+        ?.toLowerCase();
+    return hostname === "github.com" || hostname === "ssh.github.com"
+      ? [{ name, repo: { ...repo, host: "github.com" } }] : [];
+  });
 }
 
 async function readParsedGitRemotes(
