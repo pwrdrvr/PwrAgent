@@ -25,9 +25,13 @@ vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn()
 const ACP = "acp:fixture" as const;
 
 const registries: DesktopBackendRegistry[] = [];
+const transports: HeldPromptTransport[] = [];
 const databases: StateDb[] = [];
 const roots: string[] = [];
 afterEach(async () => {
+  // A failed assertion leaves the prompt held; release it so close() ends
+  // the turn instead of waiting out its shutdown timeout.
+  for (const transport of transports.splice(0)) transport.finishTurns();
   await Promise.all(registries.splice(0).map((registry) => registry.close()));
   for (const db of databases.splice(0)) db.close();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -63,6 +67,7 @@ async function createFixture() {
   const db = StateDb.open(dbPath);
   databases.push(db);
   const transport = new HeldPromptTransport();
+  transports.push(transport);
   const overlayStore = new SqliteOverlayStore(db);
   const acpAgentStore = new AcpAgentStore(db);
   acpAgentStore.upsertInstalledAgent({ backendId: ACP, registryId: "fixture", name: "Fixture ACP",
@@ -79,39 +84,42 @@ async function createFixture() {
   });
   registries.push(registry);
   const events: AgentEvent[] = [];
-  registry.onEvent((event) => { events.push(event); });
-  return { root, registry, overlayStore, transport, events };
+  const waiters: Array<{ matches: (event: AgentEvent) => boolean; resolve: (event: AgentEvent) => void }> = [];
+  registry.onEvent((event) => {
+    events.push(event);
+    for (const waiter of waiters.splice(0)) {
+      if (waiter.matches(event)) waiter.resolve(event);
+      else waiters.push(waiter);
+    }
+  });
+  /** Settles with the turn's prompt item, whether it was published already or arrives later. */
+  const promptItem = (turnId: string) => new Promise<AgentEvent>((resolve) => {
+    const matches = (event: AgentEvent) => event.notification.method === "item/completed"
+      && (event.notification.params as { item?: { id?: unknown } }).item?.id === `user:${turnId}`;
+    const published = events.find(matches);
+    if (published) resolve(published);
+    else waiters.push({ matches, resolve });
+  });
+  return { root, registry, overlayStore, promptItem };
 }
 
 it("writes a messaging turn's prompt origin once", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  const { root, registry, overlayStore, transport, events } = await createFixture();
+  const { root, registry, overlayStore, promptItem } = await createFixture();
   const { threadId } = await registry.startThread({ backend: ACP, cwd: root });
 
-  let promptItem: Promise<AgentEvent> | undefined;
+  let event: AgentEvent | undefined;
   const { writes } = await measureSqliteWrites(async () => {
     const started = await registry.startTurn({
       backend: ACP, threadId, messageOrigin: { kind: "messaging" },
       input: [{ type: "text", text: "ship the release notes" }],
     });
-    // The prompt's item is published after the start returns; its event
+    // The prompt's item is published as the start returns; its event
     // reaches listeners only once its origin handling has finished.
-    promptItem = new Promise<AgentEvent>((resolve, reject) => {
-      const find = () => events.find((event) => event.notification.method === "item/completed"
-        && (event.notification.params as { item?: { id?: unknown } }).item?.id === `user:${started.turnId}`);
-      const deadline = Date.now() + 5_000;
-      const poll = () => {
-        const found = find();
-        if (found) resolve(found);
-        else if (Date.now() > deadline) reject(new Error("the prompt item was never published"));
-        else setTimeout(poll, 5);
-      };
-      poll();
-    });
-    await promptItem;
+    event = await promptItem(started.turnId);
   });
 
-  const event = await promptItem!;
+  if (!event) throw new Error("the prompt item was never published");
   const params = event.notification.params as { turnId: string; item: { origin?: unknown } };
   // The item still carries the origin the window renders.
   expect(params.item.origin).toEqual({ kind: "messaging" });
@@ -121,7 +129,6 @@ it("writes a messaging turn's prompt origin once", async () => {
   expect(origins[`user:${params.turnId}`]).toEqual({ kind: "messaging" });
   expect(writes.tables.filter((table) => table.table === "thread_message_origins")
     .map((table) => table.commits)).toEqual([1]);
-  transport.finishTurns();
 
   expectSqliteWriteBudget({
     budgetFile: "acp-prompt-origin-write-budgets.json",
