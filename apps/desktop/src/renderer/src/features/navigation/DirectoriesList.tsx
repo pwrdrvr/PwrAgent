@@ -1418,7 +1418,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
             {nativeSubAgentCount > 0 ? (
               <NativeSubAgentsDisclosure compact thread={parent} />
             ) : null}
-            {orderStackTray(trayEntries, stackTrayKey).flatMap((entry) => {
+            {orderStackTray(trayEntries, stackTrayKey, parent).flatMap((entry) => {
               if (entry.kind === "starting") {
                 return [
                   <PendingThreadRow

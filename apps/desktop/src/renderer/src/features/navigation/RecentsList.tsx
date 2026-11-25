@@ -395,7 +395,7 @@ export function RecentsList(props: RecentsListProps) {
         {nativeSubAgentCount > 0 ? (
           <NativeSubAgentsDisclosure thread={parent} />
         ) : null}
-        {orderStackTray(trayEntries, stackTrayKey).flatMap((entry) => {
+        {orderStackTray(trayEntries, stackTrayKey, parent).flatMap((entry) => {
           if (entry.kind === "starting") {
             return [
               <PendingThreadRow

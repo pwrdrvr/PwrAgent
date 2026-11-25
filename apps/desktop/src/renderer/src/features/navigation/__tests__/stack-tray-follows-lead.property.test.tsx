@@ -17,8 +17,9 @@ import { stackGroupSelectionOrder } from "../../stacks/stack-presentation";
 // A tray is drawn under the row that owns it, stack or not. Drawing a stack's
 // tray above its lead row left it indented under whatever row came before,
 // which read as that unrelated thread's sub-threads. Inside the tray, stack
-// layers read downward from the lead in layer order, and keyboard range
-// selection walks the rows in the order they are drawn.
+// layers read away from the lead, nearest layer first, wherever plain
+// sub-threads sit among them, and keyboard range selection walks the rows in
+// the order they are drawn.
 
 afterEach(cleanup);
 
@@ -50,17 +51,18 @@ function resource(id: string, query: NavigationQueryRequest["query"], patch: Par
  * `before` is an unrelated root drawn just above the stack's lead; it is the
  * row a misplaced tray would appear to belong to.
  */
-function layout(leadPosition: number, childPositions: readonly number[], plainChildren: number) {
+function layout(leadPosition: number, childPositions: readonly number[], plainChildren: number, order: readonly number[]) {
   const count = Math.max(leadPosition, ...childPositions);
   const before = navRow("before", { title: "Before", updatedAt: 20, createdAt: 20 });
   const lead = navRow("lead", { title: "Lead", updatedAt: 10, createdAt: 10,
     ordinaryChildCount: childPositions.length + plainChildren, stackMemberships: [membership(leadPosition, count)] });
-  const children = [
+  const unordered = [
     ...childPositions.map((position) => navRow(`layer-${position}`, { title: `Layer ${position}`, parentThreadId: "lead",
       stackMemberships: [membership(position, count)] })),
     ...Array.from({ length: plainChildren }, (_, index) => navRow(`plain-${index}`, { title: `Plain ${index}`,
       parentThreadId: "lead" })),
   ];
+  const children = order.map((index) => unordered[index]!);
   return { before, lead, children };
 }
 
@@ -99,7 +101,11 @@ const stackLayout = fc.integer({ min: 2, max: 5 }).chain((count) => fc.record({
   leadPosition,
   childPositions: others.filter((position) => position !== leadPosition),
   plainChildren,
-})).filter(({ childPositions }) => childPositions.length > 0);
+})).filter(({ childPositions }) => childPositions.length > 0).chain((shape) => {
+  const size = shape.childPositions.length + shape.plainChildren;
+  const indices = Array.from({ length: size }, (_, index) => index);
+  return fc.shuffledSubarray(indices, { minLength: size, maxLength: size }).map((order) => ({ ...shape, order }));
+});
 
 function rowKeys(container: HTMLElement) {
   return [...container.querySelectorAll<HTMLElement>('[data-hover-stable-row="thread"][data-thread-key]')]
@@ -108,7 +114,7 @@ function rowKeys(container: HTMLElement) {
 
 it("draws a stack tray under its own lead row with layers in order, in every sidebar lens", () => {
   fc.assert(fc.property(stackLayout, fc.constantFrom("directories" as const, "inbox" as const), (shape, browseMode) => {
-    const rows = layout(shape.leadPosition, shape.childPositions, shape.plainChildren);
+    const rows = layout(shape.leadPosition, shape.childPositions, shape.plainChildren, shape.order);
     const view = mount(browseMode, rows);
     try {
       const tray = view.container.querySelector<HTMLElement>('[data-subthread-tray="codex:lead"]');
@@ -123,8 +129,15 @@ it("draws a stack tray under its own lead row with layers in order, in every sid
       expect(beforeRow.compareDocumentPosition(tray!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
       const drawnLayers = rowKeys(tray!).filter((key) => key.startsWith("codex:layer-"));
-      const ascending = [...shape.childPositions].sort((a, b) => a - b).map((position) => `codex:layer-${position}`);
-      expect(drawnLayers).toEqual(ascending);
+      const distance = (position: number) => Math.abs(position - shape.leadPosition);
+      const nearestFirst = [...shape.childPositions].sort((a, b) => distance(a) - distance(b) || a - b)
+        .map((position) => `codex:layer-${position}`);
+      expect(drawnLayers).toEqual(nearestFirst);
+      // Plain sub-threads keep the slots they were loaded in; only layers reorder.
+      const drawnPlain = rowKeys(tray!).filter((key) => key.startsWith("codex:plain-"));
+      expect(drawnPlain).toEqual(rows.children.filter(({ id }) => id.startsWith("plain-")).map(({ id }) => `codex:${id}`));
+      const drawnKinds = rowKeys(tray!).map((key) => key.startsWith("codex:layer-"));
+      expect(drawnKinds).toEqual(rows.children.map(({ id }) => id.startsWith("layer-")));
 
       // Shift-click ranges walk the same order the rows are drawn in.
       const lensRows = [rows.lead, ...rows.children].map((row) => ({ ...row }));
