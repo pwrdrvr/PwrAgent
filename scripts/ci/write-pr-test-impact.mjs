@@ -53,7 +53,7 @@ const lanes = Object.fromEntries(Object.keys(unitGroups).map((group) => [group, 
 // The required `Test` check needs a Linux lane to report.
 if (!lanes.linux.length) lanes.linux = [1];
 // A narrowed Playwright plan is a handful of specs, so one lane runs it.
-lanes.e2e = range(plan.e2e.mode === "selected" ? Math.min(1, plan.e2e.selected.length) : 4);
+lanes.e2e = range(plan.e2e.mode === "selected" ? Math.min(1, plan.e2e.selected.length) : 5);
 
 mkdirSync(directory, { recursive: true });
 writeFileSync(`${directory}/plan.json`, `${JSON.stringify({

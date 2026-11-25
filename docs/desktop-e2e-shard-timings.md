@@ -8,16 +8,58 @@ the worst observed setup, build, reporting, and other job overhead (3:14).
 The 20-minute job deadline gives slow runners additional time for retries,
 reporting, and cleanup. Each lane runs one Playwright worker.
 
-Linux Desktop E2E lanes never run `a11y.spec.ts`. They use `86:75:65:107`
-across four lanes, fit to the other 333 tests. A separate job, `desktop-a11y`,
-runs the accessibility audit in two lanes. Windows keeps the audit in its four
-lanes with `59:121:104:112`, fit to all 396 tests. See
-[November 24 allocation](#november-24-allocation).
-The [current fitter input](desktop-e2e-shard-durations.json) includes every test ID,
-platform skip and per-run sample from that fit.
+Linux Desktop E2E uses five lanes with weights `54:68:68:59:84` for
+the 333 replay tests in the [November 25 sample](#november-25-linux-allocation).
+The `desktop-a11y` job runs the accessibility audit in two lanes. Windows
+keeps the audit in its four lanes with `59:121:104:112`, fit to all 396
+tests in the [November 24 allocation](#november-24-allocation).
+The [November 24 fitter input](desktop-e2e-shard-durations.json) includes
+every test ID, platform skip and per-run sample from that fit.
 The previous `77:91:104:133` allocation, which Linux and Windows shared, is
 described in the [2026-11-18 timing refresh](desktop-e2e-shard-timing-refresh-2026-11-18.md),
 with its [November 18 fitter input](https://github.com/pwrdrvr/PwrAgent/blob/eea63a2392e4399cc501e8dbee47dd46111a2a62/docs/desktop-e2e-shard-durations.json).
+
+## November 25 Linux allocation
+
+The last Linux Desktop E2E lane completed 7:59 after workflow creation at
+the median of 16 recent successful full-suite PR runs (7:07 to 8:59).
+Lane 4 finished last in 14 of the 16 runs. In the seven runs with complete
+first-attempt Playwright reports and identical test collections, the
+difference between the test step and the Playwright report duration was
+9–17 seconds per lane. This includes the lane-local build and startup.
+Checkout, installation and the build happen independently in each lane.
+
+For each run, sum the Playwright HTML report's test durations by spec,
+including platform-skipped tests in the counts. Take each spec's median
+duration across the seven runs. Fit consecutive groups of whole specs
+in Playwright collection order to minimize the longest lane. The three
+slowest median specs were `rendering-diagnostics.spec.ts` (66s),
+`federation-remote-window.spec.ts` (53s) and
+`directory-launchpad-skills.spec.ts` (46s).
+
+| Allocation | Weights | Modeled lane test seconds |
+| --- | --- | --- |
+| Previous four lanes | `86:75:65:107` | 281 / 237 / 246 / 286 |
+| Refit four lanes | `72:88:76:97` | 241 / 274 / 270 / 265 |
+| Five lanes | `54:68:68:59:84` | 192 / 223 / 223 / 188 / 223 |
+
+The per-run model sums only measured test durations. Runner speed can
+change when a spec moves to another lane.
+
+| Full-suite PR run | Slowest prior lane | Slowest five-lane model |
+| --- | ---: | ---: |
+| [45639824720](https://github.com/pwrdrvr/PwrAgent/actions/runs/45639824720) | 278s | 233s |
+| [45639331096](https://github.com/pwrdrvr/PwrAgent/actions/runs/45639331096) | 313s | 245s |
+| [45575115335](https://github.com/pwrdrvr/PwrAgent/actions/runs/45575115335) | 283s | 226s |
+| [45572176338](https://github.com/pwrdrvr/PwrAgent/actions/runs/45572176338) | 280s | 222s |
+| [45569563668](https://github.com/pwrdrvr/PwrAgent/actions/runs/45569563668) | 304s | 238s |
+| [45569258598](https://github.com/pwrdrvr/PwrAgent/actions/runs/45569258598) | 303s | 238s |
+| [45566073758](https://github.com/pwrdrvr/PwrAgent/actions/runs/45566073758) | 283s | 229s |
+
+The five-lane model saves 44–68 seconds across these runs. Refitting while
+holding out each run produces the same improvement range on the held-out
+runs. The extra job repeats checkout, install, build and Playwright startup.
+A selected PR slice still runs on one lane when it contains replay specs.
 
 ## November 24 allocation
 
