@@ -1,0 +1,277 @@
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import fc from "fast-check";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  buildBudgetThreadEnv,
+  DEFAULT_LOCAL_CPU_BUDGET,
+  hasCliFlag,
+  resolveLocalCpuBudget,
+  splitTypedLintBudget,
+} from "./local-cpu-budget.mjs";
+
+/**
+ * Rule: when a thread holds an active machine CPU checkout, local repo commands
+ * run in that thread's worktree automatically cap their worker/thread count to
+ * the granted units unless explicitly overridden by CLI flags, env vars, or CI.
+ *
+ * Pre-fix failure mode: `vitest.workspace.mts` left `maxWorkers` undefined, so
+ * an agent running `npx vitest run --config vitest.workspace.mts ...` without
+ * `--maxWorkers=4` defaulted to `availableParallelism() - 1` (17 workers inside
+ * one `node` process on an 18-core host) even while holding a 4-CPU checkout.
+ */
+
+const REPOSITORY_ROOT = fileURLToPath(new URL("../", import.meta.url));
+const tempDirs = [];
+
+function makeTempDir(prefix) {
+  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), prefix)));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function writeBudgetSnapshot(pwragentRoot, profile, grants, capacity = 18) {
+  const dir = path.join(pwragentRoot, "runtime", "machine-cpu-budgets");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    path.join(dir, `${profile}.json`),
+    JSON.stringify({
+      version: 1,
+      instanceId: `inst-${profile}`,
+      profile,
+      capacity,
+      updatedAt: 1_000,
+      grants,
+    }),
+    "utf8",
+  );
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe("local CPU budget resolution", () => {
+  it("resolves every active worktree grant to its exact units and ignores unrelated or expired grants", () => {
+    const dirSegmentArb = fc.stringMatching(/^[a-z0-9]{2,8}$/);
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 32 }),
+      fc.integer({ min: 1, max: 32 }),
+      dirSegmentArb,
+      dirSegmentArb,
+      dirSegmentArb,
+      fc.integer({ min: 100, max: 100_000 }),
+      (targetUnits, otherUnits, targetName, otherName, subName, now) => {
+        fc.pre(targetName !== otherName);
+        const root = makeTempDir("pwragent-budget-prop-");
+        const worktrees = path.join(root, "worktrees");
+        const targetWorktree = path.join(worktrees, targetName);
+        const nestedDir = path.join(targetWorktree, subName);
+        const otherWorktree = path.join(worktrees, otherName);
+        mkdirSync(nestedDir, { recursive: true });
+        mkdirSync(otherWorktree, { recursive: true });
+
+        writeBudgetSnapshot(root, "default", [
+          {
+            allocationId: "alloc-target",
+            units: targetUnits,
+            deadlineAt: now + 60_000,
+            backend: "claude",
+            threadId: "t-target",
+            directories: [targetWorktree],
+          },
+          {
+            allocationId: "alloc-other",
+            units: otherUnits,
+            deadlineAt: now + 60_000,
+            backend: "codex",
+            threadId: "t-other",
+            directories: [otherWorktree],
+          },
+          {
+            allocationId: "alloc-expired",
+            units: 1,
+            deadlineAt: now,
+            backend: "claude",
+            threadId: "t-expired",
+            directories: [targetWorktree],
+          },
+        ]);
+
+        const env = { PWRAGENT_HOME: root };
+        const expectedDefault = Math.min(DEFAULT_LOCAL_CPU_BUDGET, Math.max(1, os.availableParallelism()));
+        expect(resolveLocalCpuBudget({ cwd: targetWorktree, env, now })?.units).toBe(targetUnits);
+        expect(resolveLocalCpuBudget({ cwd: nestedDir, env, now })?.units).toBe(targetUnits);
+        expect(resolveLocalCpuBudget({ cwd: otherWorktree, env, now })?.units).toBe(otherUnits);
+        expect(resolveLocalCpuBudget({ cwd: worktrees, env, now })).toEqual({ units: expectedDefault, source: "default" });
+        expect(resolveLocalCpuBudget({ cwd: worktrees, env, now, fallback: null })).toBeUndefined();
+        expect(resolveLocalCpuBudget({ cwd: targetWorktree, env: { ...env, CI: "true" }, now })).toBeUndefined();
+      },
+    ), { numRuns: 40 });
+  });
+
+  it("prefers deepest matching directory, uses minimum on same-directory overlap, and honors exact thread match", () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 1, max: 16 }),
+      fc.integer({ min: 1, max: 16 }),
+      fc.integer({ min: 1, max: 16 }),
+      (parentUnits, childUnitsA, childUnitsB) => {
+        const root = makeTempDir("pwragent-budget-depth-");
+        const parentDir = path.join(root, "repo");
+        const childDir = path.join(parentDir, "sub");
+        mkdirSync(childDir, { recursive: true });
+        const now = 5_000;
+
+        writeBudgetSnapshot(root, "default", [
+          {
+            allocationId: "alloc-parent",
+            units: parentUnits,
+            deadlineAt: now + 10_000,
+            backend: "codex",
+            threadId: "t-parent",
+            directories: [parentDir],
+          },
+          {
+            allocationId: "alloc-child-a",
+            units: childUnitsA,
+            deadlineAt: now + 10_000,
+            backend: "claude",
+            threadId: "t-a",
+            directories: [childDir],
+          },
+          {
+            allocationId: "alloc-child-b",
+            units: childUnitsB,
+            deadlineAt: now + 10_000,
+            backend: "claude",
+            threadId: "t-b",
+            directories: [childDir],
+          },
+        ]);
+
+        const baseEnv = { PWRAGENT_HOME: root };
+        // Without thread identity, deepest matching directory wins and overlap takes the minimum.
+        expect(resolveLocalCpuBudget({ cwd: childDir, env: baseEnv, now })?.units).toBe(
+          Math.min(childUnitsA, childUnitsB),
+        );
+        // With thread identity, the calling thread's own grant wins even on shared directories.
+        expect(resolveLocalCpuBudget({
+          cwd: childDir,
+          env: { ...baseEnv, PWRAGENT_BACKEND: "claude", PWRAGENT_THREAD_ID: "t-a" },
+          now,
+        })?.units).toBe(childUnitsA);
+        expect(resolveLocalCpuBudget({
+          cwd: childDir,
+          env: { ...baseEnv, PWRAGENT_BACKEND: "claude", PWRAGENT_THREAD_ID: "t-b" },
+          now,
+        })?.units).toBe(childUnitsB);
+      },
+    ), { numRuns: 40 });
+  });
+
+  it("splits typed lint budgets without exceeding units >= 2 and preserves explicit thread env overrides", () => {
+    fc.assert(fc.property(fc.integer({ min: 1, max: 64 }), (units) => {
+      const { oxlintThreads, goMaxProcs } = splitTypedLintBudget(units);
+      expect(oxlintThreads).toBeGreaterThanOrEqual(1);
+      expect(goMaxProcs).toBeGreaterThanOrEqual(1);
+      if (units >= 2) {
+        expect(oxlintThreads + goMaxProcs).toBe(units);
+      } else {
+        expect(oxlintThreads).toBe(1);
+        expect(goMaxProcs).toBe(1);
+      }
+
+      const overrides = buildBudgetThreadEnv(units, { GOMAXPROCS: "99" });
+      expect(overrides.GOMAXPROCS).toBeUndefined();
+      expect(overrides.ROLLDOWN_WORKER_THREADS).toBe(String(units));
+      expect(overrides.TOKIO_WORKER_THREADS).toBe(String(units));
+      expect(overrides.RAYON_NUM_THREADS).toBe(String(units));
+      expect(overrides.UV_THREADPOOL_SIZE).toBe(String(units));
+    }));
+  });
+
+  it("detects CLI worker flags in all supported spellings", () => {
+    expect(hasCliFlag(["--maxWorkers=4"], ["--maxWorkers"])).toBe(true);
+    expect(hasCliFlag(["--max-workers", "4"], ["--maxWorkers", "--max-workers"])).toBe(true);
+    expect(hasCliFlag(["--no-file-parallelism"], ["--no-file-parallelism"])).toBe(true);
+    expect(hasCliFlag(["--project", "shared"], ["--maxWorkers", "--max-workers"])).toBe(false);
+  });
+
+  it("oracle: vitest.workspace.mts applies the active thread checkout as maxWorkers unless overridden", () => {
+    const pwragentRoot = makeTempDir("pwragent-vitest-oracle-");
+    writeBudgetSnapshot(pwragentRoot, "default", [
+      {
+        allocationId: "alloc-vitest",
+        units: 3,
+        deadlineAt: Date.now() + 300_000,
+        backend: "claude",
+        threadId: "thread-oracle",
+        directories: [REPOSITORY_ROOT],
+      },
+    ]);
+
+    const probe = (extraArgs, extraEnv = {}) => {
+      const env = { ...process.env };
+      delete env.CI;
+      delete env.VITEST_MAX_WORKERS;
+      delete env.PWRAGENT_CPU_BUDGET;
+      delete env.ROLLDOWN_WORKER_THREADS;
+      delete env.GOMAXPROCS;
+      Object.assign(env, { PWRAGENT_HOME: pwragentRoot, ...extraEnv });
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          [
+            `const mod = await import(${JSON.stringify(new URL("../vitest.workspace.mts", import.meta.url).href)});`,
+            "const cfg = mod.default;",
+            "const shared = cfg.test.projects.find((p) => p.test?.name === 'shared');",
+            "console.log(JSON.stringify({ maxWorkers: cfg.test.maxWorkers ?? null, rolldown: shared?.test?.env?.ROLLDOWN_WORKER_THREADS ?? null, go: process.env.GOMAXPROCS ?? null }));",
+          ].join(" "),
+          "--",
+          "vitest",
+          ...extraArgs,
+        ],
+        { cwd: REPOSITORY_ROOT, env, encoding: "utf8" },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return JSON.parse(result.stdout.trim());
+    };
+
+    const expectedDefault = Math.min(DEFAULT_LOCAL_CPU_BUDGET, Math.max(1, os.availableParallelism()));
+    const emptyRoot = makeTempDir("pwragent-vitest-empty-");
+
+    // Regression case: `npx vitest run --config vitest.workspace.mts` without --maxWorkers
+    // automatically honors the thread's 3-CPU checkout instead of defaulting to 17 workers.
+    expect(probe([])).toEqual({ maxWorkers: 3, rolldown: "3", go: "3" });
+    // Even without an active checkout file, local runs stay capped at the 4-CPU default
+    // rather than spawning `availableParallelism() - 1` workers.
+    expect(probe([], { PWRAGENT_HOME: emptyRoot })).toEqual({
+      maxWorkers: expectedDefault,
+      rolldown: String(expectedDefault),
+      go: String(expectedDefault),
+    });
+    // A larger active checkout scales Vitest up to the reserved units.
+    writeBudgetSnapshot(emptyRoot, "default", [
+      {
+        allocationId: "alloc-large",
+        units: 12,
+        deadlineAt: Date.now() + 300_000,
+        backend: "claude",
+        threadId: "thread-large",
+        directories: [REPOSITORY_ROOT],
+      },
+    ]);
+    expect(probe([], { PWRAGENT_HOME: emptyRoot })).toEqual({ maxWorkers: 12, rolldown: "12", go: "12" });
+    // Explicit CLI --maxWorkers wins over the checkout default.
+    expect(probe(["--maxWorkers=7"]).maxWorkers).toBeNull();
+    // CI always ignores local machine-CPU checkouts and defaults.
+    expect(probe([], { CI: "true" })).toEqual({ maxWorkers: null, rolldown: null, go: null });
+  });
+});

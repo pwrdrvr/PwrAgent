@@ -2,6 +2,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { configDefaults, defineConfig } from "vitest/config";
+import {
+  buildBudgetThreadEnv,
+  hasCliFlag,
+  resolveLocalCpuBudget,
+} from "./scripts/local-cpu-budget.mjs";
 
 // Windows CI runners are markedly slower at spawning child processes (git.exe,
 // bash.exe), so git/worktree-heavy desktop tests can exceed the 5s default.
@@ -91,7 +96,28 @@ const SANDBOX_PATH = [...new Set([
     ? HOST_PATH.filter((entry) => !isWithin(os.homedir(), entry))
     : ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]),
 ])].join(path.delimiter);
-const SANDBOX_ENV = { [PATH_KEY]: SANDBOX_PATH };
+const LOCAL_CPU_BUDGET = resolveLocalCpuBudget({ cwd: REPOSITORY_ROOT });
+const BUDGET_THREAD_ENV = LOCAL_CPU_BUDGET
+  ? buildBudgetThreadEnv(LOCAL_CPU_BUDGET.units, process.env)
+  : {};
+if (LOCAL_CPU_BUDGET && !process.env.GOMAXPROCS) {
+  // Keep globalSetup tools (such as desktop-main's esbuild Outpost bundle)
+  // within the thread's CPU checkout even when Vitest is invoked directly.
+  process.env.GOMAXPROCS = String(LOCAL_CPU_BUDGET.units);
+}
+const DEFAULT_MAX_WORKERS =
+  LOCAL_CPU_BUDGET
+  && !process.env.VITEST_MAX_WORKERS
+  && !hasCliFlag(process.argv.slice(2), [
+    "--maxWorkers",
+    "--max-workers",
+    "--fileParallelism",
+    "--file-parallelism",
+    "--no-file-parallelism",
+  ])
+    ? LOCAL_CPU_BUDGET.units
+    : undefined;
+const SANDBOX_ENV = { ...BUDGET_THREAD_ENV, [PATH_KEY]: SANDBOX_PATH };
 
 function isWithin(parent: string, entry: string): boolean {
   // Windows paths compare without case; POSIX paths are compared as written.
@@ -161,6 +187,7 @@ const RENDERER_NODE_TSX_TESTS = [
 
 export default defineConfig({
   test: {
+    ...(DEFAULT_MAX_WORKERS !== undefined ? { maxWorkers: DEFAULT_MAX_WORKERS } : {}),
     projects: [
       {
         test: {

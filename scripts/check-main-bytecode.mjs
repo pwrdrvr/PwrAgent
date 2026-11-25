@@ -7,6 +7,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { annotateBytecode } from "./bytecode-attribution.mjs";
 import { bytecodeBudget, compileBytecode, wrapVitestModule } from "./bytecode-compiler.mjs";
+import { resolveLocalCpuBudget } from "./local-cpu-budget.mjs";
 import { discoverMainBytecodeSources, sourceFiles } from "./main-bytecode-scope.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -52,10 +53,18 @@ async function check() {
     }
     console.log(`Transform complete: ${modules.length} test modules, ${production.length} production chunks`);
     const executable = createRequire(resolve(root, "apps/desktop/package.json"))("electron");
-    const [node, electron] = await Promise.all([
-      compileBytecode([...modules, ...production]),
-      production.length ? compileBytecode(production, { executable, env: { ELECTRON_RUN_AS_NODE: "1" } }) : undefined,
-    ]);
+    const localBudget = resolveLocalCpuBudget({ cwd: root });
+    let node;
+    let electron;
+    if (localBudget && localBudget.units < 4) {
+      node = await compileBytecode([...modules, ...production]);
+      electron = production.length ? await compileBytecode(production, { executable, env: { ELECTRON_RUN_AS_NODE: "1" } }) : undefined;
+    } else {
+      [node, electron] = await Promise.all([
+        compileBytecode([...modules, ...production]),
+        production.length ? compileBytecode(production, { executable, env: { ELECTRON_RUN_AS_NODE: "1" } }) : undefined,
+      ]);
+    }
     console.log(`Node compilation complete: ${node.records.length} records`);
     console.log(`Electron compilation complete: ${electron?.records.length ?? 0} records`);
     const runtimeFiles = production.filter((module) => !module.map && /\/rolldown-runtime-[^/]+\.js$/.test(module.file)).map(({ file }) => file);

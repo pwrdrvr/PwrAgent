@@ -16,6 +16,7 @@ import {
 } from "../storage/resource-checkout-storage";
 import { readExternalCheckoutBindings, type ExternalBinding } from "./checkout-configuration";
 import { OWNERSHIP_CONFLICTS } from "./checkout-ownership";
+import { createMachineCpuBudgetPublisher } from "./machine-cpu-budget-file";
 import type { ApprovedLabCheckout } from "./pwrsuitelab-checkout-adapter";
 import { DesktopResourceCheckoutService } from "./resource-checkout-service";
 
@@ -49,6 +50,7 @@ export async function initializeResourceCheckouts(
   isPackaged = true,
   localThreadTitle?: (thread: Pick<ResourceThreadRef, "backend" | "threadId">) => string | undefined,
   agentToolsEnabled?: () => boolean,
+  localThreadDirectories?: (thread: Pick<ResourceThreadRef, "backend" | "threadId">) => readonly string[] | undefined,
 ): Promise<DesktopResourceCheckoutService> {
   const root = resolvePwragentRoot();
   const [machineId, evidence] = await Promise.all([
@@ -96,10 +98,17 @@ export async function initializeResourceCheckouts(
       }
     }
   }
+  const machineCpuBudgetPublisher = createMachineCpuBudgetPublisher({
+    pwragentRoot: root,
+    profile,
+    instanceId,
+    localThreadDirectories,
+    warn,
+  });
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
     machineStore, machineUnresolved, adoptMachineStore, machineCpuCount: cpus().length, externalStore, externalUnresolved,
-    bindings, allowAgentDrafts, approvedLabCheckouts, agentToolsEnabled, warn,
+    bindings, allowAgentDrafts, approvedLabCheckouts, agentToolsEnabled, machineCpuBudgetPublisher, warn,
     bootId: evidence.hostBinding ? evidence.bootId : undefined,
     readMachineAdvertisements: () => buildDockProfileSnapshot().profiles
       .filter((entry) => entry.name !== profile)

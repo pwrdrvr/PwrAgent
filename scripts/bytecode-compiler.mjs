@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { setFlagsFromString } from "node:v8";
 import vm from "node:vm";
 import { readJsonRpcLines } from "../apps/desktop/scripts/json-rpc-lines.mjs";
+import { resolveLocalCpuBudget } from "./local-cpu-budget.mjs";
 
 export const bytecodeBudget = 25 * 1024;
 
@@ -51,7 +52,9 @@ export async function compileBytecode(modules, options = {}) {
   // compiler exits. macOS writes a file this way far more slowly than a pipe.
   const listing = options.listing ?? (process.platform === "linux" ? "file" : "pipe");
   // This one process reads every pipe, and beyond two it is the limit.
-  const processes = options.processes ?? (listing === "file" ? availableParallelism() : Math.min(2, availableParallelism()));
+  const defaultProcesses = listing === "file" ? availableParallelism() : Math.min(2, availableParallelism());
+  const localBudget = resolveLocalCpuBudget();
+  const processes = options.processes ?? (localBudget ? Math.min(defaultProcesses, localBudget.units) : defaultProcesses);
   const count = Math.max(1, Math.min(processes, modules.length));
   const shards = Array.from({ length: count }, () => ({ size: 0, modules: [] }));
   for (const module of [...modules].sort((a, b) => b.code.length - a.code.length)) {

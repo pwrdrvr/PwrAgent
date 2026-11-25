@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ApprovedLabCheckout } from "./resource-checkouts/pwrsuitelab-checkout-adapter";
 import { createResourceCheckoutToolHandler } from "./agent-tools/pwragent-resource-checkout-agent-tools";
 import { disposeResourceCheckouts, initializeResourceCheckouts } from "./resource-checkouts/checkout-runtime";
@@ -468,6 +469,19 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       federationRuntime, options.approvedLabCheckouts, host.application.isPackaged,
       ({ backend, threadId }) => getExistingDesktopBackendRegistry()?.getThreadInfo({ backend, threadId })?.title,
       resourceCheckoutsEnabled,
+      ({ backend, threadId }) => {
+        const summary = getExistingDesktopBackendRegistry()?.getCachedThreadSummary({ backend, threadId });
+        if (!summary) return undefined;
+        const directories: string[] = [];
+        for (const directory of summary.linkedDirectories ?? []) {
+          const candidate = directory.kind === "worktree" ? directory.worktreePath : directory.path;
+          if (candidate) directories.push(candidate);
+        }
+        if (summary.projectKey && path.isAbsolute(summary.projectKey)) {
+          directories.push(summary.projectKey);
+        }
+        return directories;
+      },
     )
     : undefined;
   if (resourceCheckouts) registry.setResourceCheckoutHandler(

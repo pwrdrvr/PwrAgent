@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { resolveLocalCpuBudget } from "./local-cpu-budget.mjs";
 
 export const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 
@@ -23,11 +24,14 @@ export function oxlintBin() {
   return resolve(dirname(packageFile), bin.oxlint);
 }
 
-export function runOxlint(config, paths) {
-  const threads = process.env.OXLINT_THREADS;
+export function runOxlint(config, paths, options = {}) {
+  const localBudget = resolveLocalCpuBudget({ cwd: repositoryRoot });
+  const threads = process.env.OXLINT_THREADS
+    ?? (options.defaultThreads !== undefined ? String(options.defaultThreads) : undefined)
+    ?? (localBudget ? String(localBudget.units) : undefined);
   const result = spawnSync(process.execPath, [
     oxlintBin(), "--config", config, ...(threads ? ["--threads", threads] : []), ...paths,
-  ], { cwd: repositoryRoot, stdio: "inherit" });
+  ], { cwd: repositoryRoot, env: options.env ?? process.env, stdio: "inherit" });
   if (result.error) throw result.error;
   return result.status ?? 1;
 }

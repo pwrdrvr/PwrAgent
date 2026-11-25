@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildBudgetThreadEnv, resolveLocalCpuBudget } from "../../../scripts/local-cpu-budget.mjs";
 import { buildWindowsJobLauncher } from "./build-windows-job-launcher.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -14,12 +15,15 @@ const cliPath = resolve(desktopRoot, "node_modules/electron-vite/bin/electron-vi
 // next target starts, without changing the bundle or its hidden source maps.
 export function buildDesktop(args = [], options = {}) {
   const run = options.spawnSync ?? spawnSync;
+  const baseEnv = options.env ?? process.env;
+  const localBudget = resolveLocalCpuBudget({ cwd: resolve(desktopRoot, "../.."), env: baseEnv });
+  const budgetEnv = localBudget ? buildBudgetThreadEnv(localBudget.units, baseEnv) : {};
   for (const target of ["main", "preload", "renderer"]) {
     const result = run(options.node ?? process.execPath, [
       cliPath, "build", ...args, "--ignoreConfigWarning",
     ], {
       cwd: desktopRoot,
-      env: { ...(options.env ?? process.env), PWRAGENT_BUILD_TARGET: target },
+      env: { ...baseEnv, ...budgetEnv, PWRAGENT_BUILD_TARGET: target },
       stdio: "inherit",
     });
     if (result.error) {

@@ -19,6 +19,7 @@ import { parseCheckoutAction, parseCheckoutToken, object, text } from "./checkou
 import type { ExternalBinding } from "./checkout-configuration";
 import { labelResourceThreads, projectCheckoutDomain, UNEXPLAINED_OWNERSHIP_CONFLICT } from "./checkout-projection";
 import { misboundAuthorityConflict, OWNERSHIP_CONFLICTS } from "./checkout-ownership";
+import type { MachineCpuBudgetPublisher } from "./machine-cpu-budget-file";
 import { ResourceUsageRecorder } from "./checkout-usage-history";
 
 export const CHECKOUT_FEDERATION_METHOD = "resourceCheckouts.authority.v1";
@@ -55,6 +56,8 @@ type Options = {
   threadTitle?: (thread: ResourceThreadRef) => string | undefined;
   /** Settings → Experimental → Federation resources, read on every observation. */
   agentToolsEnabled?: () => boolean;
+  /** Publishes active local machine CPU grants so child commands can honor them. */
+  machineCpuBudgetPublisher?: MachineCpuBudgetPublisher;
   warn: (error: unknown) => void;
   now?: () => number;
 };
@@ -330,6 +333,8 @@ export class DesktopResourceCheckoutService {
     const agentTools = this.readAgentTools();
     const observedAt = this.now();
     this.usage.observe(resources, observedAt);
+    const machineResource = resources.find((resource) => resource.resourceId === this.machineDefinition.resourceId);
+    this.options.machineCpuBudgetPublisher?.sync(machineResource, observedAt);
     // The setting is in the fingerprint, so turning it on or off publishes a
     // revision on the next poll.
     const fingerprint = JSON.stringify([authorities, resources, registerGate, agentTools]);
@@ -449,7 +454,10 @@ export class DesktopResourceCheckoutService {
       return response ?? undefined;
     }
     if (binding) return this.hosted.has(resourceId) ? this.external?.status(actor, key, resourceId) : undefined;
-    return this.machineConflict ? undefined : this.machine?.status(actor, key, resourceId);
+    if (this.machineConflict) return undefined;
+    const result = this.machine?.status(actor, key, resourceId);
+    if (result?.state === "granted") this.poll();
+    return result;
   }
 
   async perform(value: unknown, actor = this.operator, handoff = false): Promise<ResourceCheckoutActionResult> {
@@ -846,6 +854,7 @@ export class DesktopResourceCheckoutService {
     }
     this.providerJobs.clear();
     this.closed = true;
+    this.options.machineCpuBudgetPublisher?.clear();
     this.machineStore?.close();
     this.options.externalStore?.close();
   }

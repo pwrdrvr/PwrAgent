@@ -1424,7 +1424,12 @@ export class ClaudeBackend {
       // The environment's toolchain (PATH, NVM_DIR, …) reaches every command
       // Claude runs, as it does for Codex and ACP threads.
       const providerEnv = await this.options.resolveEnv?.() ?? process.env;
-      const env = claudeEnvironment({ ...providerEnv, ...config.shellEnvironment });
+      const env = claudeEnvironment({
+        ...providerEnv,
+        ...config.shellEnvironment,
+        PWRAGENT_BACKEND: "claude",
+        PWRAGENT_THREAD_ID: threadId,
+      });
       controller.signal.throwIfAborted();
       current.titleEnv = env;
       // Only the account the Settings sign-in can reach may affect its status.
