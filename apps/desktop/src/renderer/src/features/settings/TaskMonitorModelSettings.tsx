@@ -4,25 +4,18 @@ import {
   type DesktopTaskMonitorModelChoice,
 } from "@pwragent/shared/helper-models";
 import { type BackendSummary } from "@pwragent/shared/contracts/backend";
-import { Select, type SelectOption } from "../../components/Select";
-import { modelSelectOptions } from "../../lib/model-select-options";
+import { ModelSettingsPicker, type ModelSettingsChoice } from "../composer/ModelSettingsPicker";
 import { helperModelRunningLabel } from "./HelperModelSettings";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
 
-/** The closed picker draws as the AI Providers page's chip pills. */
-const PICKER_CLASS = "settings-select settings-select--chip";
-
-/** Select values: "" is Automatic; provider models carry a prefix so no
- *  model id can collide with the Helper model entry. */
+/** Picker values: "" is Automatic and every other row is a model id, so
+ *  the Helper model row takes a value no provider names a model. */
 const AUTOMATIC_VALUE = "";
-const HELPER_VALUE = "helper";
-const MODEL_VALUE_PREFIX = "model:";
+const HELPER_VALUE = "pwragent:helper-model";
 
 function selectedValue(choice: DesktopTaskMonitorModelChoice | undefined): string {
   if (choice?.source === "helper") return HELPER_VALUE;
-  if (choice?.source === "provider" && choice.model) {
-    return `${MODEL_VALUE_PREFIX}${choice.model}`;
-  }
+  if (choice?.source === "provider" && choice.model) return choice.model;
   return AUTOMATIC_VALUE;
 }
 
@@ -57,37 +50,31 @@ export function TaskMonitorModelSettings(props: {
     props.catalogReading,
   );
 
-  const options: SelectOption[] = [
-    {
-      value: AUTOMATIC_VALUE,
-      label: automaticModel ? `Automatic (${labelOf(automaticModel)})` : "Automatic",
-    },
-    {
-      value: HELPER_VALUE,
-      label: helperLabel ? `Helper model (${helperLabel})` : "Helper model",
-    },
+  const automaticLabel = automaticModel ? `Automatic (${labelOf(automaticModel)})` : "Automatic";
+  const helperRowLabel = helperLabel ? `Helper model (${helperLabel})` : "Helper model";
+  const leadingOptions: ModelSettingsChoice[] = [
+    { value: AUTOMATIC_VALUE, label: automaticLabel },
+    { value: HELPER_VALUE, label: helperRowLabel, description: "Runs on Codex." },
     ...(savedModel && !models.some((model) => model.id === savedModel)
       ? [{
-          value: `${MODEL_VALUE_PREFIX}${savedModel}`,
+          value: savedModel,
           // Only a catalog that was read can say a model is not offered.
           label: backend?.available && models.length > 0
             ? `${savedModel} (not offered)`
             : savedModel,
         }]
       : []),
-    ...modelSelectOptions({
-      kind: props.backendId,
-      models,
-      valueFor: (model) => `${MODEL_VALUE_PREFIX}${model.id}`,
-    }),
   ];
+  const value = selectedValue(current);
+  const pillLabel = leadingOptions.find((option) => option.value === value)?.label
+    ?? labelOf(value);
 
   const save = (value: string): void => {
     const next = { ...props.choices };
     if (value === HELPER_VALUE) {
       next[props.backendId] = { source: "helper" };
-    } else if (value.startsWith(MODEL_VALUE_PREFIX)) {
-      const model = value.slice(MODEL_VALUE_PREFIX.length);
+    } else if (value !== AUTOMATIC_VALUE) {
+      const model = value;
       // A saved effort belongs to its model; keep it only when the model stays.
       const reasoningEffort =
         savedModel === model ? current?.reasoningEffort : undefined;
@@ -114,14 +101,22 @@ export function TaskMonitorModelSettings(props: {
           label="Monitor model"
           sub={current?.source === "helper" ? "Runs on Codex." : `Runs on ${props.providerLabel}.`}
           control={
-            <Select
-              aria-label="Task monitors"
-              className={PICKER_CLASS}
-              disabled={props.saving}
-              value={selectedValue(current)}
-              options={options}
-              onChange={save}
-            />
+            <div className="settings-provider-defaults__selectors">
+              <ModelSettingsPicker
+                ariaLabel="Task monitors"
+                disabled={props.saving}
+                size="setting"
+                provider={{ label: props.providerLabel }}
+                model={{
+                  value,
+                  label: pillLabel,
+                  kind: backend?.kind,
+                  models,
+                  leadingOptions,
+                  onChange: save,
+                }}
+              />
+            </div>
           }
         />
       </div>

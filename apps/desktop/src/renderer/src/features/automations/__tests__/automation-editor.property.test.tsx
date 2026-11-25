@@ -1,13 +1,14 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import fc from "fast-check";
 import { describe, it } from "vitest";
 import type { ReadDesktopMessagingSettingsResponse } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   codexCatalogArbitrary,
-  expectModelDropdownToList,
+  expectModelSettingsToList,
   expectedModelDropdown,
 } from "../../../test/model-catalog";
+import { openModelSettings } from "../../../test/model-settings";
 import { AutomationEditor } from "../AutomationEditor";
 
 function messagingSettings(): ReadDesktopMessagingSettingsResponse {
@@ -68,12 +69,11 @@ describe("automation editor model picker properties", () => {
         await act(async () => {
           await new Promise((resolve) => setTimeout(resolve, 0));
         });
-        fireEvent.click(screen.getByRole("button", { name: /^Automation model(?::|$)/ }));
-        const list = screen.getByRole("listbox", { name: /^Automation model(?!.*provider)/ });
-        expectModelDropdownToList(list, "Automation model", expectedModelDropdown({
+        expectModelSettingsToList(openModelSettings("Automation model"), expectedModelDropdown({
           kind: "codex",
           models,
           leading: ["Inherit Agent model"],
+          otherInline: true,
         }));
       } finally {
         cleanup();

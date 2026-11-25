@@ -26550,6 +26550,12 @@ button.stack-display__thread,
   flex: 1 1 auto;
 }
 
+.compact-composer__model {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
 /* The settings chip: the thread's model · effort · access readout, and the
    trigger for the settings menu. Neutral at rest, accent border on hover /
    open (same move as the main composer's pill dropdowns); the chevron only

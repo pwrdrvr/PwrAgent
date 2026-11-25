@@ -65,37 +65,6 @@ export function composerDropdownOptionLabels(root: ParentNode = document): strin
 }
 
 /**
- * A `Select` list as titled sections, in order: options outside any group
- * read as one section with no title. Leaves the list as it found it.
- */
-export function selectSections(
-  trigger: HTMLElement,
-): Array<{ group?: string; labels: string[] }> {
-  const wasOpen = trigger.getAttribute("aria-expanded") === "true";
-  if (!wasOpen) fireEvent.click(trigger);
-  const id = trigger.getAttribute("aria-controls");
-  const listbox = id === null ? null : document.getElementById(id);
-  if (listbox === null) throw new Error("The Select did not open.");
-  const label = (option: Element) =>
-    option.querySelector(".select-option__label")?.textContent ?? "";
-  const sections: Array<{ group?: string; labels: string[] }> = [];
-  for (const child of listbox.children) {
-    if (child.getAttribute("role") === "group") {
-      sections.push({
-        group: child.querySelector(".select-group__label")?.textContent ?? "",
-        labels: [...child.querySelectorAll('[role="option"]')].map(label),
-      });
-    } else if (child.getAttribute("role") === "option") {
-      const last = sections.at(-1);
-      if (last && last.group === undefined) last.labels.push(label(child));
-      else sections.push({ labels: [label(child)] });
-    }
-  }
-  if (!wasOpen) fireEvent.click(trigger);
-  return sections;
-}
-
-/**
  * Catalogs as main builds them, for property tests: Codex's own models in
  * any order and any subset, mixed with models a Codex model provider serves
  * (`@<provider>/<model>`), some named like a superseded Codex model.
@@ -195,23 +164,6 @@ export function readModelDropdown(list: HTMLElement): {
       rows: composerDropdownOptionLabels(group),
     })),
   };
-}
-
-/** What a Settings model list (`Select`) must show for a catalog, by the shared rule. */
-export function expectedModelSelectSections(params: {
-  kind: string;
-  models: readonly BackendModelOption[];
-  leading?: string[];
-}): Array<{ group?: string; labels: string[] }> {
-  const menu = buildModelMenu(params);
-  const sections: Array<{ group?: string; labels: string[] }> = [];
-  const lead = [...(params.leading ?? []), ...menu.primary.map(labelOf)];
-  if (lead.length > 0) sections.push({ labels: lead });
-  if (menu.other.length > 0) sections.push({ group: "Other models", labels: menu.other.map(labelOf) });
-  for (const group of menu.providerGroups) {
-    sections.push({ group: group.label, labels: group.models.map(labelOf) });
-  }
-  return sections;
 }
 
 /**
