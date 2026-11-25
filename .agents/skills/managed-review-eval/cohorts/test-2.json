@@ -1,0 +1,610 @@
+{
+  "schemaVersion": 1,
+  "name": "test-2",
+  "split": "test",
+  "blind": true,
+  "repository": "pwrdrvr/PwrAgent",
+  "description": "Held-out blind lockbox test cohort 2 (10 PRs). Reserve for final pre-release validation; never inspect individual cases.",
+  "createdAt": "2026-11-25T20:54:55.693Z",
+  "caseCount": 10,
+  "cases": [
+    {
+      "id": "pr4220-codex",
+      "pr": 4220,
+      "backend": "codex",
+      "bucket": "codex-findings-high",
+      "survivability": "PERM_PR_ANCESTOR",
+      "remotePrHeadCommit": "695374aedd2060a49d3fdabbd37be4aca580fa2f",
+      "baseline": {
+        "reviewerBackend": "codex",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "codex-native",
+        "prNumber": 4220,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/4220",
+        "prTitle": "feat(messaging): add Telegram QR and desktop pairing",
+        "branch": "codex/telegram-qr-pairing",
+        "baseBranch": "main",
+        "baseCommit": "cb26633224ad8812299be529563f5d146dac9164",
+        "headCommit": "ac8ac327f86e6c08f623c284b9f0c3202cd22540",
+        "diffFiles": 16,
+        "diffAdds": 306,
+        "diffDels": 32,
+        "counts": {
+          "total": 5,
+          "addressed": 5,
+          "deferred": 0,
+          "declined": 0,
+          "open": 0
+        },
+        "items": [
+          {
+            "id": "96f61f50-2c6a-4244-87ab-6be1cb2ad717",
+            "title": "Make pairing approval atomic with bot credential changes",
+            "body": "If the Telegram bot token is replaced while a QR pairing is being approved, this check can still see the old adapter: the settings handler saves the replacement secret before reconfiguring the runtime, while approval writes a profile-wide `authorizedUserIds` grant. An observation made under bot A can therefore authorize a user on bot B. Validate against the credential that will receive the grant and serialize approval with credential replacement; cover both orderings with a [concurrency model test](docs/property-model-oracle-testing.md#L123-L126).",
+            "priority": 2,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "b4cf1648-7a18-4dbe-b33c-f4132a6fc356",
+            "title": "Preserve unexpired Telegram pairings across identity timeouts",
+            "body": "If PwrAgent restarts with an unexpired QR code and the optional startup `getMe` lookup times out, Telegram can still start polling, but this method returns no account ID for the lifetime of the adapter. The runtime then searches only the `default` namespace, so both scanning the QR and pasting its fallback code report an invalid token on the same bot. Resolve the stable bot ID independently of the username needed to generate links, preserving the provider's [restart-safe behavior](packages/messaging/AGENTS.md#L35).",
+            "priority": 2,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "39ac7ad0-326a-4dfc-a2c6-fd582ef9cc5b",
+            "title": "Let guided setup regenerate after a bot change",
+            "body": "If the operator replaces the Telegram bot token after a QR pairing is observed, approval now correctly rejects the old request and tells them to generate a new code. Guided setup cannot follow that instruction: observation unmounts the expiry timer, the approval error leaves `generated` set, and Generate only appears when there is no message. Offer a reset or regenerate action without requiring the operator to switch pairing scopes or leave the step.",
+            "priority": 2,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "4143240b-6d1f-4168-9b31-b8f29d423eb1",
+            "title": "Distinguish a missing local adapter from a different bot",
+            "body": "When two app instances [share a profile](docs/runtime-configuration.md#L18-L21), the instance without the messaging lease can list an observed QR request from the shared database and offer Approve, but it has no local adapter. This check reports that the bot changed even when the lease holder is still connected to the same bot. Verify the account through the owner, or direct the operator to the lease holder instead of telling them to generate another code.",
+            "priority": 2,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "10b869ef-c3c0-48c1-8570-8212f317325c",
+            "title": "Scope expiry callbacks to the token that scheduled them",
+            "body": "If Settings receives a replacement token just as the previous one expires, the old timer can run after the new result is stored but before React cleans up the previous effect. Its unconditional clear removes the newly generated QR and fallback text even though the new token is still valid. Clear the result only if its entry ID still matches the token that scheduled the timer.",
+            "priority": 3,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "pr3884-codex",
+      "pr": 3884,
+      "backend": "codex",
+      "bucket": "codex-findings-high",
+      "survivability": "PERM_PR_ANCESTOR",
+      "remotePrHeadCommit": "173dbb5a840b6c102a8da67afd803512c8ca9f5a",
+      "baseline": {
+        "reviewerBackend": "codex",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "codex-native",
+        "prNumber": 3884,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/3884",
+        "prTitle": "feat(desktop): dictate live audio into composer drafts",
+        "branch": "feat/desktop-audio-transcription",
+        "baseBranch": "main",
+        "baseCommit": "8fd4e7c66fe44cdf9e9d453461cd087f5b6839c6",
+        "headCommit": "3b74aaf85457bcfd8fe615906d33fd73f8564d70",
+        "diffFiles": 33,
+        "diffAdds": 1313,
+        "diffDels": 10,
+        "counts": {
+          "total": 4,
+          "addressed": 4,
+          "deferred": 0,
+          "declined": 0,
+          "open": 0
+        },
+        "items": [
+          {
+            "id": "559a6fb7-202b-4321-a6dc-733ce90c4ee0",
+            "title": "Preserve the draft selection when appending dictation",
+            "body": "If the user returns to a nonempty draft and places the caret or selects text while dictation is finalizing, `insertContentAt` moves the selection to the end of the appended paragraph by default. The next keystroke can land in the transcript instead of editing the original draft. Pass `updateSelection: false` so appending preserves the current selection.",
+            "priority": 2,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "cba8c169-0aa3-4ae7-9e3e-759517786060",
+            "title": "Do not steal focus when the transcript arrives",
+            "body": "If the user opens thread Find and starts typing while dictation is finalizing, the transcript callback unconditionally focuses the composer, sending subsequent keystrokes into the draft instead of the search field. Append the transcript without changing focus if the user has moved to another control.",
+            "priority": 2,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "902bc341-7455-493c-a803-e255a58e86c8",
+            "title": "Handle microphone tracks that end during worklet setup",
+            "body": "If the microphone track ends while `audioWorklet.addModule()` is pending, the `ended` listener is attached too late. Startup can then report “Listening…” with no live input and hold the transcription session open until the user stops it. Register the listener before awaiting worklet setup and check for an already-ended track. Cover that event ordering in the startup lifecycle test, as required by [AGENTS.md:48](AGENTS.md#L48).",
+            "priority": 3,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "05e4f115-04d0-4c28-88c8-3c866e671033",
+            "title": "Disable new dictation while the composer is forking",
+            "body": "During an in-flight `/fork`, the editor is read-only but the idle microphone button remains enabled. A user can start a billed recording that cannot be inserted if they stop before the fork completes, or that is discarded if the fork navigates away. Disable new recordings while `forking` without disabling Stop for a recording already in progress.",
+            "priority": 3,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "pr4042-codex",
+      "pr": 4042,
+      "backend": "codex",
+      "bucket": "codex-findings-med",
+      "survivability": "PERM_PR_ANCESTOR",
+      "remotePrHeadCommit": "9de492430ee10c3270c6e7a0222c09da20f191c3",
+      "baseline": {
+        "reviewerBackend": "codex",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "codex-native",
+        "prNumber": 4042,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/4042",
+        "prTitle": "fix(desktop): drain in-flight terminal events before shutdown",
+        "branch": "fix/desktop-shutdown-terminal-drain",
+        "baseBranch": "main",
+        "baseCommit": "f6b4fae47e24a78f3fb843aa002b08717d9b946b",
+        "headCommit": "a8ebcf3685ad68060b7b20fd32a07c6b5a63df2f",
+        "diffFiles": 3,
+        "diffAdds": 131,
+        "diffDels": 30,
+        "counts": {
+          "total": 1,
+          "addressed": 1,
+          "deferred": 0,
+          "declined": 0,
+          "open": 0
+        },
+        "items": [
+          {
+            "id": "22428100-07ac-46eb-8845-40d193a453ce",
+            "title": "Drain pending terminals on standalone registry close",
+            "body": "The new terminal-only drain is bypassed when `close()` is called before a shutdown phase has run and the last turn has already unregistered. `closeResources()` still checks only `registeredTurnCount`, so it can close the queue and providers while that terminal is still in the delivery pipeline. Use the same pending-work condition at both entry points and cover direct `close()` in the drain property ([AGENTS.md:49](AGENTS.md#L49)).",
+            "priority": 2,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "pr4078-codex",
+      "pr": 4078,
+      "backend": "codex",
+      "bucket": "codex-findings-med",
+      "survivability": "PERM_PR_ANCESTOR",
+      "remotePrHeadCommit": "da1cec6af01752a1f13725603cceaae8b2b08b09",
+      "baseline": {
+        "reviewerBackend": "codex",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "codex-native",
+        "prNumber": 4078,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/4078",
+        "prTitle": "fix(release): retry failed macOS unit tests",
+        "branch": "fix/release-unit-test-retry",
+        "baseBranch": "main",
+        "baseCommit": "9a4e9fa3259017709296a6841d46b6411a542c17",
+        "headCommit": "619988e7d290ffe9c4f47f0c092191f3ecff202b",
+        "diffFiles": 3,
+        "diffAdds": 43,
+        "diffDels": 5,
+        "counts": {
+          "total": 1,
+          "addressed": 1,
+          "deferred": 0,
+          "declined": 0,
+          "open": 0
+        },
+        "items": [
+          {
+            "id": "da03a66a-c170-461c-a28a-fdadbfa4d72b",
+            "title": "Block release when the first unit run fails during teardown",
+            "body": "If the first macOS run has both a failed test and a global teardown error, a passing targeted retry can still unblock signing and packaging. The retry reporter writes `unit-first.json` in `onTestRunEnd`, before Vitest runs global teardown, so the retry planner never sees that error. I reproduced this with Vitest: the first run exited nonzero and logged a teardown error, but the retry verifier accepted the rerun. Require evidence that the first run shut down cleanly before allowing a retry to clear the release gate, as required by the [release runbook](docs/desktop-release-runbook.md#L303-L305).",
+            "priority": 2,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "pr3715-codex-clean",
+      "pr": 3715,
+      "backend": "codex",
+      "bucket": "codex-clean",
+      "survivability": "PERM_PR_TIP",
+      "remotePrHeadCommit": "2d4c64f53c6175031274f53ed5a519190601a3c0",
+      "baseline": {
+        "reviewerBackend": "codex",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "codex-native",
+        "prNumber": 3715,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/3715",
+        "prTitle": "fix(desktop): preserve unchanged session indicator identities",
+        "branch": "fix/renderer-session-indicator-churn",
+        "baseBranch": "main",
+        "baseCommit": "653a1208fa1a2051349492ddf531c2fa01edba53",
+        "headCommit": "2d4c64f53c6175031274f53ed5a519190601a3c0",
+        "diffFiles": 4,
+        "diffAdds": 189,
+        "diffDels": 29,
+        "counts": {
+          "total": 0,
+          "addressed": 0,
+          "deferred": 0,
+          "declined": 0,
+          "open": 0
+        },
+        "items": []
+      }
+    },
+    {
+      "id": "pr3594-codex-clean",
+      "pr": 3594,
+      "backend": "codex",
+      "bucket": "codex-clean",
+      "survivability": "PERM_PR_TIP",
+      "remotePrHeadCommit": "67267d71acccdc5bd44ad08e7991310a15baafe9",
+      "baseline": {
+        "reviewerBackend": "codex",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "codex-native",
+        "prNumber": 3594,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/3594",
+        "prTitle": "refactor(desktop): move pure helpers out of backend-registry.ts",
+        "branch": "harold/pwr-143-registry-pure-helpers",
+        "baseBranch": "main",
+        "baseCommit": "108fa889e24d4d5d3aecc30a7b24bac773d4b06f",
+        "headCommit": "67267d71acccdc5bd44ad08e7991310a15baafe9",
+        "diffFiles": 33,
+        "diffAdds": 10434,
+        "diffDels": 9446,
+        "counts": {
+          "total": 0,
+          "addressed": 0,
+          "deferred": 0,
+          "declined": 0,
+          "open": 0
+        },
+        "items": []
+      }
+    },
+    {
+      "id": "pr3586-claude",
+      "pr": 3586,
+      "backend": "claude",
+      "bucket": "claude-findings",
+      "survivability": "PERM_PR_ANCESTOR",
+      "remotePrHeadCommit": "0a777fcb643d0fdccaf4fa9027ddeb935edfd5a8",
+      "baseline": {
+        "reviewerBackend": "claude",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "claude-code-review",
+        "prNumber": 3586,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/3586",
+        "prTitle": "fix(agent-core): keep the turn queue's drain immediate referenced",
+        "branch": "fix/turn-queue-drain-wakeup",
+        "baseBranch": "main",
+        "baseCommit": "ecaf8c220a25ea069da5120ac6483bec3acc664b",
+        "headCommit": "7450cbb51e07df8e22e237b514f04b02ed775d50",
+        "diffFiles": 2,
+        "diffAdds": 84,
+        "diffDels": 1,
+        "counts": {
+          "total": 3,
+          "addressed": 2,
+          "deferred": 0,
+          "declined": 1,
+          "open": 0
+        },
+        "items": [
+          {
+            "id": "359bfc4c-2c98-4061-b78d-6e51872bc95e",
+            "title": "Wall-clock oracle can flake on loaded CI runners",
+            "body": "The oracle is a wall-clock threshold (startedAfterMs < 500 ms), so a GC pause or a heavily loaded CI runner can fail a correct queue, even though the stall it detects is defined by ordering: the head starts only after the bound timer fires.\n\nFailure scenario: On a loaded macos-26 lane, a GC pause or scheduler stall of more than 500 ms between the drain request and startTurn fails the property on fixed code. The test would then become the next flaky test on the lane it is meant to protect.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "192d4b9b-bbc5-42ec-bab3-a0a88d606e8c",
+            "title": "Two stacked comment blocks over one setImmediate",
+            "body": "The new comment is stacked under the existing admission-window comment as a second block above the same statement, so the reader sees two separate rationales for one setImmediate.\n\nFailure scenario: A later editor reading the admission-window comment can miss that the reference is load-bearing and add unref() back. Two comments on one statement is harder to keep in sync than one.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "9aabb3ef-06fa-4a88-93b1-da0c99f7eec6",
+            "title": "Redundant timing state for a yes/no ordering check",
+            "body": "The test keeps three pieces of derived state (the started promise, requestedAt and startedAfterMs) to answer a single yes/no question: did the head start before the bound fired?\n\nFailure scenario: Three variables plus the TDZ-sensitive closure ordering make the test harder to read and to change. A single boolean recorded in startTurn gives the same answer without the timing state.",
+            "priority": null,
+            "status": "declined",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "pr4167-claude",
+      "pr": 4167,
+      "backend": "claude",
+      "bucket": "claude-findings",
+      "survivability": "PERM_PR_ANCESTOR",
+      "remotePrHeadCommit": "e7ee57d3664d274c9f57da6729253100e1a34628",
+      "baseline": {
+        "reviewerBackend": "claude",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "claude-code-review",
+        "prNumber": 4167,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/4167",
+        "prTitle": "feat(desktop): count a review of uncommitted changes for the commit that records them",
+        "branch": "feat/review-uncommitted-tree-identity",
+        "baseBranch": "main",
+        "baseCommit": "4764ce08ad9f3226476fe9e1a629720bd10a8cc3",
+        "headCommit": "a4b1a09ec394dbf536796d3a421cb58a7bd80584",
+        "diffFiles": 12,
+        "diffAdds": 351,
+        "diffDels": 31,
+        "counts": {
+          "total": 7,
+          "addressed": 6,
+          "deferred": 0,
+          "declined": 1,
+          "open": 0
+        },
+        "items": [
+          {
+            "id": "d44e1e79-2f8f-4354-ad5c-51a18fe0f8ec",
+            "title": "Claude branch/path reviews record the whole working tree",
+            "body": "The Claude wiring passes reviewsWorkingTree: true for every /code-review without a named PR, including one that targets a branch or a path, so the working tree is recorded as reviewed when that review never read it.\n\nFailure scenario: `/code-review high src/foo.ts` with unrelated uncommitted edits elsewhere: reviewedTree records all of them, the commit of those unreviewed edits counts as covered, and PwrAgent offers a merge instead of a review.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "eb1c0fdf-88ab-4d5d-a380-6751d4621a50",
+            "title": "baseBranch reviews claim untracked files as reviewed",
+            "body": "A baseBranch review reads `git diff <merge-base>`, which excludes untracked files, but the captured tree includes them, so untracked files the reviewer never saw count as reviewed.\n\nFailure scenario: Codex base-branch review with a new untracked file: the later commit adding that file matches reviewedTree, so the unreviewed file reaches a merge offer.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "14e33285-ca8d-4611-a05b-59670515784d",
+            "title": "Capture hashes unbounded untracked content into the repo",
+            "body": "`git add --all` hashes and writes every untracked, non-ignored file as a loose object with no size bound, blocking review start for up to 15 s, though any diff over 32 MB has no identity anyway.\n\nFailure scenario: An unignored 3 GB dataset directory in the checkout: each review start writes up to 15 s of loose blobs into .git/objects that linger for two weeks, delays the review, and the result is discarded because the diff exceeds MAX_DIFF_BYTES.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "02b11616-9c8c-4669-9e71-e40244988d3d",
+            "title": "Any index copy failure falls back to an empty index",
+            "body": "copyFile errors of every kind are swallowed, so an unreadable index (EACCES, EBUSY) starts `add --all` from an empty index with no stat cache, rehashing every file in the checkout.\n\nFailure scenario: On Windows, the index is locked by another process: the copy fails and the capture hashes and writes blobs for the entire repository instead of only the changed files.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "449beac7-37b3-48cf-b909-8bf2f54b3cc7",
+            "title": "headCommit and reviewedTree read in separate Git calls",
+            "body": "headCommit comes from one `rev-parse HEAD` and the tree's base from a concurrent capture, so a commit landing between them pairs reviewedTree with the wrong HEAD.\n\nFailure scenario: An agent commits while a review starts: headCommit is the new commit but the tree was staged on the old HEAD (or vice versa), and the identity diff from merge-base(headCommit) no longer describes the reviewed change.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "3a445167-5a3e-40bb-931d-8921345c9122",
+            "title": "No test that targeted Claude reviews record no tree",
+            "body": "The provenance tests cover reviewsWorkingTree: true but nothing checks which /code-review prompts read the working tree, so the branch/path overclaim went untested.\n\nFailure scenario: A regression that again marks every Claude review as reading the working tree passes the suite.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "722dc26d-7eb2-4cb2-bc2d-c7ddda79eaf4",
+            "title": "Reviewed tree lives only as gc-prunable objects",
+            "body": "The reviewed tree is kept as unreachable objects that `git gc` prunes after its grace period, so coverage silently lapses for PRs that live longer than about two weeks.\n\nFailure scenario: A PR reviewed from uncommitted changes, committed, and left open for three weeks: after gc, the tree is gone and PwrAgent offers a second review.",
+            "priority": null,
+            "status": "declined",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "pr3620-claude",
+      "pr": 3620,
+      "backend": "claude",
+      "bucket": "claude-findings",
+      "survivability": "PERM_PR_TIP",
+      "remotePrHeadCommit": "c7a9cf3aa0240b9488b0b2426f21b1aba073a755",
+      "baseline": {
+        "reviewerBackend": "claude",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "claude-code-review",
+        "prNumber": 3620,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/3620",
+        "prTitle": "test(tests): make fast-check generators reach the bounds they guard",
+        "branch": "tests/fast-check-size-reach",
+        "baseBranch": "main",
+        "baseCommit": "5ba4a257ac4429595302f0854ac1c51bf0f16e48",
+        "headCommit": "c7a9cf3aa0240b9488b0b2426f21b1aba073a755",
+        "diffFiles": 17,
+        "diffAdds": 528,
+        "diffDels": 19,
+        "counts": {
+          "total": 2,
+          "addressed": 2,
+          "deferred": 0,
+          "declined": 0,
+          "open": 0
+        },
+        "items": [
+          {
+            "id": "4d72cd8f-2b8b-435b-8595-42b715b2613d",
+            "title": "Doc wrongly says shuffledSubarray caps its length",
+            "body": "The new doc rule lists fc.shuffledSubarray among arbitraries capped at 2 × minLength + 10, but shuffledSubarray takes no size option and draws its length evenly over [minLength, maxLength].\n\nFailure scenario: A contributor follows the doc and adds `size: \"max\"` to a shuffledSubarray: it fails to typecheck, or they spend time chasing a cap that doesn't exist. Meanwhile the real trap sits in fc.array, fc.uniqueArray, fc.string and fc.commands.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "dba51f70-940d-458c-94b5-aec8679d26d3",
+            "title": "Eviction scan recomputes priorities per element",
+            "body": "The new eviction scan re-derives `priority(outcome.kind)` and the current best entry's priority on every element and every loop pass, instead of tracking the lowest rank seen.\n\nFailure scenario: Harder to read: the condition `rank < priority(outcome.kind) && (index < 0 || rank < priority(this.outcomes[index]!.outcome.kind))` hides a simple running minimum. Each pass also does extra lookups over up to 128 entries.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          }
+        ]
+      }
+    },
+    {
+      "id": "pr3629-claude-noisy",
+      "pr": 3629,
+      "backend": "claude",
+      "bucket": "claude-noisy",
+      "survivability": "PERM_PR_ANCESTOR",
+      "remotePrHeadCommit": "b271d1cf468821983926ec49ff72c76127795236",
+      "baseline": {
+        "reviewerBackend": "claude",
+        "reviewerModel": null,
+        "reviewerEffort": null,
+        "reviewMode": "claude-code-review",
+        "prNumber": 3629,
+        "prUrl": "https://github.com/pwrdrvr/PwrAgent/pull/3629",
+        "prTitle": "fix(messaging): isolate async inbound-rejected listeners in every adapter",
+        "branch": "fix/messaging-async-inbound-rejected-listeners",
+        "baseBranch": "main",
+        "baseCommit": "461760b60f9aeb3586c330323efb2f8cc8db5add",
+        "headCommit": "c78c2b0da4c4e2a57fdb0e421b5efd8a5bb548b5",
+        "diffFiles": 17,
+        "diffAdds": 491,
+        "diffDels": 25,
+        "counts": {
+          "total": 4,
+          "addressed": 2,
+          "deferred": 0,
+          "declined": 2,
+          "open": 0
+        },
+        "items": [
+          {
+            "id": "d26cd718-423e-43a0-9430-e5ba39940667",
+            "title": "Docs/PR claim runtime store write can reject; it can't",
+            "body": "The new contract text and the PR body say a failed Messaging Activity store write in the desktop listener becomes an unhandled rejection, but handleRejectedInbound wraps route resolution and activity recording in try/catch and logs the failure itself.\n\nFailure scenario: A reader trusts the doc and believes the desktop path was leaking rejections today; the actual exposure is any other listener (or a future one without its own catch) and synchronous throws. The stated rationale is wrong and misdirects the next person debugging inbound rejection.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "283c7a41-6639-4c41-99eb-a5eaaa23c71a",
+            "title": "Feishu test asserts before settle(), leaking the listener",
+            "body": "The Feishu test checks probe.received before calling probe.settle(), so when that assertion fails the process-level unhandledRejection listener is never removed.\n\nFailure scenario: On a regression the first expect throws, settle() never runs, and the probe's handler stays attached to process for the rest of the worker, collecting rejections from later tests in the same file.",
+            "priority": null,
+            "status": "addressed",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "c5d5e383-8cb3-4223-963c-cde0213afb8d",
+            "title": "settle() waits a fixed 20 ms for rejections",
+            "body": "failingInboundRejectedListeners().settle() waits a fixed 20 ms timer for Node to report unhandled rejections instead of waiting for a deterministic point.\n\nFailure scenario: If an adapter emits the rejection more than 20 ms after the triggering call returns (slow CI, a longer async chain), the rejection is reported after process.off and the test passes on broken code.",
+            "priority": null,
+            "status": "declined",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          },
+          {
+            "id": "45eda6f1-948b-42ce-a2ac-dcaf3eb2b292",
+            "title": "Same onError logger lambda copied into six adapters",
+            "body": "Each of the six emitInboundRejected bodies repeats the same onError lambda (message format, error-to-string, kind and reason fields), differing only in platform name and logger accessor.\n\nFailure scenario: Changing which fields are safe to log means editing six files in step; one drifting copy could start logging identifiers in one adapter.",
+            "priority": null,
+            "status": "declined",
+            "file": null,
+            "startLine": null,
+            "endLine": null
+          }
+        ]
+      }
+    }
+  ]
+}

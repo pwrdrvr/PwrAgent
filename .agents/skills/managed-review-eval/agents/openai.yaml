@@ -1,0 +1,4 @@
+interface:
+  display_name: "Managed Review Eval"
+  short_description: "Evaluate PwrAgent managed code reviews against verified cohorts"
+  default_prompt: "Use $managed-review-eval to run a headless managed code review eval matrix and score it with the built-in Decision model."
