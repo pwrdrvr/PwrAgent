@@ -94,8 +94,8 @@ The slow runner's worst Linux lane would have needed 316 seconds instead of
 
 Linux no longer shares Windows' split. The two platforms collect different
 tests, so a Windows-only failure can now also come from a different lane
-assignment. The Windows lanes run only on `main`, with `ci:full`, or for
-platform-specific changes.
+assignment. The Windows lanes run only on `main`, with `ci:full` or
+`ci:windows-shutdown-diagnostics`, or for platform-specific changes.
 
 `playwright test --list` reproduces every split: 86/75/65/107 of 333 tests
 ending at `directory-launchpad-workspace.spec.ts`,
