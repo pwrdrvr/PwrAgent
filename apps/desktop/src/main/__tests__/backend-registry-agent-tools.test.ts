@@ -57,7 +57,6 @@ import { issueProviderDiscoveryPermit } from "../settings/provider-discovery-per
 import { GitWorkingStateService } from "../app-server/git-working-state-service";
 import { type MockOverlayState } from "./helpers/mock-sub-agent-store";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
-import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
 import { PwrAgentFederatedThreadMessageError, type PwrAgentFederatedThreadMessageRequest } from "../agent-tools/pwragent-thread-orchestration-agent-tools";
 import { MESSAGING_EAGER_TOOLS, VOICE_MANAGER_EAGER_TOOLS } from "../agent-tools/pwragent-tool-search";
 import { THREAD_MAINTENANCE_TOOL_WAIT_MS } from "../agent-tools/thread-maintenance-tool-scans";
@@ -542,7 +541,7 @@ describe("DesktopBackendRegistry", () => {
         // MCP calls need a live turn on the registered thread.
         const { turnId } = await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Invented request." }] });
         await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId, turnId, turn: { id: turnId } } } });
-        const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
+        const server = registry["agentToolMcpServer"]!;
         const registration = await server.registerClient({ backend: "codex", threadId });
         await mcp.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
           requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
@@ -550,7 +549,7 @@ describe("DesktopBackendRegistry", () => {
         const listed = (await mcp.listTools()).tools.map(({ name }) => name);
         expect(listed.includes(tool)).toBe(reachable);
         for (const name of refused) expect(listed.includes(name)).toBe(role === "full");
-        const result = await mcp.callTool({ name: tool, arguments: {} });
+        const result = await mcp.callTool({ name: tool, arguments: {}, _meta: { threadId } });
         expect(JSON.stringify(result).includes("does not allow this PwrAgent tool"), JSON.stringify(result)).toBe(!reachable);
       } finally {
         await mcp.close();
