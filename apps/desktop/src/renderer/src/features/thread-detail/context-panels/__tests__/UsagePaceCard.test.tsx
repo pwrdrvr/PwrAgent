@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type {
   ReadUsageActivityResponse,
@@ -193,6 +194,43 @@ describe("UsagePaceCard", () => {
       expect(readUsageActivity).toHaveBeenCalledTimes(2);
       expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 42% used." })).toBeInTheDocument();
     } finally { vi.useRealTimers(); }
+  });
+
+  it("shows the first Codex chart immediately even when another provider is cached", async () => {
+    // The model has a usable Codex chart only after a read containing an
+    // OpenAI observation. Time since a Claude-only read cannot defer that read.
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 59_999 }), async (elapsed) => {
+      vi.useFakeTimers({ now: NOW, toFake: ["Date", "setTimeout", "clearTimeout"] });
+      try {
+        const claude: UsageLimitObservation = { ...reading(5), provider: "anthropic" };
+        const readUsageActivity = reader({ limitObservations: [claude] });
+        const desktopApi = { openUsageActivity: vi.fn(), readUsageActivity };
+        const backends: BackendSummary[] = [{
+          kind: "codex", label: "OpenAI", available: true, methods: [], executionModes: [],
+          capabilities: {} as BackendSummary["capabilities"],
+        }];
+        const view = render(<UsagePaceCard backends={backends} desktopApi={desktopApi} />);
+        try {
+          await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+          expect(screen.getByRole("button", { name: /Usage Activity/ })).toHaveTextContent("Limits, pace, and spend");
+          expect(readUsageActivity).toHaveBeenCalledTimes(1);
+
+          await act(async () => { await vi.advanceTimersByTimeAsync(elapsed); });
+          const codex = reading(41, NOW + elapsed);
+          readUsageActivity.mockResolvedValue({
+            rows: [], readAt: NOW + elapsed, rateLimits: [], truncated: false, limitObservations: [claude, codex],
+          });
+          view.rerender(<UsagePaceCard backends={[{ ...backends[0], rateLimits: codex.limits }]} desktopApi={desktopApi} />);
+          await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+          expect(readUsageActivity).toHaveBeenCalledTimes(2);
+          expect(screen.getByRole("button", { name: "Open Usage Activity. Weekly limit 41% used." })).toBeInTheDocument();
+        } finally {
+          view.unmount();
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }), { numRuns: 16 });
   });
 
   it("clears another account's chart and reads the new account immediately", async () => {

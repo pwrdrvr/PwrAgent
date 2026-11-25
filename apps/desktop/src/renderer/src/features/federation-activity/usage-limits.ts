@@ -60,6 +60,7 @@ export type LimitAccount = {
 
 /** Percent drops smaller than this are rounding noise, not a reset. */
 const RESET_DROP_PERCENT = 1;
+export const limitUsageDropped = (before: number, after: number): boolean => after < before - RESET_DROP_PERCENT;
 const HOUR = 3_600_000;
 /** A pace over less than this is too noisy to project from. */
 const MIN_PACE_SPAN = 30 * 60_000;
@@ -145,7 +146,7 @@ function describeSeries(key: string, reading: UsageLimitReading, points: LimitPo
   for (let index = 1; index < points.length; index += 1) {
     const before = points[index - 1];
     const after = points[index];
-    const dropped = after.usedPercent < before.usedPercent - RESET_DROP_PERCENT;
+    const dropped = limitUsageDropped(before.usedPercent, after.usedPercent);
     const elapsed = before.resetAt !== undefined && before.resetAt <= after.at;
     // A window that elapsed and filled back up past its old level still reset.
     if (!dropped && !(elapsed && after.resetAt !== undefined && after.resetAt > before.resetAt!)) continue;

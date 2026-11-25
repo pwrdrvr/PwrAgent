@@ -8068,7 +8068,7 @@ export class DesktopBackendRegistry {
   private providerLimitObservation(backend: AppServerBackendKind): UsageLimitObservation | undefined {
     const reading = backend === "claude" ? this.claudeBackend.limitObservation()
       : isAcpBackendId(backend) ? this.acpBackend.limitObservation?.(backend) : undefined;
-    if (!reading) return undefined;
+    if (!reading || backend === "acp:antigravity") return reading;
     let group: string | undefined;
     try { group = this.resolveUsageAccountGroupsFn()[backend]; } catch { /* The reading keeps its own key. */ }
     // An operator's Account group names the account its turns record, so the

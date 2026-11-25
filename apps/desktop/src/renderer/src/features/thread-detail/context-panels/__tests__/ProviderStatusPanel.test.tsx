@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
 import { ProviderStatusPanel } from "../ProviderStatusPanel";
@@ -253,7 +254,113 @@ describe("ProviderStatusPanel", () => {
     expect(readUsageActivity).toHaveBeenCalledWith({ from: now - 8 * 24 * HOUR, to: now });
   });
 
-  it("does not read usage history when no backend has Codex limits", () => {
+  it("gives each provider's sidebar rows the same trajectory as its own account window", async () => {
+    const now = Date.UTC(2026, 10, 24, 21);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    // Each provider's window began 48 hours ago. At constant pace, a week's
+    // usage is 3.5 times the observed percentage.
+    const weekly = {
+      limitId: "weekly", name: "Weekly limit",
+      resetAt: now + 120 * HOUR, windowMinutes: 10_080,
+    };
+    const claudeLimit = { ...weekly, usedPercent: 10 };
+    const claudeGptLimit = { ...weekly, usedPercent: 20 };
+    const geminiLimit = { ...weekly, limitId: "gemini", name: "Weekly Gemini limit", usedPercent: 22 };
+    const limitObservations: UsageLimitObservation[] = [
+      { observedAt: now, provider: "anthropic", accountKey: "same-key", limits: [claudeLimit] },
+      { observedAt: now, provider: "google", accountKey: "same-key", limits: [claudeGptLimit, geminiLimit] },
+    ];
+    const readUsageActivity = vi.fn(async () => ({
+      rows: [], readAt: now, rateLimits: [], truncated: false, limitObservations,
+    }));
+    const claude = { ...codexBackend, kind: "claude" as const, label: "Claude", rateLimits: [claudeLimit] };
+    const antigravity = {
+      ...codexBackend, kind: "acp:antigravity" as const, label: "Antigravity",
+      account: undefined, rateLimits: [claudeGptLimit, geminiLimit],
+    };
+    const backends = [claude, antigravity];
+    const { rerender } = render(<ProviderStatusPanel backends={backends} desktopApi={{ readUsageActivity }} />);
+    const claudeRow = screen.getByText("Claude", { selector: ".backend-status-list__name" }).closest("li")!;
+    const antigravityRow = screen.getByText("Antigravity", { selector: ".backend-status-list__name" }).closest("li")!;
+
+    expect(await within(claudeRow).findByText(/On pace for about 35%/)).toBeInTheDocument();
+    expect(within(antigravityRow).getByText(/On pace for about 70%/)).toBeInTheDocument();
+    expect(within(antigravityRow).getByText(/On pace for about 77%/)).toBeInTheDocument();
+    expect(readUsageActivity).toHaveBeenCalledTimes(1);
+
+    // The status stream can advance to a new window before its usage read.
+    // Never put the previous window's projection beside the new reading.
+    rerender(<ProviderStatusPanel
+      backends={[{ ...claude, rateLimits: [{ ...claudeLimit, resetAt: weekly.resetAt + 168 * HOUR }] }, antigravity]}
+      desktopApi={{ readUsageActivity }}
+    />);
+    expect(within(claudeRow).queryByText(/On pace/)).not.toBeInTheDocument();
+    expect(within(antigravityRow).getByText(/On pace for about 70%/)).toBeInTheDocument();
+  });
+
+  it("refreshes Antigravity's projection from a newer sample at the same percentage", async () => {
+    const startedAt = Date.UTC(2026, 10, 24);
+    const limit = { name: "Weekly Gemini limit", usedPercent: 10, resetAt: startedAt + 168 * HOUR, windowMinutes: 10_080 };
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 30, max: 48 }), async (elapsedHours) => {
+      const firstAt = startedAt + 16 * HOUR;
+      const nextAt = startedAt + elapsedHours * HOUR;
+      vi.useFakeTimers({ now: firstAt, toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const response = (observedAt: number) => ({
+        rows: [], readAt: observedAt, rateLimits: [], truncated: false,
+        limitObservations: [{ observedAt, provider: "google", limits: [limit] }],
+      });
+      const backend = (rateLimitsObservedAt: number): BackendSummary & { rateLimitsObservedAt: number } => ({
+        ...codexBackend, kind: "acp:antigravity", label: "Antigravity", account: undefined,
+        rateLimits: [limit], rateLimitsObservedAt,
+      });
+      const readUsageActivity = vi.fn(async () => response(firstAt));
+      const view = render(<ProviderStatusPanel backends={[backend(firstAt)]} desktopApi={{ readUsageActivity }} />);
+      try {
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        expect(screen.getByText(/On pace to reach 100%/)).toBeInTheDocument();
+        vi.setSystemTime(nextAt);
+        readUsageActivity.mockResolvedValue(response(nextAt));
+        view.rerender(<ProviderStatusPanel backends={[backend(nextAt)]} desktopApi={{ readUsageActivity }} />);
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        const expected = Math.round(10 * 168 / elapsedHours);
+        expect(screen.getByText(new RegExp(`On pace for about ${expected}%`))).toBeInTheDocument();
+        expect(readUsageActivity).toHaveBeenCalledTimes(2);
+      } finally {
+        view.unmount();
+        vi.useRealTimers();
+      }
+    }), { numRuns: 10 });
+  });
+
+  it("drops a pre-credit forecast immediately when Claude usage resets at the same deadline", async () => {
+    const now = Date.UTC(2026, 10, 24, 16);
+    const limit = { name: "Weekly limit", usedPercent: 10, resetAt: now + 152 * HOUR, windowMinutes: 10_080 };
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 8 }), async (usedPercent) => {
+      vi.useFakeTimers({ now, toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const readUsageActivity = vi.fn(async () => ({
+        rows: [], readAt: now, rateLimits: [], truncated: false,
+        limitObservations: [{ observedAt: now, provider: "anthropic", limits: [limit] }],
+      }));
+      const backend: BackendSummary = { ...codexBackend, kind: "claude", label: "Claude", rateLimits: [limit] };
+      const view = render(<ProviderStatusPanel backends={[backend]} desktopApi={{ readUsageActivity }} />);
+      try {
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+        expect(screen.getByText(/On pace to reach 100%/)).toBeInTheDocument();
+        view.rerender(<ProviderStatusPanel
+          backends={[{ ...backend, rateLimits: [{ ...limit, usedPercent }] }]}
+          desktopApi={{ readUsageActivity }}
+        />);
+        expect(screen.queryByText(/On pace/)).not.toBeInTheDocument();
+        expect(valueFor("Weekly limit").querySelector("s")).toBeNull();
+        expect(readUsageActivity).toHaveBeenCalledTimes(1);
+      } finally {
+        view.unmount();
+        vi.useRealTimers();
+      }
+    }), { numRuns: 10 });
+  });
+
+  it("does not read usage history when no backend has chartable limits", () => {
     const readUsageActivity = vi.fn();
     render(<ProviderStatusPanel backends={[kimiBackend]} desktopApi={{ readUsageActivity }} />);
 

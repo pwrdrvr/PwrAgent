@@ -1812,7 +1812,7 @@ export function buildLiveThreadUsageLine(params: {
 }
 
 /** Backends other than Codex whose account limits Usage Activity charts. */
-export const PROVIDER_LIMIT_BACKENDS: readonly AppServerBackendKind[] = ["claude", "acp:grok"];
+export const PROVIDER_LIMIT_BACKENDS: readonly AppServerBackendKind[] = ["claude", "acp:grok", "acp:antigravity"];
 
 /** Codex readings are the ones that carry no provider, or OpenAI's. */
 export function isCodexLimitObservation(reading: UsageLimitObservation): boolean {
