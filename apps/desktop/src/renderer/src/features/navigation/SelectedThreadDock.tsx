@@ -345,7 +345,7 @@ function observeDockLayout(
       if (observedCard) resize?.unobserve(observedCard);
       observedCard = cardRef.current;
       if (observedCard) {
-        resize?.observe(observedCard);
+        resize?.observe(observedCard, { box: "border-box" });
         cardMounted();
       }
     }

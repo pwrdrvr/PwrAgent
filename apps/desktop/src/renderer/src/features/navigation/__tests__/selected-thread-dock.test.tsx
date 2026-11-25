@@ -22,6 +22,7 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
   }
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -193,6 +194,39 @@ describe("SelectedThreadDock", () => {
     // Gone with the selection.
     view.unmount();
     expect(changes).toEqual(["58px", "none", "58px", "none"]);
+  });
+
+  it("keeps the reserve equal to the dock's outer height plus its plate when padding changes", () => {
+    const observed = new Map<Element, ResizeObserverBoxOptions>();
+    let resize!: () => void;
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) {
+        resize = callback;
+      }
+      observe(element: Element, options?: ResizeObserverOptions) {
+        observed.set(element, options?.box ?? "content-box");
+      }
+      unobserve(element: Element) {
+        observed.delete(element);
+      }
+      disconnect() {
+        observed.clear();
+      }
+    });
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => frames.push(callback));
+    const region = mountList(-300);
+    renderDock(region);
+    const card = dock()!;
+    let height = 46;
+    Object.defineProperty(card, "offsetHeight", { get: () => height });
+    // The content box stays the same. Chromium delivers a resize only to
+    // observers of the outer box when the padding or border changes.
+    for (height of [74, 60, 46]) {
+      if (observed.get(card) === "border-box") resize();
+      act(() => frames.splice(0).forEach((frame) => frame(0)));
+      expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe(`${height + 12}px`);
+    }
   });
 
   // Showing the top dock moves the stuck header down, which covers more of
