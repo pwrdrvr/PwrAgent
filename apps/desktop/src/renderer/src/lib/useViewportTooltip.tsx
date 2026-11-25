@@ -19,6 +19,7 @@ import {
 } from "./native-drag-interaction";
 import { anchorRectsMatch, observeTooltipAnchor } from "./observe-tooltip-anchor";
 import { anchoredTooltipPosition, TOOLTIP_GAP, tooltipBridgeRect } from "./tooltip-placement";
+import { HOVER_TRANSITION_GRACE_MS } from "./useHoverTransitionGrace";
 
 const VIEWPORT_PADDING = 12;
 /** Where a pointer-anchored tooltip sits relative to the cursor's hotspot:
@@ -129,6 +130,73 @@ export function reservePlainTooltipRequest(): number {
 }
 
 export type TooltipPoint = { x: number; y: number };
+
+/**
+ * Where the pointer last was, and what it was over, from the document's own
+ * mouse events. A trigger shows its card from `mouseenter`, before the hook
+ * listens to anything, so the hook cannot learn this from its own listeners;
+ * one set of passive capture listeners per document serves every enterable
+ * card, installed when the first one mounts. Cleared when the pointer leaves
+ * the window.
+ */
+let lastPointer: { point: TooltipPoint; over: EventTarget | null } | null = null;
+let pointerTrackingInstalled = false;
+
+function installPointerTracking(): void {
+  if (pointerTrackingInstalled || typeof document === "undefined") return;
+  pointerTrackingInstalled = true;
+  const record = (event: MouseEvent): void => {
+    lastPointer = { point: { x: event.clientX, y: event.clientY }, over: event.target };
+  };
+  const options = { capture: true, passive: true };
+  document.addEventListener("mousemove", record, options);
+  document.addEventListener("mouseover", record, options);
+  document.addEventListener("mouseout", (event) => {
+    if (event.relatedTarget === null) lastPointer = null;
+  }, options);
+}
+
+/**
+ * Whether the pointer still rests on `target` where it is laid out now: it was
+ * last over the target, and the target's current box still contains that
+ * point. A target that moved out from under a stationary pointer no longer
+ * has it, whatever hover event the browser has yet to send.
+ */
+function pointerRestsOn(target: HTMLElement): boolean {
+  if (!lastPointer || !(lastPointer.over instanceof Node) || !target.contains(lastPointer.over)) {
+    return false;
+  }
+  const { x, y } = lastPointer.point;
+  const box = target.getBoundingClientRect();
+  return box.width > 0 && box.height > 0
+    && x >= box.left && x < box.left + box.width
+    && y >= box.top && y < box.top + box.height;
+}
+
+/** An `overflow` value that clips descendants. jsdom reports "" for unset. */
+function overflowClips(value: string): boolean {
+  return value !== "" && value !== "visible";
+}
+
+/**
+ * Whether any of `rect` is still on screen: inside the viewport and inside
+ * every ancestor of `target` that clips it. A chip scrolled out of its lane
+ * is still laid out, but a card following it would float beside nothing.
+ */
+function anchorOnScreen(target: HTMLElement, rect: DOMRect): boolean {
+  const outside = (clip: { top: number; bottom: number; left: number; right: number }): boolean =>
+    rect.bottom <= clip.top || rect.top >= clip.bottom
+    || rect.right <= clip.left || rect.left >= clip.right;
+  if (outside({ top: 0, bottom: window.innerHeight, left: 0, right: window.innerWidth })) {
+    return false;
+  }
+  for (let element = target.parentElement; element && element !== document.body; element = element.parentElement) {
+    const style = window.getComputedStyle(element);
+    if (!overflowClips(style.overflowX) && !overflowClips(style.overflowY)) continue;
+    if (outside(element.getBoundingClientRect())) return false;
+  }
+  return true;
+}
 
 type TooltipState = {
   content: ReactNode;
@@ -481,6 +549,12 @@ export function useViewportTooltip(options: {
   /** The pointer is inside an enterable card. */
   const pointerInCardRef = useRef(false);
   /**
+   * Runs for the hover grace after the pointer leaves an enterable card. The
+   * card still holds the operator until it ends: a pointer that slips out and
+   * back is still using it, even if the layout moved meanwhile.
+   */
+  const cardLeaveGraceRef = useRef<number | null>(null);
+  /**
    * The anchor moved, scrolled or left while an enterable card held the
    * operator. The card stayed; letting go of it closes it.
    */
@@ -498,6 +572,12 @@ export function useViewportTooltip(options: {
   const pointerBoundsRef = useRef<TooltipState["horizontalBounds"]>(undefined);
   const pointerFrameRef = useRef<number | null>(null);
   const [delayPending, setDelayPending] = useState(false);
+
+  // A boolean dependency: callers pass `interactive` as an inline object.
+  const enterable = interactive !== undefined;
+  useEffect(() => {
+    if (enterable) installPointerTracking();
+  }, [enterable]);
 
   useEffect(() => {
     getHorizontalBoundsRef.current = getHorizontalBounds;
@@ -532,6 +612,10 @@ export function useViewportTooltip(options: {
     targetRectRef.current = null;
     anchorSettlingRef.current = false;
     pointerInCardRef.current = false;
+    if (cardLeaveGraceRef.current !== null) {
+      window.clearTimeout(cardLeaveGraceRef.current);
+      cardLeaveGraceRef.current = null;
+    }
     anchorLostWhileHeldRef.current = false;
     pointerRef.current = null;
     if (pointerFrameRef.current !== null) {
@@ -544,26 +628,19 @@ export function useViewportTooltip(options: {
   hideRef.current = hide;
 
   /**
-   * Whether an enterable card holds the operator: the pointer is in it or
-   * focus is on one of its controls. A held card is no longer about its
-   * anchor, so layout under it (a row above gaining a chip, scroll anchoring
-   * compensating for it) must not close it while the operator is mid-action.
+   * Whether an enterable card holds the operator: the pointer is in it, left
+   * it less than the hover grace ago, or focus is on one of its controls. A
+   * held card is no longer about its anchor, so layout under it (a row above
+   * gaining a chip, scroll anchoring compensating for it) must not close it
+   * while the operator is mid-action.
    */
   const cardHoldsOperator = useCallback((): boolean => {
     if (!interactiveRef.current) return false;
     const card = tooltipRef.current;
     return pointerInCardRef.current
+      || cardLeaveGraceRef.current !== null
       || (card !== null && card.contains(document.activeElement));
   }, []);
-
-  /** The anchor moved or went away: close, unless the card holds the operator. */
-  const loseAnchor = useCallback((): void => {
-    if (cardHoldsOperator()) {
-      anchorLostWhileHeldRef.current = true;
-      return;
-    }
-    hide();
-  }, [cardHoldsOperator, hide]);
 
   /** Take the window's one plain-tooltip slot, hiding whoever held it. */
   const claimPlainTooltipSlot = useCallback((reservedRequest: number | undefined): void => {
@@ -631,6 +708,66 @@ export function useViewportTooltip(options: {
     },
     [],
   );
+
+  /**
+   * Whether an enterable card's trigger still holds the operator: keyboard
+   * focus is on it, or the pointer rests on it where it now sits. The card is
+   * still about that trigger, so it follows it rather than closing — a
+   * keyboard user reading a chip's card loses nothing to a reflow above it.
+   */
+  const triggerHoldsOperator = useCallback((target: HTMLElement): boolean => {
+    if (!interactiveRef.current || !target.isConnected) return false;
+    if (!target.contains(document.activeElement) && !pointerRestsOn(target)) return false;
+    // A trigger scrolled out of its lane has nothing left to follow.
+    return anchorOnScreen(target, target.getBoundingClientRect());
+  }, []);
+
+  /**
+   * Re-anchor to where the trigger sits now. The new rectangle is the
+   * baseline the observers compare against, and the placement pass reads the
+   * state's copy; the old position stays until it re-measures, so the card
+   * moves rather than blinking.
+   */
+  const followAnchor = useCallback((target: HTMLElement): void => {
+    const rect = target.getBoundingClientRect();
+    // A scroll that left the trigger in place needs no new placement, and a
+    // state write would rebuild every anchor observer once per scroll frame.
+    const remembered = targetRectRef.current;
+    if (remembered && anchorRectsMatch(rect, remembered)) return;
+    targetRectRef.current = toTargetRect(rect);
+    const horizontalBounds = getHorizontalBoundsRef.current?.(target);
+    pointerBoundsRef.current = horizontalBounds;
+    setState((current) =>
+      current
+        ? {
+            ...current,
+            horizontalBounds,
+            targetTop: rect.top,
+            targetBottom: rect.bottom,
+            targetLeft: rect.left,
+            targetRight: rect.left + rect.width,
+          }
+        : current,
+    );
+    scheduleAnchorSettle(target);
+  }, [scheduleAnchorSettle]);
+
+  /**
+   * The anchor moved or went away: close, unless the card holds the operator
+   * (it stays put) or its trigger does (it follows the trigger).
+   */
+  const loseAnchor = useCallback((): void => {
+    if (cardHoldsOperator()) {
+      anchorLostWhileHeldRef.current = true;
+      return;
+    }
+    const target = targetRef.current;
+    if (target && triggerHoldsOperator(target)) {
+      followAnchor(target);
+      return;
+    }
+    hide();
+  }, [cardHoldsOperator, followAnchor, hide, triggerHoldsOperator]);
 
   const rememberTarget = useCallback((target: HTMLElement): DOMRect | undefined => {
     if (!target.isConnected) {
@@ -774,6 +911,14 @@ export function useViewportTooltip(options: {
       return;
     }
     claimPlainTooltipSlot(reservedRequest);
+    // Showing again (focus landing on the chip of a held card) measures the
+    // anchor afresh, so the card points at it again, and is not held by a
+    // leave grace left over from before.
+    anchorLostWhileHeldRef.current = false;
+    if (cardLeaveGraceRef.current !== null) {
+      window.clearTimeout(cardLeaveGraceRef.current);
+      cardLeaveGraceRef.current = null;
+    }
     const horizontalBounds = getHorizontalBounds?.(target);
     pointerRef.current = null;
     pointerBoundsRef.current = horizontalBounds;
@@ -832,6 +977,9 @@ export function useViewportTooltip(options: {
   useEffect(() => () => {
     if (activePlainTooltip === hideRef) {
       activePlainTooltip = null;
+    }
+    if (cardLeaveGraceRef.current !== null) {
+      window.clearTimeout(cardLeaveGraceRef.current);
     }
     anchorGenerationRef.current += 1;
     if (pointerFrameRef.current !== null) {
@@ -989,22 +1137,35 @@ export function useViewportTooltip(options: {
             className={className}
             onMouseEnter={interactive ? () => {
               pointerInCardRef.current = true;
+              if (cardLeaveGraceRef.current !== null) {
+                window.clearTimeout(cardLeaveGraceRef.current);
+                cardLeaveGraceRef.current = null;
+              }
               interactiveRef.current?.onPointerEnter();
             } : undefined}
+            // Leaving is never instant, moved anchor or not: until the grace
+            // ends, the card is held. Then the owner's own grace closes an
+            // unmoved card, and this one closes a card whose anchor moved
+            // while it was held, pinned or not: it points at nothing now.
             onMouseLeave={interactive ? () => {
               pointerInCardRef.current = false;
-              // Its anchor moved while the card held the pointer, so the
-              // bridge back to it no longer leads anywhere.
-              if (anchorLostWhileHeldRef.current && !cardHoldsOperator()) {
-                hide();
-                return;
+              if (cardLeaveGraceRef.current !== null) {
+                window.clearTimeout(cardLeaveGraceRef.current);
               }
+              cardLeaveGraceRef.current = window.setTimeout(() => {
+                cardLeaveGraceRef.current = null;
+                if (anchorLostWhileHeldRef.current && !cardHoldsOperator()) {
+                  hideRef.current();
+                }
+              }, HOVER_TRANSITION_GRACE_MS);
               interactiveRef.current?.onPointerLeave();
             } : undefined}
             onBlur={interactive ? (event) => {
+              // A running leave grace decides when it ends.
               if (
                 anchorLostWhileHeldRef.current
                 && !pointerInCardRef.current
+                && cardLeaveGraceRef.current === null
                 && !event.currentTarget.contains(event.relatedTarget as Node | null)
               ) {
                 hide();

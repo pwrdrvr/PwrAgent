@@ -12,21 +12,37 @@ import { PrChip } from "../PrChip";
  *
  * A row above the chip gains and loses a chip (a repair that keeps
  * rescheduling flips its "Scheduled" chip every 30 s), which moves the PR chip
- * down and back; scroll anchoring scrolls the lane to compensate; the PR's
- * checks keep updating. The operator meanwhile rests the pointer on the card's
- * footer.
+ * down and back; a smaller change above nudges it by less than its own
+ * height; scroll anchoring scrolls the lane to compensate; the PR's checks
+ * keep updating. The operator meanwhile rests the pointer on the card's
+ * footer, rests it on the chip, or reads the card from the keyboard with
+ * focus on the chip.
  *
  * The rules:
  *
  * - A card the pointer is inside stays open, whatever the layout does under
  *   it. Only the operator closes it: leaving it, Escape, or a press outside.
- * - A card that is not held closes when its chip moves or its lane scrolls,
- *   as any tooltip does: it no longer points at anything.
- * - Leaving a card whose chip moved while it was held closes it, since the
- *   bridge back to the chip no longer leads there.
+ * - Leaving a card is never instant: for the bridge's grace the card stays,
+ *   layout moves included, so a pointer that slips out and back keeps it.
+ * - A card whose chip still has keyboard focus, or still has the pointer over
+ *   it where it now sits, follows the chip when it moves or its lane scrolls.
+ * - Any other card closes when its chip moves or its lane scrolls, as any
+ *   tooltip does: it no longer points at anything.
+ * - Leaving a card for longer than the grace closes it, whether or not its
+ *   chip moved meanwhile.
  */
 
 const ROW_SHIFT = 24;
+/** Less than the chip's height, so a pointer resting on it stays on it. */
+const ROW_NUDGE = 8;
+const CHIP_TOP = 200;
+const CHIP_HEIGHT = 20;
+const CHIP_X = 230;
+/** Where the pointer rests on the chip, from its top edge. */
+const POINTER_IN_CHIP = 10;
+const CARD_POINT = { clientX: 400, clientY: 150 };
+/** A pointer slipping out of the card by accident, well inside the grace. */
+const JIGGLE_MS = 100;
 const SIDEBAR = { left: 0, right: 320 };
 
 function rect(left: number, right: number, top: number, bottom: number): DOMRect {
@@ -37,18 +53,34 @@ function rect(left: number, right: number, top: number, bottom: number): DOMRect
   } as DOMRect;
 }
 
-/** The chip sits one row lower while the row above carries its extra chip. */
-function chipTop(): number {
-  return document.querySelector("[data-row-above-chip]") ? 200 + ROW_SHIFT : 200;
+/** Where the chip sits for a layout: a row lower while the row above carries
+ *  its extra chip, a little lower while the row above is nudged. */
+function chipTopFor(layout: Layout): number {
+  return CHIP_TOP + (layout.scheduled ? ROW_SHIFT : 0) + (layout.nudged ? ROW_NUDGE : 0);
 }
 
+function chipTop(): number {
+  return chipTopFor({
+    scheduled: document.querySelector("[data-row-above-chip]") !== null,
+    nudged: document.querySelector("[data-row-above-nudge]") !== null,
+  });
+}
+
+/** The lane's visible band; a test narrows it to scroll the chip out of view. */
+const laneView = { top: 0, bottom: 900 };
+
 function mockSidebarGeometry(): void {
+  laneView.top = 0;
+  laneView.bottom = 900;
   vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
     if (this.classList.contains("sidebar")) return rect(SIDEBAR.left, SIDEBAR.right, 0, 900);
+    if (this.classList.contains("sidebar-list--dense")) {
+      return rect(SIDEBAR.left, SIDEBAR.right, laneView.top, laneView.bottom);
+    }
     if (this.classList.contains("pr-status-card")) return rect(330, 602, 100, 300);
     if (this.hasAttribute("data-pr-chip")) {
       const top = chipTop();
-      return rect(200, 260, top, top + 20);
+      return rect(200, 260, top, top + CHIP_HEIGHT);
     }
     return rect(0, 0, 0, 0);
   });
@@ -121,13 +153,16 @@ function pr(checkState: PrChipState): PrSummary {
   };
 }
 
-function Sidebar(props: { scheduled: boolean; checkState: PrChipState }) {
+type Layout = { scheduled: boolean; nudged: boolean };
+type SidebarProps = Layout & { checkState: PrChipState };
+
+function Sidebar(props: SidebarProps) {
   return (
     <aside className="sidebar">
-      <div className="sidebar-list--dense" data-testid="lane">
+      <div className="sidebar-list--dense" data-testid="lane" style={{ overflowY: "auto" }}>
         <div className="thread-row">
           <span className="thread-row__chips">
-            <span className="thread-row__chip">Claude</span>
+            <span className="thread-row__chip" data-row-above-nudge={props.nudged ? "" : undefined}>Claude</span>
             {props.scheduled ? (
               <span className="thread-row__chip" data-row-above-chip="">Scheduled</span>
             ) : null}
@@ -150,12 +185,32 @@ function Sidebar(props: { scheduled: boolean; checkState: PrChipState }) {
 }
 
 type Pointer = "outside" | "chip" | "card";
-type Model = { visible: boolean; pointer: Pointer; movedWhileHeld: boolean };
+type Model = {
+  visible: boolean;
+  pointer: Pointer;
+  /** Where the pointer rests while it is on the chip. */
+  pointerY: number | null;
+  focus: "none" | "chip";
+  movedWhileHeld: boolean;
+  /** The chip top the visible card is placed beside. */
+  cardTop: number | null;
+  layout: Layout;
+};
 type Real = {
-  rerender: (props: { scheduled: boolean; checkState: PrChipState }) => void;
-  props: { scheduled: boolean; checkState: PrChipState };
+  rerender: (props: SidebarProps) => void;
+  props: SidebarProps;
   layoutChanged: () => void;
 };
+
+const initialModel = (): Model => ({
+  visible: false,
+  pointer: "outside",
+  pointerY: null,
+  focus: "none",
+  movedWhileHeld: false,
+  cardTop: null,
+  layout: { scheduled: false, nudged: false },
+});
 
 const chip = () => screen.getByRole("button", { name: /Open acme\/orbit#4403 / });
 const card = () => screen.queryByRole("tooltip");
@@ -167,9 +222,32 @@ async function flushMutations(): Promise<void> {
 function check(model: Model): void {
   if (model.visible) {
     expect(card()).not.toBeNull();
+    // Beside placement levels the card with the chip it points at.
+    expect(card()!.style.top).toBe(`${model.cardTop}px`);
   } else {
     expect(card()).toBeNull();
   }
+}
+
+function pointerOverChip(model: Model): boolean {
+  if (model.pointer !== "chip" || model.pointerY === null) return false;
+  const top = chipTopFor(model.layout);
+  return model.pointerY >= top && model.pointerY < top + CHIP_HEIGHT;
+}
+
+/** The card shows, or is placed again, beside the chip where it sits now. */
+function cardFollowsChip(model: Model): void {
+  model.visible = true;
+  model.movedWhileHeld = false;
+  model.cardTop = chipTopFor(model.layout);
+}
+
+function cardCloses(model: Model): void {
+  model.visible = false;
+  model.movedWhileHeld = false;
+  model.cardTop = null;
+  // A card vanishing under the pointer leaves it over whatever was beneath.
+  if (model.pointer === "card") model.pointer = "outside";
 }
 
 /** The layout under the card moved its chip, or the lane scrolled. */
@@ -177,8 +255,35 @@ function anchorDisturbed(model: Model): void {
   if (!model.visible) return;
   if (model.pointer === "card") {
     model.movedWhileHeld = true;
+  } else if (model.focus === "chip" || pointerOverChip(model)) {
+    cardFollowsChip(model);
   } else {
-    model.visible = false;
+    cardCloses(model);
+  }
+}
+
+/**
+ * The row above changes and the chip moves. A chip that moved out from under
+ * the pointer gets a `mouseleave` once the browser hit-tests again, and the
+ * bridge's grace closes its card.
+ */
+async function moveChip(model: Model, real: Real, change: Partial<Layout>): Promise<void> {
+  real.props = { ...real.props, ...change };
+  model.layout = { scheduled: real.props.scheduled, nudged: real.props.nudged };
+  real.rerender(real.props);
+  await flushMutations();
+  real.layoutChanged();
+  await flushMutations();
+  anchorDisturbed(model);
+  check(model);
+  if (model.pointer === "chip" && !pointerOverChip(model)) {
+    fireEvent.mouseLeave(chip(), { clientX: CHIP_X, clientY: model.pointerY ?? 0 });
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
+    await flushMutations();
+    model.pointer = "outside";
+    model.pointerY = null;
+    cardCloses(model);
+    check(model);
   }
 }
 
@@ -188,12 +293,13 @@ class HoverChip implements fc.AsyncCommand<Model, Real> {
   }
 
   async run(model: Model): Promise<void> {
-    fireEvent.mouseEnter(chip());
+    const pointerY = chipTopFor(model.layout) + POINTER_IN_CHIP;
+    fireEvent.mouseEnter(chip(), { clientX: CHIP_X, clientY: pointerY });
     act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
     await flushMutations();
     model.pointer = "chip";
-    model.visible = true;
-    model.movedWhileHeld = false;
+    model.pointerY = pointerY;
+    cardFollowsChip(model);
     check(model);
   }
 
@@ -207,9 +313,10 @@ class EnterCard implements fc.AsyncCommand<Model, Real> {
 
   async run(model: Model): Promise<void> {
     fireEvent.mouseLeave(chip());
-    fireEvent.mouseEnter(card()!);
+    fireEvent.mouseEnter(card()!, CARD_POINT);
     await flushMutations();
     model.pointer = "card";
+    model.pointerY = null;
     check(model);
   }
 
@@ -224,15 +331,12 @@ class LeaveCard implements fc.AsyncCommand<Model, Real> {
   async run(model: Model): Promise<void> {
     const element = card();
     if (element) fireEvent.mouseLeave(element);
-    if (model.movedWhileHeld) {
-      model.visible = false;
-      check(model);
-    }
+    // Still there for the grace, even when its chip moved meanwhile.
+    check(model);
     act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
     await flushMutations();
     model.pointer = "outside";
-    model.visible = false;
-    model.movedWhileHeld = false;
+    cardCloses(model);
     check(model);
   }
 
@@ -249,11 +353,80 @@ class LeaveChip implements fc.AsyncCommand<Model, Real> {
     act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
     await flushMutations();
     model.pointer = "outside";
-    model.visible = false;
+    model.pointerY = null;
+    cardCloses(model);
     check(model);
   }
 
   toString(): string { return "leaveChip"; }
+}
+
+/**
+ * The pointer slips out of the card and comes straight back, maybe while the
+ * row above flips its chip. The card stays where it is.
+ */
+class JiggleOutOfCard implements fc.AsyncCommand<Model, Real> {
+  constructor(private readonly moveMeanwhile: boolean) {}
+
+  check(model: Readonly<Model>): boolean {
+    return model.pointer === "card" && model.visible;
+  }
+
+  async run(model: Model, real: Real): Promise<void> {
+    fireEvent.mouseLeave(card()!);
+    act(() => vi.advanceTimersByTime(JIGGLE_MS / 2));
+    if (this.moveMeanwhile) {
+      real.props = { ...real.props, scheduled: !real.props.scheduled };
+      model.layout = { scheduled: real.props.scheduled, nudged: real.props.nudged };
+      real.rerender(real.props);
+      await flushMutations();
+      real.layoutChanged();
+      fireEvent.scroll(screen.getByTestId("lane"));
+      await flushMutations();
+      model.movedWhileHeld = true;
+      check(model);
+    }
+    act(() => vi.advanceTimersByTime(JIGGLE_MS / 2));
+    fireEvent.mouseEnter(card()!, CARD_POINT);
+    await flushMutations();
+    check(model);
+  }
+
+  toString(): string { return `jiggleOutOfCard(${this.moveMeanwhile ? "move" : "still"})`; }
+}
+
+/** Tab onto the chip: focus shows its card. */
+class FocusChip implements fc.AsyncCommand<Model, Real> {
+  check(model: Readonly<Model>): boolean {
+    return model.focus === "none";
+  }
+
+  async run(model: Model): Promise<void> {
+    act(() => chip().focus());
+    await flushMutations();
+    model.focus = "chip";
+    cardFollowsChip(model);
+    check(model);
+  }
+
+  toString(): string { return "focusChip"; }
+}
+
+/** Tab away from the chip, to something outside the card. */
+class BlurChip implements fc.AsyncCommand<Model, Real> {
+  check(model: Readonly<Model>): boolean {
+    return model.focus === "chip";
+  }
+
+  async run(model: Model): Promise<void> {
+    act(() => chip().blur());
+    await flushMutations();
+    model.focus = "none";
+    cardCloses(model);
+    check(model);
+  }
+
+  toString(): string { return "blurChip"; }
 }
 
 /** The row above gains or loses its chip, and the PR chip moves. */
@@ -261,16 +434,21 @@ class ToggleRowAbove implements fc.AsyncCommand<Model, Real> {
   check(): boolean { return true; }
 
   async run(model: Model, real: Real): Promise<void> {
-    real.props = { ...real.props, scheduled: !real.props.scheduled };
-    real.rerender(real.props);
-    await flushMutations();
-    real.layoutChanged();
-    await flushMutations();
-    anchorDisturbed(model);
-    check(model);
+    await moveChip(model, real, { scheduled: !real.props.scheduled });
   }
 
   toString(): string { return "toggleRowAbove"; }
+}
+
+/** The row above grows a little, moving the PR chip by less than its height. */
+class NudgeRowAbove implements fc.AsyncCommand<Model, Real> {
+  check(): boolean { return true; }
+
+  async run(model: Model, real: Real): Promise<void> {
+    await moveChip(model, real, { nudged: !real.props.nudged });
+  }
+
+  toString(): string { return "nudgeRowAbove"; }
 }
 
 /** Scroll anchoring compensates for a row above changing height. */
@@ -308,7 +486,11 @@ const commands = [
   fc.constant(new EnterCard()),
   fc.constant(new LeaveCard()),
   fc.constant(new LeaveChip()),
+  fc.boolean().map((moveMeanwhile) => new JiggleOutOfCard(moveMeanwhile)),
+  fc.constant(new FocusChip()),
+  fc.constant(new BlurChip()),
   fc.constant(new ToggleRowAbove()),
+  fc.constant(new NudgeRowAbove()),
   fc.constant(new ScrollLane()),
   fc.constantFrom<PrChipState>("pending", "passing", "failing")
     .map((checkState) => new StatusUpdate(checkState)),
@@ -324,11 +506,14 @@ afterEach(() => {
 describe("a held sidebar PR card", () => {
   it("stays open under layout churn until the operator leaves it", async () => {
     await fc.assert(
-      fc.asyncProperty(fc.commands(commands, { maxCommands: 30 }), async (cmds) => {
+      // One size up: a slip with a move under it needs a hover, an entry and
+      // the slip with nothing closing the card between, and the default
+      // length reached it in only 2 of 5 runs against a hook without the rule.
+      fc.asyncProperty(fc.commands(commands, { maxCommands: 30, size: "+1" }), async (cmds) => {
         vi.useFakeTimers();
         mockSidebarGeometry();
         const { layoutChanged } = stubNativeGeometryObservers();
-        const props = { scheduled: false, checkState: "pending" as PrChipState };
+        const props: SidebarProps = { scheduled: false, nudged: false, checkState: "pending" };
         const view = render(<Sidebar {...props} />);
         const real: Real = {
           props,
@@ -337,7 +522,7 @@ describe("a held sidebar PR card", () => {
         };
         try {
           await fc.asyncModelRun(
-            () => ({ model: { visible: false, pointer: "outside" as Pointer, movedWhileHeld: false }, real }),
+            () => ({ model: initialModel(), real }),
             cmds,
           );
         } finally {
@@ -355,39 +540,74 @@ describe("a held sidebar PR card", () => {
     vi.useFakeTimers();
     mockSidebarGeometry();
     const { layoutChanged } = stubNativeGeometryObservers();
-    const view = render(<Sidebar scheduled={false} checkState="pending" />);
+    const view = render(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
     fireEvent.mouseEnter(chip());
     act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
     const held = card()!;
     fireEvent.mouseLeave(chip());
     fireEvent.mouseEnter(held);
 
-    view.rerender(<Sidebar scheduled checkState="pending" />);
+    view.rerender(<Sidebar scheduled nudged={false} checkState="pending" />);
     await flushMutations();
     layoutChanged();
     fireEvent.scroll(screen.getByTestId("lane"));
     await flushMutations();
     expect(card()).toBe(held);
 
-    view.rerender(<Sidebar scheduled={false} checkState="pending" />);
+    view.rerender(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
     await flushMutations();
     layoutChanged();
     await flushMutations();
     expect(card()).toBe(held);
 
-    // Leaving it now closes it at once: its chip is not where it was.
-    view.rerender(<Sidebar scheduled checkState="pending" />);
+    // Slipping out and straight back keeps it, though its chip moved.
+    view.rerender(<Sidebar scheduled nudged={false} checkState="pending" />);
     await flushMutations();
     layoutChanged();
     fireEvent.mouseLeave(held);
+    act(() => vi.advanceTimersByTime(JIGGLE_MS));
+    expect(card()).toBe(held);
+    fireEvent.mouseEnter(held);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
+    expect(card()).toBe(held);
+
+    // Leaving it for good closes it after the grace.
+    fireEvent.mouseLeave(held);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
     expect(card()).toBeNull();
+  });
+
+  it("keeps a card the pointer slipped out of while the row above flips its chip", async () => {
+    vi.useFakeTimers();
+    mockSidebarGeometry();
+    const { layoutChanged } = stubNativeGeometryObservers();
+    const view = render(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
+    fireEvent.mouseEnter(chip());
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const held = card()!;
+    fireEvent.mouseLeave(chip());
+    fireEvent.mouseEnter(held, CARD_POINT);
+
+    fireEvent.mouseLeave(held);
+    act(() => vi.advanceTimersByTime(JIGGLE_MS / 2));
+    view.rerender(<Sidebar scheduled nudged={false} checkState="pending" />);
+    await flushMutations();
+    layoutChanged();
+    fireEvent.scroll(screen.getByTestId("lane"));
+    await flushMutations();
+    expect(card()).toBe(held);
+    expect(held.style.top).toBe(`${CHIP_TOP}px`);
+    act(() => vi.advanceTimersByTime(JIGGLE_MS / 2));
+    fireEvent.mouseEnter(held, CARD_POINT);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
+    expect(card()).toBe(held);
   });
 
   it("holds a card while focus is on one of its controls, and closes it when focus leaves after a move", async () => {
     vi.useFakeTimers();
     mockSidebarGeometry();
     const { layoutChanged } = stubNativeGeometryObservers();
-    const view = render(<Sidebar scheduled={false} checkState="pending" />);
+    const view = render(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
     fireEvent.mouseEnter(chip());
     act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
     const held = card()!;
@@ -399,7 +619,7 @@ describe("a held sidebar PR card", () => {
     expect(card()).toBe(held);
 
     act(() => control.focus());
-    view.rerender(<Sidebar scheduled checkState="pending" />);
+    view.rerender(<Sidebar scheduled nudged={false} checkState="pending" />);
     await flushMutations();
     layoutChanged();
     fireEvent.scroll(screen.getByTestId("lane"));
@@ -407,6 +627,73 @@ describe("a held sidebar PR card", () => {
     expect(card()).toBe(held);
 
     act(() => control.blur());
+    expect(card()).toBeNull();
+  });
+
+  it("follows a chip that keeps keyboard focus when a row above flips its chip", async () => {
+    vi.useFakeTimers();
+    mockSidebarGeometry();
+    const { layoutChanged } = stubNativeGeometryObservers();
+    const view = render(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
+    act(() => chip().focus());
+    const shown = card()!;
+    expect(shown.style.top).toBe(`${CHIP_TOP}px`);
+
+    view.rerender(<Sidebar scheduled nudged={false} checkState="pending" />);
+    await flushMutations();
+    layoutChanged();
+    fireEvent.scroll(screen.getByTestId("lane"));
+    await flushMutations();
+    expect(card()).toBe(shown);
+    expect(shown.style.top).toBe(`${CHIP_TOP + ROW_SHIFT}px`);
+
+    view.rerender(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
+    await flushMutations();
+    layoutChanged();
+    await flushMutations();
+    expect(card()).toBe(shown);
+    expect(shown.style.top).toBe(`${CHIP_TOP}px`);
+  });
+
+  it("closes a focused chip's card once the lane scrolls the chip out of view", async () => {
+    vi.useFakeTimers();
+    mockSidebarGeometry();
+    stubNativeGeometryObservers();
+    render(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
+    act(() => chip().focus());
+    expect(card()).not.toBeNull();
+
+    // Scrolled so the lane's visible band starts below the chip.
+    laneView.top = CHIP_TOP + CHIP_HEIGHT + 40;
+    fireEvent.scroll(screen.getByTestId("lane"));
+    await flushMutations();
+    expect(card()).toBeNull();
+  });
+
+  it("follows a chip the pointer still rests on, and closes once the chip moves out from under it", async () => {
+    vi.useFakeTimers();
+    mockSidebarGeometry();
+    const { layoutChanged } = stubNativeGeometryObservers();
+    const view = render(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
+    fireEvent.mouseEnter(chip(), { clientX: CHIP_X, clientY: CHIP_TOP + POINTER_IN_CHIP });
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const shown = card()!;
+
+    view.rerender(<Sidebar scheduled={false} nudged checkState="pending" />);
+    await flushMutations();
+    layoutChanged();
+    await flushMutations();
+    expect(card()).toBe(shown);
+    expect(shown.style.top).toBe(`${CHIP_TOP + ROW_NUDGE}px`);
+
+    fireEvent.scroll(screen.getByTestId("lane"));
+    await flushMutations();
+    expect(card()).toBe(shown);
+
+    view.rerender(<Sidebar scheduled nudged checkState="pending" />);
+    await flushMutations();
+    layoutChanged();
+    await flushMutations();
     expect(card()).toBeNull();
   });
 });
