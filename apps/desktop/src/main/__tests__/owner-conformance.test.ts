@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { createServer, type AddressInfo, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -206,7 +206,7 @@ async function startDesktopOwner(
 /** The Outpost daemon on its Codex fixture, enrolled through a real invite. */
 async function startOutpostOwner(
   hostKind: "desktop" | "headless" = "headless",
-  options: { env?: NodeJS.ProcessEnv; waitForCodexCommand?: boolean } = {},
+  options: Pick<NonNullable<Parameters<typeof startOutpostDaemon>[0]>, "env" | "waitForCodexCommand" | "beforeFailedStartupClose"> = {},
 ): Promise<OwnerHost & Pick<OutpostViewer, "waitForEvent">> {
   const outpost = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, hostKind, ...options });
   outpost.subscribe(EVENT_CLASSES);
@@ -2926,24 +2926,62 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const held = once(server, "connection", { signal: AbortSignal.timeout(15_000) });
     // The daemon may fail before the test can reach this boundary.
     void held.catch(() => {});
+    let closing: Promise<void> | undefined;
     return {
       port: String((server.address() as AddressInfo).port),
       held,
       release: async () => { const [socket] = await held; (socket as Socket).end("release"); },
-      close: async () => {
+      close: () => closing ??= new Promise<void>(resolve => {
+        server.close(() => resolve());
         for (const socket of sockets) socket.destroy();
-        await new Promise<void>(resolve => server.close(() => resolve()));
-      },
+      }),
     };
   }
+
+  // The daemon reports if shutdown reaches it while startup still owns a
+  // socket. That report also lets the test rescue the pre-fix shutdown.
+  it("closes the Outpost startup gate before joining a daemon after enrollment failure", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "pa-conformance-enrollment-"));
+    let gate: Awaited<ReturnType<typeof openCodexGate>> | undefined;
+    let starting: ReturnType<typeof startOutpostDaemon> | undefined;
+    try {
+      await mkdir(path.join(directory, "bin"));
+      await writeFile(path.join(directory, "bin", "pwragent.js"), `
+        if (process.argv[2] === "serve") {
+          const gate = require("node:net").createConnection(Number(process.env.FIXTURE_STARTUP_PORT), "127.0.0.1");
+          process.on("SIGTERM", () => { if (!gate.destroyed) gate.write("shutdown while startup gate is held"); });
+          gate.once("connect", () => console.log('{"ready":true}'));
+        } else {
+          console.error("fixture enrollment failed");
+          process.exitCode = 1;
+        }
+      `);
+      gate = await openCodexGate();
+      starting = startOutpostDaemon({ packageRoot: directory, env: { FIXTURE_STARTUP_PORT: gate.port },
+        beforeFailedStartupClose: gate.close });
+      const outcome = starting.then(() => "startup unexpectedly succeeded", (error: Error) => error.message);
+      const [socket] = await gate.held as [Socket];
+      const shutdownWhileHeld = once(socket, "data").then(([data]) => String(data));
+      expect(await Promise.race([outcome, shutdownWhileHeld])).toContain("fixture enrollment failed");
+    } finally {
+      try {
+        await gate?.close();
+        const host = await starting?.catch(() => undefined);
+        await host?.close();
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    }
+  });
 
   // Keep each publication order across the real Outpost boundary. The registry
   // and Attention model cover the cache and repeated-read permutations.
   it.each(["first read", "repeated read"] as const)("headless attention ranks count each admitted turn once when startup publishes before the %s", async (publication) => {
     const [discovery, nativeStart] = await Promise.all([openCodexGate(), openCodexGate()]);
+    const closeGates = async () => { await Promise.all([discovery.close(), nativeStart.close()]); };
     let host: Awaited<ReturnType<typeof startConformanceDaemon>> | undefined;
     try {
-      const owner = host = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, env: {
+      const owner = host = await startConformanceDaemon({ capabilities: VIEWER_CAPABILITIES, beforeFailedStartupClose: closeGates, env: {
         PWRAGENT_TEST_STARTUP_INVENTORY_PORT: discovery.port,
         PWRAGENT_TEST_CODEX_TURN_STARTED_PORT: nativeStart.port,
       } });
@@ -2989,7 +3027,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       await owner.waitForEvent("turn/completed", event => (event.notification.params as { turn?: { id?: string } }).turn?.id === turn.turnId,
         AbortSignal.timeout(5_000));
     } finally {
-      try { await Promise.all([discovery.close(), nativeStart.close()]); }
+      try { await closeGates(); }
       finally { await host?.close(); }
     }
   }, 120_000);
@@ -2998,7 +3036,8 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const discovery = await openCodexGate();
     let close: OwnerHost["close"] | undefined;
     try {
-      const host = await startOutpostOwner(hostKind, { env: { PWRAGENT_TEST_STARTUP_INVENTORY_PORT: discovery.port } });
+      const host = await startOutpostOwner(hostKind, { beforeFailedStartupClose: discovery.close,
+        env: { PWRAGENT_TEST_STARTUP_INVENTORY_PORT: discovery.port } });
       close = host.close;
       // An RPC on the same connection follows the subscription. Hold the
       // provider refresh until the viewer is subscribed and can observe it.

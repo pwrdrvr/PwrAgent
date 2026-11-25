@@ -178,8 +178,6 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return await runGit(cwd, args);
 }
 
-let seedRoot: string;
-
 async function createRepoSeed(repo: string, environment: boolean) {
   await mkdir(repo);
   await runGit(repo, ["init", "--template=", "-b", "main"]);
@@ -194,15 +192,31 @@ async function createRepoSeed(repo: string, environment: boolean) {
   await runGit(repo, ["commit", "-m", "fixture"]);
 }
 
-beforeAll(async () => {
-  seedRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-hibernate-seed-"));
-  await createRepoSeed(path.join(seedRoot, "plain"), false);
-  await createRepoSeed(path.join(seedRoot, "environment"), true);
-});
+function ownRepoSeeds(
+  createSeed = createRepoSeed,
+  removeRoot = (root: string) => rm(root, { recursive: true, force: true }),
+) {
+  let root: string;
+  let initialization: Promise<void> | undefined;
+  return {
+    get root() { return root; },
+    initialize: () => initialization ??= (async () => {
+      root = await mkdtemp(path.join(os.tmpdir(), "pwragent-hibernate-seed-"));
+      await createSeed(path.join(root, "plain"), false);
+      await createSeed(path.join(root, "environment"), true);
+    })(),
+    close: async () => {
+      // Vitest can stop awaiting the setup hook while Git still uses the root.
+      // Setup reports its own failure. Teardown joins it before removing files.
+      await initialization?.catch(() => {});
+      if (root) await removeRoot(root);
+    },
+  };
+}
 
-afterAll(async () => {
-  if (seedRoot) await rm(seedRoot, { recursive: true, force: true });
-});
+const repoSeeds = ownRepoSeeds();
+beforeAll(repoSeeds.initialize);
+afterAll(repoSeeds.close);
 
 async function createFixture(options: { environment?: boolean; worktreeRoot?: ".pwragent" | ".codex" } = {}) {
   const scope = fixtureOwner;
@@ -213,7 +227,7 @@ async function createFixture(options: { environment?: boolean; worktreeRoot?: ".
   const worktree = path.join(root, options.worktreeRoot ?? ".pwragent", "worktrees", "id", "repo");
   // Copy refs, objects and index before Git writes the linked-worktree metadata.
   // Each case owns its primary checkout and its linked worktree.
-  await cp(path.join(seedRoot, options.environment ? "environment" : "plain"), repo, { recursive: true });
+  await cp(path.join(repoSeeds.root, options.environment ? "environment" : "plain"), repo, { recursive: true });
   await mkdir(path.dirname(worktree), { recursive: true });
   await git(repo, ["worktree", "add", "-b", "owned", worktree]);
   const directory = { id: "owned", kind: "worktree" as const, label: "repo", path: repo, worktreePath: worktree };
@@ -1819,6 +1833,34 @@ describe("Thread maintenance's hibernate step", () => {
   }));
 });
 
+
+// A hook timeout ends Vitest's wait. Use a gate to control the still-running
+// setup while observing when teardown admits directory removal.
+it.each([false, true])("seed teardown joins initialization before removing its root (setup rejects: %s)", async (rejectSetup) => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const refusal = new Error("controlled seed setup failure");
+  const seeds = ownRepoSeeds(async (_repo, environment) => {
+    if (environment) return;
+    entered.resolve();
+    await release.promise;
+    order.push("seed settled");
+    if (rejectSetup) throw refusal;
+  }, async root => {
+    order.push("root removed");
+    await rm(root, { recursive: true, force: true });
+  });
+  const setup = seeds.initialize().catch((error: unknown) => error);
+  await entered.promise;
+  const closing = seeds.close();
+  release.resolve();
+  const outcome = await setup;
+  await closing;
+  expect(outcome).toBe(rejectSetup ? refusal : undefined);
+  expect(order).toEqual(["seed settled", "root removed"]);
+  expect(await exists(seeds.root)).toBe(false);
+});
 
 // A deadline is unnecessary: gate an admitted body, request the real fixture
 // teardown, then observe native Git, its file, and its SQLite owner directly.
