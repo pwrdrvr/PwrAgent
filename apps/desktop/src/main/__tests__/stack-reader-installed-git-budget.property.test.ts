@@ -113,7 +113,60 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     }
   });
 
-  it("bounds synchronous TTL revalidation per background pass when many installed-Git checkouts expire together", async () => {
+  it("bounds synchronous TTL revalidation to the default 16-entry budget when many installed-Git checkouts expire together", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-ttl-default-")));
+    restoreGit = isolateProcessGitEnvironment();
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      const tracked = path.join(sandbox, "tracked");
+      await mkdir(tracked, { recursive: true });
+      initialize(tracked);
+      await writeCatalog(tracked, "tracked");
+
+      const totalDirs = 18;
+      const rows = [
+        row(tracked, "tracked"),
+        ...Array.from({ length: totalDirs - 1 }, (_, index) => row(path.join(sandbox, `missing-${index}`), `missing-${index}`)),
+      ];
+
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      const revParseCalls = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
+      const oracle = await new StackReader().read([rows[0]!], []);
+
+      let now = 0;
+      const reader = new StackReader(() => now);
+      start.mockClear();
+      const cold = await reader.read(rows, []);
+      expect(cold.stacks).toEqual(oracle.stacks);
+      expect(revParseCalls()).toBe(totalDirs);
+
+      // Expire all cached entries at once: one background pass must cap
+      // synchronous TTL revalidations at the default budget (16).
+      now += 31_000;
+      start.mockClear();
+      const firstRefresh = await reader.read(rows, []);
+      expect(firstRefresh.stacks).toEqual(oracle.stacks);
+      const firstPassSpawns = revParseCalls();
+      expect(firstPassSpawns).toBe(16);
+
+      // A second pass rotates through the remaining expired entries, and once
+      // all entries are refreshed, a third pass spawns zero rev-parse calls.
+      start.mockClear();
+      const secondRefresh = await reader.read(rows, []);
+      expect(secondRefresh.stacks).toEqual(oracle.stacks);
+      expect(revParseCalls()).toBe(totalDirs - firstPassSpawns);
+
+      start.mockClear();
+      const warm = await reader.read(rows, []);
+      expect(warm.stacks).toEqual(oracle.stacks);
+      expect(revParseCalls()).toBe(0);
+    } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("rotates expired installed-Git TTL revalidations across passes for any configured budget", async () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-ttl-budget-")));
     restoreGit = isolateProcessGitEnvironment();
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
@@ -123,53 +176,50 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       initialize(tracked);
       await writeCatalog(tracked, "tracked");
 
-      const totalDirs = 24;
-      const extraDirs: string[] = [];
-      for (let index = 0; index < totalDirs - 1; index++) {
-        // Missing directories still require a Git check on cold pass when
-        // PWRAGENT_GIT_PATH is configured, mirroring deleted worktrees in a profile.
-        extraDirs.push(path.join(sandbox, `missing-${index}`));
-      }
+      const maxDirs = 8;
+      const rows = [
+        row(tracked, "tracked"),
+        ...Array.from({ length: maxDirs - 1 }, (_, index) => row(path.join(sandbox, `missing-${index}`), `missing-${index}`)),
+      ];
 
       process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
       const revParseCalls = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
-      const rows = [row(tracked, "tracked"), ...extraDirs.map((dir, index) => row(dir, `missing-${index}`))];
-      const oracle = await new StackReader().read(rows, []);
+      const oracle = await new StackReader().read([rows[0]!], []);
 
-      await fc.assert(fc.asyncProperty(fc.integer({ min: 18, max: totalDirs }), async (subsetSize) => {
-        const subset = rows.slice(0, subsetSize);
-        let now = 0;
-        const reader = new StackReader(() => now);
-        start.mockClear();
-        const cold = await reader.read(subset, []);
-        expect(cold.stacks).toEqual(oracle.stacks);
-        expect(revParseCalls()).toBe(subsetSize);
+      await fc.assert(fc.asyncProperty(
+        fc.integer({ min: 2, max: 4 }),
+        fc.integer({ min: 1, max: 4 }),
+        async (budget, extra) => {
+          const subsetSize = Math.min(maxDirs, budget + extra);
+          const subset = rows.slice(0, subsetSize);
+          let now = 0;
+          const reader = new StackReader(() => now, budget);
 
-        // Expire all cached entries at once: one background pass must cap
-        // synchronous TTL revalidations rather than launching all N at once.
-        now += 31_000;
-        start.mockClear();
-        const firstRefresh = await reader.read(subset, []);
-        expect(firstRefresh.stacks).toEqual(oracle.stacks);
-        const firstPassSpawns = revParseCalls();
-        expect(firstPassSpawns).toBeGreaterThan(0);
-        expect(firstPassSpawns).toBeLessThanOrEqual(16);
+          start.mockClear();
+          const cold = await reader.read(subset, []);
+          expect(cold.stacks).toEqual(oracle.stacks);
+          expect(revParseCalls()).toBe(subsetSize);
 
-        // A second pass rotates through the remaining expired entries, and
-        // once all entries are refreshed, a third pass spawns zero rev-parse calls.
-        start.mockClear();
-        const secondRefresh = await reader.read(subset, []);
-        expect(secondRefresh.stacks).toEqual(oracle.stacks);
-        expect(revParseCalls()).toBe(subsetSize - firstPassSpawns);
+          now += 31_000;
+          let remaining = subsetSize;
+          while (remaining > 0) {
+            start.mockClear();
+            const refreshed = await reader.read(subset, []);
+            expect(refreshed.stacks).toEqual(oracle.stacks);
+            const expectedSpawns = Math.min(remaining, budget);
+            expect(revParseCalls()).toBe(expectedSpawns);
+            remaining -= expectedSpawns;
+          }
 
-        start.mockClear();
-        const warm = await reader.read(subset, []);
-        expect(warm.stacks).toEqual(oracle.stacks);
-        expect(revParseCalls()).toBe(0);
-      }), { numRuns: 4 });
+          start.mockClear();
+          const warm = await reader.read(subset, []);
+          expect(warm.stacks).toEqual(oracle.stacks);
+          expect(revParseCalls()).toBe(0);
+        },
+      ), { numRuns: 4 });
     } finally {
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
 });

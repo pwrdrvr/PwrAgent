@@ -168,8 +168,8 @@ export class StackReadObservation {
   /** Cap synchronous TTL revalidations in one background navigation pass so a
    * simultaneous 30s expiry across hundreds of directories rotates smoothly
    * instead of launching a blocking subprocess storm. */
-  claimBackgroundTtlRevalidation(): boolean {
-    if (this.backgroundTtlRevalidations >= MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS) return false;
+  claimBackgroundTtlRevalidation(limit = MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS): boolean {
+    if (this.backgroundTtlRevalidations >= limit) return false;
     this.backgroundTtlRevalidations += 1;
     return true;
   }
@@ -732,7 +732,10 @@ export class StackReader {
   /** Lives as long as this reader, so every projection it makes shares the answers. */
   private readonly commitGraph = new CommitGraphMemo();
 
-  constructor(private readonly now: () => number = () => performance.now()) {}
+  constructor(
+    private readonly now: () => number = () => performance.now(),
+    private readonly backgroundTtlRevalidationBudget = MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS,
+  ) {}
 
   async preflightCatalogs(directories: readonly string[], observation: StackReadObservation): Promise<CatalogRead[]> {
     if ((observation.demand.priority?.() ?? PR_METADATA_PRIORITY.background) !== PR_METADATA_PRIORITY.background
@@ -801,7 +804,7 @@ export class StackReader {
       && (cached.checkout !== "unavailable" || allowUnavailableCache)
     ) {
       const fresh = cached.expiresAt > this.now();
-      if (fresh || (budgetTtlRevalidation && !observation.claimBackgroundTtlRevalidation())) {
+      if (fresh || (budgetTtlRevalidation && !observation.claimBackgroundTtlRevalidation(this.backgroundTtlRevalidationBudget))) {
         return cached.checkout === "unavailable"
           ? "unavailable"
           : recordWitness(cached.checkout && { ...cached.checkout, cwd }, true);
