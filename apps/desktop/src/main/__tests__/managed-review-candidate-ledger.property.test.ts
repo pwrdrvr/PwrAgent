@@ -14,14 +14,20 @@ import {
 import { pwragentToolSkipsAgentApproval } from "../app-server/acp-host-tool-approval";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import {
+  buildReviewOutputFromCandidateLedger,
   MANAGED_REVIEW_CANDIDATE_CATEGORIES,
   MANAGED_REVIEW_CANDIDATE_MAX_FIELD_LENGTH,
   MANAGED_REVIEW_CANDIDATE_MAX_PER_TURN,
   ManagedReviewCandidateLedger,
+  type ManagedReviewCandidate,
   type ManagedReviewCandidateCategory,
   type ManagedReviewCandidatePriority,
   type ManagedReviewCandidateTurnKey,
 } from "../app-server/managed-review-candidate-ledger";
+import {
+  formatReviewOutputText,
+  parseReviewOutputText,
+} from "../../shared/review-output";
 import type { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
@@ -920,5 +926,248 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
     } finally {
       await registry.close();
     }
+  });
+
+  it("recovers kept candidate-ledger findings when final review JSON has a syntax error", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
+    });
+    let nextThreadNumber = 0;
+    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
+      threadId: `codex-thread-${++nextThreadNumber}`,
+    }));
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      acpAgentStore: new AcpAgentStore(stateDb),
+      acpSessionStore: new AcpSessionStore(stateDb),
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const events: Array<{ notification: { method: string; params: Record<string, unknown> } }> = [];
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event as unknown as { notification: { method: string; params: Record<string, unknown> } });
+    });
+
+    try {
+      const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
+      const review = await registry.startReview({
+        backend: "codex",
+        threadId: parent.threadId,
+        target: { type: "uncommittedChanges" },
+        runMode: "pwragent-sub-agent",
+      });
+
+      const callLedgerTool = async (
+        requestId: string,
+        tool: string,
+        args: Record<string, unknown>,
+      ) =>
+        (await codexClient.emitRequest({
+          method: "item/tool/call",
+          params: {
+            threadId: review.reviewThreadId,
+            turnId: review.turnId,
+            requestId,
+            callId: `call-${requestId}`,
+            namespace: PWRAGENT_TOOL_NAMESPACE,
+            tool,
+            arguments: args,
+          },
+        })) as { success: boolean };
+
+      expect(
+        (await callLedgerTool("r1", "record_review_candidate", {
+          file: "src/b.ts",
+          start_line: 20,
+          end_line: 24,
+          category: "parity",
+          summary: "Lower priority parity bug",
+          mechanism: "Live transcript drops line bounds.",
+        })).success,
+      ).toBe(true);
+      expect(
+        (await callLedgerTool("r2", "record_review_candidate", {
+          file: "/repo/src/a.ts",
+          start_line: 10,
+          end_line: 12,
+          category: "correctness",
+          summary: "Higher priority safety bug",
+          mechanism: "Merge runner skips neverMerge guard.",
+        })).success,
+      ).toBe(true);
+      expect(
+        (await callLedgerTool("r3", "record_review_candidate", {
+          file: "src/c.ts",
+          start_line: 5,
+          end_line: 5,
+          category: "standards",
+          summary: "Dropped nitpick",
+          mechanism: "Already guarded by caller.",
+        })).success,
+      ).toBe(true);
+      expect(
+        (await callLedgerTool("r4", "record_review_candidate", {
+          file: "src/d.ts",
+          start_line: 1,
+          end_line: 1,
+          category: "testing",
+          summary: "Unsettled pending candidate",
+          mechanism: "Never dispositioned.",
+        })).success,
+      ).toBe(true);
+
+      expect(
+        (await callLedgerTool("d1", "dispose_review_candidate", {
+          id: "C1",
+          disposition: "keep",
+          priority: 2,
+          reason: "Verified live/replay divergence.",
+        })).success,
+      ).toBe(true);
+      expect(
+        (await callLedgerTool("d2", "dispose_review_candidate", {
+          id: "C2",
+          disposition: "keep",
+          priority: 1,
+          reason: "Verified bypass path.",
+        })).success,
+      ).toBe(true);
+      expect(
+        (await callLedgerTool("d3", "dispose_review_candidate", {
+          id: "C3",
+          disposition: "drop",
+          reason: "Caller guard verified.",
+        })).success,
+      ).toBe(true);
+
+      // Emit malformed final JSON (unescaped quotes inside code snippet, matching real LLM output).
+      const malformedJson =
+        '{"findings":[{"title":"Broken","body":"Scans `["main", "master"]` directly"}],"overall_correctness":"patch is incorrect"}';
+      await codexClient.emit({
+        method: "item/completed",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          item: {
+            id: "assistant-final",
+            type: "agentMessage",
+            text: malformedJson,
+          },
+        },
+      });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          turn: { id: review.turnId, status: "completed", output: [] },
+        },
+      });
+
+      await vi.waitFor(() => {
+        const exited = events.find(
+          (e) =>
+            e.notification.method === "item/completed"
+            && e.notification.params.threadId === parent.threadId
+            && (e.notification.params.item as { type?: string } | undefined)?.type === "exitedReviewMode",
+        );
+        expect(exited).toBeDefined();
+        const item = exited!.notification.params.item as {
+          data?: {
+            reviewOutput?: {
+              overall_correctness: string;
+              findings: Array<{
+                title: string;
+                priority: number;
+                code_location: { absolute_file_path: string; line_range: { start: number; end: number } };
+              }>;
+            };
+          };
+        };
+        expect(item.data?.reviewOutput?.overall_correctness).toBe("patch is incorrect");
+        expect(item.data?.reviewOutput?.findings).toHaveLength(2);
+        expect(item.data?.reviewOutput?.findings[0]).toMatchObject({
+          title: "Higher priority safety bug",
+          priority: 1,
+          code_location: {
+            absolute_file_path: "/repo/src/a.ts",
+            line_range: { start: 10, end: 12 },
+          },
+        });
+        expect(item.data?.reviewOutput?.findings[1]).toMatchObject({
+          title: "Lower priority parity bug",
+          priority: 2,
+          code_location: {
+            absolute_file_path: "/repo/src/b.ts",
+            line_range: { start: 20, end: 24 },
+          },
+        });
+      });
+    expect(
+      registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
+    ).toBe(0);
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
+  });
+
+  it("property: buildReviewOutputFromCandidateLedger recovers only kept entries sorted stably by priority", () => {
+    const candidateArb = fc.record({
+      id: fc.string({ minLength: 1, maxLength: 6 }).map((s) => `C${s}`),
+      file: fc.oneof(
+        fc.constantFrom("src/a.ts", "packages/shared/b.ts"),
+        fc.constantFrom("/abs/x.ts", "/repo/sub/y.ts"),
+      ),
+      startLine: fc.integer({ min: 1, max: 500 }),
+      endSpan: fc.integer({ min: 0, max: 40 }),
+      category: categoryArb,
+      summary: nonEmptyTextArb,
+      mechanism: nonEmptyTextArb,
+      disposition: fc.constantFrom<"pending" | "keep" | "drop">("pending", "keep", "drop"),
+      priority: priorityArb,
+    });
+
+    fc.assert(
+      fc.property(fc.array(candidateArb, { maxLength: 15 }), (raw) => {
+        const candidates: ManagedReviewCandidate[] = raw.map((c, idx) => ({
+          id: `C${idx + 1}`,
+          file: c.file,
+          startLine: c.startLine,
+          endLine: c.startLine + c.endSpan,
+          category: c.category,
+          summary: c.summary,
+          mechanism: c.mechanism,
+          disposition: c.disposition,
+          ...(c.disposition === "keep" ? { priority: c.priority } : {}),
+        }));
+        const expectedKept = candidates.filter((c) => c.disposition === "keep");
+        const recovered = buildReviewOutputFromCandidateLedger(candidates, "/repo");
+
+        if (expectedKept.length === 0) {
+          expect(recovered).toBeUndefined();
+          return;
+        }
+
+        expect(recovered).toBeDefined();
+        expect(recovered!.overall_correctness).toBe("patch is incorrect");
+        expect(recovered!.findings).toHaveLength(expectedKept.length);
+        for (let i = 1; i < recovered!.findings.length; i += 1) {
+          expect(recovered!.findings[i]!.priority ?? 3).toBeGreaterThanOrEqual(
+            recovered!.findings[i - 1]!.priority ?? 3,
+          );
+        }
+        for (const finding of recovered!.findings) {
+          expect(finding.code_location.absolute_file_path.startsWith("/")).toBe(true);
+          expect(finding.code_location.line_range.end).toBeGreaterThanOrEqual(
+            finding.code_location.line_range.start,
+          );
+        }
+        const roundTripped = parseReviewOutputText(JSON.stringify(recovered));
+        expect(roundTripped?.findings).toHaveLength(expectedKept.length);
+        expect(formatReviewOutputText(recovered!)).toContain(recovered!.findings[0]!.title);
+      }),
+    );
   });
 });

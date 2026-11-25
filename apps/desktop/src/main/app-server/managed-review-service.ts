@@ -75,7 +75,11 @@ import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
 import { buildManagedReviewPrompt, managedReviewAcpRuntime } from "./managed-review";
-import { ManagedReviewCandidateLedger } from "./managed-review-candidate-ledger";
+import {
+  buildReviewOutputFromCandidateLedger,
+  ManagedReviewCandidateLedger,
+  type ManagedReviewCandidateListResult,
+} from "./managed-review-candidate-ledger";
 import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
 import { localMemberRole } from "../member-containment";
 import { prepareClaudeCodeReview, validateClaudeCodeReview } from "./claude-code-review-start";
@@ -253,9 +257,9 @@ export class ManagedReviewService {
     }
     if (!turnId) return;
     const turn = { backend: event.backend, threadId: notification.params.threadId, turnId };
-    const ledgerSummary = managedReview?.mode === "managed" ? this.candidateLedger.snapshot(turn) : undefined;
-    // Once terminal ingress has fenced the tools, only the counts are needed.
-    // Dispose before any card write or duplicate terminal can intervene.
+    const ledgerSnapshot = managedReview?.mode === "managed" ? this.candidateLedger.list(turn) : undefined;
+    // Once terminal ingress has fenced the tools, clone the ledger snapshot and
+    // dispose before any card write or duplicate terminal can intervene.
     this.candidateLedger.clearTurn(turn);
     await this.completeReviewSubAgent({
       ...turn,
@@ -270,12 +274,12 @@ export class ManagedReviewService {
         ...turn, error: String(error),
       });
     });
-    if (managedReview && ledgerSummary) {
+    if (managedReview && ledgerSnapshot) {
       await this.publishManagedReviewTerminal({
         method: notification.method,
         notification,
         record: managedReview,
-      }, ledgerSummary);
+      }, ledgerSnapshot);
     }
   }
 
@@ -1898,7 +1902,7 @@ export class ManagedReviewService {
       >;
       record: ReviewSubAgentRecord;
     },
-    ledgerSummary: { total: number; pending: number; keep: number; drop: number },
+    ledgerSnapshot: ManagedReviewCandidateListResult,
   ): Promise<void> {
     const completedAt =
       completedAtFromTerminalNotification(params.notification) ?? Date.now();
@@ -1912,7 +1916,14 @@ export class ManagedReviewService {
         >,
         completedItemOutput,
       );
-      const parsed = parseReviewOutputText(output);
+      const parsedOutput = parseReviewOutputText(output);
+      const recoveredFromLedger = !parsedOutput
+        ? buildReviewOutputFromCandidateLedger(
+            ledgerSnapshot.candidates,
+            params.record.context?.workspacePath,
+          )
+        : undefined;
+      const parsed = parsedOutput ?? recoveredFromLedger;
       const review = parsed
         ? formatReviewOutputText(parsed)
         : output?.trim() || "Review completed without output.";
@@ -1962,13 +1973,14 @@ export class ManagedReviewService {
         parentThreadId: params.record.parentThreadId,
         reviewThreadId: params.record.reviewThreadId,
         structured: Boolean(parsed),
+        ...(recoveredFromLedger ? { recoveredFromCandidateLedger: true } : {}),
         turnId: params.record.turnId,
-        ...(ledgerSummary.total > 0
+        ...(ledgerSnapshot.total > 0
           ? {
-              candidateLedgerTotal: ledgerSummary.total,
-              candidateLedgerKeep: ledgerSummary.keep,
-              candidateLedgerDrop: ledgerSummary.drop,
-              candidateLedgerPending: ledgerSummary.pending,
+              candidateLedgerTotal: ledgerSnapshot.total,
+              candidateLedgerKeep: ledgerSnapshot.counts.keep,
+              candidateLedgerDrop: ledgerSnapshot.counts.drop,
+              candidateLedgerPending: ledgerSnapshot.counts.pending,
             }
           : {}),
       });

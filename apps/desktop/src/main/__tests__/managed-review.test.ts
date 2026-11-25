@@ -98,7 +98,10 @@ describe("managed review", () => {
     expect(prompt).toContain("dispose_review_candidate");
     expect(prompt).toMatch(/pass 1/i);
     expect(prompt).toMatch(/pass 2/i);
+    expect(prompt).toMatch(/audit every changed production file systematically/i);
+    expect(prompt).toMatch(/do not stop exploring after finding your first one or two issues/i);
     expect(prompt).toMatch(/do not drop a concrete P2 or P3 defect/i);
+    expect(prompt).toMatch(/feature request, UX preference, or alternative-design suggestion/i);
     expect(prompt).toMatch(/if the core fix were reverted to the broken behavior/i);
     expect(prompt).toContain("Return only one JSON object");
   });

@@ -1,4 +1,8 @@
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import path from "node:path";
+import type {
+  AppServerBackendKind,
+  AppServerReviewOutput,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 
 export const MANAGED_REVIEW_CANDIDATE_CATEGORIES = [
@@ -416,4 +420,53 @@ export class ManagedReviewCandidateLedger {
   get activeTurnCount(): number {
     return this.turns.size;
   }
+}
+
+function resolveCandidateFilePath(file: string, cwd?: string): string {
+  if (!cwd || path.isAbsolute(file) || /^[A-Za-z]:[\\/]/.test(file)) {
+    return file;
+  }
+  return path.resolve(cwd, file);
+}
+
+/**
+ * Synthesize a structured review artifact from the `keep` entries of a turn's
+ * in-memory candidate ledger when the reviewer's final message fails JSON
+ * parsing (for example, an unescaped quote or invalid escape inside a long
+ * code snippet). Returns `undefined` when no candidate was marked `keep`.
+ */
+export function buildReviewOutputFromCandidateLedger(
+  candidates: readonly ManagedReviewCandidate[],
+  cwd?: string,
+): AppServerReviewOutput | undefined {
+  const kept = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(({ candidate }) => candidate.disposition === "keep");
+  if (kept.length === 0) {
+    return undefined;
+  }
+  kept.sort((a, b) => {
+    const prioDiff = (a.candidate.priority ?? 3) - (b.candidate.priority ?? 3);
+    return prioDiff !== 0 ? prioDiff : a.index - b.index;
+  });
+
+  const findings = kept.map(({ candidate }) => ({
+    title: candidate.summary,
+    body: candidate.mechanism,
+    confidence_score: 0.85,
+    priority: candidate.priority ?? 3,
+    code_location: {
+      absolute_file_path: resolveCandidateFilePath(candidate.file, cwd),
+      line_range: {
+        start: candidate.startLine,
+        end: Math.max(candidate.startLine, candidate.endLine),
+      },
+    },
+  }));
+
+  return {
+    findings,
+    overall_correctness: "patch is incorrect",
+    overall_explanation: `Recovered ${findings.length} kept ${findings.length === 1 ? "finding" : "findings"} from the managed review candidate ledger after malformed review JSON.`,
+  };
 }
