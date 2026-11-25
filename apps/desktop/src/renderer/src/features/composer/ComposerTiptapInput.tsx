@@ -18,7 +18,7 @@ import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-up
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
-import { Plugin, PluginKey, type Transaction } from "prosemirror-state";
+import { Plugin, PluginKey, TextSelection, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import {
   EditorContent,
@@ -67,6 +67,8 @@ import type {
   ComposerCommandChip,
   ComposerInputChangeMetadata,
   ComposerInputHandle,
+  ComposerReferenceSigil,
+  ComposerReferenceTrigger,
   ComposerSkillToken,
 } from "./ComposerInputTypes";
 
@@ -102,6 +104,7 @@ type ComposerTiptapInputProps = {
   onDrop?: (event: DragEvent<HTMLDivElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
+  onReferenceSelectionChange?: () => void;
   /**
    * The pointer entered a `$skill` chip. The chip is Tiptap DOM, not React,
    * so the host's hover card is anchored to the element handed over here.
@@ -2628,6 +2631,72 @@ function getSelectionDraftRange(
   };
 }
 
+function readReferenceTriggers(
+  editor: TiptapEditor,
+): ReturnType<ComposerInputHandle["getReferenceTriggers"]> {
+  const { $from } = editor.state.selection;
+  if (!$from.parent.inlineContent || $from.parent.type.spec.code) return {};
+
+  // Marks are presentation. Hard breaks, inline code and existing chips
+  // bound the scan, so text on opposite sides cannot form one reference.
+  let prefix = "";
+  $from.parent.nodesBetween(0, $from.parentOffset, (node, position) => {
+    prefix = node.isText && !node.marks.some((mark) => mark.type.spec.code)
+      ? prefix + node.text!.slice(0, $from.parentOffset - position)
+      : "";
+  });
+  const toDocumentRange = (trigger: ComposerReferenceTrigger | undefined) => trigger && {
+    start: $from.pos - prefix.length + trigger.start,
+    end: $from.pos,
+    query: trigger.query,
+  };
+  return {
+    "#": toDocumentRange(findHashReferenceTrigger(prefix, prefix.length)),
+    "@": toDocumentRange(findDirectoryReferenceTrigger(prefix, prefix.length)),
+  };
+}
+
+function replaceEditorReference(
+  editor: TiptapEditor,
+  sigil: ComposerReferenceSigil,
+  tokens: ComposerSkillToken[],
+): void {
+  const trigger = readReferenceTriggers(editor)[sigil];
+  if (tokens.length === 0 && !trigger) return;
+
+  const { from, to, $from, $to } = editor.state.selection;
+  const fence = [$from, $to].find((position) => position.parent.type.spec.code);
+  const start = trigger?.start ?? from;
+  const following = fence ? "" : $to.nodeAfter?.text ?? "";
+  const hasSpace = /^[^\S\r\n]/.test(following);
+  const addSpace = !hasSpace && !/^[\p{Pe}\p{Pf}]/u.test(following);
+  const nodes = tokens.flatMap((token, index) => [
+    ...(index > 0 ? [editor.schema.text(" ")] : []),
+    editor.schema.nodes.mention.create(getSkillMentionAttrs(token)),
+  ]);
+  if (tokens.length && addSpace) nodes.push(editor.schema.text(" "));
+
+  const transaction = closeHistory(editor.state.tr);
+  let caret = start;
+  if (fence && nodes.length > 0) {
+    // The picker can be opened inside a fence. Its inline chip belongs in
+    // a paragraph after the whole block, even if the operator selected code.
+    const paragraph = editor.schema.nodes.paragraph.create(null, nodes);
+    const afterFence = fence.after();
+    transaction.insert(afterFence, paragraph);
+    caret = afterFence + 1 + paragraph.content.size;
+  } else if (nodes.length > 0) {
+    transaction.replaceWith(start, to, nodes);
+    caret = transaction.mapping.map(to) + (hasSpace ? 1 : 0);
+  } else {
+    transaction.delete(start, from);
+  }
+  transaction.setSelection(TextSelection.create(transaction.doc, caret));
+  editor.view.dispatch(transaction);
+  closeEditorHistory(editor);
+  editor.commands.focus();
+}
+
 function insertMentionTokenAtSelection(params: {
   editor: TiptapEditor;
   readMode: TiptapReadMode;
@@ -2979,6 +3048,7 @@ export const ComposerTiptapInput = forwardRef<
   const [threadContextMenu, setThreadContextMenu] =
     useState<ComposerThreadContextMenuState>();
   const selectionIndexRef = useRef(props.value.length);
+  const referenceSelectionKeyRef = useRef("");
   const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
   const appliedSelectionRequestIdRef = useRef<string | undefined>(undefined);
@@ -3516,6 +3586,20 @@ export const ComposerTiptapInput = forwardRef<
         readMode,
       );
     },
+    onTransaction: ({ editor: nextEditor, transaction }) => {
+      const notify = propsRef.current.onReferenceSelectionChange;
+      if (!notify || (!transaction.docChanged && !transaction.selectionSet)) return;
+      const references = readReferenceTriggers(nextEditor);
+      const key = references["#"] || references["@"] ? JSON.stringify(references) : "";
+      if (key === referenceSelectionKeyRef.current) return;
+      referenceSelectionKeyRef.current = key;
+      // Normal document edits already rerender the host via onChange.
+      // Replacing a selection with identical text can set docChanged even
+      // though Tiptap sees equal documents and skips its update event.
+      if (!transaction.docChanged
+        || transaction.getMeta("preventUpdate")
+        || transaction.before.eq(nextEditor.state.doc)) notify();
+    },
   });
   const pullRequestTooltip = useComposerPullRequestHover(editor?.view.dom);
 
@@ -3953,11 +4037,17 @@ export const ComposerTiptapInput = forwardRef<
         editor?.commands.focus();
       }
     },
+    getReferenceTriggers: () => editor ? readReferenceTriggers(editor) : {},
     insertMentionToken: (token) => {
       if (!editor || propsRef.current.readOnly) {
         return false;
       }
       return insertMentionTokenAtSelection({ editor, readMode, token });
+    },
+    replaceReference: (sigil, tokens) => {
+      if (editor?.isEditable && !propsRef.current.readOnly) {
+        replaceEditorReference(editor, sigil, tokens);
+      }
     },
     get selectionEnd() {
       return editor

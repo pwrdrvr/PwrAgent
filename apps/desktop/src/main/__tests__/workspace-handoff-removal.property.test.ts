@@ -1,7 +1,6 @@
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
@@ -205,12 +204,23 @@ describe("workspace handoff source removal", () => {
     await checkHandoffRemoval([], { direction, strategy: "move-branch", refuseDetachment: true });
   });
 
-  it("removes a worktree only when no other active thread uses it", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.array(fc.constantFrom<OtherThreadWorkspace>("source", "descendant", "unrelated"), { maxLength: 4 }),
-      fc.constantFrom("worktree-to-worktree" as const, "worktree-to-local" as const),
-      fc.constantFrom("paged" as const, "aggregate" as const),
-      async (workspaces, direction, inventory) => await checkHandoffRemoval(workspaces, { direction, inventory }),
-    ), { numRuns: 12 });
-  }, 30_000);
+  // One real Git fixture per test. These cases distinguish each kind of
+  // workspace use, including a blocker after an unrelated thread.
+  const workspaceCases: { scenario: string; workspaces: OtherThreadWorkspace[] }[] = [
+    { scenario: "no other thread", workspaces: [] },
+    { scenario: "an unrelated thread", workspaces: ["unrelated"] },
+    { scenario: "a thread at the worktree root", workspaces: ["source"] },
+    { scenario: "a descendant thread after an unrelated thread", workspaces: ["unrelated", "descendant"] },
+  ];
+  const removalCases = (["worktree-to-worktree", "worktree-to-local"] as const).flatMap((direction) =>
+    (["paged", "aggregate"] as const).flatMap((inventory) =>
+      workspaceCases.map((workspaceCase) => ({ ...workspaceCase, direction, inventory })),
+    ),
+  );
+  it.each(removalCases)(
+    "checks removal with $scenario during $direction using $inventory inventory",
+    async ({ workspaces, direction, inventory }) => {
+      await checkHandoffRemoval(workspaces, { direction, inventory });
+    },
+  );
 });
