@@ -1,6 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { unwrapCommandText } from "../command-action-labels";
+import { commandTitleMatchesInvocation, unwrapCommandText } from "../command-action-labels";
 
 const posixShell = fc.constantFrom("sh", "bash", "zsh", "/bin/sh", "/bin/bash", "/bin/zsh");
 
@@ -68,10 +68,28 @@ describe("unwrapCommandText", () => {
       fc.constantFrom("-c", "-lc"),
       fc.constantFrom("", "'echo one'", "'echo one'word"),
       fc.constantFrom("$'\\n'", '$"localized"'),
+      fc.integer({ min: 0, max: 3 }),
       fc.constantFrom("", "'echo two'", " _ 'arg'"),
-      (shell, option, prefix, quote, suffix) => {
-        const command = `${shell} ${option} ${prefix}${quote}${suffix}`;
+      (shell, option, prefix, quote, continuations, suffix) => {
+        const resumedQuote = quote[0] + "\\\n".repeat(continuations) + quote.slice(1);
+        const command = `${shell} ${option} ${prefix}${resumedQuote}${suffix}`;
         expect(unwrapCommandText(command)).toBe(command);
+      },
+    ));
+  });
+
+  it("recognizes joined script echoes with or without the outer shell escapes", () => {
+    fc.assert(fc.property(
+      posixShell,
+      fc.constantFrom("-c", "-lc"),
+      fc.constantFrom("printf %s ", "echo "),
+      fc.constantFrom("a b", "hello world"),
+      fc.constantFrom("", " _ 'arg'"),
+      (shell, option, prefix, text, args) => {
+        const escaped = `\\"${text}\\"`;
+        const command = `${shell} ${option} '${prefix}'"${escaped}"${args}`;
+        expect(commandTitleMatchesInvocation(prefix + escaped, command)).toBe(true);
+        expect(commandTitleMatchesInvocation(`${prefix}"${text}"`, command)).toBe(true);
       },
     ));
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatSearchCommandActionLabel, unwrapCommandText } from "../command-action-labels";
+import { commandTitleMatchesInvocation, formatSearchCommandActionLabel, unwrapCommandText } from "../command-action-labels";
 
 describe("formatSearchCommandActionLabel", () => {
   it("prefers the search query over its root path", () => {
@@ -72,9 +72,15 @@ describe("unwrapCommandText", () => {
 
   it.each([
     String.raw`bash -c $'\n'`,
+    "bash -c $\\\n'\\n'",
     String.raw`bash -c 'echo one'$'\n''echo two'`,
     'sh -c "pwd\n  pwd',
   ])("keeps the full invocation when the script cannot be decoded in %j", (command) => {
     expect(unwrapCommandText(command)).toBe(command);
   });
+});
+
+it("matches a joined script title that retains its outer double-quote escapes", () => {
+  const command = String.raw`sh -c 'printf %s '"\"a b\""`;
+  expect(commandTitleMatchesInvocation(String.raw`printf %s \"a b\"`, command)).toBe(true);
 });

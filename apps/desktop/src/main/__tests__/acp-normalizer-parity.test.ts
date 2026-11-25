@@ -82,7 +82,12 @@ function canon(replay: AppServerThreadReplay): unknown {
         };
       }
       if (entry.type === "plan") {
-        return { type: "plan", steps: entry.steps };
+        return {
+          type: "plan",
+          explanation: entry.explanation,
+          markdown: entry.markdown,
+          steps: entry.steps,
+        };
       }
       return { type: entry.type };
     }),
@@ -138,6 +143,10 @@ describe("KTD-P3 normalizer parity", () => {
   const longInvocation = `bash -c '${longScriptEcho}' _ 'hello'`;
   const adjacentQuoteInvocation = "bash -c 'printf \"%s\\n\" '\\''hello'\\'''";
   const adjacentQuoteInvocationWithArg = `${adjacentQuoteInvocation} _ 'arg'`;
+  const mixedQuoteInvocation = String.raw`bash -c 'printf %s '"\"a b\""`;
+  const ansiQuoteInvocation = String.raw`bash -c 'echo one'$'\n''echo two'`;
+  const continuedAnsiInvocation = "bash -c 'echo one'$\\\n'\\n''echo two'";
+  const continuedLocaleInvocation = "bash -c 'echo '$\\\n\"translated\"";
 
   it.each([
     {
@@ -248,6 +257,50 @@ describe("KTD-P3 normalizer parity", () => {
       command: adjacentQuoteInvocationWithArg,
       label: "bash -c 'printf \"%s\\n\" '\\''hello'\\''' _ 'arg'",
     },
+    {
+      scenario: "escaped double quotes in joined script fragments",
+      fields: { title: "Bash", command: mixedQuoteInvocation },
+      command: mixedQuoteInvocation,
+      label: 'printf %s "a b"',
+    },
+    {
+      scenario: "an ANSI-C quote in a Bash script word",
+      fields: { title: "Bash", command: ansiQuoteInvocation },
+      command: ansiQuoteInvocation,
+      label: String.raw`bash -c 'echo one'$'\n''echo two'`,
+    },
+    {
+      scenario: "an ANSI-C quote after a Bash line continuation",
+      fields: { title: "Bash", command: continuedAnsiInvocation },
+      command: continuedAnsiInvocation,
+      label: String.raw`bash -c 'echo one'$\ '\n''echo two'`,
+    },
+    {
+      scenario: "a locale quote after a Bash line continuation",
+      fields: { title: "Bash", command: continuedLocaleInvocation },
+      command: continuedLocaleInvocation,
+      label: String.raw`bash -c 'echo '$\ "translated"`,
+    },
+    {
+      scenario: "an escaped dollar before an adjacent quoted fragment",
+      fields: { title: "Bash", command: String.raw`bash -c 'echo '\$'HOME'` },
+      command: String.raw`bash -c 'echo '\$'HOME'`,
+      label: "echo $HOME",
+    },
+    ...['printf %s "a b"', String.raw`printf %s \"a b\"`].map((title) => ({
+      scenario: `a completion that echoes ${title} after an earlier summary`,
+      fields: { title: "Bash", rawInput: { command: mixedQuoteInvocation, toolSummary: "Print the fixture" } },
+      completionFields: { title },
+      command: mixedQuoteInvocation,
+      label: "Print the fixture",
+    })),
+    {
+      scenario: "a completion that first supplies the invocation and echoes its outer escapes",
+      fields: { title: "Bash" },
+      completionFields: { title: String.raw`printf %s \"a b\"`, command: mixedQuoteInvocation },
+      command: mixedQuoteInvocation,
+      label: 'printf %s "a b"',
+    },
   ])("shell label parity for $scenario", ({ fields, completionFields, command, label }) => {
     const call = { toolCallId: "fixture-command", kind: "execute", ...fields };
     const updates: Update[] = [
@@ -281,6 +334,38 @@ describe("KTD-P3 normalizer parity", () => {
       { kind: "tool_call", id: "tool-1", title: "Read package.json", status: "completed", locations: [{ path: "package.json" }] },
     ];
     expect(canon(runKit(updates))).toEqual(canon(runInTree(updates)));
+  });
+
+  it("keeps plan text and step statuses through a plan update", () => {
+    const updates: Update[] = [
+      { sessionUpdate: "plan", planId: "checkout-plan", steps: ["Check sample files"] },
+      {
+        session_update: "plan",
+        planId: "checkout-plan",
+        explanation: "Verify the checkout",
+        markdown: "- [x] Check sample files\n- [ ] Print the fixture",
+        steps: [
+          { content: "Check sample files", status: "completed" },
+          { step: "Print the fixture", status: "in_progress" },
+          "Record the result",
+        ],
+      },
+    ];
+    const kit = runKit(updates);
+    expect(kit.entries).toEqual([
+      {
+        type: "plan",
+        id: "checkout-plan",
+        explanation: "Verify the checkout",
+        markdown: "- [x] Check sample files\n- [ ] Print the fixture",
+        steps: [
+          { step: "Check sample files", status: "completed" },
+          { step: "Print the fixture", status: "in_progress" },
+          { step: "Record the result", status: "pending" },
+        ],
+      },
+    ]);
+    expect(canon(kit)).toEqual(canon(runInTree(updates)));
   });
 
   // Real captured transcripts from the smoke eval (redacted), one per ACP

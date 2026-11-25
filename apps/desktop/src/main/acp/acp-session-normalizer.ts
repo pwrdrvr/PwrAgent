@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { AcpSessionNormalizer, defaultQuirks, toolCallFromUpdate } from "@pwrdrvr/agent-acp";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadCommandDetail,
@@ -6,7 +7,6 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessage,
   AppServerThreadMessagePart,
-  AppServerThreadPlanEntry,
   AppServerThreadReplay,
   AppServerThreadStatus,
   AppServerThreadTurnStatus,
@@ -47,6 +47,8 @@ import {
   readAcpFileRead,
 } from "./acp-file-read.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
+import { reduceNormalizedThread } from "./normalized-thread-reducer.js";
+import { normalizedThreadToReplay, normalizedToolCallToReplayDetail } from "./normalized-thread-to-replay.js";
 
 export type AcpSessionUpdate = {
   sessionId: string;
@@ -297,6 +299,7 @@ function isSettledTurnStatus(
 }
 
 export class AcpSessionReplayNormalizer {
+  private readonly kitPlanNormalizer = new AcpSessionNormalizer({ quirks: defaultQuirks() });
   private entries: AppServerThreadEntry[] = [];
   private messages: AppServerThreadMessage[] = [];
   // Arrays own replay order; indexes refer to slots, not entry objects (turn
@@ -974,17 +977,15 @@ export class AcpSessionReplayNormalizer {
   }
 
   private upsertPlan(update: AcpSessionUpdate, createdAt: number): void {
-    const id = readString(update.update, "planId") ?? `plan:${update.sessionId}`;
-    const steps = readPlanSteps(update.update);
-    const plan: AppServerThreadPlanEntry = {
-      type: "plan",
-      id,
-      createdAt,
-      explanation: readString(update.update, "explanation"),
-      markdown: readString(update.update, "markdown"),
-      steps,
-    };
-    this.upsertEntry(plan);
+    const { sessionId, update: payload } = update;
+    const { events } = this.kitPlanNormalizer.apply(payload, {
+      threadId: sessionId,
+      turnId: this.currentTurnId ?? sessionId,
+    });
+    const [plan] = normalizedThreadToReplay(reduceNormalizedThread(events, sessionId)).entries;
+    if (plan?.type === "plan") {
+      this.upsertEntry({ ...plan, createdAt });
+    }
   }
 
   private upsertToolActivity(
@@ -1781,33 +1782,6 @@ export function readAcpContentText(value: unknown): string | undefined {
   );
 }
 
-function readPlanSteps(record: Record<string, unknown>): AppServerThreadPlanEntry["steps"] {
-  const steps = Array.isArray(record.steps) ? record.steps : [];
-  return steps.flatMap((step) => {
-    if (typeof step === "string") {
-      return [{ step, status: "pending" as const }];
-    }
-    if (!step || typeof step !== "object" || Array.isArray(step)) {
-      return [];
-    }
-    const stepRecord = step as Record<string, unknown>;
-    const text = readString(stepRecord, "step") ?? readString(stepRecord, "content");
-    if (!text) {
-      return [];
-    }
-    const status = readString(stepRecord, "status");
-    return [
-      {
-        step: text,
-        status:
-          status === "in_progress" || status === "completed"
-            ? status
-            : "pending",
-      },
-    ];
-  });
-}
-
 function toolActivity(
   update: AcpSessionUpdate,
   kind: string,
@@ -1952,17 +1926,27 @@ function toolActivity(
     providerTool?.label && sameLabel(titleCandidate, providerTool.name)
       ? providerTool.label
       : titleCandidate;
+  const formatAsCommand = !fileRead && !webFetchUrl && displayCommand
+    && (
+      isGenericShellToolTitle(labelCandidate)
+      || (followsTitleScript && isGenericActivityLabel(labelCandidate))
+      || commandTitleMatchesInvocation(labelCandidate, displayCommand)
+    );
+  // PwrAgent still owns provider-specific command extraction and completion
+  // merges. Give the kit the explicit shell invocation after title selection.
+  const kitShell = formatAsCommand && rawCommand
+    ? normalizedToolCallToReplayDetail(toolCallFromUpdate({
+        kind: "execute",
+        title: "Bash",
+        command: rawCommand,
+      }, kind, update.sessionId))
+    : undefined;
   const label = fileRead
     ? fileRead.label
     : webFetchUrl
       ? `Fetched ${webFetchUrl}`
-      : displayCommand
-          && (
-            isGenericShellToolTitle(labelCandidate)
-            || (followsTitleScript && isGenericActivityLabel(labelCandidate))
-            || commandTitleMatchesInvocation(labelCandidate, displayCommand)
-          )
-        ? formatCommandLabel(displayCommand)
+      : formatAsCommand
+        ? kitShell?.label ?? formatCommandLabel(displayCommand)
         : labelCandidate;
   const status = readToolActivityStatus(update.update);
   const path =
@@ -1992,8 +1976,8 @@ function toolActivity(
         command:
           displayCommand || output !== undefined || exitCode !== undefined
             ? {
-                displayCommand: displayCommand ?? label,
-                rawCommand: rawCommand ?? mcpToolName,
+                displayCommand: kitShell?.command?.displayCommand ?? displayCommand ?? label,
+                rawCommand: kitShell?.command?.rawCommand ?? rawCommand ?? mcpToolName,
                 ...(invocation && !rawCommand ? { source: "tool" as const } : {}),
                 output,
                 exitCode,

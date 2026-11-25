@@ -4,12 +4,9 @@
  * `NormalizedThread` — the accumulation step agent-core leaves to the consumer
  * (it ships `createEmptyThread` + `mergeToolCall` primitives but no reducer).
  *
- * This is a Phase B artifact: the renderer/store needs exactly this fold to turn
- * the kit's delta events into a thread view. For B1 (KTD-P3) it lets us compare
- * the kit pipeline against PwrAgent's in-tree `AcpSessionReplayNormalizer`
- * (which already returns a coalesced snapshot) — see
- * `normalized-thread-to-replay.ts` for the adapter to the legacy
- * `AppServerThreadReplay` shape and the parity test that asserts they agree.
+ * Production replay folds kit plan updates here. The KTD-P3 tests also use
+ * this reducer to compare complete kit event streams with the in-tree replay
+ * through `normalized-thread-to-replay.ts`.
  *
  * Scope note (B1 increment 1): messages (assistant text via deltas + finalized
  * `agent_message`), tool-call activities (merged), plans, and turn/thread
