@@ -4278,6 +4278,7 @@ describe("DesktopBackendRegistry", () => {
       const methods = emittedEvents
         .filter((event) => (event.notification.params as { turnId?: unknown }).turnId === started.turnId)
         .map((event) => event.notification.method);
+      expect(methods).toContain("turn/started");
       expect(methods.indexOf("item/completed")).toBeGreaterThan(methods.indexOf("turn/started"));
       expect(emittedEvents).toContainEqual(expect.objectContaining({
         backend: acpBackendId,
@@ -4291,6 +4292,7 @@ describe("DesktopBackendRegistry", () => {
               type: "userMessage",
               text: started.prompt,
               content: started.parts,
+              createdAt: expect.any(Number),
             },
           },
         },

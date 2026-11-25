@@ -6479,6 +6479,7 @@ export class DesktopBackendRegistry {
     });
 
     let result: Awaited<ReturnType<typeof client.startPrompt>>;
+    const promptSentAt = Date.now();
     try {
       result = await client.startPrompt({
         sessionId: params.threadId,
@@ -6523,6 +6524,8 @@ export class DesktopBackendRegistry {
     // returns; held back by the publish, a fast child's terminal arrived
     // first and the parent turn never ended. The prompt is already
     // dispatched, so a failed publish is logged and the replay still holds it.
+    // The agent's first replies can reach the window before this copy, so it
+    // carries the send time and still draws above them.
     void this.emit({
       backend: params.backend,
       notification: {
@@ -6535,6 +6538,7 @@ export class DesktopBackendRegistry {
             type: "userMessage",
             text: promptPayload.prompt,
             ...(promptPayload.parts?.length ? { content: promptPayload.parts } : {}),
+            createdAt: promptSentAt,
           },
         },
       },

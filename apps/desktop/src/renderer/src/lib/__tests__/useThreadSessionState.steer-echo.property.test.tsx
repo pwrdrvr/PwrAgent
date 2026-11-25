@@ -278,3 +278,29 @@ it("keeps an Antigravity prompt when a steer lands between two replies", async (
     ],
   });
 });
+
+it("draws an Antigravity prompt above a reply that reached the window first", async () => {
+  // The owner publishes the prompt's copy after the start call returns, so
+  // the agent's first reply can arrive ahead of it. The copy carries the
+  // send time, which places it above that reply.
+  const real = await mount("acp");
+  // A reply follows its prompt by at least one model round trip.
+  const sentAt = Date.now() - 1_000;
+  await act(async () => {
+    real.emit("turn/started", { turn: { id: SENT_TURN, status: "inProgress" } });
+    real.result.current.setActiveTurnId(SENT_TURN);
+    real.emit("item/completed", {
+      turnId: SENT_TURN,
+      item: { id: `assistant:${SENT_TURN}:0`, type: "agentMessage", text: "Reading files", phase: "commentary" },
+    });
+  });
+  await act(async () => {
+    real.emit("item/completed", {
+      turnId: SENT_TURN,
+      item: { id: PROMPT_ID, type: "userMessage", text: "ship it", createdAt: sentAt },
+    });
+  });
+  const ids = real.result.current.entries.map((row) => row.id);
+  expect(ids.slice(ids.indexOf("earlier-answer") + 1)).toEqual([PROMPT_ID, `assistant:${SENT_TURN}:0`]);
+  real.unmount();
+});
