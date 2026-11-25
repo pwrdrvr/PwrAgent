@@ -346,6 +346,18 @@ it("shows a typed director message in the transcript, and keeps a failed one in 
   expect(screen.getByRole("log", { name: "Voice transcript" })).not.toHaveTextContent("Sample second link");
   expect(f.owner.getView().status).toBe("listening");
   expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+
+  // Two quick sends that both fail: neither message is lost.
+  let rejectFirst!: (error: Error) => void;
+  vi.mocked(f.api.sendNativeVoiceText)
+    .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
+    .mockRejectedValueOnce(new Error("Request timed out."));
+  fireEvent.change(input, { target: { value: "Sample third link" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  fireEvent.change(input, { target: { value: "Sample fourth link" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); });
+  await act(async () => { rejectFirst(new Error("Request timed out.")); });
+  expect(input).toHaveValue("Sample fourth link Sample third link");
   await act(async () => { await f.owner.stop(); });
 });
 

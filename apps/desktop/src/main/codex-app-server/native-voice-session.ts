@@ -2,7 +2,7 @@ import { cameraCueText, type VoiceCameraCue } from "../../shared/native-voice-ca
 import type { NativeVoiceEvent, NativeVoiceStart, NativeVoiceTarget, NativeVoiceText } from "../../shared/native-voice";
 import { getMainLogger } from "../log";
 import { describeNativeVoiceAction, type NativeVoiceBackend, type NativeVoiceNotification } from "./native-voice-protocol";
-import { cameraStatusText, NATIVE_VOICE_PROMPTS, typedMessageText } from "./native-voice-prompts";
+import { cameraStatusText, NATIVE_VOICE_PROMPTS, typedMessageParts } from "./native-voice-prompts";
 
 export { NATIVE_VOICE_PROMPTS } from "./native-voice-prompts";
 
@@ -225,9 +225,14 @@ export class NativeVoiceSessionManager {
       throw new Error("No voice session is open in this window.");
     }
     await session.start;
-    if (session.cancelled) return;
+    // Resolving here would show the line as said; the voice never heard it.
+    const backend = session.backend;
+    if (session.cancelled || !backend) throw new Error("Voice ended before the message was sent.");
     try {
-      await session.backend?.text(session.request.threadId, typedMessageText(request.text));
+      // In order: the voice reads numbered parts as one message.
+      for (const part of typedMessageParts(request.text)) {
+        await backend.text(session.request.threadId, part);
+      }
     } catch (error) {
       log.warn("typed voice message was not accepted", {
         threadId: session.request.threadId,

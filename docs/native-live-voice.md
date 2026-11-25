@@ -238,13 +238,17 @@ voice.
 **Message voice** and **Message director** send typed or pasted text with
 `thread/realtime/appendText`. A v3 session receives it as appended context with
 no speaker, so main labels it `[Typed message]`, and the prompt tells the voice
-to answer that label as the operator's next turn. When the voice delegates, the
+to answer that label as the operator's next turn. Codex cuts a v3 append over
+500 bytes into unlabeled pieces, so main splits a longer message itself, at
+whitespace where it can, into appends labeled `[Typed message 1/3]` and so on,
+sent in order. If the session ends before the message is sent, the send fails
+rather than appearing as said. When the voice delegates, the
 prompt tells it to pass the typed text through verbatim, including links.
 Codex reports transcripts only for speech, so once the RPC is accepted, the
 renderer adds the line to the transcript as the operator's. The line sits where
 it was sent, even when speech arrived while the RPC was in flight. A send that
-fails does not end the session. The text returns to the field with **Not sent:**
-and the reason, and main logs the failure with the message's length only.
+fails does not end the session. The text returns to the field, after anything
+already there, with **Not sent:** and the reason, and main logs the failure with the message's length only.
 
 A voice failure in either mode is an ordinary app notice titled **Live voice**,
 raised through the notice library. The voice controls clear as the notice

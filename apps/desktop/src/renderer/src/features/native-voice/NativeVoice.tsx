@@ -317,12 +317,12 @@ export function VoiceTextInput({ controller, recipient = "voice", sendLabel = "S
     if (!message) return;
     setText("");
     setError(undefined);
-    // A message that did not reach the voice comes back to the field, unless
-    // the operator has started another.
+    // A message that did not reach the voice comes back to the field,
+    // after anything already there, so no failed message is lost.
     void controller.text(message).then((failure) => {
       if (failure === undefined) return;
       setError(`Not sent: ${failure}`);
-      setText((current) => current || message);
+      setText((current) => current ? `${current} ${message}` : message);
     });
   };
   return (

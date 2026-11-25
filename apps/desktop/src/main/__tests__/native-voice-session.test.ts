@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn() }));
 vi.mock("../log", () => ({ getMainLogger: () => log }));
@@ -297,6 +298,57 @@ describe("native voice stop causes", () => {
     await owner.manager.start(1, owner.request, owner.emit);
     await owner.manager.stopOwner(1, "window-navigated");
     expect(stopped().at(-1)).toMatchObject({ cause: "window-navigated" });
+  });
+
+  // Codex cuts a v3 context append over 500 bytes into unlabeled pieces, so
+  // a pasted log reached the voice with only its first 500 bytes marked.
+  it("sends any typed message as labeled appends Codex will not cut, that rejoin to the message", async () => {
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    const bytes = (text: string) => new TextEncoder().encode(text).length;
+    await fc.assert(fc.asyncProperty(
+      // `size: "max"`: by default fast-check keeps strings short, under the 500-byte cut.
+      fc.oneof(
+        fc.string({ maxLength: 8000, size: "max" }),
+        fc.string({ unit: "grapheme", maxLength: 3000, size: "max" }),
+        fc.lorem({ maxCount: 400, size: "max" }),
+        fc.string({ maxLength: 40 }),
+      ),
+      async (text) => {
+        vi.mocked(f.backend.text).mockClear();
+        await f.manager.text(1, { sessionId: f.request.sessionId, text });
+        const sent = vi.mocked(f.backend.text).mock.calls.map(([threadId, part]) => {
+          expect(threadId).toBe(f.request.threadId);
+          return part;
+        });
+        for (const part of sent) expect(bytes(part)).toBeLessThanOrEqual(500);
+        if (sent.length === 1) {
+          expect(sent[0]).toBe(`[Typed message] ${text}`);
+          return;
+        }
+        const bodies = sent.map((part, index) => {
+          const label = `[Typed message ${index + 1}/${sent.length}] `;
+          expect(part.startsWith(label)).toBe(true);
+          return part.slice(label.length);
+        });
+        expect(bodies.join("")).toBe(text);
+      },
+    ), { numRuns: 150 });
+    await f.manager.stop(1, f.request);
+  });
+
+  it("refuses a typed message the voice never received instead of reporting it sent", async () => {
+    const f = fixture();
+    const acquired = deferred<NativeVoiceBackend>();
+    f.acquire.mockReturnValueOnce(acquired.promise);
+    const start = f.manager.start(1, f.request, f.emit);
+    const sent = f.manager.text(1, { sessionId: f.request.sessionId, text: "Sample message." });
+    const stop = f.manager.stop(1, f.request, "backend-closed");
+    acquired.resolve(f.backend);
+    await start.catch(() => undefined);
+    await expect(sent).rejects.toThrow("Voice ended before the message was sent.");
+    await stop;
+    expect(f.backend.text).not.toHaveBeenCalled();
   });
 
   it("logs a refused typed message without its text and keeps the session open", async () => {

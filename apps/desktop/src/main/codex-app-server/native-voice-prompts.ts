@@ -9,7 +9,7 @@ const CONVERSATION_POLICY = [
   "Generate <|SpawnThinking|> when a request needs a backend capability, careful reasoning, or changes work already requested.",
   "Do not generate <|SpawnThinking|> for a greeting, brief clarification, an answer available in the current conversation, or a question about camera status or camera cues. Answer these yourself from your live session context.",
   "For backend actions, wait for a verified backend result before reporting success. Do not infer a backend action from a camera cue.",
-  "Typed messages: the operator can type or paste instead of speaking, often with the microphone muted. Each arrives as a [Typed message] update. It is the operator's own next turn: answer it as you would their speech. When the request needs the backend, pass the typed text to it word for word, links and error text included; never ask the operator to repeat or paste what a [Typed message] already holds.",
+  "Typed messages: the operator can type or paste instead of speaking, often with the microphone muted. Each arrives as a [Typed message] update. It is the operator's own next turn: answer it as you would their speech. When the request needs the backend, pass the typed text to it word for word, links and error text included; never ask the operator to repeat or paste what a [Typed message] already holds. A long one arrives as numbered parts, [Typed message 1/3] and so on: read the parts together as one message.",
 ].join("\n");
 
 const CAMERA_POLICY = [
@@ -39,12 +39,41 @@ export const NATIVE_VOICE_PROMPTS = {
   ].join("\n\n"),
 } satisfies Record<NativeVoiceMode, string>;
 
+/** Codex splits a v3 context append longer than this into separate appends. */
+const CONTEXT_APPEND_MAX_BYTES = 500;
+/** Room for the longest part label, `[Typed message 99/99] `, with margin. */
+const PART_LABEL_BYTES = 32;
+const utf8Bytes = (text: string) => new TextEncoder().encode(text).length;
+
 /**
  * Typed text reaches a v3 session as appended context, without a speaker, so
  * the voice cannot tell it from a status update unless the text says so.
+ * Codex cuts an append over 500 bytes into unlabeled pieces, so a long
+ * message is split here instead, at whitespace where it can be, and each
+ * part carries its own label.
  */
-export function typedMessageText(text: string): string {
-  return `[Typed message] ${text}`;
+export function typedMessageParts(text: string): string[] {
+  const whole = `[Typed message] ${text}`;
+  if (utf8Bytes(whole) <= CONTEXT_APPEND_MAX_BYTES) return [whole];
+  const budget = CONTEXT_APPEND_MAX_BYTES - PART_LABEL_BYTES;
+  const bodies: string[] = [];
+  let rest = text;
+  while (rest) {
+    let cut = 0;
+    let bytes = 0;
+    let lastSpace = -1;
+    for (const char of rest) {
+      const size = utf8Bytes(char);
+      if (bytes + size > budget) break;
+      bytes += size;
+      cut += char.length;
+      if (/\s/.test(char)) lastSpace = cut;
+    }
+    if (cut < rest.length && lastSpace > cut / 2) cut = lastSpace;
+    bodies.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  return bodies.map((body, index) => `[Typed message ${index + 1}/${bodies.length}] ${body}`);
 }
 
 /** A toggle is context even when no frame ever passes the confidence filter. */
