@@ -2282,6 +2282,42 @@ describe("app server ipc", () => {
     }
   });
 
+  it("orders GitLab observations individually and writes accepted rows together", async () => {
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const service = appServerService as unknown as {
+      prStatusRegistry: Map<string, { pr: PrSummary; fetchedAt: number }>;
+      applyPolledPrStatuses: (prs: PrSummary[], fallback: number, timestamps: ReadonlyMap<string, number>) => Promise<string[]>;
+      handlePrAutoDispatchSnapshots: () => Promise<void>;
+      publishPullRequestStatusUpdates: () => Promise<void>;
+      getOverlayStore: () => { writePrStatusCacheEntries: () => Promise<void> };
+    };
+    const prKey = (number: number) => `gitlab.com/fixture/project#${number}`;
+    const rows = [1, 2, 3].map((number): PrSummary => ({
+      provider: "gitlab.com", org: "fixture", repo: "project", number,
+      url: `https://gitlab.com/fixture/project/-/merge_requests/${number}`, state: "passing",
+    }));
+    const registry = service.prStatusRegistry;
+    service.prStatusRegistry = new Map(rows.map((pr) => [prKey(pr.number), {
+      pr: { ...pr, state: "pending" }, fetchedAt: 20,
+    }]));
+    const writePrStatusCacheEntries = vi.fn(async () => {});
+    const cache = vi.spyOn(service, "getOverlayStore").mockReturnValue({ writePrStatusCacheEntries });
+    const automation = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+    const publish = vi.spyOn(service, "publishPullRequestStatusUpdates").mockResolvedValue(undefined);
+    try {
+      const atByKey = new Map([[prKey(1), 15], [prKey(2), 25], [prKey(3), 30]]);
+      expect(await service.applyPolledPrStatuses(rows, 10, atByKey)).toEqual([prKey(2), prKey(3)]);
+      expect(service.prStatusRegistry.get(prKey(1))).toMatchObject({ fetchedAt: 20, pr: { state: "pending" } });
+      expect(writePrStatusCacheEntries).toHaveBeenCalledExactlyOnceWith([
+        { provider: "gitlab.com", prKey: prKey(2), fetchedAt: 25, pr: expect.objectContaining(rows[1]!) },
+        { provider: "gitlab.com", prKey: prKey(3), fetchedAt: 30, pr: expect.objectContaining(rows[2]!) },
+      ]);
+    } finally {
+      cache.mockRestore(); automation.mockRestore(); publish.mockRestore();
+      service.prStatusRegistry = registry;
+    }
+  });
+
   it("does not publish unchanged directory Git probes", async () => {
     registerAppServerIpcHandlers();
     const writer = setDirectoryGitStatusWriter.mock.calls.at(-1)?.[0];

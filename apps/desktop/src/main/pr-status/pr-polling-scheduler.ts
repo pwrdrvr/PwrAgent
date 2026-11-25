@@ -6,6 +6,7 @@ import {
   GITHUB_RECONNECT_DEDUP_MS,
 } from "./github-graphql-client";
 import { isTerminalPullRequest } from "./pr-derivations";
+import type { GitLabPollRequest } from "./gitlab-pr-fetcher";
 
 const schedulerLog = getMainLogger("pwragent:pr-poller");
 
@@ -21,11 +22,9 @@ const schedulerLog = getMainLogger("pwragent:pr-poller");
  * AppServerService — that keeps it unit-testable without booting the app, and
  * keeps the module graph acyclic.
  *
- * Budget shape: one admitted GraphQL batch covers up to `BATCH_SIZE` PRs
- * across arbitrary repos. PRs with more than 100 status contexts can require
- * paginated follow-ups, but those are coalesced per page and stop as soon as a
- * running check is found. GitLab uses singleton batches: each MR is a separate
- * REST request, and its transport budgets any additional verification reads.
+ * GitHub batches across repositories. GitLab batches per target project and
+ * takes its first token at transport admission. Additional pages and
+ * verification reads spend their own tokens.
  */
 
 /**
@@ -81,9 +80,7 @@ const HIDDEN_WINDOW_CADENCE_MULTIPLIER = 4;
 
 const TICK_INTERVAL_MS = 15_000;
 /**
- * Cap requests per tick. Bounds concurrency by construction (the batches below
- * this cap run together) and spreads a large backlog across ticks instead of
- * bursting it all at once.
+ * Cap initial batches per tick. This spreads a large backlog across ticks.
  */
 const MAX_BATCHES_PER_TICK = 3;
 
@@ -101,12 +98,12 @@ export type PrPollingSchedulerDeps = {
   isWindowVisible: () => boolean;
   /** Global scheduled-fetch ceiling. One token per REQUEST, not per PR. */
   tryTakeToken: (targets?: PrPollTarget[]) => boolean;
-  fetchPullRequests: (refs: PrRef[]) => Promise<PrSummary[]>;
+  fetchPullRequests: (refs: PrRef[], gitlabPoll?: GitLabPollRequest) => Promise<PrSummary[]>;
   onPollUnavailable?: (targets: PrPollTarget[], failed: boolean) => void;
   /** One token-bounded probe allowed through the client's outage cooldown. */
-  fetchPullRequestsAfterReconnect?: (refs: PrRef[]) => Promise<PrSummary[]>;
+  fetchPullRequestsAfterReconnect?: PrPollingSchedulerDeps["fetchPullRequests"];
   /** Persist + publish. Returns the prKeys whose status actually changed. */
-  applyResults: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
+  applyResults: (prs: PrSummary[], fetchedAt: number, fetchedAtByKey?: ReadonlyMap<string, number>) => Promise<string[]>;
   /** Targets admitted for an attempt or already fresh/terminal; deferred work stays pending. */
   onTargetsHandled?: (prKeys: string[]) => void;
   /** Allocate a globally ordered token immediately before starting a request. */
@@ -116,6 +113,7 @@ export type PrPollingSchedulerDeps = {
 
 type PollState = {
   lastPolledAt: number;
+  retryAt?: number;
   /** Last time this PR's status actually changed — drives quiet-demotion. */
   lastChangedAt: number;
   /**
@@ -324,29 +322,28 @@ export class PrPollingScheduler {
       return;
     }
 
-    const batches = buildPrPollBatches(due).slice(0, MAX_BATCHES_PER_TICK);
-    const admitted: PrPollTarget[][] = [];
-    for (const batch of batches) {
-      // One token per request. If the bucket is dry, leave the rest of the
-      // backlog for the next tick rather than dropping it silently.
-      if (!this.deps.tryTakeToken(batch)) {
-        schedulerLog.debug("PR poll deferred: token bucket empty", {
-          deferredBatches: batches.length - admitted.length,
-        });
-        break;
-      }
-      admitted.push(batch);
-    }
-
-    const deferred = new Set(due.map((target) => target.prKey));
-    for (const batch of admitted) {
-      for (const target of batch) deferred.delete(target.prKey);
-    }
+    const dueKeys = new Set(due.map((target) => target.prKey));
     this.deps.onTargetsHandled?.(targets
-      .filter((target) => !deferred.has(target.prKey))
+      .filter((target) => !dueKeys.has(target.prKey))
       .map((target) => target.prKey));
 
-    await Promise.all(admitted.map(async (batch) => await this.pollBatch(batch)));
+    const ready = this.excludeCooldowns(due, now);
+    const githubReads: Promise<void>[] = [];
+    const run = (batch: PrPollTarget[]) => this.pollBatch(batch).catch((error: unknown) => {
+      schedulerLog.warn("PR poll batch failed", { error: error instanceof Error ? error.message : String(error) });
+    });
+    for (const batch of buildPrPollBatches(ready).slice(0, MAX_BATCHES_PER_TICK)) {
+      if (isGitLabPollBatch(batch)) {
+        // GitLab only charges on dispatch. Give a due batch its opportunity
+        // to finish its paid follow-ups before starting a later batch.
+        await run(batch);
+        continue;
+      }
+      if (!this.deps.tryTakeToken(batch)) break;
+      this.deps.onTargetsHandled?.(batch.map((target) => target.prKey));
+      githubReads.push(run(batch));
+    }
+    await Promise.all(githubReads);
   }
 
   private async runReconnectProbe(): Promise<void> {
@@ -354,11 +351,11 @@ export class PrPollingScheduler {
     const now = this.now();
     const targets = this.deps.listTargets();
     this.prunePollState(targets);
-    const batch = buildPrPollBatches(this.selectDueTargets(targets, now, true))[0] ?? [];
+    const batch = buildPrPollBatches(this.excludeCooldowns(this.selectDueTargets(targets, now, true), now))[0] ?? [];
     if (batch.length === 0) {
       return;
     }
-    if (!this.deps.tryTakeToken(batch)) {
+    if (!isGitLabPollBatch(batch) && !this.deps.tryTakeToken(batch)) {
       this.reconnectProbeWaitingForBudget = true;
       schedulerLog.debug("PR reconnect probe deferred: token bucket empty");
       return;
@@ -366,7 +363,12 @@ export class PrPollingScheduler {
     await this.pollBatch(
       batch,
       this.deps.fetchPullRequestsAfterReconnect ?? this.deps.fetchPullRequests,
+      true,
     );
+  }
+
+  private excludeCooldowns(targets: PrPollTarget[], now: number): PrPollTarget[] {
+    return targets.filter((target) => (this.pollState.get(target.prKey)?.retryAt ?? 0) <= now);
   }
 
   private selectDueTargets(
@@ -438,6 +440,7 @@ export class PrPollingScheduler {
   private async pollBatch(
     batch: PrPollTarget[],
     fetchPullRequests = this.deps.fetchPullRequests,
+    reconnect = false,
   ): Promise<void> {
     const refs: PrRef[] = [];
     for (const target of batch) {
@@ -451,14 +454,32 @@ export class PrPollingScheduler {
       refs.push(ref);
     }
 
-    // Mark polled BEFORE the request. If a PR consistently errors, it must not
-    // stay permanently "due" and crowd out healthy targets on every tick.
     const attemptedAt = this.now();
     const observedAt = this.deps.getObservationTimestamp?.() ?? attemptedAt;
-    for (const target of batch) {
-      const state = this.ensurePollState(target.prKey, attemptedAt);
-      state.lastPolledAt = attemptedAt;
-    }
+    const deferred = new Map<number, number | undefined>();
+    const fetchedAtByKey = new Map<string, number>();
+    const gitlabPoll: GitLabPollRequest | undefined = refs[0]?.kind === "gitlab" ? {
+      takeFirstRequestToken: () => {
+        const taken = this.deps.tryTakeToken(batch);
+        if (!taken && reconnect) this.reconnectProbeWaitingForBudget = true;
+        return taken;
+      },
+      defer: (iid, retryAt) => deferred.set(iid, retryAt),
+      recordObservation: (pr, fetchedAt) => fetchedAtByKey.set(buildPullRequestStatusKey(pr), fetchedAt),
+    } : undefined;
+    const markAttempted = () => {
+      // Leave deferred MRs pending, even if a transcript is the only owner.
+      const handled: string[] = [];
+      for (const target of batch) {
+        const state = this.ensurePollState(target.prKey, attemptedAt);
+        state.retryAt = deferred.get(target.pr.number);
+        if (deferred.has(target.pr.number)) continue;
+        state.lastPolledAt = attemptedAt;
+        handled.push(target.prKey);
+      }
+      if (gitlabPoll && handled.length > 0) this.deps.onTargetsHandled?.(handled);
+    };
+    if (!gitlabPoll) markAttempted();
 
     if (refs.length === 0) {
       return;
@@ -466,13 +487,15 @@ export class PrPollingScheduler {
 
     let prs: PrSummary[];
     try {
-      prs = await fetchPullRequests(refs);
+      prs = gitlabPoll ? await fetchPullRequests(refs, gitlabPoll) : await fetchPullRequests(refs);
     } catch (error) {
       this.deps.onPollUnavailable?.(batch, true);
       throw error;
+    } finally {
+      if (gitlabPoll) markAttempted();
     }
     const returnedKeys = new Set(prs.map((pr) => buildPullRequestStatusKey(pr)));
-    const missing = batch.filter((target) => !returnedKeys.has(target.prKey));
+    const missing = batch.filter((target) => !deferred.has(target.pr.number) && !returnedKeys.has(target.prKey));
     if (missing.length > 0) this.deps.onPollUnavailable?.(missing, false);
     if (prs.length === 0) {
       return;
@@ -481,11 +504,13 @@ export class PrPollingScheduler {
     // Order competing observations by when their request started, not when the
     // network happened to finish. Otherwise an older slow response can clobber
     // a newer hover/selection result simply by completing last.
-    const changedKeys = await this.deps.applyResults(prs, observedAt);
+    const changedKeys = fetchedAtByKey.size
+      ? await this.deps.applyResults(prs, observedAt, fetchedAtByKey)
+      : await this.deps.applyResults(prs, observedAt);
     for (const prKey of changedKeys) {
       const state = this.pollState.get(prKey);
       if (state) {
-        state.lastChangedAt = observedAt;
+        state.lastChangedAt = Math.max(state.lastChangedAt, fetchedAtByKey.get(prKey) ?? observedAt);
       }
     }
 
@@ -527,27 +552,29 @@ export class PrPollingScheduler {
   }
 }
 
-/** Each batch is one paid request: GitHub batches up to 40, GitLab reads one MR. */
+function isGitLabPollBatch(batch: PrPollTarget[]): boolean {
+  return parsePrRefFromUrl(batch[0]!.pr.url)?.kind === "gitlab";
+}
+
+/** Keep batch order by first due target, including interleaved GitLab projects. */
 export function buildPrPollBatches(targets: PrPollTarget[]): PrPollTarget[][] {
   const batches: PrPollTarget[][] = [];
-  let batch: PrPollTarget[] = [];
-  let batchKey: string | undefined;
+  const openBatches = new Map<string, PrPollTarget[]>();
   for (const target of targets) {
     const ref = parsePrRefFromUrl(target.pr.url);
     // Invalid URLs still get marked polled, but never reach a transport.
-    const key = ref ? `${ref.kind}/${ref.host}` : undefined;
+    // GitLab polls use the selected glab command's explicit host login.
+    const key = ref?.kind === "gitlab" ? `glab/${ref.host}/${ref.owner}/${ref.repo}`
+      : ref ? `${ref.kind}/${ref.host}` : "";
     const limit = ref ? FORGE_PRODUCTS[ref.kind].pollBatchSize : 1;
-    if (batch.length && (batchKey !== key || batch.length >= limit)) {
-      batches.push(batch);
+    let batch = openBatches.get(key);
+    if (!batch) {
       batch = [];
+      batches.push(batch);
+      openBatches.set(key, batch);
     }
-    batchKey = key;
     batch.push(target);
-    if (batch.length === limit) {
-      batches.push(batch);
-      batch = [];
-    }
+    if (batch.length === limit) openBatches.delete(key);
   }
-  if (batch.length) batches.push(batch);
   return batches;
 }

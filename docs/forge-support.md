@@ -65,10 +65,10 @@ transport may naturally contain its protocol-specific rules.
 
 ## Request and persistence ownership
 
-The scheduler preserves due-order and separates batches by product and host.
-GitHub batches up to 40 PRs; GitLab batches one MR. A scheduler token pays for
-one admitted request. `requestTokenTaken` tells the adapter that the initial
-request is already paid; extra verification reads still need their own tokens.
+The scheduler preserves due order and separates batches by product and host.
+GitHub batches up to 40 PRs. GitLab batches up to eight MRs from one target
+project and host login, then spends a token at admission for each actual page,
+fallback, or verification read.
 Reconnect uses the same router and the GitHub adapter's reconnect probe.
 
 Adapters return observations. The existing app-server status registry owns
