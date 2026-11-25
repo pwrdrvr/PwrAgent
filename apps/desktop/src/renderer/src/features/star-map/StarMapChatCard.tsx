@@ -794,6 +794,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             // ordinary prompt content and may accompany attachments.
             requiresNoAttachments:
               commandBackend === "codex" && commandName === "compact",
+            skill: command.skill,
             sourceLabel: formatBackendLabel(commandBackend),
           };
         }),

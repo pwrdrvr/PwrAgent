@@ -775,6 +775,7 @@ export function useComposerMentions(params: {
     label = "Commands";
     options = commandOptions.map((command, index) => {
       const name = normalizeSlashCommandName(command.name);
+      const { skill } = command;
       return renderOption(
         index,
         <>
@@ -788,11 +789,15 @@ export function useComposerMentions(params: {
                 {command.argumentHint}
               </span>
             ) : null}
+            {skill?.origin ? (
+              <SkillOriginChip origin={skill.origin} {...skillOriginCard.chipHandlers(skill)} />
+            ) : null}
           </span>
           <span className="compact-composer__mention-meta">
-            {[command.sourceLabel, command.description].filter(Boolean).join(" · ")}
+            {[skill?.origin ? undefined : command.sourceLabel, command.description].filter(Boolean).join(" · ")}
           </span>
         </>,
+        { describedBy: skill ? skillOriginCard.describedBy(skill) : undefined },
       );
     });
   } else if (kind === "directories") {

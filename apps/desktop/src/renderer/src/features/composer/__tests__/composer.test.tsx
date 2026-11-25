@@ -783,6 +783,35 @@ describe("Composer", () => {
     }), { numRuns: 4, examples: [[false], [true]] });
   });
 
+  it("shows the project chip for an Antigravity slash skill and inserts the native command", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "slash-skill", title: "Garden release", titleSource: "explicit",
+      source: "acp:antigravity", inbox: { inInbox: false },
+      linkedDirectories: [{ id: "garden", path: "/garden", label: "Garden", kind: "local" }],
+    };
+    const description = "Prepare the Garden release.";
+    const desktopApi: DesktopApi = {
+      listSkills: async ({ catalog } = {}) => ({
+        backend: thread.source,
+        fetchedAt: 1,
+        data: catalog === "commands"
+          ? [{ commands: [{ name: "release", backend: thread.source, description }], skills: [] }]
+          : [{ skills: [{ name: "release", description, path: "/garden/.agents/skills/release/SKILL.md" }] }],
+      }),
+    };
+    function Picker() {
+      const skills = useThreadSkills({ desktopApi, thread });
+      return <Composer thread={thread} skills={skills.skills} providerCommands={skills.providerCommands} onEnsureSkillsLoaded={skills.ensureLoaded} />;
+    }
+    render(<Picker />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "/rele" } });
+    const option = await screen.findByRole("option", { name: /\/release.*Garden.*Prepare/ });
+    expect(within(option).getByText("Garden")).toBeInTheDocument();
+    fireEvent.click(option);
+    expect(input).toHaveValue("/release ");
+  });
+
   it("offers explicit Refresh for a missing skill while reopening reuses the fresh catalog", async () => {
     let names = ["rate-math-paper"];
     let pause = false;

@@ -141,7 +141,6 @@ import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
   MoveThreadToMainCheckoutResponse,
-  AppServerAvailableCommandSummary,
   AppServerBackendKind,
   AppServerReviewTarget,
   AppServerSkillSummary,
@@ -238,6 +237,7 @@ import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import { LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { prefersClaudeCodeReview, resolveReviewRunMode } from "../../lib/review-run-mode";
@@ -769,7 +769,7 @@ export type ComposerProps = {
   setExecutionModeError?: string;
   skillError?: string;
   skillLoading?: boolean;
-  providerCommands?: AppServerAvailableCommandSummary[];
+  providerCommands?: ThreadProviderCommand[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
   integratedTerminal?: ComposerTerminalToggleProps;
@@ -1051,6 +1051,7 @@ type SlashCommandSuggestion = {
   id: string;
   insertText: string;
   label: string;
+  skill?: AppServerSkillSummary;
   source: "provider" | "pwragent";
   sourceLabel: string;
 };
@@ -1208,7 +1209,7 @@ const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
 ];
 
 function providerCommandToSlashSuggestion(
-  command: AppServerAvailableCommandSummary,
+  command: ThreadProviderCommand,
   backends: BackendSummary[] = [],
 ): SlashCommandSuggestion {
   const commandName = command.name.startsWith("/")
@@ -1223,6 +1224,7 @@ function providerCommandToSlashSuggestion(
     insertText: `/${commandName}`,
     description: command.description ?? "Provider command",
     aliases: command.aliases,
+    skill: command.skill,
     ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
     source: "provider",
     sourceLabel,
@@ -15205,6 +15207,7 @@ function useComposerController(props: ComposerProps) {
               ref={(node) => {
                 autocompleteOptionRefs.current[index] = node;
               }}
+              aria-describedby={command.skill ? skillOriginCard.describedBy(command.skill) : undefined}
               aria-selected={index === activeSlashIndex}
               className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
               role="option"
@@ -15232,11 +15235,18 @@ function useComposerController(props: ComposerProps) {
                     {command.argumentHint}
                   </span>
                 ) : null}
-                <span
-                  className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
-                >
-                  {command.sourceLabel}
-                </span>
+                {command.skill?.origin ? (
+                  <SkillOriginChip
+                    origin={command.skill.origin}
+                    {...skillOriginCard.chipHandlers(command.skill)}
+                  />
+                ) : (
+                  <span
+                    className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
+                  >
+                    {command.sourceLabel}
+                  </span>
+                )}
               </span>
               <span className="composer__autocomplete-meta">
                 {command.description}

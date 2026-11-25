@@ -35,6 +35,30 @@ function createEmptySkillState(): SkillState {
 
 type EnsureSkillsOptions = { force?: boolean; includeCommands?: boolean };
 
+export type ThreadProviderCommand = AppServerAvailableCommandSummary & {
+  /** Renderer-only match against the owning workspace's Antigravity catalog. */
+  skill?: AppServerSkillSummary;
+};
+
+function slashSkillKey(name: string, description: string | undefined): string | undefined {
+  const summary = description?.replace(/\s+/g, " ").trim();
+  return summary ? `${name.replace(/^\//, "")}\0${summary}` : undefined;
+}
+
+function indexAntigravitySlashSkills(
+  skills: AppServerSkillSummary[] | undefined,
+): Map<string, AppServerSkillSummary | undefined> {
+  const matches = new Map<string, AppServerSkillSummary | undefined>();
+  for (const skill of skills ?? []) {
+    if (!skill.path || !skill.origin || skill.enabled === false) continue;
+    const key = slashSkillKey(skill.name, skill.description);
+    // ACP doesn't identify the selected file. Multiple distinct paths with
+    // the same advertisement leave provenance unknown.
+    if (key) matches.set(key, matches.has(key) ? undefined : skill);
+  }
+  return matches;
+}
+
 export function useThreadSkills(params: {
   desktopApi?: DesktopApi;
   launchpad?: NavigationLaunchpadDraft;
@@ -44,7 +68,7 @@ export function useThreadSkills(params: {
   ensureLoaded: (options?: EnsureSkillsOptions) => Promise<void>;
   error?: string;
   loading: boolean;
-  providerCommands: AppServerAvailableCommandSummary[];
+  providerCommands: ThreadProviderCommand[];
   response?: AppServerListSkillsResponse;
   skillCatalogTargetKey?: string;
   skills: AppServerSkillSummary[];
@@ -388,22 +412,26 @@ export function useThreadSkills(params: {
     );
   }, [bundledSkillRoots, originDirectories, state?.response?.data]);
 
+  const antigravitySkills = separateCommands ? skills : undefined;
   const providerCommands = useMemo(() => {
-    const deduped = new Map<string, AppServerAvailableCommandSummary>();
+    const deduped = new Map<string, ThreadProviderCommand>();
+    const matches = indexAntigravitySlashSkills(antigravitySkills);
 
     for (const entry of commandState?.response?.data ?? []) {
       for (const command of entry.commands ?? []) {
-        deduped.set(
-          `${command.backend ?? skillTarget?.backend ?? "unknown"}:${command.name}`,
-          command,
-        );
+        const backend = command.backend ?? skillTarget?.backend;
+        const skillKey = backend === "acp:antigravity" && !command.argumentHint
+          ? slashSkillKey(command.name, command.description)
+          : undefined;
+        const skill = skillKey ? matches.get(skillKey) : undefined;
+        deduped.set(`${backend ?? "unknown"}:${command.name}`, skill ? { ...command, skill } : command);
       }
     }
 
     return [...deduped.values()].sort((left, right) =>
       left.name.localeCompare(right.name)
     );
-  }, [skillTarget?.backend, commandState?.response?.data]);
+  }, [antigravitySkills, skillTarget?.backend, commandState?.response?.data]);
 
   return {
     ensureLoaded,

@@ -364,3 +364,55 @@ it("retries empty Antigravity command lookups on reopen and reuses the first suc
     }
   }), { numRuns: 8 });
 });
+
+it("attributes only unique Antigravity slash skill matches, regardless of catalog arrival order", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (commandsFirst, peer) => {
+    const draft = { ...launchpad(0, peer), backend: "acp:antigravity" as const };
+    const backend = draft.backend;
+    type Catalog = Awaited<ReturnType<NonNullable<DesktopApi["listSkills"]>>>;
+    const commands = Promise.withResolvers<Catalog>();
+    const skills = Promise.withResolvers<Catalog>();
+    const slashRows = [
+      { name: "/release", description: "Prepare the\nrelease." },
+      { name: "compact", description: "Compact this session." },
+      { name: "check", description: "Check the project." },
+      { name: "unknown" },
+    ];
+    const releasePath = "/project-0/.agents/skills/release/SKILL.md";
+    const listSkills: NonNullable<DesktopApi["listSkills"]> = (request) =>
+      request?.catalog === "commands" ? commands.promise : skills.promise;
+    const { result, unmount } = renderHook(() => useThreadSkills({ desktopApi: { listSkills }, launchpad: draft }));
+    try {
+      await act(async () => { void result.current.ensureLoaded({ includeCommands: true }); });
+      const resolveCommands = async () => {
+        await act(async () => {
+          commands.resolve({ backend, fetchedAt: 1, data: [{ commands: slashRows, skills: [] }] });
+        });
+      };
+      if (commandsFirst) {
+        await resolveCommands();
+        expect(result.current.providerCommands).toHaveLength(slashRows.length);
+        expect(result.current.providerCommands.every((command) => !("skill" in command))).toBe(true);
+      }
+      await act(async () => {
+        skills.resolve({ backend, fetchedAt: 1, data: [{ skills: [
+          { name: "release", description: "Prepare the release.", path: releasePath },
+          { name: "compact", description: "Compact images.", path: "/project-0/.agents/skills/compact/SKILL.md" },
+          { name: "check", description: "Check the project.", path: "/project-0/.agents/skills/check/SKILL.md" },
+          { name: "check", description: "Check the project.", path: "/another-project/.agents/skills/check/SKILL.md" },
+          { name: "unknown", path: "/project-0/.agents/skills/unknown/SKILL.md" },
+        ] }] });
+      });
+      if (!commandsFirst) await resolveCommands();
+      expect(result.current.providerCommands.find(({ name }) => name === "/release")).toMatchObject({
+        name: "/release",
+        skill: { path: releasePath, origin: { kind: "project", label: "project-0" } },
+      });
+      for (const command of result.current.providerCommands.filter(({ name }) => name !== "/release")) {
+        expect(command).not.toHaveProperty("skill");
+      }
+    } finally {
+      unmount();
+    }
+  }), { examples: [[true, false], [false, true]], numRuns: 6 });
+});
