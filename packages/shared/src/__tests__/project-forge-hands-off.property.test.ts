@@ -51,6 +51,22 @@ describe("hands-off label patterns", () => {
     }), { numRuns: 2_000 });
   });
 
+  it("match in linear time however many stars a pattern has", () => {
+    // A backtracking `.*` per star took 49 s on this pair.
+    const started = Date.now();
+    expect(handsOffLabelMatches(`${"*a".repeat(60)}b`, "a".repeat(200))).toBe(false);
+    expect(handsOffLabelMatches(`${"*a".repeat(60)}*`, "a".repeat(200))).toBe(true);
+    expect(Date.now() - started).toBeLessThan(250);
+  });
+
+  it("match long star-heavy patterns as the oracle does", () => {
+    const starry = fc.array(fc.constantFrom("a", "*", "b"), { maxLength: 24 }).map((chars) => chars.join(""));
+    const text = fc.array(fc.constantFrom("a", "b"), { maxLength: 30 }).map((chars) => chars.join(""));
+    fc.assert(fc.property(starry, text, (pattern, value) => {
+      expect(handsOffLabelMatches(pattern, value)).toBe(wildcardOracle(pattern, value));
+    }), { numRuns: 1_000 });
+  });
+
   it("match the label T3 Code uses for a takeover", () => {
     expect(handsOffLabelMatches("takeover:*", "takeover:in-progress")).toBe(true);
     expect(handsOffLabelMatches("takeover:*", "size:L")).toBe(false);
@@ -118,6 +134,9 @@ describe("hands-off rule storage", () => {
     expect(normalizeHandsOffRepository("https://github.com/pingdotgg/t3code.git/")).toBe("pingdotgg/t3code");
     expect(normalizeHandsOffRepository("gitlab.example.com")).toBeUndefined();
     expect(normalizeHandsOffRepository("group/sub/project")).toBe("group/sub/project");
+    // As the Forge Automation subtitle shows a repository.
+    expect(normalizeHandsOffRepository("github.com/canvas-org/canvas")).toBe("canvas-org/canvas");
+    expect(normalizeHandsOffRepository("gitlab.example.com/group/sub/project")).toBe("group/sub/project");
   });
 
   it("reads labels only for repositories with a label rule", () => {

@@ -568,12 +568,13 @@ export class PrAutoDispatchCoordinator {
     }
 
     let admissionHold: string | undefined;
+    let admissionHandsOff: string | undefined;
     const canAdmit = async () => {
       const latest = this.options.getCurrentPr?.(record.pending.prKey);
       const latestEvent = latest && buildPrAutoDispatchEvent(latest, this.kindFilter(identity));
       if (latest && latestEvent?.fingerprint === fingerprint) {
-        admissionHold = this.options.handsOff?.(identity, latest)
-          ?? await this.options.stackHold?.(latest);
+        admissionHandsOff = this.options.handsOff?.(identity, latest);
+        admissionHold = admissionHandsOff ?? await this.options.stackHold?.(latest);
         return !admissionHold;
       }
       return false;
@@ -582,6 +583,11 @@ export class PrAutoDispatchCoordinator {
     if (lateHold) {
       await this.restoreAfterBusy(identity, fingerprint, this.now());
       this.clearTimer(this.threadKey(identity));
+      if (admissionHandsOff) {
+        // Hands-off is no hold to wait out: drop the repair, as dispatch does.
+        await this.cancelForProject(identity, record.pending, this.now(), `Cancelled: ${admissionHandsOff}`);
+        return;
+      }
       activity(admissionHold ?? "The PR observation changed before repair admission", "warning");
       return;
     }

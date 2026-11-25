@@ -1595,6 +1595,26 @@ describe("PrAutoDispatchCoordinator with Forge Automation hands-off rules", () =
     expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
   });
 
+  it("cancels, rather than parks, a repair whose PR turns hands-off at turn admission", async () => {
+    const unlabeled = upstream([]);
+    // Unlabeled at scheduling and at dispatch; labeled by admission.
+    let reads = 0;
+    const harness = createHarness({
+      currentPr: unlabeled,
+      handsOff: () => (++reads >= 3 ? "hands-off, labeled takeover:in-progress" : undefined),
+    });
+    expect((await observe(harness.coordinator, unlabeled))[0]?.status).toBe("scheduled");
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(harness.pendingUpdates.at(-1)).toBeNull();
+    expect(await store.getThreadPrAutoDispatchPending({ backend: "codex", threadId: "thread-1" }))
+      .toBeUndefined();
+    expect(harness.onActivity).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Cancelled: hands-off, labeled takeover:in-progress",
+    }));
+  });
+
   it("leaves every PR into a repository alone with a repository rule, labels read or not", async () => {
     const harness = createHarness({
       currentPr: upstream([]),

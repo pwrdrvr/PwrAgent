@@ -5280,9 +5280,10 @@ class DesktopAppServerService {
       pullRequest: `${pr.org}/${pr.repo}#${pr.number}`,
       match,
     }));
-    const handsOffNumbers = new Set(handsOffPrs.map(({ pr }) => pr.number));
+    // By URL: a fork and its upstream number their PRs independently.
+    const handsOffUrls = new Set(handsOffPrs.map(({ pr }) => pr.url));
     const reviewReadiness = (await this.readPrReviewReadiness(params, primaryPrs))
-      .filter((entry) => !handsOffNumbers.has(entry.prNumber));
+      .filter((entry) => !handsOffUrls.has(entry.prUrl));
     const neverMerge = forgeProject && projectNeverMerges(forgeProject.automation) ? forgeProject.label : undefined;
     const mergeBranches = projectMergeBranches(forgeProject?.automation);
     const readinessGuidance = reviewReadiness
@@ -6943,9 +6944,12 @@ class DesktopAppServerService {
     if (eventKinds.length === 0 || (!validate && !hasProjectRules)) {
       return await store.getPrAutoDispatchCandidateWinner({ prKey });
     }
+    // A thread whose project leaves this PR hands-off cannot claim it ahead
+    // of a thread in a project that repairs it.
     const allowsRepair = (candidate: { backend: AppServerBackendKind; threadId: string }) => {
       const automation = this.threadForgeAutomation(candidate);
-      return eventKinds.some((kind) => projectAllowsAutoFixKind(automation, kind));
+      return eventKinds.some((kind) => projectAllowsAutoFixKind(automation, kind))
+        && !(automation?.handsOff && findHandsOffMatch(automation, pr));
     };
     const winner = await store.getPrAutoDispatchCandidateWinner({
       prKey,
@@ -8636,9 +8640,15 @@ class DesktopAppServerService {
     const handsOffChanged = JSON.stringify(previous?.handsOff ?? [])
       !== JSON.stringify(next?.handsOff ?? []);
     if (handsOffChanged && getAppStateMode()) {
-      // A pending repair for a PR that just became hands-off is cancelled at
-      // dispatch; a label rule's labels arrive with the next poll.
+      // Poll now, so a new label rule's labels arrive before a pending
+      // repair dispatches; that repair is cancelled at dispatch.
       this.prPollingScheduler?.noteThreadInteraction(threadKeys);
+      void this.prPollingScheduler?.tick().catch((error: unknown) => {
+        appServerLog.debug("hands-off PR poll failed", {
+          directoryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     }
     if (projectNeverMerges(previous) !== projectNeverMerges(next)
       || projectMergeBranches(previous).join("\n") !== projectMergeBranches(next).join("\n")

@@ -326,8 +326,9 @@ export function normalizeHandsOffRules(value: unknown): ProjectForgeHandsOffRule
 
 /**
  * `owner/name` from what the operator typed, or undefined. Accepts a pasted
- * repository URL (`https://github.com/owner/name`) and drops a trailing
- * `.git` or slash. GitLab subgroups (`group/sub/name`) keep every segment.
+ * repository URL (`https://github.com/owner/name`) or a host-prefixed key
+ * (`github.com/owner/name`) and drops a trailing `.git` or slash. GitLab
+ * subgroups (`group/sub/name`) keep every segment.
  */
 export function normalizeHandsOffRepository(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
@@ -337,18 +338,42 @@ export function normalizeHandsOffRepository(value: unknown): string | undefined 
   text = text.replace(/\/+$/, "").replace(/\.git$/i, "");
   if (text.length === 0 || text.length > MAX_HANDS_OFF_RULE_TEXT) return undefined;
   const segments = text.split("/");
+  // `github.com/owner/name`, as the Forge Automation subtitle shows it: a
+  // first segment with a dot is a host, never an owner, when two remain.
+  if (segments.length >= 3 && segments[0]!.includes(".")) segments.shift();
   if (segments.length < 2) return undefined;
   if (segments.some((segment) => !/^[\w.-]+$/.test(segment))) return undefined;
   return segments.join("/");
 }
 
-/** Whether a label pattern matches a label name, ignoring case. */
+/**
+ * Whether a label pattern matches a label name, ignoring case. `*` matches
+ * any run of characters. A linear two-pointer match, never a RegExp: a
+ * backtracking `.*` per star made `*a*a*a…b` take seconds on one label.
+ */
 export function handsOffLabelMatches(pattern: string, label: string): boolean {
-  const expression = pattern
-    .split("*")
-    .map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&"))
-    .join(".*");
-  return new RegExp(`^${expression}$`, "i").test(label);
+  const p = pattern.toLowerCase();
+  const t = label.toLowerCase();
+  let i = 0;
+  let j = 0;
+  let star = -1;
+  let resume = 0;
+  while (j < t.length) {
+    if (i < p.length && p[i] === "*") {
+      star = i++;
+      resume = j;
+    } else if (i < p.length && p[i] === t[j]) {
+      i++;
+      j++;
+    } else if (star >= 0) {
+      i = star + 1;
+      j = ++resume;
+    } else {
+      return false;
+    }
+  }
+  while (i < p.length && p[i] === "*") i++;
+  return i === p.length;
 }
 
 /** The part of a PR a hands-off rule reads. */
