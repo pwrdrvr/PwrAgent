@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { getPrDiff, harnessReferences, listE2eFiles, planImpact, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
+import { a11ySpec, getPrDiff, harnessReferences, listE2eFiles, planImpact, separateA11y, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
 import { withVitestImpact } from "./pr-test-impact-vitest.mjs";
 
 const source = "packages/shared/src/";
@@ -375,4 +375,23 @@ it("splits a narrowed unit plan into lanes that cover every selected file once",
     // A selection of any size uses no more lanes than the full suite.
     expect(unitLaneCount(100_000, group)).toBe(lanes);
   }
+});
+
+it("moves a selected accessibility audit out of the narrowed lane into its own job, keeping every other spec", () => {
+  const others = ["apps/desktop/e2e/a11y-helpers.spec.ts", "apps/desktop/e2e/thread-view.spec.ts", "apps/desktop/e2e/zz.spec.ts"];
+  // Every subset of the other specs, with and without the audit, in every position.
+  for (let mask = 0; mask < 1 << others.length; mask++) {
+    const chosen = others.filter((_, index) => mask & (1 << index));
+    for (let position = 0; position <= chosen.length + 1; position++) {
+      const files = position > chosen.length ? chosen : [...chosen.slice(0, position), a11ySpec, ...chosen.slice(position)];
+      const plan = { mode: "selected", total: 10, selected: files.map((file) => ({ file, reasons: ["edited spec"] })) };
+      const { e2e, a11y } = separateA11y(plan);
+      expect(a11y, files.join(",")).toBe(files.includes(a11ySpec));
+      expect(e2e.selected.map(({ file }) => file), files.join(",")).toEqual(chosen);
+      expect(e2e.total).toBe(10);
+      expect(plan.selected.map(({ file }) => file)).toEqual(files);
+    }
+  }
+  const full = { mode: "full", reason: "fixture" };
+  expect(separateA11y(full)).toEqual({ e2e: full, a11y: false });
 });

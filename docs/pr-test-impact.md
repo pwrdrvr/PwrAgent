@@ -79,6 +79,12 @@ resolution, and a changed importer is in the diff. Deletion selects the full
 suite when another file can now answer the same import (`name.js` beside a
 deleted `name.ts`, an `index` file, or a `__mocks__` entry).
 
+The Linux Desktop E2E lanes never run `a11y.spec.ts`; the `Linux Desktop
+a11y` job does. A narrowed plan that selects it removes it from the lane's
+specs and publishes `e2e_a11y=true`, which starts that job. When the
+accessibility spec was the only selection, no Desktop E2E lane runs. See
+[accessibility audit on PRs](../.github/workflows/README.md#accessibility-audit-on-prs).
+
 The full suite runs for:
 
 - dependency metadata, package-manager configuration, patches, CI, and test

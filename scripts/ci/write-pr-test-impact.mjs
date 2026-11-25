@@ -2,7 +2,7 @@
 // that plan, or the full suite when it says `full`.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
-import { getPrDiff, harnessReferences, listAffectedE2eFiles, listE2eFiles, planImpact, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
+import { getPrDiff, harnessReferences, listAffectedE2eFiles, listE2eFiles, planImpact, separateA11y, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
 import { withVitestImpact } from "./pr-test-impact-vitest.mjs";
 
 const directory = ".local/ci/pr-test-impact";
@@ -43,6 +43,10 @@ try {
   plan = await planImpact([], { fallback: "Vitest or inventory initialization error" });
 }
 
+// The accessibility audit has its own job; a lane never runs it.
+const { e2e: laneE2e, a11y: e2eA11y } = separateA11y(plan.e2e);
+plan = { ...plan, e2e: laneE2e };
+
 // The lanes each job runs. A full plan runs every lane of the full suite.
 const lanes = Object.fromEntries(Object.keys(unitGroups).map((group) => [group, range(plan.unit.mode === "selected"
   ? unitLaneCount(unitGroupFiles(plan.unit.selected, group).length, group) : unitGroups[group].lanes)]));
@@ -62,6 +66,7 @@ const outputs = {
   unit_windows_main_lanes: JSON.stringify(lanes["windows-main"]),
   unit_windows_renderer_lanes: JSON.stringify(lanes["windows-renderer"]),
   e2e_lanes: JSON.stringify(lanes.e2e),
+  e2e_a11y: String(e2eA11y),
 };
 // The job publishes these after it uploads the plan, so that a lane narrows
 // only when the plan is there to download.
@@ -72,6 +77,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
     "",
     `- Unit tests: ${size(plan.unit)}`,
     `- Linux Desktop E2E: ${size(plan.e2e)}`,
+    `- Accessibility audit: ${e2eA11y ? "selected; its own job runs it" : "not selected by this plan"}`,
     "- The `ci:full` label runs every test on every platform.",
     ...(plannerError ? ["", "Planner error:", "", "```", plannerError, "```"] : []),
   ].join("\n")}\n`);
