@@ -39,6 +39,27 @@ describe("unwrapCommandText", () => {
     ));
   });
 
+  it("joins adjacent POSIX script fragments and keeps arguments after the word", () => {
+    fc.assert(fc.property(
+      posixShell,
+      fc.constantFrom("-c", "-lc"),
+      fc.array(fc.constantFrom(
+        { encoded: "'first'", text: "first" },
+        { encoded: '" second"', text: " second" },
+        { encoded: "\\'", text: "'" },
+      ), { minLength: 1 }),
+      (shell, option, fragments) => {
+        const word = "'printf '" + fragments.map(({ encoded }) => encoded).join("");
+        const script = "printf " + fragments.map(({ text }) => text).join("");
+        const command = `${shell} ${option} ${word}`;
+        const withArgument = `${command} _ 'hello'`;
+
+        expect(unwrapCommandText(command)).toBe(script);
+        expect(unwrapCommandText(withArgument)).toBe(withArgument);
+      },
+    ));
+  });
+
   it("keeps the POSIX invocation when the c option is uppercase", () => {
     fc.assert(fc.property(
       posixShell,
