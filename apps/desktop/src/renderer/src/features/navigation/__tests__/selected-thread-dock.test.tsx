@@ -22,6 +22,7 @@ afterEach(() => {
   } else {
     Reflect.deleteProperty(HTMLElement.prototype, "scrollIntoView");
   }
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -52,7 +53,7 @@ function mountList(
   region.className = "sidebar__scroll-region";
   region.style.overflow = "hidden";
   region.innerHTML = `
-    <div class="directory-groups" style="overflow-y: auto">
+    <div class="directory-groups sidebar-list--dense" style="overflow-y: auto">
       <section class="directory-row" data-directory-key="pwrgit">
         <div class="directory-row__header" data-header="pwrgit"></div>
         ${options?.duplicateTop === undefined ? "" : `
@@ -193,6 +194,39 @@ describe("SelectedThreadDock", () => {
     // Gone with the selection.
     view.unmount();
     expect(changes).toEqual(["58px", "none", "58px", "none"]);
+  });
+
+  it("keeps the reserve equal to the dock's outer height plus its plate when padding changes", () => {
+    const observed = new Map<Element, ResizeObserverBoxOptions>();
+    let resize!: () => void;
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(callback: () => void) {
+        resize = callback;
+      }
+      observe(element: Element, options?: ResizeObserverOptions) {
+        observed.set(element, options?.box ?? "content-box");
+      }
+      unobserve(element: Element) {
+        observed.delete(element);
+      }
+      disconnect() {
+        observed.clear();
+      }
+    });
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => frames.push(callback));
+    const region = mountList(-300);
+    renderDock(region);
+    const card = dock()!;
+    let height = 46;
+    Object.defineProperty(card, "offsetHeight", { get: () => height });
+    // The content box stays the same. Chromium delivers a resize only to
+    // observers of the outer box when the padding or border changes.
+    for (height of [74, 60, 46]) {
+      if (observed.get(card) === "border-box") resize();
+      act(() => frames.splice(0).forEach((frame) => frame(0)));
+      expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe(`${height + 12}px`);
+    }
   });
 
   // Showing the top dock moves the stuck header down, which covers more of
@@ -339,10 +373,20 @@ describe("SelectedThreadDock", () => {
       expect(dock()).toBeNull();
     });
 
-    it("hands focus to the row once a reveal brings it in", () => {
+    it.each([false, true])("focuses a visible row after a keyboard reveal (offscreen alias: %s)", (alias) => {
       const region = mountList(900, { hidden: true });
       const view = renderDock(region, "open", { directoryKeys: ["pwragent"] });
+      dock()!.focus();
       act(() => dock()!.click());
+      if (alias) {
+        region.querySelector("[data-directory-key='pwrgit']")!.insertAdjacentHTML(
+          "beforeend",
+          `<div class="thread-row-shell" data-thread-key="open">
+            <div class="thread-row" data-row="alias"><button class="thread-row__open"></button></div>
+          </div>`,
+        );
+        place(region.querySelector("[data-row='alias']")!, -150, 60);
+      }
       region.querySelector("[data-directory-key='pwragent']")!.insertAdjacentHTML(
         "beforeend",
         `<div class="thread-row-shell" data-thread-key="open" data-thread-directory-key="pwragent">
