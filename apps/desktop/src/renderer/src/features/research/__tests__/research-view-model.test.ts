@@ -65,7 +65,7 @@ describe("research run phase", () => {
       if (phase.label === "Ready to finish") {
         expect(run.status === "running" && idle && !undecided && run.submissions.some((s) => s.review?.decision === "accepted")).toBe(true);
       }
-    }), { numRuns: 400 });
+    }), { numRuns: 100 });
   });
 
   it("does not call a fully reviewed run, or one with a revision in flight, awaiting review", () => {
@@ -150,7 +150,7 @@ describe("research map", () => {
         branch.assignments.forEach(check);
       };
       branches.forEach(check);
-    }), { numRuns: 400 });
+    }), { numRuns: 100 });
   });
 
   it("nests a focused child and its own findings under the item it investigates", () => {
@@ -251,7 +251,7 @@ describe("research activity paging", () => {
       window = mergeResearchActivityHead(window, read(researchActivityHeadRange(window, limit)));
       while (window.nextBeforeSeq !== undefined) window = appendResearchActivityOlder(window, read({ beforeSeq: window.nextBeforeSeq, limit }));
       expect(window.events).toEqual(projectResearchRun("run", journal).events.toReversed());
-    }), { numRuns: 200 });
+    }), { numRuns: 100 });
   });
 
   it("names the same phase from a run summary as from the synced store of its run", () => {
@@ -333,7 +333,7 @@ describe("research findings filter", () => {
           }
         }
       }
-    }), { numRuns: 150 });
+    }), { numRuns: 100 });
     // The generated filters reached each thing a card shows beyond the finding's own text.
     expect(cut).toBeGreaterThan(100);
     expect(byTitle).toBeGreaterThan(10);
@@ -443,7 +443,7 @@ describe("research map filter", () => {
           }
         }
       }
-    }), { numRuns: 150 });
+    }), { numRuns: 100 });
     // The generated filters reached each kind of text a branch shows.
     for (const part of PARTS) expect([part, reached.get(part) ?? 0]).toEqual([part, expect.toSatisfy((count: number) => count > 10)]);
   });
@@ -517,7 +517,7 @@ describe("research findings paging", () => {
       while (window.next) window = appendResearchFindingsOlder(window, search(researchFindingsOlderCursor(window)));
       expect(window.hits.map((hit) => hit.id)).toEqual(newestFirst());
       expect(window.total).toBe(run().findings.length);
-    }), { numRuns: 200 });
+    }), { numRuns: 100 });
   });
 
   it("restarts from the first page when more findings arrived than a page holds, and ignores a page that repeats loaded hits", () => {

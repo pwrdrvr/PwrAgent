@@ -4,6 +4,15 @@ import { projectResearchRun, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, type Res
 import { ResearchService, validateStartResearch, type ResearchPorts } from "../research-service";
 import { MemoryResearchStorage } from "./fixtures/research-memory-storage";
 
+const eventLimit = vi.hoisted(() => ({ override: undefined as number | undefined }));
+vi.mock("@pwragent/shared/research", async () => {
+  const research = await vi.importActual<typeof import("@pwragent/shared/research")>("@pwragent/shared/research");
+  return {
+    ...research,
+    get RESEARCH_MAX_EVENTS() { return eventLimit.override ?? research.RESEARCH_MAX_EVENTS; },
+  };
+});
+
 const context = { kind: "agent", backend: "codex", threadId: "coordinator", turnId: "parent-turn", callId: "start" } as const;
 const request: StartResearchRequest = { objective: "Investigate a queue race", minutes: 10, workspaceMode: "none",
   approaches: [{ title: "Events", task: "Trace event order" }, { title: "Lifetime", task: "Check owner lifetime" }, { title: "Persistence", task: "Check durable state" }] };
@@ -694,14 +703,20 @@ describe("research lifecycle model", () => {
     const run = await started(service, request, context);
     await service.update(run.id, "s", { action: "submit", approachId: "a1", text: "Candidate", paths: [] }, context);
     await service.update(run.id, "r", { action: "review", submissionId: service.read(run.id, context).submissions[0]!.id, decision: "revision_requested", reason: "Check evidence" }, { ...context, kind: "operator" });
-    const records = storage.records.get(run.id)!;
-    while (records.length < RESEARCH_MAX_EVENTS) records.push({ seq: records.length + 1, commandId: `prior-boundary:${records.length}`, signature: "prior-boundary", at: 1000, actor: context,
-      data: { type: "worker", approachId: "a1", state: "running" } });
-    await expect(service.update(run.id, "over-limit", { action: "finding", approachId: "a1", kind: "note", text: "More work", paths: [] }, context)).rejects.toThrow("limit");
-    await service.update(run.id, "stop", { action: "stop", reason: "Stop" }, context);
-    const stopped = service.read(run.id, context);
-    expect(stopped.status).toBe("stopped");
-    expect(stopped.deliveries[0]?.state).toBe("cancelled");
+    // Drive the real boundary check one event before and at the limit
+    // without making the in-memory storage replay a 100,000-event journal.
+    eventLimit.override = storage.records.get(run.id)!.length + 1;
+    try {
+      await service.update(run.id, "at-limit", { action: "finding", approachId: "a1", kind: "note", text: "Last contribution", paths: [] }, context);
+      expect(service.read(run.id, context).revision).toBe(RESEARCH_MAX_EVENTS);
+      await expect(service.update(run.id, "over-limit", { action: "finding", approachId: "a1", kind: "note", text: "More work", paths: [] }, context)).rejects.toThrow("limit");
+      await service.update(run.id, "stop", { action: "stop", reason: "Stop" }, context);
+      const stopped = service.read(run.id, context);
+      expect(stopped.status).toBe("stopped");
+      expect(stopped.deliveries[0]?.state).toBe("cancelled");
+    } finally {
+      eventLimit.override = undefined;
+    }
   });
 
   it("settles an unknown revision cancellation only after its exact admitted turn ends", async () => {

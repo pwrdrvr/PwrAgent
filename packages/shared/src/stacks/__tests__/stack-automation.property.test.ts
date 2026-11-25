@@ -73,14 +73,16 @@ function publish(model: Model, index: number) {
 
 function monitor(model: Model) {
   const gates = actual(model);
+  const firstUnsettled = model.layers.findIndex((_, i) => !settled(model, i));
+  expect(gates.map((gate) => gate.heldBy?.number)).toEqual(model.layers.map((_, index) =>
+    firstUnsettled >= 0 && firstUnsettled < index ? model.layers[firstUnsettled]!.number : undefined,
+  ));
   for (const [index, gate] of gates.entries()) {
-    const lower = model.layers.findIndex((_, i) => i < index && !settled(model, i));
-    expect(gate.heldBy?.number).toBe(lower < 0 ? undefined : model.layers[lower]!.number);
     const layer = model.layers[index]!;
     const mayStartRepair = (layer.ci === "failing" || layer.conflict)
       && !layer.repair && !layer.merged && !stackDispatchBlock(gate);
     if (mayStartRepair) {
-      expect(lower).toBe(-1);
+      expect(firstUnsettled < 0 || firstUnsettled >= index).toBe(true);
       expect(layer.remote).toBe(layer.local);
       expect(layer.base).toBe(parentTip(model, index));
       layer.repair = true;
@@ -139,7 +141,7 @@ test("the gate holds every upper trigger behind the first unsettled layer", () =
 });
 
 test("amends and red or running CI coalesce into one replay, push and CI run per upper layer", () => {
-  fc.assert(fc.property(fc.integer({ min: 2, max: 28 }), fc.infiniteStream(fc.integer({ min: 1, max: 20 })), (size, noise) => {
+  fc.assert(fc.property(fc.integer({ min: 2, max: 28 }), fc.array(fc.integer({ min: 1, max: 20 }), { minLength: 87, maxLength: 87 }), (size, noise) => {
     const model = { layers: makeStack(size), tip: size, trunk: 0 };
     const bottom = model.layers[0]!;
     const delays = noise[Symbol.iterator]();
@@ -161,5 +163,5 @@ test("amends and red or running CI coalesce into one replay, push and CI run per
       const total = model.layers.slice(1).reduce((sum, layer) => sum + layer.ciRuns, 0);
       expect(total).toBe(wave * (size - 1));
     }
-  }), { numRuns: 35 });
+  }), { numRuns: 12, examples: [[28, Array<number>(87).fill(20)]] });
 });

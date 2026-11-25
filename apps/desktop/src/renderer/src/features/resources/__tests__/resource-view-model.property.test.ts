@@ -123,16 +123,7 @@ const sharingArb = fc.oneof(
     }))),
 );
 
-const resourceArb: fc.Arbitrary<ResourceDomain> = fc.record({
-  condition: fc.constantFrom(...CONDITIONS),
-  boundAuthority: fc.boolean(),
-  conflict: fc.constantFrom("none", "remedy", "resolvable"),
-  sharing: sharingArb,
-  allocations: fc.array(allocationArb, { maxLength: 3 }),
-  queue: fc.array(queueEntryArb, { maxLength: 3 }),
-  fencing: fc.option(fc.constantFrom("verified", "unverified", "unknown"), { nil: undefined }),
-  actions: gatesArb,
-}).map(({ condition, boundAuthority, conflict, sharing, allocations, queue, fencing, actions }) => ({
+const publishedResource = {
   resourceId: "res-1",
   canonicalKey: "machine:abc:cpu",
   displayName: "Resource",
@@ -143,18 +134,32 @@ const resourceArb: fc.Arbitrary<ResourceDomain> = fc.record({
   placement: "machine",
   visibility: "machine",
   allocationScope: "machine",
-  authorityId: boundAuthority ? AUTHORITY_ID : null,
-  condition,
-  sharing,
   enforcement: { coverage: "enforced", summary: "Enforced", gaps: [] },
-  allocations,
-  queue,
   readiness: [],
   advertisements: [],
   routes: [],
   instructions: null,
   policy: { useScope: "All", manageScope: "Operator", renewalRule: "None", finalEffect: "None" },
   cleanup: { state: "verified", detail: "ok" },
+  definition: { revision: 1, publication: "published", updatedAt: 0 },
+} satisfies Partial<ResourceDomain>;
+
+const resourceArb: fc.Arbitrary<ResourceDomain> = fc.record({
+  condition: fc.constantFrom(...CONDITIONS),
+  boundAuthority: fc.boolean(),
+  conflict: fc.constantFrom("none", "remedy", "resolvable"),
+  sharing: sharingArb,
+  allocations: fc.array(allocationArb, { maxLength: 3 }),
+  queue: fc.array(queueEntryArb, { maxLength: 3 }),
+  fencing: fc.option(fc.constantFrom("verified", "unverified", "unknown"), { nil: undefined }),
+  actions: gatesArb,
+}).map(({ condition, boundAuthority, conflict, sharing, allocations, queue, fencing, actions }) => ({
+  ...publishedResource,
+  authorityId: boundAuthority ? AUTHORITY_ID : null,
+  condition,
+  sharing,
+  allocations,
+  queue,
   recovery: fencing
     ? { allocationId: "a", generation: 1, reason: "r", since: 0, fencing, evidence: [] }
     : null,
@@ -167,7 +172,6 @@ const resourceArb: fc.Arbitrary<ResourceDomain> = fc.record({
         ? { resolution: { kind: "adopt_store" as const, label: "Adopt for this machine", consequence: "Copied checkouts are dropped." } }
         : {}),
     },
-  definition: { revision: 1, publication: "published", updatedAt: 0 },
   actions,
 }));
 
@@ -275,18 +279,35 @@ describe("resource view model", () => {
         },
         { authorityId: AUTHORITY_ID, kind: "machine_broker", label: "Broker", endpointLabel: "socket", epoch: 1, status: "reachable" },
       ]);
-    let possibleWithQueue = 0;
     fc.assert(fc.property(requestableArb, ([resource, authority]) => {
       const request = resourceActions(resource, authority).find((action) => action.kind === "request");
       if (!request) return;
       const possible = resource.sharing.mode === "counted"
         ? resource.sharing.inUse < resource.sharing.capacity
         : resource.queue.length === 0 && resource.allocations.length === 0;
-      if (possible && resource.queue.length) possibleWithQueue += 1;
       expect(request.label).toBe(possible ? "Request checkout" : "Join queue");
     }));
-    // The generator must reach the case the property is about.
-    expect(possibleWithQueue).toBeGreaterThan(0);
+  });
+
+  it("offers an immediate counted grant even when another operator is queued", () => {
+    const authority: ResourceAuthority = {
+      authorityId: AUTHORITY_ID, kind: "machine_broker", label: "Broker", endpointLabel: "socket", epoch: 1, status: "reachable",
+    };
+    const resource: ResourceDomain = {
+      ...publishedResource,
+      condition: "available",
+      authorityId: AUTHORITY_ID,
+      ownershipConflict: null,
+      recovery: null,
+      sharing: { mode: "counted", capacity: 2, inUse: 1, unitLabel: "slots" },
+      allocations: [],
+      queue: [{
+        queueEntryId: "entry-1", position: 1, requester: { kind: "operator", label: "Peer" }, purpose: "Build",
+        requestedAt: 0, eligibility: { eligible: true }, viewerOwns: false,
+      }],
+      actions: { request: { allowed: true } },
+    };
+    expect(resourceActions(resource, authority).find((action) => action.kind === "request")?.label).toBe("Request checkout");
   });
 
   it("offers exactly one of request, cancel and release", () => {

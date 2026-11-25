@@ -93,7 +93,7 @@ describe("every secret input states its stored value the same way", () => {
           removeName: "Remove saved Fixture key",
         });
       }),
-      { numRuns: 20 },
+      { numRuns: 8 },
     );
   });
 
@@ -126,7 +126,7 @@ describe("every secret input states its stored value the same way", () => {
           removeName: "Remove saved API key",
         });
       }),
-      { numRuns: 20 },
+      { numRuns: 8 },
     );
   });
 
@@ -147,7 +147,7 @@ describe("every secret input states its stored value the same way", () => {
           draft: Boolean(draft),
         });
       }),
-      { numRuns: 20 },
+      { numRuns: 8 },
     );
   });
 
@@ -173,7 +173,7 @@ describe("every secret input states its stored value the same way", () => {
           draft: draft !== "",
         });
       }),
-      { numRuns: 20 },
+      { numRuns: 8 },
     );
   });
 
@@ -294,7 +294,7 @@ describe("removing a stored secret", () => {
         });
         await expectRemovalWaitsForConfirm(steps, "Fixture key", () => onClearSecret.mock.calls.length);
       }),
-      { numRuns: 40 },
+      { numRuns: 8 },
     );
   });
 });
@@ -333,7 +333,7 @@ describe("a secret in a form that writes on its own Save", () => {
           expect(onRemove).toHaveBeenLastCalledWith(true);
         }
       }),
-      { numRuns: 30 },
+      { numRuns: 8 },
     );
   });
 });

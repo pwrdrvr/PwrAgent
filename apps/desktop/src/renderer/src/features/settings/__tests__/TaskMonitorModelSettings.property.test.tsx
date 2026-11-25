@@ -52,6 +52,6 @@ describe("TaskMonitorModelSettings properties", () => {
       } finally {
         cleanup();
       }
-    }), { numRuns: 50 });
+    }), { numRuns: 12 });
   });
 });

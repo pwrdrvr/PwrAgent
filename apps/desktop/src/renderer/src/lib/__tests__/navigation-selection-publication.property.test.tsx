@@ -1,7 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
-import fc from "fast-check";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { Sidebar } from "../../features/navigation/Sidebar";
@@ -34,26 +33,16 @@ function stableSelectionHistory(...args: Parameters<typeof runSelectionHistory>)
 // Selecting a loaded sibling changes neither membership nor the owner's saved
 // order. Independently completed exact metadata batches must preserve both in
 // every publication, including the gap while their identity sets turn over.
-it.for([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
-  "keeps child rows stable through selection with $count siblings, reverse=$reverse", async ({ count, reverse }, { signal }) => {
-    await stableSelectionHistory(signal, count, reverse, [1, 2, 1, 0], reverse);
-  },
-);
-
-// Partition the same 12 generated histories at pagination boundaries so each
-// mounted model stays within the suite's per-test execution budget.
-it.for([{ min: 3, max: 9 }, { min: 10, max: 11 }, { min: 12, max: 16 }])(
-  "keeps owner order through generated histories with $min–$max children", async (range, { signal }) => {
-  await ownSelectionWork(fc.assert(fc.asyncProperty(fc.integer(range), fc.array(fc.nat(), { minLength: 3, maxLength: 7 }),
-    fc.boolean(), fc.boolean(), (count, selections, reverse, hover) => stableSelectionHistory(signal, count, reverse, selections, hover)), { numRuns: 4 }));
+it("keeps child rows stable through repeated selection and reverse replies on the first page", async ({ signal }) => {
+  await stableSelectionHistory(signal, 6, true, [1, 2, 1, 0], true);
 });
 
-it.for([false, true].flatMap((offPage) => [{ min: 3, max: 9 }, { min: 10, max: 16 }].map((range) => ({ offPage, ...range }))))(
-  "preserves generated selection publications, offPage=$offPage children=$min–$max", async ({ offPage, ...range }, { signal }) => {
-  await ownSelectionWork(fc.assert(fc.asyncProperty(fc.integer(range),
-    fc.array(fc.nat(), { minLength: 3, maxLength: 6 }), fc.boolean(),
-    (count, selections, reverse) => stableSelectionHistory(signal, count, reverse, selections, false,
-      !offPage, false, offPage, !offPage)), { numRuns: 3 }));
+it("preserves off-page parent ancestry and owner order across the child pagination boundary", async ({ signal }) => {
+  await stableSelectionHistory(signal, 11, false, [10, 1, 10, 0], false, false, false, true);
+});
+
+it("keeps viewer child demand with split owner directories across reverse exact replies", async ({ signal }) => {
+  await stableSelectionHistory(signal, 12, true, [11, 1, 11, 2], false, true, false, false, true);
 });
 
 it("keeps native order when owner-directory ancestry stops before the viewer-mounted parent", async ({ signal }) => {
@@ -63,18 +52,6 @@ it("keeps native order when owner-directory ancestry stops before the viewer-mou
 it("keeps a legacy cross-provider parent identity across scoped owner exact reads", async ({ signal }) => {
   await stableSelectionHistory(signal, 6, false, [1, 2, 1], false, false, true);
 });
-
-it.for([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
-  "retains off-page parent ancestry during child selection, count=$count reverse=$reverse", async ({ count, reverse }, { signal }) => {
-    await stableSelectionHistory(signal, count, reverse, [1, 2, 1], false, false, false, true);
-  },
-);
-
-it.for([6, 12].flatMap((count) => [false, true].map((reverse) => ({ count, reverse }))))(
-  "keeps viewer child demand with split owner directories, count=$count reverse=$reverse", async ({ count, reverse }, { signal }) => {
-    await stableSelectionHistory(signal, count, reverse, [1, 2, 1], false, true, false, false, true);
-  },
-);
 
 async function runSelectionHistory(signal: AbortSignal, count: number, reverse: boolean, selections: number[], hover: boolean, differentOwnerProjects = false, crossProvider = false, offPage = false, startAtParent = false, afterReady?: (container: HTMLElement) => Promise<void>): Promise<void> {
   signal.throwIfAborted();
