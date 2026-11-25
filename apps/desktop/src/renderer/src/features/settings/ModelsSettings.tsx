@@ -33,8 +33,9 @@ import type {
 import type { DesktopDecisionModelSettings } from "@pwragent/shared/decision-models";
 import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-app-server";
 import { Select, type SelectOption } from "../../components/Select";
+import { ModelSettingsPicker } from "../composer/ModelSettingsPicker";
+import { splitEffortChoices } from "../composer/model-settings-picker-model";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { modelSelectOptions } from "../../lib/model-select-options";
 import {
   describeExecutionModeForBackend,
   formatExecutionModeLabel,
@@ -1824,7 +1825,6 @@ function ProviderModelDefaultField(props: {
   const { pending: fastAllowPending, track: trackFastAllow } =
     useSettingsFieldPending();
   const models = props.backend.launchpadOptions?.models ?? [];
-  const modelRows = modelSelectOptions({ kind: props.backend.kind, models });
   const selectedModel = props.defaults?.model ?? "";
   const modelOption = models.find((model) => model.id === selectedModel);
   const reasoningOptions = reasoningOptionsFor(
@@ -1840,20 +1840,7 @@ function ProviderModelDefaultField(props: {
       !selectedReasoning
       || reasoningOptions.includes(selectedReasoning)
     );
-  const modelChoices: SelectOption[] = [
-    { value: "", label: "Provider advertised default" },
-    ...(selectedModel && !modelOption
-      ? [{ value: selectedModel, label: `${selectedModel} (unavailable)` }]
-      : []),
-    ...modelRows,
-  ];
-  const reasoningChoices: SelectOption[] = [
-    { value: "", label: "Provider advertised reasoning" },
-    ...(selectedReasoning && !reasoningOptions.includes(selectedReasoning)
-      ? [{ value: selectedReasoning, label: `${selectedReasoning} (unavailable)` }]
-      : []),
-    ...reasoningOptions.map((effort) => ({ value: effort, label: effort })),
-  ];
+  const { stops: effortStops } = splitEffortChoices(reasoningOptions);
 
   return (
     <SettingsField
@@ -1866,58 +1853,78 @@ function ProviderModelDefaultField(props: {
       control={
         <div className="settings-paths">
           <div className="settings-provider-defaults__selectors">
-            <Select
-              aria-label={`${props.backend.label} default model`}
-              className="settings-select settings-select--chip"
+            <ModelSettingsPicker
+              ariaLabel={`${props.backend.label} default model`}
               disabled={props.disabled}
-              value={selectedModel}
-              options={modelChoices}
-              onChange={(model) => {
-                if (!model) {
-                  props.onChange(withoutModel(props.defaults));
-                  return;
-                }
-                const option = models.find((candidate) => candidate.id === model);
-                const reasoningEffortsByModel = {
-                  ...(props.defaults?.reasoningEffortsByModel ?? {}),
-                };
-                if (
-                  option?.defaultReasoningEffort
-                  && !reasoningEffortsByModel[model]
-                ) {
-                  reasoningEffortsByModel[model] = option.defaultReasoningEffort;
-                }
-                props.onChange({
-                  ...props.defaults,
-                  model,
-                  reasoningEffortsByModel,
-                });
-              }}
-            />
-            {selectedModel && reasoningOptions.length > 0 ? (
-              <Select
-                aria-label={`${props.backend.label} default reasoning`}
-                className="settings-select settings-select--chip"
-                disabled={props.disabled}
-                value={selectedReasoning}
-                options={reasoningChoices}
-                onChange={(effort) => {
+              size="setting"
+              provider={{ label: props.backend.label, note: "New thread default" }}
+              model={{
+                value: selectedModel,
+                label: modelOption?.label ?? (selectedModel || "Provider default"),
+                kind: props.backend.kind,
+                models,
+                leadingOptions: [
+                  {
+                    value: "",
+                    label: "Provider default",
+                    description: `Whatever ${props.backend.label} advertises.`,
+                  },
+                  ...(selectedModel && !modelOption
+                    ? [{
+                        value: selectedModel,
+                        label: selectedModel,
+                        description: "Not in this provider's catalog.",
+                        disabled: true,
+                      }]
+                    : []),
+                ],
+                onChange: (model) => {
+                  if (!model) {
+                    props.onChange(withoutModel(props.defaults));
+                    return;
+                  }
+                  const option = models.find((candidate) => candidate.id === model);
                   const reasoningEffortsByModel = {
                     ...(props.defaults?.reasoningEffortsByModel ?? {}),
                   };
-                  if (effort) {
-                    reasoningEffortsByModel[selectedModel] = effort;
-                  } else {
-                    delete reasoningEffortsByModel[selectedModel];
+                  if (
+                    option?.defaultReasoningEffort
+                    && !reasoningEffortsByModel[model]
+                  ) {
+                    reasoningEffortsByModel[model] = option.defaultReasoningEffort;
                   }
                   props.onChange({
                     ...props.defaults,
-                    model: selectedModel,
+                    model,
                     reasoningEffortsByModel,
                   });
-                }}
-              />
-            ) : null}
+                },
+              }}
+              {...(reasoningOptions.length > 0 || selectedReasoning ? {
+                effort: {
+                  stops: effortStops,
+                  value: selectedReasoning,
+                  defaultOption: { value: "", label: "Provider default" },
+                  // A saved effort belongs to a saved model.
+                  disabled: !selectedModel,
+                  onChange: (effort: string) => {
+                    const reasoningEffortsByModel = {
+                      ...(props.defaults?.reasoningEffortsByModel ?? {}),
+                    };
+                    if (effort) {
+                      reasoningEffortsByModel[selectedModel] = effort;
+                    } else {
+                      delete reasoningEffortsByModel[selectedModel];
+                    }
+                    props.onChange({
+                      ...props.defaults,
+                      model: selectedModel,
+                      reasoningEffortsByModel,
+                    });
+                  },
+                },
+              } : {})}
+            />
           </div>
           {selectedModel ? (
             <div className="settings-inline-actions">

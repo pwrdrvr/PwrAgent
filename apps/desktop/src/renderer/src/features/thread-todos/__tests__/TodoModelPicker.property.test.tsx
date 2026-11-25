@@ -8,7 +8,7 @@ import { TodoDispatchProvider } from "../TodoDispatchProvider";
 import {
   codexCatalogModels,
   codexCatalogWithChoiceArbitrary,
-  expectModelDropdownToList,
+  expectModelSettingsToList,
   expectedModelDropdown,
 } from "../../../test/model-catalog";
 
@@ -47,15 +47,13 @@ async function runCatalogCase(signal: AbortSignal, [models, choice]: CatalogCase
     });
     if (afterOpen) await afterOpen();
     signal.throwIfAborted();
-    fireEvent.click(screen.getByRole("menuitem", { name: /^To-do model:/ }));
-    const list = screen.getByRole("listbox", { name: /^To-do model/ });
-    // The Provider picker chooses the Codex provider, so the Model menu
-    // lists that provider's models by the shared rule.
-    expectModelDropdownToList(list, "To-do model", expectedModelDropdown({
+    // The Provider rail chooses the Codex provider, so the Model list
+    // shows that provider's models by the shared rule.
+    expectModelSettingsToList(screen.getByRole("dialog", { name: "Model for the new thread" }), expectedModelDropdown({
       kind: "codex",
       models,
       thread: { model: choice.id },
-      opensDown: true,
+      otherInline: true,
     }));
   } finally {
     mounted.unmount();
@@ -79,7 +77,7 @@ function fixtureModels(): CatalogCase {
   return [models, models[0]!];
 }
 
-function menuGate() {
+function panelGate() {
   let release!: () => void;
   let opened!: () => void;
   const ready = new Promise<void>(resolve => { opened = resolve; });
@@ -88,17 +86,17 @@ function menuGate() {
     ready,
     release,
     afterOpen: async () => {
-      expect(screen.getByRole("menuitem", { name: /^To-do model:/ })).toBeTruthy();
+      expect(screen.getByRole("dialog", { name: "Model for the new thread" })).toBeTruthy();
       opened();
       await hold;
     },
   };
 }
 
-it("an aborted menu case leaves another render root intact", async () => {
+it("an aborted panel case leaves another render root intact", async () => {
   const aborted = new AbortController();
-  const reason = new Error("controlled abort at menu readiness");
-  const gate = menuGate();
+  const reason = new Error("controlled abort at panel readiness");
+  const gate = panelGate();
   const work = runCatalogCase(aborted.signal, fixtureModels(), gate.afterOpen).then(() => undefined, error => error);
   await gate.ready;
   const other = render(<div>Independent owner</div>);
@@ -116,13 +114,13 @@ it("an aborted menu case leaves another render root intact", async () => {
 });
 
 it("teardown joins the admitted case before global DOM cleanup", async () => {
-  const gate = menuGate();
+  const gate = panelGate();
   const work = activeProperty = runCatalogCase(new AbortController().signal, fixtureModels(), gate.afterOpen);
   const outcome = work.then(() => undefined, error => error);
   await gate.ready;
   const retiring = retireCatalogModels();
   try {
-    expect(screen.queryByRole("menuitem", { name: /^To-do model:/ })).not.toBeNull();
+    expect(screen.queryByRole("dialog", { name: "Model for the new thread" })).not.toBeNull();
   } finally {
     gate.release();
     await outcome;

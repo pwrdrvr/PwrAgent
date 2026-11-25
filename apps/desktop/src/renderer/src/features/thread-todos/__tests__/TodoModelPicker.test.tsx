@@ -10,6 +10,7 @@ import {
   codexCatalogModels,
   composerDropdownOptionLabels,
 } from "../../../test/model-catalog";
+import { chooseEffort, chooseModelSettingsOption } from "../../../test/model-settings";
 
 const thread: ThreadTodoModelSettings = { backend: "claude", model: "opus", reasoningEffort: "high" };
 const codex: ThreadTodoModelSettings = { backend: "codex", model: "sol", reasoningEffort: "high" };
@@ -37,9 +38,21 @@ function setup(todo = base, recents = [codex], catalog = backends) {
   return { ...result, onRun, api, tree };
 }
 
+const LABEL = "Model for the new thread";
+
 async function openPicker() {
   await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Model for the new thread:/ })); });
-  return screen.getByRole("menu", { name: "Model for the new thread" });
+  return screen.getByRole("dialog", { name: LABEL });
+}
+
+/** The one-click rows above the editor: This thread, Suggested, Recent. */
+function readyRows(panel: HTMLElement): HTMLElement[] {
+  return within(within(panel).getByRole("listbox", { name: "Ready settings" })).getAllByRole("option");
+}
+
+function rowName(row: HTMLElement): string {
+  const detail = row.getAttribute("aria-description");
+  return `${row.getAttribute("aria-label")}${detail ? ` (${detail})` : ""}`;
 }
 
 describe("to-do dispatch model picker", () => {
@@ -49,9 +62,9 @@ describe("to-do dispatch model picker", () => {
       executionMode: "auto", workMode: "local",
     }, dispatchDefaults: { thread: codex, lastDispatch: codex } };
     const { onRun } = setup(todo, []);
-    expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high effort" })).toBeTruthy();
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show start settings" })); });
-    expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high effort" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(onRun).toHaveBeenCalledWith(todo, expect.objectContaining({
       modelSettings: { backend: "claude", model: "opus", reasoningEffort: "high" },
@@ -62,12 +75,10 @@ describe("to-do dispatch model picker", () => {
     const settings: ThreadTodoModelSettings = { backend: "codex", model: "gpt-6.1-sol" };
     const todo = { ...base, dispatchDefaults: { thread: settings } };
     const { onRun } = setup(todo, [], [{ ...backends[1]!, launchpadOptions: { models: codexCatalogModels() } }]);
-    await openPicker();
-    fireEvent.click(screen.getByRole("menuitem", { name: "To-do model: GPT-6.1-Sol" }));
-    expect(composerDropdownOptionLabels(screen.getByRole("listbox", { name: /^To-do model/ })))
-      .toEqual([...CURRENT_CODEX_MODEL_LABELS, "Other"]);
-    fireEvent.click(screen.getByRole("menuitem", { name: /^To-do provider:/ }));
-    const providers = screen.getByRole("listbox", { name: /^To-do provider/ });
+    const panel = await openPicker();
+    expect(composerDropdownOptionLabels(within(panel).getByRole("listbox", { name: "Model" })))
+      .toEqual(CURRENT_CODEX_MODEL_LABELS);
+    const providers = within(panel).getByRole("listbox", { name: "Provider" });
     expect(composerDropdownOptionLabels(providers)).toEqual(["Codex", PROVIDER_MODEL.providerLabel]);
     await act(async () => {
       fireEvent.click(within(providers).getByRole("option", {
@@ -88,69 +99,66 @@ describe("to-do dispatch model picker", () => {
       models: labels.map((label) => ({ id: label.toLowerCase(), label })),
     } }];
     const { onRun } = setup(todo, [], catalog);
-    await openPicker();
-    fireEvent.click(screen.getByRole("menuitem", { name: "To-do model: GPT-5.6-Terra" }));
-    expect(screen.getAllByRole("option").map((option) =>
-      option.querySelector(".composer-dropdown__option-label")?.textContent,
-    )).toEqual([
-      "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "Other",
+    const panel = await openPicker();
+    expect(composerDropdownOptionLabels(within(panel).getByRole("listbox", { name: "Model" }))).toEqual([
+      "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna",
     ]);
-    fireEvent.click(screen.getByRole("option", { name: "Other" }));
-    const other = screen.getByRole("listbox", { name: "To-do model: Other" });
+    // The chosen legacy model opens Other in place.
+    const other = within(panel).getByRole("listbox", { name: "Model: Other" });
     const legacy = within(other).getByRole("option", { name: "GPT-5.6-Terra" });
     expect(legacy.getAttribute("aria-selected")).toBe("true");
-    expect(within(other).getAllByRole("option").map((option) =>
-      option.querySelector(".composer-dropdown__option-label")?.textContent,
-    )).toEqual([
+    expect(composerDropdownOptionLabels(other)).toEqual([
       "GPT-6-Sol", "GPT-5.6-Sol", "GPT-5.6-Terra", "GPT-5.6-Luna",
     ]);
-    fireEvent.click(screen.getByRole("option", { name: "GPT-6-Sol" }));
+    chooseModelSettingsOption("Model", "GPT-6-Sol", LABEL);
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(onRun).toHaveBeenCalledWith(todo, { modelSettings: { backend: "codex", model: "gpt-6-sol" } });
   });
 
-  it("always shows the Model fact first and opens This thread, Recent, then Custom with display labels", async () => {
+  it("always shows the Model fact first and opens This thread, Recent, then the editor with display labels", async () => {
     const { container, api } = setup();
     // No peer can host it, so the row has no Machine chip; Model leads.
     expect(within(screen.getByRole("group", { name: "Start settings" })).getAllByRole("button")[0]!.getAttribute("aria-label"))
       .toMatch(/^Model for the new thread:/);
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Show start settings" })); });
     expect([...container.querySelectorAll("dt")].map((dt) => dt.textContent)).toEqual(["Model", "Thread", "Where", "Env"]);
-    expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high" }).getAttribute("aria-expanded")).toBe("false");
-    const menu = await openPicker();
+    expect(screen.getByRole("button", { name: "Model for the new thread: Claude, Opus 5.5, high effort" }).getAttribute("aria-expanded")).toBe("false");
+    const panel = await openPicker();
     expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).hasAttribute("data-tooltip")).toBe(false);
-    expect(within(menu).getAllByRole("menuitemradio").map((row) => row.textContent)).toEqual([
-      "Claude · Opus 5.5 · highThis thread", "Codex · GPT-6.1-Sol · high",
+    expect(readyRows(panel).map(rowName)).toEqual([
+      "Claude, Opus 5.5, high effort (This thread)", "Codex, GPT-6.1-Sol, high effort",
     ]);
+    expect(within(panel).getByRole("group", { name: "Recent" })).toBeTruthy();
     expect(api.listModelSettingsRecents).toHaveBeenCalledWith({ scope: "todo-dispatch", federationTarget: undefined });
     expect(screen.queryByText("Picked for this card")).toBeNull();
-    expect(document.activeElement).toBe(within(menu).getAllByRole("menuitemradio")[0]);
+    expect(document.activeElement).toBe(readyRows(panel)[0]);
   });
 
-  it("places a bottom-edge menu above its chip and follows scroll geometry", async () => {
+  it("places a bottom-edge panel above its chip and follows scroll geometry", async () => {
     let top = window.innerHeight - 30;
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(() => new DOMRect(200, top, 160, 22));
     vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockReturnValue(300);
     setup();
-    const menu = await openPicker();
-    expect(Number.parseFloat(menu.style.top)).toBe(top - 306);
-    expect(Number.parseFloat(menu.style.maxHeight)).toBeGreaterThan(300);
+    const panel = await openPicker();
+    expect(Number.parseFloat(panel.style.top)).toBe(top - 308);
+    expect(Number.parseFloat(panel.style.maxHeight)).toBeGreaterThan(300);
     top = -50;
-    fireEvent.scroll(window);
-    expect(menu.style.top).toBe("8px");
+    await act(async () => { fireEvent.scroll(window); });
+    expect(panel.style.top).toBe("8px");
     top = 10;
-    fireEvent.resize(window);
-    expect(menu.style.top).toBe("38px");
+    await act(async () => { fireEvent.resize(window); });
+    expect(panel.style.top).toBe("40px");
   });
 
   it("picks a recent for just this card, survives paging, and dispatches it", async () => {
     const { rerender, tree, onRun } = setup();
-    await openPicker();
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "Codex · GPT-6.1-Sol · high" }));
-    expect(screen.queryByRole("menu")).toBeNull();
+    const panel = await openPicker();
+    fireEvent.click(within(panel).getByRole("option", { name: "Codex, GPT-6.1-Sol, high effort" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByText("Picked for this card")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).className).toContain("is-changed");
+    expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).closest(".model-settings")?.className)
+      .toContain("model-settings--changed");
     rerender(tree(base, false));
     rerender(tree(base));
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
@@ -163,8 +171,8 @@ describe("to-do dispatch model picker", () => {
     setup({ ...base, action: { type: "start_thread", prompt: "Go", reasoningEffort: "xhigh" },
       dispatchDefaults: { thread, lastDispatch: codex } });
     expect(screen.getByText(/Last used here. Agent suggested Claude · Opus 5.5 · xhigh/)).toBeTruthy();
-    const menu = await openPicker();
-    expect(within(menu).getAllByRole("menuitemradio")[1]?.textContent).toBe("Claude · Opus 5.5 · xhighSuggested");
+    const panel = await openPicker();
+    expect(rowName(readyRows(panel)[1]!)).toBe("Claude, Opus 5.5, xhigh effort (Suggested)");
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
     fireEvent.click(screen.getByRole("button", { name: "↺ Use suggestion" }));
     expect(screen.getByRole("button", { name: /Model for the new thread: Claude, Opus 5.5, xhigh/ })).toBeTruthy();
@@ -179,41 +187,50 @@ describe("to-do dispatch model picker", () => {
     expect(screen.queryByText("Last used in this thread")).toBeNull();
   });
 
-  it("uses useMenuNavigation arrows, Home, End, Escape and Tab including Custom triggers", async () => {
+  it("walks the ready rows with arrows, Home and End; Escape and Tab out return to the chip", async () => {
     setup();
     const trigger = screen.getByRole("button", { name: /^Model for the new thread:/ });
-    const menu = await openPicker();
-    const rows = within(menu).getAllByRole("menuitemradio");
+    const panel = await openPicker();
+    const rows = readyRows(panel);
     fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(document.activeElement).toBe(rows[1]);
-    fireEvent.keyDown(document.activeElement!, { key: "End" });
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("To-do reasoning: high");
     fireEvent.keyDown(document.activeElement!, { key: "Home" });
     expect(document.activeElement).toBe(rows[0]);
+    fireEvent.keyDown(document.activeElement!, { key: "End" });
+    expect(document.activeElement).toBe(rows[rows.length - 1]);
     fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(trigger);
+    // The panel is portalled: Shift+Tab off its first stop and Tab off its
+    // last both land on the chip and close it.
     await openPicker();
-    fireEvent.keyDown(document.activeElement!, { key: "Tab" });
-    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.keyDown(document.activeElement!, { key: "Tab", shiftKey: true });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    const reopened = await openPicker();
+    const slider = within(reopened).getByRole("slider", { name: "Effort" });
+    slider.focus();
+    fireEvent.keyDown(slider, { key: "Tab" });
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
 
-  it("keeps Custom changes open and lets the nested dropdown claim its arrow keys and Escape", async () => {
-    setup();
-    await openPicker();
-    fireEvent.click(screen.getByRole("menuitem", { name: "To-do provider: Claude" }));
-    expect(screen.getByRole("listbox")).toBeTruthy();
-    fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
-    expect(document.activeElement?.textContent).toContain("Codex");
-    fireEvent.click(document.activeElement!);
-    expect(screen.queryByRole("listbox")).toBeNull();
-    expect(screen.getByRole("menu")).toBeTruthy();
-    expect(screen.getByRole("menuitem", { name: "To-do model: GPT-6.1-Sol" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("menuitem", { name: "To-do reasoning: high" }));
-    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
-    expect(screen.queryByRole("listbox")).toBeNull();
-    expect(screen.getByRole("menu")).toBeTruthy();
+  it("keeps editor changes open: provider, model and effort each take one click", async () => {
+    const { onRun } = setup();
+    const panel = await openPicker();
+    fireEvent.click(within(within(panel).getByRole("listbox", { name: "Provider" })).getByRole("option", { name: "Codex" }));
+    expect(screen.getByRole("dialog", { name: LABEL })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^Model for the new thread:/ }).getAttribute("aria-label"))
+      .toBe("Model for the new thread: Codex, GPT-6.1-Sol, high effort");
+    chooseEffort("medium", LABEL);
+    expect(screen.getByRole("dialog", { name: LABEL })).toBeTruthy();
+    expect(within(screen.getByRole("dialog", { name: LABEL })).getByRole("slider", { name: "Effort" })
+      .getAttribute("aria-valuetext")).toBe("medium");
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
+    expect(onRun).toHaveBeenCalledWith(base, {
+      modelSettings: { backend: "codex", model: "sol", reasoningEffort: "medium" },
+    });
   });
 
   it("filters missing models/providers, caps Recent at five, and closes on an outside pointer", async () => {
@@ -222,10 +239,10 @@ describe("to-do dispatch model picker", () => {
       codex, { ...codex, reasoningEffort: "medium" }, { ...codex, reasoningEffort: undefined },
       thread, { ...thread, reasoningEffort: "medium" }, { ...thread, reasoningEffort: "xhigh" },
       { ...thread, reasoningEffort: undefined }]);
-    const menu = await openPicker();
-    expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(6);
+    const panel = await openPicker();
+    expect(readyRows(panel)).toHaveLength(6);
     fireEvent.pointerDown(document.body);
-    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("names the provider default when a start-capable backend offers no model list", async () => {
@@ -235,8 +252,10 @@ describe("to-do dispatch model picker", () => {
       <ThreadTodoCard todo={todo} running={false} onRun={vi.fn()} onResolve={vi.fn()}
         onStartReview={vi.fn()} onSetItemChecked={vi.fn()} />
     </TodoDispatchProvider>);
-    await openPicker();
-    expect(screen.getByRole("menuitem", { name: "To-do model: Default model" }).hasAttribute("disabled")).toBe(true);
+    const panel = await openPicker();
+    const fallback = within(within(panel).getByRole("listbox", { name: "Model" })).getByRole("option", { name: "Default model" });
+    expect(fallback.getAttribute("aria-selected")).toBe("true");
+    expect(fallback.getAttribute("aria-disabled")).toBe("true");
   });
 
   it("uses one owner catalog for a remote card's chip and provenance", async () => {
@@ -257,8 +276,8 @@ describe("to-do dispatch model picker", () => {
     </TodoDispatchProvider>);
     expect(await screen.findByRole("button", { name: "↺ Claude · Opus owner · high" })).toBeTruthy();
     expect(api.listBackends).toHaveBeenCalledExactlyOnceWith({ federationTarget });
-    const menu = await openPicker();
-    expect(within(menu).getByRole("menuitemradio", { name: /Claude · Opus owner · high/ })).toBeTruthy();
+    const panel = await openPicker();
+    expect(within(panel).getByRole("option", { name: "Claude, Opus owner, high effort" })).toBeTruthy();
     expect(api.listModelSettingsRecents).toHaveBeenCalledWith({ scope: "todo-dispatch", federationTarget });
   });
 

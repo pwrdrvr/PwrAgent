@@ -1434,13 +1434,16 @@ test.describe("federation remote window", () => {
       const childPrompt = remote.getByRole("textbox", { name: "New thread" });
       await expect(childPrompt).toBeVisible();
       const childSettings = remote.getByLabel("New thread settings");
-      const childProvider = childSettings.getByRole("button", {
-        name: /^Provider(?::|$)/,
-        exact: true,
-      });
+      // The model pill leads with the provider on a launchpad.
+      const childProvider = childSettings.getByTestId("composer-model-settings");
       await expect(childProvider).toContainText("Kimi");
       await childProvider.click();
-      await remote.getByRole("option", { name: "OpenAI", exact: true }).click();
+      await remote
+        .getByRole("dialog", { name: "Model settings" })
+        .getByRole("listbox", { name: "Provider" })
+        .getByRole("option", { name: "OpenAI", exact: true })
+        .click();
+      await remote.keyboard.press("Escape");
       await expect(childProvider).toContainText("OpenAI");
 
       const childTools = remote.getByLabel("Composer tools");
@@ -1728,10 +1731,7 @@ test.describe("federation remote window", () => {
       ).toBeVisible({ timeout: 30_000 });
 
       const settings = remote.getByLabel("New thread settings");
-      const provider = settings.getByRole("button", {
-        name: /^Provider(?::|$)/,
-        exact: true,
-      });
+      const provider = settings.getByTestId("composer-model-settings");
       const ensureCalls = () => gateway!.calls
         .filter((call) => call.method === "ensureDirectoryLaunchpad")
         .map((call) => call.params as { directoryKey: string; preferredBackend?: string });
@@ -2627,15 +2627,18 @@ test.describe("federation remote window", () => {
         .click();
 
       const childSettings = remote.getByLabel("New thread settings");
-      const childProvider = childSettings.getByRole("button", {
-        name: /^Provider(?::|$)/,
-        exact: true,
-      });
+      // The model pill leads with the provider on a launchpad.
+      const childProvider = childSettings.getByTestId("composer-model-settings");
       await expect(childProvider).toContainText("Kimi");
       await childProvider.click();
-      await remote.getByRole("option", { name: "OpenAI", exact: true }).click();
+      await remote
+        .getByRole("dialog", { name: "Model settings" })
+        .getByRole("listbox", { name: "Provider" })
+        .getByRole("option", { name: "OpenAI", exact: true })
+        .click();
+      await remote.keyboard.press("Escape");
       await expect(childProvider).toContainText("OpenAI");
-      await expect(childSettings.getByRole("button", { name: /^Model:/ })).toHaveAttribute("data-value", "gpt-5.5");
+      await expect(childProvider).toHaveAttribute("data-model", "gpt-5.5");
 
       const childAccessMode = childSettings.getByLabel(/^Access mode(?::|$)/);
       if (await childAccessMode.getAttribute("data-value") !== "full-access") {

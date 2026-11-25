@@ -1190,13 +1190,15 @@ describe("App", () => {
       await waitFor(() => expect(listBackends).toHaveBeenCalledWith(expect.objectContaining({
         federationTarget: selectedTarget,
       })));
-      const providerButton = await screen.findByRole("button", { name: /^Provider(?::|$)/ });
+      // The launchpad's model pill leads with the provider.
+      const providerButton = await screen.findByRole("button", { name: /^Model settings(?::|$)/ });
       await waitFor(() => expect(providerButton).toHaveTextContent("Claude"));
       fireEvent.click(providerButton);
-      const choices = screen.getByRole("listbox", { name: "Provider" });
-      expect(within(choices).getByRole("option", { name: "Claude" })).toBeInTheDocument();
+      const choices = within(screen.getByRole("dialog", { name: "Model settings" }))
+        .getByRole("listbox", { name: "Provider" });
+      expect(within(choices).getByRole("option", { name: "Claude" })).toHaveAttribute("aria-selected", "true");
       expect(within(choices).queryByRole("option", { name: "OpenAI" })).not.toBeInTheDocument();
-      fireEvent.click(within(choices).getByRole("option", { name: "Claude" }));
+      fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
       pasteComposerText(await screen.findByRole("textbox", { name: "New thread" }), "Compose on the selected owner");
       await waitFor(() => expect(screen.getByRole("button", { name: "Start thread" })).toBeEnabled());
       await clickButton("Start thread");
