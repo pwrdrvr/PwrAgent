@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { AcpSessionNormalizer } from "@pwrdrvr/agent-acp";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadCommandDetail,
@@ -47,6 +48,8 @@ import {
   readAcpFileRead,
 } from "./acp-file-read.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
+import { reduceNormalizedThread } from "./normalized-thread-reducer.js";
+import { normalizedThreadToReplay, normalizedToolCallToReplayDetail } from "./normalized-thread-to-replay.js";
 
 export type AcpSessionUpdate = {
   sessionId: string;
@@ -71,10 +74,20 @@ export function acpReplayPromptTextDigest(text: string): string {
 }
 
 export type AcpSessionReplayNormalizerOptions = ReadAcpFileEditOptions & {
+  replayKit?: AcpReplayKit;
   surfaceThoughtsAsMessages?: boolean;
   /** Scope provider message IDs after a handoff, keeping the original segment's IDs intact. */
   workspaceSessionId?: string;
 };
+
+export type AcpReplayKit = Pick<typeof import("@pwrdrvr/agent-acp"),
+  "AcpSessionNormalizer" | "defaultQuirks" | "toolCallFromUpdate">;
+
+export async function loadAcpReplayKit(): Promise<AcpReplayKit> {
+  // Loading the package root also loads the ACP SDK. Keep that graph out of
+  // owner startup until a caller initializes an ACP client or reads a replay.
+  return await import("@pwrdrvr/agent-acp");
+}
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
   return backendId !== "acp:qwen" && backendId !== "acp:grok";
@@ -297,6 +310,7 @@ function isSettledTurnStatus(
 }
 
 export class AcpSessionReplayNormalizer {
+  private readonly kitPlanNormalizer?: AcpSessionNormalizer;
   private entries: AppServerThreadEntry[] = [];
   private messages: AppServerThreadMessage[] = [];
   // Arrays own replay order; indexes refer to slots, not entry objects (turn
@@ -340,6 +354,8 @@ export class AcpSessionReplayNormalizer {
   private fileEditOptions: ReadAcpFileEditOptions;
 
   constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {
+    const kit = options.replayKit;
+    this.kitPlanNormalizer = kit ? new kit.AcpSessionNormalizer({ quirks: kit.defaultQuirks() }) : undefined;
     this.fileEditOptions = {
       wholeFileDiffContent: options.wholeFileDiffContent,
       antigravity: options.antigravity,
@@ -974,17 +990,26 @@ export class AcpSessionReplayNormalizer {
   }
 
   private upsertPlan(update: AcpSessionUpdate, createdAt: number): void {
-    const id = readString(update.update, "planId") ?? `plan:${update.sessionId}`;
-    const steps = readPlanSteps(update.update);
-    const plan: AppServerThreadPlanEntry = {
+    const { sessionId, update: payload } = update;
+    if (this.kitPlanNormalizer) {
+      const { events } = this.kitPlanNormalizer.apply(payload, {
+        threadId: sessionId,
+        turnId: this.currentTurnId ?? sessionId,
+      });
+      const [plan] = normalizedThreadToReplay(reduceNormalizedThread(events, sessionId)).entries;
+      if (plan?.type === "plan") {
+        this.upsertEntry({ ...plan, createdAt });
+        return;
+      }
+    }
+    this.upsertEntry({
       type: "plan",
-      id,
+      id: readString(payload, "planId") ?? `plan:${sessionId}`,
       createdAt,
-      explanation: readString(update.update, "explanation"),
-      markdown: readString(update.update, "markdown"),
-      steps,
-    };
-    this.upsertEntry(plan);
+      explanation: readString(payload, "explanation"),
+      markdown: readString(payload, "markdown"),
+      steps: readPlanSteps(payload),
+    });
   }
 
   private upsertToolActivity(
@@ -1025,6 +1050,7 @@ export class AcpSessionReplayNormalizer {
         fileRead,
         this.fileEditOptions,
         followsTitleScript,
+        this.options.replayKit,
       ),
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
@@ -1787,24 +1813,19 @@ function readPlanSteps(record: Record<string, unknown>): AppServerThreadPlanEntr
     if (typeof step === "string") {
       return [{ step, status: "pending" as const }];
     }
-    if (!step || typeof step !== "object" || Array.isArray(step)) {
+    const stepRecord = asRecord(step);
+    if (!stepRecord) {
       return [];
     }
-    const stepRecord = step as Record<string, unknown>;
     const text = readString(stepRecord, "step") ?? readString(stepRecord, "content");
     if (!text) {
       return [];
     }
     const status = readString(stepRecord, "status");
-    return [
-      {
-        step: text,
-        status:
-          status === "in_progress" || status === "completed"
-            ? status
-            : "pending",
-      },
-    ];
+    return [{
+      step: text,
+      status: status === "in_progress" || status === "completed" ? status : "pending",
+    }];
   });
 }
 
@@ -1816,6 +1837,7 @@ function toolActivity(
   fileRead?: AcpFileRead,
   fileEditOptions?: ReadAcpFileEditOptions,
   followsTitleScript = false,
+  replayKit?: AcpReplayKit,
 ): AppServerThreadActivityEntry {
   const id =
     readAcpToolCallId(update.update) ??
@@ -1952,17 +1974,27 @@ function toolActivity(
     providerTool?.label && sameLabel(titleCandidate, providerTool.name)
       ? providerTool.label
       : titleCandidate;
+  const formatAsCommand = !fileRead && !webFetchUrl && displayCommand
+    && (
+      isGenericShellToolTitle(labelCandidate)
+      || (followsTitleScript && isGenericActivityLabel(labelCandidate))
+      || commandTitleMatchesInvocation(labelCandidate, displayCommand)
+    );
+  // PwrAgent still owns provider-specific command extraction and completion
+  // merges. Give the kit the explicit shell invocation after title selection.
+  const kitShell = replayKit && formatAsCommand && rawCommand
+    ? normalizedToolCallToReplayDetail(replayKit.toolCallFromUpdate({
+        kind: "execute",
+        title: "Bash",
+        command: rawCommand,
+      }, kind, update.sessionId))
+    : undefined;
   const label = fileRead
     ? fileRead.label
     : webFetchUrl
       ? `Fetched ${webFetchUrl}`
-      : displayCommand
-          && (
-            isGenericShellToolTitle(labelCandidate)
-            || (followsTitleScript && isGenericActivityLabel(labelCandidate))
-            || commandTitleMatchesInvocation(labelCandidate, displayCommand)
-          )
-        ? formatCommandLabel(displayCommand)
+      : formatAsCommand
+        ? kitShell?.label ?? formatCommandLabel(displayCommand)
         : labelCandidate;
   const status = readToolActivityStatus(update.update);
   const path =
@@ -1992,8 +2024,8 @@ function toolActivity(
         command:
           displayCommand || output !== undefined || exitCode !== undefined
             ? {
-                displayCommand: displayCommand ?? label,
-                rawCommand: rawCommand ?? mcpToolName,
+                displayCommand: kitShell?.command?.displayCommand ?? displayCommand ?? label,
+                rawCommand: kitShell?.command?.rawCommand ?? rawCommand ?? mcpToolName,
                 ...(invocation && !rawCommand ? { source: "tool" as const } : {}),
                 output,
                 exitCode,
