@@ -3836,6 +3836,38 @@ describe("StarMapChatCard settings menu", () => {
     expect(screen.queryByRole("menuitem", { name: /Access/ })).toBeNull();
   });
 
+  it("offers no Fast where the account may not use it", async () => {
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [
+        {
+          kind: "codex",
+          label: "Codex",
+          available: true,
+          codexFastAllowed: false,
+          methods: [],
+          capabilities: {},
+          executionModes: [{ mode: "default", label: "Default Access", available: true }],
+          launchpadOptions: {
+            models: [{ id: "gpt-5-codex", supportsFast: true, reasoningEfforts: ["low", "high"] }],
+            reasoningEfforts: ["low", "high"],
+            supportsFastMode: true,
+          },
+        },
+      ],
+    }));
+    const desktopApi = settingsApi({ listBackends } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread({ fastMode: false, model: "gpt-5-codex" }) });
+    await screen.findByRole("button", { name: /^Model settings/ });
+    await waitFor(() => expect(listBackends).toHaveBeenCalled());
+    // The effort row needs the describe, so the Speed row's absence below
+    // is a decision, not a race.
+    await waitFor(() => {
+      expect(within(openModelSettings()).getByRole("slider")).toBeTruthy();
+    });
+    expect(within(openModelSettings()).queryByRole("radio", { name: "Fast" })).toBeNull();
+  });
+
   it("toggles fast mode for a model that supports it", async () => {
     const desktopApi = settingsApi();
     renderCard({

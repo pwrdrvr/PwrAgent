@@ -90,32 +90,63 @@ const launchpad: NavigationLaunchpadDraft = {
   updatedAt: 1,
 } as NavigationLaunchpadDraft;
 
-function renderLaunchpad(recents: { composer: ModelSettingsRecent[]; todoDispatch: ModelSettingsRecent[] }) {
+const grok = {
+  kind: "acp:grok",
+  label: "Grok",
+  available: true,
+  methods: ["thread/start", "turn/start"],
+  capabilities,
+  executionModes: [{ mode: "default", label: "Default Access", available: true, isDefault: true }],
+  launchpadOptions: {
+    models: [
+      { id: "grok-5", label: "Grok 5", isDefault: true, supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+      { id: "grok-5-mini", label: "Grok 5 Mini", supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+    ],
+  },
+} as BackendSummary;
+
+function renderLaunchpad(
+  recents: { composer: ModelSettingsRecent[]; todoDispatch: ModelSettingsRecent[] },
+  options: {
+    initial?: NavigationLaunchpadDraft;
+    backends?: BackendSummary[];
+    onProviderSelected?: ComponentProps<typeof ProductionComposer>["onProviderSelected"];
+  } = {},
+) {
   const patches: Array<Partial<NavigationLaunchpadDraft>> = [];
+  const backends = options.backends ?? [codex, claude];
+  let latest = options.initial ?? launchpad;
   const listModelSettingsRecents = vi.fn(async ({ scope }: { scope: string }) => ({
     recents: scope === "composer" ? recents.composer : scope === "todo-dispatch" ? recents.todoDispatch : [],
   }));
   function Harness() {
-    const [current, setCurrent] = useState(launchpad);
+    const [current, setCurrent] = useState(latest);
     return (
       <Composer
-        backends={[codex, claude]}
+        backends={backends}
         desktopApi={{
-          listBackends: vi.fn(async () => ({ fetchedAt: 1, backends: [codex, claude] })),
+          listBackends: vi.fn(async () => ({ fetchedAt: 1, backends })),
           listModelSettingsRecents: listModelSettingsRecents as unknown as DesktopApi["listModelSettingsRecents"],
         }}
         directory={{ key: "directory:/repo", kind: "directory", label: "Repo", path: "/repo" }}
         launchpad={current}
+        {...(options.onProviderSelected ? { onProviderSelected: options.onProviderSelected } : {})}
         onUpdateLaunchpad={async (_key, patch) => {
           patches.push(patch);
-          setCurrent((draft) => applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(draft, patch));
+          latest = applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(latest, patch);
+          setCurrent(latest);
         }}
         skills={[]}
       />
     );
   }
   render(<Harness />);
-  return { patches, listModelSettingsRecents };
+  return { patches, listModelSettingsRecents, state: () => latest };
+}
+
+async function settleRecents(list: ReturnType<typeof vi.fn>) {
+  await waitFor(() => expect(list).toHaveBeenCalledWith({ scope: "todo-dispatch" }));
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
 }
 
 describe("new-thread Recent settings", () => {
@@ -158,6 +189,41 @@ describe("new-thread Recent settings", () => {
     expect(patches.at(-1)).toMatchObject({
       backend: "codex", model: "gpt-6-sol", reasoningEffort: "high", fastMode: true, serviceTier: undefined,
     });
+  });
+
+  it("replays a row's unset model and effort as unset, and checks that row after", async () => {
+    const { listModelSettingsRecents, state } = renderLaunchpad({
+      // A thread that started on Claude's default model and effort.
+      composer: [{ backend: "claude" }],
+      todoDispatch: [],
+    }, { initial: { ...launchpad, backend: "claude", model: "opus", reasoningEffort: "high" } });
+    await settleRecents(listModelSettingsRecents);
+    const panel = openModelSettings();
+    fireEvent.click(within(panel).getByRole("option", { name: "Claude, Default model" }));
+    await waitFor(() => expect(state().model).toBeUndefined());
+    expect(state().reasoningEffort).toBeUndefined();
+
+    const reopened = openModelSettings();
+    await waitFor(() => {
+      expect(within(reopened).getByRole("option", { name: "Claude, Default model" }))
+        .toHaveAttribute("aria-selected", "true");
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  });
+
+  it("keeps a Recent row's agent model through that agent's catalog refresh", async () => {
+    const onProviderSelected = vi.fn(async () => grok);
+    const { listModelSettingsRecents, state } = renderLaunchpad({
+      composer: [{ backend: "acp:grok", model: "grok-5-mini", reasoningEffort: "low" }],
+      todoDispatch: [],
+    }, { backends: [codex, claude, grok], onProviderSelected });
+    await settleRecents(listModelSettingsRecents);
+    const panel = openModelSettings();
+    fireEvent.click(within(panel).getByRole("option", { name: "Grok, Grok 5 Mini, low effort" }));
+    await waitFor(() => expect(onProviderSelected).toHaveBeenCalledWith("acp:grok"));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(state()).toMatchObject({ backend: "acp:grok", model: "grok-5-mini", reasoningEffort: "low" });
   });
 
   it("opens on the editor, with no Recent tab, before any thread has started", async () => {

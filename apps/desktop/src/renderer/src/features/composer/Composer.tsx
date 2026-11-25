@@ -15940,19 +15940,24 @@ function useComposerController(props: ComposerProps) {
       const value = providerPickerValue(row.recent.backend, row.recent.model);
       const codex = row.recent.backend === "codex";
       const base = value === providerValue ? {} : providerChangePatch(value) ?? {};
+      // The row names its model, so an agent's catalog refresh keeps it
+      // rather than adopting that agent's default.
+      if (row.recent.model) pendingProviderSelectionKeyRef.current = undefined;
+      // An unset model or effort is the default, and replays as unset.
       handleLaunchpadPatch({
         ...base,
         backend: row.recent.backend,
         ...(codex ? { codexModelProviderId: parseProviderPickerValue(value).codexModelProviderId } : {}),
-        ...(row.recent.model ? { model: row.recent.model } : {}),
-        ...(row.recent.reasoningEffort ? { reasoningEffort: row.recent.reasoningEffort } : {}),
+        model: row.recent.model,
+        reasoningEffort: row.recent.reasoningEffort,
         ...(codex ? codexSpeedSettings(row.speed) : {}),
       }, { keepFocus: true });
     };
+    // A row is the launchpad's own values, unset ones included.
     const recentSelected = (row: NewThreadRecent): boolean =>
       providerPickerValue(row.recent.backend, row.recent.model) === providerValue
-      && (row.recent.model ?? "") === (selectedModelOption?.id ?? "")
-      && (row.recent.reasoningEffort ?? "") === (selectedReasoningEffort ?? "")
+      && (row.recent.model ?? "") === (props.launchpad?.model ?? "")
+      && (row.recent.reasoningEffort ?? "") === (props.launchpad?.reasoningEffort ?? "")
       && row.speed === (backend.kind === "codex" ? selectedSpeed : "standard");
     return {
       provider: {

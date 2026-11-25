@@ -1791,7 +1791,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     const speeds = threadSource === "codex"
       ? codexSpeedOptions(currentModelOption, backendSummary?.codexFastAllowed !== false, supportsFast)
       : [];
-    const fastOnly = supportsFast && !speeds.includes("ultrafast");
+    const fastOnly = speeds.includes("fast") && !speeds.includes("ultrafast");
     const loading = Boolean(desktopApi.listBackends) && !backendSummaries.loaded;
     const { stops, hasModelDefault } = splitEffortChoices(reasoningEfforts);
     // Shown before any catalog is read: the card names the thread's own
