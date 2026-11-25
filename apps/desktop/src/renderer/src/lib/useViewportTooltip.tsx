@@ -478,6 +478,13 @@ export function useViewportTooltip(options: {
   /** True while the anchor is animating and its settled baseline is pending. */
   const anchorSettlingRef = useRef(false);
   const anchorGenerationRef = useRef(0);
+  /** The pointer is inside an enterable card. */
+  const pointerInCardRef = useRef(false);
+  /**
+   * The anchor moved, scrolled or left while an enterable card held the
+   * operator. The card stayed; letting go of it closes it.
+   */
+  const anchorLostWhileHeldRef = useRef(false);
   // Read from the settle callback below, which re-measures the bounds after the
   // motion stops. A ref rather than a dependency: consumers pass an inline
   // arrow, and threading that identity through `rememberTarget` would rebuild
@@ -524,6 +531,8 @@ export function useViewportTooltip(options: {
     targetRef.current = null;
     targetRectRef.current = null;
     anchorSettlingRef.current = false;
+    pointerInCardRef.current = false;
+    anchorLostWhileHeldRef.current = false;
     pointerRef.current = null;
     if (pointerFrameRef.current !== null) {
       window.cancelAnimationFrame(pointerFrameRef.current);
@@ -533,6 +542,28 @@ export function useViewportTooltip(options: {
     if (target) onDismiss?.(target);
   }, [clearHoverDelay, onDismiss, tooltipId]);
   hideRef.current = hide;
+
+  /**
+   * Whether an enterable card holds the operator: the pointer is in it or
+   * focus is on one of its controls. A held card is no longer about its
+   * anchor, so layout under it (a row above gaining a chip, scroll anchoring
+   * compensating for it) must not close it while the operator is mid-action.
+   */
+  const cardHoldsOperator = useCallback((): boolean => {
+    if (!interactiveRef.current) return false;
+    const card = tooltipRef.current;
+    return pointerInCardRef.current
+      || (card !== null && card.contains(document.activeElement));
+  }, []);
+
+  /** The anchor moved or went away: close, unless the card holds the operator. */
+  const loseAnchor = useCallback((): void => {
+    if (cardHoldsOperator()) {
+      anchorLostWhileHeldRef.current = true;
+      return;
+    }
+    hide();
+  }, [cardHoldsOperator, hide]);
 
   /** Take the window's one plain-tooltip slot, hiding whoever held it. */
   const claimPlainTooltipSlot = useCallback((reservedRequest: number | undefined): void => {
@@ -854,6 +885,7 @@ export function useViewportTooltip(options: {
       if (active) hide();
     });
     const onScroll = (event: Event): void => {
+      if (anchorLostWhileHeldRef.current) return;
       const scrollTarget = event.target;
       const target = targetRef.current;
       if (
@@ -861,7 +893,7 @@ export function useViewportTooltip(options: {
         || scrollTarget === document
         || (scrollTarget instanceof Node && target && scrollTarget.contains(target))
       ) {
-        hide();
+        loseAnchor();
       }
     };
     // Pure: it reports what the anchor did, and the observer below decides.
@@ -901,10 +933,11 @@ export function useViewportTooltip(options: {
       targetRectRef.current,
       () => tooltipRef.current,
       (rect) => {
-        if (targetRef.current !== observedTarget) return;
+        // A held card already let its anchor go: measuring again decides nothing.
+        if (targetRef.current !== observedTarget || anchorLostWhileHeldRef.current) return;
         const anchor = readAnchorState(rect);
         if (anchor.status === "gone" || anchor.status === "relocated") {
-          hide();
+          loseAnchor();
         } else if (anchor.status === "settling") {
           // A newly started animation also needs an owned completion callback.
           if (!anchorSettlingRef.current) scheduleAnchorSettle(observedTarget);
@@ -943,7 +976,7 @@ export function useViewportTooltip(options: {
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown, { capture: true });
     };
-  }, [active, hide, observedTarget, scheduleAnchorSettle, state?.targetTop, state?.targetBottom, state?.targetLeft, state?.targetRight]);
+  }, [active, hide, loseAnchor, observedTarget, scheduleAnchorSettle, state?.targetTop, state?.targetBottom, state?.targetLeft, state?.targetRight]);
 
   const tooltipNode =
     state && typeof document !== "undefined"
@@ -954,8 +987,29 @@ export function useViewportTooltip(options: {
             aria-label={interactive?.dialogLabel}
             id={tooltipId}
             className={className}
-            onMouseEnter={interactive ? () => interactiveRef.current?.onPointerEnter() : undefined}
-            onMouseLeave={interactive ? () => interactiveRef.current?.onPointerLeave() : undefined}
+            onMouseEnter={interactive ? () => {
+              pointerInCardRef.current = true;
+              interactiveRef.current?.onPointerEnter();
+            } : undefined}
+            onMouseLeave={interactive ? () => {
+              pointerInCardRef.current = false;
+              // Its anchor moved while the card held the pointer, so the
+              // bridge back to it no longer leads anywhere.
+              if (anchorLostWhileHeldRef.current && !cardHoldsOperator()) {
+                hide();
+                return;
+              }
+              interactiveRef.current?.onPointerLeave();
+            } : undefined}
+            onBlur={interactive ? (event) => {
+              if (
+                anchorLostWhileHeldRef.current
+                && !pointerInCardRef.current
+                && !event.currentTarget.contains(event.relatedTarget as Node | null)
+              ) {
+                hide();
+              }
+            } : undefined}
             // The portal sits in its trigger's React tree, so presses in an
             // enterable card would bubble to the trigger's ancestors (a
             // thread row selects, renames, or starts a drag on them).
