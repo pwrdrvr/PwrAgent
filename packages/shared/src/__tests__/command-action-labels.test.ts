@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatSearchCommandActionLabel } from "../command-action-labels";
+import { formatSearchCommandActionLabel, unwrapCommandText } from "../command-action-labels";
 
 describe("formatSearchCommandActionLabel", () => {
   it("prefers the search query over its root path", () => {
@@ -36,5 +36,11 @@ describe("formatSearchCommandActionLabel", () => {
     expect(formatSearchCommandActionLabel({ query: null, path: "/" })).toBe(
       "Searched",
     );
+  });
+});
+
+describe("unwrapCommandText", () => {
+  it("keeps line breaks and indentation when unwrapping a plain sh -c script", () => {
+    expect(unwrapCommandText('sh -c "pwd\n  pwd"')).toBe("pwd\n  pwd");
   });
 });

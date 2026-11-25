@@ -147,10 +147,22 @@ describe("KTD-P3 normalizer parity", () => {
       label: scriptLabel,
     },
     {
-      scenario: "a long command with a generic Bash title",
+      scenario: "a Bash login-shell command with a generic title",
       fields: { title: "Bash", command: `/bin/bash -lc "${script}"` },
       command: `/bin/bash -lc "${script}"`,
       label: scriptLabel,
+    },
+    {
+      scenario: "a Bash -c command with a generic title",
+      fields: { title: "Bash", command: `/bin/bash -c "${script}"` },
+      command: `/bin/bash -c "${script}"`,
+      label: scriptLabel,
+    },
+    {
+      scenario: "a single-quoted Zsh login-shell command",
+      fields: { title: "Bash", command: "/bin/zsh -lc 'git status'" },
+      command: "/bin/zsh -lc 'git status'",
+      label: "git status",
     },
   ])("shell label parity for $scenario", ({ fields, command, label }) => {
     const call = { toolCallId: "fixture-command", kind: "execute", ...fields };
@@ -162,9 +174,8 @@ describe("KTD-P3 normalizer parity", () => {
     const inTree = runInTree(updates);
 
     // Both pipelines use the same one-line heading and keep the full script in its details.
-    expect(canon(kit)).toEqual(canon(inTree));
-    for (const replay of [kit, inTree]) {
-      expect(replay.entries).toMatchObject([
+    for (const [pipeline, replay] of Object.entries({ kit, inTree })) {
+      expect(replay.entries, pipeline).toMatchObject([
         {
           type: "activity",
           summary: label,
@@ -172,6 +183,7 @@ describe("KTD-P3 normalizer parity", () => {
         },
       ]);
     }
+    expect(canon(kit)).toEqual(canon(inTree));
   });
 
   it("plan then tool call", () => {

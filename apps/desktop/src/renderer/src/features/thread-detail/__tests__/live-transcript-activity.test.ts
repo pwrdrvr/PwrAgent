@@ -1058,15 +1058,20 @@ describe("Windows command rendering", () => {
     expect(details[0]?.command?.rawCommand).toContain("powershell.exe");
   });
 
-  it("strips a POSIX login-shell wrapper from the command label", () => {
+  it.each([
+    ["a POSIX login-shell", "/bin/zsh -lc 'git status'"],
+    ["a POSIX non-login shell", '/bin/bash -c "git status"'],
+  ])("strips %s wrapper from the command label", (_shell, command) => {
     const details = buildLiveToolDetails({
       type: "commandExecution",
       id: "cmd-2",
-      command: "/bin/zsh -lc 'git status'",
+      command,
       status: "completed",
     });
 
     expect(details[0]?.label).toBe("git status");
+    expect(details[0]?.command?.displayCommand).toBe("git status");
+    expect(details[0]?.command?.rawCommand).toBe(command);
   });
 
   it("strips a quoted Git-bash wrapper whose path contains spaces", () => {

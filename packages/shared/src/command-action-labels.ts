@@ -102,8 +102,8 @@ function readMeaningfulPathName(value: string | null | undefined): string | unde
 const MAX_COMMAND_LABEL_LENGTH = 72;
 
 // Strip a leading shell-interpreter wrapper so we show the command the agent
-// actually ran rather than the interpreter's full path. Handles POSIX login
-// shells (`/bin/sh -lc <cmd>`, `bash -lc <cmd>`) and Windows interpreters
+// actually ran rather than the interpreter's full path. Handles POSIX shells
+// (`/bin/sh -c <cmd>`, `bash -lc <cmd>`) and Windows interpreters
 // (`"C:\...\powershell.exe" -Command <cmd>`, `cmd.exe /c <cmd>`,
 // `bash.exe -lc <cmd>`). The full, unmodified command is preserved separately
 // as `rawCommand` for the expanded details view.
@@ -116,7 +116,7 @@ const MAX_COMMAND_LABEL_LENGTH = 72;
 function stripShellWrapper(command: string): string {
   return command
     .trim()
-    .replace(/^(?:\/\S+\/)?(?:ba|z)?sh\s+-lc\s+/i, "")
+    .replace(/^(?:\/\S+\/)?(?:ba|z)?sh\s+-l?c\s+/i, "")
     .replace(
       /^(?:"[^"]*(?:powershell|pwsh|cmd|bash)\.exe"|[^\s"]*(?:powershell|pwsh|cmd|bash)\.exe)\s+(?:-Command|-lc|-c|\/d\s+\/s\s+\/c|\/c)\s+/i,
       "",
