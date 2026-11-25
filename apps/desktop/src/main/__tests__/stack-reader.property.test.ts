@@ -163,6 +163,16 @@ describe("stack checkout demand", () => {
       await rm(config);
       expect((await read())?.thread?.key).toBe("codex:topic");
       expect(measured()).toHaveLength(1);
+
+      let validations = 0;
+      const changed = await reader.read(rows, [], undefined, undefined, new StackReadObservation(), async ({ prs }) => {
+        if (++validations === 1) await writeFile(config, "[user]\n\tname = Changed Worktree Fixture\n");
+        return prs;
+      });
+      expect(changed.stacks[0]?.layers[0]?.thread?.key).toBe("codex:topic");
+      // An exact Git rediscovery can still report the same root and clone.
+      // The first roster's evidence must be discarded and admission retried.
+      expect(validations).toBe(2);
     } finally {
       starts.mockRestore();
       vi.unstubAllEnvs();

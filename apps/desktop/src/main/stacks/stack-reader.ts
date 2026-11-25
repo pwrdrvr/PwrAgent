@@ -143,8 +143,10 @@ export class StackReadObservation {
   private readonly preflightCheckoutVersions = new Map<string, string | undefined>();
   private readonly catalogs = new Map<string, Promise<CatalogObservation>>();
   private readonly worktreeInventories = new Map<string, RegisteredWorktrees>();
-  private readonly rosterByCheckout = new Map<string, RosterMember>();
-  private readonly checkoutWitnesses = new Map<string, string>();
+  // A fresh lookup can replace a checkout at the same path. Its predecessor's
+  // roster and identity cannot vouch for that new Git result.
+  private readonly rosterByCheckout = new WeakMap<Checkout, RosterMember>();
+  private readonly checkoutWitnesses = new WeakMap<Checkout, string>();
 
   constructor(readonly demand: PrMetadataDemand = {}) {
     // A selected request can promote the explicit checkout without putting
@@ -170,16 +172,20 @@ export class StackReadObservation {
     return this.checkouts.has(cwd);
   }
 
-  recordCheckoutWitness(cwd: string, version: string): void {
-    this.checkoutWitnesses.set(cwd, version);
+  recordCheckoutWitness(checkout: Checkout, version: string): void {
+    this.checkoutWitnesses.set(checkout, version);
   }
 
   async checkoutsStillMatch(checkouts: Iterable<Checkout>): Promise<boolean> {
     const hints = createStackCheckoutHints(this.inventoryDemand);
-    const matches = new IterableMapper(checkouts, async ({ cwd, root, commonDir }) => {
-      const before = this.checkoutWitnesses.get(cwd);
+    const matches = new IterableMapper(checkouts, async (checkout) => {
+      const { cwd, root, commonDir } = checkout;
+      const before = this.checkoutWitnesses.get(checkout);
       if (before && (await hints.checkoutIdentity(cwd))?.version === before) return true;
-      this.checkoutWitnesses.delete(cwd);
+      this.checkoutWitnesses.delete(checkout);
+      // A live Git lookup could return the same root and common dir even
+      // after this member acquired config that invalidates its attachment proof.
+      if (this.rosterByCheckout.has(checkout)) return false;
       const current = await locateCheckout(cwd, this.inventoryDemand);
       return Boolean(current && current !== "unavailable" && current.root === root && current.commonDir === commonDir);
     }, STACK_CHECKOUT_SCAN_LIMITS);
@@ -192,7 +198,7 @@ export class StackReadObservation {
   projectionCheckout(checkout: Checkout): Checkout {
     // A corroborated physical root keeps subsequent bundled Git commands on
     // this clone even if the provider's original alias moves again.
-    return !this.hints.requiresGitDiscovery && this.checkoutWitnesses.has(checkout.cwd)
+    return !this.hints.requiresGitDiscovery && this.checkoutWitnesses.has(checkout)
       ? { ...checkout, cwd: checkout.root } : checkout;
   }
 
@@ -200,8 +206,8 @@ export class StackReadObservation {
     return this.worktreeInventories.get(commonDir)?.ready;
   }
 
-  rosterMember(cwd: string): RosterMember | undefined {
-    return this.rosterByCheckout.get(cwd);
+  rosterMember(checkout: Checkout): RosterMember | undefined {
+    return this.rosterByCheckout.get(checkout);
   }
 
   async registeredCheckout(cwd: string, before: CheckoutIdentity, ready?: WorktreeRoster): Promise<Checkout | undefined> {
@@ -220,8 +226,9 @@ export class StackReadObservation {
     // A witness taken before Git finished the inventory can have changed
     // while Git ran. A later witness already sees changes to that checkout.
     if (roster !== ready && !await this.hasCurrentRegistration(cwd, before)) return undefined;
-    this.rosterByCheckout.set(cwd, { roster, gitDir: before.gitDir });
-    return { cwd, root: before.root, commonDir: before.commonDir };
+    const checkout = { cwd, root: before.root, commonDir: before.commonDir };
+    this.rosterByCheckout.set(checkout, { roster, gitDir: before.gitDir });
+    return checkout;
   }
 
   private async hasCurrentRegistration(cwd: string, before: CheckoutIdentity): Promise<boolean> {
@@ -481,7 +488,7 @@ function threadDirectories(thread: StackThreadRow): string[] {
 function rosteredCheckoutRoots(checkouts: ReadonlyMap<string, Checkout>, observation: StackReadObservation) {
   const roots = new Map<string, RosterMember & { checkout: Checkout }>();
   for (const checkout of checkouts.values()) {
-    const member = observation.rosterMember(checkout.cwd);
+    const member = observation.rosterMember(checkout);
     if (member) roots.set(checkout.root, { checkout, ...member });
   }
   return roots;
@@ -497,7 +504,7 @@ function observeStackAttachments(checkouts: ReadonlyMap<string, Checkout>, obser
   const storedAttachmentObservation = createStoredAttachmentObservation(async (cwd) => {
     if (!roots?.size) return undefined;
     const exact = checkouts.get(cwd);
-    if (exact) return representative(observation.rosterMember(exact.cwd));
+    if (exact) return representative(observation.rosterMember(exact));
     if (!path.isAbsolute(cwd)) return undefined;
     let physical = aliasReads.get(cwd);
     if (!physical) {
@@ -817,7 +824,7 @@ export class StackReader {
     const key = (!hints.requiresGitDiscovery ? before?.physicalDirectory : undefined) ?? cwd;
     const recordWitness = (checkout: CheckoutLookup, corroborated: boolean) => {
       if (before && checkout && checkout !== "unavailable" && corroborated) {
-        observation.recordCheckoutWitness(cwd, before.version);
+        observation.recordCheckoutWitness(checkout, before.version);
       }
       return checkout;
     };
