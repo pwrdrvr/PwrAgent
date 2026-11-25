@@ -19,11 +19,24 @@ export function isThreadActive(
   thread: NavigationThreadSummary,
   thinkingThreadKeys?: Record<string, boolean>,
 ): boolean {
+  return (
+    isThreadTurnRunning(thread, thinkingThreadKeys)
+    || thread.hasBackgroundTasks === true
+  );
+}
+
+/**
+ * `isThreadActive` without background tasks that outlived their turn: a
+ * parent turn or an owned worker is still changing the thread's files.
+ */
+export function isThreadTurnRunning(
+  thread: NavigationThreadSummary,
+  thinkingThreadKeys?: Record<string, boolean>,
+): boolean {
   const threadKey = threadSummaryIdentityKey(thread);
   return (
     thread.threadStatus === "active"
     || thread.hasActiveSubAgent === true
-    || thread.hasBackgroundTasks === true
     || thinkingThreadKeys?.[threadKey] === true
   );
 }

@@ -42,6 +42,7 @@ import { readCompactStackMemberships } from "@pwragent/shared/stacks/stack-statu
 import {
   getThreadRowStatus,
   isThreadRemoteWorkHere,
+  isThreadTurnRunning,
   ThreadRowStatus,
 } from "./ThreadRowStatus";
 import { InlineRenameInput } from "./InlineRenameInput";
@@ -774,7 +775,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
         </span>
 
         {/* Single ordered chip flow: meta (provider / location → PR chips
-            → branch / drift / git state) → messaging binding chips →
+            → branch / git state) → messaging binding chips →
             reactions. PR chips slot into the middle of the meta flow (see
             ThreadMetaChips.prChips) so they pack right after the short
             fixed-width chips instead of trailing the branch — the longest,
@@ -808,6 +809,10 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             hasInputRequest={props.inputRequestThreadKeys?.[threadKey] === true}
             queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
             hasUnsentDraft={hasUnsentDraft}
+            // Mid-turn and not open: hold the git and to-do chips until the
+            // turn ends or the operator opens the thread. Background tasks
+            // left running after the turn do not hold them.
+            holdWorkProgress={!active && isThreadTurnRunning(props.thread, props.thinkingThreadKeys)}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             // One chip for the lead PR, then one `+N PRs` chip whose list

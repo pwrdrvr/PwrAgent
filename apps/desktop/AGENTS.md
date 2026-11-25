@@ -51,8 +51,8 @@ match adjacent code by hand, including leading binary operators.
 
 ### Branch-Drift Dialog
 
-- Use `isBranchDrifted` for sidebar and dialog decisions so both surfaces share
-  one predicate.
+- Use `isBranchDrifted` for the open thread's warning and dialog.
+  Thread rows show no drift chip.
 - Defer branch-drift dialogs during active turns and recheck the selected thread
   after the turn settles.
 
