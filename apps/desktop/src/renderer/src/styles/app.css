@@ -7885,6 +7885,12 @@ button.stack-display__thread,
   z-index: 1;
 }
 
+.thread-row.is-batch-selected,
+.thread-row-shell[data-xray-target] > .thread-row.is-batch-selected {
+  border-style: dashed;
+  border-color: var(--text-muted);
+}
+
 /* The thread card a sub-thread / new-thread composer is being created from.
    Filled solid accent while the composer is open so the source is unmistakable;
    foreground flips to the on-accent token and meta chips invert to readable

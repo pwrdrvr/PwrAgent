@@ -1,4 +1,4 @@
-import { threadRowInstanceKey } from "./thread-row-instance";
+import { threadRowBatchSelected, threadRowInstanceKey } from "./thread-row-instance";
 import { getDesktopApi } from "../../lib/desktop-api";
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
@@ -189,7 +189,7 @@ type DirectoriesListProps = {
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
   selectedDirectoryKeys?: ReadonlySet<string>;
-  selectedThreadKeys?: ReadonlySet<string>;
+  batchThreadKeys?: ReadonlySet<string>;
   thinkingThreadKeys?: Record<string, boolean>;
   agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -1525,7 +1525,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                 nestedDepth={trays.depth(childKey)}
                 revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey === childKey ? childKey : undefined}
-                selected={props.selectedThreadKeys?.has(childKey)}
+                batchSelected={threadRowBatchSelected(props.batchThreadKeys, childKey, props.selectedItemKey)}
                 subthreadCount={childSubthreadCount}
                 subthreadsCollapsed={isSubthreadSectionCollapsed(child) && !trays.heldOpen(childKey)}
                 onToggleSubthreads={
@@ -1692,7 +1692,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
             revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey === threadKey ? threadKey : undefined}
-            selected={props.selectedThreadKeys?.has(threadKey)}
+            batchSelected={threadRowBatchSelected(props.batchThreadKeys, threadKey, props.selectedItemKey)}
             subthreadCount={subthreadCount}
             subthreadsCollapsed={subthreadsCollapsed}
             thinkingThreadKeys={props.thinkingThreadKeys}
@@ -2030,7 +2030,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             rowRevealSelectedThreadRequest
                           }
 	                          selectedThreadKey={props.selectedItemKey === threadKey ? threadKey : undefined}
-	                          selected={props.selectedThreadKeys?.has(threadKey)}
+	                          batchSelected={threadRowBatchSelected(props.batchThreadKeys, threadKey, props.selectedItemKey)}
                               subthreadCount={subthreadCount}
                               subthreadsCollapsed={subthreadsCollapsed}
 	                          thinkingThreadKeys={props.thinkingThreadKeys}

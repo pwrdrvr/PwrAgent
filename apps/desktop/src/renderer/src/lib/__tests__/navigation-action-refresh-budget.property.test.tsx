@@ -109,7 +109,8 @@ it.each([4, 8, 16])("bounds create, off-page select and submit reply work with %
     const affectedDirectory = directories[action === "pr-discovery" ? 1 : 0]!.key;
     expect(calls.filter((request) => request.query.kind === "directory" && request.query.directoryKey !== affectedDirectory)).toHaveLength(0);
     const budgets: Record<string, { calls: number; publications: number; commits: number; rowRenders: number }> = {
-      create: { calls: 1, publications: 3, commits: 7, rowRenders: 3 },
+      // The active row follows navigation in the same commit, with no later selection repaint.
+      create: { calls: 1, publications: 3, commits: 7, rowRenders: 2 },
       select: { calls: 3, publications: 8, commits: 12, rowRenders: 1 },
       "submit-reply": { calls: 2, publications: 5, commits: 8, rowRenders: 5 },
       "pr-discovery": { calls: 5, publications: 7, commits: 12, rowRenders: 0 },

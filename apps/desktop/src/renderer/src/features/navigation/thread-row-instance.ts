@@ -11,3 +11,14 @@ export type ThreadRowInstance = {
 export function threadRowInstanceKey(row: ThreadRowInstance): string {
   return JSON.stringify([row.directoryKey ?? null, row.parentThreadKey ?? null, row.threadKey]);
 }
+
+export function threadRowBatchSelected(
+  batch: ReadonlySet<string> | undefined,
+  threadKey: string,
+  activeKey?: string,
+): boolean | undefined {
+  const included = batch?.has(threadKey);
+  // Only the active row needs to distinguish exclusion from an absent batch.
+  // Other rows keep the same prop when an unrelated batch starts or ends.
+  return threadKey === activeKey ? included : included || undefined;
+}

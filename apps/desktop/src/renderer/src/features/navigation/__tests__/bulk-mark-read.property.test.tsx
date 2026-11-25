@@ -4,6 +4,7 @@ import fc from "fast-check";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
 import { _resetKeybindingsStoreForTests } from "../../../lib/keybindings-store";
+import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 
 afterEach(() => {
   cleanup();
@@ -33,14 +34,16 @@ function thread(index: number, unread: boolean, remote = false): NavigationThrea
   };
 }
 
-function openSelection(
+function renderAttention(
   threads: NavigationThreadSummary[],
   onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>,
+  openThread = threads[0]!,
 ): void {
   render(<Sidebar
     backends={[]}
     browseMode="attention"
     directories={[]}
+    selectedItemKey={threadSummaryIdentityKey(openThread)}
     threads={threads}
     loading={false}
     onBrowseModeChange={() => undefined}
@@ -49,6 +52,13 @@ function openSelection(
     onSelectThread={() => undefined}
     onMarkThreadsSeen={onMarkThreadsSeen}
   />);
+}
+
+function openSelection(
+  threads: NavigationThreadSummary[],
+  onMarkThreadsSeen?: (threads: NavigationThreadSummary[]) => Promise<void>,
+): void {
+  renderAttention(threads, onMarkThreadsSeen);
   // The last row stays unselected, even when it is unread.
   for (const [index, candidate] of threads.slice(0, -1).entries()) {
     fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${candidate.title}(?:,|$)`) }),
@@ -58,6 +68,32 @@ function openSelection(
 }
 
 describe("bulk Mark Read", () => {
+  it("preserves the batch established by a row menu when a subsequent click adds a row", async () => {
+    const order = fc.shuffledSubarray([0, 1, 2, 3], { minLength: 4, maxLength: 4 });
+    await fc.assert(fc.asyncProperty(order, fc.boolean(), async (indices, menuInsideBatch) => {
+      const threads = Array.from({ length: 4 }, (_, index) => thread(index, true));
+      const [open, firstPick, outside, nextPick] = indices.map((index) => threads[index]!);
+      const onMarkThreadsSeen = vi.fn(async (_threads: NavigationThreadSummary[]) => undefined);
+      const row = (item: NavigationThreadSummary) => screen.getByRole("button", { name: item.title });
+      try {
+        renderAttention(threads, onMarkThreadsSeen, open!);
+        fireEvent.click(row(firstPick!), { metaKey: true });
+        fireEvent.contextMenu(row(menuInsideBatch ? firstPick! : outside!));
+        fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+        fireEvent.click(row(nextPick!), { metaKey: true });
+        expect(row(open!).getAttribute("aria-current")).toBe("true");
+
+        const expected = new Set(menuInsideBatch ? [open!, firstPick!, nextPick!] : [outside!, nextPick!]);
+        fireEvent.contextMenu(row(nextPick!));
+        const markRead = screen.getByRole("menuitem", { name: `Mark ${expected.size} Threads Read` });
+        await act(async () => { fireEvent.click(markRead); });
+        expect(onMarkThreadsSeen).toHaveBeenCalledExactlyOnceWith(threads.filter((item) => expected.has(item)));
+      } finally {
+        cleanup();
+      }
+    }), { numRuns: 16 });
+  });
+
   it.each([false, true])("marks only selected unread Attention threads (first row unread: %s)", async (firstUnread) => {
     // false is the property's smallest counterexample: one read row and
     // one unread row still need a bulk Mark Read action.
