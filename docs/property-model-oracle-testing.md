@@ -110,9 +110,10 @@ against the pre-fix code:
 ## When to write one
 
 - **Fixing a bug.** Write the rule the bug broke as a property or model
-  invariant, and confirm it fails on the pre-fix code before you fix it. Also
-  keep the shrunk counterexample as a plain example test, so the regression
-  has a name.
+  invariant, and confirm it fails on the pre-fix code before you fix it.
+  Commit the shrunk counterexample as a plain example test, so the regression
+  has a name. Commit the property itself only if it fits
+  [What to check in](#what-to-check-in).
 - **A rule already written in prose.** This file, a design doc, a PR
   description and UI copy all make promises: "Unlocking sends what it held, in
   order", "A thread can move at most twice during one turn", "Pins have two
@@ -170,14 +171,10 @@ against the pre-fix code:
   When the rule is a cap, budget, window, attempt limit, page size or
   queue depth, add `size: "max"` or a `minLength` so runs cross the
   bound. Then mutate the bound by one and check that the test fails.
-- **Budget the runs.** The default test timeout is 5 s on Linux and macOS and 30 s on
-  Windows. CI runs unit tests on all three, and Windows desktop-main run time
-  can vary by more than 2× between runs.
-  - Pure properties: keep the default `numRuns` (100), and a file under
-    about 200 ms on Linux.
-  - Models over a real `StateDb`, real git or a mounted hook: keep
-    `numRuns` around 25–50, and each test under about 1 s on Linux. Open
-    databases from the migrated template, as other main-process tests do.
+- **Budget the runs** as [What to check in](#what-to-check-in) describes.
+  The default test timeout is 5 s on Linux and macOS and 30 s on Windows.
+  CI runs unit tests on all three, and Windows desktop-main run time can
+  vary by more than 2× between runs.
 - **Use the scheduler and injected clocks for ordering and time,** not real
   sleeps or fake timers. `ThreadTurnQueue` already takes `now` and its other
   effects as options.
@@ -188,6 +185,59 @@ against the pre-fix code:
 - **Generated data stays generated.** Don't seed a property from Codex
   storage files; the Codex data boundary in [AGENTS.md](../AGENTS.md) applies.
   Recorded fixtures the test owns are fine.
+
+## What to check in
+
+A property finds a bug once. After that it is a regression test, and CI
+runs it on Linux, macOS and Windows for every PR. Every bug in the table
+above was found within 7 runs.
+
+On main on 2026-11-25, fast-check tests took 1,013 s of the 2,772 s of
+macOS unit-test time (36.5%). 79% of that was in tests that rebuilt a real
+git repository, `StateDb`, child process or mounted React tree on every
+run. Across 166 CI runs, property files caused 48% of the unit failures
+that passed on retry. Most of them were 5 s timeouts.
+
+So use generated tests two ways.
+
+**To find bugs, run them hard, locally.** Raise `numRuns` (for example
+`{ numRuns: 1000 }`) while you work, against the pre-fix code and the fix.
+Don't commit the raised count.
+
+**To guard against regressions, commit what is cheap:**
+
+- **Every counterexample, as a named example test.** That includes each
+  shrunk counterexample and each boundary the search found.
+- **Properties over in-memory code.** Pure functions, reducers,
+  projections, in-memory fakes, `fc.scheduler` and injected clocks qualify.
+  Keep the default `numRuns` (100), and the file under about 200 ms on
+  Linux.
+- **No generated loop over real git, a `StateDb`, a child process or a
+  mounted React tree.** Move the rule into the pure function, reducer or
+  model it depends on and give that the property. Then keep one to three
+  examples against the real fixture. If the loop truly cannot move, build
+  the fixture once per test, not once per run. Cap `numRuns` at 5, keep the
+  test under about 500 ms on Linux, and say in a comment why examples can't
+  cover it.
+- **Enumerate small spaces.** Some inputs that change behavior fit in fewer
+  cases than `numRuns`: a few booleans, or a `constantFrom` of two or three
+  values. Write an `it.each` table over every combination. Sampling 25
+  runs repeats cases and can still miss one.
+- **Don't randomize what doesn't matter.** A generated uuid or marker string
+  that never changes the code path makes one example look like a property.
+  Write the example.
+- **Keep `numRuns` at or below the default.** A higher count needs a comment
+  that names the bug which needed it.
+- **Name a file `.property.test.ts` only if its tests are properties.** Put
+  example tests that use a real fixture in the module's ordinary test file.
+
+Never make a property fit by raising its timeout, splitting it across more
+tests, or retrying it. Make it cheaper, or commit examples instead.
+
+Before you commit, run the file alone with the Vitest project it belongs to,
+for example
+`pnpm exec vitest run --config vitest.workspace.mts --project desktop-main <file>`.
+Check the summed duration against these budgets.
 
 ## The updater is shared with PwrGit
 
