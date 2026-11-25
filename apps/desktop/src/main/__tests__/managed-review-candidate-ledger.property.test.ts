@@ -340,6 +340,7 @@ describe("managed review ledger MCP isolation and approval", () => {
   it("exposes only the 3 auto-approved ledger tools to managedReview Antigravity clients and hides them from normal clients", async () => {
     const ledger = new ManagedReviewCandidateLedger();
     const reviewRouter = buildManagedReviewLedgerToolRouter(ledger);
+    let retireAtDispatch = false;
     const server = new AgentToolMcpServer({
       resolveCatalogs: (context) =>
         context.managedReview
@@ -349,6 +350,10 @@ describe("managed review ledger MCP isolation and approval", () => {
         context.threadId
           ? { backend: context.backend, threadId: context.threadId, turnId: "active-turn" }
           : undefined,
+      authorizeToolCall: async (turn) => {
+        if (retireAtDispatch) ledger.retireToolTurn(turn);
+        return null;
+      },
     });
 
     try {
@@ -407,6 +412,8 @@ describe("managed review ledger MCP isolation and approval", () => {
 
         // Bind review thread and execute Pass 1 -> Pass 2 calls.
         reviewReg.bindThread("review-child-thread");
+        const turn = { backend: "acp:antigravity", threadId: "review-child-thread", turnId: "active-turn" } as const;
+        ledger.armToolTurn(turn, turn.turnId);
         const recorded = await reviewClient.callTool({
           name: "record_review_candidate",
           arguments: {
@@ -448,6 +455,12 @@ describe("managed review ledger MCP isolation and approval", () => {
           updated: { id: "C1", disposition: "keep", priority: 2 },
           summary: { pending: 0, keep: 1, drop: 0 },
         });
+        retireAtDispatch = true;
+        await expect(reviewClient.callTool({
+          name: "dispose_review_candidate",
+          arguments: { id: "C1", disposition: "drop", reason: "Arrived after terminal" },
+        })).resolves.toMatchObject({ isError: true });
+        expect(ledger.snapshot(turn)).toMatchObject({ keep: 1, drop: 0 });
 
         // General tools remain unreachable from a managed review client.
         await expect(
@@ -580,7 +593,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
     stateDb.close();
   }, 60_000);
 
-  it("wires HTTP-MCP Antigravity managed reviews to the 3-tool ledger and clears it on terminal completion", async () => {
+  it.each([false, true])("fences ACP ledger calls and clears candidates at terminal (card write fails: %s)", async (cardWriteFails) => {
     const backend = "acp:antigravity";
     const agentStore = new AcpAgentStore(stateDb);
     const sessionStore = new AcpSessionStore(stateDb);
@@ -615,12 +628,31 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
         },
       },
     });
+    const overlayStore = createOverlayStoreMock();
+    const upsert = overlayStore.upsertThreadSubAgent.bind(overlayStore);
+    const lateCall = Promise.withResolvers<boolean>();
+    vi.spyOn(overlayStore, "upsertThreadSubAgent").mockImplementation(async (params) => {
+      if (params.subAgent.status === "success") {
+        const reviewClient = [...transport.sessions.values()]
+          .find((session) => session.tools.includes("record_review_candidate"))?.client;
+        const response = await reviewClient!.callTool({
+          name: "record_review_candidate",
+          arguments: {
+            file: "/repo/src/late.ts", start_line: 1, end_line: 1,
+            category: "correctness", summary: "Late candidate", mechanism: "Terminal already arrived.",
+          },
+        });
+        lateCall.resolve(response.isError === true);
+        if (cardWriteFails) throw new Error("fixture terminal review card write failed");
+      }
+      return await upsert(params);
+    });
     const registry = createDesktopBackendRegistry({
       codexClient: new MockBackendClient({}),
       acpAgentStore: agentStore,
       acpSessionStore: sessionStore,
       createAcpTransport: () => transport,
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       createScratchProjectDirectory: async () => "/tmp/pwragent-review-ledger",
       threadTitleGenerationService: null,
     });
@@ -641,6 +673,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       expect(transport.prompts.at(-1)).toContain("list_review_candidates");
       expect(transport.prompts.at(-1)).toContain("dispose_review_candidate");
 
+      expect.soft(await lateCall.promise).toBe(true);
       await vi.waitFor(() => {
         expect(
           registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
@@ -714,6 +747,64 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       await transport.closeAll();
       await registry.close();
     }
+  });
+
+  it("accepts only the provider-confirmed Codex review turn before startTurn returns", async () => {
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (holdStartedDelivery) => {
+      const child = "codex-review-starting";
+      const providerTurn = "provider-turn";
+      const client = new MockBackendClient({
+        initializeResult: { methods: ["thread/start", "turn/start"] },
+        startThreadResult: { threadId: child },
+      });
+      const registry = createDesktopBackendRegistry({
+        codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
+      });
+      const { threadArchiveCoordinator, turnState } = registryModules(registry);
+      const gate = Promise.withResolvers<void>();
+      const prepareArchive = threadArchiveCoordinator.prepareArchiveReferenceChanges.bind(threadArchiveCoordinator);
+      vi.spyOn(threadArchiveCoordinator, "prepareArchiveReferenceChanges").mockImplementation((backend, notification) =>
+        holdStartedDelivery && notification.method === "turn/started" && notification.params.threadId === child
+          ? gate.promise
+          : prepareArchive(backend, notification));
+      const outcomes: boolean[] = [];
+      vi.spyOn(client, "startTurn").mockImplementation(async () => {
+        const delivery = client.emit({
+          method: "turn/started",
+          params: { threadId: child, turnId: providerTurn, turn: { id: providerTurn } },
+        });
+        try {
+          if (holdStartedDelivery) {
+            expect(turnState.pendingStartedTurnId(child)).toBe(providerTurn);
+          } else {
+            await delivery;
+          }
+          for (const turnId of ["unrelated-turn", providerTurn]) {
+            const result = await client.emitRequest({
+              method: "item/tool/call",
+              params: {
+                threadId: child, turnId, requestId: turnId, callId: turnId,
+                namespace: PWRAGENT_TOOL_NAMESPACE, tool: "list_review_candidates", arguments: {},
+              },
+            }) as { success: boolean };
+            outcomes.push(result.success);
+          }
+        } finally {
+          gate.resolve();
+          await delivery;
+        }
+        return { threadId: child, turnId: providerTurn };
+      });
+      try {
+        await registry.startReview({
+          backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" },
+          runMode: "pwragent-sub-agent",
+        });
+        expect(outcomes).toEqual([false, true]);
+      } finally {
+        await registry.close();
+      }
+    }), { numRuns: 2, examples: [[true], [false]] });
   });
 
   it("attaches dynamic ledger tools to Codex managed review children, refuses non-review threads, and clears on terminal", async () => {

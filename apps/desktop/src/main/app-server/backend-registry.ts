@@ -6348,14 +6348,9 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async startAcpTurnLocked(params: {
-    backend: AcpBackendId;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    model?: string;
-    reasoningEffort?: string;
-    requiredAntigravityMode?: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  private async startAcpTurnLocked(
+    params: Parameters<RegistryHostPorts["startAcpTurn"]>[0],
+  ): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const promptPayload = await inputToAcpPrompt(params.input, {
       owner: { backend: params.backend, threadId: params.threadId },
       privateStorageRoots: this.localFilePrivateStorageRoots,
@@ -6462,6 +6457,9 @@ export class DesktopBackendRegistry {
       }
     }
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
+    if (params.managedReviewLedger) {
+      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId);
+    }
     await this.emit({
       backend: params.backend,
       notification: {
@@ -17386,9 +17384,16 @@ export class DesktopBackendRegistry {
         const codexStartDelivery = backend === "codex" && notification.method === "turn/started"
           ? this.context.turnState.beginStartDelivery(notification.params.threadId, turnIdFromStartedNotification(notification as Extract<AppServerNotification, { method: "turn/started" }>))
           : undefined;
+        if (codexStartDelivery && !isPendingTurnId(codexStartDelivery.threadId, codexStartDelivery.turnId)) {
+          this.managedReviewService.candidateLedger.confirmToolTurn({ backend, ...codexStartDelivery });
+        }
         if (backend === "codex" && (notification.method === "turn/completed"
           || notification.method === "turn/failed" || notification.method === "turn/cancelled")) {
-          this.context.turnState.observeTurnTerminal(notification.params.threadId, turnIdFromTerminalNotification(notification));
+          const turnId = turnIdFromTerminalNotification(notification);
+          if (turnId) {
+            this.managedReviewService.candidateLedger.retireToolTurn({ backend, threadId: notification.params.threadId, turnId });
+          }
+          this.context.turnState.observeTurnTerminal(notification.params.threadId, turnId);
         }
         try {
           if (backend === "codex" && notification.method === "thread/started") {
@@ -19900,16 +19905,7 @@ export class DesktopBackendRegistry {
       hostToolCall
       && managedReviewLedgerRouter.acceptsDynamicToolCall(hostToolCall)
     ) {
-      const isManagedReviewChild =
-        this.context.turnState.reviewChildParent(
-          buildThreadIdentityKey(backend, hostToolCall.threadId),
-        ) !== undefined
-        || this.managedReviewService.findManagedReviewForChildRequest({
-          backend,
-          reviewThreadId: hostToolCall.threadId,
-          turnId: hostToolCall.turnId,
-        }) !== undefined;
-      if (!isManagedReviewChild || !this.isLiveDynamicToolCall(backend, hostToolCall)) {
+      if (!this.managedReviewService.candidateLedger.hasToolTurn({ backend, ...hostToolCall })) {
         return toDynamicToolResponse({
           ok: false,
           code: "forbidden",
@@ -20405,7 +20401,11 @@ export class DesktopBackendRegistry {
     const refusal = localAgentToolRefusal(params.tool);
     if (refusal) return refusal;
     if (params.tool === GET_CURRENT_TURN_INPUT_SOURCE) return null;
-    if (params.catalogId === "managed_review") return null;
+    if (params.catalogId === "managed_review") {
+      return this.managedReviewService.candidateLedger.hasToolTurn(params)
+        ? null
+        : "an active managed code review turn";
+    }
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {
       return null;
@@ -22254,6 +22254,14 @@ export class DesktopBackendRegistry {
     const notification = event.notification;
     const isTerminal = notification.method === "turn/completed"
       || notification.method === "turn/failed" || notification.method === "turn/cancelled";
+    if (isTerminal && !event.federationTarget) {
+      const turnId = turnIdFromTerminalNotification(notification);
+      if (turnId) {
+        this.managedReviewService.candidateLedger.retireToolTurn({
+          backend: event.backend, threadId: notification.params.threadId, turnId,
+        });
+      }
+    }
     if (!event.federationTarget) {
       try {
         if (notification.method === "item/completed") {

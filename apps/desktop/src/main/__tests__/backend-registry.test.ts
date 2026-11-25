@@ -2897,8 +2897,14 @@ describe("DesktopBackendRegistry", () => {
           "search_token_miser_output",
           "read_token_miser_output",
           "read_all_token_miser_output",
+          "record_review_candidate",
+          "list_review_candidates",
+          "dispose_review_candidate",
         ],
       );
+      expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual([
+        expect.objectContaining({ type: "namespace", name: "pwragent" }),
+      ]);
       expect(codexClient.lastStartThreadParams?.ephemeral).toBe(true);
       expect(codexClient.lastStartTurnParams?.dynamicTools).toBeUndefined();
       expect(

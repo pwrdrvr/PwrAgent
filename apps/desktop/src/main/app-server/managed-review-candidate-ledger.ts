@@ -1,4 +1,5 @@
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 
 export const MANAGED_REVIEW_CANDIDATE_CATEGORIES = [
   "correctness",
@@ -26,6 +27,8 @@ export type ManagedReviewCandidateTurnKey = {
   threadId: string;
   turnId: string;
 };
+
+type ReviewChild = Pick<ManagedReviewCandidateTurnKey, "backend" | "threadId">;
 
 export type ManagedReviewCandidate = {
   id: string;
@@ -174,6 +177,30 @@ function cloneCandidate(
  */
 export class ManagedReviewCandidateLedger {
   private readonly turns = new Map<string, TurnLedgerState>();
+  /** Only a fresh Codex child can be armed before the provider assigns its turn ID. */
+  private readonly toolTurns = new Map<string, string | null>();
+
+  armToolTurn(child: ReviewChild, turnId: string | null): void {
+    this.toolTurns.set(buildThreadIdentityKey(child.backend, child.threadId), turnId);
+  }
+
+  confirmToolTurn(turn: ManagedReviewCandidateTurnKey): void {
+    const key = buildThreadIdentityKey(turn.backend, turn.threadId);
+    if (this.toolTurns.get(key) === null) this.toolTurns.set(key, turn.turnId);
+  }
+
+  hasToolTurn(turn: ReviewChild & { turnId?: string }): boolean {
+    return Boolean(turn.turnId)
+      && this.toolTurns.get(buildThreadIdentityKey(turn.backend, turn.threadId)) === turn.turnId;
+  }
+
+  retireToolTurn(turn: ManagedReviewCandidateTurnKey): void {
+    const key = buildThreadIdentityKey(turn.backend, turn.threadId);
+    const active = this.toolTurns.get(key);
+    // A terminal can arrive before startTurn returns or before turn/started
+    // for a freshly created Codex child. Never reopen it on a late receipt.
+    if (active === null || active === turn.turnId) this.toolTurns.delete(key);
+  }
 
   record(
     turn: ManagedReviewCandidateTurnKey,
@@ -362,27 +389,6 @@ export class ManagedReviewCandidateLedger {
     };
   }
 
-  snapshotThread(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): ManagedReviewCandidateCounts & { total: number } {
-    let total = 0;
-    let pending = 0;
-    let keep = 0;
-    let drop = 0;
-    for (const state of this.turns.values()) {
-      if (state.backend !== params.backend || state.threadId !== params.threadId) {
-        continue;
-      }
-      const counts = countDispositions(state.candidates);
-      total += state.candidates.length;
-      pending += counts.pending;
-      keep += counts.keep;
-      drop += counts.drop;
-    }
-    return { total, pending, keep, drop };
-  }
-
   clearTurn(turn: ManagedReviewCandidateTurnKey): boolean {
     return this.turns.delete(buildTurnKey(turn));
   }
@@ -391,6 +397,7 @@ export class ManagedReviewCandidateLedger {
     backend: AppServerBackendKind;
     threadId: string;
   }): number {
+    this.toolTurns.delete(buildThreadIdentityKey(params.backend, params.threadId));
     let removed = 0;
     for (const [key, state] of this.turns.entries()) {
       if (state.backend === params.backend && state.threadId === params.threadId) {
@@ -403,6 +410,7 @@ export class ManagedReviewCandidateLedger {
 
   clearAll(): void {
     this.turns.clear();
+    this.toolTurns.clear();
   }
 
   get activeTurnCount(): number {

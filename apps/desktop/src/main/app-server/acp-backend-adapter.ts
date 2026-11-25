@@ -215,6 +215,7 @@ export type AcpRuntimeClient = Pick<
       | "closeIdleSessions"
       | "closeSessionForArchive"
       | "closeSessionForTransfer"
+      | "retireManagedReviewSession"
       | "didSessionLoadReplayHistory"
       | "disconnected"
       | "configureWorkflowBudget"
@@ -409,6 +410,7 @@ export type AcpBackendAdapterOptions = {
     backend: AcpBackendId,
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
+  onTurnTerminalIngress?: (turn: { backend: AcpBackendId; threadId: string; turnId: string }) => void;
 };
 
 export function readAcpUpdateKind(
@@ -2400,6 +2402,10 @@ export class AcpBackendAdapter {
     }
   }
 
+  retireManagedReviewSession(backend: AcpBackendId, sessionId: string): void {
+    this.findSessionOwner(backend, sessionId)?.client.retireManagedReviewSession?.(sessionId);
+  }
+
   /**
    * Close sessions idle for `idleMs` on every live ACP process, so each agent
    * stops their MCP servers (`AcpAgentClient.closeIdleSessions`). The next
@@ -3575,6 +3581,9 @@ export class AcpBackendAdapter {
           updateKind === "turn_finished"
           && !fromSessionLoad
           && replay.threadStatus !== "active";
+        if (promptSettledTurnFinished && turnId) {
+          this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
+        }
         const completedUsage =
           promptSettledTurnFinished && turnId
             ? this.liveTurnUsage.get(
@@ -3847,6 +3856,7 @@ export class AcpBackendAdapter {
         // prompt-settled terminal events, not transcript replay snapshots.
       },
       onPromptError: async ({ sessionId, turnId, error, usage }) => {
+        this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
         );

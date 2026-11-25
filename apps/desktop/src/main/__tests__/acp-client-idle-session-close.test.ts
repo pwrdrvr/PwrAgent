@@ -105,6 +105,38 @@ async function finishPrompt(client: AcpAgentClient, sessionId: string, prompt: s
   });
 }
 
+it("protects the managed review catalog through the prompt and then allows idle close", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), async (ledgerAvailable) => {
+    const sessionId = `review-${ledgerAvailable}`;
+    const transport = new GrokLikeTransport({
+      initialize: GROK_INITIALIZE,
+      "session/new": { sessionId },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => clock,
+      mcpServers: () => ({
+        servers: [],
+        ...(ledgerAvailable ? { managedReviewLedgerAvailable: true as const } : {}),
+      }),
+    });
+    try {
+      await client.initialize();
+      await client.startSession({ cwd: "/repo", executionMode: "default", managedReview: true });
+      clock += IDLE_MS;
+      expect(await client.closeIdleSessions({ idleMs: IDLE_MS })).toEqual([]);
+      await finishPrompt(client, sessionId, "Review the change");
+      clock += IDLE_MS;
+      expect(await client.closeIdleSessions({ idleMs: IDLE_MS })).toEqual([sessionId]);
+      expect(transport.methods().filter((method) => method === "session/close")).toHaveLength(1);
+    } finally {
+      await client.dispose();
+    }
+  }), { numRuns: 2, examples: [[true], [false]] });
+});
+
 it("reloads exactly when a verified session's advertised Job Monitor preference changes", async () => {
   await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 6 }), async (preferences) => {
     let desired = true;

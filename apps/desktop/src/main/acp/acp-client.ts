@@ -8,6 +8,7 @@ import {
   findAcpMirroredModeConfigOption,
 } from "@pwragent/shared/acp-permission-mode";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
   AcpBackendId,
@@ -31,6 +32,7 @@ import {
   acpSessionReplayNormalizerOptions,
   isAcpUserBoilerplateMessage,
   readAcpContentText,
+  readAcpToolCallId,
   readAcpTopicTitle,
   readAcpUpdateTimestamp,
   loadAcpReplayKit,
@@ -54,6 +56,8 @@ import {
   type AcpProviderStatus,
 } from "./acp-provider-status.js";
 import {
+  readAcpMcpToolName,
+  readAcpProviderTool,
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolText,
@@ -80,6 +84,7 @@ import {
 } from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { ANTIGRAVITY_CALL_PWRAGENT_TOOL, readPwrAgentCallTarget } from "../agent-tools/antigravity-mcp-catalog.js";
+import { isManagedReviewLedgerToolName } from "../agent-tools/pwragent-managed-review-ledger-tools.js";
 import { getMainLogger } from "../log.js";
 import {
   ACP_WORKSPACE_HANDOFF_RECORD,
@@ -493,12 +498,14 @@ export class AcpAgentClient {
    * session/load would bring back neither. They are never idle-closed.
    */
   private readonly sessionsWithoutFaithfulReload = new Set<string>();
+  private readonly pendingManagedReviewSessions = new Set<string>();
   /** The `agentToolCatalogKey` each session's MCP servers started under, by app session id. */
   private readonly sessionAgentToolCatalogKeys = new Map<string, string>();
   /** The MCP servers each session's agent last received. */
   private readonly sessionMcpServers = new Map<string, AcpSessionMcpServers>();
   /** Managed review child sessions that received the in-memory candidate ledger MCP server. */
   private readonly managedReviewLedgerSessions = new Set<string>();
+  private readonly managedReviewLedgerToolCalls = new Map<string, Map<string, string>>();
   /** MCP tools the operator allowed for the rest of a thread. */
   private readonly sessionMcpToolGrants = new Map<string, Set<string>>();
   private readonly now: () => number;
@@ -736,6 +743,7 @@ export class AcpAgentClient {
       !this.loadedSessionCwds.has(protocolSessionId)
       || (idleClosed && !idleClosed.workerOpen)
       || this.sessionsWithoutFaithfulReload.has(sessionId)
+      || this.pendingManagedReviewSessions.has(sessionId)
       || this.activeTurns.has(sessionId)
       || this.pendingPermissionRequests.has(sessionId)
       || this.loadingSessions.has(protocolSessionId)
@@ -869,7 +877,9 @@ export class AcpAgentClient {
     this.idleClosedSessions.delete(sessionId);
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
+    this.retireManagedReviewSession(sessionId);
     this.managedReviewLedgerSessions.delete(sessionId);
+    this.managedReviewLedgerToolCalls.delete(sessionId);
     this.sessionAgentToolCatalogKeys.delete(sessionId);
     const previousMcpServers = this.sessionMcpServers.get(sessionId);
     if (retainMcpGrants && previousMcpServers && this.sessionMcpToolGrants.has(sessionId)) {
@@ -887,6 +897,11 @@ export class AcpAgentClient {
 
   sessionSupportsManagedReviewLedger(sessionId: string): boolean {
     return this.managedReviewLedgerSessions.has(sessionId);
+  }
+
+  /** Managed review children need their original catalog only for one turn. */
+  retireManagedReviewSession(sessionId: string): void {
+    this.pendingManagedReviewSessions.delete(sessionId);
   }
 
   supportsTurnSteering(): boolean {
@@ -932,7 +947,9 @@ export class AcpAgentClient {
     this.pendingPermissionRequests.clear();
     this.idleClosedSessions.clear();
     this.sessionsWithoutFaithfulReload.clear();
+    this.pendingManagedReviewSessions.clear();
     this.managedReviewLedgerSessions.clear();
+    this.managedReviewLedgerToolCalls.clear();
     this.jobMonitorCatalogs.clear();
     this.grokBackgroundSessions.clear();
     this.antigravityBackgroundCommands.clear();
@@ -1408,9 +1425,10 @@ export class AcpAgentClient {
     this.normalizers.get(appSessionId)?.setWorkspace(cwd);
     this.loadedSessionCwds.set(sessionId, cwd);
     this.touchSession(appSessionId);
-    if (params.sessionMeta || params.mcpServers === "none" || params.managedReview) {
+    if (params.sessionMeta || params.mcpServers === "none") {
       this.sessionsWithoutFaithfulReload.add(appSessionId);
     }
+    if (params.managedReview) this.pendingManagedReviewSessions.add(appSessionId);
     if (mcpRegistration.managedReviewLedgerAvailable) {
       this.managedReviewLedgerSessions.add(appSessionId);
     } else {
@@ -3463,6 +3481,7 @@ export class AcpAgentClient {
   } {
     const activeTurn = this.activeTurns.get(sessionId);
     this.activeTurns.delete(sessionId);
+    this.retireManagedReviewSession(sessionId);
     // The idle clock starts when the turn ends, not when it began.
     this.touchSession(sessionId);
     const replay = this.normalizerFor(sessionId).recordTurnFinished(
@@ -3603,8 +3622,44 @@ export class AcpAgentClient {
       backendId: this.options.backendId,
       sessionId,
       receivedAt,
-      update,
+      update: this.managedReviewRolloutUpdate(sessionId, update),
     });
+  }
+
+  private managedReviewRolloutUpdate(
+    sessionId: string,
+    update: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!this.managedReviewLedgerSessions.has(sessionId)) return update;
+    const kind = readUpdateKind(update);
+    if (kind !== "tool_call" && kind !== "tool_call_update") return update;
+
+    const id = readAcpToolCallId(update);
+    let calls = this.managedReviewLedgerToolCalls.get(sessionId);
+    const knownName = id ? calls?.get(id) : undefined;
+    const prefix = `mcp_${PWRAGENT_TOOL_NAMESPACE}_`;
+    const toolName = knownName ?? [
+      readAcpMcpToolName(update), readAcpProviderTool(update)?.name,
+      update.name, update.toolName, update.title,
+    ].flatMap((name) => typeof name === "string"
+      ? [name.startsWith(prefix) ? name.slice(prefix.length) : name]
+      : []).find(isManagedReviewLedgerToolName);
+    if (!toolName) return update;
+    if (id && !knownName) {
+      if (!calls) {
+        calls = new Map();
+        this.managedReviewLedgerToolCalls.set(sessionId, calls);
+      }
+      calls.set(id, toolName);
+    }
+    // Completion updates can carry a result without repeating the tool name.
+    // Write only transcript bookkeeping, including for future updates by ID.
+    return {
+      sessionUpdate: kind,
+      ...(id ? { toolCallId: id } : {}),
+      title: toolName,
+      status: update.status,
+    };
   }
 
   private updateSessionStatus(

@@ -212,6 +212,7 @@ export interface RegistryHostPorts {
     model?: string;
     reasoningEffort?: string;
     requiredAntigravityMode?: string;
+    managedReviewLedger?: true;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
   /** A missing or local instance id resolves to the local owner. */
   ownerRelativeInstanceId(instanceId: string | undefined): string | undefined;

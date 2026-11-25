@@ -33,16 +33,20 @@ export function isManagedReviewLedgerToolName(
 
 function resolveTurnKey(
   context: AgentToolCallContext,
+  ledger: ManagedReviewCandidateLedger,
 ): ManagedReviewCandidateTurnKey | undefined {
   const turnId = context.turnId?.trim();
   if (!turnId) {
     return undefined;
   }
-  return {
+  const turn = {
     backend: context.backend,
     threadId: context.threadId,
     turnId,
   };
+  // MCP authorization awaits other work before it dispatches. Recheck
+  // ownership here, synchronously with the read or mutation.
+  return ledger.hasToolTurn(turn) ? turn : undefined;
 }
 
 export function buildManagedReviewLedgerToolDefinitions(
@@ -102,7 +106,7 @@ export function buildManagedReviewLedgerToolDefinitions(
         ],
       },
       dispatch: (args, context) => {
-        const turnKey = resolveTurnKey(context);
+        const turnKey = resolveTurnKey(context, ledger);
         if (!turnKey) {
           return agentToolFailure({
             code: "forbidden",
@@ -139,7 +143,7 @@ export function buildManagedReviewLedgerToolDefinitions(
         properties: {},
       },
       dispatch: (_args, context) => {
-        const turnKey = resolveTurnKey(context);
+        const turnKey = resolveTurnKey(context, ledger);
         if (!turnKey) {
           return agentToolFailure({
             code: "forbidden",
@@ -192,7 +196,7 @@ export function buildManagedReviewLedgerToolDefinitions(
         required: ["id", "disposition", "reason"],
       },
       dispatch: (args, context) => {
-        const turnKey = resolveTurnKey(context);
+        const turnKey = resolveTurnKey(context, ledger);
         if (!turnKey) {
           return agentToolFailure({
             code: "forbidden",
