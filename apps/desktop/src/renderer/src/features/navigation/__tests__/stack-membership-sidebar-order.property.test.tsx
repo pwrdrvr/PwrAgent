@@ -12,14 +12,12 @@ import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-statu
 import { Sidebar } from "../Sidebar";
 import { createNavigationPageState } from "../../../lib/navigation-query-state";
 import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
-import { stackGroupSelectionOrder } from "../../stacks/stack-presentation";
 
-// A tray is drawn under the row that owns it, stack or not. Drawing a stack's
-// tray above its lead row left it indented under whatever row came before,
-// which read as that unrelated thread's sub-threads. Inside the tray, stack
-// layers read away from the lead, nearest layer first, wherever plain
-// sub-threads sit among them, and keyboard range selection walks the rows in
-// the order they are drawn.
+// PR stacks show in the thread list only through each row's M/N chip and its
+// hover. Stack membership never moves, reorders or restyles a sub-thread tray:
+// a stack-aware tray was drawn above its lead row, where it read as the
+// sub-threads of whichever unrelated row came before. The oracle is the same
+// sidebar rendered with every stack membership stripped.
 
 afterEach(cleanup);
 
@@ -47,22 +45,30 @@ function resource(id: string, query: NavigationQueryRequest["query"], patch: Par
   } } };
 }
 
+type Shape = {
+  leadPosition: number;
+  childPositions: number[];
+  plainChildren: number;
+  order: number[];
+};
+
 /**
  * `before` is an unrelated root drawn just above the stack's lead; it is the
  * row a misplaced tray would appear to belong to.
  */
-function layout(leadPosition: number, childPositions: readonly number[], plainChildren: number, order: readonly number[]) {
-  const count = Math.max(leadPosition, ...childPositions);
+function layout(shape: Shape, withStacks: boolean) {
+  const count = Math.max(shape.leadPosition, ...shape.childPositions);
+  const stacked = (position: number) => withStacks ? { stackMemberships: [membership(position, count)] } : {};
   const before = navRow("before", { title: "Before", updatedAt: 20, createdAt: 20 });
   const lead = navRow("lead", { title: "Lead", updatedAt: 10, createdAt: 10,
-    ordinaryChildCount: childPositions.length + plainChildren, stackMemberships: [membership(leadPosition, count)] });
+    ordinaryChildCount: shape.childPositions.length + shape.plainChildren, ...stacked(shape.leadPosition) });
   const unordered = [
-    ...childPositions.map((position) => navRow(`layer-${position}`, { title: `Layer ${position}`, parentThreadId: "lead",
-      stackMemberships: [membership(position, count)] })),
-    ...Array.from({ length: plainChildren }, (_, index) => navRow(`plain-${index}`, { title: `Plain ${index}`,
+    ...shape.childPositions.map((position) => navRow(`layer-${position}`, { title: `Layer ${position}`,
+      parentThreadId: "lead", ...stacked(position) })),
+    ...Array.from({ length: shape.plainChildren }, (_, index) => navRow(`plain-${index}`, { title: `Plain ${index}`,
       parentThreadId: "lead" })),
   ];
-  const children = order.map((index) => unordered[index]!);
+  const children = shape.order.map((index) => unordered[index]!);
   return { before, lead, children };
 }
 
@@ -93,7 +99,7 @@ function mount(browseMode: "directories" | "inbox", rows: ReturnType<typeof layo
     onSetSubthreadsCollapsed={async () => undefined} />);
 }
 
-const stackLayout = fc.integer({ min: 2, max: 5 }).chain((count) => fc.record({
+const shapes: fc.Arbitrary<Shape> = fc.integer({ min: 2, max: 5 }).chain((count) => fc.record({
   leadPosition: fc.integer({ min: 1, max: count }),
   others: fc.shuffledSubarray(Array.from({ length: count }, (_, index) => index + 1), { minLength: 1 }),
   plainChildren: fc.integer({ min: 0, max: 2 }),
@@ -107,45 +113,33 @@ const stackLayout = fc.integer({ min: 2, max: 5 }).chain((count) => fc.record({
   return fc.shuffledSubarray(indices, { minLength: size, maxLength: size }).map((order) => ({ ...shape, order }));
 });
 
-function rowKeys(container: HTMLElement) {
-  return [...container.querySelectorAll<HTMLElement>('[data-hover-stable-row="thread"][data-thread-key]')]
-    .map((row) => row.dataset.threadKey!);
+/** Row and tray order plus tray markup, without the rows' own chips. */
+function structure(container: HTMLElement) {
+  return [...container.querySelectorAll<HTMLElement>('[data-hover-stable-row="thread"][data-thread-key], [data-subthread-tray]')]
+    .map((element) => element.dataset.subthreadTray
+      ? `tray:${element.dataset.subthreadTray}:${element.className}`
+      : `row:${element.dataset.threadKey}:${element.className}`);
 }
 
-it("draws a stack tray under its own lead row with layers in order, in every sidebar lens", () => {
-  fc.assert(fc.property(stackLayout, fc.constantFrom("directories" as const, "inbox" as const), (shape, browseMode) => {
-    const rows = layout(shape.leadPosition, shape.childPositions, shape.plainChildren, shape.order);
-    const view = mount(browseMode, rows);
+it("draws stacked sub-threads exactly as it draws plain ones, in every sidebar lens", () => {
+  fc.assert(fc.property(shapes, fc.constantFrom("directories" as const, "inbox" as const), (shape, browseMode) => {
+    const plain = mount(browseMode, layout(shape, false));
+    const expected = structure(plain.container);
+    plain.unmount();
+    const stacked = mount(browseMode, layout(shape, true));
     try {
-      const tray = view.container.querySelector<HTMLElement>('[data-subthread-tray="codex:lead"]');
-      expect(tray).not.toBeNull();
-      expect(tray).toHaveClass("subthread-list--stack");
-      const lead = view.container.querySelector<HTMLElement>('[data-hover-stable-row="thread"][data-thread-key="codex:lead"]')!;
-      const beforeRow = view.container.querySelector<HTMLElement>('[data-hover-stable-row="thread"][data-thread-key="codex:before"]')!;
-      // The tray sits after its own lead, never between an unrelated row and the lead.
-      expect(lead.compareDocumentPosition(tray!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      const keys = rowKeys(view.container);
-      expect(keys.indexOf("codex:before")).toBe(keys.indexOf("codex:lead") - 1);
-      expect(beforeRow.compareDocumentPosition(tray!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-
-      const drawnLayers = rowKeys(tray!).filter((key) => key.startsWith("codex:layer-"));
-      const distance = (position: number) => Math.abs(position - shape.leadPosition);
-      const nearestFirst = [...shape.childPositions].sort((a, b) => distance(a) - distance(b) || a - b)
-        .map((position) => `codex:layer-${position}`);
-      expect(drawnLayers).toEqual(nearestFirst);
-      // Plain sub-threads keep the slots they were loaded in; only layers reorder.
-      const drawnPlain = rowKeys(tray!).filter((key) => key.startsWith("codex:plain-"));
-      expect(drawnPlain).toEqual(rows.children.filter(({ id }) => id.startsWith("plain-")).map(({ id }) => `codex:${id}`));
-      const drawnKinds = rowKeys(tray!).map((key) => key.startsWith("codex:layer-"));
-      expect(drawnKinds).toEqual(rows.children.map(({ id }) => id.startsWith("layer-")));
-
-      // Shift-click ranges walk the same order the rows are drawn in.
-      const lensRows = [rows.lead, ...rows.children].map((row) => ({ ...row }));
-      const selection = stackGroupSelectionOrder(lensRows[0]!, lensRows.slice(1))
-        .map(({ id }) => `codex:${id}`);
-      expect(selection).toEqual(keys.slice(keys.indexOf("codex:lead")));
+      const drawn = structure(stacked.container);
+      expect(drawn).toEqual(expected);
+      // The oracle itself: the tray follows its own lead, children in loaded order.
+      const keys = drawn.map((entry) => entry.split(":").slice(0, 3).join(":"));
+      expect(keys).toEqual([
+        "row:codex:before",
+        "row:codex:lead",
+        "tray:codex:lead",
+        ...layout(shape, true).children.map(({ id }) => `row:codex:${id}`),
+      ]);
     } finally {
-      view.unmount();
+      stacked.unmount();
     }
   }), { numRuns: 40 });
 });
