@@ -683,7 +683,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Find registered backend ids and modelOptions in list_instance_projects. Models are validated against the destination provider.",
         "Use send_message to preview a request for an active thread. Archived targets are refused. Name its target and prompt. The operator sends it.",
         "Prefer this over start_thread when an existing thread owns the work.",
-        "Use add_forge_hands_off_rule to propose that PwrAgent leave a repository's PRs, or those with a matching label, to their maintainers: no Auto-fix, Review or Merge cards. Read the current rules in get_thread_status prAutomation.forgeAutomation first. The operator's click saves it to this thread's project; you never change the rules yourself.",
+        "Use add_forge_hands_off_rule to propose leaving a repository's PRs to their maintainers. A label narrows the rule to matching PRs. Those PRs get no Auto-fix, Review or Merge cards. Read the current rules in get_thread_status prAutomation.forgeAutomation first. The operator's click saves the rule to this thread's project. You never change the rules yourself.",
         TODO_WRITING_GUIDANCE,
         "Omit the action for a reminder that must not be lost.",
         "The operator clicks to run an action, and you never run it.",
