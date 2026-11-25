@@ -4004,8 +4004,8 @@ export class DesktopBackendRegistry {
     };
   }
 
-  refreshManagedAntigravityCatalog(command: string): void {
-    this.acpBackend.refreshManagedAntigravityCatalog(command);
+  async refreshManagedAntigravityCatalog(command: string): Promise<void> {
+    await this.acpBackend.refreshManagedAntigravityCatalog(command);
   }
 
   async invalidateProviderRuntimeSelections(params: {

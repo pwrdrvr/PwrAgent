@@ -1,17 +1,85 @@
+import { addAbortListener } from "node:events";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { resolveActiveProfileDir, resolveBootstrapProfileDir } from "../profile";
 import { getAppStateMode } from "../storage/desktop-runtime-storage";
 import { withAntigravityModelCatalog } from "./acp-capability-freshness.js";
 import { acpDiscoveryActionRequiredMessage } from "./acp-discovery-error.js";
+import { acpAgentLaunchIdentity } from "./acp-launch-descriptor.js";
 import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
-import { discoverAcpRuntimeCapabilities } from "./acp-runtime-discovery.js";
+import { discoverAcpRuntimeCapabilities, type AcpRuntimeDiscoveryResult } from "./acp-runtime-discovery.js";
 
 export type AcpRuntimeCapabilityProbeOptions = {
-  /** Terminates the agent; the probe then rejects instead of recording. */
+  /** Cancel this request. A shared probe stays alive for its other callers. */
   signal?: AbortSignal;
   onStage?: (stage: string) => void;
 };
+
+type RuntimeDiscoveryOptions = Parameters<typeof discoverAcpRuntimeCapabilities>[1];
+type ManagedAntigravityProbe = {
+  controller: AbortController;
+  callers: Set<RuntimeDiscoveryOptions>;
+  result: Promise<AcpRuntimeDiscoveryResult>;
+  stage?: string;
+};
+
+const managedAntigravityProbes = new Map<string, ManagedAntigravityProbe>();
+
+async function untilProbeAborted<T>(result: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await result;
+  signal.throwIfAborted();
+  const cancelled = Promise.withResolvers<never>();
+  using _abort = addAbortListener(signal, () => cancelled.reject(signal.reason));
+  return await Promise.race([result, cancelled.promise]);
+}
+
+async function discoverManagedAntigravityCapabilities(
+  record: AcpInstalledAgentRecord,
+  options: RuntimeDiscoveryOptions,
+): Promise<AcpRuntimeDiscoveryResult> {
+  options.signal?.throwIfAborted();
+  // The discovery workspace scopes this to the profile. A replacement
+  // binary or provider configuration gets an independent probe.
+  const key = JSON.stringify([
+    options.cwd,
+    record.version,
+    record.configDependencyFingerprint,
+    acpAgentLaunchIdentity(record),
+  ]);
+  let active = managedAntigravityProbes.get(key);
+  if (active?.controller.signal.aborted) {
+    await untilProbeAborted(active.result.catch(() => undefined), options.signal);
+    return await discoverManagedAntigravityCapabilities(record, options);
+  }
+  if (!active) {
+    const controller = new AbortController();
+    const callers = new Set<RuntimeDiscoveryOptions>();
+    const run: ManagedAntigravityProbe = {
+      controller,
+      callers,
+      result: Promise.resolve().then(() => discoverAcpRuntimeCapabilities(record, {
+        ...options,
+        signal: controller.signal,
+        onStage: (stage) => {
+          run.stage = stage;
+          for (const caller of callers) caller.onStage?.(stage);
+        },
+      })).finally(() => managedAntigravityProbes.delete(key)),
+    };
+    managedAntigravityProbes.set(key, run);
+    active = run;
+  }
+  active.callers.add(options);
+  try {
+    if (active.stage) options.onStage?.(active.stage);
+    return await untilProbeAborted(active.result, options.signal);
+  } finally {
+    active.callers.delete(options);
+    if (active.callers.size === 0 && managedAntigravityProbes.get(key) === active) {
+      active.controller.abort(options.signal?.reason);
+    }
+  }
+}
 
 /**
  * Probe an agent's runtime capabilities over ACP and fold the outcome into its
@@ -43,12 +111,16 @@ export async function probeAcpRuntimeCapabilities(
 ): Promise<{ record: AcpInstalledAgentRecord; error?: string }> {
   const now = Date.now();
   try {
-    const result = await discoverAcpRuntimeCapabilities(record, {
+    const discoveryOptions = {
       cwd,
       ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
       ...(options?.signal ? { signal: options.signal } : {}),
       ...(options?.onStage ? { onStage: options.onStage } : {}),
-    });
+    };
+    const discover = record.registryId === "antigravity" && record.launchDescriptor?.managedAntigravityFallback === true
+      ? discoverManagedAntigravityCapabilities : discoverAcpRuntimeCapabilities;
+    const result = await discover(record, discoveryOptions);
+    options?.signal?.throwIfAborted();
     let capabilities = result.runtimeCapabilities;
     if (capabilities && record.registryId === "antigravity" && record.runtimeCapabilities?.status === "stale") {
       // A sparse response can describe the protocol without answering the

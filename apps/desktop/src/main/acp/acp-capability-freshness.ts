@@ -68,8 +68,9 @@ export function shouldReprobeAcpCapabilities(
 
 /**
  * Probe a known agent whose runtime changed during startup discovery or a
- * managed update. Cached Antigravity model choices can survive the change,
- * but do not count as a probe of the new executable.
+ * managed update. An automatically selected Antigravity runtime can inherit
+ * model choices, and live replies can mark its capabilities discovered.
+ * Only the probe's own outcome records that the executable was probed.
  *
  * The rule never fires in steady state. It requires that no probe has
  * run for the current runtime, and every probe outcome records one: a result
@@ -91,7 +92,7 @@ export function shouldProbeAcpCapabilitiesAfterRuntimeChange(
     && agent.installStatus === "installed"
     && agent.launchDescriptor !== undefined
     && (agent.runtimeCapabilities === undefined
-      || (agent.registryId === "antigravity" && agent.runtimeCapabilities.status === "stale"))
+      || (agent.registryId === "antigravity" && agent.launchDescriptor.managedAntigravityFallback === true))
     && agent.lastDiscoveredAt === undefined
     && agent.lastDiscoveryError === undefined
   );

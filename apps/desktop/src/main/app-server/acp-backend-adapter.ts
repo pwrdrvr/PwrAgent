@@ -72,6 +72,7 @@ import type {
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
 import { isManagedAntigravityCommand, MANAGED_ANTIGRAVITY_ENV } from "../acp/antigravity-managed-runtime";
+import { resolveAntigravityCommandPath } from "../acp/antigravity-runtime-retention";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import {
   assertProviderDiscoveryPermit,
@@ -357,6 +358,7 @@ export type AcpPromptPayload = {
 
 export type AcpRuntimeCapabilityProbe = (
   agent: AcpInstalledAgentRecord,
+  canProbe: () => boolean,
 ) => Promise<AcpInstalledAgentRecord>;
 
 export type AcpBackendAdapterOptions = {
@@ -1353,11 +1355,10 @@ export class AcpBackendAdapter {
       ? undefined
       : options.probeAcpRuntimeCapabilities
         ?? (isAppStateInitialized()
-          ? async (agent) =>
-              await refreshAcpRuntimeCapabilities(
-                agent,
-                await ensureAcpRuntimeDiscoveryWorkspace(),
-              )
+          ? async (agent, canProbe) => {
+              const cwd = await ensureAcpRuntimeDiscoveryWorkspace();
+              return canProbe() ? await refreshAcpRuntimeCapabilities(agent, cwd) : agent;
+            }
           : undefined);
     this.acpAgentStore =
       options.acpAgentStore === null
@@ -3002,13 +3003,20 @@ export class AcpBackendAdapter {
     }
   }
 
-  refreshManagedAntigravityCatalog(command: string): void {
+  async refreshManagedAntigravityCatalog(command: string): Promise<void> {
     const agent = this.acpAgentStore?.getInstalledAgent("acp:antigravity");
-    if (agent?.launchDescriptor?.command === command
-      && agent.launchDescriptor.managedAntigravityFallback
-      && shouldProbeAcpCapabilitiesAfterRuntimeChange(agent, true)) {
-      this.probeChangedRuntimesInBackground([agent]);
+    const launch = agent?.launchDescriptor;
+    if (!agent || !launch?.managedAntigravityFallback || !shouldProbeAcpCapabilitiesAfterRuntimeChange(agent, true)) {
+      return;
     }
+    if (launch.command !== command) {
+      const [selected, installed] = await Promise.all([
+        resolveAntigravityCommandPath(launch.command, { cwd: launch.cwd, env: { ...process.env, ...launch.env } }),
+        resolveAntigravityCommandPath(command),
+      ]);
+      if (!selected || selected !== installed) return;
+    }
+    this.probeChangedRuntimesInBackground([agent]);
   }
 
   private probeChangedRuntimesInBackground(
@@ -3044,7 +3052,9 @@ export class AcpBackendAdapter {
       return current
         && !this.closed
         && (this.isAcpAgentEnabled?.(agent.registryId) ?? true)
+        && this.isRuntimeSelectionCurrent(current)
         && current.version === agent.version
+        && current.configDependencyFingerprint === agent.configDependencyFingerprint
         && acpAgentLaunchIdentity(current) === acpAgentLaunchIdentity(agent)
         && shouldProbeAcpCapabilitiesAfterRuntimeChange(current, true)
         ? current : undefined;
@@ -3052,12 +3062,14 @@ export class AcpBackendAdapter {
     try {
       const before = readUnprobedRuntime();
       if (!before) return;
-      const probed = await probe(before);
+      const probed = await probe(before, () => readUnprobedRuntime() !== undefined);
       const current = readUnprobedRuntime();
-      if (!current) return;
+      if (!current || probed === before) return;
+      const useCurrentCapabilities = probed.runtimeCapabilities === before.runtimeCapabilities
+        && !acpDiscoveryActionRequiredMessage(agent.registryId, probed.lastDiscoveryError);
       this.acpAgentStore?.upsertInstalledAgent({
         ...current,
-        runtimeCapabilities: probed.runtimeCapabilities,
+        runtimeCapabilities: useCurrentCapabilities ? current.runtimeCapabilities : probed.runtimeCapabilities,
         lastDiscoveredAt: probed.lastDiscoveredAt,
         lastDiscoveryError: probed.lastDiscoveryError,
         updatedAt: Math.max(current.updatedAt, probed.updatedAt),
@@ -3898,7 +3910,9 @@ export class AcpBackendAdapter {
         // catalog over the newly selected installation. Its session state is
         // still authoritative for that thread.
         if (agent.registryId !== "antigravity"
-          || current.launchDescriptor?.command === agent.launchDescriptor?.command) {
+          || (current.version === agent.version
+            && current.launchDescriptor?.command === agent.launchDescriptor?.command
+            && this.isRuntimeSelectionCurrent(current))) {
           this.acpAgentStore?.upsertInstalledAgent(
             recordWithSessionRuntimeCapabilities(current, runtimeCapabilities, now),
           );
