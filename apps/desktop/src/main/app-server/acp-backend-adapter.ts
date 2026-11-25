@@ -120,8 +120,10 @@ import {
   AcpSessionReplayNormalizer,
   acpSessionReplayNormalizerOptions,
   inferAcpReplayTurns,
+  loadAcpReplayKit,
   readAcpContentText,
   shouldSurfaceAcpThoughtsAsMessages,
+  type AcpReplayKit,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import {
@@ -1237,6 +1239,7 @@ export class AcpBackendAdapter {
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
   >;
+  private replayKit?: AcpReplayKit;
   private readonly acpRolloutStore?: Pick<
     AcpRolloutStore,
     "appendUpdate" | "readReplay" | "readUpdates"
@@ -1975,6 +1978,7 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
+    this.replayKit ??= await loadAcpReplayKit();
     if (backend === "acp:antigravity") {
       return await this.environmentClientLocks.run(JSON.stringify([backend, sessionId]), async () => {
         const session = this.getSession(backend, sessionId);
@@ -2629,6 +2633,7 @@ export class AcpBackendAdapter {
         sessionId: session.sessionId,
         cwd: session.cwd,
         workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(session),
+        replayKit: this.replayKit,
       }) ?? new AcpSessionReplayNormalizer().replay();
     this.logSessionReplaySource({
       backend: session.backendId,
@@ -2703,6 +2708,7 @@ export class AcpBackendAdapter {
           sessionId: session.sessionId,
           cwd: session.cwd,
           workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(session),
+          replayKit: this.replayKit,
         }) ?? new AcpSessionReplayNormalizer().replay();
       if (rolloutReplay.entries.length > 0) {
         this.logSessionReplaySource({
@@ -2751,6 +2757,7 @@ export class AcpBackendAdapter {
         sessionId: session.sessionId,
         cwd: session.cwd,
         workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(session),
+        replayKit: this.replayKit,
       }) ?? new AcpSessionReplayNormalizer().replay();
     if (rolloutReplay.entries.length === 0) {
       this.logSessionReplaySource({
@@ -2789,6 +2796,7 @@ export class AcpBackendAdapter {
         sessionId: params.session.sessionId,
         cwd: params.session.cwd,
         workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(params.session),
+        replayKit: this.replayKit,
       }) ?? new AcpSessionReplayNormalizer().replay();
     if (rolloutReplay.entries.length > 0) {
       this.logSessionReplaySource({

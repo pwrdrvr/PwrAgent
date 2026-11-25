@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpKit from "@pwrdrvr/agent-acp";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
+import { loadAcpReplayKit } from "../acp/acp-session-normalizer";
 import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 
 vi.mock(import("@pwrdrvr/agent-acp"), async (importOriginal) => {
@@ -67,7 +68,7 @@ describe("AcpRolloutStore", () => {
     ]);
   });
 
-  it("replays kit plans and command headings without losing persisted host events", () => {
+  it("replays kit plans and command headings without losing persisted host events", async () => {
     const params = { backendId: "acp:gemini" as const, sessionId: "phase-b-fixture" };
     const store = new AcpRolloutStore(tempDir);
     const command = String.raw`bash -c 'printf %s '"\"a b\""`;
@@ -102,7 +103,7 @@ describe("AcpRolloutStore", () => {
     try {
       const reopened = new AcpRolloutStore(tempDir);
       const records = reopened.readUpdates(params);
-      const replay = reopened.readReplay(params);
+      const replay = reopened.readReplay({ ...params, replayKit: await loadAcpReplayKit() });
       expect(applyKit).toHaveBeenCalledWith(plan, {
         threadId: params.sessionId,
         turnId: "fixture-turn",

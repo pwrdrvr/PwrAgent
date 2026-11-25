@@ -238,30 +238,52 @@ it("accepts a skipped lane in the Desktop E2E gate only when the classifier or t
   const gate = jobSection("desktop-e2e-result");
   const script = gate.split("        run: |\n")[1].split("\n").map((line) => line.slice(10)).join("\n");
   const results = ["success", "failure", "cancelled", "skipped"];
+  const cases = [];
   for (const linux of results) {
     for (const a11y of results) {
       for (const requested of ["true", "false"]) {
         for (const macos of results) {
           for (const full of ["true", "false"]) {
             // Unset when the plan job did not succeed, then no lane and one lane.
-            for (const lanes of [undefined, "", "[]", "[1]"]) {
-              const run = spawnSync("bash", ["-c", script], {
-                env: { PATH: process.env.PATH, LINUX_E2E_RESULT: linux, MACOS_E2E_RESULT: macos, FULL_PLATFORMS: full,
-                  A11Y_RESULT: a11y, A11Y_REQUESTED: requested,
-                  GITHUB_STEP_SUMMARY: "/dev/null", ...(lanes === undefined ? {} : { E2E_LANES: lanes }) },
-                encoding: "utf8",
-              });
+            for (const lanes of ["unset", "", "[]", "[1]"]) {
               const pass = (linux === "success" || (lanes === "[]" && linux === "skipped"))
                 && (a11y === "success" || (requested === "false" && a11y === "skipped"))
                 && (macos === "success" || (full === "false" && macos === "skipped"));
               const name = `linux=${linux} a11y=${a11y} requested=${requested} macos=${macos} full=${full} lanes=${lanes}`;
-              expect(run.status === 0, `${name}: ${run.stdout}${run.stderr}`).toBe(pass);
+              cases.push({ values: [linux, a11y, requested, macos, full, lanes], name, pass });
             }
           }
         }
       }
     }
   }
+  // Run the real step once per case in a subshell so its variables, shell
+  // options and exit status are isolated without starting 1,024 Bash executables.
+  const run = spawnSync("bash", ["-c", `
+    while IFS='|' read -r linux a11y requested macos full lanes; do
+      (
+        export LINUX_E2E_RESULT="$linux" A11Y_RESULT="$a11y" A11Y_REQUESTED="$requested"
+        export MACOS_E2E_RESULT="$macos" FULL_PLATFORMS="$full"
+        if [[ "$lanes" == "unset" ]]; then
+          unset E2E_LANES
+        else
+          export E2E_LANES="$lanes"
+        fi
+        ${script}
+      ) >/dev/null 2>&1
+      printf '%s\\n' "$?"
+    done
+  `], {
+    env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: "/dev/null" },
+    input: cases.map(({ values }) => values.join("|")).join("\n") + "\n",
+    encoding: "utf8",
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const statuses = run.stdout.trimEnd().split(/\r?\n/);
+  expect(statuses).toHaveLength(cases.length);
+  cases.forEach(({ name, pass }, index) => {
+    expect(statuses[index], name).toBe(pass ? "0" : "1");
+  });
 });
 
 it("gates the accessibility job, its required check and its flake slices on the same request", () => {

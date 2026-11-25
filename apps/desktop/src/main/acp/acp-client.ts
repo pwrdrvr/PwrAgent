@@ -33,6 +33,8 @@ import {
   readAcpContentText,
   readAcpTopicTitle,
   readAcpUpdateTimestamp,
+  loadAcpReplayKit,
+  type AcpReplayKit,
   type AcpSessionReplayNormalizerOptions,
   type AcpSessionUpdate,
   type AcpReplayPromptIdentity,
@@ -501,6 +503,7 @@ export class AcpAgentClient {
   private antigravitySessionListSupported = false;
   private jobMonitorCatalogRefreshSupported = false;
   private readonly normalizerOptions: AcpSessionReplayNormalizerOptions;
+  private replayKit?: AcpReplayKit;
   private activeOperations = 0;
 
   constructor(private readonly options: AcpAgentClientOptions) {
@@ -518,6 +521,7 @@ export class AcpAgentClient {
   }
 
   async initialize(): Promise<void> {
+    this.replayKit = await loadAcpReplayKit();
     this.unsubscribe = this.options.transport.onNotification((method, params) => {
       if (method === "session/update") {
         this.applySessionUpdate(params);
@@ -2768,6 +2772,7 @@ export class AcpAgentClient {
   private normalizerOptionsFor(metadata?: AcpSessionMetadata): AcpSessionReplayNormalizerOptions {
     return {
       ...this.normalizerOptions,
+      replayKit: this.replayKit,
       cwd: metadata?.cwd,
       workspaceSessionId: metadata?.antigravityWorkspaceRebound ? protocolSessionIdForMetadata(metadata) : undefined,
     };

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { AcpSessionNormalizer, defaultQuirks, toolCallFromUpdate } from "@pwrdrvr/agent-acp";
+import type { AcpSessionNormalizer } from "@pwrdrvr/agent-acp";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadCommandDetail,
@@ -7,6 +7,7 @@ import type {
   AppServerThreadImagePart,
   AppServerThreadMessage,
   AppServerThreadMessagePart,
+  AppServerThreadPlanEntry,
   AppServerThreadReplay,
   AppServerThreadStatus,
   AppServerThreadTurnStatus,
@@ -73,10 +74,20 @@ export function acpReplayPromptTextDigest(text: string): string {
 }
 
 export type AcpSessionReplayNormalizerOptions = ReadAcpFileEditOptions & {
+  replayKit?: AcpReplayKit;
   surfaceThoughtsAsMessages?: boolean;
   /** Scope provider message IDs after a handoff, keeping the original segment's IDs intact. */
   workspaceSessionId?: string;
 };
+
+export type AcpReplayKit = Pick<typeof import("@pwrdrvr/agent-acp"),
+  "AcpSessionNormalizer" | "defaultQuirks" | "toolCallFromUpdate">;
+
+export async function loadAcpReplayKit(): Promise<AcpReplayKit> {
+  // Loading the package root also loads the ACP SDK. Keep that graph out of
+  // owner startup until a caller initializes an ACP client or reads a replay.
+  return await import("@pwrdrvr/agent-acp");
+}
 
 export function shouldSurfaceAcpThoughtsAsMessages(backendId: string): boolean {
   return backendId !== "acp:qwen" && backendId !== "acp:grok";
@@ -299,7 +310,7 @@ function isSettledTurnStatus(
 }
 
 export class AcpSessionReplayNormalizer {
-  private readonly kitPlanNormalizer = new AcpSessionNormalizer({ quirks: defaultQuirks() });
+  private readonly kitPlanNormalizer?: AcpSessionNormalizer;
   private entries: AppServerThreadEntry[] = [];
   private messages: AppServerThreadMessage[] = [];
   // Arrays own replay order; indexes refer to slots, not entry objects (turn
@@ -343,6 +354,8 @@ export class AcpSessionReplayNormalizer {
   private fileEditOptions: ReadAcpFileEditOptions;
 
   constructor(private readonly options: AcpSessionReplayNormalizerOptions = {}) {
+    const kit = options.replayKit;
+    this.kitPlanNormalizer = kit ? new kit.AcpSessionNormalizer({ quirks: kit.defaultQuirks() }) : undefined;
     this.fileEditOptions = {
       wholeFileDiffContent: options.wholeFileDiffContent,
       antigravity: options.antigravity,
@@ -978,14 +991,25 @@ export class AcpSessionReplayNormalizer {
 
   private upsertPlan(update: AcpSessionUpdate, createdAt: number): void {
     const { sessionId, update: payload } = update;
-    const { events } = this.kitPlanNormalizer.apply(payload, {
-      threadId: sessionId,
-      turnId: this.currentTurnId ?? sessionId,
-    });
-    const [plan] = normalizedThreadToReplay(reduceNormalizedThread(events, sessionId)).entries;
-    if (plan?.type === "plan") {
-      this.upsertEntry({ ...plan, createdAt });
+    if (this.kitPlanNormalizer) {
+      const { events } = this.kitPlanNormalizer.apply(payload, {
+        threadId: sessionId,
+        turnId: this.currentTurnId ?? sessionId,
+      });
+      const [plan] = normalizedThreadToReplay(reduceNormalizedThread(events, sessionId)).entries;
+      if (plan?.type === "plan") {
+        this.upsertEntry({ ...plan, createdAt });
+        return;
+      }
     }
+    this.upsertEntry({
+      type: "plan",
+      id: readString(payload, "planId") ?? `plan:${sessionId}`,
+      createdAt,
+      explanation: readString(payload, "explanation"),
+      markdown: readString(payload, "markdown"),
+      steps: readPlanSteps(payload),
+    });
   }
 
   private upsertToolActivity(
@@ -1026,6 +1050,7 @@ export class AcpSessionReplayNormalizer {
         fileRead,
         this.fileEditOptions,
         followsTitleScript,
+        this.options.replayKit,
       ),
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
@@ -1782,6 +1807,28 @@ export function readAcpContentText(value: unknown): string | undefined {
   );
 }
 
+function readPlanSteps(record: Record<string, unknown>): AppServerThreadPlanEntry["steps"] {
+  const steps = Array.isArray(record.steps) ? record.steps : [];
+  return steps.flatMap((step) => {
+    if (typeof step === "string") {
+      return [{ step, status: "pending" as const }];
+    }
+    const stepRecord = asRecord(step);
+    if (!stepRecord) {
+      return [];
+    }
+    const text = readString(stepRecord, "step") ?? readString(stepRecord, "content");
+    if (!text) {
+      return [];
+    }
+    const status = readString(stepRecord, "status");
+    return [{
+      step: text,
+      status: status === "in_progress" || status === "completed" ? status : "pending",
+    }];
+  });
+}
+
 function toolActivity(
   update: AcpSessionUpdate,
   kind: string,
@@ -1790,6 +1837,7 @@ function toolActivity(
   fileRead?: AcpFileRead,
   fileEditOptions?: ReadAcpFileEditOptions,
   followsTitleScript = false,
+  replayKit?: AcpReplayKit,
 ): AppServerThreadActivityEntry {
   const id =
     readAcpToolCallId(update.update) ??
@@ -1934,8 +1982,8 @@ function toolActivity(
     );
   // PwrAgent still owns provider-specific command extraction and completion
   // merges. Give the kit the explicit shell invocation after title selection.
-  const kitShell = formatAsCommand && rawCommand
-    ? normalizedToolCallToReplayDetail(toolCallFromUpdate({
+  const kitShell = replayKit && formatAsCommand && rawCommand
+    ? normalizedToolCallToReplayDetail(replayKit.toolCallFromUpdate({
         kind: "execute",
         title: "Bash",
         command: rawCommand,
