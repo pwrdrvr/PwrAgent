@@ -1,7 +1,14 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { mapGraphqlPrNode } from "../pr-status/github-graphql-client";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
+import {
+  forgetGithubForgeStacks,
+  GithubForgeStackDiscovery,
+  githubForgeStackRepository,
+  readGithubForgeStack,
+} from "../stacks/github-forge-stacks";
 
 /**
  * Model-based test of GitHub's own stacked pull requests against what
@@ -46,15 +53,24 @@ type Op =
   | { kind: "form_stack"; at: number }
   | { kind: "merge_outside"; at: number }
   | { kind: "poll" }
-  | { kind: "click"; at: number; checkStackOrder: boolean };
+  /**
+   * `consent` is what the card sent about the open layers below: nothing,
+   * the layers it listed, or a stale list missing one that opened since.
+   */
+  | { kind: "click"; at: number; checkStackOrder: boolean; consent: "none" | "listed" | "stale"; upper: boolean };
 
 const op: fc.Arbitrary<Op> = fc.oneof(
   // Mostly chains, so stacks can form.
-  { weight: 4, arbitrary: fc.record({ kind: fc.constant("open" as const), on: fc.option(fc.nat({ max: 7 }), { nil: null, freq: 4 }) }) },
-  { weight: 3, arbitrary: fc.record({ kind: fc.constant("form_stack" as const), at: fc.nat({ max: 7 }) }) },
-  { weight: 2, arbitrary: fc.record({ kind: fc.constant("merge_outside" as const), at: fc.nat({ max: 7 }) }) },
+  { weight: 6, arbitrary: fc.record({ kind: fc.constant("open" as const), on: fc.option(fc.nat({ max: 3 }), { nil: null, freq: 4 }) }) },
+  { weight: 4, arbitrary: fc.record({ kind: fc.constant("form_stack" as const), at: fc.nat({ max: 7 }) }) },
+  { weight: 1, arbitrary: fc.record({ kind: fc.constant("merge_outside" as const), at: fc.nat({ max: 7 }) }) },
   { weight: 2, arbitrary: fc.constant({ kind: "poll" as const }) },
-  { weight: 3, arbitrary: fc.record({ kind: fc.constant("click" as const), at: fc.nat({ max: 7 }), checkStackOrder: fc.boolean() }) },
+  { weight: 3, arbitrary: fc.record({
+    kind: fc.constant("click" as const), at: fc.nat({ max: 7 }), checkStackOrder: fc.boolean(),
+    consent: fc.constantFrom("none" as const, "listed" as const, "stale" as const),
+    // Often an upper layer with open layers below, where consent decides the merge.
+    upper: fc.boolean(),
+  }) },
 );
 
 const iso = (at: number) => new Date(START + at * 60_000).toISOString();
@@ -94,6 +110,17 @@ function restPull(model: Model, pr: ModelPr) {
     base: { ref: pr.base, sha: pr.baseSha, repo: { default_branch: TRUNK } },
     stack: stack ? { id: stack.number, ...stack, base: { ref: TRUNK, sha: null } } : null,
   };
+}
+
+/** GitHub's `GET /stacks/{number}`: its members bottom first. */
+function stackBody(model: Model, number: number) {
+  return { number, base: { ref: TRUNK }, pull_requests: model.stacks.get(number)!.map((member) => {
+    const pr = model.prs.find((candidate) => candidate.number === member)!;
+    return {
+      number: member, state: open(pr) ? "open" : "closed", merged_at: open(pr) ? null : iso(pr.mergedAt!),
+      head: { ref: pr.head, sha: pr.sha }, base: { ref: pr.base, sha: pr.baseSha },
+    };
+  }) };
 }
 
 /** The operator's `gh`, answering from the model. Records every merge GitHub refused and every PR it landed. */
@@ -140,11 +167,7 @@ function fakeGh(model: Model, log: { refused: number; landed: number[] }) {
     if (match) return json(restPull(model, byNumber(Number(match[1]))!));
     match = /^\/stacks\/(\d+)$/.exec(route);
     if (match) {
-      const members = model.stacks.get(Number(match[1]))!;
-      return json({ number: Number(match[1]), pull_requests: members.map((number) => {
-        const pr = byNumber(number)!;
-        return { number, state: open(pr) ? "open" : "closed", merged_at: open(pr) ? null : iso(pr.mergedAt!) };
-      }) });
+      return json(stackBody(model, Number(match[1])));
     }
     if (route.startsWith("/pulls?")) {
       const head = new URLSearchParams(route.split("?")[1]).get("head")!.split(":")[1];
@@ -154,32 +177,55 @@ function fakeGh(model: Model, log: { refused: number; landed: number[] }) {
   };
 }
 
+/** A PR number in no stack: what a card listed about a layer that is gone. */
+const STALE_LAYER = 9_999;
+/** Clicks on a PR with open layers below, by what the card sent. */
+const stats = { none: 0, listed: 0, stale: 0 };
+
 async function run(ops: readonly Op[]): Promise<void> {
   const model: Model = { clock: 0, prs: [], stacks: new Map(), nextStack: 4402 };
+  forgetGithubForgeStacks();
+  // The poll's member reads, answered from the model and counted.
+  const stackReads: number[] = [];
+  const pendingReads: Promise<unknown>[] = [];
+  const discovery = new GithubForgeStackDiscovery({
+    read: (_repository, path) => {
+      const number = Number(path.split("/").at(-1));
+      stackReads.push(number);
+      const answer = Promise.resolve(stackBody(model, number));
+      pendingReads.push(answer);
+      return answer;
+    },
+    learned: () => {},
+    // Ten minutes a step, so the limiter never hides a read a step needs.
+    now: () => START + model.clock * 600_000 + sincePoll,
+  });
+  let sincePoll = 0;
+  const settleReads = async () => {
+    while (pendingReads.length) await pendingReads.shift();
+    await new Promise((resolve) => setImmediate(resolve));
+  };
   // Each step picks among the PRs it can act on, so short runs still reach stacks.
   const pick = <T,>(rows: readonly T[], index: number): T | undefined => rows[index % Math.max(1, rows.length)];
   const openPrs = () => model.prs.filter(open);
   for (const step of ops) {
     model.clock++;
     if (step.kind === "open") {
-      const onParent = step.on === null ? undefined : pick(openPrs(), step.on);
+      // Counted from the newest open PR, so low indexes grow one chain.
+      const onParent = step.on === null ? undefined : pick(openPrs().reverse(), step.on);
       const number = 4387 + model.prs.length;
       model.prs.push({
         number, head: `layer-${number}`, sha: sha(number), createdAt: model.clock, retargets: [],
         base: onParent?.head ?? TRUNK, baseSha: onParent?.sha ?? sha(0xa000 + model.clock),
       });
     } else if (step.kind === "form_stack") {
-      // GitHub stacks a chain of open PRs, bottom on trunk, each on the head of the one below.
+      // GitHub stacks a chain of open PRs, bottom on trunk, each on the head of
+      // the one below; at a fork the operator takes one path, here the oldest.
       const childrenOf = (pr: ModelPr) => model.prs.filter((child) => open(child) && child.stack === undefined && child.base === pr.head);
-      const bottom = pick(openPrs().filter((pr) => pr.stack === undefined && pr.base === TRUNK && childrenOf(pr).length === 1), step.at);
+      const bottom = pick(openPrs().filter((pr) => pr.stack === undefined && pr.base === TRUNK && childrenOf(pr).length > 0), step.at);
       if (!bottom) continue;
       const chain = [bottom];
-      for (;;) {
-        const above = childrenOf(chain.at(-1)!);
-        if (above.length !== 1) break;
-        chain.push(above[0]!);
-      }
-      if (chain.length < 2) continue;
+      for (let above = childrenOf(bottom)[0]; above; above = childrenOf(above)[0]) chain.push(above);
       const number = model.nextStack++;
       model.stacks.set(number, chain.map((pr) => pr.number));
       for (const pr of chain) pr.stack = number;
@@ -189,6 +235,7 @@ async function run(ops: readonly Op[]): Promise<void> {
       if (pr) land(model, pr);
     } else if (step.kind === "poll") {
       // What PwrAgent knows after a status poll: GitHub's stack membership, for every PR.
+      const summaries: PrSummary[] = [];
       for (const pr of model.prs) {
         const summary = mapGraphqlPrNode({
           number: pr.number, url: `https://github.com/${OWNER}/${REPO}/pull/${pr.number}`,
@@ -200,16 +247,47 @@ async function run(ops: readonly Op[]): Promise<void> {
           stackEntry: pr.stack === undefined ? null : { position: membership(model, pr)!.position },
         }, undefined, START + model.clock * 60_000);
         expect(summary.githubStack, `#${pr.number} after a poll`).toEqual(membership(model, pr));
+        summaries.push(summary);
       }
+      // Members are read once per changed stack, and then match GitHub.
+      stackReads.length = 0;
+      discovery.observe(summaries);
+      await settleReads();
+      expect(new Set(stackReads).size, "one member read per stack").toBe(stackReads.length);
+      const repository = githubForgeStackRepository({ host: "github.com", owner: OWNER, repo: REPO });
+      for (const [number, members] of model.stacks) {
+        expect(readGithubForgeStack(repository, number)?.layers.map((layer) => [layer.number, layer.open]), `stack ${number}`)
+          .toEqual(members.map((member) => [member, open(model.prs.find((pr) => pr.number === member)!)]));
+      }
+      // Nothing changed since: the same poll again, past the limiter, reads nothing.
+      stackReads.length = 0;
+      sincePoll = 300_000;
+      discovery.observe(summaries);
+      await settleReads();
+      sincePoll = 0;
+      expect(stackReads, "a poll with no stack change reads no members").toEqual([]);
     } else {
       // The synchronous fallback runs only for a PR on trunk; the order check covers the rest.
-      const pr = pick(openPrs().filter((candidate) => step.checkStackOrder || candidate.base === TRUNK), step.at);
+      const openBelowOf = (pr: ModelPr) => {
+        const stack = membership(model, pr);
+        return stack
+          ? model.stacks.get(stack.number)!.slice(0, stack.position - 1).filter((number) => open(model.prs.find((p) => p.number === number)!))
+          : [];
+      };
+      const clickable = openPrs().filter((candidate) => step.checkStackOrder || candidate.base === TRUNK);
+      const upper = clickable.filter((candidate) => openBelowOf(candidate).length > 0);
+      const pr = pick(step.upper && upper.length ? upper : clickable, step.at);
       if (!pr) continue;
       const stack = membership(model, pr);
-      const lowerOpen = stack
-        ? model.stacks.get(stack.number)!.slice(0, stack.position - 1).some((number) => open(model.prs.find((p) => p.number === number)!))
-        : false;
-      const blocked = lowerOpen || pr.base !== TRUNK;
+      const openBelow = openBelowOf(pr);
+      // What the card sent: nothing, the open layers it listed, or a stale list.
+      // A stale list names layers, just not every one open now: the newest is
+      // missing, and a layer that has merged since stands in its place.
+      const consented = step.consent === "listed" ? openBelow
+        : step.consent === "stale" && openBelow.length ? [...openBelow.slice(0, -1), STALE_LAYER] : [];
+      if (openBelow.length) stats[step.consent] += 1;
+      const coversBelow = openBelow.every((number) => consented.includes(number));
+      const blocked = openBelow.length ? !coversBelow : pr.base !== TRUNK;
       const log = { refused: 0, landed: [] as number[] };
       const fetcher = new GithubPrFetcher({
         graphqlClient: { fetchPullRequests: async () => [], fetchPullRequestsForBranches: async () => new Map() } as never,
@@ -218,15 +296,21 @@ async function run(ops: readonly Op[]): Promise<void> {
       });
       const result = await fetcher.mergePullRequest({
         pullRequest: `https://github.com/${OWNER}/${REPO}/pull/${pr.number}`, method: "squash", checkStackOrder: step.checkStackOrder,
+        ...(consented.length ? { mergeOpenLayersBelow: consented } : {}),
       }).then((merged) => ({ merged }), (error: unknown) => ({ error }));
-      // Safety: one click lands at most the PR clicked.
-      expect(log.landed.filter((number) => number !== pr.number), `merging #${pr.number} landed other PRs`).toEqual([]);
+      // Safety: a click lands only the PR clicked and the layers below it the operator chose.
+      expect(log.landed.filter((number) => number !== pr.number && !consented.includes(number)),
+        `merging #${pr.number} landed PRs nobody chose`).toEqual([]);
       if (blocked) {
-        expect(result, `#${pr.number} has an open layer below it`).toMatchObject({ error: { code: "stack_parent_open" } });
+        expect(result, `#${pr.number} has an open layer below it nobody chose`).toMatchObject({ error: { code: "stack_parent_open" } });
         expect(log.landed).toEqual([]);
       } else {
         expect(result, `#${pr.number} can merge`).toHaveProperty("merged");
-        expect(log.landed).toEqual([pr.number]);
+        // GitHub lands the chosen layers bottom first, then the PR clicked.
+        expect(log.landed).toEqual([...openBelow, pr.number]);
+        if (openBelow.length && "merged" in result) {
+          expect(result.merged.summary).toContain(`${openBelow.length + 1} PRs in a GitHub stack`);
+        }
       }
       // A merge that read the PR first never sends GitHub one it will refuse; the fallback sends at most one.
       expect(log.refused).toBeLessThanOrEqual(step.checkStackOrder ? 0 : 1);
@@ -240,9 +324,9 @@ async function run(ops: readonly Op[]): Promise<void> {
   }
 }
 
-it("knows a PR's GitHub stack after a poll, and merges exactly the PR clicked, as GitHub allows", async () => {
+it("knows a PR's GitHub stack after a poll, and merges only the PRs the operator chose, as GitHub allows", async () => {
   await fc.assert(fc.asyncProperty(fc.array(op, { minLength: 8, maxLength: 30 }), async (ops) => await run(ops)), {
-    numRuns: 300,
+    numRuns: 500,
     examples: [[[
       // #4387 and #4393 on 2026-11-25: chained, stacked outside PwrAgent, bottom merged on github.com, top merged from the card.
       { kind: "open", on: null },
@@ -250,7 +334,9 @@ it("knows a PR's GitHub stack after a poll, and merges exactly the PR clicked, a
       { kind: "form_stack", at: 0 },
       { kind: "merge_outside", at: 0 },
       { kind: "poll" },
-      { kind: "click", at: 1, checkStackOrder: true },
+      { kind: "click", at: 1, checkStackOrder: true, consent: "none", upper: false },
     ]]],
   });
+  // The generator reaches every kind of consent on a PR with open layers below.
+  expect(Math.min(stats.none, stats.listed, stats.stale), JSON.stringify(stats)).toBeGreaterThanOrEqual(15);
 });

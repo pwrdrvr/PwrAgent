@@ -116,6 +116,32 @@ describe("mergeThreadPullRequest (property)", () => {
     expect(refresh).toHaveBeenCalledExactlyOnceWith(THREAD);
   });
 
+  it("passes the stack layers the card chose to merge too, and refuses a list it cannot trust", async () => {
+    const url = githubUrl({ repo: REPOS[0], number: 4 });
+    await fc.assert(fc.asyncProperty(
+      fc.oneof(
+        fc.uniqueArray(fc.integer({ min: 1, max: 99_999 }), { maxLength: 64 }),
+        fc.anything(),
+        fc.array(fc.oneof(fc.integer(), fc.double(), fc.string()), { minLength: 1, maxLength: 70 }),
+      ),
+      async (layers) => {
+        const { deps, merge } = harness([url], new Set());
+        const valid = Array.isArray(layers) && layers.length <= 64
+          && layers.every((number) => typeof number === "number" && Number.isSafeInteger(number) && number > 0)
+          && new Set(layers).size === layers.length;
+        const request = { ...THREAD, url, method: "squash", mergeOpenLayersBelow: layers };
+        if (!valid && layers !== undefined) {
+          await expect(mergeThreadPullRequest(deps, request)).rejects.toThrow("Choose the stack layers to merge again.");
+          expect(merge).not.toHaveBeenCalled();
+          return;
+        }
+        await mergeThreadPullRequest(deps, request);
+        const sent = (merge.mock.calls[0]![0] as { mergeOpenLayersBelow?: number[] }).mergeOpenLayersBelow;
+        expect(sent).toEqual(Array.isArray(layers) && layers.length ? layers : undefined);
+      },
+    ));
+  });
+
   it("reads the remembered pick and the Settings default", async () => {
     const { deps } = harness([], new Set());
     await expect(readThreadPullRequestMerge(deps, THREAD)).resolves.toEqual({ remembered: "rebase", fallback: "squash" });

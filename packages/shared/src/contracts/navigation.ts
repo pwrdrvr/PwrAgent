@@ -3499,6 +3499,14 @@ export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {
   method: PrMergeMethod;
   /** The pick came from the method list, so it becomes the project's. */
   rememberMethod?: boolean;
+  /**
+   * The PR is in a GitHub stack whose layers below it are still open, and the
+   * operator chose to merge those layers with it: their numbers, as the card
+   * listed them. GitHub's asynchronous merge lands every open layer below the
+   * one merged, so main refuses when any other lower layer is open. Local
+   * merges only: a peer's merge request does not carry it.
+   */
+  mergeOpenLayersBelow?: number[];
 };
 
 export type MergeThreadPullRequestResponse = {

@@ -30,7 +30,12 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import type { NavigationStarMapSignals } from "@pwragent/shared/navigation-star-map-filters";
 import { STACK_UNSETTLED_REASONS } from "@pwragent/shared/stacks/stack-automation";
-import { MAX_COMPACT_STACK_MEMBERSHIPS, readCompactStackMemberships, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import {
+  MAX_COMPACT_STACK_MEMBERSHIPS,
+  MAX_GITHUB_STACK_OPEN_BELOW,
+  readCompactStackMemberships,
+  type StackSummary,
+} from "@pwragent/shared/stacks/stack-status";
 import {
   buildThreadIdentityKey,
   isNavigationThreadRunning,
@@ -621,6 +626,10 @@ function projectStackMemberships(thread: Pick<NavigationThreadSummary, "stacks" 
       ...(typeof entry.threadKey === "string" && entry.threadKey.length <= 512 ? { threadKey: entry.threadKey } : {}),
       ...(typeof entry.parentThreadKey === "string" && entry.parentThreadKey.length <= 512 ? { parentThreadKey: entry.parentThreadKey } : {}),
       ...(entry.parentMerged === true ? { parentMerged: true } : {}),
+      ...(positiveNumber(entry.githubStack) ? { githubStack: entry.githubStack } : {}),
+      ...(Array.isArray(entry.openBelow) && entry.openBelow.length && entry.openBelow.length < entry.position
+        && entry.openBelow.length <= MAX_GITHUB_STACK_OPEN_BELOW
+        && entry.openBelow.every(positiveNumber) ? { openBelow: [...entry.openBelow] } : {}),
       ...(typeof entry.detailRevision === "string" && entry.detailRevision.length <= 64 ? { detailRevision: entry.detailRevision } : {}),
     }];
   });

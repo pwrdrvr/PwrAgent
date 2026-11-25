@@ -60,6 +60,12 @@ type GithubMergeOptions = {
   thread?: ThreadPullRequestMergeTarget;
   assertCanMerge?: (url: string) => void;
   checkStackOrder?: boolean;
+  /**
+   * The open lower layers of the PR's GitHub stack that the operator saw and
+   * chose to merge with it. GitHub's asynchronous merge lands them all; any
+   * other open lower layer refuses the merge.
+   */
+  mergeOpenLayersBelow?: readonly number[];
 };
 
 type GithubThreadMergeObserver = (
@@ -363,7 +369,7 @@ export class GithubPrFetcher {
     let mergeTarget = params.pullRequest;
     if (params.checkStackOrder) {
       try {
-        checked = await this.checkStackOrder(reference, params.cwd, run);
+        checked = await this.checkStackOrder(reference, params, run);
       } catch (error) {
         if (!(error instanceof ForgeReadError) || error.code !== "pull_request_redirected") throw error;
         const result = await run(["pr", "view", reference.url, "--json", "url", "--jq", ".url"]);
@@ -373,7 +379,7 @@ export class GithubPrFetcher {
         params.assertCanMerge?.(canonical.url);
         reference = canonical;
         mergeTarget = canonical.url;
-        checked = await this.checkStackOrder(reference, params.cwd, run);
+        checked = await this.checkStackOrder(reference, params, run);
       }
     }
     const checkedBase = checked?.base;
@@ -400,7 +406,11 @@ export class GithubPrFetcher {
         const pull = await get(`/pulls/${reference.number}`) as GithubStackPull;
         // Learned from the refusal: read the whole stack, so the decision and
         // the result account for every pull request in it.
-        const stack = await assertGithubNativeStackMergeAllowed(reference.number, pull, get, undefined, { readLayers: true });
+        const stack = await assertGithubNativeStackMergeAllowed(reference.number, pull, get, undefined, {
+          readLayers: true,
+          repository: { provider: "github", host: reference.provider, owner: reference.org, repo: reference.repo },
+          ...(params.mergeOpenLayersBelow ? { mergeOpenLayersBelow: params.mergeOpenLayersBelow } : {}),
+        });
         return await this.mergeAsynchronously(reference, params, run, pull?.head?.sha, stack);
       }
       // Refused for want of the queue: learn the repository and queue it.
@@ -457,6 +467,15 @@ export class GithubPrFetcher {
       return await this.reportFailedMerge(reference, params, error, "GitHub refused the merge", `GitHub did not answer the merge of ${label} within 30 seconds`);
     }
     if (outcome.status === "merged") {
+      if (stack?.mergesWith?.length) {
+        // GitHub landed the open layers below with it, bottom first.
+        const landed = [...stack.mergesWith, reference.number].map((number) => `#${number}`);
+        return {
+          mergedUrl: reference.url,
+          summary: `${MERGE_METHOD_RESULTS[params.method]} ${landed.length} PRs in a GitHub stack: ${landed.join(", ")}`
+            + (githubStackLayersAboveNote(reference.number, stack) ? `. ${githubStackLayersAboveNote(reference.number, stack)}` : ""),
+        };
+      }
       const merged = mergedResult(reference.url, params);
       const above = githubStackLayersAboveNote(reference.number, stack);
       return above ? { ...merged, summary: `${merged.summary}. ${above}` } : merged;
@@ -529,9 +548,10 @@ export class GithubPrFetcher {
 
   private async checkStackOrder(
     reference: PullRequestReferenceIdentity,
-    cwd: string | undefined,
+    params: GithubMergeOptions,
     run: (args: string[]) => Promise<{ stdout: string }>,
   ): Promise<GithubStackMergeCheck> {
+    const cwd = params.cwd;
     const catalogs = cwd ? (await readStackClones([cwd])).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : []) : [];
     const repository = { provider: "github" as const, host: reference.provider, owner: reference.org, repo: reference.repo };
     const transport = stackTransport;
@@ -548,7 +568,7 @@ export class GithubPrFetcher {
       } catch (error) {
         throw new Error(ghFailureLine(ghErrorDetail(error)), { cause: error });
       }
-    });
+    }, undefined, params.mergeOpenLayersBelow ? { mergeOpenLayersBelow: params.mergeOpenLayersBelow } : {});
   }
 
   /**

@@ -5,6 +5,12 @@ import {
   type ThreadTodoMergeMethod,
 } from "@pwragent/shared/contracts/thread-todos";
 import { resolveCheckState } from "@pwragent/shared/pull-request-rollup";
+import {
+  githubStackMergeNote,
+  resolveGithubStackMergePlan,
+  type GithubStackMergePlan,
+} from "@pwragent/shared/pull-request-merge-offer";
+import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
 import { PendingSpinner } from "../../components/PendingSpinner";
 import { CheckIcon, ChevronDownIcon, MergeIcon, MergeQueueIcon } from "../../icons";
 import type { PullRequestMergeService } from "./pull-request-merge-context";
@@ -20,12 +26,35 @@ type Phase =
 export function pullRequestMergeQuestion(
   pr: PrSummary,
   action: { queue: string } | { method: ThreadTodoMergeMethod },
+  stack?: GithubStackMergePlan,
 ): string {
   const into = pr.baseRefName ? ` into ${pr.baseRefName}` : "";
   if ("queue" in action) {
     return `Add #${pr.number} to the ${action.queue}${pr.baseRefName ? ` for ${pr.baseRefName}` : ""}?`;
   }
+  if (stack?.kind === "with_layers_below") {
+    // GitHub lands the stack on its trunk; the PR's own base is the layer below.
+    const trunk = stack.trunk ? ` into ${stack.trunk}` : into;
+    return `${THREAD_TODO_MERGE_METHOD_LABELS[action.method].verb} ${stack.count} PRs from its GitHub stack${trunk}?`;
+  }
   return `${THREAD_TODO_MERGE_METHOD_LABELS[action.method].verb} #${pr.number}${into}?`;
+}
+
+/**
+ * What merging `pr` does with its GitHub stack's open lower layers, as the
+ * card and the merge dialog show it. See `resolveGithubStackMergePlan`.
+ */
+export function pullRequestStackMergePlan(
+  stack: CompactStackMembership | undefined,
+  thread: ThreadPullRequestMergeTarget,
+): GithubStackMergePlan | undefined {
+  return resolveGithubStackMergePlan({ member: stack, remote: thread.federationTarget?.scope === "remote" });
+}
+
+/** A merge button's label: a stack merge says how many PRs it lands. */
+export function pullRequestMergeButtonLabel(method: ThreadTodoMergeMethod, stack: GithubStackMergePlan | undefined): string {
+  const label = THREAD_TODO_MERGE_METHOD_LABELS[method].button;
+  return stack?.kind === "with_layers_below" ? `${label} ${stack.count} PRs` : label;
 }
 
 /** One line when the head's checks have not passed; branch protection still decides. */
@@ -51,16 +80,19 @@ export function PrCardMergeControl(props: {
   service: PullRequestMergeService;
   /** Copy URL, Detach: the footer's other buttons. */
   trailing: ReactNode;
+  /** The PR's stack membership, which says whether a merge lands layers below it. */
+  stack?: CompactStackMembership;
   /** The card's height changed, so it must be placed again. */
   onLayoutChange: () => void;
 }) {
   const { pr, service, onLayoutChange } = props;
   const offer = usePullRequestMergeOffer(pr, props.thread, service);
+  const stackPlan = offer.kind === "merge" ? pullRequestStackMergePlan(props.stack, props.thread) : undefined;
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
   // A card near the window's bottom edge has to move up as it grows.
-  const layoutKey = `${phase.kind}|${offer.kind}`;
+  const layoutKey = `${phase.kind}|${offer.kind}|${stackPlan?.kind ?? ""}`;
   const firstLayout = useRef(true);
   useLayoutEffect(() => {
     if (firstLayout.current) {
@@ -72,18 +104,23 @@ export function PrCardMergeControl(props: {
 
   const run = (method: ThreadTodoMergeMethod, remember: boolean): void => {
     setPhase({ kind: "running" });
-    void service.merge({ thread: props.thread, pr, method, rememberMethod: remember }).finally(() => {
+    void service.merge({
+      thread: props.thread, pr, method, rememberMethod: remember,
+      ...(stackPlan?.kind === "with_layers_below" ? { mergeOpenLayersBelow: stackPlan.below } : {}),
+    }).finally(() => {
       if (mounted.current) setPhase({ kind: "idle" });
     });
   };
 
   if (phase.kind === "confirm" && (offer.kind === "merge" || offer.kind === "queue")) {
     const warning = pullRequestMergeCheckWarning(pr);
+    const plan = offer.kind === "merge" ? stackPlan : undefined;
     return (
       <div className="pr-status-card__confirm" aria-hidden="true">
         <span className="pr-status-card__confirm-question">
-          {pullRequestMergeQuestion(pr, offer.kind === "queue" ? { queue: offer.noun } : { method: phase.method })}
+          {pullRequestMergeQuestion(pr, offer.kind === "queue" ? { queue: offer.noun } : { method: phase.method }, plan)}
         </span>
+        {plan ? <span className="pr-status-card__confirm-warning">{githubStackMergeNote(plan, pr.number)}</span> : null}
         {warning ? <span className="pr-status-card__confirm-warning">{warning}</span> : null}
         <div className="pr-status-card__confirm-buttons">
           <button
@@ -101,7 +138,9 @@ export function PrCardMergeControl(props: {
             onClick={() => run(phase.method, phase.remember)}
           >
             {offer.kind === "queue" ? <MergeQueueIcon size={12} /> : <MergeIcon size={12} />}
-            {offer.kind === "queue" ? "Add to queue" : THREAD_TODO_MERGE_METHOD_LABELS[phase.method].verb}
+            {offer.kind === "queue" ? "Add to queue"
+              : plan?.kind === "with_layers_below" ? pullRequestMergeButtonLabel(phase.method, plan)
+              : THREAD_TODO_MERGE_METHOD_LABELS[phase.method].verb}
           </button>
         </div>
       </div>
@@ -128,6 +167,13 @@ export function PrCardMergeControl(props: {
         Merging off in Forge Automation
       </span>
     );
+  } else if (stackPlan?.kind === "merge_below_first") {
+    // A peer's owner takes no choice of lower layers, and would refuse.
+    control = (
+      <span className="pr-status-card__merge-status">
+        {githubStackMergeNote(stackPlan, pr.number)}
+      </span>
+    );
   } else if (offer.kind === "queue") {
     const noun = offer.noun;
     control = (
@@ -150,7 +196,7 @@ export function PrCardMergeControl(props: {
         onClick={() => setPhase({ kind: "confirm", method: offer.method, remember: false })}
       >
         <MergeIcon size={12} />
-        {THREAD_TODO_MERGE_METHOD_LABELS[offer.method].button}
+        {pullRequestMergeButtonLabel(offer.method, stackPlan)}
       </button>
     );
   } else if (offer.kind === "merge") {
@@ -175,7 +221,7 @@ export function PrCardMergeControl(props: {
             onClick={() => setPhase({ kind: "confirm", method: offer.method, remember: false })}
           >
             <MergeIcon size={12} />
-            {THREAD_TODO_MERGE_METHOD_LABELS[offer.method].button}
+            {pullRequestMergeButtonLabel(offer.method, stackPlan)}
           </button>
         </div>
       </div>

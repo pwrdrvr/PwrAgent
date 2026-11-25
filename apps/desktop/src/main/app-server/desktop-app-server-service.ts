@@ -39,6 +39,7 @@ import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 import { getDesktopStackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
+import { GithubForgeStackDiscovery, githubForgeStackRepository, type GithubForgeStack } from "../stacks/github-forge-stacks";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
@@ -1258,6 +1259,11 @@ class DesktopAppServerService {
     }
   }
   private publishedStacks: readonly StackSummary[] = [];
+  /** Reads a GitHub stack's members when the poll shows they may have changed; see the module. */
+  private readonly githubForgeStackDiscovery = new GithubForgeStackDiscovery({
+    read: async (repository, path) => await this.getForgeCiClient().requestGithub(repository, { path }),
+    learned: (stack) => this.publishGithubForgeStackLearned(stack),
+  });
   private readonly prActivity = new PrActivityJournal();
   /** Repository renames the forge has answered with. See its class. */
   private readonly prRepositoryAliases = new PullRequestRepositoryAliases();
@@ -5473,6 +5479,7 @@ class DesktopAppServerService {
       this.applyPrStatusToAttachments(pr);
       this.transcriptPrSubscriptions.observe([pr], prFetchedAt);
     }
+    this.githubForgeStackDiscovery.observe(prs);
     if (staleKeys.length > 0) {
       // Losing to a newer registry entry is ordinary bookkeeping: cache loads
       // and overlay seeds observe at timestamp 0, so every known PR reports one.
@@ -5979,6 +5986,32 @@ class DesktopAppServerService {
         },
       },
     });
+  }
+
+  /**
+   * A GitHub stack's member list arrived. Its members' rows project the stack
+   * from it, so tell the windows showing them to read their stacks again.
+   */
+  private publishGithubForgeStackLearned(stack: GithubForgeStack): void {
+    const members = new Set(stack.layers.map((layer) => layer.number));
+    const byBackend = new Map<AppServerBackendKind, PrSummary[]>();
+    for (const pr of this.knownStackPullRequests()) {
+      if (!members.has(pr.number)
+        || githubForgeStackRepository({ host: pr.provider, owner: pr.org, repo: pr.repo }) !== stack.repository) continue;
+      for (const threadKey of this.findThreadKeysForPrKey(getPrStatusKey(pr))) {
+        const backend = parseThreadIdentityKey(threadKey)?.backend;
+        if (!backend) continue;
+        const prs = byBackend.get(backend) ?? [];
+        if (!prs.includes(pr)) prs.push(pr);
+        byBackend.set(backend, prs);
+      }
+    }
+    for (const [backend, prs] of byBackend) {
+      void this.publishPullRequestStatusUpdates({ backend, prs }).catch((error: unknown) =>
+        appServerLog.warn("could not publish a GitHub stack's members", {
+          stack: stack.number, error: error instanceof Error ? error.message : String(error),
+        }));
+    }
   }
 
   private async publishPullRequestStatusUpdates(params: {

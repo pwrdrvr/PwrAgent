@@ -1,7 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary, ThreadPullRequestMergeTarget } from "@pwragent/shared/contracts/navigation";
+import type {
+  NavigationThreadSummary,
+  PrSummary,
+  ThreadPullRequestMergeTarget,
+} from "@pwragent/shared/contracts/navigation";
+import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
 import type {
   ManageThreadDependenciesResponse,
   ThreadDependency,
@@ -61,10 +66,21 @@ function api(options: { remembered?: "squash" | "rebase" | "merge"; held?: boole
   };
 }
 
+/** A thread whose PR #11 tops a GitHub stack with #9 and #10 still open below it. */
+function stackedThread(openBelow: number[] | null = [9, 10]): NavigationThreadSummary {
+  const member: CompactStackMembership = {
+    key: "stack:github.com:acme/orbit:main", name: "Orbit", inferred: false, position: 3, count: 3,
+    repository: "github.com:acme/orbit", number: 11, health: "in_sync", hasOpenPr: true, trunk: "main",
+    githubStack: 4402, ...(openBelow ? { openBelow } : {}),
+  };
+  return { ...THREAD, stackMemberships: [member] } as unknown as NavigationThreadSummary;
+}
+
 function renderChip(
   summary: PrSummary,
   desktopApi: ReturnType<typeof api>,
   thread: ThreadPullRequestMergeTarget = THREAD,
+  stackThread?: NavigationThreadSummary,
 ) {
   const merge = vi.fn<PullRequestMergeService["merge"]>(async () => true);
   const service: PullRequestMergeService = { api: desktopApi as unknown as DesktopApi, merge };
@@ -77,6 +93,7 @@ function renderChip(
         onDetach={vi.fn()}
         cardActions
         merge={{ thread, service }}
+        {...(stackThread ? { stackThread } : {})}
       />
     </aside>,
   );
@@ -130,6 +147,42 @@ describe("PrChip sidebar card merge", () => {
       fireEvent.click(within(card).getByText("Rebase and merge", { selector: "button" }));
     });
     expect(merge).toHaveBeenCalledWith(expect.objectContaining({ method: "rebase", rememberMethod: true }));
+  });
+
+  it("says a GitHub stack's merge lands the open layers below, and sends that choice", async () => {
+    // The PR's base is the layer below; GitHub lands the whole stack on its trunk.
+    const { merge } = renderChip(pr({ baseRefName: "layer-10" }), api(), THREAD, stackedThread());
+    const card = await openCard();
+    fireEvent.click(within(card).getByText("Squash merge 3 PRs"));
+    expect(within(card).getByText("Squash merge 3 PRs from its GitHub stack into main?")).toBeInTheDocument();
+    expect(within(card).getByText(
+      "#9 and #10 below #11 in its GitHub stack are still open. GitHub merges them first, then #11.",
+    )).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(within(card).getByText("Squash merge 3 PRs", { selector: "button" }));
+    });
+    expect(merge).toHaveBeenCalledWith(expect.objectContaining({ method: "squash", mergeOpenLayersBelow: [9, 10] }));
+  });
+
+  it("offers one PR's merge when nothing below it in its GitHub stack is open", async () => {
+    const { merge } = renderChip(pr(), api(), THREAD, stackedThread(null));
+    const card = await openCard();
+    fireEvent.click(within(card).getByText("Squash merge"));
+    expect(within(card).getByText("Squash merge #11 into main?")).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(within(card).getByText("Squash merge", { selector: "button" }));
+    });
+    expect(merge.mock.calls[0]![0]).not.toHaveProperty("mergeOpenLayersBelow");
+  });
+
+  it("asks a peer's thread to merge the layers below first, with nothing to click", async () => {
+    const owner = { scope: "remote", instanceId: "peer-a" } as const;
+    const { merge } = renderChip(pr(), api(), { ...THREAD, federationTarget: owner }, stackedThread());
+    const card = await openCard();
+    expect(within(card).getByText("#9 and #10 below #11 in its GitHub stack are still open. Merge them first."))
+      .toBeInTheDocument();
+    expect(within(card).queryByText(/^Squash merge/)).toBeNull();
+    expect(merge).not.toHaveBeenCalled();
   });
 
   it("goes back to the pill on Cancel without merging", async () => {

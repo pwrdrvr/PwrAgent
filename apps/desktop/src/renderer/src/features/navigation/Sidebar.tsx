@@ -7,6 +7,8 @@ import {
   type ThreadWorktreeAvailability,
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
+import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
+import { stackMembershipForPr } from "../stacks/stack-pr-data";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { PINNED_GROUP_RESOURCE_ID, lensHasPinnedGroup } from "../../lib/navigation-window-demand";
@@ -994,7 +996,7 @@ function SidebarContent(props: SidebarProps) {
   >();
   const pullRequestMerge = usePullRequestMergeService();
   const [mergingPullRequest, setMergingPullRequest] = useState<
-    { thread: ThreadPullRequestMergeTarget; pr: PrSummary } | undefined
+    { thread: ThreadPullRequestMergeTarget; pr: PrSummary; stack?: CompactStackMembership } | undefined
   >();
   const [renamingRow, setRenamingRow] = useState<RenamingThreadRow>();
   // Another lens unmounts the field without a commit; forget the edit, or it
@@ -4627,7 +4629,10 @@ function SidebarContent(props: SidebarProps) {
                               role="menuitem"
                               type="button"
                               onClick={() => {
-                                setMergingPullRequest({ thread: contextMenuMergeTarget, pr: contextMenuPullRequest });
+                                const stack = stackMembershipForPr(contextMenu.thread, contextMenuPullRequest);
+                                setMergingPullRequest({
+                                  thread: contextMenuMergeTarget, pr: contextMenuPullRequest, ...(stack ? { stack } : {}),
+                                });
                                 setContextMenu(undefined);
                               }}
                             >
@@ -4744,6 +4749,7 @@ function SidebarContent(props: SidebarProps) {
           <MergePullRequestDialog
             pr={mergingPullRequest.pr}
             thread={mergingPullRequest.thread}
+            {...(mergingPullRequest.stack ? { stack: mergingPullRequest.stack } : {})}
             service={pullRequestMerge}
             returnFocus={contextMenuOpenerRef}
             onClose={() => setMergingPullRequest(undefined)}

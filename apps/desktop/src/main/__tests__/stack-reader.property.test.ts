@@ -9,6 +9,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { PR_METADATA_PRIORITY, runPrMetadataProcess, SharedPrMetadataRead } from "../pr-status/pr-metadata-process";
 import { StackOperationsService } from "../stacks/stack-operations-service";
+import { forgetGithubForgeStacks, parseGithubForgeStack, recordGithubForgeStack } from "../stacks/github-forge-stacks";
 import { StackReader, StackReadObservation, readGhStackCatalog, readStackClones } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
@@ -1103,6 +1104,52 @@ describe("stack checkout demand", () => {
       expect((await reader.read(rows, [])).stacks[0]?.repository).toBe("github.com:fixture/external");
     } finally {
       vi.unstubAllEnvs();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("shows a stack made on github.com, after its lower layer merged and GitHub retargeted the upper one", async () => {
+    // #4387 and #4393 on 2026-11-25: no gh-stack catalog, and the base chain is gone.
+    forgetGithubForgeStacks();
+    onTestFinished(forgetGithubForgeStacks);
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-github-stack-"));
+    try {
+      const clone = path.join(sandbox, "clone");
+      await mkdir(clone);
+      initialize(clone);
+      const upper: PrSummary = {
+        ...inferredPr(4393, "topic", "main", clone),
+        githubStack: { number: 4402, position: 2, size: 2 },
+      };
+      const lower: PrSummary = {
+        ...inferredPr(4387, "lower", "main", clone), lifecycleState: "merged", linkedDirectoryPaths: [],
+      };
+      const rows = [{ ...row(clone, "upper"), prs: [upper] }];
+      const reader = new StackReader();
+      // Before PwrAgent has read the stack: one PR on trunk is no stack.
+      expect((await reader.read(rows, [lower, upper])).stacks).toEqual([]);
+
+      recordGithubForgeStack(parseGithubForgeStack({ host: "github.com", owner: "fixture", repo: "shared" }, 4402, {
+        base: { ref: "main" },
+        pull_requests: [
+          { number: 4387, state: "closed", merged_at: "2026-11-25T17:00:55Z", head: { ref: "lower" }, base: { ref: "main" } },
+          { number: 4393, state: "open", merged_at: null, head: { ref: "topic" }, base: { ref: "main" } },
+        ],
+      })!);
+      const { stacks } = await new StackReader().read(rows, [lower, upper]);
+      expect(stacks).toHaveLength(1);
+      expect(stacks[0]).toMatchObject({
+        inferred: false,
+        githubStack: 4402,
+        trunk: "main",
+        layers: [
+          { branch: "lower", pullRequest: { number: 4387, lifecycleState: "merged" } },
+          { branch: "topic", pullRequest: { number: 4393, lifecycleState: "open" }, thread: { key: "codex:upper" } },
+        ],
+      });
+      // A forge stack has no fork points, so it claims no local sync state.
+      for (const layer of stacks[0]!.layers) expect(["parent_merged", "needs_restack"]).not.toContain(layer.health);
+    } finally {
       await rm(sandbox, { recursive: true, force: true });
     }
   });
