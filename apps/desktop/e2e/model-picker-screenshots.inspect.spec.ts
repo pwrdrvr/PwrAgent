@@ -175,10 +175,14 @@ test("captures the model pickers this change touched", async () => {
         .click();
       await expect(page.getByRole("region", { name: "Model settings" })).toBeVisible();
       await dismissNotices();
-      const field = page.getByRole("combobox", { name: "Helper model" });
+      // A Select before the model pill, the pill after: the spec runs on both.
+      const field = page.getByRole("combobox", { name: "Helper model" })
+        .or(page.getByRole("button", { name: /^Helper model(?::|$)/ }));
       await field.scrollIntoViewIfNeeded();
       await field.click();
-      const list = page.getByRole("listbox").last();
+      const list = page.getByRole("dialog", { name: "Helper model" })
+        .or(page.getByRole("listbox").last())
+        .first();
       await expect(list).toBeVisible();
       const section = field.locator("xpath=ancestor::section[1]");
       await captureRegion(

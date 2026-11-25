@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { chooseSpeed, openModelSettings, speedChoices } from "../../../test/model-settings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary, ListBackendsRequest } from "@pwragent/shared/contracts/backend";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
@@ -140,6 +141,21 @@ async function choose(chipName: string, option: string) {
   await act(async () => { fireEvent.click(chip(chipName)); });
   const menu = screen.getByRole("menu", { name: chipName });
   await act(async () => { fireEvent.click(within(menu).getByRole("menuitemradio", { name: new RegExp(`^${option}`) })); });
+}
+
+const MODEL = "Model for the new thread";
+
+/** Open the model panel, letting its recents load, and return it. */
+async function openModelPanel(): Promise<HTMLElement> {
+  if (chip(MODEL).getAttribute("aria-expanded") !== "true") {
+    await act(async () => { fireEvent.click(chip(MODEL)); });
+  }
+  return openModelSettings(MODEL);
+}
+
+/** Close the model panel the way a keyboard user does. */
+async function closeModelPanel() {
+  await act(async () => { fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" }); });
 }
 
 async function settle() {
@@ -369,7 +385,7 @@ describe("to-do dispatch target", () => {
     const row = screen.getByRole("group", { name: "Start settings" });
     expect(within(row).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
       "Machine for the new thread: studio",
-      "Model for the new thread: Claude, Opus 5.5, high",
+      "Model for the new thread: Claude, Opus 5.5, high effort",
       "Where the new thread is filed: Top-level",
       "Where the new thread works: This thread's directory",
       "Environment for the new thread: Dev",
@@ -380,7 +396,7 @@ describe("to-do dispatch target", () => {
     expect(chip("Environment for the new thread").getAttribute("data-tooltip")).toBe("Environment: Dev");
     expect(container.querySelector("dt")).toBeNull();
     expect(chip("Machine for the new thread").getAttribute("aria-label")).toBe("Machine for the new thread: studio");
-    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Opus 5.5, high");
+    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Opus 5.5, high effort");
     expect(chip("Where the new thread works").textContent).toBe("This thread's directory");
     expect(chip("Environment for the new thread").textContent).toBe("Dev");
     expect(api.listThreadTodoDispatchEnvironments).toHaveBeenCalledWith({ id: "card" });
@@ -510,15 +526,16 @@ describe("to-do dispatch target", () => {
       { id: "card", repositoryOnly: true },
       { project: { ...ATLAS, repositoryKey: "github.com/fixture-org/atlas" }, federationTarget: { scope: "remote", instanceId: "win" } },
     ]);
-    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: OpenAI, GPT-6.1-Sol, high");
+    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: OpenAI, GPT-6.1-Sol, high effort");
     expect(screen.getByText("Claude is not set up on win-lab / dev. Using another provider.")).toBeTruthy();
     expect(chip("Where the new thread works").textContent).toBe("atlas checkout");
     expect(chip("Environment for the new thread").textContent).toBe("Windows CI");
     // A peer start carries fast mode only, so Ultrafast is not offered there.
-    await act(async () => { fireEvent.click(chip("Speed for the new thread")); });
-    const speeds = within(screen.getByRole("menu", { name: "Speed for the new thread" }));
-    expect(speeds.getAllByRole("menuitemradio").map((row) => row.textContent)).toEqual(["Standard", "Fast"]);
-    await act(async () => { fireEvent.click(speeds.getByRole("menuitemradio", { name: "Fast" })); });
+    await openModelPanel();
+    expect(speedChoices(MODEL)).toEqual(["Standard", "Fast"]);
+    await act(async () => { chooseSpeed("Fast", MODEL); });
+    await closeModelPanel();
+    expect(chip(MODEL).getAttribute("aria-label")).toBe("Model for the new thread: OpenAI, GPT-6.1-Sol, high effort, Fast");
     await choose("Where the new thread works", "New worktree");
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(onRun).toHaveBeenLastCalledWith(card, {
@@ -531,8 +548,8 @@ describe("to-do dispatch target", () => {
 
     await choose("Machine for the new thread", "studio");
     await settle();
-    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Opus 5.5, high");
-    expect(screen.queryByRole("button", { name: /^Speed for the new thread/ })).toBeNull();
+    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Opus 5.5, high effort");
+    expect(chip(MODEL).hasAttribute("data-speed")).toBe(false);
     expect(chip("Environment for the new thread").textContent).toBe("Dev");
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(onRun).toHaveBeenLastCalledWith(card, { modelSettings: thread, workMode: "worktree", environment: "dev" });
@@ -540,7 +557,7 @@ describe("to-do dispatch target", () => {
     // The peer's choices are still there when the card goes back to it.
     await choose("Machine for the new thread", "win-lab / dev");
     await settle();
-    expect(chip("Speed for the new thread").textContent).toBe("Fast");
+    expect(chip(MODEL).getAttribute("data-speed")).toBe("fast");
   });
 
   it("keeps a model picked for the peer on the peer only", async () => {
@@ -551,23 +568,22 @@ describe("to-do dispatch target", () => {
     await choose("Machine for the new thread", "win-lab / dev");
     await settle();
     // Claude is there, without Opus: the provider stays and its default model is used.
-    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Sonnet 5.5, medium");
+    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Sonnet 5.5, medium effort");
     expect(screen.getByText("Claude · Opus 5.5 is not offered on win-lab / dev. Using its default model.")).toBeTruthy();
-    await act(async () => { fireEvent.click(chip("Model for the new thread")); });
-    const menu = screen.getByRole("menu", { name: "Model for the new thread" });
+    const panel = await openModelPanel();
     // This thread's own settings cannot run there, so the row is left out.
-    expect(within(menu).queryByRole("menuitemradio", { name: /This thread/ })).toBeNull();
-    await act(async () => { fireEvent.click(within(menu).getByRole("menuitem", { name: "To-do provider: Claude" })); });
-    await act(async () => { fireEvent.click(screen.getByRole("option", { name: "OpenAI" })); });
-    if (screen.queryByRole("menu", { name: "Model for the new thread" })) {
-      await act(async () => { fireEvent.click(chip("Model for the new thread")); });
-    }
+    expect(within(panel).queryAllByRole("option")
+      .filter((option) => option.getAttribute("aria-description") === "This thread")).toEqual([]);
+    await act(async () => {
+      fireEvent.click(within(within(panel).getByRole("listbox", { name: "Provider" })).getByRole("option", { name: "OpenAI" }));
+    });
+    await closeModelPanel();
     await choose("Machine for the new thread", "studio");
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(onRun).toHaveBeenLastCalledWith(card, { modelSettings: thread, environment: "dev" });
     await choose("Machine for the new thread", "win-lab / dev");
     await settle();
-    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: OpenAI, GPT-6.1-Sol, high");
+    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: OpenAI, GPT-6.1-Sol, high effort");
   });
 
   it("locks Speed at Standard when the chosen machine turned Fast off", async () => {
@@ -575,13 +591,12 @@ describe("to-do dispatch target", () => {
     await settle();
     await choose("Machine for the new thread", "win-lab / dev");
     await settle();
-    const speed = chip("Speed for the new thread");
-    // Standard is the composer's bare bolt; its name and tooltip say which.
-    expect(speed.getAttribute("aria-label")).toBe("Speed for the new thread: Standard");
-    expect(speed.textContent).toBe("");
-    expect(speed.className).toContain("is-icon-only");
-    expect(speed.hasAttribute("disabled")).toBe(true);
-    expect(speed.getAttribute("data-tooltip")).toBe("Fast mode is turned off in Settings → Models on win-lab / dev.");
+    // The pill draws no bolt at Standard; the panel says why Fast is gone.
+    expect(chip(MODEL).getAttribute("data-speed")).toBe("standard");
+    expect(chip(MODEL).querySelector(".model-settings__pill-bolt")).toBeNull();
+    const panel = await openModelPanel();
+    expect(within(panel).getAllByRole("radio").map((radio) => radio.textContent)).toEqual(["Standard"]);
+    expect(within(panel).getByText("Fast mode is turned off in Settings → Models on win-lab / dev.")).toBeTruthy();
   });
 
   it("follows this machine's Allow Fast mode setting for a Codex thread, and inherits its speed when allowed", async () => {
@@ -590,25 +605,27 @@ describe("to-do dispatch target", () => {
     } };
     const { onRun, unmount } = setup({ todo, localCodexFastAllowed: false });
     await settle();
-    expect(chip("Speed for the new thread").getAttribute("aria-label")).toBe("Speed for the new thread: Standard");
-    expect(chip("Speed for the new thread").getAttribute("data-tooltip")).toBe("Fast mode is turned off in Settings → Models.");
+    expect(chip(MODEL).getAttribute("data-speed")).toBe("standard");
+    const panel = await openModelPanel();
+    expect(within(panel).getByText("Fast mode is turned off in Settings → Models.")).toBeTruthy();
     unmount();
 
     const allowed = setup({ todo });
     await settle();
-    expect(chip("Speed for the new thread").textContent).toBe("Fast");
-    // A paid tier is named and lit, as the composer draws it.
-    expect(chip("Speed for the new thread").className).toContain("is-lit");
-    expect(chip("Speed for the new thread").className).not.toContain("is-changed");
+    // A paid tier lights the pill's bolt and is named, as the composer draws it.
+    expect(chip(MODEL).getAttribute("aria-label")).toMatch(/, Fast$/);
+    expect(chip(MODEL).querySelector(".model-settings__pill-bolt")).toBeTruthy();
+    expect(chip(MODEL).closest(".model-settings")?.className).not.toContain("model-settings--changed");
     // Ultrafast is offered on the card's own machine.
-    await act(async () => { fireEvent.click(chip("Speed for the new thread")); });
-    expect(within(screen.getByRole("menu", { name: "Speed for the new thread" })).getAllByRole("menuitemradio")
-      .map((row) => row.textContent)).toEqual(["Standard", "Fast", "Ultrafast"]);
-    await act(async () => { fireEvent.click(chip("Speed for the new thread")); });
+    await openModelPanel();
+    expect(speedChoices(MODEL)).toEqual(["Standard", "Fast", "Ultrafast"]);
+    await closeModelPanel();
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     // Unchanged, the owner inherits the thread's exact speed.
     expect(allowed.onRun).toHaveBeenLastCalledWith(todo, expect.not.objectContaining({ speed: expect.anything() }));
-    await choose("Speed for the new thread", "Standard");
+    await openModelPanel();
+    await act(async () => { chooseSpeed("Standard", MODEL); });
+    await closeModelPanel();
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
     expect(allowed.onRun).toHaveBeenLastCalledWith(todo, expect.objectContaining({ speed: "standard" }));
     expect(onRun).not.toHaveBeenCalled();
@@ -648,7 +665,7 @@ describe("to-do dispatch target", () => {
     await settle();
     expect(screen.queryByRole("button", { name: /^Machine for the new thread/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Environment for the new thread/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Speed for the new thread/ })).toBeNull();
+    expect(chip(MODEL).hasAttribute("data-speed")).toBe(false);
     expect(screen.getByText("Where").nextElementSibling?.textContent).toBe("This thread's directory");
     expect(legacy.api.listThreadTodoDispatchEnvironments).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Start thread" }));
@@ -668,7 +685,7 @@ describe("to-do dispatch target", () => {
     await choose("Machine for the new thread", "studio");
     await settle();
     expect(api.listBackends).toHaveBeenCalledWith({ federationTarget: { scope: "local" } });
-    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Opus 5.5, high");
+    expect(chip("Model for the new thread").getAttribute("aria-label")).toBe("Model for the new thread: Claude, Opus 5.5, high effort");
     expect(api.listThreadTodoDispatchEnvironments).toHaveBeenCalledWith({ id: remote.id, repositoryOnly: true });
     expect(api.listThreadTodoDispatchEnvironments).toHaveBeenLastCalledWith({
       project: { ...ATLAS, repositoryKey: "github.com/fixture-org/atlas" }, federationTarget: { scope: "local" },

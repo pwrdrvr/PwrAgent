@@ -8,7 +8,7 @@ import type {
   ThreadTodoPlacement,
   ThreadTodoWorkMode,
 } from "@pwragent/shared/contracts/thread-todos";
-import { CODEX_SPEED_LABELS, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
+import { selectedCodexSpeed } from "@pwragent/shared/codex-speed";
 import { THREAD_ENVIRONMENT_NONE } from "@pwragent/shared/contracts/agent";
 import {
   THREAD_TODO_PLACEMENT_LOCK_MESSAGES,
@@ -30,7 +30,6 @@ import {
   ChevronUpIcon,
   FileCodeIcon,
   FolderIcon,
-  LightningIcon,
   ServerIcon,
   ShieldIcon,
   SubthreadIcon,
@@ -578,8 +577,23 @@ export function TodoDispatchFacts(props: {
       {...(compact ? { icon: ServerIcon, tooltip: `Machine: ${target.machine.label}` } : {})}
     />
   ) : null;
+  // Speed is chosen in the model pill's panel, beside the model that
+  // decides which speeds are offered.
+  const modelSpeed = speed && !target.legacy ? {
+    options: speed.options,
+    speed: speed.speed,
+    changed: speed.changed,
+    ...(speedTooltip ? { lockedReason: speedTooltip } : {}),
+    onChange: target.setSpeed,
+  } : undefined;
   const model = target.onOwner ? (
-    <TodoModelPicker todo={todo} selection={target.model!} onPick={target.pickModel} disabled={props.disabled} />
+    <TodoModelPicker
+      todo={todo}
+      selection={target.model!}
+      onPick={target.pickModel}
+      disabled={props.disabled}
+      {...(modelSpeed ? { speed: modelSpeed } : {})}
+    />
   ) : target.model ? (
     <TodoModelPicker
       todo={todo}
@@ -589,39 +603,13 @@ export function TodoDispatchFacts(props: {
       backends={target.backends ?? []}
       machineLabel={machineName}
       changed={target.fit !== "kept"}
+      {...(modelSpeed ? { speed: modelSpeed } : {})}
     />
   ) : (
     <span className="todo-dispatch__pending">
       {target.backends ? `No provider on ${machineName} can start a thread` : "Loading…"}
     </span>
   );
-  const speedLabel = speed ? CODEX_SPEED_LABELS[speed.speed] : "";
-  const speedChip = speed && !target.legacy ? (
-    <TodoFactMenu
-      label="Speed for the new thread"
-      value={speedLabel}
-      entries={speed.options.map((option) => ({
-        kind: "item",
-        key: option,
-        label: CODEX_SPEED_LABELS[option],
-        checked: option === speed.speed,
-        onSelect: () => target.setSpeed(option),
-      }))}
-      changed={speed.changed}
-      disabled={props.disabled || speed.locked !== undefined}
-      testId="todo-dispatch-speed"
-      {...(compact
-        ? {
-            icon: LightningIcon,
-            // Standard is the bare bolt and a faster tier is named and lit,
-            // as the composer draws its speed control.
-            iconOnly: speed.speed === "standard",
-            lit: speed.speed !== "standard",
-            tooltip: speedTooltip ?? `Speed: ${speedLabel}`,
-          }
-        : speedTooltip ? { tooltip: speedTooltip } : {})}
-    />
-  ) : null;
   const whereValue = target.workMode === "worktree" ? "New worktree" : localLabel;
   const where = target.legacy ? whereValue : (
     <TodoFactMenu
@@ -765,7 +753,6 @@ export function TodoDispatchFacts(props: {
         <div className="todo-dispatch-chips" role="group" aria-label="Start settings">
           {machine}
           {model}
-          {speedChip}
           {accessChip}
           {threadChip}
           {where}
@@ -792,12 +779,6 @@ export function TodoDispatchFacts(props: {
             <dt>Model</dt>
             <dd>{model}</dd>
           </div>
-          {speedChip ? (
-            <div className="thread-todo-card__fact thread-todo-card__fact--model">
-              <dt>Speed</dt>
-              <dd>{speedChip}</dd>
-            </div>
-          ) : null}
           {accessChip ? (
             <div className={`thread-todo-card__fact${typeof accessChip === "string" ? "" : " thread-todo-card__fact--model"}`}>
               <dt>Access</dt>
