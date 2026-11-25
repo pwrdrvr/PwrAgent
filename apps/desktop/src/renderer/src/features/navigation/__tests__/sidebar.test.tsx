@@ -5577,6 +5577,31 @@ describe("Sidebar", () => {
     expect(onArchiveThread).toHaveBeenCalledWith(thirdThread);
   });
 
+  it("archives the menu target and the next Cmd-clicked row while a different thread stays open", async () => {
+    const [open, target, added] = ["Open", "Menu target", "Added"].map((title, index) => ({
+      ...sharedThread, id: `thread-${index}`, title,
+    }));
+    const threads = [open!, target!, added!];
+    const onArchiveThread = vi.fn(async () => undefined);
+    const onSelectThread = vi.fn();
+    render(<Sidebar backends={backends} browseMode="recents" directories={directories}
+      inboxThreads={threads} threads={threads} loading={false} selectedItemKey={threadSummaryIdentityKey(open!)}
+      onArchiveThread={onArchiveThread} onSelectThread={onSelectThread} onBrowseModeChange={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
+
+    const row = (title: string) => screen.getByRole("button", { name: title });
+    fireEvent.contextMenu(row("Menu target"));
+    pressEscape();
+    fireEvent.click(row("Added"), { metaKey: true });
+    expect(threadCard(row("Open"))).toHaveClass("is-selected");
+    expect(threadCard(row("Menu target"))).not.toHaveClass("is-selected");
+    expect(onSelectThread).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(row("Added"));
+    await act(async () => { fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 Threads" })); });
+    expect(onArchiveThread.mock.calls).toEqual([[target], [added]]);
+  });
+
   it("limits each batch action to its compatible thread subset", async () => {
     const onSetThreadParent = vi.fn(async () => undefined);
     const onSetThreadPin = vi.fn(async () => undefined);

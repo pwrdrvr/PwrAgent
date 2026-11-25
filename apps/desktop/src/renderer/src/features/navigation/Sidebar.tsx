@@ -1991,7 +1991,8 @@ function SidebarContent(props: SidebarProps) {
     if (!threadActionKeys.has(threadKey)) {
       selectionAnchorKeyRef.current = threadKey;
       selectionAnchorDirectoryKeyRef.current = undefined;
-      setThreadBatch(undefined);
+      // Modified clicks after closing the menu start from the row it targeted.
+      setThreadBatch({ itemKey: selectedItemKey, keys: new Set([threadKey]) });
       return [thread];
     }
 

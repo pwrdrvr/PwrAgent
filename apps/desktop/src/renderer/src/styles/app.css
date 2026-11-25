@@ -7860,11 +7860,6 @@ button.stack-display__thread,
   gap: 12px;
 }
 
-.thread-row.is-batch-selected {
-  border-style: dashed;
-  border-color: var(--text-muted);
-}
-
 .thread-row.is-selected {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
@@ -7888,6 +7883,12 @@ button.stack-display__thread,
      sub-thread cards where the lower one's hover tint crept over the
      selected card's bottom border. */
   z-index: 1;
+}
+
+.thread-row.is-batch-selected,
+.thread-row-shell[data-xray-target] > .thread-row.is-batch-selected {
+  border-style: dashed;
+  border-color: var(--text-muted);
 }
 
 /* The thread card a sub-thread / new-thread composer is being created from.
