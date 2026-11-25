@@ -23,6 +23,8 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
+import type { AgentToolMcpCatalogId } from "../agent-tools/agent-tool-mcp-server";
+import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
 import { isOnlyTaskMonitorWake, type SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
@@ -6233,8 +6235,13 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
+    managedReview?: boolean;
     requiredAntigravityMode?: string;
-  }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }> {
+  }): Promise<{
+    threadId: string;
+    executionMode: ThreadExecutionMode;
+    managedReviewLedgerAvailable?: boolean;
+  }> {
     if (params.executionMode === "auto") {
       throw new Error("Auto access is supported only by Codex.");
     }
@@ -6254,6 +6261,7 @@ export class DesktopBackendRegistry {
       acpRuntime: effectiveAcpRuntime,
       additionalMcpRegistration: params.mcpRegistration,
       ...(params.hidden ? { hidden: true } : {}),
+      ...(params.managedReview ? { managedReview: true } : {}),
       requiredAntigravityMode: params.requiredAntigravityMode,
     }));
     if (
@@ -6280,6 +6288,9 @@ export class DesktopBackendRegistry {
         session.sessionId,
         params.executionMode,
       ),
+      ...(client.sessionSupportsManagedReviewLedger?.(session.sessionId)
+        ? { managedReviewLedgerAvailable: true }
+        : {}),
     };
   }
 
@@ -16286,6 +16297,7 @@ export class DesktopBackendRegistry {
       unsubscribe();
     }
     this.streamNoticeOwners.clear();
+    this.managedReviewService.clearCandidateLedger();
     this.planLimits.close();
 
     for (const [key, pending] of this.pendingServerRequests) {
@@ -19881,6 +19893,35 @@ export class DesktopBackendRegistry {
         call: hostToolCall,
       });
     }
+    const managedReviewLedgerRouter = buildManagedReviewLedgerToolRouter(
+      this.managedReviewService.candidateLedger,
+    );
+    if (
+      hostToolCall
+      && managedReviewLedgerRouter.acceptsDynamicToolCall(hostToolCall)
+    ) {
+      const isManagedReviewChild =
+        this.context.turnState.reviewChildParent(
+          buildThreadIdentityKey(backend, hostToolCall.threadId),
+        ) !== undefined
+        || this.managedReviewService.findManagedReviewForChildRequest({
+          backend,
+          reviewThreadId: hostToolCall.threadId,
+          turnId: hostToolCall.turnId,
+        }) !== undefined;
+      if (!isManagedReviewChild || !this.isLiveDynamicToolCall(backend, hostToolCall)) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message:
+            "Review candidate tools are callable only during an active managed code review turn.",
+        });
+      }
+      return await managedReviewLedgerRouter.handleDynamicToolCall({
+        backend,
+        call: hostToolCall,
+      });
+    }
 
     if (hostToolCall) {
       // Use the same definitions as advertisement, including compatibility
@@ -20355,7 +20396,7 @@ export class DesktopBackendRegistry {
 
   private async authorizeAgentToolMcpCall(params: {
     backend: AppServerBackendKind;
-    catalogId?: AgentToolCatalogId;
+    catalogId?: AgentToolMcpCatalogId;
     threadId: string;
     tool: string;
     turnId: string;
@@ -20364,6 +20405,7 @@ export class DesktopBackendRegistry {
     const refusal = localAgentToolRefusal(params.tool);
     if (refusal) return refusal;
     if (params.tool === GET_CURRENT_TURN_INPUT_SOURCE) return null;
+    if (params.catalogId === "managed_review") return null;
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {
       return null;

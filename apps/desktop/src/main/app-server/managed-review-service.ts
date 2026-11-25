@@ -75,6 +75,9 @@ import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
 import { buildManagedReviewPrompt, managedReviewAcpRuntime } from "./managed-review";
+import { ManagedReviewCandidateLedger } from "./managed-review-candidate-ledger";
+import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
+import { localMemberRole } from "../member-containment";
 import { prepareClaudeCodeReview, validateClaudeCodeReview } from "./claude-code-review-start";
 import { resolvePullRequestReview, resolvePullRequestSetReview } from "./pull-request-review";
 import type { RegistryContext, RegistryHost } from "./registry-context";
@@ -178,15 +181,22 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
 export class ManagedReviewService {
   private readonly context: RegistryContext;
   private readonly host: RegistryHost<ManagedReviewServiceHost>;
+  readonly candidateLedger: ManagedReviewCandidateLedger;
   private readonly operatorReviewInputs = new Map<string, OperatorReviewInput>();
   private readonly drainingReviewTerminals = new Set<string>();
 
   constructor(
     context: RegistryContext,
     host: RegistryHost<ManagedReviewServiceHost>,
+    candidateLedger = new ManagedReviewCandidateLedger(),
   ) {
     this.context = context;
     this.host = host;
+    this.candidateLedger = candidateLedger;
+  }
+
+  clearCandidateLedger(): void {
+    this.candidateLedger.clearAll();
   }
 
   observeOperatorReviewInput(turn: { backend: AppServerBackendKind; threadId: string; turnId: string }, source?: TurnInputSource): void {
@@ -953,20 +963,33 @@ export class ManagedReviewService {
         // turn below applies the two together.
         reasoningEffort: acpRuntime?.reasoningEffort,
         hidden: true,
+        managedReview: true,
       });
-      const turn = await this.host().startAcpTurn({
-        backend: params.backend,
-        threadId: thread.threadId,
-        input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
-        model: params.modelSettings.model,
-        reasoningEffort: params.modelSettings.reasoningEffort,
-        requiredAntigravityMode: params.agentAntigravityAccess?.mode,
-      });
-      return {
-        threadId: params.parentThreadId,
-        reviewThreadId: turn.threadId,
-        turnId: turn.turnId,
-      };
+      const candidateLedger = thread.managedReviewLedgerAvailable === true;
+      try {
+        const turn = await this.host().startAcpTurn({
+          backend: params.backend,
+          threadId: thread.threadId,
+          input: [{
+            type: "text",
+            text: buildManagedReviewPrompt(params.target, { candidateLedger }),
+          }],
+          model: params.modelSettings.model,
+          reasoningEffort: params.modelSettings.reasoningEffort,
+          requiredAntigravityMode: params.agentAntigravityAccess?.mode,
+        });
+        return {
+          threadId: params.parentThreadId,
+          reviewThreadId: turn.threadId,
+          turnId: turn.turnId,
+        };
+      } catch (error) {
+        this.candidateLedger.clearThread({
+          backend: params.backend,
+          threadId: thread.threadId,
+        });
+        throw error;
+      }
     }
 
     const executionMode = inheritsParentSession
@@ -989,6 +1012,14 @@ export class ManagedReviewService {
     const tokenMiserDynamicTools = params.tokenMiserEnabled
       ? buildCodexTokenMiserDynamicToolSpecs(this.host().tokenMiserStore, this.host().tokenMiserService?.focused)
       : [];
+    const candidateLedger = localMemberRole() !== "contained";
+    const reviewLedgerDynamicTools = candidateLedger
+      ? buildManagedReviewLedgerToolRouter(this.candidateLedger).buildDynamicToolSpecs()
+      : [];
+    const dynamicTools = [
+      ...tokenMiserDynamicTools,
+      ...reviewLedgerDynamicTools,
+    ];
     const thread = await this.host().withArchiveWorkspaceWrite(params.cwd ? [params.cwd] : [], async () => await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
@@ -1005,8 +1036,8 @@ export class ManagedReviewService {
         : {}),
       ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
       ...(pwrdrvrTokenMiser ? { pwrdrvrTokenMiser } : {}),
-      ...(tokenMiserDynamicTools.length > 0
-        ? { dynamicTools: tokenMiserDynamicTools }
+      ...(dynamicTools.length > 0
+        ? { dynamicTools }
         : {}),
     }));
     let managedReviewChildKey = buildThreadIdentityKey(
@@ -1022,7 +1053,10 @@ export class ManagedReviewService {
       const turn = await client.startTurn({
         ...params.turnAttribution,
         threadId: thread.threadId,
-        input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
+        input: [{
+          type: "text",
+          text: buildManagedReviewPrompt(params.target, { candidateLedger }),
+        }],
         ...(params.cwd ? { cwd: params.cwd } : {}),
         approvalPolicy: modeSettings.approvalPolicy,
         approvalsReviewer: modeSettings.approvalsReviewer,
@@ -1066,6 +1100,10 @@ export class ManagedReviewService {
         turnId: turn.turnId,
       };
     } catch (error) {
+      this.candidateLedger.clearThread({
+        backend: "codex",
+        threadId: thread.threadId,
+      });
       this.context.turnState.unlinkReviewChild(managedReviewChildKey);
       throw error;
     } finally {
@@ -1844,6 +1882,36 @@ export class ManagedReviewService {
     >;
     record: ReviewSubAgentRecord;
   }): Promise<void> {
+    const ledgerSummary = this.candidateLedger.snapshotThread({
+      backend: params.record.backend,
+      threadId: params.record.reviewThreadId,
+    });
+    try {
+      await this.publishManagedReviewTerminalBody(params, ledgerSummary);
+    } finally {
+      this.candidateLedger.clearTurn({
+        backend: params.record.backend,
+        threadId: params.record.reviewThreadId,
+        turnId: params.record.turnId,
+      });
+      this.candidateLedger.clearThread({
+        backend: params.record.backend,
+        threadId: params.record.reviewThreadId,
+      });
+    }
+  }
+
+  private async publishManagedReviewTerminalBody(
+    params: {
+      method: "turn/completed" | "turn/failed" | "turn/cancelled";
+      notification: Extract<
+        AppServerNotification,
+        { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+      >;
+      record: ReviewSubAgentRecord;
+    },
+    ledgerSummary: { total: number; pending: number; keep: number; drop: number },
+  ): Promise<void> {
     const completedAt =
       completedAtFromTerminalNotification(params.notification) ?? Date.now();
     const completedItemOutput = this.takeManagedReviewOutput(params.record);
@@ -1907,6 +1975,14 @@ export class ManagedReviewService {
         reviewThreadId: params.record.reviewThreadId,
         structured: Boolean(parsed),
         turnId: params.record.turnId,
+        ...(ledgerSummary.total > 0
+          ? {
+              candidateLedgerTotal: ledgerSummary.total,
+              candidateLedgerKeep: ledgerSummary.keep,
+              candidateLedgerDrop: ledgerSummary.drop,
+              candidateLedgerPending: ledgerSummary.pending,
+            }
+          : {}),
       });
       await this.context.emit({
         backend: params.record.parentBackend,

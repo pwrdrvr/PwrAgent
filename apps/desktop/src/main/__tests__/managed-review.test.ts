@@ -80,6 +80,27 @@ describe("managed review", () => {
     // Noise suppression and clean-patch allowance.
     expect(prompt).toMatch(/do not report style or formatting nitpicks/i);
     expect(prompt).toMatch(/zero findings is valid/i);
+    // Static fallback omits the in-memory candidate ledger tools.
+    expect(prompt).not.toContain("record_review_candidate");
+    expect(prompt).not.toContain("list_review_candidates");
+    expect(prompt).not.toContain("dispose_review_candidate");
+  });
+
+  it("builds the two-pass candidate ledger prompt when candidateLedger is enabled", () => {
+    const prompt = buildManagedReviewPrompt(
+      { type: "baseBranch", branch: "main" },
+      { candidateLedger: true },
+    );
+
+    expect(prompt).toContain("against base branch 'main'");
+    expect(prompt).toContain("record_review_candidate");
+    expect(prompt).toContain("list_review_candidates");
+    expect(prompt).toContain("dispose_review_candidate");
+    expect(prompt).toMatch(/pass 1/i);
+    expect(prompt).toMatch(/pass 2/i);
+    expect(prompt).toMatch(/do not drop a concrete P2 or P3 defect/i);
+    expect(prompt).toMatch(/if the core fix were reverted to the broken behavior/i);
+    expect(prompt).toContain("Return only one JSON object");
   });
 
   it("calibrates P0-P3 priorities in the managed review prompt", () => {

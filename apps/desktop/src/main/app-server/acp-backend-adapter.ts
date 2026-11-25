@@ -227,6 +227,7 @@ export type AcpRuntimeClient = Pick<
       | "readProviderStatus"
       | "rebindAntigravityWorkspace"
       | "sendControlPrompt"
+      | "sessionSupportsManagedReviewLedger"
       | "setRuntimeOption"
       | "steerSession"
       | "supportsArchivedSessionRestore"
@@ -4005,9 +4006,40 @@ export class AcpBackendAdapter {
         backendId,
         runtimeCapabilities,
         sessionId,
+        managedReview,
       }): Promise<AcpMcpServerRegistration> => {
         let baseRegistration: AcpMcpServerRegistration | undefined;
         const http = acpRuntimeSupportsHttpMcp(runtimeCapabilities);
+        if (managedReview) {
+          if (!http || !this.agentToolMcpServer || localMemberRole() === "contained") {
+            return { servers: [] };
+          }
+          try {
+            const registration = await this.agentToolMcpServer.registerClient({
+              backend: backendId,
+              threadId: sessionId,
+              managedReview: true,
+            });
+            const readTool = registration.readTool;
+            return {
+              servers: [registration.server],
+              bindThread: registration.bindThread,
+              managedReviewLedgerAvailable: true,
+              ...(readTool ? {
+                hostApprovesToolCall: async (serverName: string, toolName: string) =>
+                  serverName === registration.server.name
+                  && pwragentToolSkipsAgentApproval(await readTool(toolName)),
+              } : {}),
+            };
+          } catch (error) {
+            acpBackendAdapterLog.warn("agent_tool_mcp_start_failed", {
+              backend: backendId,
+              error: error instanceof Error ? error.message : String(error),
+              sessionId: sessionId ?? null,
+            });
+            return { servers: [] };
+          }
+        }
         if (this.agentToolMcpServer) {
           try {
             const registration = await this.agentToolMcpServer.registerClient({

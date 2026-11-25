@@ -177,6 +177,7 @@ export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-
 export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
   managedConnectionsViaGateway?: true;
+  managedReviewLedgerAvailable?: true;
   bindThread?: (threadId: string) => Promise<void> | void;
   readListedJobMonitorCreation?: () => boolean | undefined;
   /**
@@ -203,6 +204,9 @@ export function mergeMcpServerRegistrations(
     servers: present.flatMap((registration) => registration.servers),
     ...(present.some((registration) => registration.managedConnectionsViaGateway)
       ? { managedConnectionsViaGateway: true }
+      : {}),
+    ...(present.some((registration) => registration.managedReviewLedgerAvailable)
+      ? { managedReviewLedgerAvailable: true }
       : {}),
     readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
     ...(approvers.length ? {
@@ -409,6 +413,7 @@ export type AcpAgentClientOptions = {
     cwd: string;
     runtimeCapabilities?: BackendAcpRuntimeCapabilities;
     sessionId?: string;
+    managedReview?: boolean;
   }) =>
     | AcpMcpServerConfig[]
     | AcpMcpServerRegistration
@@ -492,6 +497,8 @@ export class AcpAgentClient {
   private readonly sessionAgentToolCatalogKeys = new Map<string, string>();
   /** The MCP servers each session's agent last received. */
   private readonly sessionMcpServers = new Map<string, AcpSessionMcpServers>();
+  /** Managed review child sessions that received the in-memory candidate ledger MCP server. */
+  private readonly managedReviewLedgerSessions = new Set<string>();
   /** MCP tools the operator allowed for the rest of a thread. */
   private readonly sessionMcpToolGrants = new Map<string, Set<string>>();
   private readonly now: () => number;
@@ -862,6 +869,7 @@ export class AcpAgentClient {
     this.idleClosedSessions.delete(sessionId);
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
+    this.managedReviewLedgerSessions.delete(sessionId);
     this.sessionAgentToolCatalogKeys.delete(sessionId);
     const previousMcpServers = this.sessionMcpServers.get(sessionId);
     if (retainMcpGrants && previousMcpServers && this.sessionMcpToolGrants.has(sessionId)) {
@@ -875,6 +883,10 @@ export class AcpAgentClient {
     this.jobMonitorCatalogs.delete(sessionId);
     this.grokBackgroundSessions.delete(sessionId);
     this.antigravityBackgroundCommands.delete(sessionId);
+  }
+
+  sessionSupportsManagedReviewLedger(sessionId: string): boolean {
+    return this.managedReviewLedgerSessions.has(sessionId);
   }
 
   supportsTurnSteering(): boolean {
@@ -920,6 +932,7 @@ export class AcpAgentClient {
     this.pendingPermissionRequests.clear();
     this.idleClosedSessions.clear();
     this.sessionsWithoutFaithfulReload.clear();
+    this.managedReviewLedgerSessions.clear();
     this.jobMonitorCatalogs.clear();
     this.grokBackgroundSessions.clear();
     this.antigravityBackgroundCommands.clear();
@@ -1260,6 +1273,7 @@ export class AcpAgentClient {
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
+    managedReview?: boolean;
     /** An agent-requested review cannot prompt until the caller's mode is confirmed. */
     requiredAntigravityMode?: string;
     mcpServers?: "default" | "none";
@@ -1299,6 +1313,7 @@ export class AcpAgentClient {
         : await this.buildMcpServers({
             cwd,
             sessionId: params.sessionId,
+            ...(params.managedReview ? { managedReview: true } : {}),
           });
     const additional = params.additionalMcpRegistration;
     const mcpRegistration = defaultMcpRegistration.managedConnectionsViaGateway
@@ -1393,8 +1408,13 @@ export class AcpAgentClient {
     this.normalizers.get(appSessionId)?.setWorkspace(cwd);
     this.loadedSessionCwds.set(sessionId, cwd);
     this.touchSession(appSessionId);
-    if (params.sessionMeta || params.mcpServers === "none") {
+    if (params.sessionMeta || params.mcpServers === "none" || params.managedReview) {
       this.sessionsWithoutFaithfulReload.add(appSessionId);
+    }
+    if (mcpRegistration.managedReviewLedgerAvailable) {
+      this.managedReviewLedgerSessions.add(appSessionId);
+    } else {
+      this.managedReviewLedgerSessions.delete(appSessionId);
     }
     if (!params.hidden && !this.sessionsWithoutFaithfulReload.has(appSessionId)) {
       this.rememberJobMonitorCatalog(appSessionId, mcpRegistration, jobMonitorCreationEnabled, false);
@@ -3311,12 +3331,14 @@ export class AcpAgentClient {
   private async buildMcpServers(params: {
     cwd: string;
     sessionId?: string;
+    managedReview?: boolean;
   }): Promise<AcpMcpServerRegistration> {
     const registration = await this.options.mcpServers?.({
       backendId: this.options.backendId,
       cwd: params.cwd,
       runtimeCapabilities: this.runtimeCapabilities,
       sessionId: params.sessionId,
+      ...(params.managedReview ? { managedReview: true } : {}),
     });
     return Array.isArray(registration)
       ? { servers: registration }

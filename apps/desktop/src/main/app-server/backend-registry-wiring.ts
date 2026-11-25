@@ -10,6 +10,8 @@ import { getMainLogger } from "../log";
 import { applicationHost as app, getOwnerHostServices } from "../owner-host";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
+import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
+import { ManagedReviewCandidateLedger } from "./managed-review-candidate-ledger";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import { openClaudeSessionReader } from "../claude/claude-session-reader";
@@ -961,6 +963,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     options?.worktreeRecoveryService ??
     new WorktreeRecoveryService({ gitEnv: codexEnv });
   const worktreeContainerService = new WorktreeContainerService({ codexHome });
+  const managedReviewCandidateLedger = new ManagedReviewCandidateLedger();
+  const managedReviewLedgerRouter = buildManagedReviewLedgerToolRouter(
+    managedReviewCandidateLedger,
+  );
   const agentToolMcpServer =
     options?.agentToolMcpServer === null
       ? undefined
@@ -968,7 +974,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         new AgentToolMcpServer({
           resolveCallContext: (context) =>
             ports.resolveAgentToolMcpCallContext(context),
-          resolveCatalogs: (context) => context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
+          resolveCatalogs: (context) => context.managedReview
+            ? [{ id: "managed_review", router: managedReviewLedgerRouter }]
+            : context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
             ? [
                 { id: "thread_orchestration", router: new AgentToolRouter([
                   ...buildPwrAgentTaskMonitorToolDefinitions(async (request) => await ports.handleAgentTaskMonitorRequest(request), "monitor"),
@@ -1598,7 +1606,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   }, context.emit, () => ports);
   const acpSessionRuntimeOptions = new AcpSessionRuntimeOptions(acpBackend, overlayStore, context.emit, () => ports);
   const headlessAutomation = new HeadlessAutomationTurns(context, threadMcpConnections, mcpGatewayTools, () => ports);
-  const managedReviewService = new ManagedReviewService(context, () => ports);
+  const managedReviewService = new ManagedReviewService(
+    context,
+    () => ports,
+    managedReviewCandidateLedger,
+  );
   const subAgentMonitorService = new SubAgentMonitorService(context, {
     forgeToolBridge,
     managedReviewService,
