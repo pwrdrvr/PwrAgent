@@ -26,8 +26,8 @@ them.
 - Before limits are known, the limit presets read a provisional window (8
   days, or 5 hours). When the limit's start differs from what was read, the
   view reads once more over the limit's window, so helper rollups and bars
-  fit it rather than straddling its start. Every read is
-  bounded to 31 days. Turns that finished before the start are outside
+  fit it rather than straddling its start. A period is bounded to 90 days.
+  Turns that finished before the start are outside
   the window and are dropped, not listed as not counted.
 
 ## Totals
@@ -63,9 +63,16 @@ them.
   width capped at an hour, on epoch boundaries, so a rollup never straddles a
   bar in any whole-hour time zone. The line id is derived from the window,
   so two owners sharing one ledger return the same rollup and it counts once.
-- Each owner reads its own PwrAgent SQLite ledger. The read returns at most
-  5,000 recent candidate rows for windows up to 31 days. Four owner reads may
-  run concurrently. Capped results, unavailable peers and older peers lacking
+- Each owner reads its own PwrAgent SQLite ledger. A read returns at most
+  5,000 recent candidate rows for a window of at most 31 days, and every
+  owner, including older peers, rejects a longer one. The viewer therefore
+  reads a longer period in pieces of at most 30 days, cut on whole hours so
+  no helper rollup bucket is split, and rereads a piece that came back capped
+  as two halves, within 64 reads per owner
+  (`usage-activity-pieces.ts`). A helper that crosses a cut is returned as an
+  ordinary row by both pieces and counted once. Only the first, newest read
+  asks for account-wide token history. Four owners are read concurrently.
+  Results still capped, unavailable peers and older peers lacking
   the RPC are reported as partial coverage. Remote reads use the existing
   `thread_detail` capability. Titles are fetched for the bounded result
   through the search-document identity index.

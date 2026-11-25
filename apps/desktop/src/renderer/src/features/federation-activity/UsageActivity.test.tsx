@@ -1299,3 +1299,32 @@ it("says an Overview total is unavailable, not zero, when no instance could be r
   expect(overview).toHaveTextContent("Unavailable");
   expect(overview).not.toHaveTextContent("$0.00");
 });
+
+it("reads 90 days in pieces every owner accepts and counts turns older than 31 days", async () => {
+  const now = new Date(2026, 10, 25, 13, 31).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const old = { ...usageFixture({ threadId: "old", turnId: "old-turn", usageLineId: "old-line",
+    createdAt: now - 60 * 24 * HOUR, startedAt: now - 60 * 24 * HOUR, completedAt: now - 60 * 24 * HOUR + HOUR }), title: "Old thread" };
+  const recent = { ...usageFixture({ threadId: "recent", turnId: "recent-turn", usageLineId: "recent-line",
+    createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR }), title: "Recent thread" };
+  const readUsageActivity = vi.fn(async (request: { from: number; to: number }) => {
+    // Every owner, including older peers, rejects a window over 31 days.
+    if (request.to - request.from > 31 * 24 * HOUR) throw new Error("Select a usage window of at most 31 days.");
+    return { readAt: now, rateLimits: [], truncated: false,
+      rows: [old, recent].filter((row) => row.line.startedAt! < request.to && row.line.completedAt! >= request.from) };
+  });
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await screen.findByRole("button", { name: "Inspect Recent thread" });
+  expect(screen.queryByRole("button", { name: "Inspect Old thread" })).not.toBeInTheDocument();
+
+  readUsageActivity.mockClear();
+  choosePeriod("90 days");
+  expect(await screen.findByRole("button", { name: "Inspect Old thread" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Recent thread" })).toBeInTheDocument();
+  const windows = readUsageActivity.mock.calls.map(([request]) => request);
+  expect(windows.length).toBeGreaterThan(1);
+  expect(Math.min(...windows.map((window) => window.from))).toBe(now - 90 * 24 * HOUR);
+  expect(Math.max(...windows.map((window) => window.to))).toBe(now);
+  expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Usage overview" })).toHaveTextContent("2 threads · 2 turns");
+});
