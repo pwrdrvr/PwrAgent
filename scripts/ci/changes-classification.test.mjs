@@ -238,6 +238,7 @@ it("accepts a skipped lane in the Desktop E2E gate only when the classifier or t
   const gate = jobSection("desktop-e2e-result");
   const script = gate.split("        run: |\n")[1].split("\n").map((line) => line.slice(10)).join("\n");
   const results = ["success", "failure", "cancelled", "skipped"];
+  const cases = [];
   for (const linux of results) {
     for (const a11y of results) {
       for (const requested of ["true", "false"]) {
@@ -245,23 +246,55 @@ it("accepts a skipped lane in the Desktop E2E gate only when the classifier or t
           for (const full of ["true", "false"]) {
             // Unset when the plan job did not succeed, then no lane and one lane.
             for (const lanes of [undefined, "", "[]", "[1]"]) {
-              const run = spawnSync("bash", ["-c", script], {
-                env: { PATH: process.env.PATH, LINUX_E2E_RESULT: linux, MACOS_E2E_RESULT: macos, FULL_PLATFORMS: full,
-                  A11Y_RESULT: a11y, A11Y_REQUESTED: requested,
-                  GITHUB_STEP_SUMMARY: "/dev/null", ...(lanes === undefined ? {} : { E2E_LANES: lanes }) },
-                encoding: "utf8",
-              });
-              const pass = (linux === "success" || (lanes === "[]" && linux === "skipped"))
-                && (a11y === "success" || (requested === "false" && a11y === "skipped"))
-                && (macos === "success" || (full === "false" && macos === "skipped"));
-              const name = `linux=${linux} a11y=${a11y} requested=${requested} macos=${macos} full=${full} lanes=${lanes}`;
-              expect(run.status === 0, `${name}: ${run.stdout}${run.stderr}`).toBe(pass);
+              cases.push({ linux, a11y, requested, macos, full, lanes });
             }
           }
         }
       }
     }
   }
+  // One shell runs every case, without a subshell per case. A process per
+  // case made 1,024 spawns, which took 8.6s on a GitHub-hosted macOS runner;
+  // a subshell per case took 15.3s on Windows, where Git Bash emulates fork.
+  // The step's one `exit` becomes `return`, so each case returns its status
+  // to the driver. The program arrives on stdin: as one `-c` argument it
+  // exceeds Linux's 128 KiB argument limit and Windows' command-line limit.
+  const exits = script.match(/\bexit\b/g) ?? [];
+  expect(exits, "the gate ends with its only exit").toHaveLength(1);
+  expect(script.trimEnd().endsWith('exit "$status"')).toBe(true);
+  const gateFunction = `gate() {\n${script.trimEnd().replace(/exit "\$status"$/, 'return "$status"')}\n}`;
+  const runCase = ({ linux, a11y, requested, macos, full, lanes }, output) => [
+    `export LINUX_E2E_RESULT='${linux}' A11Y_RESULT='${a11y}' A11Y_REQUESTED='${requested}'`,
+    `export MACOS_E2E_RESULT='${macos}' FULL_PLATFORMS='${full}'`,
+    lanes === undefined ? "unset E2E_LANES" : `export E2E_LANES='${lanes}'`,
+    // `||` keeps a failing status from ending the driver under the step's
+    // `set -e`.
+    `code=0; gate < /dev/null${output} || code=$?`,
+  ].join("\n");
+  const runShell = (driver) => spawnSync("bash", ["-s"], {
+    input: `${gateFunction}\n${driver}\n`,
+    env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: "/dev/null" },
+    encoding: "utf8",
+  });
+  const run = runShell(cases.map((testCase, index) => `${runCase(testCase, " > /dev/null 2>&1")}\necho "${index} $code"`)
+    .join("\n"));
+  expect(run.status, `${run.error ?? ""}${run.stderr}`).toBe(0);
+  const statuses = new Map(run.stdout.trim().split("\n").map((line) => line.split(" ").map(Number)));
+  expect(statuses.size, run.stdout.slice(-500)).toBe(cases.length);
+  cases.forEach((testCase, index) => {
+    const { linux, a11y, requested, macos, full, lanes } = testCase;
+    const pass = (linux === "success" || (lanes === "[]" && linux === "skipped"))
+      && (a11y === "success" || (requested === "false" && a11y === "skipped"))
+      && (macos === "success" || (full === "false" && macos === "skipped"));
+    const name = `linux=${linux} a11y=${a11y} requested=${requested} macos=${macos} full=${full} lanes=${lanes}`;
+    // Rerun only a mismatched case, with its output, so the failure shows
+    // what the gate printed.
+    const detail = (statuses.get(index) === 0) === pass ? "" : (() => {
+      const single = runShell(runCase(testCase, " 2>&1"));
+      return `: ${single.stdout}${single.stderr}`;
+    })();
+    expect(statuses.get(index) === 0, `${name}${detail}`).toBe(pass);
+  });
 });
 
 it("gates the accessibility job, its required check and its flake slices on the same request", () => {
