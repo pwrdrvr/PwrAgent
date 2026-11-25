@@ -43361,6 +43361,23 @@ div.composer-error-row__toggle {
   gap: 1px;
 }
 
+.pr-watch-list__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+/* Auto-fix's thread and PR switches sit under its text, past the icon. */
+.pr-watch-list__row--stacked {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.pr-watch-list__row--stacked .pr-watch-list__actions {
+  flex-basis: 100%;
+  padding-left: 24px;
+}
+
 .pr-watch-list__title {
   color: var(--text-primary);
   font-size: 12px;
@@ -59550,6 +59567,18 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .composer-pr-menu .composer-pr-menu__pr-label {
   font-family: var(--font-mono);
   font-size: 12px;
+}
+
+/* A covered PR's state goes under its name, past the check column. */
+.composer-pr-menu .composer-pr-menu__pr {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+
+.composer-pr-menu .composer-pr-menu__pr .todo-model-picker__detail {
+  flex-basis: 100%;
+  margin-left: 0;
+  padding-left: 20px;
 }
 
 .todo-dispatch__pending {

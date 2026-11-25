@@ -141,7 +141,7 @@ export function ComposerPrMenu(props: {
                   key={entry.prKey}
                   type="button"
                   role="menuitemcheckbox"
-                  className="todo-split__item"
+                  className="todo-split__item composer-pr-menu__pr"
                   aria-checked={entry.state === "on"}
                   // A hands-off PR changes only through the project's rules.
                   aria-disabled={entry.state === "hands-off" ? true : undefined}

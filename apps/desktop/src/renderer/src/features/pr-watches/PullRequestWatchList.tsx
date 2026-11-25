@@ -173,7 +173,9 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
         </div>
       ) : null}
       {props.autoFix ? (
-        <div className="pr-watch-list__row">
+        // Two buttons share the text's row only by squeezing it; they go
+        // under the text instead, lined up with it.
+        <div className={`pr-watch-list__row${!readOnly && props.onTurnOffAutoFix && props.onSetPrAutoFix ? " pr-watch-list__row--stacked" : ""}`}>
           <span className="pr-watch-list__icon" aria-hidden="true">
             <PullRequestIcon size={12} />
           </span>
@@ -183,25 +185,29 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
               Starts a repair turn when a new push fails CI.
             </span>
           </span>
-          {!readOnly && props.onTurnOffAutoFix ? (
-            <button
-              type="button"
-              className="pr-watch-list__action"
-              aria-label="Turn off Auto-fix for this thread"
-              onClick={props.onTurnOffAutoFix}
-            >
-              Turn Off
-            </button>
-          ) : null}
-          {!readOnly && props.onSetPrAutoFix ? (
-            <button
-              type="button"
-              className="pr-watch-list__action"
-              aria-label={`Turn off Auto-fix for #${props.pr.number} only`}
-              onClick={() => props.onSetPrAutoFix!(false)}
-            >
-              Skip This PR
-            </button>
+          {!readOnly && (props.onTurnOffAutoFix || props.onSetPrAutoFix) ? (
+            <span className="pr-watch-list__actions">
+              {props.onTurnOffAutoFix ? (
+                <button
+                  type="button"
+                  className="pr-watch-list__action"
+                  aria-label="Turn off Auto-fix for this thread"
+                  onClick={props.onTurnOffAutoFix}
+                >
+                  Turn Off
+                </button>
+              ) : null}
+              {props.onSetPrAutoFix ? (
+                <button
+                  type="button"
+                  className="pr-watch-list__action"
+                  aria-label={`Turn off Auto-fix for #${props.pr.number} only`}
+                  onClick={() => props.onSetPrAutoFix!(false)}
+                >
+                  Skip This PR
+                </button>
+              ) : null}
+            </span>
           ) : null}
         </div>
       ) : autoFixBlocked?.reason === "hands_off" ? (
