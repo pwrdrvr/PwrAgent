@@ -101,33 +101,29 @@ function readMeaningfulPathName(value: string | null | undefined): string | unde
 
 const MAX_COMMAND_LABEL_LENGTH = 72;
 
-// Strip a leading shell-interpreter wrapper so we show the command the agent
-// actually ran rather than the interpreter's full path. Handles POSIX login
-// shells (`/bin/sh -lc <cmd>`, `bash -lc <cmd>`) and Windows interpreters
-// (`"C:\...\powershell.exe" -Command <cmd>`, `cmd.exe /c <cmd>`,
-// `bash.exe -lc <cmd>`). The full, unmodified command is preserved separately
-// as `rawCommand` for the expanded details view.
-//
-// The Windows branch matches the interpreter path in two forms: quoted
-// (`"[^"]*…\.exe"`, which permits spaces — e.g. `"C:\Program Files\Git\bin\
-// bash.exe"`) and unquoted (`[^\s"]*…\.exe`, no spaces). A single
-// `[^\s"]*` couldn't span a spaced path inside quotes, so a quoted Git-bash
-// invocation under "Program Files" would otherwise show the full path.
-function stripShellWrapper(command: string): string {
-  return command
-    .trim()
-    .replace(/^(?:\/\S+\/)?(?:ba|z)?sh\s+-lc\s+/i, "")
+/** Unwraps a shell invocation for display while keeping the script's formatting. */
+export function unwrapCommandText(command: string): string {
+  const trimmed = command.trim();
+  const posixWrapper = /^(?:\/\S+\/)?(?:ba|z)?sh\s+-l?c\s+/.exec(trimmed);
+  if (posixWrapper) {
+    const script = trimmed.slice(posixWrapper[0].length);
+    // Only the first quoted word can be the script. Keep the invocation if
+    // other tokens follow it or the script itself would be blank.
+    const quotedScript = /^(?:'[^']*'|"(?:[^"\\]|\\[\s\S])*")/.exec(script)?.[0];
+    if (quotedScript === undefined) {
+      return script;
+    }
+    const body = quotedScript.slice(1, -1);
+    return quotedScript.length === script.length && body.trim() ? body : trimmed;
+  }
+
+  // Quoted Windows executable paths can contain spaces, as in Program Files.
+  const unwrapped = trimmed
     .replace(
       /^(?:"[^"]*(?:powershell|pwsh|cmd|bash)\.exe"|[^\s"]*(?:powershell|pwsh|cmd|bash)\.exe)\s+(?:-Command|-lc|-c|\/d\s+\/s\s+\/c|\/c)\s+/i,
       "",
     )
     .trim();
-}
-
-/** Removes a shell wrapper and its quotes while keeping the script's formatting. */
-export function unwrapCommandText(command: string): string {
-  const trimmed = command.trim();
-  const unwrapped = stripShellWrapper(trimmed);
   return unwrapped === trimmed
     ? unwrapped
     : unwrapped.replace(/^(['"])([\s\S]*)\1$/, "$2");
