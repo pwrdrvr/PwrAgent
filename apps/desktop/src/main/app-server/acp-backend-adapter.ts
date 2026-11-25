@@ -72,6 +72,7 @@ import type {
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
 import { isManagedAntigravityCommand, MANAGED_ANTIGRAVITY_ENV } from "../acp/antigravity-managed-runtime";
+import { resolveAntigravityCommandPath } from "../acp/antigravity-runtime-retention";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import {
   assertProviderDiscoveryPermit,
@@ -133,7 +134,8 @@ import {
 } from "../acp/acp-ephemeral-prompt";
 import {
   recordWithSessionRuntimeCapabilities,
-  shouldProbeAcpCapabilitiesAtStartup,
+  retainedManagedAntigravityCatalog,
+  shouldProbeAcpCapabilitiesAfterRuntimeChange,
   withAntigravityModelCatalog,
 } from "../acp/acp-capability-freshness";
 import {
@@ -358,6 +360,7 @@ export type AcpPromptPayload = {
 
 export type AcpRuntimeCapabilityProbe = (
   agent: AcpInstalledAgentRecord,
+  canProbe: () => boolean,
 ) => Promise<AcpInstalledAgentRecord>;
 
 export type AcpBackendAdapterOptions = {
@@ -390,7 +393,7 @@ export type AcpBackendAdapterOptions = {
   /**
    * Probes one agent's runtime capabilities over ACP and returns its record
    * with the outcome folded in. Startup uses it only for an agent whose runtime
-   * changed (see `shouldProbeAcpCapabilitiesAtStartup`). Defaults to the real
+   * changed (see `shouldProbeAcpCapabilitiesAfterRuntimeChange`). Defaults to the real
    * probe once app state is initialized; `null` disables it.
    */
   probeAcpRuntimeCapabilities?: AcpRuntimeCapabilityProbe | null;
@@ -1303,7 +1306,8 @@ export class AcpBackendAdapter {
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
   private readonly grokUpdateRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly runtimeCapabilityProbe?: AcpRuntimeCapabilityProbe;
-  private startupCapabilityProbe?: Promise<void>;
+  private readonly pendingCapabilityProbes = new Map<AcpBackendId, AcpInstalledAgentRecord>();
+  private backgroundCapabilityProbe?: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
   private readonly closeTimeoutMs: number;
@@ -1354,11 +1358,10 @@ export class AcpBackendAdapter {
       ? undefined
       : options.probeAcpRuntimeCapabilities
         ?? (isAppStateInitialized()
-          ? async (agent) =>
-              await refreshAcpRuntimeCapabilities(
-                agent,
-                await ensureAcpRuntimeDiscoveryWorkspace(),
-              )
+          ? async (agent, canProbe) => {
+              const cwd = await ensureAcpRuntimeDiscoveryWorkspace();
+              return canProbe() ? await refreshAcpRuntimeCapabilities(agent, cwd) : agent;
+            }
           : undefined);
     this.acpAgentStore =
       options.acpAgentStore === null
@@ -2997,7 +3000,7 @@ export class AcpBackendAdapter {
             (agent) =>
               discoveredBackendIds.has(agent.backendId)
               && (this.isAcpAgentEnabled?.(agent.registryId) ?? true)
-              && shouldProbeAcpCapabilitiesAtStartup(
+              && shouldProbeAcpCapabilitiesAfterRuntimeChange(
                 agent,
                 recordedBackendIds.has(agent.backendId),
               ),
@@ -3008,85 +3011,97 @@ export class AcpBackendAdapter {
     }
   }
 
-  /**
-   * Refill the capabilities that startup discovery dropped when an agent's
-   * runtime changed. Without them the composer offers no model or effort
-   * picker, and nothing else probes outside Settings and setup. The agents are
-   * already filtered by `shouldProbeAcpCapabilitiesAtStartup`, so this runs at
-   * most once per runtime.
-   */
+  async refreshManagedAntigravityCatalog(command: string): Promise<void> {
+    const agent = this.acpAgentStore?.getInstalledAgent("acp:antigravity");
+    const launch = agent?.launchDescriptor;
+    if (!agent || !launch?.managedAntigravityFallback || !shouldProbeAcpCapabilitiesAfterRuntimeChange(agent, true)) {
+      return;
+    }
+    if (launch.command !== command) {
+      const [selected, installed] = await Promise.all([
+        resolveAntigravityCommandPath(launch.command, { cwd: launch.cwd, env: { ...process.env, ...launch.env } }),
+        resolveAntigravityCommandPath(command),
+      ]);
+      if (!selected || selected !== installed) return;
+    }
+    this.probeChangedRuntimesInBackground([agent]);
+  }
+
   private probeChangedRuntimesInBackground(
     agents: AcpInstalledAgentRecord[],
   ): void {
     const probe = this.runtimeCapabilityProbe;
-    if (
-      !probe
-      || agents.length === 0
-      || this.closed
-      || this.startupCapabilityProbe
-    ) {
-      return;
+    if (!probe || this.closed) return;
+    for (const agent of agents) {
+      this.pendingCapabilityProbes.set(agent.backendId, agent);
     }
+    if (this.backgroundCapabilityProbe || this.pendingCapabilityProbes.size === 0) return;
 
-    // One agent at a time: each probe launches a real agent process while
-    // startup is still refreshing provider threads.
-    const run = (async () => {
-      for (const agent of agents) {
-        if (this.closed) return;
-        const probed = await probe(agent);
-        if (this.closed) return;
-        const current = this.acpAgentStore?.getInstalledAgent(agent.backendId);
-        // A Settings probe or a newer discovery may have written this record
-        // while the probe ran. Only fill a runtime that is still unprobed.
-        if (
-          !current
-          || current.version !== agent.version
-          || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(agent)
-          || !shouldProbeAcpCapabilitiesAtStartup(current, true)
-        ) {
-          continue;
-        }
-        this.acpAgentStore?.upsertInstalledAgent({
-          ...current,
-          ...(probed.runtimeCapabilities
-            ? { runtimeCapabilities: probed.runtimeCapabilities }
-            : {}),
-          ...(probed.lastDiscoveredAt !== undefined
-            ? { lastDiscoveredAt: probed.lastDiscoveredAt }
-            : {}),
-          ...(probed.lastDiscoveryError !== undefined
-            ? { lastDiscoveryError: probed.lastDiscoveryError }
-            : {}),
-          updatedAt: Math.max(current.updatedAt, probed.updatedAt),
-        });
-        acpBackendAdapterLog.info("startup_acp_capability_probe_completed", {
-          backend: agent.backendId,
-          version: agent.version,
-          discovered: probed.runtimeCapabilities !== undefined,
-          ...(probed.lastDiscoveryError
-            ? { error: probed.lastDiscoveryError }
-            : {}),
-        });
-        await this.emit({
-          backend: agent.backendId,
-          notification: {
-            method: "backend/acpRuntimeCapabilities/updated",
-            params: { backend: agent.backendId },
-          },
-        });
+    // Each probe launches an agent process. A managed update can queue the
+    // replacement while a startup probe is still running.
+    this.backgroundCapabilityProbe = (async () => {
+      for (const [backend, agent] of this.pendingCapabilityProbes) {
+        this.pendingCapabilityProbes.delete(backend);
+        await this.probeChangedRuntime(agent, probe);
       }
-    })()
-      .catch((error) => {
-        acpBackendAdapterLog.warn("startup_acp_capability_probe_failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .finally(() => {
-        if (this.startupCapabilityProbe === run) {
-          this.startupCapabilityProbe = undefined;
-        }
+    })().finally(() => {
+      this.backgroundCapabilityProbe = undefined;
+      this.probeChangedRuntimesInBackground([]);
+    });
+  }
+
+  private async probeChangedRuntime(
+    agent: AcpInstalledAgentRecord,
+    probe: AcpRuntimeCapabilityProbe,
+  ): Promise<void> {
+    // Settings or a newer runtime can replace the record while discovery runs.
+    const readUnprobedRuntime = () => {
+      const current = this.acpAgentStore?.getInstalledAgent(agent.backendId);
+      return current
+        && !this.closed
+        && (this.isAcpAgentEnabled?.(agent.registryId) ?? true)
+        && this.isRuntimeSelectionCurrent(current)
+        && current.version === agent.version
+        && current.configDependencyFingerprint === agent.configDependencyFingerprint
+        && acpAgentLaunchIdentity(current) === acpAgentLaunchIdentity(agent)
+        && shouldProbeAcpCapabilitiesAfterRuntimeChange(current, true)
+        ? current : undefined;
+    };
+    try {
+      const before = readUnprobedRuntime();
+      if (!before) return;
+      const probed = await probe(before, () => readUnprobedRuntime() !== undefined);
+      const current = readUnprobedRuntime();
+      if (!current || probed === before) return;
+      const useCurrentCapabilities = probed.runtimeCapabilities === before.runtimeCapabilities
+        && !acpDiscoveryActionRequiredMessage(agent.registryId, probed.lastDiscoveryError);
+      this.acpAgentStore?.upsertInstalledAgent({
+        ...current,
+        runtimeCapabilities: useCurrentCapabilities ? current.runtimeCapabilities : probed.runtimeCapabilities,
+        lastDiscoveredAt: probed.lastDiscoveredAt,
+        lastDiscoveryError: probed.lastDiscoveryError,
+        updatedAt: Math.max(current.updatedAt, probed.updatedAt),
       });
-    this.startupCapabilityProbe = run;
+      acpBackendAdapterLog.info("background_acp_capability_probe_completed", {
+        backend: agent.backendId,
+        version: agent.version,
+        discovered: probed.runtimeCapabilities?.status === "discovered",
+        ...(probed.lastDiscoveryError ? { error: probed.lastDiscoveryError } : {}),
+      });
+      await this.emit({
+        backend: agent.backendId,
+        notification: {
+          method: "backend/acpRuntimeCapabilities/updated",
+          params: { backend: agent.backendId },
+        },
+      });
+    } catch (error) {
+      acpBackendAdapterLog.warn("background_acp_capability_probe_failed", {
+        backend: agent.backendId,
+        version: agent.version,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -3176,6 +3191,9 @@ export class AcpBackendAdapter {
         && cached?.installStatus === "installed"
         && cached.version === agent.version
         && acpAgentLaunchIdentity(cached) === acpAgentLaunchIdentity(agent);
+      const runtimeCapabilities = sameRuntime
+        ? cached.runtimeCapabilities
+        : retainedManagedAntigravityCatalog(cached, agent);
       return {
         ...agent,
         installedAt: cached?.installedAt ?? agent.installedAt,
@@ -3183,9 +3201,7 @@ export class AcpBackendAdapter {
           sameRuntime && cached
             ? Math.max(agent.updatedAt, cached.updatedAt)
             : agent.updatedAt,
-        ...(sameRuntime && cached?.runtimeCapabilities
-          ? { runtimeCapabilities: cached.runtimeCapabilities }
-          : {}),
+        ...(runtimeCapabilities ? { runtimeCapabilities } : {}),
         ...(sameRuntime && cached?.lastDiscoveredAt !== undefined
           ? { lastDiscoveredAt: cached.lastDiscoveredAt }
           : {}),
@@ -3253,7 +3269,7 @@ export class AcpBackendAdapter {
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.grokUpdateRefreshes.clear();
-    this.startupCapabilityProbe = undefined;
+    this.pendingCapabilityProbes.clear();
     this.liveTurnUsage.clear();
     this.liveContextWindows.clear();
     this.localAgentSnapshot = [];
@@ -3892,7 +3908,9 @@ export class AcpBackendAdapter {
         // catalog over the newly selected installation. Its session state is
         // still authoritative for that thread.
         if (agent.registryId !== "antigravity"
-          || current.launchDescriptor?.command === agent.launchDescriptor?.command) {
+          || (current.version === agent.version
+            && current.launchDescriptor?.command === agent.launchDescriptor?.command
+            && this.isRuntimeSelectionCurrent(current))) {
           this.acpAgentStore?.upsertInstalledAgent(
             recordWithSessionRuntimeCapabilities(current, runtimeCapabilities, now),
           );

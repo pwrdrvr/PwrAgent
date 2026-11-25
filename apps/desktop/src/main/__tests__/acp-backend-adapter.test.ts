@@ -1649,6 +1649,7 @@ describe("AcpBackendAdapter", () => {
     expect(probe).toHaveBeenCalledOnce();
     expect(probe).toHaveBeenCalledWith(
       expect.objectContaining({ backendId, version: "2.0.0" }),
+      expect.any(Function),
     );
     await vi.waitFor(() => {
       expect(emit).toHaveBeenCalledWith({

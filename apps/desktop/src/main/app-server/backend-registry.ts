@@ -4004,6 +4004,10 @@ export class DesktopBackendRegistry {
     };
   }
 
+  async refreshManagedAntigravityCatalog(command: string): Promise<void> {
+    await this.acpBackend.refreshManagedAntigravityCatalog(command);
+  }
+
   async invalidateProviderRuntimeSelections(params: {
     acp: boolean;
     acpRegistryIds?: readonly string[];
