@@ -1,8 +1,11 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { createRef } from "react";
 import type { Editor } from "@tiptap/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { CompactComposer } from "../CompactComposer";
+import { ComposerTiptapInput } from "../ComposerTiptapInput";
+import type { ComposerInputHandle } from "../ComposerInputTypes";
 
 function mountEditor() {
   return render(<CompactComposer threadTitle="Fixture" onSend={vi.fn()} mentionSources={{
@@ -14,6 +17,7 @@ function mountEditor() {
       linkedDirectories: [],
     }],
     directories: [
+      { key: "acorn", kind: "directory", label: "acorn", path: "/dev/acorn" },
       { key: "orchard", kind: "directory", label: "orchard", path: "/dev/orchard" },
     ],
   }} />);
@@ -76,4 +80,50 @@ it("reopens a parenthetical thread reference when the caret moves back inside it
   expect(screen.getByRole("option").textContent).toContain("#ship release");
   act(() => { input.editor.commands.setTextSelection(before.length + 2); });
   expect(screen.queryByRole("listbox")).toBeNull();
+});
+
+it("refreshes the picker when replacing its selected query with the same text", () => {
+  mountEditor();
+  const input = textbox();
+  fireEvent.change(input, { target: { value: "@orch" } });
+  act(() => { input.editor.commands.setTextSelection({ from: 2, to: 6 }); });
+  expect(screen.getAllByRole("option")).toHaveLength(2);
+  act(() => {
+    const transaction = input.editor.state.tr.insertText("orch");
+    expect(transaction.docChanged).toBe(true);
+    expect(transaction.doc.eq(transaction.before)).toBe(true);
+    input.editor.view.dispatch(transaction);
+  });
+  expect(screen.getByRole("option").textContent).toContain("orchard");
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(input.querySelector(".composer-tiptap-input__mention")?.textContent).toBe("@orchard");
+});
+
+it("inserts a picker reference after a fence and preserves every character of code", () => {
+  const code = "first line\nsecond line";
+  fc.assert(fc.property(fc.integer({ min: 0, max: code.length }), fc.boolean(), (offset, selectNext) => {
+    const ref = createRef<ComposerInputHandle>();
+    const view = render(<ComposerTiptapInput ref={ref} id="reply" label="Reply"
+      value={`\`\`\`text\n${code}\n\`\`\`\n\nNext paragraph`}
+      markdownConversion placeholder="Reply" skillTokens={[]} onChange={() => {}} />);
+    try {
+      const input = view.getByRole("textbox", { name: "Reply" }) as HTMLElement & { editor: Editor };
+      const { editor } = input;
+      const fence = editor.state.doc.firstChild!;
+      expect(fence.type.name).toBe("codeBlock");
+      act(() => {
+        editor.commands.setTextSelection({ from: offset + 1, to: Math.min(offset + Number(selectNext), code.length) + 1 });
+        ref.current!.replaceReference("@", [{ id: "dir", index: 0, kind: "directory", name: "orchard", path: "/dev/orchard" }]);
+      });
+      const { doc, selection } = editor.state;
+      expect(doc.firstChild?.eq(fence)).toBe(true);
+      expect(doc.child(1).type.name).toBe("paragraph");
+      expect(doc.child(1).firstChild?.type.name).toBe("mention");
+      expect(doc.child(2).textContent).toBe("Next paragraph");
+      expect(selection.$from.parent.eq(doc.child(1))).toBe(true);
+      expect(selection.$from.parentOffset).toBe(doc.child(1).content.size);
+    } finally {
+      view.unmount();
+    }
+  }), { numRuns: 24 });
 });

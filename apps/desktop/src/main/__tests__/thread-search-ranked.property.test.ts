@@ -3,14 +3,57 @@ import { expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ThreadSearchStore } from "../storage/thread-search-store";
+import { StateDb } from "../state/state-db";
 import { seedSearchThreads } from "./helpers/thread-search-fixture";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 
 const projection: Pick<AppServerThreadSummary, "source" | "titleSource" | "linkedDirectories"> = {
   source: "codex",
   titleSource: "explicit",
   linkedDirectories: [],
 };
+
+it("ranks one WAL snapshot when another owner renames a match between passes", () => {
+  const { dbPath, tempDir } = createTempStateDb("search-rank-snapshot-");
+  const reader = StateDb.open(dbPath);
+  const writer = StateDb.open(dbPath);
+  try {
+    const store = new ThreadSearchStore(reader);
+    const writerStore = new ThreadSearchStore(writer);
+    const exact = { ...projection, id: "renamed", title: "orchard willow", updatedAt: 10 };
+    const partial = { ...projection, id: "unchanged", title: "willow", updatedAt: 1 };
+    writerStore.upsertThreads([exact, partial]);
+    const prepare = reader.raw.prepare.bind(reader.raw);
+    let intervened = false;
+    const spy = vi.spyOn(reader.raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql.includes("thread_search_fts MATCH @query")) {
+        const read = statement.all.bind(statement);
+        statement.all = (...args: unknown[]) => {
+          const rows = read(...args);
+          if (!intervened) {
+            intervened = true;
+            writerStore.upsertThread({ ...exact, title: "orchard", updatedAt: 20 });
+          }
+          return rows;
+        };
+      }
+      return statement;
+    });
+    const request = { query: "orchard willow", limit: 2 };
+    const results = store.search(request);
+    spy.mockRestore();
+    expect(intervened).toBe(true);
+    expect(results.map(({ threadId, title }) => [threadId, title])).toEqual([
+      [exact.id, exact.title], [partial.id, partial.title],
+    ]);
+    expect(store.search(request)).toContainEqual(expect.objectContaining({ threadId: exact.id, title: "orchard" }));
+  } finally {
+    writer.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
+});
 
 it("keeps all-term matches ahead of partial matches and applies scope before filling the limit", () => {
   const db = openInMemoryStateDb();

@@ -2661,9 +2661,10 @@ function replaceEditorReference(
   const trigger = readReferenceTriggers(editor)[sigil];
   if (tokens.length === 0 && !trigger) return;
 
-  const { from, to, $to } = editor.state.selection;
+  const { from, to, $from, $to } = editor.state.selection;
+  const fence = [$from, $to].find((position) => position.parent.type.spec.code);
   const start = trigger?.start ?? from;
-  const following = $to.nodeAfter?.text ?? "";
+  const following = fence ? "" : $to.nodeAfter?.text ?? "";
   const hasSpace = /^[^\S\r\n]/.test(following);
   const addSpace = !hasSpace && !/^[\p{Pe}\p{Pf}]/u.test(following);
   const nodes = tokens.flatMap((token, index) => [
@@ -2673,13 +2674,21 @@ function replaceEditorReference(
   if (tokens.length && addSpace) nodes.push(editor.schema.text(" "));
 
   const transaction = closeHistory(editor.state.tr);
-  if (nodes.length) transaction.replaceWith(start, to, nodes);
-  else transaction.delete(start, from);
-  const end = start + nodes.reduce((size, node) => size + node.nodeSize, 0);
-  transaction.setSelection(TextSelection.create(
-    transaction.doc,
-    end + (tokens.length > 0 && hasSpace ? 1 : 0),
-  ));
+  let caret = start;
+  if (fence && nodes.length > 0) {
+    // The picker can be opened inside a fence. Its inline chip belongs in
+    // a paragraph after the whole block, even if the operator selected code.
+    const paragraph = editor.schema.nodes.paragraph.create(null, nodes);
+    const afterFence = fence.after();
+    transaction.insert(afterFence, paragraph);
+    caret = afterFence + 1 + paragraph.content.size;
+  } else if (nodes.length > 0) {
+    transaction.replaceWith(start, to, nodes);
+    caret = transaction.mapping.map(to) + (hasSpace ? 1 : 0);
+  } else {
+    transaction.delete(start, from);
+  }
+  transaction.setSelection(TextSelection.create(transaction.doc, caret));
   editor.view.dispatch(transaction);
   closeEditorHistory(editor);
   editor.commands.focus();
@@ -3434,9 +3443,11 @@ export const ComposerTiptapInput = forwardRef<
       if (key === referenceSelectionKeyRef.current) return;
       referenceSelectionKeyRef.current = key;
       // Normal document edits already rerender the host via onChange.
-      // Selection-only moves and controlled restores can change the picker
-      // without publishing a draft.
-      if (!transaction.docChanged || transaction.getMeta("preventUpdate")) notify();
+      // Replacing a selection with identical text can set docChanged even
+      // though Tiptap sees equal documents and skips its update event.
+      if (!transaction.docChanged
+        || transaction.getMeta("preventUpdate")
+        || transaction.before.eq(nextEditor.state.doc)) notify();
     },
   });
   const pullRequestTooltip = useComposerPullRequestHover(editor?.view.dom);

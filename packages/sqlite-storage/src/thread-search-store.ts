@@ -328,7 +328,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
           + backendClause + archivedClause + filterWhere.sql + `
           ORDER BY rank_value ASC, COALESCE(d.updated_at, d.created_at, 0) DESC, thread_search_fts.rowid ASC
           LIMIT @limit`,
-      )
+      );
     const runMatch = (query: string, limit: number): ThreadSearchFtsRow[] =>
       ranked.all({
         backend: request.backend,
@@ -336,32 +336,38 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         limit,
         query,
       }) as ThreadSearchFtsRow[];
-    const toResult = (row: ThreadSearchFtsRow, band: number): ThreadSearchResult => {
+    const toResult = (row: ThreadSearchFtsRow, relaxation = 0): ThreadSearchResult => {
       const bm25 = -(row.rank_value ?? 0);
-      // A monotonic BM25 score within each band survives the service's merge
-      // by score. No amount of term frequency crosses a relevance boundary.
-      return this.rowToResult(row, band + bm25 / (1 + bm25), row.snippet_text, request.query);
+      // Exact matches keep the score that older peers already send and sort
+      // by. Relaxed matches occupy disjoint negative bands, even for a viewer
+      // that only knows how to compare numeric scores.
+      const score = relaxation === 0 ? bm25 : bm25 / (1 + bm25) - relaxation;
+      return this.rowToResult(row, score, row.snippet_text, request.query);
     };
-    const exact = runMatch(ftsQuery, request.limit);
-    const results = exact.map((row) => toResult(row, 2));
-    if (results.length >= request.limit) return results;
+    // A second process can update the index between passes. One deferred
+    // read transaction keeps MATCH and its exclusions on the same snapshot.
+    return this.db.transaction(() => {
+      const exact = runMatch(ftsQuery, request.limit);
+      const results = exact.map((row) => toResult(row));
+      if (results.length >= request.limit) return results;
 
-    const correctedQuery = exact.length === 0 ? buildTypoThreadSearchFtsQuery(request.query) : undefined;
-    const corrected = correctedQuery ? runMatch(correctedQuery, request.limit) : [];
-    results.push(...corrected.map((row) => toResult(row, 1)));
-    if (results.length >= request.limit) return results;
+      const correctedQuery = exact.length === 0 ? buildTypoThreadSearchFtsQuery(request.query) : undefined;
+      const corrected = correctedQuery ? runMatch(correctedQuery, request.limit) : [];
+      results.push(...corrected.map((row) => toResult(row, 1)));
+      if (results.length >= request.limit) return results;
 
-    const partialQuery = buildPartialThreadSearchFtsQuery(request.query);
-    if (partialQuery) {
-      const correctedKeys = new Set(corrected.map((row) => row.identity_key));
-      // Corrected results can also match an uncorrected term. Overfetch by
-      // at most the size of that band to fill the page after deduplication.
-      const partial = runMatch(partialQuery, request.limit - exact.length)
-        .filter((row) => !correctedKeys.has(row.identity_key))
-        .slice(0, request.limit - results.length);
-      results.push(...partial.map((row) => toResult(row, 0)));
-    }
-    return results;
+      const partialQuery = buildPartialThreadSearchFtsQuery(request.query);
+      if (partialQuery) {
+        const correctedKeys = new Set(corrected.map((row) => row.identity_key));
+        // Corrected results can also match an uncorrected term. Overfetch by
+        // at most the size of that band to fill the page after deduplication.
+        const partial = runMatch(partialQuery, request.limit - exact.length)
+          .filter((row) => !correctedKeys.has(row.identity_key))
+          .slice(0, request.limit - results.length);
+        results.push(...partial.map((row) => toResult(row, 2)));
+      }
+      return results;
+    })();
   }
 
   private rowToResult(
@@ -388,9 +394,9 @@ export class ThreadSearchStore implements ThreadSearchStorage {
       ...(row.git_branch ? { gitBranch: row.git_branch } : {}),
       ...(row.model ? { model: row.model } : {}),
       score,
-      confidence: threadIdMatch ? "high" : score > 0 ? "medium" : "low",
+      confidence: threadIdMatch ? "high" : score !== 0 ? "medium" : "low",
       matchReasons:
-        score > 0
+        score !== 0
           ? [
               threadIdMatch
                 ? { kind: "thread_id_match", field: "thread_id" }

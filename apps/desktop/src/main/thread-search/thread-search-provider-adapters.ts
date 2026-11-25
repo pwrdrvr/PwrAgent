@@ -76,7 +76,7 @@ export class ProviderTranscriptThreadSearchAdapter {
         }
         results.push({
           ...candidate,
-          score: candidate.score + 25,
+          score: Math.max(candidate.score, 0) + 25,
           confidence: candidate.confidence === "high" ? "high" : "medium",
           matchReasons: [
             ...candidate.matchReasons,
