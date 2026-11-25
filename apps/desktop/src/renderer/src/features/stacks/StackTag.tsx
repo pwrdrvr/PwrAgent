@@ -27,9 +27,10 @@ function StackPopover({ thread, pr, member, onOpen, close, focus, body, onResize
   const openRail = useContext(StackRailContext);
   const legacy = thread.stacks?.find(({ stack }) => stack.key === member.key)?.stack;
   // Any member of this stack that loaded it at the same revision supplies it.
+  // An older copy draws at once while it is read again.
   const cached = legacy ? undefined : readCachedStack(stackOwnerInstanceId(thread), member);
-  const details = useSelectedStackDetails({ thread, desktopApi: getDesktopApi(), enabled: !legacy && !cached, allowLegacyLookup: false });
-  const stack = legacy ?? cached ?? details.stacks?.find(({ key }) => key === member.key);
+  const details = useSelectedStackDetails({ thread, desktopApi: getDesktopApi(), enabled: !legacy && !cached?.fresh, allowLegacyLookup: false });
+  const stack = legacy ?? details.stacks?.find(({ key }) => key === member.key) ?? cached?.value;
   const loading = !stack && !details.error && !details.stacks && Boolean(getDesktopApi()?.getNavigationSelectedDetail);
 
   useLayoutEffect(() => {
@@ -190,7 +191,9 @@ export function StackTag({ thread, pr, member, onOpen }: StackTagProps) {
         onMouseEnter={(event) => {
           if (pinned.current) return;
           // Read during the hover delay so the popover opens with its rows.
-          if (!thread.stacks?.length) prefetchSelectedStacks(getDesktopApi()?.getNavigationSelectedDetail, thread);
+          if (!thread.stacks?.length && !readCachedStack(stackOwnerInstanceId(thread), member)?.fresh) {
+            prefetchSelectedStacks(getDesktopApi()?.getNavigationSelectedDetail, thread);
+          }
           if (sidebarPrCardBridge.enterTrigger(bridge.current)) tooltip.show(event.currentTarget, latest.current);
           else tooltip.showAfterDelay(event.currentTarget, () => latest.current);
         }}

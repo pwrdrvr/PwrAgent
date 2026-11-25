@@ -366,17 +366,77 @@ function parseRefs(output: string): Refs {
   }));
 }
 
-async function isAncestor(
-  cwd: string, ancestor: string | undefined, head: string | undefined, demand?: PrMetadataDemand,
-): Promise<boolean | undefined> {
-  if (!ancestor || !head || !SHA.test(ancestor) || !SHA.test(head)) return undefined;
-  if (ancestor === head) return true;
-  try {
-    await git(cwd, ["merge-base", "--is-ancestor", ancestor, head], demand);
-    return true;
-  } catch (error) {
-    return (error as { code?: number }).code === 1 ? false : undefined;
+const COMMIT_GRAPH_ANSWERS = 4_096;
+
+/**
+ * Whether one commit reaches another, and whether every patch of a range is
+ * already upstream, are fixed for a pair of commit ids. Only metadata that
+ * rewrites the graph can change them: a shallow boundary, grafts, or loose
+ * replace refs. Their state scopes a clone's answers, so a projection whose
+ * refs are unchanged spends no Git on its layers.
+ */
+class CommitGraphMemo {
+  private readonly answers = new Map<string, boolean>();
+
+  async scope(commonDir: string): Promise<string | undefined> {
+    const names = ["shallow", path.join("info", "grafts"), path.join("refs", "replace")];
+    try {
+      const stats = await Promise.all(names.map((name) => lstat(path.join(commonDir, name), { bigint: true })
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+          throw error;
+        })));
+      return JSON.stringify([commonDir, ...stats.map((stat) => stat && catalogVersion(stat))]);
+    } catch {
+      // Unknown graph metadata leaves this projection unmemoized.
+      return undefined;
+    }
   }
+
+  async answer(scope: string | undefined, question: readonly string[], ask: () => Promise<boolean | undefined>): Promise<boolean | undefined> {
+    const key = scope && JSON.stringify([scope, ...question]);
+    const known = key ? this.answers.get(key) : undefined;
+    if (known !== undefined) {
+      this.answers.delete(key!);
+      this.answers.set(key!, known);
+      return known;
+    }
+    // Failures, timeouts and cancellation are not facts about the graph.
+    const answer = await ask();
+    if (key && answer !== undefined) {
+      this.answers.set(key, answer);
+      if (this.answers.size > COMMIT_GRAPH_ANSWERS) this.answers.delete(this.answers.keys().next().value!);
+    }
+    return answer;
+  }
+}
+
+/** One clone's commit-graph questions within a projection. */
+type CommitGraph = {
+  isAncestor(ancestor: string | undefined, head: string | undefined): Promise<boolean | undefined>;
+  patchesUpstream(upstream: string, head: string): Promise<boolean | undefined>;
+};
+
+function commitGraph(cwd: string, memo: CommitGraphMemo, scope: string | undefined, demand?: PrMetadataDemand): CommitGraph {
+  return {
+    async isAncestor(ancestor, head) {
+      if (!ancestor || !head || !SHA.test(ancestor) || !SHA.test(head)) return undefined;
+      if (ancestor === head) return true;
+      return await memo.answer(scope, ["is-ancestor", ancestor, head], async () => {
+        try {
+          await git(cwd, ["merge-base", "--is-ancestor", ancestor, head], demand);
+          return true;
+        } catch (error) {
+          return (error as { code?: number }).code === 1 ? false : undefined;
+        }
+      });
+    },
+    async patchesUpstream(upstream, head) {
+      if (!SHA.test(upstream) || !SHA.test(head)) return undefined;
+      return await memo.answer(scope, ["cherry", upstream, head], async () =>
+        await git(cwd, ["cherry", upstream, head], demand).then((output) => !output.trim(), () => undefined));
+    },
+  };
 }
 
 function prRepository(pr: PrSummary): string {
@@ -446,14 +506,13 @@ function stackPullRequest(pr: PrSummary): StackLayerPullRequest {
 
 async function projectCatalogLayers(input: {
   stack: GhStack;
-  clone: Clone;
   refs: Refs;
   prs: readonly PrSummary[];
   worktrees: readonly StackWorktree[];
   threads: readonly StackThread[];
-  demand?: PrMetadataDemand;
+  graph: CommitGraph;
 }): Promise<StackLayer[]> {
-  const { stack, clone, refs, prs, worktrees, threads, demand } = input;
+  const { stack, refs, prs, worktrees, threads, graph } = input;
   const local = (branch: GhStackBranch) => refs.get(`refs/heads/${branch.branch}`);
   const byBranch = new Map<string, PrSummary[]>();
   for (const pr of prs) {
@@ -496,13 +555,12 @@ async function projectCatalogLayers(input: {
     const compareBase = branch.base === parentTip ? parentTip : undefined;
     const compareRemote = remoteHead !== branch.head && remoteHead !== pr?.headSha ? remoteHead : undefined;
     const trunkTip = local(stack.trunk)?.head;
-    const parentIntegrated = !retargeted && !parentPr && !parent.pullRequest && index > 0
-      && trunkTip && parentTip && SHA.test(trunkTip) && SHA.test(parentTip)
-      ? await git(clone.cwd, ["cherry", trunkTip, parentTip], demand).then((output) => !output.trim(), () => undefined)
+    const parentIntegrated = !retargeted && !parentPr && !parent.pullRequest && index > 0 && trunkTip && parentTip
+      ? await graph.patchesUpstream(trunkTip, parentTip)
       : undefined;
     const [baseIsAncestor, remoteIsAncestor] = await Promise.all([
-      isAncestor(clone.cwd, compareBase, localHead, demand),
-      isAncestor(clone.cwd, compareRemote, localHead, demand),
+      graph.isAncestor(compareBase, localHead),
+      graph.isAncestor(compareRemote, localHead),
     ]);
     return {
       branch: branch.branch, parent: parent.branch, role: binding.role,
@@ -526,7 +584,7 @@ function clonePrs(threads: readonly CloneThread[], knownPrs: readonly PrSummary[
 }
 
 async function projectClone(
-  clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[], demand?: PrMetadataDemand,
+  clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[], memo: CommitGraphMemo, demand?: PrMetadataDemand,
 ): Promise<{ stacks: StackSummary[]; worktrees: StackWorktree[]; observed: Map<string, PrSummary> }> {
   const catalog = clone.catalog.status === "ok" ? clone.catalog.catalog : undefined;
   const repositories = new Set(threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
@@ -551,10 +609,12 @@ async function projectClone(
     return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, prs, bindings, inferred }] : [];
   });
   if (!plans.length) return { stacks, worktrees: [], observed };
-  const [worktreeOutput, refOutput] = await Promise.all([
+  const [worktreeOutput, refOutput, graphScope] = await Promise.all([
     git(clone.cwd, ["worktree", "list", "--porcelain", "-z"], demand).catch(() => ""),
     git(clone.cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(upstream)", "refs/heads/", "refs/remotes/"], demand).catch(() => ""),
+    memo.scope(clone.commonDir),
   ]);
+  const graph = commitGraph(clone.cwd, memo, graphScope, demand);
   const worktrees = checkedOutWorktrees(worktreeOutput);
   const refs = parseRefs(refOutput);
   const cloneKey = createHash("sha256").update(clone.commonDir).digest("hex").slice(0, 24);
@@ -565,7 +625,7 @@ async function projectClone(
     for (const stack of catalogStacks) {
       if (!stack.branches.length) continue;
       const name = stack.branches[0]!.branch;
-      const layers = await projectCatalogLayers({ stack, clone, refs, prs, worktrees, threads: bindings, demand });
+      const layers = await projectCatalogLayers({ stack, refs, prs, worktrees, threads: bindings, graph });
       const identity = stack.id ?? name;
       const key = `${prefix}:catalog:${identity}`;
       stacks.push({
@@ -584,7 +644,7 @@ async function projectClone(
           health: binding.role === "ambiguous" ? "ambiguous"
             : pr.headSha && pr.baseSha && refs.get(`refs/heads/${branch}`)?.head === pr.headSha
               && (chain.find((parent) => parent.headRefName === pr.baseRefName)?.headSha ?? pr.baseSha) === pr.baseSha
-              && await isAncestor(clone.cwd, pr.baseSha, pr.headSha, demand) ? "in_sync" : "unknown",
+              && await graph.isAncestor(pr.baseSha, pr.headSha) ? "in_sync" : "unknown",
           pullRequest: stackPullRequest(pr),
           ...("thread" in binding ? { thread: { key: binding.thread.key, title: binding.thread.title } } : {}),
         };
@@ -632,6 +692,9 @@ export class StackReader {
   private readonly inventoryCheckouts = new Map<string, {
     version: string; checkout: Checkout | undefined; expiresAt: number;
   }>();
+
+  /** Lives as long as this reader, so every projection it makes shares the answers. */
+  private readonly commitGraph = new CommitGraphMemo();
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
@@ -942,7 +1005,7 @@ export class StackReader {
       return {
         catalog,
         ...await projectClone({ ...(validatedAny ? observation.projectionCheckout(checkout) : checkout), catalog },
-          cloneThreads.get(checkout.commonDir) ?? [], knownPrs, demand),
+          cloneThreads.get(checkout.commonDir) ?? [], knownPrs, this.commitGraph, demand),
       };
     }));
     if (directories && unavailablePaths.size && !unavailable.length) {

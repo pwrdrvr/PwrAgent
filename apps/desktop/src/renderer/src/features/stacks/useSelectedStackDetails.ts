@@ -20,9 +20,10 @@ export function useSelectedStackDetails({ thread, desktopApi, enabled = true, al
   const readLegacyRow = desktopApi?.getNavigationQueryPage;
   const needsLegacyLookup = Boolean(allowLegacyLookup && ownerInstanceId && thread?.stackMemberships?.length && !thread?.stacks?.length);
   const hasWorkspace = Boolean(thread?.linkedDirectories.length);
-  // A row another reader already loaded at the same revisions draws at once.
+  // A row another reader already loaded at the same revisions draws at once;
+  // an older copy is read again behind it.
   const cached = enabled && read && hasWorkspace ? readCachedSelectedStacks(thread, ownerInstanceId) : undefined;
-  const hasCached = Boolean(cached);
+  const fresh = cached?.fresh === true;
   // The read takes the row as rendered; `source` says when that changes.
   const threadRef = useRef(thread);
   useLayoutEffect(() => {
@@ -30,7 +31,7 @@ export function useSelectedStackDetails({ thread, desktopApi, enabled = true, al
   });
   useEffect(() => {
     const latestThread = threadRef.current;
-    if (!enabled || !read || !hasWorkspace || !backend || !threadId || !latestThread || hasCached) return;
+    if (!enabled || !read || !hasWorkspace || !backend || !threadId || !latestThread || fresh) return;
     let active = true;
     const ref = { backend, threadId, ownerInstanceId };
     const federationTarget = ownerInstanceId ? { scope: "remote" as const, instanceId: ownerInstanceId } : undefined;
@@ -56,8 +57,10 @@ export function useSelectedStackDetails({ thread, desktopApi, enabled = true, al
       setLoaded({ source, error: "Could not load stack details." });
     });
     return () => { active = false; };
-  }, [enabled, allowLegacyLookup, read, readLegacyRow, needsLegacyLookup, hasWorkspace, backend, threadId, ownerInstanceId, source, attempt, hasCached]);
-  const current = cached ? { stacks: cached, error: undefined } : loaded?.source === source ? loaded : undefined;
+  }, [enabled, allowLegacyLookup, read, readLegacyRow, needsLegacyLookup, hasWorkspace, backend, threadId, ownerInstanceId, source, attempt, fresh]);
+  const settled = loaded?.source === source ? loaded : undefined;
+  // A newer read wins; a failed re-read keeps the copy it was checking.
+  const current = settled?.stacks ? settled : cached ? { stacks: cached.value, error: undefined } : settled;
   return { stacks: current?.stacks, error: current?.error, retry: () => {
     setLoaded(undefined);
     setAttempt((value) => value + 1);

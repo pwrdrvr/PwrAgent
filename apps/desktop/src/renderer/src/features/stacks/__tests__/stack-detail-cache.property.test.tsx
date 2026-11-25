@@ -5,7 +5,7 @@ import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contra
 import { compactStackMembership, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PrChip } from "../../pr-status/PrChip";
-import { resetStackDetailCacheForTests } from "../stack-detail-cache";
+import { resetStackDetailCacheForTests, STACK_DETAIL_FRESH_MS, STACK_DETAIL_USABLE_MS } from "../stack-detail-cache";
 
 type Read = NonNullable<DesktopApi["getNavigationSelectedDetail"]>;
 
@@ -129,4 +129,47 @@ it("holds one row per layer while loading, so the popover does not grow when the
   await act(async () => { finish(); });
   expect(loadedRows()).toBe(3);
   expect(popover.querySelector("[data-placeholder]")).toBeNull();
+});
+
+it("draws an aging copy at once, reads it again behind it, and stops drawing it once it is too old", async () => {
+  const { prs, stack, thread } = fixture(3);
+  const read = installOwner(stack);
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const titles = (popover: HTMLElement) => [...popover.querySelectorAll(".stack-display__layer:not([data-placeholder]) .stack-display__title")]
+    .map((title) => title.textContent);
+  try {
+    const first = openStack(thread(1, "r1"), prs[0]!, false);
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+    first.view.unmount();
+
+    // Git moved with no new revision on the rows. Past the fresh window the
+    // copy still draws whole on the first frame, and is read again behind it.
+    now += STACK_DETAIL_FRESH_MS + 1;
+    stack.layers[2] = { ...stack.layers[2]!, branch: "ledger-3-rebased" };
+    const aging = openStack(thread(2, "r1"), prs[1]!, false);
+    expect(titles(aging.popover)).toEqual(["ledger-3", "Ledger change 2", "ledger-1"]);
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(titles(aging.popover)).toEqual(["ledger-3-rebased", "Ledger change 2", "ledger-1"]);
+    aging.view.unmount();
+
+    // That read is fresh for every member of the stack.
+    const fresh = openStack(thread(3, "r1"), prs[2]!, false);
+    expect(titles(fresh.popover)).toEqual(["Ledger change 3", "ledger-2", "ledger-1"]);
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(2);
+    fresh.view.unmount();
+
+    // Too old to draw at all.
+    now += STACK_DETAIL_USABLE_MS + 1;
+    const expired = openStack(thread(1, "r1"), prs[0]!, false);
+    expect(expired.loadedRows()).toBe(0);
+    await act(async () => {});
+    expect(expired.loadedRows()).toBe(3);
+    expect(read).toHaveBeenCalledTimes(3);
+  } finally {
+    clock.mockRestore();
+  }
 });

@@ -8,12 +8,31 @@ export type SelectedStacksResult = { stacks: StackSummary[]; error?: undefined }
 
 const RESULT_LIMIT = 32;
 const STACK_LIMIT = 64;
-/** A preview can omit memberships, so a result keyed by it also ages out. */
-const RESULT_TTL_MS = 120_000;
+/**
+ * A copy this young draws with no read. The owner answers a detail read from
+ * its newest projection for the same 15 seconds, so asking sooner could only
+ * return the same stack.
+ */
+export const STACK_DETAIL_FRESH_MS = 15_000;
+/**
+ * An older copy still draws at once, so the popover keeps its size, and is
+ * read again behind it. Git can move with no event, so the copy cannot stand
+ * in for a read forever; past this age it is not drawn at all.
+ */
+export const STACK_DETAIL_USABLE_MS = 10 * 60_000;
 
-const results = new Map<string, { stacks: StackSummary[]; at: number }>();
+export type CachedStacks<T> = { value: T; fresh: boolean };
+type Entry<T> = { value: T; at: number };
+
+const results = new Map<string, Entry<StackSummary[]>>();
 const pending = new Map<string, Promise<SelectedStacksResult>>();
-const stacksByRevision = new Map<string, StackSummary>();
+const stacksByRevision = new Map<string, Entry<StackSummary>>();
+
+function readEntry<T>(entry: Entry<T> | undefined, now: number): CachedStacks<T> | undefined {
+  const age = entry ? now - entry.at : Infinity;
+  if (!entry || age < 0 || age > STACK_DETAIL_USABLE_MS) return undefined;
+  return { value: entry.value, fresh: age <= STACK_DETAIL_FRESH_MS };
+}
 
 export function stackOwnerInstanceId(thread: NavigationThreadSummary | undefined): string | undefined {
   const target = thread?.federation?.ref.target ?? readRendererFederationTarget();
@@ -47,16 +66,17 @@ function remember<V>(map: Map<string, V>, key: string, value: V, limit: number):
   while (map.size > limit) map.delete(map.keys().next().value!);
 }
 
-/** One stack exactly as its owner last sent it at this membership's revision. */
-export function readCachedStack(ownerInstanceId: string | undefined, member: CompactStackMembership): StackSummary | undefined {
-  return member.detailRevision ? stacksByRevision.get(stackKey(ownerInstanceId, member.key, member.detailRevision)) : undefined;
+/** One stack as its owner last sent it for this membership's revision. */
+export function readCachedStack(ownerInstanceId: string | undefined, member: CompactStackMembership,
+  now = Date.now()): CachedStacks<StackSummary> | undefined {
+  if (!member.detailRevision) return undefined;
+  return readEntry(stacksByRevision.get(stackKey(ownerInstanceId, member.key, member.detailRevision)), now);
 }
 
 export function readCachedSelectedStacks(thread: NavigationThreadSummary | undefined, ownerInstanceId: string | undefined,
-  now = Date.now()): StackSummary[] | undefined {
+  now = Date.now()): CachedStacks<StackSummary[]> | undefined {
   if (!cacheable(thread)) return undefined;
-  const entry = results.get(selectedStackSource(thread, ownerInstanceId));
-  return entry && now - entry.at < RESULT_TTL_MS ? entry.stacks : undefined;
+  return readEntry(results.get(selectedStackSource(thread, ownerInstanceId)), now);
 }
 
 async function readAllStackLayers(read: ReadSelectedDetail, thread: NavigationThreadSummary,
@@ -115,10 +135,11 @@ export function loadSelectedStacks(read: ReadSelectedDetail, thread: NavigationT
   const memberships = thread.stackMemberships ?? [];
   const promise = readAllStackLayers(read, thread, ownerInstanceId).then((result) => {
     if (result.stacks) {
-      remember(results, source, { stacks: result.stacks, at: Date.now() }, RESULT_LIMIT);
+      const at = Date.now();
+      remember(results, source, { value: result.stacks, at }, RESULT_LIMIT);
       for (const stack of result.stacks) {
         const revision = memberships.find(({ key }) => key === stack.key)?.detailRevision;
-        if (revision) remember(stacksByRevision, stackKey(ownerInstanceId, stack.key, revision), stack, STACK_LIMIT);
+        if (revision) remember(stacksByRevision, stackKey(ownerInstanceId, stack.key, revision), { value: stack, at }, STACK_LIMIT);
       }
     }
     return result;
@@ -133,7 +154,7 @@ export function loadSelectedStacks(read: ReadSelectedDetail, thread: NavigationT
 export function prefetchSelectedStacks(read: ReadSelectedDetail | undefined, thread: NavigationThreadSummary): void {
   const ownerInstanceId = stackOwnerInstanceId(thread);
   if (!read || !thread.linkedDirectories.length || !cacheable(thread)
-    || readCachedSelectedStacks(thread, ownerInstanceId)) return;
+    || readCachedSelectedStacks(thread, ownerInstanceId)?.fresh) return;
   void loadSelectedStacks(read, thread, ownerInstanceId).catch(() => undefined);
 }
 
