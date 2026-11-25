@@ -4270,6 +4270,34 @@ describe("DesktopBackendRegistry", () => {
       },
     ]);
     expect(cancelledSessions).toEqual(["session-1"]);
+    // Oracle: the prompt the owner dispatched, which is what its replay
+    // records as `user:<turnId>`. ACP agents report no user item for it, so
+    // without this copy a window holding no pending copy of the send drew the
+    // turn's replies under no prompt until it reloaded.
+    for (const started of startedPrompts) {
+      const methods = emittedEvents
+        .filter((event) => (event.notification.params as { turnId?: unknown }).turnId === started.turnId)
+        .map((event) => event.notification.method);
+      expect(methods).toContain("turn/started");
+      expect(methods.indexOf("item/completed")).toBeGreaterThan(methods.indexOf("turn/started"));
+      expect(emittedEvents).toContainEqual(expect.objectContaining({
+        backend: acpBackendId,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "session-1",
+            turnId: started.turnId,
+            item: {
+              id: `user:${started.turnId}`,
+              type: "userMessage",
+              text: started.prompt,
+              content: started.parts,
+              createdAt: expect.any(Number),
+            },
+          },
+        },
+      }));
+    }
     await waitForCondition(() =>
       emittedEvents.some((event) => event.notification.method === "thread/name/updated"),
     );

@@ -1406,6 +1406,8 @@ describe("AcpBackendAdapter", () => {
               id: "user:turn-1:steer:agy-steer-1",
               type: "userMessage",
               text: "Say PINEAPPLE",
+              // Joins the running turn; it must not stand in for its prompt.
+              steered: true,
               content: [{ type: "text", text: "Say PINEAPPLE" }],
             },
           },
