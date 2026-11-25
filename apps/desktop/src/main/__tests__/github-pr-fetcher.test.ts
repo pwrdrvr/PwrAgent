@@ -1136,6 +1136,7 @@ describe("a merge GitHub answers with a 5xx", () => {
     const fetchPullRequests = vi.fn(async (): Promise<PrSummary[]> => {
       if (state === "unreadable") throw new Error("GitHub GraphQL request failed: 502");
       if (state === "unanswered") return [];
+      if (state === "hung") return await new Promise<PrSummary[]>(() => {});
       return [{ lifecycleState: state === "MERGED" ? "merged" : "open" } as PrSummary];
     });
     return new GithubPrFetcher({
@@ -1161,7 +1162,7 @@ describe("a merge GitHub answers with a 5xx", () => {
         expect(message).not.toMatch(/[<>]|body:|\\r\\n/);
         // The merge can still land after the read, so the card never says it failed.
         expect(message).not.toMatch(/did not merge/);
-        expect(message).toMatch(state === "OPEN" ? /had not merged when checked/ : /could not be read/);
+        expect(message).toMatch(state === "OPEN" ? /had not merged when checked/ : /could not be checked/);
       }
       expect(merges).toHaveLength(1);
     }), { numRuns: 60 });
@@ -1175,9 +1176,29 @@ describe("a merge GitHub answers with a 5xx", () => {
       if (state === "MERGED") {
         await expect(merge).resolves.toMatchObject({ mergedUrl: url });
       } else {
-        await expect(merge).rejects.toThrow(state === "OPEN" ? /within 60 seconds, and it had not merged/ : /within 60 seconds, and its state could not be read/);
+        await expect(merge).rejects.toThrow(state === "OPEN" ? /within 60 seconds, and it had not merged/ : /within 60 seconds, and its state could not be checked/);
       }
     }), { numRuns: 10 });
+  });
+
+  it("reports the failure once the state read passes its deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const merges: string[][] = [];
+      const merge = fetcherFor("non-200 OK status code: 502 Bad Gateway", "hung", merges)
+        .mergePullRequest({ pullRequest: url, method: "squash" })
+        .then(() => "", (error: Error) => error.message);
+      await vi.advanceTimersByTimeAsync(14_999);
+      let settled = false;
+      void merge.then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await merge).toBe("GitHub returned 502 Bad Gateway while merging #3631, and its state could not be checked."
+        + " Retry the merge: one that went through reports as already merged.");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps a refusal's reason but not an HTML body gh attached", async () => {

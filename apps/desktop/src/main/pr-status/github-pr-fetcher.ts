@@ -114,6 +114,27 @@ export function ghFailureLine(detail: string): string {
   const serverError = ghServerErrorStatus(line);
   return serverError ? `GitHub returned ${serverError}, which is usually temporary` : line;
 }
+
+/**
+ * What a failed gh run reports. A gh killed at its time limit has no stderr,
+ * and its message starts with the whole command line, query and all.
+ */
+function ghErrorDetail(error: unknown): string {
+  const err = error as { stderr?: string; message?: string; killed?: boolean };
+  return err.stderr?.trim() || (err.killed ? "gh did not answer in time" : err.message || String(error));
+}
+
+/** How long the one state read after an unsettled merge may take. */
+const UNSETTLED_MERGE_READ_MS = 15_000;
+
+async function withinDeadline<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms); })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
 
 /** Default re-probe cadence for `gh --version`. */
@@ -375,18 +396,21 @@ export class GithubPrFetcher {
       if (unsettled) {
         // One read through the client PR status polls with; no other route.
         const ref = parsePrRefFromUrl(reference.url);
+        // The client retries with backoff, so bound the read: a degraded
+        // GitHub must not hold the card after the merge already failed.
         const state = ref
-          ? await this.graphqlClient.fetchPullRequests([ref]).then(([pr]) => pr?.lifecycleState, (readError: unknown) => {
-            fetcherLog.warn("could not read a pull request's state after an unsettled merge", {
-              pullRequest: reference.url, error: readError instanceof Error ? readError.message : String(readError),
-            });
-            return undefined;
-          })
+          ? await withinDeadline(this.graphqlClient.fetchPullRequests([ref]), UNSETTLED_MERGE_READ_MS)
+            .then((prs) => prs?.[0]?.lifecycleState, (readError: unknown) => {
+              fetcherLog.warn("could not read a pull request's state after an unsettled merge", {
+                pullRequest: reference.url, error: readError instanceof Error ? readError.message : String(readError),
+              });
+              return undefined;
+            })
           : undefined;
         if (state === "merged") return mergedResult(reference.url, params);
         throw new Error(state
           ? `${unsettled}, and it had not merged when checked. Retry the merge: one that has since landed reports as already merged.`
-          : `${unsettled}, and its state could not be read. Retry the merge: one that went through reports as already merged.`, { cause: error });
+          : `${unsettled}, and its state could not be checked. Retry the merge: one that went through reports as already merged.`, { cause: error });
       }
       throw new Error(`gh pr merge failed: ${firstLine}${mergeScopeHint(firstLine)}`, { cause: error });
     }
@@ -431,8 +455,7 @@ export class GithubPrFetcher {
         if (parsed.errors?.length) throw new Error("GitHub returned partial stack history.");
         return parsed.data;
       } catch (error) {
-        const detail = (error as { stderr?: string }).stderr?.trim() || String(error);
-        throw new Error(ghFailureLine(detail), { cause: error });
+        throw new Error(ghFailureLine(ghErrorDetail(error)), { cause: error });
       }
     });
   }
@@ -454,8 +477,7 @@ export class GithubPrFetcher {
         const result = await run(["api", "graphql", ...host, "-f", `query=${query}`, ...fields]);
         return (JSON.parse(result.stdout) as { data?: unknown }).data;
       } catch (error) {
-        const err = error as { stderr?: string; message?: string };
-        const detail = ghFailureLine(err.stderr?.trim() || err.message || String(error));
+        const detail = ghFailureLine(ghErrorDetail(error));
         throw new Error(`gh api graphql failed: ${detail}${mergeScopeHint(detail)}`, { cause: error });
       }
     };

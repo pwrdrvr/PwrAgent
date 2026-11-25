@@ -567,6 +567,32 @@ describe("merge_pull_request and merge queues", () => {
     }), { numRuns: 16 });
   });
 
+  it.each([
+    ["a 5xx, without the page gh attached", Object.assign(new Error("exit 1"), {
+      stderr: "non-200 OK status code: 502 Bad Gateway body: \"<html>\\r\\n<center>nginx</center>\\r\\n</html>\\r\\n\"\n",
+    }), "GitHub returned 502 Bad Gateway, which is usually temporary"],
+    ["a gh it had to kill, without its command line", Object.assign(
+      new Error("Command failed: /fixture/gh api graphql --hostname github.com -f query=query PwrAgentStackHistory {"),
+      { killed: true, signal: "SIGTERM", stderr: "" },
+    ), "gh did not answer in time"],
+  ])("names %s on the stack check", async (_case, failure, message) => {
+    seenRepository(false);
+    const ran: string[][] = [];
+    const fetcher = new GithubPrFetcher({
+      graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+      discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+      runGhCommand: async (_command, args) => {
+        ran.push(args);
+        if (args[0] === "api" && args[1] === "graphql") throw failure;
+        if (args[0] === "api") return { stdout: JSON.stringify(trunkTarget) };
+        return { stdout: "" };
+      },
+    });
+    await expect(fetcher.mergePullRequest({ pullRequest: "https://github.com/fixture/project/pull/3631", method: "squash", checkStackOrder: true }))
+      .rejects.toThrow(new RegExp(`^${message}$`));
+    expect(ran.some((args) => args[0] === "pr" && args[1] === "merge")).toBe(false);
+  });
+
   it("merges with gh, as before, when a to-do card's queue read fails", async () => {
     seenRepository(true);
     const ran: string[][] = [];
