@@ -1859,6 +1859,37 @@ describe("TranscriptList", () => {
       .toBeInTheDocument();
   });
 
+  it("draws pipe rows that end an assistant reply as a table, last row included", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-trailing-pipe-rows",
+            role: "assistant",
+            text: [
+              "Sweep finished. Results:",
+              "Repos | requests | peak",
+              "1 | 6→1 | 3→1",
+              "20 | 120→2 | 3→1",
+              "200 | 1,200→5 | 3→1",
+            ].join("\n"),
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const table = container.querySelector("table");
+    expect(table).toBeInTheDocument();
+    expect(
+      [...table!.querySelectorAll("tbody tr")].map((row) => row.firstElementChild?.textContent),
+    ).toEqual(["1", "20", "200"]);
+    expect(table).not.toHaveTextContent("Sweep finished");
+  });
+
   it("keeps a trailing heading and separators with its wide table split block", async () => {
     const copyText = vi.fn(async () => undefined);
     const tableBlock = `## Quick matrix

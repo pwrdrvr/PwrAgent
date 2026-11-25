@@ -95,6 +95,28 @@ describe("inferPipeTables", () => {
     }));
   });
 
+  // Agent replies often end on the table. Its last row is still a row, however
+  // the message ends: no newline, a newline, a blank line, trailing spaces, or
+  // Windows line endings throughout.
+  it("keeps every row of a table that ends the message", () => {
+    fc.assert(fc.property(
+      prose,
+      pipeRows,
+      fc.constantFrom("", "\n", "\n\n", " ", "  \n"),
+      fc.boolean(),
+      (before, { rows, outerPipe }, ending, crlf) => {
+        const body = [before, ...rows.map((row) => pipeLine(row, outerPipe))].join("\n") + ending;
+        const markdown = crlf ? body.replace(/\n/g, "\r\n") : body;
+        const html = render(inferPipeTables(markdown));
+
+        expect(html.match(/<table>/g) ?? []).toHaveLength(1);
+        expect(tableCells(html, "th")).toEqual(rows[0]);
+        expect(tableCells(html, "td")).toEqual(rows.slice(1).flat());
+        expect(html.endsWith("</table>")).toBe(true);
+      },
+    ));
+  });
+
   // The delimiter row is ours, not the author's, so it must never reach the
   // reader as text. Under a list item an unindented delimiter is a lazy line,
   // which GFM won't start a table from.
