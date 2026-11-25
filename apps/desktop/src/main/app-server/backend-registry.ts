@@ -11961,6 +11961,7 @@ export class DesktopBackendRegistry {
       let preparedPdfInput!: Awaited<ReturnType<typeof preparePdfTurnInput>>;
       let userInput!: AppServerTurnInputItem[];
       let input!: AppServerTurnInputItem[];
+      let promptContext: string | undefined;
       return await this.threadStarts.startAcp({
         reserve: () => {
           if (this.threadHasActiveTurn(params.threadId, params.backend)) {
@@ -12036,7 +12037,10 @@ export class DesktopBackendRegistry {
           threadId: result.threadId,
           input: userInput,
         }),
-        bindContext: (context, result) => this.bindPendingThreadMessageContext(context, result.turnId),
+        bindContext: (context, result) => {
+          this.bindPendingThreadMessageContext(context, result.turnId);
+          promptContext = context;
+        },
         persistOrigin: (origin) => this.persistStartingTurnOrigin(origin),
         retainAttachments: (result) => this.rememberTurnInputAttachments({
           backend: params.backend,
@@ -12044,7 +12048,13 @@ export class DesktopBackendRegistry {
           turnId: result.turnId,
           input: userInput,
         }),
-        forgetContext: (context) => this.forgetPendingThreadMessageContext(context),
+        // An accepted turn's prompt item claims its bound context, as every
+        // other user item does. That item can reach the message-context stage
+        // after this start returns, behind image work already in flight on
+        // the thread, so only a start that bound no turn forgets it here.
+        forgetContext: (context) => {
+          if (context !== promptContext) this.forgetPendingThreadMessageContext(context);
+        },
         disposeOrigin: (origin) => this.dropStartingTurnOrigin(origin),
         release: () => { this.reservedAcpStartThreadKeys.delete(reservationKey); },
         failed: (stage, error, turn) => backendRegistryLog.warn("acp_turn_start_finalization_failed", {
@@ -12538,6 +12548,16 @@ export class DesktopBackendRegistry {
       const bound = candidates.find((pending) => pending.messageId === params.messageId);
       if (bound) {
         return bound;
+      }
+      // An ACP turn's prompt item claims its start's context by turn, not by
+      // text: the prompt the agent receives can carry more than the operator's
+      // words, such as review context or several text parts. A thread starts
+      // one ACP turn at a time, so an unbound start context is this turn's.
+      if (params.turnId && params.messageId === buildTurnUserMessageOriginId(params.turnId)) {
+        const start = candidates.find((pending) => pending.turnStartWritesPromptOrigin);
+        if (start) {
+          return start;
+        }
       }
       // Turn identity alone is not message identity. Codex can deliver several
       // user items in a turn, including operator steers with no pending origin.

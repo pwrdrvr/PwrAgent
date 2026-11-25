@@ -1,7 +1,8 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
+import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -28,7 +29,9 @@ const registries: DesktopBackendRegistry[] = [];
 const transports: HeldPromptTransport[] = [];
 const databases: StateDb[] = [];
 const roots: string[] = [];
-afterEach(async () => {
+afterEach(cleanUp);
+
+async function cleanUp() {
   // A failed assertion leaves the prompt held; release it so close() ends
   // the turn instead of waiting out its shutdown timeout.
   for (const transport of transports.splice(0)) transport.finishTurns();
@@ -36,7 +39,7 @@ afterEach(async () => {
   for (const db of databases.splice(0)) db.close();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   vi.unstubAllEnvs();
-});
+}
 
 /** An ACP agent whose prompt stays open until the test ends the turn. */
 class HeldPromptTransport extends FakeAcpAgentTransport {
@@ -100,7 +103,7 @@ async function createFixture() {
     if (published) resolve(published);
     else waiters.push({ matches, resolve });
   });
-  return { root, registry, overlayStore, promptItem };
+  return { root, registry, overlayStore, promptItem, onEvent: (listener: (event: AgentEvent) => void) => registry.onEvent(listener) };
 }
 
 it("writes a messaging turn's prompt origin once", async () => {
@@ -136,4 +139,54 @@ it("writes a messaging turn's prompt origin once", async () => {
     scenario: "acp-messaging-turn-start",
     writes,
   });
+});
+
+it("gives every ACP prompt item its turn's origin and leaves no context behind", async () => {
+  // Rule: the prompt item of an ACP turn carries the origin it was sent with
+  // and claims the context its start registered, however late its delivery
+  // reaches the message-context stage and whatever the agent's prompt adds
+  // to the operator's words.
+  //
+  // Live items on a thread are delivered in order behind any image work in
+  // flight, so a reply whose images are still loading when the prompt is
+  // dispatched holds the prompt item back until after the start returns.
+  // An attached file adds its reference to the agent's prompt, so the
+  // prompt's text differs from the operator's words the context records.
+  await fc.assert(fc.asyncProperty(
+    fc.array(fc.constantFrom("ship the release notes", "then tag it", "and post the link"), { minLength: 1, maxLength: 3 }),
+    fc.boolean(),
+    fc.boolean(),
+    async (texts, attachFile, imageWorkInFlight) => {
+      const { root, registry, promptItem, onEvent } = await createFixture();
+      const { threadId } = await registry.startThread({ backend: ACP, cwd: root });
+      const notes = path.join(root, "notes.txt");
+      if (attachFile) await writeFile(notes, "release notes\n");
+      const imageWork = Promise.withResolvers<void>();
+      const internals = registry as unknown as {
+        transcriptImageWork: Map<string, Promise<void>>;
+        pendingThreadMessageContexts: Map<string, { threadId: string }>;
+      };
+      onEvent((event) => {
+        // The reply's images start loading once the turn is under way.
+        if (imageWorkInFlight && event.notification.method === "turn/started") {
+          internals.transcriptImageWork.set(`${ACP}:${threadId}`, imageWork.promise);
+        }
+      });
+
+      const started = await registry.startTurn({
+        backend: ACP, threadId, messageOrigin: { kind: "messaging" },
+        input: [
+          ...texts.map((text) => ({ type: "text" as const, text })),
+          ...(attachFile ? [{ type: "localFile" as const, path: notes, name: "notes.txt" }] : []),
+        ],
+      });
+      imageWork.resolve();
+      const event = await promptItem(started.turnId);
+
+      expect((event.notification.params as { item: { origin?: unknown } }).item.origin).toEqual({ kind: "messaging" });
+      expect([...internals.pendingThreadMessageContexts.values()]
+        .filter((pending) => pending.threadId === threadId)).toEqual([]);
+      await cleanUp();
+    },
+  ), { numRuns: 12 });
 });
