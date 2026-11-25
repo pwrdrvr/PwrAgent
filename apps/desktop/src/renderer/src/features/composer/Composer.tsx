@@ -612,7 +612,7 @@ export type ComposerProps = {
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
-  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   pendingRequestActive?: boolean;
   pendingUserInputActive?: boolean;
@@ -7232,6 +7232,8 @@ function useComposerController(props: ComposerProps) {
     };
   }, [activeAutocompleteIndex, autocompleteKind]);
 
+  const onEnsureSkillsLoaded = props.onEnsureSkillsLoaded;
+  const isSlashSkillPicker = !trigger && Boolean(slashTrigger);
   const skillPickerLoadKey = trigger
     ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:skills:${trigger.start}`
     : slashTrigger
@@ -7243,15 +7245,16 @@ function useComposerController(props: ComposerProps) {
       loadedSkillPickerRef.current = undefined;
       return;
     }
-    if (!props.onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
+    if (!onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
       return;
     }
     // Query edits and streamed thread summaries can replace the callback.
     // Check freshness once per trigger opening, including an empty list.
     loadedSkillPickerRef.current = skillPickerLoadKey;
-    void props.onEnsureSkillsLoaded?.();
+    void onEnsureSkillsLoaded(isSlashSkillPicker ? { includeCommands: true } : undefined);
   }, [
-    props.onEnsureSkillsLoaded,
+    onEnsureSkillsLoaded,
+    isSlashSkillPicker,
     skillPickerLoadKey,
   ]);
 

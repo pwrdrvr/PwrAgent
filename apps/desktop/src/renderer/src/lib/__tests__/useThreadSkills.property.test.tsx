@@ -268,3 +268,72 @@ describe("skill picker catalog freshness", () => {
     ), { numRuns: 25 });
   });
 });
+
+async function checkAntigravityCommandOrdering(commandsArriveFirst: boolean) {
+  const thread: NavigationThreadSummary = {
+    id: "agy-session", source: "acp:antigravity", title: "Garden release", titleSource: "explicit",
+    linkedDirectories: [{ id: "repo", path: "/repo", label: "Repo", kind: "local" }],
+  };
+  const skill = { name: "release", path: "/repo/.agents/skills/release/SKILL.md" };
+  const response = { backend: "acp:antigravity" as const, fetchedAt: 1, data: [{ skills: [skill] }] };
+  let finish!: (value: typeof response) => void;
+  const pending = new Promise<typeof response>((resolve) => { finish = resolve; });
+  let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+  const { result, unmount } = renderHook(() => useThreadSkills({
+    thread,
+    desktopApi: {
+      listSkills: () => pending,
+      onAgentEvent: (listener) => {
+        emit = listener;
+        return () => {};
+      },
+    },
+  }));
+  try {
+    const commands = [{ name: "compact" }];
+    const advertise = () => emit({
+      backend: "acp:antigravity",
+      notification: {
+        method: "thread/availableCommands/updated",
+        params: { threadId: thread.id, commands },
+      },
+    });
+    let request!: Promise<void>;
+    await act(async () => { request = result.current.ensureLoaded(); });
+    if (commandsArriveFirst) await act(async () => { advertise(); });
+    await act(async () => { finish(response); await request; });
+    if (!commandsArriveFirst) await act(async () => { advertise(); });
+    expect(result.current.skills).toEqual([expect.objectContaining(skill)]);
+    expect(result.current.providerCommands).toEqual(commands);
+  } finally {
+    unmount();
+  }
+}
+
+it("keeps the filesystem catalog when an Antigravity command update arrives afterward", async () => {
+  await checkAntigravityCommandOrdering(false);
+});
+
+it("keeps both Antigravity catalogs regardless of command update and filesystem response order", async () => {
+  await fc.assert(fc.asyncProperty(fc.boolean(), checkAntigravityCommandOrdering), { numRuns: 8 });
+});
+
+it("loads Antigravity skills while an unopened launchpad's slash-command probe is pending", async () => {
+  const draft = { ...launchpad(0, false), backend: "acp:antigravity" as const };
+  const skill = { name: "prepare", path: "/project-0/.agents/skills/prepare/SKILL.md" };
+  const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>((request) =>
+    request?.catalog === "commands"
+      ? new Promise(() => {})
+      : Promise.resolve({ backend: draft.backend, fetchedAt: 1, data: [{ skills: [skill] }] }));
+  const { result, unmount } = renderHook(() => useThreadSkills({
+    desktopApi: { listSkills }, launchpad: draft,
+  }));
+  try {
+    await act(async () => { void result.current.ensureLoaded({ includeCommands: true }); });
+    expect(listSkills.mock.calls.map(([request]) => request?.catalog)).toEqual(["skills", "commands"]);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.skills).toEqual([expect.objectContaining(skill)]);
+  } finally {
+    unmount();
+  }
+});

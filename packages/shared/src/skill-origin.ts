@@ -113,6 +113,8 @@ function classifySkillOriginCore(
       return { kind: "built-in", label: "Built-in" };
     case "admin":
       return { kind: "admin", label: "Admin" };
+    case "antigravity-user":
+      return { kind: "personal", label: "Personal" };
     case "user": {
       const normalizedSkillPath = normalizeTrimmedPath(skillPath);
       // PwrAgent hands Codex its own bundled skill folder, which Codex lists

@@ -1551,6 +1551,7 @@ class DesktopAppServerService {
         .remoteBackend(request.federationTarget)
         .listSkills({
           backend: request.backend,
+          catalog: request.catalog,
           cwd: request.cwd,
           cwds: request.cwds,
           threadId: request.threadId,
@@ -1560,6 +1561,7 @@ class DesktopAppServerService {
     const backend = request.backend ?? "codex";
     const response = await getDesktopBackendRegistry().listSkills({
       backend,
+      catalog: request.catalog,
       cwd: request.cwd,
       cwds: request.cwds,
       threadId: request.threadId,

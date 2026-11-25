@@ -1,3 +1,4 @@
+import { discoverAntigravitySkills } from "../acp/antigravity-skills";
 import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import { isResourceCheckoutCleanupCall, type CheckoutToolHandler, type CheckoutToolMode } from "../agent-tools/pwragent-resource-checkout-agent-tools";
@@ -231,6 +232,7 @@ import {
   type ArchiveWorktreeResponse,
   type ArchiveThreadRequest,
   type ArchiveThreadResponse,
+  type AppServerListSkillsRequest,
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingThreadStart,
@@ -5889,6 +5891,7 @@ export class DesktopBackendRegistry {
 
   async listSkills(params: {
     backend?: AppServerBackendKind;
+    catalog?: AppServerListSkillsRequest["catalog"];
     cwd?: string;
     cwds?: string[];
     threadId?: string;
@@ -5898,20 +5901,26 @@ export class DesktopBackendRegistry {
       const session = params.threadId
         ? this.acpBackend.getSession(backend, params.threadId)
         : undefined;
-      const sessionCommands = session?.availableCommands ?? [];
-      if (sessionCommands.length > 0) {
-        return { data: [{ commands: sessionCommands, skills: [] }] };
+      const cwds = [session?.cwd, params.cwd, ...(params.cwds ?? [])];
+      const readCommands = async () => session?.availableCommands?.length
+        ? session.availableCommands
+        : await this.resolveAcpAvailableCommands({ backend, cwds });
+
+      if (backend !== "acp:antigravity" || params.catalog === "commands") {
+        return { data: [{ commands: await readCommands(), skills: [] }] };
       }
 
-      // No live session has reported commands for this request — either it is a
-      // launchpad draft (no thread id at all) or a session that has not yet
-      // advertised. Fall back to what the repo last told us, and probe for it
-      // when we have never seen this repo/agent pair.
-      const commands = await this.resolveAcpAvailableCommands({
-        backend,
-        cwds: [session?.cwd, params.cwd, ...(params.cwds ?? [])],
-      });
-      return { data: [{ commands, skills: [] }] };
+      // Use the worktree itself for skills. The slash-command cache uses the
+      // common repository and can cost an ACP startup on a miss.
+      const workspaces = [...new Set(cwds.flatMap((cwd) => cwd?.trim() ? [path.resolve(cwd)] : []))];
+      const [commands, data] = await Promise.all([
+        params.catalog === "skills" ? undefined : readCommands(),
+        Promise.all((workspaces.length > 0 ? workspaces : [undefined]).map(async (cwd) => ({
+          cwd,
+          skills: await discoverAntigravitySkills(cwd),
+        }))),
+      ]);
+      return { data: commands ? [{ commands, skills: [] }, ...data] : data };
     }
 
     if (backend === "claude") {

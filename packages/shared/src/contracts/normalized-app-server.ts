@@ -2115,6 +2115,8 @@ export type PersistThreadUsageActivityResponse = {
 
 export type AppServerListSkillsRequest = {
   backend?: AppServerBackendKind;
+  /** Antigravity can read either catalog independently. Omit for both. */
+  catalog?: "skills" | "commands";
   cwd?: string;
   cwds?: string[];
   federationTarget?: FederationTarget;

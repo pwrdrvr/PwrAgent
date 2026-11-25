@@ -7958,6 +7958,7 @@ function localBackendOperations(): FederationBackendOperations {
       const backend = request.backend ?? "codex";
       const response = await getDesktopBackendRegistry().listSkills({
         backend,
+        catalog: request.catalog,
         cwd: request.cwd,
         cwds: request.cwds,
         threadId: request.threadId,
