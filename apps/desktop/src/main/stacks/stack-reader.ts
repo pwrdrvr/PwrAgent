@@ -18,6 +18,7 @@ type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 
 const CATALOG_BYTES = 1024 * 1024;
 const MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS = 16;
+const MAX_INVENTORY_CHECKOUTS = 2_048;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 type CatalogObservation = { catalog: CatalogRead; version?: string };
@@ -154,6 +155,7 @@ export class StackReadObservation {
   private readonly worktreeInventories = new Map<string, RegisteredWorktrees>();
   private readonly checkoutWitnesses = new Map<string, string>();
   private backgroundTtlRevalidations = 0;
+  private readonly reservedTtlRevalidations = new Set<string>();
 
   constructor(readonly demand: PrMetadataDemand = {}) {
     // A selected request can promote the explicit checkout without putting
@@ -165,11 +167,16 @@ export class StackReadObservation {
     this.hints = createStackCheckoutHints(this.inventoryDemand);
   }
 
-  /** Cap synchronous TTL revalidations in one background navigation pass so a
-   * simultaneous 30s expiry across hundreds of directories rotates smoothly
-   * instead of launching a blocking subprocess storm. */
-  claimBackgroundTtlRevalidation(limit = MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS): boolean {
-    if (this.backgroundTtlRevalidations >= limit) return false;
+  reserveBackgroundTtlRevalidation(cwd: string, limit: number): boolean {
+    if (this.backgroundTtlRevalidations + this.reservedTtlRevalidations.size >= limit) return false;
+    this.reservedTtlRevalidations.add(cwd);
+    return true;
+  }
+
+  /** Cap synchronous TTL revalidations in one background navigation pass. */
+  claimBackgroundTtlRevalidation(cwd: string, limit: number): boolean {
+    if (!this.reservedTtlRevalidations.delete(cwd)
+      && this.backgroundTtlRevalidations + this.reservedTtlRevalidations.size >= limit) return false;
     this.backgroundTtlRevalidations += 1;
     return true;
   }
@@ -728,6 +735,7 @@ export class StackReader {
   private readonly inventoryCheckouts = new Map<string, {
     version: string; checkout: CheckoutLookup; expiresAt: number;
   }>();
+  private readonly deferredTtlRevalidations = new Set<string>();
 
   /** Lives as long as this reader, so every projection it makes shares the answers. */
   private readonly commitGraph = new CommitGraphMemo();
@@ -768,6 +776,18 @@ export class StackReader {
     return await pending.read(demand);
   }
 
+  private claimBackgroundTtlRevalidation(cwd: string, observation: StackReadObservation): boolean {
+    if (observation.claimBackgroundTtlRevalidation(cwd, this.backgroundTtlRevalidationBudget)) {
+      this.deferredTtlRevalidations.delete(cwd);
+      return true;
+    }
+    this.deferredTtlRevalidations.add(cwd);
+    if (this.deferredTtlRevalidations.size > MAX_INVENTORY_CHECKOUTS) {
+      this.deferredTtlRevalidations.delete(this.deferredTtlRevalidations.values().next().value!);
+    }
+    return false;
+  }
+
   private async readInventoryCheckout(
     cwd: string,
     observation: StackReadObservation,
@@ -804,7 +824,7 @@ export class StackReader {
       && (cached.checkout !== "unavailable" || allowUnavailableCache)
     ) {
       const fresh = cached.expiresAt > this.now();
-      if (fresh || (budgetTtlRevalidation && !observation.claimBackgroundTtlRevalidation(this.backgroundTtlRevalidationBudget))) {
+      if (fresh || (budgetTtlRevalidation && !this.claimBackgroundTtlRevalidation(cwd, observation))) {
         return cached.checkout === "unavailable"
           ? "unavailable"
           : recordWitness(cached.checkout && { ...cached.checkout, cwd }, true);
@@ -820,9 +840,10 @@ export class StackReader {
       if (!version || checkRegistration) return;
       if (checkout === "unavailable" && !allowUnavailableCache) return;
       const expiresAt = checkout === "unavailable" || hints.installedGitVersion ? this.now() + 30_000 : Infinity;
+      this.deferredTtlRevalidations.delete(cwd);
       this.inventoryCheckouts.delete(key);
       this.inventoryCheckouts.set(key, { version, checkout, expiresAt });
-      if (this.inventoryCheckouts.size > 2_048) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
+      if (this.inventoryCheckouts.size > MAX_INVENTORY_CHECKOUTS) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
     };
     if (checkRegistration) {
       const checkout = await observation.registeredCheckout(cwd, before, ready);
@@ -901,6 +922,16 @@ export class StackReader {
     const unavailablePaths = new Set<string>();
     const backgroundNavigation = !directories
       && (demand.priority?.() ?? PR_METADATA_PRIORITY.background) === PR_METADATA_PRIORITY.background;
+    if (backgroundNavigation && this.deferredTtlRevalidations.size) {
+      const currentPaths = new Set(paths);
+      // Reserve slots before the concurrent probes so faster checkouts cannot
+      // take them again after another TTL window elapses.
+      for (const cwd of this.deferredTtlRevalidations) {
+        if (!currentPaths.has(cwd)) continue;
+        if (!observation.reserveBackgroundTtlRevalidation(cwd, this.backgroundTtlRevalidationBudget)) break;
+        this.deferredTtlRevalidations.delete(cwd);
+      }
+    }
     const scan = new IterableMapper(paths, async (cwd) => {
       const found = anchorPaths.has(cwd) ? undefined : await hints.possibleCommonDirs(cwd);
       if (found && !hints.requiresGitDiscovery) {

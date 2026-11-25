@@ -130,7 +130,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       ];
 
       process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
-      const revParseCalls = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
+      const probedPaths = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
       const oracle = await new StackReader().read([rows[0]!], []);
 
       let now = 0;
@@ -138,7 +138,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       start.mockClear();
       const cold = await reader.read(rows, []);
       expect(cold.stacks).toEqual(oracle.stacks);
-      expect(revParseCalls()).toBe(totalDirs);
+      expect(probedPaths()).toHaveLength(totalDirs);
 
       // Expire all cached entries at once: one background pass must cap
       // synchronous TTL revalidations at the default budget (16).
@@ -146,20 +146,18 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       start.mockClear();
       const firstRefresh = await reader.read(rows, []);
       expect(firstRefresh.stacks).toEqual(oracle.stacks);
-      const firstPassSpawns = revParseCalls();
-      expect(firstPassSpawns).toBe(16);
+      const firstPass = probedPaths();
+      expect(firstPass).toHaveLength(16);
 
-      // A second pass rotates through the remaining expired entries, and once
-      // all entries are refreshed, a third pass spawns zero rev-parse calls.
+      // Another long gap expires even the just-refreshed entries. The last
+      // two must still get slots on the second pass.
+      now += 31_000;
       start.mockClear();
       const secondRefresh = await reader.read(rows, []);
       expect(secondRefresh.stacks).toEqual(oracle.stacks);
-      expect(revParseCalls()).toBe(totalDirs - firstPassSpawns);
-
-      start.mockClear();
-      const warm = await reader.read(rows, []);
-      expect(warm.stacks).toEqual(oracle.stacks);
-      expect(revParseCalls()).toBe(0);
+      const secondPass = probedPaths();
+      expect(secondPass).toHaveLength(16);
+      expect(new Set([...firstPass, ...secondPass])).toEqual(new Set(rows.map((item) => item.linkedDirectories[0]!.path)));
     } finally {
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
@@ -183,13 +181,14 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       ];
 
       process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
-      const revParseCalls = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
+      const probedPaths = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
       const oracle = await new StackReader().read([rows[0]!], []);
 
       await fc.assert(fc.asyncProperty(
-        fc.integer({ min: 2, max: 4 }),
         fc.integer({ min: 1, max: 4 }),
-        async (budget, extra) => {
+        fc.integer({ min: 1, max: 4 }),
+        fc.array(fc.constantFrom(0, 15_000, 30_000, 31_000, 62_000), { minLength: 4, maxLength: 4 }),
+        async (budget, extra, gaps) => {
           const subsetSize = Math.min(maxDirs, budget + extra);
           const subset = rows.slice(0, subsetSize);
           let now = 0;
@@ -198,23 +197,20 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
           start.mockClear();
           const cold = await reader.read(subset, []);
           expect(cold.stacks).toEqual(oracle.stacks);
-          expect(revParseCalls()).toBe(subsetSize);
+          expect(probedPaths()).toHaveLength(subsetSize);
 
           now += 31_000;
-          let remaining = subsetSize;
-          while (remaining > 0) {
+          const refreshedPaths = new Set<string>();
+          for (let pass = 0; pass < Math.ceil(subsetSize / budget); pass++) {
             start.mockClear();
             const refreshed = await reader.read(subset, []);
             expect(refreshed.stacks).toEqual(oracle.stacks);
-            const expectedSpawns = Math.min(remaining, budget);
-            expect(revParseCalls()).toBe(expectedSpawns);
-            remaining -= expectedSpawns;
+            const paths = probedPaths();
+            expect(paths.length).toBeLessThanOrEqual(budget);
+            for (const cwd of paths) refreshedPaths.add(cwd);
+            now += gaps[pass] ?? 31_000;
           }
-
-          start.mockClear();
-          const warm = await reader.read(subset, []);
-          expect(warm.stacks).toEqual(oracle.stacks);
-          expect(revParseCalls()).toBe(0);
+          expect(refreshedPaths).toEqual(new Set(subset.map((item) => item.linkedDirectories[0]!.path)));
         },
       ), { numRuns: 4 });
     } finally {

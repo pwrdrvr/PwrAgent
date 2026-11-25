@@ -1,84 +1,14 @@
 import "@testing-library/jest-dom/vitest";
-import { act, render } from "@testing-library/react";
+import { act, render, waitFor } from "@testing-library/react";
 import fc from "fast-check";
 import { expect, it, vi } from "vitest";
-import type {
-  NavigationDirectoryRow,
-  NavigationQueryPage,
-  NavigationQueryRequest,
-  NavigationRow,
-} from "@pwragent/shared/contracts/navigation";
-import { Sidebar } from "../Sidebar";
+import type { NavigationQueryPage } from "@pwragent/shared/contracts/navigation";
+import type { DesktopApi } from "../../../lib/desktop-api";
+import { useBoundedNavigationWindow } from "../../../lib/useBoundedNavigationWindow";
+import { useNavigationDirectoryDisclosure } from "../../../lib/useNavigationDirectoryDisclosure";
+import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import type { ProjectRevealRequest } from "../DirectoriesList";
-import { createNavigationPageState } from "../../../lib/navigation-query-state";
-import type { NavigationWindowResource } from "../../../lib/navigation-window-queries";
-
-function directoryRow(index: number): NavigationDirectoryRow {
-  const key = `directory:/repo-${index}`;
-  return {
-    key,
-    label: `Repo ${index}`,
-    path: `/repo-${index}`,
-    kind: "directory",
-    counts: { total: 1, pinned: 0, active: 0, unread: 0, review: 0 },
-    pinnedRootCount: 0,
-    unpinnedRootCount: 1,
-    launchpadPresent: false,
-  };
-}
-
-function threadRow(index: number): NavigationRow {
-  const path = `/repo-${index}`;
-  return {
-    id: `thread-${index}`,
-    source: "codex",
-    title: `Thread ${index}`,
-    titleSource: "explicit",
-    ref: { backend: "codex", threadId: `thread-${index}` },
-    rowRevision: "r",
-    linkedDirectories: [{ id: path, kind: "local", label: `Repo ${index}`, path }],
-    inbox: { inInbox: false },
-    ordinaryChildCount: 0,
-    nativeSubAgentGroupPresent: false,
-    queueCount: 0,
-    queueState: "unknown",
-  };
-}
-
-function buildResource(
-  id: string,
-  query: NavigationQueryRequest["query"],
-  options: { page?: Partial<NavigationQueryPage>; loading: boolean; omitPage?: boolean },
-): NavigationWindowResource {
-  const request: NavigationQueryRequest = {
-    protocol: 2,
-    consumer: "main-sidebar",
-    pageSize: 10,
-    query,
-  };
-  return {
-    id,
-    loading: options.loading,
-    state: {
-      ...createNavigationPageState(request),
-      ...(options.omitPage ? {} : {
-        page: {
-          protocol: 2,
-          queryKey: id,
-          generation: "g",
-          ownerEpoch: "owner",
-          countsRevision: "r",
-          coverage: { state: "complete" },
-          counts: { total: 1, pinned: 0, active: 0, unread: 0, review: 0 },
-          entries: [],
-          directories: [],
-          complete: true,
-          ...options.page,
-        },
-      }),
-    },
-  };
-}
+import { Sidebar } from "../Sidebar";
 
 async function flushFrame(): Promise<void> {
   await act(async () => {
@@ -88,179 +18,132 @@ async function flushFrame(): Promise<void> {
   });
 }
 
-it("jumps immediately on ProjectIndex clicks even while background directory refreshes or lower directories are loading", async () => {
+async function checkJump(count: number, target: number, blocker: number, roots: "pinned" | "unpinned", delay = 0) {
+  const directories = Array.from({ length: count }, (_, index) => ({
+    key: `directory:/repo-${index}`,
+    label: `Repo ${index}`,
+    path: `/repo-${index}`,
+    kind: "directory" as const,
+  }));
+  const threads = directories.map((directory, index) => ({
+    id: `thread-${index}`,
+    source: "codex" as const,
+    title: `Thread ${index}`,
+    titleSource: "explicit" as const,
+    linkedDirectories: [{ id: directory.path, kind: "local" as const, label: directory.label, path: directory.path }],
+    inbox: { inInbox: false },
+  }));
+  const targetKey = directories[target]!.key;
+  const blockerKey = directories[blocker]!.key;
+  const belowKey = directories[target + 1]!.key;
+  const resourcePrefix = roots === "pinned" ? "directory-pins:" : "directory:";
+  const blockerId = `${resourcePrefix}${blockerKey}`;
+  const belowId = `directory:${belowKey}`;
+  const refreshId = roots === "pinned" ? `directory:${targetKey}` : `directory-pins:${targetKey}`;
+  let releaseBlocker!: () => void;
+  const blockerPending = new Promise<void>((resolve) => { releaseBlocker = resolve; });
+  const desktopApi: DesktopApi = {
+    getNavigationQueryPage: async (request) => {
+      const query = request.query;
+      if (query.kind === "directory") {
+        if (query.directoryKey === blockerKey && query.roots === roots) await blockerPending;
+        if (request.anchor || (query.directoryKey === belowKey && query.roots === "unpinned")) {
+          return new Promise<NavigationQueryPage>(() => undefined);
+        }
+      }
+      return navigationQueryFixture(request, { directories, threads });
+    },
+  };
+  let navigation!: ReturnType<typeof useBoundedNavigationWindow>;
+  function Window({ projectRevealRequest }: { projectRevealRequest?: ProjectRevealRequest }) {
+    const directoryDisclosure = useNavigationDirectoryDisclosure({
+      // The jump itself opens a closed target. All other directories
+      // already have demand, including one below the target.
+      version: 1, selection: null, unpinnedExpandedByKey: {}, loadedRowsByQuery: {},
+      expandedByKey: Object.fromEntries(directories.map(({ key }) => [key, key !== targetKey])),
+    });
+    navigation = useBoundedNavigationWindow({
+      desktopApi, browseMode: "directories", enabled: true, visible: true,
+      attentionView: { id: "window", promoteOnTurnEnd: true },
+      expandedByKey: directoryDisclosure.expandedByKey,
+      unpinnedExpandedByKey: directoryDisclosure.unpinnedExpandedByKey,
+    });
+    return <Sidebar
+      backends={[]}
+      browseMode="directories"
+      directories={navigation.directories}
+      directoryDisclosure={directoryDisclosure}
+      loading={false}
+      pagedNavigation={navigation}
+      projectRevealRequest={projectRevealRequest}
+      threads={threads}
+      onBrowseModeChange={() => undefined}
+      onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined}
+      onSelectThread={() => undefined}
+      onSetSubthreadsCollapsed={async () => undefined}
+      onSetDirectoryThreadsCollapsed={async () => undefined}
+    />;
+  }
+  const logRendererDiagnostic = vi.fn(async () => undefined);
+  const bridge = window as Window & { pwragent?: DesktopApi };
+  const previousApi = bridge.pwragent;
+  let now = 10_000;
+  const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
+  bridge.pwragent = { logRendererDiagnostic };
+  const view = render(<Window />);
+  try {
+    await waitFor(() => expect(navigation.resources.get(belowId)?.loading).toBe(true));
+    const summary = view.container.querySelector(
+      `section.directory-row[data-directory-key="${targetKey}"] .directory-row__summary`,
+    );
+    expect(summary).not.toBeNull();
+    view.rerender(<Window projectRevealRequest={{ key: targetKey, jump: true }} />);
+    await waitFor(() => expect(navigation.resources.get(blockerId)?.loading).toBe(true));
+    await waitFor(() => expect(navigation.resources.get(refreshId)?.state.page).toBeDefined());
+    act(() => { void navigation.rebaseline(refreshId, { kind: "directory", key: targetKey }); });
+    await waitFor(() => expect(navigation.resources.get(refreshId)?.loading).toBe(true));
+    await flushFrame();
+    // The jump waits until first pages that can affect landing have arrived.
+    expect(summary).not.toHaveClass("is-revealed");
+    now += delay;
+    await act(async () => releaseBlocker());
+    await flushFrame();
+    // The lower first page still holds the whole lens open, but cannot move the target.
+    expect(navigation.resources.get(belowId)?.state.page).toBeUndefined();
+    expect(navigation.resources.get(refreshId)?.loading).toBe(true);
+    expect(navigation.presentationReady).toBe(false);
+    expect(summary).toHaveClass("is-revealed");
+    return logRendererDiagnostic;
+  } finally {
+    view.unmount();
+    nowSpy.mockRestore();
+    bridge.pwragent = previousApi;
+  }
+}
+
+it("lands on the target when its first page arrives even if a lower project is still loading", async () => {
+  await checkJump(2, 0, 0, "unpinned");
+});
+
+it("waits only for first project pages that affect the jump", async () => {
   await fc.assert(fc.asyncProperty(
-    fc.integer({ min: 3, max: 6 }),
-    fc.integer({ min: 0, max: 5 }),
-    fc.array(fc.boolean(), { minLength: 6, maxLength: 6 }),
-    async (count, rawTarget, loadingFlags) => {
-      const targetIndex = rawTarget % count;
-      const directories = Array.from({ length: count }, (_, index) => directoryRow(index));
-      const threads = Array.from({ length: count }, (_, index) => threadRow(index));
-      const resources = new Map<string, NavigationWindowResource>([
-        [
-          "directory-index",
-          buildResource("directory-index", { kind: "directory-index" }, {
-            loading: false,
-            page: { directories },
-          }),
-        ],
-      ]);
-      for (let index = 0; index < count; index++) {
-        const directory = directories[index]!;
-        const thread = threads[index]!;
-        const isBelowTarget = index > targetIndex;
-        // Every directory at or above the jump target already has a loaded
-        // page (even if a background refresh has loading=true). Directories
-        // below the target may even be on an initial load without a page.
-        const loading = loadingFlags[index] ?? true;
-        const omitPage = isBelowTarget && loading;
-        resources.set(
-          `directory:${directory.key}`,
-          buildResource(`directory:${directory.key}`, { kind: "directory", directoryKey: directory.key, roots: "unpinned" }, {
-            loading: index === targetIndex ? true : loading,
-            omitPage,
-            page: {
-              entries: [{ row: thread, placement: { kind: "root" }, orderKey: "a" }],
-            },
-          }),
-        );
-      }
-
-      const pagedNavigation = {
-        resources,
-        directories,
-        selectedDirectoryKeys: [directories[0]!.key],
-        connected: true,
-        presentationReady: true,
-        invalidate: () => undefined,
-        refresh: async () => undefined,
-        loadMore: async () => undefined,
-        rebaseline: async () => undefined,
-        restart: async () => undefined,
-        setVisibleAnchor: () => undefined,
-      };
-      const onComplete = vi.fn();
-      const request: ProjectRevealRequest = { key: directories[targetIndex]!.key, jump: true };
-
-      const view = render(
-        <Sidebar
-          backends={[]}
-          browseMode="directories"
-          directories={directories}
-          loading={false}
-          pagedNavigation={pagedNavigation}
-          projectRevealRequest={request}
-          selectedItemKey={`codex:${threads[0]!.id}`}
-          selectedThreadDirectoryKeys={[directories[0]!.key]}
-          threads={threads}
-          onBrowseModeChange={() => undefined}
-          onCreateThread={async () => undefined}
-          onOpenLaunchpad={async () => undefined}
-          onSelectThread={() => undefined}
-          onSetSubthreadsCollapsed={async () => undefined}
-          onSetDirectoryThreadsCollapsed={async () => undefined}
-        />,
-      );
-      try {
-        await flushFrame();
-        const section = view.container.querySelector<HTMLElement>(
-          `section.directory-row[data-directory-key="${directories[targetIndex]!.key}"]`,
-        );
-        expect(section).not.toBeNull();
-        const summary = section!.querySelector<HTMLElement>(".directory-row__summary");
-        // The jump landed immediately and flashed the target project header
-        // instead of blocking on background directory refreshes.
-        expect(summary).toHaveClass("is-revealed");
-      } finally {
-        view.unmount();
-        onComplete.mockReset();
-      }
+    fc.integer({ min: 2, max: 6 }).chain((count) =>
+      fc.integer({ min: 0, max: count - 2 }).chain((target) =>
+        fc.record({ count: fc.constant(count), target: fc.constant(target),
+          blocker: fc.integer({ min: 0, max: target }),
+          roots: fc.constantFrom("pinned" as const, "unpinned" as const) }))),
+    async ({ count, target, blocker, roots }) => {
+      await checkJump(count, target, blocker, roots);
     },
   ), { numRuns: 10 });
 });
 
-it("logs a renderer diagnostic warning when a project jump is delayed waiting for navigation readiness", async () => {
-  const directories = [directoryRow(0), directoryRow(1)];
-  const threads = [threadRow(0), threadRow(1)];
-  const logRendererDiagnostic = vi.fn(async () => undefined);
-  const previousApi = (window as unknown as { pwragent?: unknown }).pwragent;
-  (window as unknown as { pwragent?: unknown }).pwragent = { logRendererDiagnostic };
-  let now = 10_000;
-  const nowSpy = vi.spyOn(performance, "now").mockImplementation(() => now);
-  try {
-    const makeNavigation = (presentationReady: boolean) => ({
-      resources: new Map<string, NavigationWindowResource>([
-        ["directory-index", buildResource("directory-index", { kind: "directory-index" }, { loading: false, page: { directories } })],
-        ["directory:directory:/repo-0", buildResource("directory:directory:/repo-0", { kind: "directory", directoryKey: directories[0]!.key, roots: "unpinned" }, { loading: !presentationReady, omitPage: !presentationReady })],
-        ["directory:directory:/repo-1", buildResource("directory:directory:/repo-1", { kind: "directory", directoryKey: directories[1]!.key, roots: "unpinned" }, { loading: !presentationReady, omitPage: !presentationReady })],
-      ]),
-      directories,
-      selectedDirectoryKeys: [directories[0]!.key],
-      connected: true,
-      presentationReady,
-      invalidate: () => undefined,
-      refresh: async () => undefined,
-      loadMore: async () => undefined,
-      rebaseline: async () => undefined,
-      restart: async () => undefined,
-      setVisibleAnchor: () => undefined,
-    });
-    const request: ProjectRevealRequest = { key: directories[1]!.key, jump: true };
-    const { rerender, unmount } = render(
-      <Sidebar
-        backends={[]}
-        browseMode="directories"
-        directories={directories}
-        loading={false}
-        pagedNavigation={makeNavigation(false)}
-        projectRevealRequest={request}
-        selectedItemKey={`codex:${threads[0]!.id}`}
-        selectedThreadDirectoryKeys={[directories[0]!.key]}
-        threads={threads}
-        onBrowseModeChange={() => undefined}
-        onCreateThread={async () => undefined}
-        onOpenLaunchpad={async () => undefined}
-        onSelectThread={() => undefined}
-        onSetSubthreadsCollapsed={async () => undefined}
-        onSetDirectoryThreadsCollapsed={async () => undefined}
-      />,
-    );
-    try {
-      await flushFrame();
-      expect(logRendererDiagnostic).not.toHaveBeenCalled();
-
-      // Simulate a 2.5s stall waiting for navigation readiness.
-      now += 2_500;
-      rerender(
-        <Sidebar
-          backends={[]}
-          browseMode="directories"
-          directories={directories}
-          loading={false}
-          pagedNavigation={makeNavigation(true)}
-          projectRevealRequest={request}
-          selectedItemKey={`codex:${threads[0]!.id}`}
-          selectedThreadDirectoryKeys={[directories[0]!.key]}
-          threads={threads}
-          onBrowseModeChange={() => undefined}
-          onCreateThread={async () => undefined}
-          onOpenLaunchpad={async () => undefined}
-          onSelectThread={() => undefined}
-          onSetSubthreadsCollapsed={async () => undefined}
-          onSetDirectoryThreadsCollapsed={async () => undefined}
-        />,
-      );
-      await flushFrame();
-      expect(logRendererDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
-        level: "warn",
-        message: "project index jump delayed",
-      }));
-    } finally {
-      unmount();
-    }
-  } finally {
-    nowSpy.mockRestore();
-    (window as unknown as { pwragent?: unknown }).pwragent = previousApi;
-  }
+it("logs the relevant project pages as the cause of a delayed jump", async () => {
+  const log = await checkJump(3, 1, 0, "pinned", 2_500);
+  expect(log).toHaveBeenCalledWith(expect.objectContaining({
+    level: "warn",
+    message: "project index jump delayed",
+    details: expect.objectContaining({ elapsedMs: 2_500, waitedForPages: true }),
+  }));
 });

@@ -44,6 +44,7 @@ type Load<T extends Result> = (options: { signal: AbortSignal; deadlineAt: numbe
 type Read = {
   controller: AbortController;
   promise: Promise<Result>;
+  startedAt?: number;
   /** The invalidation sequence its load began under; unset while it waits for admission. */
   loadedAt?: number;
 };
@@ -110,7 +111,9 @@ export class NavigationQueryPool {
       queryKind: params.request.query.kind,
       consumer: params.request.consumer,
       ownerKey: ownerKey(params.request.federationTarget),
-      key: JSON.stringify(["query", params.scopeKey ?? "renderer", params.request.federationTarget ?? { scope: "local" }, navigationQueryKey(params.request)]),
+      // Mention reads omit stack projection even when their query matches a full navigation read.
+      key: JSON.stringify(["query", params.scopeKey ?? "renderer", params.request.federationTarget ?? { scope: "local" },
+        params.request.consumer === "mentions", navigationQueryKey(params.request)]),
       operationKey: JSON.stringify([params.request.cursor ?? null, params.request.anchor ?? null,
         params.request.completeBaselineRevision ?? null, params.request.retainedRange ?? null, params.request.pageSize ?? 100]),
       deadlineAt: params.request.deadlineAt,
@@ -159,13 +162,13 @@ export class NavigationQueryPool {
     load: Load<T>;
   }): Promise<T> {
     const startedAt = Date.now();
-    const timing: { admittedAt?: number } = {};
+    let observedRead: Read | undefined;
     const diagnosticFields = (outcome: "ok" | "error", extra: Record<string, unknown> = {}): Record<string, unknown> => ({
       kind: params.kind,
       ...(params.queryKind ? { queryKind: params.queryKind } : {}),
       ...(params.consumer ? { consumer: params.consumer } : {}),
       elapsedMs: Math.max(0, Date.now() - startedAt),
-      ...(timing.admittedAt !== undefined ? { waitMs: Math.max(0, timing.admittedAt - startedAt) } : {}),
+      ...(observedRead?.startedAt !== undefined ? { waitMs: Math.max(0, observedRead.startedAt - startedAt) } : {}),
       activeReads: this.activeReads,
       pendingReads: this.pendingReads,
       queries: this.queries.size,
@@ -261,7 +264,6 @@ export class NavigationQueryPool {
       admissions.delete(admission);
       if (admissions.size === 0) this.admissions.delete(params.consumerId);
     }
-    timing.admittedAt = Date.now();
     query.consumers.add(params.consumerId);
     const consumerLeft = (): boolean => !query.consumers.has(params.consumerId);
     const operationKey = params.operationKey;
@@ -276,6 +278,7 @@ export class NavigationQueryPool {
     }
     // Keys are constructed by the typed public entry points and partition result kinds.
     if (pending && !pending.controller.signal.aborted) {
+      observedRead = pending;
       if (params.kind === "query") listingDiagnostics.link("navigation", "coalesced", pending.promise);
       this.pendingReads += 1;
       // An early waiter deadline does not detach its Promise continuation.
@@ -285,6 +288,7 @@ export class NavigationQueryPool {
       return observe(this.waitForRead(pending.promise, deadlineAt) as Promise<T>, consumerLeft);
     }
     const read: Read = { controller: new AbortController(), promise: undefined as unknown as Promise<Result> };
+    observedRead = read;
     const retainedQuery = query;
     this.pendingReads += 1;
     const fetch = () => this.fetch({
@@ -383,6 +387,7 @@ export class NavigationQueryPool {
       Math.max(0, params.deadlineAt - Date.now()));
     const completion = (async () => {
       params.read.loadedAt = params.query.invalidationSequence;
+      params.read.startedAt = Date.now();
       const load = () => params.load({ signal, deadlineAt: params.deadlineAt });
       const page = await (params.query.kind === "query" ? listingDiagnostics.trace("owner-read", {}, load) : load());
       signal.throwIfAborted();

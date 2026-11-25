@@ -210,13 +210,11 @@ export function useComposerMentionSources(params: {
       const allDone = threadsDone;
       setState((current) => ({
         ownerKey,
-        population: isRemoteDirectoryOwner
-          ? EMPTY_POPULATION
-          : {
-              directories: [],
-              ownerRankedDirectories: false,
-              threads: current.ownerKey === ownerKey ? current.population.threads : [],
-            },
+        population: {
+          directories: [],
+          ownerRankedDirectories: false,
+          threads: current.ownerKey === ownerKey ? current.population.threads : [],
+        },
         loading: !allDone,
         settledDirectoryQuery: demand,
         ...(allDone ? { settledQuery: demand } : {}),
@@ -241,16 +239,13 @@ export function useComposerMentionSources(params: {
       threadsSucceeded = true;
       resolvedThreads = threads.entries.map((entry) => entry.row);
       const allDone = directoriesDone;
-      const clearForOfflineRemote = isRemoteDirectoryOwner && directoriesDone && !directoriesSucceeded;
       setState((current) => ({
         ownerKey,
-        population: clearForOfflineRemote
-          ? EMPTY_POPULATION
-          : {
-              directories: current.ownerKey === ownerKey ? current.population.directories : [],
-              ownerRankedDirectories: current.ownerKey === ownerKey ? current.population.ownerRankedDirectories : false,
-              threads: resolvedThreads,
-            },
+        population: {
+          directories: current.ownerKey === ownerKey ? current.population.directories : [],
+          ownerRankedDirectories: current.ownerKey === ownerKey ? current.population.ownerRankedDirectories : false,
+          threads: resolvedThreads,
+        },
         loading: !allDone,
         ...(current.ownerKey === ownerKey && current.settledDirectoryQuery !== undefined
           ? { settledDirectoryQuery: current.settledDirectoryQuery }

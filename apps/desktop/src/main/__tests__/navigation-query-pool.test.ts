@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type {
   NavigationQueryPage,
   NavigationQueryRequest,
@@ -499,6 +500,96 @@ it("does not coalesce viewer mounts with the otherwise identical owner inventory
   expect((await owner).counts.total).toBe(0);
   pool.release("owner");
   pool.release("viewer");
+});
+
+it.each(["search", "mentions"] as const)("separates stack and mention projections when %s gets there first", async (firstConsumer) => {
+  const pool = new NavigationQueryPool();
+  const firstRequest = { ...request, consumer: firstConsumer, pageSize: 10 };
+  const secondConsumer = firstConsumer === "search" ? "mentions" : "search";
+  const secondPage = { ...page, generation: "second-projection" };
+  let finishFirst!: (value: NavigationQueryPage) => void;
+  const secondLoad = vi.fn(async () => secondPage);
+  const duplicateLoad = vi.fn(async () => secondPage);
+  const first = pool.read({ consumerId: "first", scopeKey: "federation:viewer", request: firstRequest,
+    load: () => new Promise((resolve) => { finishFirst = resolve; }) });
+  const second = pool.read({ consumerId: "second", scopeKey: "federation:viewer",
+    request: { ...firstRequest, consumer: secondConsumer }, load: secondLoad });
+  const duplicate = pool.read({ consumerId: "duplicate", scopeKey: "federation:viewer",
+    request: { ...firstRequest, consumer: firstConsumer === "search" ? "main-sidebar" : "mentions" }, load: duplicateLoad });
+  // An identical projection shares the first read. The other projection can
+  // start immediately and receives its own result, regardless of arrival order.
+  const separateProjectionStarted = secondLoad.mock.calls.length;
+  finishFirst(page);
+  await expect(Promise.all([first, second, duplicate])).resolves.toEqual([page, secondPage, page]);
+  expect(separateProjectionStarted).toBe(1);
+  expect(duplicateLoad).not.toHaveBeenCalled();
+});
+
+async function checkAdmissionTiming(blockedBy: "another page" | "global capacity", queuedMs: number, loadMs: number) {
+  let now = 10_000;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const warn = vi.fn();
+  const pool = new NavigationQueryPool({ slowReadThresholdMs: 1, onDiagnosticWarning: warn });
+  let finishLoad!: (value: NavigationQueryPage) => void;
+  let signalLoadStarted!: () => void;
+  const loadStarted = new Promise<void>((resolve) => { signalLoadStarted = resolve; });
+  const releaseBlockers: Array<() => void> = [];
+  try {
+    const blockers = blockedBy === "another page"
+      ? [pool.read({
+          consumerId: "previous", request: { ...request, cursor: "previous" },
+          load: () => new Promise((resolve) => releaseBlockers.push(() => resolve(page))),
+        })]
+      : Array.from({ length: 8 }, (_, index) => pool.readExact({
+          kind: "launchpad", consumerId: `blocker-${index}`, identity: String(index), operation: "full",
+          load: () => new Promise<NavigationLaunchpadConfigResponse>((resolve) => {
+            releaseBlockers.push(() => resolve({ protocol: 2, revision: "ready" }));
+          }),
+        }));
+    const waiting = pool.read({ consumerId: "waiting", request, load: () => new Promise((resolve) => {
+      finishLoad = resolve;
+      signalLoadStarted();
+    }) });
+    now += 1;
+    const earlyJoin = pool.read({ consumerId: "early-join", request: { ...request, consumer: "remote-window" },
+      load: async () => page });
+    expect(finishLoad).toBeUndefined();
+    now += queuedMs - 1;
+    releaseBlockers.forEach((release) => release());
+    await loadStarted;
+    now += 1;
+    const lateJoin = pool.read({ consumerId: "late-join", request: { ...request, consumer: "search" },
+      load: async () => page });
+    now += loadMs - 1;
+    finishLoad(page);
+    await Promise.all([...blockers, waiting, earlyJoin, lateJoin]);
+    for (const [consumer, elapsedMs, waitMs] of [
+      ["main-sidebar", queuedMs + loadMs, queuedMs],
+      ["remote-window", queuedMs + loadMs - 1, queuedMs - 1],
+      ["search", loadMs - 1, 0],
+    ] as const) {
+      expect(warn).toHaveBeenCalledWith("slow navigation query", expect.objectContaining({
+        queryKind: "lens", consumer, elapsedMs, waitMs,
+      }));
+    }
+  } finally {
+    releaseBlockers.forEach((release) => release());
+    finishLoad?.(page);
+    clock.mockRestore();
+  }
+}
+
+it("counts time queued behind another page before measuring owner work", async () => {
+  await checkAdmissionTiming("another page", 2_500, 20);
+});
+
+it("measures queue delay up to the shared owner load for each caller", async () => {
+  await fc.assert(fc.asyncProperty(
+    fc.constantFrom("another page" as const, "global capacity" as const),
+    fc.integer({ min: 2, max: 3_000 }),
+    fc.integer({ min: 2, max: 500 }),
+    checkAdmissionTiming,
+  ), { numRuns: 15 });
 });
 
 it("logs a diagnostic warning when a navigation read is slow or hits navigation_busy", async () => {
