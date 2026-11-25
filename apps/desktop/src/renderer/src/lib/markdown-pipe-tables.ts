@@ -8,9 +8,11 @@
 // A guess has to stay rare, so a line only counts when every cell has text and
 // it has at least three cells, or it opens or closes with a pipe. That keeps a
 // few unfenced `cmd | grep x` lines as text. Fenced code, lines that already
-// start a GFM table, and quoted, list, heading, or indented-code lines are
-// left alone, and a line whose code span holds a pipe never counts, because
-// GFM would split that span across cells.
+// start a GFM table, and quoted, list, or indented-code lines are left alone,
+// and a line whose code span holds a pipe never counts, because GFM would split
+// that span across cells. A row must share the header's indentation, and the
+// delimiter row copies it, so a table nested in a list item stays there. A
+// header that opens with a `#` column is escaped so it doesn't become a heading.
 
 const MIN_INFERRED_TABLE_LINES = 3;
 const MIN_BARE_CELLS = 3;
@@ -32,16 +34,14 @@ export function inferPipeTables(markdown: string): string {
 
   while (index < lines.length) {
     const line = lines[index] ?? "";
-    const fenceLine = line.match(/^\s{0,3}(`{3,}|~{3,})(.*)$/);
+    const fenceLine = parseFenceLine(line);
     if (fenceLine) {
-      const sequence = fenceLine[1] ?? "";
-      const marker = sequence[0] as "`" | "~";
       if (!fence) {
-        fence = { marker, length: sequence.length };
+        fence = { marker: fenceLine.marker, length: fenceLine.length };
       } else if (
-        marker === fence.marker
-        && sequence.length >= fence.length
-        && (fenceLine[2] ?? "").trim() === ""
+        fenceLine.marker === fence.marker
+        && fenceLine.length >= fence.length
+        && fenceLine.info.trim() === ""
       ) {
         fence = undefined;
       }
@@ -56,16 +56,24 @@ export function inferPipeTables(markdown: string): string {
       continue;
     }
 
-    // An existing GFM table keeps every row until the next blank line.
+    // An existing GFM table keeps its rows until the next blank line. A code
+    // fence also ends it, and goes back to the loop so its contents stay
+    // fenced.
     if (line.includes("|") && isDelimiterRow(lines[index + 1] ?? "")) {
-      while (index < lines.length && (lines[index] ?? "").trim() !== "") {
+      output.push(line);
+      index += 1;
+      while (
+        index < lines.length
+        && (lines[index] ?? "").trim() !== ""
+        && !parseFenceLine(lines[index] ?? "")
+      ) {
         output.push(lines[index] ?? "");
         index += 1;
       }
       continue;
     }
 
-    const header = inferablePipeRow(line);
+    const header = inferablePipeRow(line, "header");
     if (!header) {
       output.push(line);
       index += 1;
@@ -73,11 +81,15 @@ export function inferPipeTables(markdown: string): string {
     }
 
     // A line followed by a delimiter row starts a real table, so the run ends
-    // before it and the existing-table branch takes it next.
+    // before it and the existing-table branch takes it next. Every row keeps
+    // the header's indentation: GFM never continues a table on a lazy line,
+    // so a row that drifts out of a list item would end the table.
+    const indent = leadingSpaces(line);
     let end = index + 1;
     while (
       end < lines.length
-      && inferablePipeRow(lines[end] ?? "")?.cells.length === header.cells.length
+      && leadingSpaces(lines[end] ?? "") === indent
+      && inferablePipeRow(lines[end] ?? "", "row")?.cells.length === header.cells.length
       && !isDelimiterRow(lines[end + 1] ?? "")
     ) {
       end += 1;
@@ -92,10 +104,12 @@ export function inferPipeTables(markdown: string): string {
     if (output.length > 0 && (output[output.length - 1] ?? "").trim() !== "") {
       output.push("");
     }
+    // A `#` column header would otherwise make the line an ATX heading.
+    const headerLine = isAtxHeading(line) ? line.replace("#", "\\#") : line;
     const carriageReturn = line.endsWith("\r") ? "\r" : "";
     output.push(
-      line,
-      `| ${header.cells.map(() => "---").join(" | ")} |${carriageReturn}`,
+      headerLine,
+      `${indent}| ${header.cells.map(() => "---").join(" | ")} |${carriageReturn}`,
       ...lines.slice(index + 1, end),
     );
     if (end < lines.length && (lines[end] ?? "").trim() !== "") {
@@ -108,11 +122,14 @@ export function inferPipeTables(markdown: string): string {
   return changed ? output.join("\n") : markdown;
 }
 
-function inferablePipeRow(line: string): PipeRow | undefined {
+// A header line may start with a `#` column (it is escaped on output); a body
+// row may not, because GFM ends a table at a heading.
+function inferablePipeRow(line: string, position: "header" | "row"): PipeRow | undefined {
   if (
     !line.includes("|")
     || /^(?: {4}|\s*\t)/.test(line)
-    || /^\s*(?:>|#|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$))/.test(line)
+    || /^\s*(?:>|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$))/.test(line)
+    || (position === "row" && isAtxHeading(line))
   ) {
     return undefined;
   }
@@ -129,6 +146,29 @@ function inferablePipeRow(line: string): PipeRow | undefined {
   }
 
   return row;
+}
+
+// A backtick fence's info string can't hold a backtick, so a line such as
+// "```pnpm test``` passed" is inline code, not a fence.
+function parseFenceLine(line: string): { marker: "`" | "~"; length: number; info: string } | undefined {
+  const match = /^ {0,3}(?:(`{3,})([^`]*)|(~{3,})(.*))$/.exec(line);
+  if (!match) {
+    return undefined;
+  }
+  const sequence = match[1] ?? match[3] ?? "";
+  return {
+    marker: sequence.startsWith("`") ? "`" : "~",
+    length: sequence.length,
+    info: match[2] ?? match[4] ?? "",
+  };
+}
+
+function isAtxHeading(line: string): boolean {
+  return /^ {0,3}#{1,6}(?:[ \t]|$)/.test(line);
+}
+
+function leadingSpaces(line: string): string {
+  return /^ */.exec(line)?.[0] ?? "";
 }
 
 function isDelimiterRow(line: string): boolean {

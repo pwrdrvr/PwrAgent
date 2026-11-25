@@ -76,8 +76,13 @@ const mixedDocument = fc.array(
 describe("inferPipeTables", () => {
   // Three or more lines with the same cell count are a table the author
   // wrote without GFM's delimiter row. The prose around them stays prose.
+  // A `#` first column is common in review tables; it must stay the header.
   it("renders same-count pipe lines between prose as one table of those rows", () => {
-    fc.assert(fc.property(prose, pipeRows, prose, (before, { rows, outerPipe }, after) => {
+    fc.assert(fc.property(prose, pipeRows, prose, fc.boolean(), (before, generated, after, hashColumn) => {
+      const { outerPipe } = generated;
+      const rows = hashColumn
+        ? [["#", ...(generated.rows[0] ?? []).slice(1)], ...generated.rows.slice(1)]
+        : generated.rows;
       const markdown = [before, ...rows.map((row) => pipeLine(row, outerPipe)), after].join("\n");
       const html = render(inferPipeTables(markdown));
 
@@ -87,6 +92,69 @@ describe("inferPipeTables", () => {
       const [beforeTable = "", afterTable = ""] = html.split(/<table>[\s\S]*<\/table>/);
       expect(beforeTable).toContain(before);
       expect(afterTable).toContain(after);
+    }));
+  });
+
+  // The delimiter row is ours, not the author's, so it must never reach the
+  // reader as text. Under a list item an unindented delimiter is a lazy line,
+  // which GFM won't start a table from.
+  it("never shows an inserted delimiter row as text, in or out of a list item", () => {
+    fc.assert(fc.property(
+      fc.boolean(),
+      pipeRows,
+      fc.array(fc.constantFrom("", "  ", "   "), { minLength: 8, maxLength: 8 }),
+      fc.boolean(),
+      (inList, { rows, outerPipe }, indents, uniform) => {
+        const lines = rows.map((row, index) =>
+          `${uniform ? indents[0] : indents[index]}${pipeLine(row, outerPipe)}`
+        );
+        const html = render(inferPipeTables([inList ? "- Results:" : "Results:", ...lines].join("\n")));
+
+        expect(html).not.toContain("---");
+        if (uniform) {
+          expect(html).toContain("<table>");
+        }
+      },
+    ));
+  });
+
+  // Inference reads prose, never code: whatever sits around a code block, the
+  // block renders exactly as the author wrote it.
+  it("never changes what a code block contains", () => {
+    const pipeRun = fc.array(fc.array(cell, { minLength: 3, maxLength: 3 }), { minLength: 3, maxLength: 4 })
+      .map((rows) => rows.map((row) => row.join(" | ")).join("\n"));
+    const fencedBlock = fc.tuple(
+      fc.constantFrom("```", "```sh", "~~~"),
+      fc.array(fc.oneof(fc.constant(""), prose, pipeRun), { minLength: 1, maxLength: 4 }),
+    ).map(([open, body]) => [open, ...body, open.startsWith("~") ? "~~~" : "```"].join("\n"));
+    const realTable = fc.array(fc.array(cell, { minLength: 2, maxLength: 2 }), { minLength: 1, maxLength: 3 })
+      .map(([header = [], ...rows]) =>
+        [header, ["---", "---"], ...rows].map((row) => pipeLine(row, true)).join("\n")
+      );
+    // Inline code at the start of a line, which is not a fence opener.
+    const inlineTripleBacktick = cell.map((value) => `\`\`\`${value}\`\`\` passed.`);
+    // A fence that opens on the line after a table's last row ends the table;
+    // a blank line inside the fence must not end the fence.
+    const tableThenFence = fc.tuple(realTable, fc.constantFrom("```", "~~~"), pipeRun).map(
+      ([table, open, rows]) => [table, open, "", rows, open].join("\n"),
+    );
+    const codeDocument = fc.array(
+      fc.oneof(fencedBlock, realTable, inlineTripleBacktick, prose, pipeRun, tableThenFence),
+      { minLength: 2, maxLength: 6 },
+    ).chain((blocks) =>
+      fc.array(fc.constantFrom("\n", "\n\n"), {
+        minLength: blocks.length - 1,
+        maxLength: blocks.length - 1,
+      }).map((separators) =>
+        blocks.reduce((document, block, index) =>
+          index === 0 ? block : `${document}${separators[index - 1]}${block}`, "")
+      ),
+    );
+    const codeBlocks = (html: string): string[] =>
+      [...html.matchAll(/<pre><code[^>]*>([\s\S]*?)<\/code><\/pre>/g)].map((match) => match[1] ?? "");
+
+    fc.assert(fc.property(codeDocument, (markdown) => {
+      expect(codeBlocks(render(inferPipeTables(markdown)))).toEqual(codeBlocks(render(markdown)));
     }));
   });
 
