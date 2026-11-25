@@ -1128,22 +1128,22 @@ describe("a merge GitHub answers with a 5xx", () => {
     (code: string, reason: string, body: string) => `non-200 OK status code: ${code} ${reason} body: "${body}"`,
     (code: string, reason: string) => `HTTP ${code}: ${reason} (https://api.github.com/graphql)`,
   );
-  const afterwards = fc.constantFrom("MERGED", "OPEN", "unreadable");
+  // What the PR status client answers afterwards; "unanswered" is its slow mode or a missing token.
+  const afterwards = fc.constantFrom("MERGED", "OPEN", "unreadable", "unanswered");
 
+  /** `merges` records every gh call: the merge is the only one. */
   function fetcherFor(failure: string | Error, state: string, merges: string[][]) {
+    const fetchPullRequests = vi.fn(async (): Promise<PrSummary[]> => {
+      if (state === "unreadable") throw new Error("GitHub GraphQL request failed: 502");
+      if (state === "unanswered") return [];
+      return [{ lifecycleState: state === "MERGED" ? "merged" : "open" } as PrSummary];
+    });
     return new GithubPrFetcher({
-      graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+      graphqlClient: { fetchPullRequests, fetchPullRequestsForBranches: vi.fn() },
       discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
       runGhCommand: async (_command, args) => {
-        if (args[0] === "pr" && args[1] === "merge") {
-          merges.push(args);
-          throw typeof failure === "string" ? Object.assign(new Error("exit 1"), { stderr: `${failure}\n` }) : failure;
-        }
-        if (args[0] === "pr" && args[1] === "view" && args.includes("state")) {
-          if (state === "unreadable") throw Object.assign(new Error("exit 1"), { stderr: "HTTP 502: Bad Gateway" });
-          return { stdout: `${state}\n` };
-        }
-        return { stdout: `${url}\n` };
+        merges.push(args);
+        throw typeof failure === "string" ? Object.assign(new Error("exit 1"), { stderr: `${failure}\n` }) : failure;
       },
     });
   }

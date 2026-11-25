@@ -373,14 +373,17 @@ export class GithubPrFetcher {
         ? `GitHub returned ${serverError} while merging ${label}`
         : err.killed ? `gh pr merge did not finish ${label} within 60 seconds` : undefined;
       if (unsettled) {
-        const state = await run(["pr", "view", mergeTarget, "--json", "state", "--jq", ".state"])
-          .then((result) => result.stdout.trim(), (readError: unknown) => {
+        // One read through the client PR status polls with; no other route.
+        const ref = parsePrRefFromUrl(reference.url);
+        const state = ref
+          ? await this.graphqlClient.fetchPullRequests([ref]).then(([pr]) => pr?.lifecycleState, (readError: unknown) => {
             fetcherLog.warn("could not read a pull request's state after an unsettled merge", {
               pullRequest: reference.url, error: readError instanceof Error ? readError.message : String(readError),
             });
             return undefined;
-          });
-        if (state === "MERGED") return mergedResult(reference.url, params);
+          })
+          : undefined;
+        if (state === "merged") return mergedResult(reference.url, params);
         throw new Error(state
           ? `${unsettled}, and it had not merged when checked. Retry the merge: one that has since landed reports as already merged.`
           : `${unsettled}, and its state could not be read. Retry the merge: one that went through reports as already merged.`, { cause: error });
