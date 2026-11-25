@@ -6516,34 +6516,36 @@ export class DesktopBackendRegistry {
     // ACP agents report no user item for the prompt itself. Publish the copy
     // the owner just recorded, under the replay's id, so a window that holds
     // no pending copy shows it live: a steer that fell back to a new turn, a
-    // queued release, or a send from another surface. The prompt is already
-    // dispatched, so a failed publish must not report the turn as failed;
-    // the replay still holds the prompt.
-    try {
-      await this.emit({
-        backend: params.backend,
-        notification: {
-          method: "item/completed",
-          params: {
-            threadId: result.sessionId,
-            turnId: result.turnId,
-            item: {
-              id: `user:${result.turnId}`,
-              type: "userMessage",
-              text: promptPayload.prompt,
-              ...(promptPayload.parts?.length ? { content: promptPayload.parts } : {}),
-            },
+    // queued release, or a send from another surface.
+    //
+    // Not awaited: callers act on this start before the turn's first events.
+    // A managed review registers the parent's review turn only after this
+    // returns; held back by the publish, a fast child's terminal arrived
+    // first and the parent turn never ended. The prompt is already
+    // dispatched, so a failed publish is logged and the replay still holds it.
+    void this.emit({
+      backend: params.backend,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: result.sessionId,
+          turnId: result.turnId,
+          item: {
+            id: `user:${result.turnId}`,
+            type: "userMessage",
+            text: promptPayload.prompt,
+            ...(promptPayload.parts?.length ? { content: promptPayload.parts } : {}),
           },
         },
-      });
-    } catch (error) {
+      },
+    }).catch((error: unknown) => {
       backendRegistryLog.warn("Could not publish the ACP turn's prompt", {
         backend: params.backend,
         threadId: result.sessionId,
         turnId: result.turnId,
         error: error instanceof Error ? error.message : String(error),
       });
-    }
+    });
     return {
       backend: params.backend,
       threadId: result.sessionId,
