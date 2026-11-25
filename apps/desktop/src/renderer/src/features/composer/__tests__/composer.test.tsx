@@ -6834,7 +6834,7 @@ describe("Composer", () => {
     fireEvent.click(modelButton);
     expect(screen.getAllByRole("option").map((option) =>
       option.querySelector(".composer-dropdown__option-label")?.textContent,
-    )).toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna", "Other"]);
+    )).toEqual(["Other", "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"]);
     expect(screen.queryByRole("option", { name: "GPT-6-Sol" })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "GPT-5.6-Sol" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: "Other" }));
@@ -6868,7 +6868,7 @@ describe("Composer", () => {
     expect(modelButton).toHaveValue("fable");
     fireEvent.click(modelButton);
     expect(screen.getAllByRole("option").map((option) => option.querySelector(".composer-dropdown__option-label")?.textContent))
-      .toEqual(["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5", "Other Models"]);
+      .toEqual(["Other Models", "Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5"]);
     expect(screen.queryByRole("option", { name: "Opus 4.8" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("option", { name: "Other Models" }));
     const submenu = screen.getByRole("listbox", { name: "Model: Other Models" });
@@ -10929,8 +10929,8 @@ describe("Composer", () => {
     );
     const list = screen.getByRole("listbox", { name: /^Review model/ });
     expect(composerDropdownOptionLabels(list)).toEqual([
-      ...CURRENT_CODEX_MODEL_LABELS,
       "Other",
+      ...CURRENT_CODEX_MODEL_LABELS,
       "Ternary-Bonsai-27B",
     ]);
     expect(within(list).getByRole("group", { name: "PrismML Bonsai (local)" }))

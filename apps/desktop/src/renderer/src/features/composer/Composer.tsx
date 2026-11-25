@@ -13,7 +13,6 @@ import {
 import {
   buildProviderPickerEntries,
   codexModelProviderCatalogNote,
-  describeCodexModelProviderEntry,
   parseProviderPickerValue,
 } from "@pwragent/shared/provider-picker";
 import { codexProviderIdOfModel } from "@pwragent/shared/codex-model-providers";
@@ -387,6 +386,7 @@ import {
   ComposerDropdown,
   useDismissableMenu,
 } from "./ComposerDropdown";
+import { providerPickerDropdownOptions } from "./provider-picker-options";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
 import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
@@ -15799,16 +15799,7 @@ function useComposerController(props: ComposerProps) {
               ariaLabel="Provider"
               disabled={launchpadSubmitting}
               value={navigationLaunchpadProviderKey(props.launchpad)}
-              options={providerPickerEntries.map((entry) => entry.codexModelProviderId
-                ? {
-                    label: entry.label ?? entry.codexModelProviderId,
-                    value: entry.value,
-                    ...describeCodexModelProviderEntry(entry),
-                  }
-                : {
-                    label: formatBackendLabel(entry.backend, props.backends),
-                    value: entry.value,
-                  })}
+              {...providerPickerDropdownOptions(providerPickerEntries, props.backends)}
               onChange={(value) => {
                 if (!props.launchpad) {
                   return;

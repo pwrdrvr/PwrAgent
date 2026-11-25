@@ -168,9 +168,9 @@ describe("AutomationEditor", () => {
     );
     const list = screen.getByRole("listbox", { name: /^Automation model/ });
     expect(composerDropdownOptionLabels(list)).toEqual([
+      "Other",
       "Inherit Agent model",
       ...CURRENT_CODEX_MODEL_LABELS,
-      "Other",
       "Ternary-Bonsai-27B",
     ]);
     expect(within(list).getByRole("group", { name: "PrismML Bonsai (local)" }))

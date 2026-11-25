@@ -55,6 +55,7 @@ async function runCatalogCase(signal: AbortSignal, [models, choice]: CatalogCase
       kind: "codex",
       models,
       thread: { model: choice.id },
+      opensDown: true,
     }));
   } finally {
     mounted.unmount();
