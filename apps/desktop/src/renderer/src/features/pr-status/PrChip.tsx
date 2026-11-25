@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -131,6 +132,11 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
   const watchStopHint = Boolean(props.onOpenContextMenu);
   const onDetach = props.onDetach;
   const merge = cardActions ? props.merge : undefined;
+  // The dialog returns focus to the chip, which outlives the card.
+  const forgeAutomationLink = useMemo(
+    () => ({ onOpen: hideTooltip, returnFocus: contextMenuInvokerRef }),
+    [hideTooltip],
+  );
   // The merge control changes the card's height; placing it again keeps a
   // card near the window's bottom edge on screen.
   const relayoutCard = useCallback(() => {
@@ -146,6 +152,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         watchStopHint={watchStopHint}
         stack={stack}
         stackThread={stackThread}
+        {...(cardActions ? { forgeAutomationLink } : {})}
       />
       {cardActions ? (
         <PrCardActions
@@ -239,6 +246,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     pr.mergeQueue?.state,
     pr.mergeQueue?.kind,
     pr.allowedMergeMethods?.join(","),
+    pr.labels?.join(","),
   ].join("|");
   // A fresh build observation or a canceled watch changes the resolved wait
   // object. The card renders that snapshot, including the time it was checked.

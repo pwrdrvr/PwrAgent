@@ -51,7 +51,11 @@ import {
   ThreadPrWatchIndicatorsContext,
 } from "../../pr-watches/useThreadPrWatchIndicators";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
-import { useState, type ComponentProps } from "react";
+import { useRef, useState, type ComponentProps, type ReactNode } from "react";
+import {
+  ThreadForgeAutomationProvider,
+  useForgeAutomationOpener,
+} from "../../forge-automation/thread-hands-off";
 import type { Editor } from "@tiptap/react";
 import { ComposerTiptapInput } from "../../composer/ComposerTiptapInput";
 import {
@@ -9844,6 +9848,7 @@ describe("Sidebar directory pinning", () => {
       platform?: string;
       onRevealPath?: (path: string) => void;
       projectIndex?: boolean;
+      wrapper?: (props: { children: ReactNode }) => ReactNode;
     } = {},
   ): { rerender: (next: typeof initialOverrides) => void } {
     const element = (overrides: typeof initialOverrides) => (
@@ -9880,7 +9885,10 @@ describe("Sidebar directory pinning", () => {
         onProjectIndexWidthChange={overrides.projectIndex ? () => undefined : undefined}
       />
     );
-    const result = render(element(initialOverrides));
+    const result = render(
+      element(initialOverrides),
+      initialOverrides.wrapper ? { wrapper: initialOverrides.wrapper } : undefined,
+    );
     return { rerender: (next) => result.rerender(element(next)) };
   }
 
@@ -11569,6 +11577,88 @@ describe("Sidebar directory pinning", () => {
         { reportError: false },
       ));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    describe("from another surface", () => {
+      const threadInProjectB = {
+        linkedDirectories: [
+          { id: "dir-b", label: "ProjectB", path: projectBDirectory.path!, kind: "local" as const },
+        ],
+      };
+      /**
+       * The composer menu's view of the opener: its item goes away as the
+       * dialog opens, so focus has to go back to the menu's trigger.
+       */
+      function OpenerProbe() {
+        const opener = useForgeAutomationOpener();
+        const trigger = useRef<HTMLButtonElement>(null);
+        const [menuOpen, setMenuOpen] = useState(true);
+        const project = opener?.projectFor(threadInProjectB);
+        if (!project) return <span>No opener</span>;
+        return (
+          <>
+            <button ref={trigger} type="button">Menu trigger</button>
+            {menuOpen ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  opener!.open(threadInProjectB, trigger);
+                }}
+              >
+                {`Open for ${project}`}
+              </button>
+            ) : null}
+          </>
+        );
+      }
+      const wrapper = ({ children }: { children: ReactNode }) => (
+        <ThreadForgeAutomationProvider directories={[projectBDirectory]}>
+          {children}
+          <OpenerProbe />
+        </ThreadForgeAutomationProvider>
+      );
+
+      it("opens this sidebar's dialog for the thread's project, and returns focus to the opener", async () => {
+        renderSidebar([projectBDirectory], {
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+          wrapper,
+        });
+        const opener = await screen.findByRole("button", { name: "Open for ProjectB" });
+        opener.focus();
+        fireEvent.click(opener);
+        const dialog = await screen.findByRole("dialog", { name: "Forge Automation" });
+        expect(within(dialog).getByText(/^ProjectB/)).toBeInTheDocument();
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.getByRole("button", { name: "Menu trigger" })).toHaveFocus());
+      });
+
+      it("offers nothing where the sidebar's menu would not: no owner to save to, or a peer window whose owner does not advertise it", async () => {
+        renderSidebar([projectBDirectory], { onSetDirectoryPin: async () => undefined, wrapper });
+        expect(await screen.findByText("No opener")).toBeInTheDocument();
+        cleanup();
+
+        (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = {
+          scope: "remote",
+          instanceId: "remote-instance",
+        };
+        const { rerender } = renderSidebar([projectBDirectory], {
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+          wrapper,
+        });
+        expect(await screen.findByText("No opener")).toBeInTheDocument();
+        rerender({
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+          federationOwnerForgeAutomation: true,
+          wrapper,
+        });
+        expect(await screen.findByRole("button", { name: "Open for ProjectB" })).toBeInTheDocument();
+      });
     });
 
     it("opens Forge Automation… as a dialog and saves it", async () => {

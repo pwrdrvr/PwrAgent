@@ -1,4 +1,4 @@
-import { useContext } from "react";
+import { useContext, type RefObject } from "react";
 import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
 import { StackNavigationContext, StackNode } from "../stacks/StackBody";
 import { stackHoldLabel, stackRepository } from "../stacks/stack-pr-data";
@@ -10,7 +10,8 @@ import { formatRunningDurationMs } from "../../lib/format-duration";
 import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
 import { describeMergeBuildWatchRow } from "../pr-watches/merge-build-watches";
 import { readPrBranchDrift, type PrBranchDrift } from "./pr-branch-drift";
-import { useThreadPrHandsOff } from "../forge-automation/thread-hands-off";
+import { describeHandsOffMatch } from "@pwragent/shared/project-forge-automation";
+import { useForgeAutomationOpener, useThreadPrHandsOffMatch } from "../forge-automation/thread-hands-off";
 import { splitPrBranch } from "./pr-branch-split";
 import {
   prPhaseLabel,
@@ -57,6 +58,11 @@ export function PrStatusCard(props: {
   now?: number;
   stack?: CompactStackMembership;
   stackThread?: NavigationThreadSummary;
+  /**
+   * The sidebar's card links its Auto-fix row to the thread's project's
+   * Forge Automation. `onOpen` runs first, to put the card away.
+   */
+  forgeAutomationLink?: { onOpen: () => void; returnFocus: RefObject<HTMLElement | null> };
 }) {
   const { pr } = props;
   const now = props.now ?? Date.now();
@@ -68,8 +74,14 @@ export function PrStatusCard(props: {
   const branch = splitPrBranch(pr.headRefName);
   const drift = readBranchDriftRows(props.branchDrift);
   // The thread's project, not main's election, decides a hands-off PR.
-  const handsOff = useThreadPrHandsOff(props.stackThread, pr);
+  const handsOffMatch = useThreadPrHandsOffMatch(props.stackThread, pr);
+  const handsOff = handsOffMatch ? describeHandsOffMatch(handsOffMatch) : undefined;
   const wakes = readWatchRows(withHandsOff(props.watch, handsOff), now);
+  const forgeAutomation = useForgeAutomationOpener();
+  const forgeLink = props.forgeAutomationLink;
+  const forgeProject = forgeLink && props.stackThread ? forgeAutomation?.projectFor(props.stackThread) : undefined;
+  // Labels are read only for a repository a label rule names.
+  const labels = pr.labels ?? [];
   const queue = readMergeQueueSection(pr, now);
   const stoppable = Boolean(props.watch?.ci || props.watch?.terminal || props.watch?.mergeBuild);
 
@@ -109,6 +121,22 @@ export function PrStatusCard(props: {
         />
         <span>{prStatusLabel(pr)}</span>
       </div>
+      {labels.length > 0 ? (
+        <ul className="pr-status-card__labels" aria-label="Labels">
+          {labels.map((label) => {
+            const matched = handsOffMatch?.label === label;
+            return (
+              <li
+                key={label}
+                className={`pr-status-card__label${matched ? " pr-status-card__label--hands-off" : ""}`}
+              >
+                {label}
+                {matched ? <span className="pr-status-card__label-note"> (hands-off)</span> : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
       {props.stack && props.stack.count > 1 ? (
         <PrStackSection member={props.stack} pr={pr} thread={props.stackThread} />
       ) : null}
@@ -177,6 +205,19 @@ export function PrStatusCard(props: {
                 <span className="pr-status-card__row-detail">
                   {row.detail}
                 </span>
+              ) : null}
+              {row.autoFix && forgeProject ? (
+                <button
+                  type="button"
+                  className="pr-status-card__link"
+                  aria-label={`Forge Automation for ${forgeProject}…`}
+                  onClick={() => {
+                    forgeLink!.onOpen();
+                    forgeAutomation!.open(props.stackThread!, forgeLink!.returnFocus);
+                  }}
+                >
+                  Forge Automation…
+                </button>
               ) : null}
             </div>
           ))}
@@ -330,7 +371,7 @@ type PrTimelineRow = { label: string; value: string };
  * `detail` is prose, such as a thread title, that goes on its own line under
  * the row. A row's value never wraps, so prose there ran out of the card.
  */
-type PrWatchRow = PrTimelineRow & { muted?: boolean; detail?: string };
+type PrWatchRow = PrTimelineRow & { muted?: boolean; detail?: string; autoFix?: true };
 
 /** A chip watch whose Auto-fix row says the project left the PR hands-off. */
 function withHandsOff(watch: PrChipWatch | undefined, handsOff: string | undefined): PrChipWatch | undefined {
@@ -363,13 +404,19 @@ function readWatchRows(watch: PrChipWatch | undefined, now: number): PrWatchRow[
     rows.push({ label: "Merge build", value: row.wakes, detail: row.status });
   }
   if (watch.autoFix) {
-    rows.push({ label: "Auto-fix", value: "on", muted: true });
+    rows.push({ label: "Auto-fix", value: "on", muted: true, autoFix: true });
   } else if (watch.autoFixBlocked?.reason === "paused") {
-    rows.push({ label: "Auto-fix", value: "paused", muted: true });
+    rows.push({ label: "Auto-fix", value: "paused", muted: true, autoFix: true });
   } else if (watch.autoFixBlocked?.reason === "switched_off") {
-    rows.push({ label: "Auto-fix", value: "off for this PR", muted: true });
+    rows.push({ label: "Auto-fix", value: "off for this PR", muted: true, autoFix: true });
   } else if (watch.autoFixBlocked?.reason === "hands_off") {
-    rows.push({ label: "Auto-fix", value: "hands-off", muted: true, detail: handsOffDetail(watch.autoFixBlocked.detail) });
+    rows.push({
+      label: "Auto-fix",
+      value: "hands-off",
+      muted: true,
+      detail: handsOffDetail(watch.autoFixBlocked.detail),
+      autoFix: true,
+    });
   } else if (watch.autoFixBlocked) {
     const threadTitle = watch.autoFixBlocked.threadTitle?.trim();
     rows.push({

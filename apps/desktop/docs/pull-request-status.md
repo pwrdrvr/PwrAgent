@@ -231,6 +231,13 @@ same rule: the REST detail carries them, and the GraphQL poll adds
 `labels(first: 20)` only for those projects, on pages of four merge requests
 so the label connection stays inside GitLab's default complexity budget.
 
+The sidebar's PR card lists a PR's labels when they were read, marking the
+one a rule matched, and its Auto-fix row links to the project's Forge
+Automation; so does the composer's Auto-fix menu. Both open the sidebar's
+one dialog through `ThreadForgeAutomationProvider`, where the sidebar
+publishes its opener (`usePublishForgeAutomationOpener`) for exactly the
+projects its own project menu offers the dialog on.
+
 Agents read the gates through `get_thread_status`
 (`prAutomation.forgeAutomation`) and propose a rule with an add_todo
 `add_forge_hands_off_rule` card; see

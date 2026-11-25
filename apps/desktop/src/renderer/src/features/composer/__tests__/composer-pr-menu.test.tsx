@@ -9,6 +9,10 @@ import type {
 } from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ComposerPrMenu } from "../ComposerPrMenu";
+import {
+  ThreadForgeAutomationProvider,
+  usePublishForgeAutomationOpener,
+} from "../../forge-automation/thread-hands-off";
 import { describeMergeBuildWatch, mergeBuildPullRequestUrl } from "../../pr-watches/merge-build-watches";
 
 const PR_URL = "https://github.com/example/app/pull/41";
@@ -128,6 +132,55 @@ describe("composer PR menu", () => {
     const { onToggle } = renderMenu([]);
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Auto-fix PR/ }));
     expect(onToggle).toHaveBeenCalledWith(false);
+  });
+
+  it("opens the thread's project's Forge Automation, returning focus to the menu button", () => {
+    const project = {
+      key: "directory:/Users/fixture-user/code/app",
+      kind: "directory" as const,
+      label: "app",
+      path: "/Users/fixture-user/code/app",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1,
+    };
+    const inProject: NavigationThreadSummary = {
+      ...thread,
+      linkedDirectories: [{ id: "dir-1", label: "app", path: project.path, kind: "local" }],
+    };
+    const open = vi.fn();
+    function Sidebar(props: { canOpen?: () => boolean }) {
+      usePublishForgeAutomationOpener([project], props.canOpen, open);
+      return null;
+    }
+    const menu = (canOpen?: () => boolean) => (
+      <ThreadForgeAutomationProvider directories={[project]}>
+        <Sidebar canOpen={canOpen} />
+        <ComposerPrMenu
+          thread={inProject}
+          desktopApi={{} as DesktopApi}
+          watchMergeBuildsDefault
+          className="composer__toggle"
+          tooltip="Auto-fix PR"
+          autoFix={{ checked: true, available: true, onToggle: () => undefined }}
+        />
+      </ThreadForgeAutomationProvider>
+    );
+    const { rerender } = render(menu(() => true));
+    const trigger = screen.getByRole("button", { name: "Pull request automation" });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Forge Automation for app…/ }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(open).toHaveBeenCalledWith(project, expect.objectContaining({ current: trigger }));
+
+    // Only where the sidebar's own project menu would offer it.
+    for (const canOpen of [() => false, undefined]) {
+      rerender(menu(canOpen));
+      fireEvent.click(trigger);
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /Forge Automation/ })).not.toBeInTheDocument();
+      fireEvent.click(trigger);
+    }
   });
 
   it("names the newest open PR, else the one merged most recently", () => {

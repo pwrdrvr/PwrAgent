@@ -8,6 +8,7 @@ import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useCloseOnOutsidePointer, useTodoFactMenuPlacement } from "../thread-todos/TodoFactMenu";
 import { useThreadDependencyList } from "../thread-dependencies/useThreadDependencyList";
 import type { AutoFixCoverageEntry } from "./auto-fix-coverage";
+import { useForgeAutomationOpener } from "../forge-automation/thread-hands-off";
 import {
   cancelMergeBuildWatches,
   createMergeBuildWatch,
@@ -65,6 +66,9 @@ export function ComposerPrMenu(props: {
   const canManage = Boolean(props.desktopApi?.manageThreadDependencies) && list.ready && Boolean(list.data);
   // One PR's switch means something only beside another PR Auto-fix covers,
   // or to undo one already made.
+  // The thread's project's rules decide which PRs Auto-fix leaves alone.
+  const forgeAutomation = useForgeAutomationOpener();
+  const forgeProject = open ? forgeAutomation?.projectFor(props.thread) : undefined;
   const togglePr = props.autoFix.onTogglePr;
   const coverage = togglePr && props.autoFix.checked && props.autoFix.available && props.autoFix.coverage
     && (props.autoFix.coverage.length > 1 || props.autoFix.coverage.some((entry) => entry.state !== "on"))
@@ -161,6 +165,22 @@ export function ComposerPrMenu(props: {
                 </button>
               ))}
             </div>
+          ) : null}
+          {forgeProject ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="todo-split__item composer-pr-menu__pr"
+              data-testid="composer-pr-menu-forge-automation"
+              onClick={() => {
+                close();
+                forgeAutomation!.open(props.thread, triggerRef);
+              }}
+            >
+              <span className="todo-split__item-check" aria-hidden="true" />
+              <span className="todo-split__item-label">{`Forge Automation for ${forgeProject}…`}</span>
+              <span className="todo-model-picker__detail">Hands-off rules and pause</span>
+            </button>
           ) : null}
           <button
             type="button"

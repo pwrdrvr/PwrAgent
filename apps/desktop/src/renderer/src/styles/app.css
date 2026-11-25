@@ -9580,7 +9580,8 @@ button.stack-display__thread,
    `aria-hidden` because flex blockifies them into two separate a11y nodes, so
    the name would otherwise be announced split mid-word. Absolute positioning
    keeps this out of the flex flow entirely. */
-.pr-status-card__branch-full {
+.pr-status-card__branch-full,
+.pr-status-card__label-note {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -9995,6 +9996,60 @@ button.stack-display__thread,
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+/* The PR's labels, read only for a repository a hands-off label rule
+   names. The one a rule matched carries the accent edge, and its name says
+   "hands-off" to assistive tech. */
+.pr-status-card__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pr-status-card__label {
+  max-width: 100%;
+  padding: 1px 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-status-card__label--hands-off {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+/* The sidebar card's way to the project's hands-off rules, under its
+   Auto-fix row. Inset by its own padding so the words line up with the
+   row's label. */
+.pr-status-card__link {
+  margin: 1px -6px 0;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pr-status-card__link:hover,
+.pr-status-card__link:focus-visible {
+  background: var(--accent-soft);
+  color: var(--text-primary);
 }
 
 /* A thread chip's hover card: the PR card's container and rows, plus the
