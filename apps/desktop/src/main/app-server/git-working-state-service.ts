@@ -57,6 +57,8 @@ type WorktreeBaseState = Pick<
   | "baseBehindCommitCount"
   | "baseAheadCommitCount"
   | "isBehindBase"
+  | "upstreamBranch"
+  | "upstreamBehindCommitCount"
 >;
 
 type ResolvedWorktreeBaseState = {
@@ -77,7 +79,7 @@ type BaseBranchCandidate = {
   baseAheadCommitCount?: number;
 };
 
-type BaseBranchRefState = {
+export type BaseBranchRefState = {
   ref: string;
   baseTipCommit: string;
   baseBehindCommitCount?: number;
@@ -443,7 +445,34 @@ async function resolveWorktreeBaseState(
     }
   }
   const { sourceRank: _sourceRank, ...state } = best;
-  return state;
+  const baseRef = candidates.find((entry) => entry.label === state.baseBranch)?.ref ?? state.baseBranch;
+  const upstream = resolveUpstreamDrift(refStates, baseRef);
+  return upstream ? { ...state, ...upstream } : state;
+}
+
+/** The fork-workflow remote that holds the project's real default branch. */
+const UPSTREAM_REMOTE = "upstream";
+const UPSTREAM_DEFAULT_BRANCHES = ["main", "master"] as const;
+
+/**
+ * How far HEAD is behind the `upstream` remote's default branch, from the
+ * same `for-each-ref` walk the base was picked from, so it costs no Git
+ * process. Undefined when there is no such ref, Git gave no counts, or the
+ * base already is on `upstream` (its row says the same thing).
+ */
+export function resolveUpstreamDrift(
+  refStates: readonly BaseBranchRefState[],
+  baseRef: string,
+): Pick<WorktreeBaseState, "upstreamBranch" | "upstreamBehindCommitCount"> | undefined {
+  if (baseRef.startsWith(`${UPSTREAM_REMOTE}/`)) return undefined;
+  for (const branch of UPSTREAM_DEFAULT_BRANCHES) {
+    const ref = `${UPSTREAM_REMOTE}/${branch}`;
+    const state = refStates.find((entry) => entry.ref === ref);
+    if (!state) continue;
+    if (state.baseBehindCommitCount === undefined) return undefined;
+    return { upstreamBranch: ref, upstreamBehindCommitCount: state.baseBehindCommitCount };
+  }
+  return undefined;
 }
 
 function clampPositiveInteger(

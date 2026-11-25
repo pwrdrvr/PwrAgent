@@ -209,6 +209,8 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     props.branchDrift?.baseBranch,
     props.branchDrift?.behind,
     props.branchDrift?.ahead,
+    props.branchDrift?.upstreamBranch,
+    props.branchDrift?.upstreamBehind,
     props.watch?.ci?.runAttempt,
     props.watch?.ci?.notifyOn.join(","),
     Boolean(props.watch?.ci),

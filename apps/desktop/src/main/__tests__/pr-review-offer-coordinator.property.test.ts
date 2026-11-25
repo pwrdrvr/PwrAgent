@@ -169,6 +169,7 @@ type Harness = {
 function createHarness(
   db: StateDb = openInMemoryStateDb(),
   ownerThread: (world: World) => Promise<PrReviewOfferThread | undefined> = async () => THREAD,
+  neverMerge: () => boolean = () => false,
 ): Harness {
   const world = new World();
   let ids = 0;
@@ -183,6 +184,7 @@ function createHarness(
       return key === PR_KEY ? await ownerThread(world) : undefined;
     },
     threadPrKeys: () => [PR_KEY],
+    neverMergeRefusal: () => neverMerge() ? "canvas never merges its pull requests." : undefined,
     getPr: () => world.pr(),
     stackHold: async () => world.heldBy ? { reason: world.heldBy, lowerKey: prKeyFor(1) } : undefined,
     stackMergeEvidence: async () => ({
@@ -1047,6 +1049,83 @@ describe("PR offers and project Forge Automation", () => {
       expect(openOfferCards(harness.todos, THREAD)).toEqual([]);
       // The card raised before the switch stays; no new one joins it.
       expect(openOfferCards(harness.todos, THREAD_B)).toHaveLength(1);
+    } finally {
+      harness.close();
+    }
+  });
+});
+
+/**
+ * A contribution fork's project never merges its pull requests (Forge
+ * Automation `neverMerge`). The rule: while it is on, PwrAgent raises no
+ * merge offer, and every evaluation withdraws an open one; review offers
+ * keep their normal rules.
+ */
+describe("PR offers in a never-merge project", () => {
+  type Step = { kind: "workflow"; command: Command } | { kind: "toggle"; on: boolean };
+
+  it("raises no merge card while the project never merges, withdraws an open one, and keeps review offers", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.boolean(),
+      fc.array(fc.oneof(
+        { weight: 4, arbitrary: fc.oneof(...commands).map((command): Step => ({ kind: "workflow", command })) },
+        { weight: 1, arbitrary: fc.boolean().map((on): Step => ({ kind: "toggle", on })) },
+      ), { minLength: 4, maxLength: 30 }),
+      async (startOn, sequence) => {
+        let never = startOn;
+        const harness = createHarness(openInMemoryStateDb(), async () => THREAD, () => never);
+        try {
+          for (const step of sequence) {
+            if (step.kind === "toggle") {
+              never = step.on;
+              continue;
+            }
+            const before = new Set(openOfferCards(harness.todos).map((card) => card.id));
+            const evaluations = harness.world.evaluatedOwners.length;
+            await step.command.run(harness);
+            if (!never) continue;
+            const cards = openOfferCards(harness.todos);
+            // Never raised while on.
+            for (const card of cards.filter((candidate) => !before.has(candidate.id))) {
+              expect(card.action?.type).toBe("start_review");
+            }
+            // Any evaluation while on leaves no merge card behind.
+            if (harness.world.evaluatedOwners.length > evaluations) {
+              expect(cards.filter((card) => card.action?.type === "merge_pull_request")).toEqual([]);
+            }
+          }
+        } finally {
+          harness.close();
+        }
+      },
+    ), { numRuns: 60 });
+  });
+
+  it("withdraws a merge card raised before the switch, refuses an agent's merge card, and still offers reviews", async () => {
+    let never = false;
+    const harness = createHarness(openInMemoryStateDb(), async () => THREAD, () => never);
+    try {
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
+      await reviewChanged(harness, recordReview(harness.world, 0));
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["merge_pull_request"]);
+
+      never = true;
+      expect(await harness.coordinator.mergeOfferRefusal(THREAD, PR_KEY)).toContain("never merges");
+      harness.world.ci = "failing";
+      await transition(harness, { checkState: { from: "passing", to: "failing" } });
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "failing", to: "passing" } });
+      expect(openOfferCards(harness.todos)).toEqual([]);
+      const withdrawn = harness.todos.list({ ...THREAD, status: "all" })
+        .find((todo) => todo.action?.type === "merge_pull_request");
+      expect(withdrawn?.result).toBe("Withdrawn: this project never merges its pull requests");
+
+      await push(harness, harness.world.newChange());
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
     } finally {
       harness.close();
     }

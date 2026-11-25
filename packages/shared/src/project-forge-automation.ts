@@ -45,6 +45,14 @@ export type ProjectForgeAutomation = {
    * owner never stored it; reads fill it as on.
    */
   prOffers: boolean;
+  /**
+   * The project's pull requests land elsewhere, as a contribution fork's
+   * do: it sends them upstream and never merges them itself. PwrAgent then
+   * raises no "Merge #N" cards, PR cards offer no merge, and agents are told
+   * not to merge and refused when they try. Review offers are unaffected.
+   * Present only when on; an older owner never stores it.
+   */
+  neverMerge?: true;
   /** While paused, refuse agent messages from other threads. */
   refuseThreadMessages: boolean;
   /**
@@ -101,6 +109,7 @@ export function resolveProjectForgeAutomation(value: unknown): ProjectForgeAutom
       ? { mergeBuildWatches: record.mergeBuildWatches }
       : {}),
     prOffers: flag("prOffers"),
+    ...(record.neverMerge === true ? { neverMerge: true as const } : {}),
     refuseThreadMessages: flag("refuseThreadMessages"),
     wakeupPolicy: record.wakeupPolicy === "discard" ? "discard" : "hold",
   };
@@ -114,6 +123,7 @@ export function isDefaultProjectForgeAutomation(value: ProjectForgeAutomation): 
     && value.prWatches === DEFAULT_PROJECT_FORGE_AUTOMATION.prWatches
     && (value.mergeBuildWatches ?? "default") === "default"
     && value.prOffers !== false
+    && value.neverMerge !== true
     && value.refuseThreadMessages === DEFAULT_PROJECT_FORGE_AUTOMATION.refuseThreadMessages
     && value.wakeupPolicy === DEFAULT_PROJECT_FORGE_AUTOMATION.wakeupPolicy;
 }
@@ -153,6 +163,35 @@ export function projectWatchesMergeBuilds(value: ProjectForgeAutomation | undefi
  */
 export function projectAllowsPrOffers(value: ProjectForgeAutomation | undefined): boolean {
   return !value || (!value.paused && value.prOffers !== false);
+}
+
+/**
+ * Whether PwrAgent may raise a "Merge #N" card for the project's pull
+ * requests: offers are allowed and the project merges its own PRs.
+ */
+export function projectAllowsMergeOffers(value: ProjectForgeAutomation | undefined): boolean {
+  return projectAllowsPrOffers(value) && !projectNeverMerges(value);
+}
+
+/**
+ * Whether the project's pull requests are never merged from PwrAgent: no
+ * merge card, PR card button, or agent merge. Pausing does not change it.
+ * A value without the field, from an owner that predates it, merges.
+ */
+export function projectNeverMerges(value: Pick<ProjectForgeAutomation, "neverMerge"> | undefined): boolean {
+  return value?.neverMerge === true;
+}
+
+/**
+ * Why an agent may not merge, or raise a merge card for, a pull request in
+ * a never-merge project. Used as the tool refusal and the readiness line.
+ */
+export function buildProjectNeverMergeRefusal(params: {
+  projectLabel: string;
+  pullRequest?: string;
+}): string {
+  const subject = params.pullRequest ? `${params.pullRequest} is in` : "This thread is in";
+  return `${subject} ${params.projectLabel}, where Forge Automation is set to never merge pull requests: they land upstream. Do not merge it, offer a merge, or raise a merge card. The operator can change this from the project menu: Forge Automation.`;
 }
 
 /** Whether the project's pull requests should be polled at all. */

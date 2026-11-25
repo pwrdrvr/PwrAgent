@@ -14,6 +14,13 @@ export type PrBranchDrift = {
   behind?: number;
   /** Commits on the branch after the merge base. */
   ahead?: number;
+  /**
+   * The `upstream` remote's default branch, when the base is a fork's copy
+   * of it: the fork only moves when the operator syncs it.
+   */
+  upstreamBranch?: string;
+  /** Commits on `upstreamBranch` the branch does not have. */
+  upstreamBehind?: number;
 };
 
 /**
@@ -65,29 +72,44 @@ function isSameBase(gitBase: string | undefined, prBase: string | undefined): bo
  */
 export function readPrBranchDrift(
   drift: PrBranchDrift | undefined,
-): { baseBranch: string; behind?: number; ahead?: number } | undefined {
+): {
+  baseBranch: string;
+  behind?: number;
+  ahead?: number;
+  upstream?: { branch: string; behind: number };
+} | undefined {
   const baseBranch = drift?.baseBranch.trim();
   if (!drift || !baseBranch) {
     return undefined;
   }
   const behind = readCount(drift.behind);
   const ahead = readCount(drift.ahead);
-  if (behind === undefined && ahead === undefined) {
+  const upstreamBranch = drift.upstreamBranch?.trim();
+  const upstreamBehind = readCount(drift.upstreamBehind);
+  const upstream = upstreamBranch && upstreamBehind !== undefined
+    ? { branch: upstreamBranch, behind: upstreamBehind }
+    : undefined;
+  if (behind === undefined && ahead === undefined && !upstream) {
     return undefined;
   }
-  return { baseBranch, behind, ahead };
+  return { baseBranch, behind, ahead, ...(upstream ? { upstream } : {}) };
 }
 
 /**
  * The rollup list's short form, `4 behind main`. Only the behind count fits
- * on that line, and only a branch that is behind needs saying.
+ * on that line, and only a branch that is behind needs saying. A fork's base
+ * that is current says nothing about the upstream, so the upstream count
+ * speaks when the base's is 0.
  */
 export function prBranchBehindLabel(drift: PrBranchDrift | undefined): string | undefined {
   const counts = readPrBranchDrift(drift);
-  if (!counts?.behind) {
-    return undefined;
+  if (counts?.behind) {
+    return `${counts.behind.toLocaleString()} behind ${counts.baseBranch}`;
   }
-  return `${counts.behind.toLocaleString()} behind ${counts.baseBranch}`;
+  if (counts?.upstream?.behind) {
+    return `${counts.upstream.behind.toLocaleString()} behind ${counts.upstream.branch}`;
+  }
+  return undefined;
 }
 
 function readCount(value: number | undefined): number | undefined {

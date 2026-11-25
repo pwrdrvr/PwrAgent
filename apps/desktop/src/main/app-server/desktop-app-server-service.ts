@@ -352,6 +352,7 @@ import {
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
   type ProjectForgeAutomation,
+  buildProjectNeverMergeRefusal,
   buildProjectPrDependencyNotice,
   buildProjectPrWatchRefusal,
   isDefaultProjectForgeAutomation,
@@ -359,6 +360,7 @@ import {
   projectAllowsAutoFixKind,
   projectAllowsForgePolling,
   projectAllowsPrWatches,
+  projectNeverMerges,
   projectWatchesMergeBuilds,
   resolveProjectForgeAutomation,
 } from "@pwragent/shared/project-forge-automation";
@@ -4062,6 +4064,16 @@ class DesktopAppServerService {
     });
   }
 
+  /** A merge from a thread whose project never merges is refused before any forge call. */
+  private assertProjectMerges(context: AgentToolCallContext, args: ForgePrToolArgs): void {
+    if (!isAppServerBackendKind(context.backend)) return;
+    const refusal = this.projectNeverMergeRefusal(
+      { backend: context.backend, threadId: context.threadId },
+      typeof args.number === "number" ? `#${args.number}` : undefined,
+    );
+    if (refusal) throw new ForgeReadError("forbidden", refusal);
+  }
+
   /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
   async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreflightResult> {
     const scope = await this.forgePrToolScope(context);
@@ -4078,6 +4090,7 @@ class DesktopAppServerService {
     if (operation !== "merge_pull_request") {
       return await this.forgePrToolService().prepare(operation, args, scope, context.signal);
     }
+    this.assertProjectMerges(context, args);
     // A merge reads and keeps the project's merge-method pick, the one a
     // to-do merge card for this project would use.
     const preference = await readProjectMergeMethodPreference(getDesktopBackendRegistry(), context);
@@ -4133,6 +4146,7 @@ class DesktopAppServerService {
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
+    if (operation === "merge_pull_request") this.assertProjectMerges(context, args);
     const scope = await this.forgePrToolScope(context);
     const stackDemand = { signal: context.signal, priority: () => PR_METADATA_PRIORITY.selected };
     if (operation === "publish_stack_layer") return await this.publishStackLayer(args, context, scope);
@@ -5174,6 +5188,7 @@ class DesktopAppServerService {
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
     const projectSkippedKind = projectSkipsMergeConflicts ? "merge conflicts" : "failing CI";
     const reviewReadiness = await this.readPrReviewReadiness(params, primaryPrs);
+    const neverMerge = forgeProject && projectNeverMerges(forgeProject.automation) ? forgeProject.label : undefined;
     const readinessGuidance = reviewReadiness
       .filter((entry) => entry.readiness !== "closed")
       .map((entry) => describePrReviewReadiness({
@@ -5182,6 +5197,7 @@ class DesktopAppServerService {
         ...(entry.headSha ? { headSha: entry.headSha } : {}),
         reviewed: entry.reviewed,
         ...(entry.openFindings !== undefined ? { openFindings: entry.openFindings } : {}),
+        ...(neverMerge ? { neverMergeProject: neverMerge } : {}),
       }));
     const automationGuidance = autoFixEnabled && forgeProject && projectBlocksAutoFix
       ? `Auto-fix PR is saved for this thread, but it is in ${forgeProject.label}, where ${forgeProject.automation.paused ? "forge activity is paused" : "Auto-fix is turned off in Forge Automation"}. PwrAgent will not start a repair turn. Do not poll CI or create a monitor in its place. Tell the operator, who can change it from the project menu: Forge Automation.`
@@ -6701,6 +6717,22 @@ class DesktopAppServerService {
     if (!getProjectForgeAutomationIndex().hasAny()) return undefined;
     const identity = parseThreadIdentityKey(threadKey);
     return identity ? this.threadForgeAutomation(identity) : undefined;
+  }
+
+  /**
+   * The refusal for a merge in the thread's project when its Forge
+   * Automation never merges; undefined when the project merges.
+   */
+  private projectNeverMergeRefusal(
+    ref: { backend: AppServerBackendKind; threadId: string },
+    pullRequest?: string,
+  ): string | undefined {
+    const project = this.resolveThreadForgeProject(ref);
+    if (!project || !projectNeverMerges(project.automation)) return undefined;
+    return buildProjectNeverMergeRefusal({
+      projectLabel: project.label,
+      ...(pullRequest ? { pullRequest } : {}),
+    });
   }
 
   private resolveThreadForgeProject(ref: {
@@ -9032,6 +9064,7 @@ class DesktopAppServerService {
           .map(getPrStatusKey);
       },
       getPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+      neverMergeRefusal: (thread, pr) => this.projectNeverMergeRefusal(thread, `#${pr.number}`),
       stackHold: (pr) => this.prStackHoldEvidence(pr),
       stackMergeEvidence: (thread, pr) => this.readStackMergeEvidence(thread, pr),
       isLowerPolled: (key) => this.prPollBackendByKey.has(key) || this.transcriptPrSubscriptions.hasTarget(key),

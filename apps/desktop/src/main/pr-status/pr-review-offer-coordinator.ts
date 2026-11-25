@@ -51,6 +51,12 @@ export type PrReviewOfferPorts = {
   ownerThread(prKey: string): Promise<PrReviewOfferThread | undefined>;
   /** The primary attached PR keys of one thread, for review events. */
   threadPrKeys(thread: PrReviewOfferThread): string[];
+  /**
+   * Why the thread's project never merges its pull requests, as an agent
+   * refusal; undefined when it merges them. Such a project gets review
+   * offers but no merge offer, and an open merge offer is withdrawn.
+   */
+  neverMergeRefusal?(thread: PrReviewOfferThread, pr: PrSummary): string | undefined;
   /** The status registry's current PR. No forge request is made. */
   getPr(prKey: string): PrSummary | undefined;
   stackHold?(pr: PrSummary): Promise<{ reason: string; lowerKey?: string } | undefined>;
@@ -308,6 +314,10 @@ export class PrReviewOfferCoordinator {
           ...(parsed.headSha ? { headSha: parsed.headSha } : {}),
         }
       : undefined;
+    // A never-merge project keeps its review offers; an open merge offer is
+    // withdrawn whatever the PR's state, so no early return below keeps it.
+    const neverMerge = this.ports.neverMergeRefusal?.(thread, pr) !== undefined;
+    const withdrawMerge = neverMerge && open?.kind === "merge";
 
     // Git runs only when CI is green, or to withdraw an open offer: a review
     // offer that a review started some other way has answered, or a merge
@@ -338,18 +348,22 @@ export class PrReviewOfferCoordinator {
     } else if (assessment.readiness === "closed") {
       this.trackLowers(prKey, []);
     }
-    if (recoveryOnly && assessment.standing !== "ready_to_merge") return undefined;
+    if (recoveryOnly && assessment.standing !== "ready_to_merge" && !withdrawMerge) return undefined;
     // A transient transport failure defers a new offer. A previously
     // verified card stays put; executing it always rechecks live evidence.
-    if (assessment.retryOnObservation && !assessment.stackHold && open?.kind === "merge" && open.headSha === pr.headSha) return undefined;
+    if (assessment.retryOnObservation && !assessment.stackHold && open?.kind === "merge" && open.headSha === pr.headSha
+      && !withdrawMerge) return undefined;
     const { readiness, reviewId, headContentId, headCovered, standing } = assessment;
-    const desired = desiredPrOffer({
+    const offer = desiredPrOffer({
       prKey,
       readiness,
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
       ...(headContentId ? { headContentId } : {}),
     });
-    const plan = assessment.stackHold && open
+    const desired = neverMerge && offer?.kind === "merge" ? undefined : offer;
+    const plan = withdrawMerge && open
+      ? { retire: { cardId: open.cardId, reason: "never_merge" as const }, raise: desired }
+      : assessment.stackHold && open
       ? { retire: { cardId: open.cardId, reason: "stale" as const }, raise: undefined } : planPrOffer({
       open,
       desired,
@@ -409,6 +423,8 @@ export class PrReviewOfferCoordinator {
   async mergeOfferRefusal(thread: PrReviewOfferThread, prKey: string): Promise<string | undefined> {
     const pr = this.ports.getPr(prKey);
     if (!pr) return undefined;
+    const neverMerge = this.ports.neverMergeRefusal?.(thread, pr);
+    if (neverMerge) return `${neverMerge} This card was not raised.`;
     const hold = await this.ports.stackHold?.(pr);
     if (hold) return hold.reason;
     const assessment = await this.assessPr(thread, pr, true, false);

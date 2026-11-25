@@ -14,6 +14,7 @@ const automationArb: fc.Arbitrary<ProjectForgeAutomation | undefined> = fc.optio
   autoFixCiFailures: fc.boolean(),
   prWatches: fc.boolean(),
   prOffers: fc.boolean(),
+  neverMerge: fc.constantFrom(undefined, true as const),
   refuseThreadMessages: fc.boolean(),
   wakeupPolicy: fc.constantFrom("hold" as const, "discard" as const),
   mergeBuildWatches: fc.constantFrom(undefined, "default" as const, "on" as const, "off" as const),
