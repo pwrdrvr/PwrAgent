@@ -7076,24 +7076,6 @@ a.button {
   margin-left: 14px;
 }
 
-.subthread-list--stack {
-  border-left-color: transparent;
-}
-
-.subthread-list--stack > .thread-row-shell > .thread-row[data-stack-tray-layer]::before {
-  position: absolute;
-  inset-block: -1px;
-  inset-inline-start: -11px;
-  border-inline-start: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  content: "";
-  pointer-events: none;
-}
-
-.subthread-list--stack > .thread-row-shell > .thread-row[data-stack-tray-stale]::before {
-  border-inline-start-style: dashed;
-  border-inline-start-color: var(--status-warning);
-}
-
 /* A stack's spine and marks are shared by the PR popover, rollup and rail. */
 .stack-display__head {
   display: flex;

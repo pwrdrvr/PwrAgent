@@ -38,7 +38,7 @@ import { ThreadRowDensityContext } from "./thread-row-density";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
 import { stackHoldForPr } from "../stacks/stack-presentation";
-import { isStaleStackLayer, readCompactStackMemberships } from "@pwragent/shared/stacks/stack-status";
+import { readCompactStackMemberships } from "@pwragent/shared/stacks/stack-status";
 import {
   getThreadRowStatus,
   isThreadRemoteWorkHere,
@@ -94,7 +94,6 @@ type ThreadRowProps = {
   includeLinkedDirectories?: boolean;
   linkedDirectoryMode?: "label" | "kind";
   nested?: boolean;
-  stackTrayKey?: string;
   /**
    * How deep this row sits inside its tray: 1 for a direct child, 2 for a
    * grandchild. The tray is flat, so the indent is the only thing separating
@@ -469,9 +468,6 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       ) : null}
       <div
         ref={rowRef}
-        data-stack-tray-layer={props.stackTrayKey && readCompactStackMemberships(props.thread).find(({ key }) => key === props.stackTrayKey)?.key}
-        data-stack-tray-stale={props.stackTrayKey && readCompactStackMemberships(props.thread).some(({ key, health, heldBy }) =>
-          key === props.stackTrayKey && !heldBy && isStaleStackLayer(health)) || undefined}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           selected ? " is-selected" : ""
         }${

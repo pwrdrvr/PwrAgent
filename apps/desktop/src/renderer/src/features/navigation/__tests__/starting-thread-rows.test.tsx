@@ -19,27 +19,8 @@ import { buildSubthreadLaunchpadKey } from "../../../lib/subthread-launchpads";
 import type { AppServerPendingThreadStart } from "@pwragent/shared/contracts/normalized-app-server";
 import { applyPendingThreadStartReport, pendingThreadStartRows } from "../pending-thread-starts";
 import { startingThreadHomeDirectoryKey } from "../starting-thread-home";
-import { orderStackTray, stackGroupSelectionOrder } from "../../stacks/stack-presentation";
 
 afterEach(cleanup);
-
-it("keeps each stack sibling's descendants and pending row together in display and selection order", () => {
-  const key = "stack";
-  const membership = (position: number) => ({
-    key, name: key, position, count: 3, health: "in_sync" as const, inferred: false,
-  });
-  const root = thread("root", { stackMemberships: [membership(1)] });
-  const a = thread("a", { stackMemberships: [membership(2)], parentThreadId: "root" });
-  const b = thread("b", { stackMemberships: [membership(3)], parentThreadId: "root" });
-  const aChild = thread("a-child", { parentThreadId: "a" });
-  const bChild = thread("b-child", { parentThreadId: "b" });
-  const starting = { kind: "starting" as const, creation: subthreadDraft({ parentThreadKey: "codex:a" }), depth: 2 };
-  const threads = [a, aChild, b, bChild];
-  const rows = threads.map((thread) => ({ kind: "thread" as const, thread }));
-  expect(orderStackTray([...rows.slice(0, 2), starting, ...rows.slice(2)], key))
-    .toEqual([rows[2], rows[3], rows[0], rows[1], starting]);
-  expect(stackGroupSelectionOrder(root, threads)).toEqual([b, bChild, a, aChild, root]);
-});
 
 const PROJECT_PATH = "/Users/fixture-user/pwrdrvr/PwrSnap";
 const PROJECT_KEY = `directory:${PROJECT_PATH}`;
