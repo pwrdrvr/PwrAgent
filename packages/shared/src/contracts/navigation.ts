@@ -2442,6 +2442,11 @@ export type NavigationRow = {
   queuedExecutionMode?: ThreadExecutionMode;
   queuedNativeMode?: string;
   prAutoDispatchEnabled?: boolean;
+  /**
+   * The thread's Auto-fix repair while it is pending or being tried, so the
+   * row's Scheduled chip survives a page refresh. Absent from older owners.
+   */
+  prAutoDispatchPending?: ThreadPrAutoDispatchPending;
   /** The owner's active CI watches; absent from an owner that predates them. */
   prCiWatches?: import("./thread-pr-watches").ThreadPrCiWatchMark[];
   scheduledStart?: ThreadScheduledStart;
