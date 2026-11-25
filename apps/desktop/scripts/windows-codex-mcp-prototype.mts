@@ -249,14 +249,13 @@ async function realCodex(helper: string, codex: string, cwd: string) {
     const threadId = started.thread.id;
     assert.equal(readyThreadId, threadId);
     registered.bindThread(threadId);
-    const inventory = await appServer.request<{ data: Array<{ name: string; tools: Record<string, unknown>; toolsError: string | null }> }>("mcpServerStatus/list", {
-      threadId, detail: "toolsAndAuthOnly", limit: 100,
+    const idle = await appServer.request<{ isError?: boolean; structuredContent?: { code?: string } }>("mcpServer/tool/call", {
+      threadId, server: "pwragent_apps", tool, arguments: {}, _meta: { threadId },
     });
-    const apps = inventory.data.find(({ name }) => name === "pwragent_apps");
-    const rows = inventory.data.map(({ name, tools, toolsError }) => ({ name, tools: Object.keys(tools), toolsError }));
-    assert(apps && Object.hasOwn(apps.tools, tool), `real Codex inventory omitted the owner tool: ${JSON.stringify(rows)}`);
+    assert.equal(idle.isError, true, "the real Codex call must be refused while the thread is idle");
+    assert.equal(idle.structuredContent?.code, "forbidden");
     assert.equal(owner.dispatches(), 0);
-    console.log("Real Codex App Server launched the verified relay and discovered the owner tool");
+    console.log("Real Codex launched the verified relay, reported MCP ready, and received the owner’s idle-call refusal");
   } finally {
     runtime.stdin?.end();
     await owner.server.close();

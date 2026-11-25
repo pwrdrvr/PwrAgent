@@ -40,7 +40,7 @@ and Dynamic Tools paths. A requested native configuration requires the relay.
   selected by ACP capability. Managed reviews keep their own HTTP registration.
   Linux and Windows Claude/ACP combinations use these existing paths.
 
-## Admission and lifetime
+## Unix admission and lifetime
 
 1. The owner lazily creates a socket in a new mode-0700 directory under
    the system's short `/tmp` path and sets the socket to mode 0600. The
@@ -178,6 +178,9 @@ toolchain. The script builds only the native test executable. The fixture
 tests production-off behavior, an occupied endpoint, an outside process
 with the correct grant, an admitted descendant, idle and wrong-thread rejection,
 and endpoint cleanup. With a native Codex executable supplied it also
-checks that a disposable App Server launches the relay and discovers the
-owner tool. The path-filtered Windows workflow downloads the pinned
+checks that a disposable App Server launches the relay, reports the tool
+server ready, and receives the owner's idle-call refusal. The app-server
+inventory RPC attempted its own handshake after the thread reported ready.
+That handshake could not open a second stream on the prototype's one-stream
+listener. The prototype does not support the full inventory inspector. The path-filtered Windows workflow downloads the pinned
 Codex 0.169.0 release and runs both scenarios without using an account.
