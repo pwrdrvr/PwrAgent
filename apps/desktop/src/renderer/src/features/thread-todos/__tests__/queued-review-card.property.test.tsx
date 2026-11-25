@@ -114,3 +114,26 @@ it("offers Start review only while no review queued from the card is waiting", (
   );
   expect(screen.queryByText("Review queued")).toBeNull();
 });
+
+// Every queue edit in any thread notifies the store's listeners. The card set
+// is read from ThreadView, so an edit that leaves the ids alone must neither
+// re-render it nor hand the cards a new set.
+it("keeps the queued card set, and skips the render, when a queue edit leaves its ids alone", () => {
+  const { result: storeHook } = renderHook(() => useComposerDraftStore());
+  const store = storeHook.current;
+  let renders = 0;
+  const { result } = renderHook(() => {
+    renders += 1;
+    return useQueuedReviewTodoIds(store);
+  });
+  act(() => syncScheduledActionProjections(store, [reviewAction("action-0", { threadId: "thread-a", todoId: "card-1", status: "queued" })]));
+  const queued = result.current;
+  const rendersAfterQueue = renders;
+  expect([...queued]).toEqual(["card-1"]);
+
+  act(() => applyScheduledActionProjection(store, reviewAction("action-1", { threadId: "thread-b", status: "scheduled" })));
+  act(() => applyScheduledActionProjection(store, reviewAction("action-0", { threadId: "thread-a", todoId: "card-1", status: "dispatching" })));
+
+  expect(renders).toBe(rendersAfterQueue);
+  expect(result.current).toBe(queued);
+});

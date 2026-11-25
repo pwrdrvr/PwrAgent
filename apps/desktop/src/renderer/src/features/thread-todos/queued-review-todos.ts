@@ -4,8 +4,8 @@ import type {
   ComposerQueuedTurnSnapshot,
 } from "../composer/useComposerDraftStore";
 
-const NO_STORE_VERSION = 0;
 const EMPTY: ReadonlySet<string> = new Set();
+const KEY_SEPARATOR = "\n";
 
 /**
  * The review cards whose review is waiting in a thread's queue. A card
@@ -25,21 +25,22 @@ export function queuedReviewTodoIds(
   return ids.size ? ids : EMPTY;
 }
 
-/** `queuedReviewTodoIds` across every queue the store holds, kept current. */
+/**
+ * `queuedReviewTodoIds` across every queue the store holds, kept current.
+ * Every queue edit in any thread notifies, so the snapshot is the sorted ids
+ * as one string: React skips the render, and the set keeps its identity,
+ * unless the ids themselves change.
+ */
 export function useQueuedReviewTodoIds(store: ComposerDraftStore | undefined): ReadonlySet<string> {
   const subscribe = useCallback(
     (listener: () => void) => store?.subscribeQueuedTurns(listener) ?? (() => undefined),
     [store],
   );
-  const getVersion = useCallback(
-    () => store?.getQueuedTurnVersion() ?? NO_STORE_VERSION,
-    [store],
-  );
-  const version = useSyncExternalStore(subscribe, getVersion);
-  return useMemo(() => {
-    if (!store) return EMPTY;
-    return queuedReviewTodoIds(store.getQueuedScopeKeys().map((scopeKey) => store.getQueuedTurns(scopeKey)));
-    // The version names the queue contents this set was read from.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store, version]);
+  const getKey = useCallback(() => {
+    if (!store) return "";
+    const ids = queuedReviewTodoIds(store.getQueuedScopeKeys().map((scopeKey) => store.getQueuedTurns(scopeKey)));
+    return [...ids].sort().join(KEY_SEPARATOR);
+  }, [store]);
+  const key = useSyncExternalStore(subscribe, getKey);
+  return useMemo(() => (key ? new Set(key.split(KEY_SEPARATOR)) : EMPTY), [key]);
 }

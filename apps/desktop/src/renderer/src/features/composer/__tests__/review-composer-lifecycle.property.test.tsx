@@ -271,6 +271,13 @@ describe("review composer lifecycle invariants", () => {
                 ? { todo: { id: "todo-a", allowOpenItems: true } }
                 : { target: { type: "uncommittedChanges" } }),
             }));
+            // The queued row names the card it completes, so the card can say
+            // its review is queued rather than offer Start review again.
+            await waitFor(() =>
+              expect(capturedStore?.getQueuedTurns(scopeA).map((queued) => queued.reviewTodoId)).toEqual(
+                entry === "review-request" ? ["todo-a"] : [undefined],
+              ),
+            );
           }
         },
       ),
