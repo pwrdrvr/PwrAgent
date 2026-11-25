@@ -275,9 +275,30 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
       ].filter(Boolean).join(" ")}
       data-testid={props.testId ? `${props.testId}-panel` : undefined}
       id={panelId}
+      aria-busy={props.disabled || undefined}
       ref={panelRef}
       role="dialog"
       style={panelStyle}
+      // While the pill is disabled (a save or a start in flight) the open
+      // panel stays put but takes no picks: its handlers read the props of
+      // the last render, so a second pick would undo the first.
+      onClickCapture={(event) => {
+        if (!props.disabled) return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onPointerDownCapture={(event) => {
+        if (props.disabled) event.stopPropagation();
+      }}
+      onKeyDownCapture={(event) => {
+        if (!props.disabled) return;
+        const role = (event.target as HTMLElement).getAttribute("role");
+        const picks = event.key === "Enter" || event.key === " "
+          || ((role === "slider" || role === "radio") && event.key !== "Tab" && event.key !== "Escape");
+        if (!picks) return;
+        event.preventDefault();
+        event.stopPropagation();
+      }}
       onBlur={(event) => {
         // Tabbing out of both the panel and its pill closes the panel. Only
         // the keyboard does: the host moving focus in code (a composer
@@ -703,7 +724,9 @@ function EffortSection({ effort }: { effort: NonNullable<ModelSettingsPickerProp
               aria-valuemax={count - 1}
               aria-valuemin={0}
               aria-valuenow={index >= 0 ? index : undefined}
-              aria-valuetext={index >= 0 ? effort.stops[index] : effort.defaultOption?.label ?? "Not set"}
+              aria-valuetext={index >= 0 ? effort.stops[index]
+                : isDefault ? effort.defaultOption?.label
+                : effort.value || "Not set"}
               className={[
                 "model-settings__effort-track",
                 index < 0 && preview === undefined ? "is-unset" : "",

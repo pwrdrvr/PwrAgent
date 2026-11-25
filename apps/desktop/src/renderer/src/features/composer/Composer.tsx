@@ -15769,128 +15769,128 @@ function useComposerController(props: ComposerProps) {
     if (!props.launchpad && !props.thread) return undefined;
     const hasModels = Boolean(backend?.launchpadOptions?.models?.length);
     const offersProviders = Boolean(props.launchpad && providerOptions.length > 0);
-    if (!backend || (!hasModels && !offersProviders)) return undefined;
+    const efforts = supportsReasoning ? getReasoningEffortsForModel(backend, selectedModelOption) : [];
+    // A provider can list efforts without a model catalog; the effort bar
+    // is still its control.
+    if (!backend || (!hasModels && !offersProviders && efforts.length === 0)) return undefined;
     const onProviderChange = (value: string): void => {
       if (!props.launchpad) {
         return;
       }
-              if (!props.launchpad) {
-                return;
-              }
-              const picked = parseProviderPickerValue(value);
-              const nextBackend = picked.backend as NavigationLaunchpadDraft["backend"];
-              const pickedEntry = providerPickerEntries.find((entry) => entry.value === value);
-              const hasRememberedModel = Boolean(
-                props.launchpad.providerSettings?.[value]?.model,
-              );
-              if (nextBackend.startsWith("acp:") && !hasRememberedModel) {
-                pendingProviderSelectionKeyRef.current =
-                  `${props.launchpad.directoryKey}:${nextBackend}`;
-              } else {
-                pendingProviderSelectionKeyRef.current = undefined;
-              }
-              if (
-                !nextBackend.startsWith("acp:")
-                || !props.onProviderSelected
-              ) {
-                void refreshProviderCatalogOnFirstSelection(
-                  props.desktopApi,
-                  nextBackend,
-                  filesystemFederationTarget,
-                );
-              }
-              const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
-              const remembered = props.launchpad.providerSettings?.[value];
-              const configuredDefaults = filesystemFederationTarget?.scope === "remote"
-                ? nextSummary?.modelProviderDefaults?.[value] ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined)
-                : props.providerModelDefaults?.[value] ?? nextSummary?.modelProviderDefaults?.[value]
-                  ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined);
-              // A Codex entry, OpenAI's own or a model provider's, offers
-              // only that provider's models, so its model is chosen there.
-              const ownerModels = nextBackend === "codex"
-                ? pickedEntry?.models ?? []
-                : nextSummary?.launchpadOptions?.models ?? [];
-              const defaultOption = getDefaultModelOption(nextSummary);
-              const ownerModel = ownerModels.find((candidate) => candidate.id === remembered?.model)
-                ?? ownerModels.find((candidate) => candidate.id === configuredDefaults?.model)
-                ?? (nextBackend === "codex"
-                  ? ownerModels.find((candidate) => candidate.id === defaultOption?.id) ?? ownerModels[0]
-                  : defaultOption);
-              const ownerEffort = ownerModel
-                ? remembered?.reasoningEffortsByModel?.[ownerModel.id]
-                  ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
-                  ?? configuredDefaults?.reasoningEffortsByModel[ownerModel.id]
-                : undefined;
-              handleLaunchpadPatch({
-                backend: nextBackend,
-                ...(nextBackend === "codex" ? {
-                  codexModelProviderId: picked.codexModelProviderId,
-                  executionMode: remembered?.executionMode
-                    ?? configuredDefaults?.executionMode
-                    ?? resolveDefaultLaunchpadExecutionMode(value),
-                } : {}),
-                // A local Codex choice names its provider through the model
-                // id, so moving between Codex entries sets the model. The
-                // remembered effort, Fast mode and tier still restore as
-                // they do for any other provider switch.
-                ...(nextBackend === "codex" || filesystemFederationTarget?.scope === "remote" ? {
-                  model: ownerModel?.id,
-                  reasoningEffort: ownerModel?.supportsReasoning
-                    ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)
-                    : undefined,
-                  fastMode: ownerModel?.supportsFast ? remembered?.fastMode : undefined,
-                  serviceTier: ownerModel?.serviceTiers?.includes(remembered?.serviceTier ?? "")
-                    || (ownerModel?.supportsFast && ["fast", "priority"].includes(remembered?.serviceTier ?? ""))
-                    ? remembered?.serviceTier
-                    : undefined,
-                } : {}),
-              }, { keepFocus: true });
+      const picked = parseProviderPickerValue(value);
+      const nextBackend = picked.backend as NavigationLaunchpadDraft["backend"];
+      const pickedEntry = providerPickerEntries.find((entry) => entry.value === value);
+      const hasRememberedModel = Boolean(
+        props.launchpad.providerSettings?.[value]?.model,
+      );
+      if (nextBackend.startsWith("acp:") && !hasRememberedModel) {
+        pendingProviderSelectionKeyRef.current =
+          `${props.launchpad.directoryKey}:${nextBackend}`;
+      } else {
+        pendingProviderSelectionKeyRef.current = undefined;
+      }
+      if (
+        !nextBackend.startsWith("acp:")
+        || !props.onProviderSelected
+      ) {
+        void refreshProviderCatalogOnFirstSelection(
+          props.desktopApi,
+          nextBackend,
+          filesystemFederationTarget,
+        );
+      }
+      const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
+      const remembered = props.launchpad.providerSettings?.[value];
+      const configuredDefaults = filesystemFederationTarget?.scope === "remote"
+        ? nextSummary?.modelProviderDefaults?.[value] ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined)
+        : props.providerModelDefaults?.[value] ?? nextSummary?.modelProviderDefaults?.[value]
+          ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined);
+      // A Codex entry, OpenAI's own or a model provider's, offers
+      // only that provider's models, so its model is chosen there.
+      const ownerModels = nextBackend === "codex"
+        ? pickedEntry?.models ?? []
+        : nextSummary?.launchpadOptions?.models ?? [];
+      const defaultOption = getDefaultModelOption(nextSummary);
+      const ownerModel = ownerModels.find((candidate) => candidate.id === remembered?.model)
+        ?? ownerModels.find((candidate) => candidate.id === configuredDefaults?.model)
+        ?? (nextBackend === "codex"
+          ? ownerModels.find((candidate) => candidate.id === defaultOption?.id) ?? ownerModels[0]
+          : defaultOption);
+      const ownerEffort = ownerModel
+        ? remembered?.reasoningEffortsByModel?.[ownerModel.id]
+          ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
+          ?? configuredDefaults?.reasoningEffortsByModel[ownerModel.id]
+        : undefined;
+      handleLaunchpadPatch({
+        backend: nextBackend,
+        ...(nextBackend === "codex" ? {
+          codexModelProviderId: picked.codexModelProviderId,
+          executionMode: remembered?.executionMode
+            ?? configuredDefaults?.executionMode
+            ?? resolveDefaultLaunchpadExecutionMode(value),
+        } : {}),
+        // A local Codex choice names its provider through the model
+        // id, so moving between Codex entries sets the model. The
+        // remembered effort, Fast mode and tier still restore as
+        // they do for any other provider switch.
+        ...(nextBackend === "codex" || filesystemFederationTarget?.scope === "remote" ? {
+          model: ownerModel?.id,
+          reasoningEffort: ownerModel?.supportsReasoning
+            ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)
+            : undefined,
+          fastMode: ownerModel?.supportsFast ? remembered?.fastMode : undefined,
+          serviceTier: ownerModel?.serviceTiers?.includes(remembered?.serviceTier ?? "")
+            || (ownerModel?.supportsFast && ["fast", "priority"].includes(remembered?.serviceTier ?? ""))
+            ? remembered?.serviceTier
+            : undefined,
+        } : {}),
+      }, { keepFocus: true });
     };
     const onModelChange = (value: string): void => {
-              const model = value;
-              const nextModelOption = backend.launchpadOptions?.models?.find(
-                (option) => option.id === model
-              );
-              const nextSupportsReasoning =
-                nextModelOption?.supportsReasoning ??
-                Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
-              const nextSupportsFast =
-                backend.kind === "codex"
-                  ? nextModelOption?.supportsFast ??
-                    backend.launchpadOptions?.supportsFastMode ??
-                    false
-                  : false;
-              if (props.launchpad) {
-                handleLaunchpadPatch({
-                  model,
-                  ...(nextSupportsFast ? {} : { fastMode: undefined }),
-                  ...(filesystemFederationTarget?.scope === "remote" ? {
-                    reasoningEffort: nextSupportsReasoning
-                      ? getReasoningEffortValue(backend, nextModelOption,
-                          props.launchpad.providerSettings?.[navigationLaunchpadProviderKey(props.launchpad)]?.reasoningEffortsByModel?.[model]
-                            ?? props.launchpad.reasoningEffort)
-                      : undefined,
-                    serviceTier: nextModelOption?.serviceTiers?.includes(props.launchpad.serviceTier ?? "")
-                      || (nextSupportsFast && ["fast", "priority"].includes(props.launchpad.serviceTier ?? ""))
-                      ? props.launchpad.serviceTier
-                      : undefined,
-                  } : {}),
-                }, { keepFocus: true });
-                return;
-              }
-              if (nextSupportsReasoning) {
-                handleThreadModelSettingsPatch({
-                  model,
-                  ...(nextSupportsFast ? {} : { fastMode: undefined }),
-                });
-                return;
-              }
-              const patch = {
-                model,
-                reasoningEffort: undefined,
-                ...(nextSupportsFast ? {} : { fastMode: undefined }),
-              };
-              handleThreadModelSettingsPatch(patch);
+      const model = value;
+      const nextModelOption = backend.launchpadOptions?.models?.find(
+        (option) => option.id === model
+      );
+      const nextSupportsReasoning =
+        nextModelOption?.supportsReasoning ??
+        Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
+      const nextSupportsFast =
+        backend.kind === "codex"
+          ? nextModelOption?.supportsFast ??
+            backend.launchpadOptions?.supportsFastMode ??
+            false
+          : false;
+      if (props.launchpad) {
+        handleLaunchpadPatch({
+          model,
+          ...(nextSupportsFast ? {} : { fastMode: undefined }),
+          ...(filesystemFederationTarget?.scope === "remote" ? {
+            reasoningEffort: nextSupportsReasoning
+              ? getReasoningEffortValue(backend, nextModelOption,
+                  props.launchpad.providerSettings?.[navigationLaunchpadProviderKey(props.launchpad)]?.reasoningEffortsByModel?.[model]
+                    ?? props.launchpad.reasoningEffort)
+              : undefined,
+            serviceTier: nextModelOption?.serviceTiers?.includes(props.launchpad.serviceTier ?? "")
+              || (nextSupportsFast && ["fast", "priority"].includes(props.launchpad.serviceTier ?? ""))
+              ? props.launchpad.serviceTier
+              : undefined,
+          } : {}),
+        }, { keepFocus: true });
+        return;
+      }
+      if (nextSupportsReasoning) {
+        handleThreadModelSettingsPatch({
+          model,
+          ...(nextSupportsFast ? {} : { fastMode: undefined }),
+        });
+        return;
+      }
+      const patch = {
+        model,
+        reasoningEffort: undefined,
+        ...(nextSupportsFast ? {} : { fastMode: undefined }),
+      };
+      handleThreadModelSettingsPatch(patch);
     };
     const providerChoices = offersProviders
       ? providerPickerDropdownOptions(providerPickerEntries, props.backends)
@@ -15901,7 +15901,6 @@ function useComposerController(props: ComposerProps) {
         .find((option) => option.value === providerValue)?.label
         ?? formatBackendLabel(backend.kind, props.backends)
       : formatOwnerProviderLabel(props.thread?.source ?? backend.kind, props.thread?.model, props.backends);
-    const efforts = supportsReasoning ? getReasoningEffortsForModel(backend, selectedModelOption) : [];
     const { stops, hasModelDefault } = splitEffortChoices(efforts);
     const fastOnly = supportsFast && !speedOptions.includes("ultrafast");
     const applySettings = (
@@ -16021,8 +16020,9 @@ function useComposerController(props: ComposerProps) {
             )
           ) : null}
           {props.thread && !props.launchpad && !backend?.launchpadOptions?.models?.length ? (
-            // A thread whose provider lists no models has no model pill to
-            // name its provider, so the provider stays as a plain fact.
+            // A thread's pill never names its provider, and without a model
+            // list the pill (if any) holds only effort, so the provider
+            // stays as a plain fact.
             <span className="composer__fixed-value" aria-label="Provider">
               {formatOwnerProviderLabel(props.thread.source, props.thread.model, props.backends)}
             </span>

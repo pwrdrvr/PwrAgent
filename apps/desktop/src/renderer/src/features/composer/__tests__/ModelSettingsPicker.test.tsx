@@ -82,3 +82,52 @@ describe("ModelSettingsPicker initial focus", () => {
     expect(document.activeElement).toBe(screen.getByRole("option", { name: "Opus 5.5" }));
   });
 });
+
+/**
+ * While the pill is disabled (a save in flight), the open panel takes no
+ * picks. Its handlers hold the last render's props, so a second pick sent
+ * the old model back with the new effort and undid the first.
+ */
+describe("ModelSettingsPicker while disabled", () => {
+  it("ignores picks in an open panel once the pill is disabled", async () => {
+    const onModel = vi.fn();
+    const onEffort = vi.fn();
+    const picker = (disabled: boolean) => (
+      <ModelSettingsPicker
+        disabled={disabled}
+        model={{
+          value: "opus", label: "Opus 5.5", kind: "claude",
+          models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+          onChange: onModel,
+        }}
+        effort={{ stops: ["low", "high"], value: "high", onChange: onEffort }}
+      />
+    );
+    const { rerender } = render(picker(false));
+    fireEvent.click(screen.getByRole("button", { name: /^Model settings/ }));
+    rerender(picker(true));
+    const panel = screen.getByRole("dialog", { name: "Model settings" });
+    fireEvent.click(screen.getByRole("option", { name: "Sonnet 5.5" }));
+    const slider = screen.getByRole("slider", { name: "Effort" });
+    fireEvent.keyDown(slider, { key: "Home" });
+    fireEvent.pointerDown(panel.querySelector("[data-effort='low']")!, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(panel.querySelector("[data-effort='low']")!, { button: 0, pointerId: 1 });
+    expect(onModel).not.toHaveBeenCalled();
+    expect(onEffort).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Model settings" })).toBe(panel);
+    rerender(picker(false));
+    fireEvent.click(screen.getByRole("option", { name: "Sonnet 5.5" }));
+    expect(onModel).toHaveBeenCalledWith("sonnet");
+  });
+
+  it("names an effort the bar does not list as that effort, not the default", () => {
+    render(
+      <ModelSettingsPicker
+        model={{ value: "m", label: "Model", kind: "claude", models: [], onChange: () => undefined }}
+        effort={{ stops: ["low", "high"], value: "xhigh", defaultOption: { value: "default", label: "Default" }, onChange: () => undefined }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Model settings/ }));
+    expect(screen.getByRole("slider", { name: "Effort" }).getAttribute("aria-valuetext")).toBe("xhigh");
+  });
+});

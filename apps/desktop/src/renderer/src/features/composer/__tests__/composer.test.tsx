@@ -6769,6 +6769,26 @@ describe("Composer", () => {
     expect(onUpdateLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ model: "owner-plain", reasoningEffort: undefined, serviceTier: undefined }));
   });
 
+  it("keeps an effort control for a thread whose provider lists efforts but no models", () => {
+    const onSetThreadModelSettings = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("acp:grok", { reasoningEfforts: ["low", "high"] })]}
+        onSetThreadModelSettings={onSetThreadModelSettings}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Effort only", titleSource: "explicit", source: "acp:grok",
+          executionMode: "default", reasoningEffort: "high", linkedDirectories: [], inbox: { inInbox: false },
+        }}
+      />,
+    );
+    // The removed Reasoning dropdown showed for any listed efforts; the
+    // pill carries them now, with or without a model catalog.
+    expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
+    chooseEffort("low");
+    expect(onSetThreadModelSettings).toHaveBeenCalledWith({ reasoningEffort: "low" });
+  });
+
   it("keeps the model panel open on a provider pick and lists that provider's models", async () => {
     function Draft() {
       const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>({
