@@ -141,11 +141,12 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     const readyRows = menu.getByRole("listbox", { name: "Ready settings" }).getByRole("option");
     await expect(readyRows.first()).toBeFocused();
     await expect(menu).toContainText("GPT-5.4");
-    // The panel hangs under the chip and stays inside the window.
+    // The panel opens beside the chip (under it when it fits, else above),
+    // never over it, and stays inside the window.
     const menuBox = await menu.boundingBox();
     const chipBox = await chip.boundingBox();
     const viewportWidth = await app.window.evaluate(() => window.innerWidth);
-    expect(menuBox!.y).toBeGreaterThanOrEqual(chipBox!.y + chipBox!.height);
+    expect(menuBox!.y >= chipBox!.y + chipBox!.height || menuBox!.y + menuBox!.height <= chipBox!.y).toBe(true);
     expect(menuBox!.x).toBeGreaterThanOrEqual(8);
     expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewportWidth - 8 + 0.5);
     await menu.screenshot({ path: testInfo.outputPath("todo-dispatch-popover.png"), animations: "disabled" });

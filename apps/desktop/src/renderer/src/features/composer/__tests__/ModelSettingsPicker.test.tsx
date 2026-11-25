@@ -1,8 +1,11 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ModelSettingsPicker } from "../ModelSettingsPicker";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 function renderPicker() {
   render(
@@ -46,5 +49,36 @@ describe("ModelSettingsPicker focus", () => {
     renderPicker();
     await act(async () => { fireEvent.pointerDown(screen.getByRole("textbox", { name: "Prompt" })); });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+/**
+ * A portalled panel is hidden until it is placed, and a browser will not
+ * focus into a hidden element. The panel once moved focus during that
+ * hidden first render, so a to-do card opened with focus nowhere.
+ */
+describe("ModelSettingsPicker initial focus", () => {
+  it("moves focus into a portalled panel only once it is visible", async () => {
+    const seen: string[] = [];
+    const focus = HTMLElement.prototype.focus;
+    vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options) {
+      const panel = this.closest<HTMLElement>(".model-settings__panel");
+      if (panel) seen.push(panel.style.visibility || "visible");
+      focus.call(this, options);
+    });
+    render(
+      <ModelSettingsPicker
+        size="card"
+        model={{
+          value: "opus", label: "Opus 5.5", kind: "claude",
+          models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+          onChange: () => undefined,
+        }}
+      />,
+    );
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Model settings/ })); });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).not.toContain("hidden");
+    expect(document.activeElement).toBe(screen.getByRole("option", { name: "Opus 5.5" }));
   });
 });

@@ -215,16 +215,24 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
   }, [open, place, portalled]);
 
   // Focus goes to the chosen quick pick, else the chosen model: where a
-  // keyboard user most often starts.
+  // keyboard user most often starts. A portalled panel stays hidden until
+  // it is placed, and a browser will not focus into a hidden element, so
+  // the move waits for the placement, once per opening.
+  const focusedOpenRef = useRef(false);
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      focusedOpenRef.current = false;
+      return;
+    }
+    if (focusedOpenRef.current || (portalled && !placement)) return;
+    focusedOpenRef.current = true;
     const panel = panelRef.current;
     const target = panel?.querySelector<HTMLElement>('.model-settings__quick [aria-selected="true"]')
       ?? panel?.querySelector<HTMLElement>('[data-model-settings-list="model"] [aria-selected="true"]')
       ?? panel?.querySelector<HTMLElement>('[data-model-settings-list="model"] [role="option"]:not(:disabled)')
       ?? panel?.querySelector<HTMLElement>("button:not(:disabled), [tabindex='0']");
     target?.focus({ preventScroll: true });
-  }, [open]);
+  }, [open, placement, portalled]);
 
   const effortIndex = props.effort ? props.effort.stops.indexOf(props.effort.value ?? "") : -1;
   const effortIsDefault = Boolean(props.effort?.defaultOption)
