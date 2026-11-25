@@ -39,15 +39,19 @@ Density is `<html data-density>`: absent for Mission Control, `compact`, or
 
 An agent edits, commits, pushes and adds to-do cards many times a turn. Each
 change resized its row and moved every row below it, including the row under
-the pointer. So while a thread is mid-turn (`getThreadRowStatus` says
-`thinking`) and is not the open thread, its row passes `holdWorkProgress` to
+the pointer. So while a thread's turn or owned worker runs
+(`isThreadTurnRunning`) and it is not the open thread, its row passes
+`holdWorkProgress` to
 `ThreadMetaChips`, which shows these as they were when the hold began:
 
 - the branch chip (`gitBranch`, `observedGitBranch`);
 - the uncommitted and unpushed chips (`gitWorkingState`);
 - the to-do count's cards.
 
-Opening the thread, or the turn ending, shows the live values at once. Every
+Opening the thread, or the turn ending, shows the live values at once.
+Background tasks left running after the turn keep the row's working mark but
+not the hold, so a turn's results show when it ends, not when a dev server or
+watcher it started exits. Every
 other chip stays live: approvals, input, questions and held messages wait on
 the operator, PR chips mark a milestone, and drafts are the operator's own.
 A row that mounts mid-turn shows its first values. X-ray and chip tooltips

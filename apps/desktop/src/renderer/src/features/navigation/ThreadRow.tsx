@@ -42,6 +42,7 @@ import { readCompactStackMemberships } from "@pwragent/shared/stacks/stack-statu
 import {
   getThreadRowStatus,
   isThreadRemoteWorkHere,
+  isThreadTurnRunning,
   ThreadRowStatus,
 } from "./ThreadRowStatus";
 import { InlineRenameInput } from "./InlineRenameInput";
@@ -809,8 +810,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             queuedMessageState={props.queuedMessageThreadKeys?.[threadKey]}
             hasUnsentDraft={hasUnsentDraft}
             // Mid-turn and not open: hold the git and to-do chips until the
-            // turn ends or the operator opens the thread.
-            holdWorkProgress={status === "thinking" && !active}
+            // turn ends or the operator opens the thread. Background tasks
+            // left running after the turn do not hold them.
+            holdWorkProgress={!active && isThreadTurnRunning(props.thread, props.thinkingThreadKeys)}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             // One chip for the lead PR, then one `+N PRs` chip whose list

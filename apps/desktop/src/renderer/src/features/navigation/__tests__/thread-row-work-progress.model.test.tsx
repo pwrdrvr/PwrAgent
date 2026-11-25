@@ -16,7 +16,9 @@ afterEach(cleanup);
 // row keeps the git and to-do chips it showed when it went quiet. Opening the
 // thread, or the turn ending, shows the live values at once. Chips that wait
 // on the operator stay live throughout, and no row shows the branch-drift
-// chip; that warning belongs to the open thread.
+// chip; that warning belongs to the open thread. A turn is running while the
+// backend says so, an owned worker runs, or the renderer is waiting on the
+// turn's status; background tasks left running after it do not count.
 //
 // Oracle: a second, idle row rendered from the model's expected summary. The
 // two chip flows must match, so the test never restates how a chip renders.
@@ -42,8 +44,11 @@ type Progress = {
 };
 
 const branch = fc.constantFrom(undefined, "HEAD", "main", "fix/contrived-branch", "test/another-contrived-branch");
+type Activity = { thinking: boolean; turnActive: boolean; subAgent: boolean; background: boolean };
+const IDLE: Activity = { thinking: false, turnActive: false, subAgent: false, background: false };
+
 const command = fc.oneof(
-  fc.record({ kind: fc.constant("working" as const) }),
+  fc.record({ kind: fc.constant("activity" as const), source: fc.constantFrom<keyof Activity>("thinking", "turnActive", "subAgent", "background") }),
   fc.record({ kind: fc.constant("select" as const) }),
   fc.record({ kind: fc.constant("approval" as const) }),
   fc.record({ kind: fc.constant("remount" as const) }),
@@ -69,22 +74,28 @@ function chipFlow(container: HTMLElement): string[] {
 
 it("holds a working, unopened row's progress chips until it is opened or idle", () => {
   fc.assert(fc.property(fc.array(command, { minLength: 10, maxLength: 40, size: "max" }), (commands) => {
-    let working = false;
+    let activity: Activity = IDLE;
     let selected = false;
     let approval = false;
     let live: Progress = { gitBranch: thread.gitBranch, todos: [] };
     let shown: Progress = live;
     let nextTodo = 0;
 
-    const row = (progress: Progress, rowWorking: boolean, rowSelected: boolean) => {
+    const row = (progress: Progress, rowActivity: Activity, rowSelected: boolean) => {
       const { todos, ...git } = progress;
       return (
         <ThreadTodoCountsContext.Provider value={new Map([[threadKey, todos]])}>
           <ThreadRow
             approvalRequestThreadKeys={approval ? { [threadKey]: true } : undefined}
             selectedThreadKey={rowSelected ? threadKey : undefined}
-            thinkingThreadKeys={rowWorking ? { [threadKey]: true } : undefined}
-            thread={{ ...thread, ...git }}
+            thinkingThreadKeys={rowActivity.thinking ? { [threadKey]: true } : undefined}
+            thread={{
+              ...thread,
+              ...git,
+              threadStatus: rowActivity.turnActive ? "active" : "idle",
+              hasActiveSubAgent: rowActivity.subAgent,
+              hasBackgroundTasks: rowActivity.background,
+            }}
             onOpenContextMenu={() => undefined}
             onSelectThread={() => undefined}
           />
@@ -92,11 +103,11 @@ it("holds a working, unopened row's progress chips until it is opened or idle", 
       );
     };
 
-    let subject = render(row(live, working, selected));
+    let subject = render(row(live, activity, selected));
     try {
       for (const step of commands) {
         switch (step.kind) {
-          case "working": working = !working; break;
+          case "activity": activity = { ...activity, [step.source]: !activity[step.source] }; break;
           case "select": selected = !selected; break;
           case "approval": approval = !approval; break;
           case "git":
@@ -131,15 +142,16 @@ it("holds a working, unopened row's progress chips until it is opened or idle", 
 
         if (step.kind === "remount") {
           subject.unmount();
-          subject = render(row(live, working, selected));
+          subject = render(row(live, activity, selected));
           // A row that mounts mid-turn has nothing older to show.
           shown = live;
         } else {
-          subject.rerender(row(live, working, selected));
+          subject.rerender(row(live, activity, selected));
         }
-        if (!working || selected) shown = live;
+        const turnRunning = activity.thinking || activity.turnActive || activity.subAgent;
+        if (!turnRunning || selected) shown = live;
 
-        const oracle = render(row(shown, false, false));
+        const oracle = render(row(shown, IDLE, false));
         try {
           expect(chipFlow(subject.container)).toEqual(chipFlow(oracle.container));
         } finally {
@@ -221,4 +233,17 @@ it("keeps the open thread's to-do count live mid-turn", () => {
   expect(count(unopened)).toBe("0");
   unopened.rerender(renderRow({ working: false, selected: false, todos: [todo] }));
   expect(count(unopened)).toBe("1");
+});
+
+it("shows live chips once the turn ends, even with background tasks still running", () => {
+  const backgroundOnly = (gitWorkingState?: ThreadGitWorkingState) => (
+    <ThreadRow
+      thread={{ ...thread, gitBranch: "fix/contrived-branch", threadStatus: "idle", hasBackgroundTasks: true, gitWorkingState }}
+      onOpenContextMenu={() => undefined}
+      onSelectThread={() => undefined}
+    />
+  );
+  const view = render(backgroundOnly());
+  view.rerender(backgroundOnly(unpushed(1)));
+  expect(view.container.querySelector(".thread-row__chip--unpushed")).toHaveTextContent("↑1");
 });
