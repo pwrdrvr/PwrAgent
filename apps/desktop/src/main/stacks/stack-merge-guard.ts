@@ -76,6 +76,50 @@ export async function assertStackMergeAllowed(input: {
   }
 }
 
+/** A pull request in one of GitHub's own stacks, which merges only through the asynchronous merge API. */
+export type GithubNativeStack = { number: number; position: number; size: number };
+
+type GithubNativeStackLayer = { number?: number; state?: string; merged_at?: string | null };
+
+/**
+ * GitHub merges a stacked pull request together with every open layer below
+ * it. One merge must land one pull request, so refuse while a lower layer is
+ * open. Returns the stack, or undefined for a pull request outside one.
+ */
+export async function assertGithubNativeStackMergeAllowed(
+  number: number,
+  pull: GithubStackPull,
+  get: (route: string) => Promise<unknown>,
+  observeLower?: (number: number) => void,
+): Promise<GithubNativeStack | undefined> {
+  const stack = pull?.stack;
+  if (!stack) return undefined;
+  const unreadable = () => new ForgeReadError("stack_parent_open",
+    `Could not read the GitHub stack of pull request #${number}. Confirm its lower layers have merged, then retry.`);
+  if (!Number.isInteger(stack.number) || !Number.isInteger(stack.position) || !Number.isInteger(stack.size)) throw unreadable();
+  let layers: GithubNativeStackLayer[] | undefined;
+  try {
+    layers = (await get(`/stacks/${stack.number}`) as { pull_requests?: GithubNativeStackLayer[] } | undefined)?.pull_requests;
+  } catch (error) {
+    if (error instanceof ForgeReadError && error.code === "not_found") throw unreadable();
+    throw error;
+  }
+  const index = layers?.findIndex((layer) => layer?.number === number) ?? -1;
+  if (!layers || index < 0) throw unreadable();
+  const lower = layers.slice(0, index);
+  for (const layer of lower) {
+    if (layer.number) observeLower?.(layer.number);
+  }
+  const open = lower.filter((layer) => !layer.merged_at && layer.state !== "closed");
+  if (open.length) {
+    const named = open.map((layer) => `#${layer.number}`).join(", ");
+    throw new ForgeReadError("stack_parent_open", `Pull request #${number} is layer ${index + 1} of ${layers.length} in a GitHub stack, and ${named} below it ${open.length === 1 ? "is" : "are"} still open. GitHub would merge ${open.length === 1 ? "it" : "them"} too: merge ${named} first.`);
+  }
+  return { number: stack.number!, position: stack.position!, size: stack.size! };
+}
+
+export type GithubStackMergeCheck = { base: string; headSha?: string; nativeStack?: GithubNativeStack };
+
 export async function assertGithubStackMergeAllowed(
   repository: ForgeRepository,
   number: number,
@@ -84,9 +128,22 @@ export async function assertGithubStackMergeAllowed(
   graphql: GithubStackGraphql,
   observeLower?: (number: number) => void,
 ): Promise<string> {
+  return (await checkGithubStackMerge(repository, number, catalogs, get, graphql, observeLower)).base;
+}
+
+/** The stack-order check, plus what a merge needs to know: whether GitHub stacks the pull request itself. */
+export async function checkGithubStackMerge(
+  repository: ForgeRepository,
+  number: number,
+  catalogs: readonly GhStackCatalog[],
+  get: (route: string) => Promise<unknown>,
+  graphql: GithubStackGraphql,
+  observeLower?: (number: number) => void,
+): Promise<GithubStackMergeCheck> {
   const current = await get(`/pulls/${number}`) as GithubStackPull;
   const base = current?.base?.ref;
   if (!base) throw new ForgeReadError("unavailable", `Could not confirm the base of pull request #${number}.`);
+  const nativeStack = await assertGithubNativeStackMergeAllowed(number, current, get, observeLower);
   const repo = `${repository.owner}/${repository.repo}`.toLowerCase();
   const fromBranch = async (branch: string) => {
     const params = new URLSearchParams({ state: "all", head: `${repository.owner}:${branch}`, per_page: "100" });
@@ -117,7 +174,7 @@ export async function assertGithubStackMergeAllowed(
       if (block) throw block;
     },
   });
-  return base;
+  return { base, ...(current.head?.sha ? { headSha: current.head.sha } : {}), ...(nativeStack ? { nativeStack } : {}) };
 }
 
 /** A retarget can leave the head SHA unchanged. The queue read must agree with the guard. */

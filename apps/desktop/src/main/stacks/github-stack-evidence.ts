@@ -10,6 +10,8 @@ export type GithubStackPull = {
   created_at?: string;
   head?: { ref?: string; sha?: string; repo?: { full_name?: string } | null };
   base?: { ref?: string; sha?: string; repo?: { default_branch?: string } | null };
+  /** GitHub's own stacked pull requests: `number` names the stack, not a pull request. */
+  stack?: { number?: number; position?: number; size?: number } | null;
 };
 
 export type GithubStackGraphql = (query: string, variables: { owner: string; repo: string; number: number }) => Promise<unknown>;
