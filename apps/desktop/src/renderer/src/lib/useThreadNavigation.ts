@@ -856,6 +856,7 @@ function prSummariesEqual(
       candidate.sourceRepository?.org === pr.sourceRepository?.org &&
       candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
       candidate.explicitlyAttached === pr.explicitlyAttached &&
+      candidate.autoFixOff === pr.autoFixOff &&
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
@@ -2172,7 +2173,11 @@ function applyPullRequestStatusUpdate(
     if (buildPullRequestStatusKey(currentPr) !== prKey) {
       continue;
     }
-    const updatedPr = { ...params.pr, explicitlyAttached: currentPr.explicitlyAttached };
+    const updatedPr = {
+      ...params.pr,
+      explicitlyAttached: currentPr.explicitlyAttached,
+      autoFixOff: currentPr.autoFixOff,
+    };
     if (prSummariesEqual([currentPr], [updatedPr])) {
       continue;
     }
@@ -3311,9 +3316,11 @@ export function useThreadNavigation(
       >
     >
   ) => Promise<void>;
+  /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
   setThreadPrAutoDispatch: (
     thread: NavigationThreadSummary,
     enabled: boolean,
+    prKey?: string,
   ) => Promise<void>;
   cancelThreadPrAutoDispatch: (
     thread: NavigationThreadSummary,
@@ -10429,6 +10436,7 @@ export function useThreadNavigation(
     async (
       thread: NavigationThreadSummary,
       enabled: boolean,
+      prKey?: string,
     ): Promise<void> => {
       if (!setThreadPrAutoDispatchRequest) {
         setSetThreadModelSettingsError(
@@ -10437,6 +10445,25 @@ export function useThreadNavigation(
         return;
       }
       setSetThreadModelSettingsError(undefined);
+      if (prKey !== undefined) {
+        // One PR's switch rewrites the thread's attachment list; the owner's
+        // thread/pullRequests/updated event carries it to every window.
+        try {
+          await setThreadPrAutoDispatchRequest({
+            backend: thread.source,
+            federationTarget: thread.federation?.ref.target ??
+              readRendererFederationTarget(),
+            threadId: thread.id,
+            enabled,
+            prKey,
+          });
+        } catch (error) {
+          setSetThreadModelSettingsError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        return;
+      }
       setOptimisticThread((current) =>
         current
         && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)

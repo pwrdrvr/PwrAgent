@@ -15609,6 +15609,19 @@ export class DesktopBackendRegistry {
   async setThreadPrAutoDispatch(
     params: SetThreadPrAutoDispatchRequest,
   ): Promise<SetThreadPrAutoDispatchResponse> {
+    if (params.prKey !== undefined) {
+      // One PR's switch; the thread's own preference is untouched.
+      if (!this.threadPrAutoDispatchHandler?.pullRequestChanged) {
+        throw new Error("Auto-fix for one pull request is not available here.");
+      }
+      await this.threadPrAutoDispatchHandler.pullRequestChanged({
+        backend: params.backend,
+        threadId: params.threadId,
+        prKey: params.prKey,
+        enabled: params.enabled,
+      });
+      return params;
+    }
     await this.setThreadPrAutoDispatchBatch([params]);
     return params;
   }

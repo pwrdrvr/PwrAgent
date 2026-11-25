@@ -127,6 +127,11 @@ import {
   useThreadPrWatchIndicators,
   type PrWatchStopTarget,
 } from "./features/pr-watches/useThreadPrWatchIndicators";
+import { findThreadProjectDirectory } from "./features/forge-automation/forge-automation-view";
+import {
+  ThreadForgeAutomationContext,
+  type ThreadForgeAutomationLookup,
+} from "./features/forge-automation/thread-hands-off";
 import {
   ThreadProvidersContext,
   useStableThreadProviders,
@@ -3505,6 +3510,15 @@ function DesktopAppShell(props: {
       });
     }
   });
+  // A PR card or Pull requests panel names a hands-off PR as such. Only this
+  // instance's own threads: a peer's run under its projects.
+  const navigationDirectories = navigation.directories;
+  const threadForgeAutomation = useMemo<ThreadForgeAutomationLookup>(
+    () => (thread) => thread.federation
+      ? undefined
+      : findThreadProjectDirectory(thread, navigationDirectories)?.forgeAutomation,
+    [navigationDirectories],
+  );
   const threadPrWatchContext = useMemo(
     () => ({
       byThreadKey: threadPrWatchIndicators,
@@ -4270,9 +4284,10 @@ function DesktopAppShell(props: {
   });
   const handleSetThreadPrAutoDispatch = useEventCallback(async (
     enabled: Parameters<NonNullable<ThreadViewProps["onSetThreadPrAutoDispatch"]>>[0],
+    prKey?: string,
   ) => {
     const thread = navigation.selectedThread;
-    if (thread) await navigation.setThreadPrAutoDispatch(thread, enabled);
+    if (thread) await navigation.setThreadPrAutoDispatch(thread, enabled, prKey);
   });
   const handleSetThreadLock = useEventCallback(async (locked: boolean, note?: string) => {
     const thread = navigation.selectedThread;
@@ -4631,6 +4646,7 @@ function DesktopAppShell(props: {
       <OperatorWaitsContext.Provider value={operatorWaitsContext}>
       <ThreadDependencyIndicatorsContext.Provider value={threadDependencyContext}>
       <ThreadPrWatchIndicatorsContext.Provider value={threadPrWatchContext}>
+      <ThreadForgeAutomationContext.Provider value={threadForgeAutomation}>
       {/* A peer's thread merges on its owner, which holds the thread's
           attachments and merge holds; see threadPullRequestMergeTarget. */}
       <PullRequestMergeProvider
@@ -5394,6 +5410,7 @@ function DesktopAppShell(props: {
       </ThreadProviderCatalogsContext.Provider>
       </ThreadProvidersContext.Provider>
       </PullRequestMergeProvider>
+      </ThreadForgeAutomationContext.Provider>
       </ThreadPrWatchIndicatorsContext.Provider>
       </ThreadDependencyIndicatorsContext.Provider>
       </OperatorWaitsContext.Provider>

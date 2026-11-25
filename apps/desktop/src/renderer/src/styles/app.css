@@ -59546,6 +59546,12 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   white-space: nowrap;
 }
 
+/* A covered PR's name is an identifier; its state note keeps the room. */
+.composer-pr-menu .composer-pr-menu__pr-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 .todo-dispatch__pending {
   color: var(--text-muted);
   font-family: var(--font-sans);

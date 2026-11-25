@@ -10,6 +10,7 @@ import { formatRunningDurationMs } from "../../lib/format-duration";
 import type { PrChipWatch } from "../pr-watches/useThreadPrWatchIndicators";
 import { describeMergeBuildWatchRow } from "../pr-watches/merge-build-watches";
 import { readPrBranchDrift, type PrBranchDrift } from "./pr-branch-drift";
+import { useThreadPrHandsOff } from "../forge-automation/thread-hands-off";
 import { splitPrBranch } from "./pr-branch-split";
 import {
   prPhaseLabel,
@@ -66,7 +67,9 @@ export function PrStatusCard(props: {
   const timeline = readPrTimeline(pr, now);
   const branch = splitPrBranch(pr.headRefName);
   const drift = readBranchDriftRows(props.branchDrift);
-  const wakes = readWatchRows(props.watch, now);
+  // The thread's project, not main's election, decides a hands-off PR.
+  const handsOff = useThreadPrHandsOff(props.stackThread, pr);
+  const wakes = readWatchRows(withHandsOff(props.watch, handsOff), now);
   const queue = readMergeQueueSection(pr, now);
   const stoppable = Boolean(props.watch?.ci || props.watch?.terminal || props.watch?.mergeBuild);
 
@@ -329,6 +332,12 @@ type PrTimelineRow = { label: string; value: string };
  */
 type PrWatchRow = PrTimelineRow & { muted?: boolean; detail?: string };
 
+/** A chip watch whose Auto-fix row says the project left the PR hands-off. */
+function withHandsOff(watch: PrChipWatch | undefined, handsOff: string | undefined): PrChipWatch | undefined {
+  if (!handsOff || !(watch?.autoFix || watch?.autoFixBlocked)) return watch;
+  return { ...watch, autoFix: false, autoFixBlocked: { reason: "hands_off", detail: handsOff } };
+}
+
 /**
  * One row per thing that wakes the thread. The attempt is the useful number
  * after a re-run: it says which run's result the watch is waiting for.
@@ -357,6 +366,10 @@ function readWatchRows(watch: PrChipWatch | undefined, now: number): PrWatchRow[
     rows.push({ label: "Auto-fix", value: "on", muted: true });
   } else if (watch.autoFixBlocked?.reason === "paused") {
     rows.push({ label: "Auto-fix", value: "paused", muted: true });
+  } else if (watch.autoFixBlocked?.reason === "switched_off") {
+    rows.push({ label: "Auto-fix", value: "off for this PR", muted: true });
+  } else if (watch.autoFixBlocked?.reason === "hands_off") {
+    rows.push({ label: "Auto-fix", value: "hands-off", muted: true, detail: handsOffDetail(watch.autoFixBlocked.detail) });
   } else if (watch.autoFixBlocked) {
     const threadTitle = watch.autoFixBlocked.threadTitle?.trim();
     rows.push({
@@ -367,6 +380,12 @@ function readWatchRows(watch: PrChipWatch | undefined, now: number): PrWatchRow[
     });
   }
   return rows;
+}
+
+/** "hands-off, labeled x" under a "hands-off" value: "Labeled x". */
+export function handsOffDetail(text: string): string {
+  const reason = text.replace(/^hands-off, /, "");
+  return reason.charAt(0).toUpperCase() + reason.slice(1);
 }
 
 export function describeCiOutcomes(notifyOn: readonly string[]): string {

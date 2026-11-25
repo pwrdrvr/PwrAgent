@@ -4,7 +4,7 @@ import type { ThreadPrWatchHistoryEntry } from "@pwragent/shared/contracts/threa
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
 import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import { CommitIcon, EyeIcon, MergeIcon, PullRequestIcon } from "../../icons";
-import { describeCiOutcomes } from "../pr-status/PrStatusCard";
+import { describeCiOutcomes, handsOffDetail } from "../pr-status/PrStatusCard";
 import { resolveLifecycleState } from "../pr-status/pr-chip-state";
 import { describeMergeBuildWatchRow } from "./merge-build-watches";
 import {
@@ -36,6 +36,11 @@ type PullRequestWatchListProps = {
   mergeBuild?: ThreadDependency;
   onStopMergeBuild?: (wait: ThreadDependency) => Promise<void>;
   onTurnOffAutoFix?: () => void;
+  /**
+   * Switches Auto-fix for this PR alone; the thread's other PRs keep theirs.
+   * Absent where the owner cannot take it, or the thread has one such PR.
+   */
+  onSetPrAutoFix?: (enabled: boolean) => void;
   /** Arms a success and failure watch now, without an agent turn. */
   onWatchCi?: () => Promise<void>;
   /** Ended watches for this PR, newest first; absent until first loaded. */
@@ -186,6 +191,50 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
               onClick={props.onTurnOffAutoFix}
             >
               Turn Off
+            </button>
+          ) : null}
+          {!readOnly && props.onSetPrAutoFix ? (
+            <button
+              type="button"
+              className="pr-watch-list__action"
+              aria-label={`Turn off Auto-fix for #${props.pr.number} only`}
+              onClick={() => props.onSetPrAutoFix!(false)}
+            >
+              Skip This PR
+            </button>
+          ) : null}
+        </div>
+      ) : autoFixBlocked?.reason === "hands_off" ? (
+        <div className="pr-watch-list__row pr-watch-list__row--muted">
+          <span className="pr-watch-list__icon" aria-hidden="true">
+            <PullRequestIcon size={12} />
+          </span>
+          <span className="pr-watch-list__text">
+            <span className="pr-watch-list__title">Auto-fix hands-off</span>
+            <span className="pr-watch-list__sub">
+              {`${handsOffDetail(autoFixBlocked.detail)}. Its maintainers own it; the project's Forge Automation sets this.`}
+            </span>
+          </span>
+        </div>
+      ) : autoFixBlocked?.reason === "switched_off" ? (
+        <div className="pr-watch-list__row pr-watch-list__row--muted">
+          <span className="pr-watch-list__icon" aria-hidden="true">
+            <PullRequestIcon size={12} />
+          </span>
+          <span className="pr-watch-list__text">
+            <span className="pr-watch-list__title">Auto-fix off for this PR</span>
+            <span className="pr-watch-list__sub">
+              The thread&apos;s other pull requests keep Auto-fix.
+            </span>
+          </span>
+          {!readOnly && props.onSetPrAutoFix ? (
+            <button
+              type="button"
+              className="pr-watch-list__action"
+              aria-label={`Turn Auto-fix back on for #${props.pr.number}`}
+              onClick={() => props.onSetPrAutoFix!(true)}
+            >
+              Turn On
             </button>
           ) : null}
         </div>

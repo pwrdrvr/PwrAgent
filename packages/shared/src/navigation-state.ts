@@ -723,6 +723,7 @@ export function serializeNavigationSnapshotForHash(params: {
         repo: pr.repo,
         title: pr.title ?? null,
         labels: pr.labels ?? null,
+        autoFixOff: pr.autoFixOff ?? null,
         additions: pr.additions ?? null,
         deletions: pr.deletions ?? null,
         changedFiles: pr.changedFiles ?? null,

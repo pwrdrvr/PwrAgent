@@ -117,6 +117,18 @@ describe("resolvePrChipWatch", () => {
     expect(resolvePrChipWatch(undefined, pr, undefined)).toBeUndefined();
   });
 
+  it("reads a PR switched off here as off, whatever main projects, and keeps one object per entry", () => {
+    const watches = summarizeThreadPrWatches([ciWatch]).get("codex:consumer");
+    const off = { ...pr, autoFixOff: true as const };
+    const chip = resolvePrChipWatch(watches, off, REPOSITORY);
+    expect(chip).toMatchObject({ ci: { runAttempt: 2 }, autoFixBlocked: { reason: "switched_off" } });
+    expect(chip?.autoFix).toBeUndefined();
+    expect(resolvePrChipWatch(watches, { ...off }, REPOSITORY)).toBe(chip);
+    expect(resolvePrChipWatch(undefined, off, REPOSITORY)).toEqual({ autoFixBlocked: { reason: "switched_off" } });
+    // Off the primary repository Auto-fix means nothing, switched or not.
+    expect(resolvePrChipWatch(undefined, off, undefined)).toBeUndefined();
+  });
+
   it("says why Auto-fix will not wake the thread when main projects it paused or elsewhere", () => {
     const paused: ThreadPrAutoFixState = {
       backend: "codex", threadId: "consumer", prKey: ciWatch.prKey, state: "paused",

@@ -637,6 +637,13 @@ export type ThreadPrAutoDispatchHandler = {
     changes: ThreadPrAutoDispatchPreferenceChange[],
   ) => Promise<void>;
   cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
+  /** Auto-fix switched off, or back on, for one PR of the thread. */
+  pullRequestChanged?: (request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prKey: string;
+    enabled: boolean;
+  }) => Promise<void>;
   /** A lock or unlock moves the thread out of or back into the Auto-fix election. */
   lockChanged?: (request: {
     backend: AppServerBackendKind;

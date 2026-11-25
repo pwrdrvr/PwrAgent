@@ -172,6 +172,7 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { DEFAULT_WATCH_MERGE_BUILDS } from "@pwragent/shared/contracts/settings";
 import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automation";
+import { describeAutoFixCoverage } from "./auto-fix-coverage";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
 import { mergeBuildPullRequestUrl } from "../pr-watches/merge-build-watches";
@@ -796,7 +797,8 @@ export type ComposerProps = {
       >
     >
   ) => Promise<void>;
-  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean, prKey?: string) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
   onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   threadModelSettingsError?: string;
@@ -12070,6 +12072,7 @@ function useComposerController(props: ComposerProps) {
     prAutoDispatchIdleTooltip,
     prAutoDispatchTooltip,
     prAutoDispatchProjectMuted,
+    prAutoDispatchProjectAutomation,
     prMergeBuildWatchDefault,
     prAutoDispatchIdle,
     environmentMenuAction,
@@ -13679,6 +13682,7 @@ function useComposerController(props: ComposerProps) {
       prAutoDispatchIdleTooltip,
       prAutoDispatchTooltip,
       prAutoDispatchProjectMuted,
+      prAutoDispatchProjectAutomation: prAutoDispatchProject?.forgeAutomation,
       prMergeBuildWatchDefault,
       prAutoDispatchIdle,
       environmentMenuAction,
@@ -16216,6 +16220,13 @@ function useComposerController(props: ComposerProps) {
                 available: prAutoDispatchAvailable,
                 unavailableDetail: !backgroundPrPollingEnabled ? "PR polling is off" : "Not allowed in Git settings",
                 onToggle: (enabled) => { void props.onSetThreadPrAutoDispatch?.(enabled); },
+                coverage: describeAutoFixCoverage(props.thread, prAutoDispatchProjectAutomation),
+                // A peer that predates one PR's switch would toggle the thread.
+                onTogglePr: props.onSetThreadPrAutoDispatch
+                  && (!props.thread.federation
+                    || props.thread.federation.capabilities?.includes("thread_pull_request_auto_fix_v1") === true)
+                  ? (prKey, enabled) => { void props.onSetThreadPrAutoDispatch?.(enabled, prKey); }
+                  : undefined,
               }}
             />
           ) : null}

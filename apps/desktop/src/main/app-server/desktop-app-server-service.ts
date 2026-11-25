@@ -391,6 +391,7 @@ import {
   buildThreadIdentityKey,
   isAppServerBackendKind,
   parseThreadIdentityKey,
+  pullRequestAttachmentIntent,
 } from "@pwragent/shared/contracts/navigation";
 import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import {
@@ -2914,7 +2915,7 @@ class DesktopAppServerService {
       candidates.push({
         backend: thread.source,
         threadId: thread.id,
-        prKeys: (thread.prs ?? []).filter((pr) => this.matchesPrimaryRepository(pr, primaryRepoKey)).map(getPrStatusKey),
+        prKeys: this.autoFixCandidatePrKeys(thread.prs ?? [], primaryRepoKey),
       });
     }
     if (options.replace) {
@@ -3052,6 +3053,16 @@ class DesktopAppServerService {
     return changed;
   }
 
+  /**
+   * The PRs a thread stands for in Auto-fix election: those of its primary
+   * repository, less any the operator switched off for this thread alone.
+   */
+  private autoFixCandidatePrKeys(prs: PrSummary[], primaryRepoKey: string | undefined): string[] {
+    return prs
+      .filter((pr) => pr.autoFixOff !== true && this.matchesPrimaryRepository(pr, primaryRepoKey))
+      .map(getPrStatusKey);
+  }
+
   private async syncThreadPrAutoDispatchCandidates(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -3060,11 +3071,7 @@ class DesktopAppServerService {
       buildThreadIdentityKey(params.backend, params.threadId),
     );
     const prKeys = attachment
-      ? attachment.prs
-          .filter((pr) =>
-            this.matchesPrimaryRepository(pr, attachment.primaryRepoKey),
-          )
-          .map(getPrStatusKey)
+      ? this.autoFixCandidatePrKeys(attachment.prs, attachment.primaryRepoKey)
       : [];
     const changes = await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
       ...params,
@@ -3219,7 +3226,7 @@ class DesktopAppServerService {
         return normalizePrSummary({
           ...pr,
           linkedDirectoryPaths: candidate.linkedDirectoryPaths,
-          ...(candidate.explicitlyAttached ? { explicitlyAttached: true } : {}),
+          ...pullRequestAttachmentIntent(candidate),
         });
       });
       if (changed) {
@@ -5287,6 +5294,15 @@ class DesktopAppServerService {
     }));
     // By URL: a fork and its upstream number their PRs independently.
     const handsOffUrls = new Set(handsOffPrs.map(({ pr }) => pr.url));
+    // A PR switched off here left this thread's candidacy, so no election
+    // explains it; say so rather than blame an older thread.
+    const switchedOffPrs = autoFixEnabled
+      ? primaryPrs.filter((pr) => pr.autoFixOff === true && !handsOffUrls.has(pr.url))
+      : [];
+    const switchedOffGuidance = switchedOffPrs.map((pr) =>
+      `Auto-fix is switched off for ${pr.org}/${pr.repo}#${pr.number} in this thread, so PwrAgent will not start a repair turn for it here. Do not poll its CI or create a monitor in its place; the operator can switch it back on from the PR card.`);
+    const everyPrSwitchedOff = primaryPrs.length > 0
+      && primaryPrs.every((pr) => pr.autoFixOff === true || handsOffUrls.has(pr.url));
     const reviewReadiness = (await this.readPrReviewReadiness(params, primaryPrs))
       .filter((entry) => !handsOffUrls.has(entry.prUrl));
     const neverMerge = forgeProject && projectNeverMerges(forgeProject.automation) ? forgeProject.label : undefined;
@@ -5325,8 +5341,15 @@ class DesktopAppServerService {
     const stackGuidance = await this.threadStackGuidance(primaryPrs);
     const stackLines = stackGuidance.map(({ text }) => text);
     const guidance = (stackGuidance.some(({ held }) => held)
-      ? [...stackLines, ...handsOffGuidance, ...neverMergeGuidance]
-      : [...stackLines, ...handsOffGuidance, automationGuidance, ...readinessGuidance, ...neverMergeGuidance]).join(" ");
+      ? [...stackLines, ...handsOffGuidance, ...switchedOffGuidance, ...neverMergeGuidance]
+      : [
+        ...stackLines,
+        ...handsOffGuidance,
+        ...switchedOffGuidance,
+        ...(everyPrSwitchedOff && !autoFixActive && switchedOffPrs.length > 0 ? [] : [automationGuidance]),
+        ...readinessGuidance,
+        ...neverMergeGuidance,
+      ]).join(" ");
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -5447,6 +5470,44 @@ class DesktopAppServerService {
       detachedPrKeys: overlay.detachedPrKeys ?? [],
       prs,
     };
+  }
+
+  /**
+   * Switch Auto-fix off, or back on, for one PR of a thread whose Auto-fix
+   * stays on. The PR leaves the thread's candidacy, so the election either
+   * hands it to another thread that holds it or leaves it unrepaired.
+   */
+  async setThreadPullRequestAutoFix(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prKey: string;
+    enabled: boolean;
+  }): Promise<void> {
+    const prKey = this.prRepositoryAliases.canonicalizeKey(request.prKey);
+    const { state, changed } = await this.getOverlayStore().setThreadPullRequestAutoFixOff({
+      backend: request.backend,
+      threadId: request.threadId,
+      matchesPrKey: (storedKey) => this.prRepositoryAliases.canonicalizeKey(storedKey) === prKey,
+      off: !request.enabled,
+    });
+    if (!changed || !state) return;
+    await this.publishThreadPullRequestsUpdated({
+      backend: request.backend,
+      threadId: request.threadId,
+      prs: state.prs ?? [],
+      detachedPrs: state.detachedPrs ?? [],
+    });
+    if (!request.enabled) {
+      await this.getPrAutoDispatchCoordinator().cancelPendingForPr({
+        backend: request.backend,
+        threadId: request.threadId,
+        prKey,
+      });
+    }
+    const currentPr = this.prStatusRegistry.get(prKey)?.pr;
+    if (currentPr && this.backgroundPrPollingEnabled) {
+      await this.handlePrAutoDispatchSnapshots([currentPr], this.nextPrObservationTimestamp(), true);
+    }
   }
 
   /** Hold watch election while a merge button's forge write is still in flight. */
@@ -5769,7 +5830,7 @@ class DesktopAppServerService {
         ? normalizePrSummary({
             ...status,
             linkedDirectoryPaths: normalized.linkedDirectoryPaths,
-            ...(normalized.explicitlyAttached ? { explicitlyAttached: true } : {}),
+            ...pullRequestAttachmentIntent(normalized),
           })
         : normalized;
       const existingIndex = indexes.get(key);
@@ -5790,7 +5851,7 @@ class DesktopAppServerService {
           existing.linkedDirectoryPaths,
           row.linkedDirectoryPaths,
         ),
-        ...((existing.explicitlyAttached || row.explicitlyAttached) ? { explicitlyAttached: true } : {}),
+        ...pullRequestAttachmentIntent(existing, row),
       });
     }
     return merged;
@@ -6008,7 +6069,7 @@ class DesktopAppServerService {
             existing?.linkedDirectoryPaths,
             pr.linkedDirectoryPaths,
           ),
-          ...((existing?.explicitlyAttached || pr.explicitlyAttached) ? { explicitlyAttached: true } : {}),
+          ...pullRequestAttachmentIntent(existing, pr),
         });
       }
     }

@@ -29,6 +29,7 @@ const VARIANTS: Variants = {
   headRefName: ["feat/history", "feat/other"],
   linkedDirectoryPaths: [undefined, ["/work/PwrAgent"]],
   explicitlyAttached: [undefined, true],
+  autoFixOff: [undefined, true],
   state: ["passing", "failing"],
   checkState: ["passing", "failing"],
   checksStillRunning: [undefined, true],

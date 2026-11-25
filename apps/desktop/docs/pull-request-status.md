@@ -229,6 +229,25 @@ index). A PR whose labels were not read never matches a label rule. A
 repository rule needs no labels. GitLab merge requests do not report labels
 yet, so only repository rules apply to them.
 
+### Auto-fix off for one pull request
+
+A thread's Auto-fix can be switched off for one of its PRs while it stays on
+for the rest: Skip This PR in the Pull requests panel, or the PR's row in the
+composer's Auto-fix menu, which lists every PR Auto-fix covers and names a
+hands-off one with its rule. The choice is thread-local intent stored on the
+attachment row (`PrSummary.autoFixOff`, beside `explicitlyAttached`). Every
+path that rebuilds a row from provider status carries both through
+`pullRequestAttachmentIntent`, so a lookup or a status poll never clears it;
+detaching the PR forgets it.
+
+A switched-off PR leaves the thread's Auto-fix candidacy, so the election
+hands it to another thread that holds it, or nobody repairs it; switching it
+off cancels this thread's pending repair for it. The request is
+`setThreadPrAutoDispatch` with a `prKey`. A peer owner must advertise
+`thread_pull_request_auto_fix_v1`: an older one ignores `prKey` and would
+toggle the whole thread, so the viewer refuses to send it and offers no
+per-PR switch.
+
 ### Stack settlement and publishing
 
 The shared gate projects a tracked stack bottom-first. A live layer settles

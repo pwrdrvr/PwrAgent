@@ -783,6 +783,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "sub_agent_failure_dismissal",
   "turn_assistant_reply",
   "project_forge_automation",
+  "thread_pull_request_auto_fix_v1",
   "thread_mcp_connections",
   "thread_job_monitor_control",
   "thread_todos",

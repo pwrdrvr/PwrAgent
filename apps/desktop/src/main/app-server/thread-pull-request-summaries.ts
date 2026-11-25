@@ -99,6 +99,7 @@ export function stripPrLinkedDirectoryPaths(pr: PrSummary): PrSummary {
   const normalized = normalizePrSummary(pr);
   delete normalized.linkedDirectoryPaths;
   delete normalized.explicitlyAttached;
+  delete normalized.autoFixOff;
   return normalized;
 }
 
@@ -202,6 +203,7 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       JSON.stringify(candidate.linkedDirectoryPaths ?? [])
         === JSON.stringify(pr.linkedDirectoryPaths ?? []) &&
       candidate.explicitlyAttached === pr.explicitlyAttached &&
+      candidate.autoFixOff === pr.autoFixOff &&
       JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
       // Hover-card fields. They belong here for the same reason as every field
       // above: this comparison decides whether a snapshot is republished, so a

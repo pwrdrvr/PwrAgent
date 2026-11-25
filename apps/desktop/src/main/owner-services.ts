@@ -1182,6 +1182,8 @@ export function wireAppServerOwnerServices(): void {
       await appServerService.handleThreadPrAutoDispatchPreferences(requests),
     cancelPending: async (request) =>
       await appServerService.cancelThreadPrAutoDispatch(request),
+    pullRequestChanged: async (request) =>
+      await appServerService.setThreadPullRequestAutoFix(request),
     lockChanged: async (request) =>
       await appServerService.handleThreadLockChanged(request),
     sendPendingNow: async (request) =>

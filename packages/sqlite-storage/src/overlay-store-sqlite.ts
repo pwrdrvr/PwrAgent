@@ -26,7 +26,7 @@ export type {
 import { canonicalizeDetachedPrKeys, normalizeDetachedPrKeys } from "@pwragent/owner-core/detached-pr-keys";
 import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { claimAgentReviewBudget, rearmAgentReviewBudget, type AgentReviewAdmission, type AgentReviewBudget, type AgentReviewRefusal, type OperatorReviewInput } from "@pwragent/owner-core/agent-review-admission";
-import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildLegacyEncodedThreadIdentityKey, pullRequestAttachmentIntent } from "@pwragent/shared/contracts/navigation";
 import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 import {
   parseUsageLimitObservation,
@@ -608,7 +608,7 @@ function mergePrSummariesByStatusKey(
         existing?.linkedDirectoryPaths,
         normalized.linkedDirectoryPaths,
       ),
-      ...((existing?.explicitlyAttached || normalized.explicitlyAttached) ? { explicitlyAttached: true } : {}),
+      ...pullRequestAttachmentIntent(existing, normalized),
     }));
   }
   // Map replacement retains the existing key's position, while a genuinely
@@ -6734,9 +6734,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       return observed;
     }
     const canonicalizePrKey = params.canonicalizePrKey ?? ((key: string) => key);
-    const explicitKeys = new Set((current.prs ?? [])
-      .filter((pr) => pr.explicitlyAttached)
-      .map((pr) => canonicalizePrKey(buildPullRequestStatusKey(pr))));
+    // Thread-local intent survives a lookup, which reports provider status only.
+    const intentByKey = new Map((current.prs ?? [])
+      .map((pr) => [canonicalizePrKey(buildPullRequestStatusKey(pr)), pullRequestAttachmentIntent(pr)] as const));
     const { detachedPrKeys, releasedPrKeys } = canonicalizeDetachedPrKeys({
       detachedPrKeys: current.detachedPrKeys,
       attachedPrKeys: (current.prs ?? []).map(buildPullRequestStatusKey),
@@ -6754,7 +6754,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       detachedPrs,
       prs: filterDetachedPrs(params.prs, detachedPrKeys).map((pr) => normalizePrSummary({
         ...pr,
-        ...(explicitKeys.has(buildPullRequestStatusKey(pr)) ? { explicitlyAttached: true } : {}),
+        ...pullRequestAttachmentIntent(intentByKey.get(buildPullRequestStatusKey(pr))),
       })),
       prsFetchedAt: fetchedAt,
       prsRefreshKey: params.refreshKey,
@@ -6843,6 +6843,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     };
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  /**
+   * Switch Auto-fix off, or back on, for one attached PR of a thread whose
+   * Auto-fix stays on. `matchesPrKey` takes a stored row's status key, so a
+   * row stored under a renamed repository's old name still matches.
+   */
+  async setThreadPullRequestAutoFixOff(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    matchesPrKey: (prKey: string) => boolean;
+    off: boolean;
+  }): Promise<{ state: ThreadOverlayState | undefined; changed: boolean }> {
+    return this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = this.getThread(threadKey);
+      if (!current?.prs?.length) return { state: current, changed: false };
+      let changed = false;
+      const prs = current.prs.map((pr) => {
+        if (!params.matchesPrKey(buildPullRequestStatusKey(pr)) || (pr.autoFixOff === true) === params.off) return pr;
+        changed = true;
+        const next = { ...pr };
+        if (params.off) next.autoFixOff = true;
+        else delete next.autoFixOff;
+        return normalizePrSummary(next);
+      });
+      if (!changed) return { state: current, changed };
+      const nextState: ThreadOverlayState = { ...current, prs };
+      this.putThread(threadKey, nextState);
+      return { state: nextState, changed };
+    }).immediate();
   }
 
   async readPrStatusCache(): Promise<Record<string, PrStatusCacheEntry>> {
@@ -13233,6 +13264,7 @@ export type OverlayStoreLike = Pick<
   | "readAllDirectoryOverlays"
   | "setThreadPullRequests"
   | "detachThreadPullRequest"
+  | "setThreadPullRequestAutoFixOff"
   | "addThreadPullRequestReference"
   | "readPrStatusCache"
   | "writePrStatusCacheEntries"

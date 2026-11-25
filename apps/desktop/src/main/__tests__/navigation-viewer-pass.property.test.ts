@@ -871,3 +871,61 @@ it("keeps watch and healthy PR status when a different PR's stack read fails", a
     db.close();
   }
 });
+
+it("switches Auto-fix off for one PR: it leaves the thread's candidacy and guidance, and comes back when switched on", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    current.store = store;
+    current.registry = {
+      publishLocalEvent: vi.fn(async () => undefined),
+      getThreadInfo: () => undefined,
+      invalidateWorktreeWorkingState: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    const thread = { backend: "codex" as const, threadId: "fixture" };
+    const upstream: PrSummary = {
+      number: 7, provider: "github.com", org: "upstream", repo: "t3code", state: "failing",
+      lifecycleState: "open", url: "https://github.com/upstream/t3code/pull/7",
+      sourceRepository: { provider: "github.com", org: "fork", repo: "t3code" },
+    };
+    const fork: PrSummary = {
+      number: 3, provider: "github.com", org: "fork", repo: "t3code", state: "failing",
+      lifecycleState: "open", url: "https://github.com/fork/t3code/pull/3",
+    };
+    await store.setThreadPrAutoDispatchEnabled({ ...thread, enabled: true });
+    await store.setThreadPullRequests({ ...thread, prs: [upstream, fork], fetchedAt: 1 });
+    const internals = service as unknown as {
+      attachedPrsByThreadKey: Map<string, { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }>;
+      readPrReviewReadiness: () => Promise<[]>;
+      resolveThreadForgeProject: () => undefined;
+      readPrStacks: () => Promise<StackSummary[]>;
+    };
+    internals.attachedPrsByThreadKey.set("codex:fixture", {
+      backend: "codex", primaryRepoKey: "github.com/fork/t3code", prs: [upstream, fork],
+    });
+    vi.spyOn(internals, "readPrReviewReadiness").mockResolvedValue([]);
+    vi.spyOn(internals, "resolveThreadForgeProject").mockReturnValue(undefined);
+    vi.spyOn(internals, "readPrStacks").mockResolvedValue([]);
+    const candidates = async () => (await store.listPrAutoDispatchCandidates(thread)).map((row) => row.prKey).sort();
+
+    await service.setThreadPullRequestAutoFix({ ...thread, prKey: "github.com/upstream/t3code#7", enabled: false });
+    expect((await store.getThreadOverlayState(thread))?.prs?.map((pr) => [pr.number, pr.autoFixOff])).toEqual([
+      [7, true], [3, undefined],
+    ]);
+    expect(await candidates()).toEqual(["github.com/fork/t3code#3"]);
+    expect((await service.getThreadPullRequestAutomationStatus(thread)).guidance)
+      .toContain("Auto-fix is switched off for upstream/t3code#7 in this thread");
+
+    // A lookup reports provider status only; the switch survives it.
+    await store.setThreadPullRequests({ ...thread, prs: [{ ...upstream, title: "Refreshed" }, fork], fetchedAt: 2 });
+    expect((await store.getThreadOverlayState(thread))?.prs?.[0]).toMatchObject({ title: "Refreshed", autoFixOff: true });
+
+    await service.setThreadPullRequestAutoFix({ ...thread, prKey: "github.com/upstream/t3code#7", enabled: true });
+    expect(await candidates()).toEqual(["github.com/fork/t3code#3", "github.com/upstream/t3code#7"]);
+    expect((await service.getThreadPullRequestAutomationStatus(thread)).guidance).not.toContain("switched off");
+  } finally {
+    db.close();
+  }
+});
