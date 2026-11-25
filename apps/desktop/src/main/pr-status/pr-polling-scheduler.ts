@@ -80,9 +80,7 @@ const HIDDEN_WINDOW_CADENCE_MULTIPLIER = 4;
 
 const TICK_INTERVAL_MS = 15_000;
 /**
- * Cap requests per tick. Bounds concurrency by construction (the batches below
- * this cap run together) and spreads a large backlog across ticks instead of
- * bursting it all at once.
+ * Cap initial batches per tick. This spreads a large backlog across ticks.
  */
 const MAX_BATCHES_PER_TICK = 3;
 
@@ -105,7 +103,7 @@ export type PrPollingSchedulerDeps = {
   /** One token-bounded probe allowed through the client's outage cooldown. */
   fetchPullRequestsAfterReconnect?: PrPollingSchedulerDeps["fetchPullRequests"];
   /** Persist + publish. Returns the prKeys whose status actually changed. */
-  applyResults: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
+  applyResults: (prs: PrSummary[], fetchedAt: number, fetchedAtByKey?: ReadonlyMap<string, number>) => Promise<string[]>;
   /** Targets admitted for an attempt or already fresh/terminal; deferred work stays pending. */
   onTargetsHandled?: (prKeys: string[]) => void;
   /** Allocate a globally ordered token immediately before starting a request. */
@@ -115,6 +113,7 @@ export type PrPollingSchedulerDeps = {
 
 type PollState = {
   lastPolledAt: number;
+  retryAt?: number;
   /** Last time this PR's status actually changed — drives quiet-demotion. */
   lastChangedAt: number;
   /**
@@ -323,34 +322,28 @@ export class PrPollingScheduler {
       return;
     }
 
-    const batches = buildPrPollBatches(due).slice(0, MAX_BATCHES_PER_TICK);
-    const admitted: PrPollTarget[][] = [];
-    for (const batch of batches) {
-      if (isGitLabPollBatch(batch)) {
-        admitted.push(batch);
-        continue;
-      }
-      // One token per request. If the bucket is dry, leave the rest of the
-      // backlog for the next tick rather than dropping it silently.
-      if (!this.deps.tryTakeToken(batch)) {
-        schedulerLog.debug("PR poll deferred: token bucket empty", {
-          deferredBatches: batches.length - admitted.length,
-        });
-        break;
-      }
-      admitted.push(batch);
-    }
-
-    const deferred = new Set(due.map((target) => target.prKey));
-    for (const batch of admitted) {
-      if (isGitLabPollBatch(batch)) continue;
-      for (const target of batch) deferred.delete(target.prKey);
-    }
+    const dueKeys = new Set(due.map((target) => target.prKey));
     this.deps.onTargetsHandled?.(targets
-      .filter((target) => !deferred.has(target.prKey))
+      .filter((target) => !dueKeys.has(target.prKey))
       .map((target) => target.prKey));
 
-    await Promise.all(admitted.map(async (batch) => await this.pollBatch(batch)));
+    const ready = this.excludeCooldowns(due, now);
+    const githubReads: Promise<void>[] = [];
+    const run = (batch: PrPollTarget[]) => this.pollBatch(batch).catch((error: unknown) => {
+      schedulerLog.warn("PR poll batch failed", { error: error instanceof Error ? error.message : String(error) });
+    });
+    for (const batch of buildPrPollBatches(ready).slice(0, MAX_BATCHES_PER_TICK)) {
+      if (isGitLabPollBatch(batch)) {
+        // GitLab only charges on dispatch. Give a due batch its opportunity
+        // to finish its paid follow-ups before starting a later batch.
+        await run(batch);
+        continue;
+      }
+      if (!this.deps.tryTakeToken(batch)) break;
+      this.deps.onTargetsHandled?.(batch.map((target) => target.prKey));
+      githubReads.push(run(batch));
+    }
+    await Promise.all(githubReads);
   }
 
   private async runReconnectProbe(): Promise<void> {
@@ -358,7 +351,7 @@ export class PrPollingScheduler {
     const now = this.now();
     const targets = this.deps.listTargets();
     this.prunePollState(targets);
-    const batch = buildPrPollBatches(this.selectDueTargets(targets, now, true))[0] ?? [];
+    const batch = buildPrPollBatches(this.excludeCooldowns(this.selectDueTargets(targets, now, true), now))[0] ?? [];
     if (batch.length === 0) {
       return;
     }
@@ -372,6 +365,10 @@ export class PrPollingScheduler {
       this.deps.fetchPullRequestsAfterReconnect ?? this.deps.fetchPullRequests,
       true,
     );
+  }
+
+  private excludeCooldowns(targets: PrPollTarget[], now: number): PrPollTarget[] {
+    return targets.filter((target) => (this.pollState.get(target.prKey)?.retryAt ?? 0) <= now);
   }
 
   private selectDueTargets(
@@ -459,22 +456,25 @@ export class PrPollingScheduler {
 
     const attemptedAt = this.now();
     const observedAt = this.deps.getObservationTimestamp?.() ?? attemptedAt;
-    const deferred = new Set<number>();
+    const deferred = new Map<number, number | undefined>();
+    const fetchedAtByKey = new Map<string, number>();
     const gitlabPoll: GitLabPollRequest | undefined = refs[0]?.kind === "gitlab" ? {
       takeFirstRequestToken: () => {
         const taken = this.deps.tryTakeToken(batch);
         if (!taken && reconnect) this.reconnectProbeWaitingForBudget = true;
         return taken;
       },
-      defer: (iid) => deferred.add(iid),
+      defer: (iid, retryAt) => deferred.set(iid, retryAt),
+      recordObservation: (pr, fetchedAt) => fetchedAtByKey.set(buildPullRequestStatusKey(pr), fetchedAt),
     } : undefined;
     const markAttempted = () => {
-      // Leave budget-deferred MRs due. Failed or throttled reads cool down on
-      // the normal cadence so they cannot crowd out healthy targets.
+      // Leave deferred MRs pending, even if a transcript is the only owner.
       const handled: string[] = [];
       for (const target of batch) {
+        const state = this.ensurePollState(target.prKey, attemptedAt);
+        state.retryAt = deferred.get(target.pr.number);
         if (deferred.has(target.pr.number)) continue;
-        this.ensurePollState(target.prKey, attemptedAt).lastPolledAt = attemptedAt;
+        state.lastPolledAt = attemptedAt;
         handled.push(target.prKey);
       }
       if (gitlabPoll && handled.length > 0) this.deps.onTargetsHandled?.(handled);
@@ -504,11 +504,13 @@ export class PrPollingScheduler {
     // Order competing observations by when their request started, not when the
     // network happened to finish. Otherwise an older slow response can clobber
     // a newer hover/selection result simply by completing last.
-    const changedKeys = await this.deps.applyResults(prs, observedAt);
+    const changedKeys = fetchedAtByKey.size
+      ? await this.deps.applyResults(prs, observedAt, fetchedAtByKey)
+      : await this.deps.applyResults(prs, observedAt);
     for (const prKey of changedKeys) {
       const state = this.pollState.get(prKey);
       if (state) {
-        state.lastChangedAt = observedAt;
+        state.lastChangedAt = Math.max(state.lastChangedAt, fetchedAtByKey.get(prKey) ?? observedAt);
       }
     }
 

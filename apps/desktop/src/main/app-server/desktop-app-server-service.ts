@@ -5388,7 +5388,7 @@ class DesktopAppServerService {
     prs: PrSummary[],
     fetchedAt: number,
     source: string,
-    options: { skipMergeBuildWatch?: boolean } = {},
+    options: { skipMergeBuildWatch?: boolean; fetchedAtByKey?: ReadonlyMap<string, number> } = {},
   ): PrSummary[] {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
@@ -5396,10 +5396,11 @@ class DesktopAppServerService {
     const endedChanged = new Set<string>();
     for (const pr of prs.map(stripPrLinkedDirectoryPaths)) {
       const key = getPrStatusKey(pr);
+      const prFetchedAt = options.fetchedAtByKey?.get(key) ?? fetchedAt;
       const current = this.prStatusRegistry.get(key);
       // A merge is irreversible. Reads started either side of the write can
       // briefly report the pre-merge state.
-      if (current && (current.fetchedAt > fetchedAt
+      if (current && (current.fetchedAt > prFetchedAt
         || (current.pr.lifecycleState === "merged" && pr.lifecycleState !== "merged"))) {
         staleKeys.push(key);
         continue;
@@ -5421,10 +5422,10 @@ class DesktopAppServerService {
       this.prStatusRegistry.set(key, {
         ...current,
         pr,
-        fetchedAt,
+        fetchedAt: prFetchedAt,
       });
       this.applyPrStatusToAttachments(pr);
-      this.transcriptPrSubscriptions.observe([pr], fetchedAt);
+      this.transcriptPrSubscriptions.observe([pr], prFetchedAt);
     }
     if (staleKeys.length > 0) {
       // Losing to a newer registry entry is ordinary bookkeeping: cache loads
@@ -5439,7 +5440,7 @@ class DesktopAppServerService {
       });
     }
     if (transitions.length > 0) {
-      this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source });
+      this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source }, options.fetchedAtByKey);
       if (!options.skipMergeBuildWatch) this.armMergeBuildWatches(transitions);
     }
     this.publishPrAutoFixPrEndedChanges(endedChanged);
@@ -5511,6 +5512,7 @@ class DesktopAppServerService {
   private emitPrStatusTransitions(
     transitions: PrStatusTransition[],
     observation: { observedAt: number; source: string },
+    fetchedAtByKey?: ReadonlyMap<string, number>,
   ): void {
     for (const transition of transitions) {
       appServerLog.info(
@@ -5518,6 +5520,7 @@ class DesktopAppServerService {
         {
           ...summarizePrStatusTransition(transition),
           ...observation,
+          observedAt: fetchedAtByKey?.get(transition.prKey) ?? observation.observedAt,
         },
       );
       this.prReviewOfferCoordinator?.handleTransition(transition);
@@ -5590,13 +5593,15 @@ class DesktopAppServerService {
   private async writePrStatusesToCache(
     prs: PrSummary[],
     fetchedAt: number,
+    fetchedAtByKey?: ReadonlyMap<string, number>,
   ): Promise<void> {
     const entries: PrStatusCacheEntry[] = prs.flatMap((pr) => {
       const current = this.matchingPrStatus(pr);
-      if (!current || current.fetchedAt < fetchedAt) return [];
+      const prFetchedAt = fetchedAtByKey?.get(getPrStatusKey(pr)) ?? fetchedAt;
+      if (!current || current.fetchedAt < prFetchedAt) return [];
       // Keep this observation's timestamp. The cache's own ordering guard
       // drops the write if an agreeing, fresher result is already durable.
-      return [{ provider: current.pr.provider, prKey: getPrStatusKey(current.pr), fetchedAt, pr: current.pr }];
+      return [{ provider: current.pr.provider, prKey: getPrStatusKey(current.pr), fetchedAt: prFetchedAt, pr: current.pr }];
     });
     if (entries.length) await this.getOverlayStore().writePrStatusCacheEntries(entries);
   }
@@ -6386,14 +6391,14 @@ class DesktopAppServerService {
         await this.fetchForgePullRequests(refs, { reconnect: true, gitlabPoll }),
       getObservationTimestamp: () => this.nextPrObservationTimestamp(),
       onTargetsHandled: (keys) => this.transcriptPrSubscriptions.markHandled(keys),
-      applyResults: async (prs, fetchedAt) => {
+      applyResults: async (prs, fetchedAt, fetchedAtByKey) => {
         // Mention-only results must never enter persistence, transitions, or
         // automatic repair. Attached PRs keep their existing result path.
-        this.transcriptPrSubscriptions.observe(prs, fetchedAt);
+        this.transcriptPrSubscriptions.observe(prs, fetchedAt, fetchedAtByKey);
         const attached = prs.filter((pr) =>
           this.primaryPrThreadsByKey.has(getPrStatusKey(pr))
         );
-        return attached.length ? await this.applyPolledPrStatuses(attached, fetchedAt) : [];
+        return attached.length ? await this.applyPolledPrStatuses(attached, fetchedAt, fetchedAtByKey) : [];
       },
     });
     this.prPollingScheduler = scheduler;
@@ -6770,11 +6775,13 @@ class DesktopAppServerService {
     prs: PrSummary[],
     observedAt: number,
     operatorInitiated = false,
+    fetchedAtByKey?: ReadonlyMap<string, number>,
   ): Promise<void> {
     await this.refreshPrAutoDispatchBudgetSafetyStop();
     const coordinator = this.getPrAutoDispatchCoordinator();
     for (const pr of prs) {
       const prKey = getPrStatusKey(pr);
+      const prObservedAt = fetchedAtByKey?.get(prKey) ?? observedAt;
       const winner = await this.getPrAutoDispatchWinner(pr, prKey);
       const threadKeys = winner
         ? [buildThreadIdentityKey(winner.backend, winner.threadId)]
@@ -6783,7 +6790,7 @@ class DesktopAppServerService {
         ? await coordinator.handleStatusSnapshot({
             pr,
             threadKeys,
-            observedAt,
+            observedAt: prObservedAt,
             backgroundPollingEnabled: this.isPrAutoDispatchAvailable(),
             operatorInitiated,
           })
@@ -6832,7 +6839,7 @@ class DesktopAppServerService {
           ),
         );
         const dispatched = await this.getPrStatusWatchCoordinator()
-          .handleStatusSnapshot(pr, observedAt, failureCoveredThreadKeys);
+          .handleStatusSnapshot(pr, prObservedAt, failureCoveredThreadKeys);
         if (dispatched > 0) {
           appServerLog.info("pr status watch completed", {
             prKey,
@@ -7213,6 +7220,7 @@ class DesktopAppServerService {
   private async applyPolledPrStatuses(
     prs: PrSummary[],
     fetchedAt: number,
+    fetchedAtByKey?: ReadonlyMap<string, number>,
   ): Promise<string[]> {
     // The GraphQL client fetches only the PR's head commit (see the cost note
     // in github-graphql-client). Union forward so a status poll does not
@@ -7223,18 +7231,22 @@ class DesktopAppServerService {
       return commitShas.length > 0 ? { ...pr, commitShas } : pr;
     });
 
-    const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll");
+    const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll", { fetchedAtByKey });
     const canonical = this.canonicalizePrs(merged);
     const changedKeys = new Set(changed.map(getPrStatusKey));
+    const hasCurrentObservation = (pr: PrSummary) => {
+      const key = getPrStatusKey(pr);
+      return this.prStatusRegistry.get(key)?.fetchedAt === (fetchedAtByKey?.get(key) ?? fetchedAt);
+    };
     this.prReviewOfferCoordinator?.handleObservations(canonical.filter((pr) =>
       this.primaryPrThreadsByKey.has(getPrStatusKey(pr))
       && !changedKeys.has(getPrStatusKey(pr))
-      && this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt));
+      && hasCurrentObservation(pr)));
     this.recordPrCheck(canonical, "background poll");
-    await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
+    await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt, false, fetchedAtByKey);
     // An unchanged accepted poll refreshes CI freshness without publishing a
     // field-change event. Dependencies still need that observation for admission.
-    const fresh = canonical.filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt);
+    const fresh = canonical.filter(hasCurrentObservation);
     this.queueStackAdvance(fresh);
     const freshPrUrls = fresh.map((pr) => pr.url);
     // Evaluation can start a continuation turn; the poll must not wait on it.
@@ -7246,7 +7258,7 @@ class DesktopAppServerService {
       return [];
     }
 
-    await this.writePrStatusesToCache(changed, fetchedAt);
+    await this.writePrStatusesToCache(changed, fetchedAt, fetchedAtByKey);
 
     // Publish on the backend that owns each PR's thread. Group so we emit one
     // batch per backend rather than one call per PR.
@@ -8959,7 +8971,10 @@ class DesktopAppServerService {
         // while the app runs and the very next poll must respect it.
         isProviderEnabled: (provider) =>
           getDesktopSettingsService().isForgeEnabled(provider),
-      }, new GitLabPrFetcher({ tryTakeRequestToken: () => this.takePrPollingToken("GitLab additional request") }));
+      }, new GitLabPrFetcher({
+        tryTakeRequestToken: () => this.takePrPollingToken("GitLab additional request"),
+        getObservationTimestamp: () => this.nextPrObservationTimestamp(),
+      }));
     }
     return this.prFetcher;
   }

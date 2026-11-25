@@ -162,7 +162,7 @@ describe("GitLab MR routing and status", () => {
     })]);
     expect(run.mock.calls.map((call) => call[1])).toEqual([
       ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests?scope=all&state=all&source_branch=feature%2Fa%2Bb&per_page=100&page=1"],
-      ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17"],
+      ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17"],
       // Merge trains are a project setting, read once per project and cached.
       ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", "projects/team%2Fsub%2Fgroup%2Fproject"],
     ]);
@@ -178,7 +178,7 @@ describe("GitLab MR routing and status", () => {
     ]);
     expect(run.mock.calls.map((call) => call[1])).toEqual([
       ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", `projects/team%2Fsub%2Fgroup%2Fproject/repository/commits/${tip}/merge_requests?per_page=20`],
-      ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17"],
+      ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17"],
       // Merge trains are a project setting, read once per project and cached.
       ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", "projects/team%2Fsub%2Fgroup%2Fproject"],
     ]);
@@ -297,7 +297,7 @@ describe("review regressions", () => {
         ? { id: "synthetic", parent_ids: ["target-or-previous-train", "new-head"] }
         : { ...mr, head_pipeline: { status, sha: "synthetic", ref: `refs/merge-requests/17/${kind}`, project_id: 123 } });
       expect(await fetcher.fetchByRef(ref)).toMatchObject({ headSha: "new-head", checkState: expected });
-      expect(run).toHaveBeenCalledWith("/fixture/glab", ["api", "--hostname", "gitlab.com", "--method", "GET", "projects/123/repository/commits/synthetic"]);
+      expect(run).toHaveBeenCalledWith("/fixture/glab", ["api", "--hostname", "gitlab.com", "--method", "GET", "--include", "projects/123/repository/commits/synthetic"]);
     }
   });
 
@@ -314,7 +314,7 @@ describe("review regressions", () => {
       url: moved.web_url,
     });
     expect(run).toHaveBeenCalledWith("/fixture/glab", [
-      "api", "--hostname", "gitlab.com", "--method", "GET",
+      "api", "--hostname", "gitlab.com", "--method", "GET", "--include",
       "projects/team%2Fsub%2Fgroup%2Fproject/merge_requests/17",
     ]);
 

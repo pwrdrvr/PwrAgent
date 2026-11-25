@@ -592,6 +592,17 @@ describe("GitLab request admission", () => {
     expect(tryTakeToken).toHaveBeenCalledTimes(3);
   });
 
+  it("gives the last shared token to the focused GitLab target ahead of GitHub", async () => {
+    const focused = { ...gitlabTargets(1)[0]!, threadKeys: ["codex:focused"] };
+    const h = harness({
+      listTargets: () => [target(99), focused],
+      getFocusedThreadKeys: () => new Set(["codex:focused"]),
+      tryTakeToken: vi.fn().mockReturnValueOnce(true).mockReturnValue(false),
+    });
+    await h.scheduler.tick();
+    expect(polledNumbers(h.fetched)).toEqual([1]);
+  });
+
   it("keeps a reconnect probe to one paid GitLab request", async () => {
     const tryTakeToken = vi.fn(() => true);
     const h = harness({ listTargets: () => gitlabTargets(120), tryTakeToken });

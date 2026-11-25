@@ -6,6 +6,7 @@ import { ForgePrFetcher } from "../pr-status/forge-pr-fetcher";
 import { GitLabPrFetcher, parseGitLabMr, type GitLabMrPayload } from "../pr-status/gitlab-pr-fetcher";
 import { PrPollingScheduler } from "../pr-status/pr-polling-scheduler";
 import { PrStatusTokenBucket } from "../pr-status/pr-status-token-bucket";
+import { TranscriptPrSubscriptions } from "../pr-status/transcript-pr-subscriptions";
 
 const host = "gitlab.example.com";
 const project = "team/sub/project";
@@ -68,6 +69,187 @@ function graphPage(rows: GitLabMrPayload[], endCursor: string | null = null, err
 function cliHttpError(status: number, headers = "", body = "{}") {
   return Object.assign(new Error("nonzero glab exit"), { stdout: `HTTP/2.0 ${status}\r\n${headers}\r\n${body}` });
 }
+
+it("completes a merge-train observation under repeated small shared-budget refills", async () => {
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (refill) => {
+    let tokens = refill;
+    let now = Date.now();
+    const takeToken = () => tokens > 0 && --tokens >= 0;
+    const rows = Array.from({ length: 6 }, (_, index) => {
+      const row = fixtureMr(index + 1);
+      const projectIndex = Math.floor(index / 2);
+      row.web_url = row.web_url.replace(project, `${project}-${projectIndex}`);
+      row.head_pipeline = { status: "running", sha: `train-${row.iid}`,
+        ref: `refs/merge-requests/${row.iid}/train`, project_id: 432 };
+      return row;
+    });
+    const gitlab = new GitLabPrFetcher({ discover, tryTakeRequestToken: takeToken, run: async (_command, args) => {
+      const endpoint = args.at(-1)!;
+      if (endpoint === "graphql") {
+        const query = args.find((arg) => arg.startsWith("query="))!;
+        const projectIndex = Number(query.match(/fullPath: "[^"]+-(\d+)"/)?.[1]);
+        return graphPage(rows.filter((row) => row.web_url.includes(`${project}-${projectIndex}/`)));
+      }
+      const commit = endpoint.match(/\/repository\/commits\/(train-(\d+))$/);
+      if (commit) return JSON.stringify({ id: commit[1], parent_ids: [`head-${commit[2]}`] });
+      if (endpoint.includes("/merge_trains/")) return '{"status":"fresh","pipeline":{"status":"running"}}';
+      if (/^projects\/[^/]+$/.test(endpoint)) return '{"merge_trains_enabled":true}';
+      const row = rows.find((row) => endpoint.endsWith(`/merge_requests/${row.iid}`));
+      if (row) return JSON.stringify(row);
+      throw new Error(`Unexpected fake transport request ${endpoint}`);
+    } });
+    const observed: PrSummary[] = [];
+    const targets = rows.map((row) => {
+      const pr = parseGitLabMr(row);
+      return { prKey: buildPullRequestStatusKey(pr), pr, threadKeys: [] };
+    });
+    const forge = new ForgePrFetcher({}, gitlab);
+    const scheduler = new PrPollingScheduler({
+      listTargets: () => targets, getFocusedThreadKeys: () => new Set(), isWindowVisible: () => true, now: () => now,
+      tryTakeToken: takeToken, fetchPullRequests: (refs, gitlabPoll) => forge.fetchPullRequests(refs, { gitlabPoll }),
+      applyResults: async (prs) => { observed.push(...prs); return []; },
+    });
+    // The independent model needs four paid operations for the first MR:
+    // status, synthetic commit parent, project setting, and train car.
+    for (let tick = 0; tick < Math.ceil(4 / refill); tick++) {
+      await scheduler.tick();
+      tokens = refill;
+      now += 15_000;
+    }
+    expect(observed[0]).toMatchObject({ number: 1, checkState: "pending", mergeQueue: { state: "group_checks_running" } });
+  }), { examples: [[5]], numRuns: 12 });
+});
+
+it.each(["unchecked", "forbidden"])("uses budgeted REST detail for the %s GraphQL response", async (scenario) => {
+  const run = vi.fn(async (_command: string, args: string[]) => {
+    const endpoint = args.at(-1)!;
+    if (endpoint === "graphql") {
+      if (scenario === "forbidden") throw cliHttpError(403);
+      return graphPage([{ ...fixtureMr(1), detailed_merge_status: "unchecked" }, fixtureMr(2)]);
+    }
+    if (endpoint.startsWith(`${prefix}/`)) return JSON.stringify(fixtureMr(Number(endpoint.at(-1))));
+    return "{}";
+  });
+  const pay = vi.fn(() => true);
+  const gitlab = new GitLabPrFetcher({ discover, run, tryTakeRequestToken: pay });
+  const results = await gitlab.pollProject([ref(1), ref(2)], { takeFirstRequestToken: pay, defer: vi.fn() });
+  expect(results).toHaveLength(2);
+  expect(results.every((pr) => pr.mergeState === "mergeable")).toBe(true);
+  expect(run.mock.calls.map(([, args]) => args.at(-1))).toContain(`${prefix}/1`);
+  expect(pay).toHaveBeenCalledTimes(run.mock.calls.length);
+});
+
+it("orders a page and a later fallback around an overlapping foreground observation", async () => {
+  let timestamp = Date.now();
+  const nextAt = () => ++timestamp;
+  const rows = [fixtureMr(1), fixtureMr(2), fixtureMr(3)];
+  const stored = new Map<number, { title?: string; at: number }>();
+  const gitlab = new GitLabPrFetcher({ discover, getObservationTimestamp: nextAt, run: async (_command, args) => {
+    const endpoint = args.at(-1)!;
+    if (endpoint === "graphql") {
+      if (args.some((arg) => arg.includes('after: "next"'))) return graphPage([rows[1]!]);
+      // The first page started already. A foreground refresh of all rows
+      // completes before the next page and the singleton fallback start.
+      const at = nextAt();
+      for (const row of rows) stored.set(row.iid, { title: "foreground", at });
+      return graphPage([rows[0]!], "next");
+    }
+    if (endpoint === `${prefix}/3`) return JSON.stringify(rows[2]);
+    return "{}";
+  } });
+  const forge = new ForgePrFetcher({}, gitlab);
+  const scheduler = new PrPollingScheduler({
+    listTargets: () => rows.map((row) => {
+      const pr = parseGitLabMr(row);
+      return { pr, prKey: buildPullRequestStatusKey(pr), threadKeys: [] };
+    }),
+    getFocusedThreadKeys: () => new Set(), isWindowVisible: () => true, tryTakeToken: () => true,
+    getObservationTimestamp: nextAt,
+    fetchPullRequests: (refs, gitlabPoll) => forge.fetchPullRequests(refs, { gitlabPoll }),
+    applyResults: async (prs, fallbackAt, fetchedAtByKey) => {
+      for (const pr of prs) {
+        const at = fetchedAtByKey?.get(buildPullRequestStatusKey(pr)) ?? fallbackAt;
+        if (at >= (stored.get(pr.number)?.at ?? 0)) stored.set(pr.number, { title: pr.title, at });
+      }
+      return [];
+    },
+  });
+  await scheduler.tick();
+  expect([...stored.values()].map(({ title }) => title)).toEqual(["foreground", "MR 2", "MR 3"]);
+  expect(stored.get(2)!.at).toBeLessThan(stored.get(3)!.at);
+});
+
+it("keeps a transcript-only MR pending until provider cooldown ends with background polling off", async () => {
+  vi.useFakeTimers();
+  const subscriptions = new TranscriptPrSubscriptions();
+  try {
+    const row = { ...fixtureMr(1), web_url: fixtureMr(1).web_url.replace(host, "gitlab.com") };
+    const run = vi.fn(async (_command: string, args: string[]) => {
+      if (args.at(-1) === "blocker") throw cliHttpError(429, "Retry-After: 61\r\n");
+      if (args.at(-1) === `${prefix}/1`) return JSON.stringify(row);
+      return "{}";
+    });
+    const gitlab = new GitLabPrFetcher({ discover, run });
+    await expect(gitlab.readApi("gitlab.com", "blocker")).rejects.toThrow("429");
+    const forge = new ForgePrFetcher({}, gitlab);
+    const scheduler = new PrPollingScheduler({
+      listTargets: () => subscriptions.targets(), getFocusedThreadKeys: () => new Set(), isWindowVisible: () => true,
+      tryTakeToken: () => true, fetchPullRequests: (refs, gitlabPoll) => forge.fetchPullRequests(refs, { gitlabPoll }),
+      applyResults: async (prs, at, atByKey) => { subscriptions.observe(prs, at, atByKey); return []; },
+      onTargetsHandled: (keys) => subscriptions.markHandled(keys),
+    });
+    subscriptions.set(1, { removedUrls: [], updates: [{ url: row.web_url, visible: true }] }, vi.fn());
+    subscriptions.requestRefresh(() => scheduler.tick(() => subscriptions.pendingTargets()));
+    await vi.advanceTimersByTimeAsync(60_999);
+    expect(run).toHaveBeenCalledOnce();
+    expect(subscriptions.pendingTargets()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(run).toHaveBeenCalledTimes(3);
+    expect(subscriptions.pendingTargets()).toEqual([]);
+    expect(subscriptions.targets()[0]?.pr.checkState).toBe("passing");
+  } finally {
+    subscriptions.clear();
+    vi.useRealTimers();
+  }
+});
+
+it("reports a temporary login check failure and probes again after Retry-After", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const run = vi.fn(async (_command: string, args: string[]) => {
+      if (args.at(-1) === "blocker") throw cliHttpError(429, "Retry-After: 61\r\n");
+      if (args.at(-1) === "user") return '{"username":"fixture"}';
+      return '{"scopes":["read_api"]}';
+    });
+    const gitlab = new GitLabPrFetcher({ discover, run });
+    await expect(gitlab.readApi(host, "blocker")).rejects.toThrow("429");
+    await expect(gitlab.getAuthStatus(host, true)).rejects.toThrow("rate-limiting");
+    expect(run).toHaveBeenCalledOnce();
+    vi.setSystemTime(Date.now() + 61_000);
+    await expect(gitlab.getAuthStatus(host)).resolves.toMatchObject({ loggedIn: true, account: "fixture" });
+    expect(run).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("shares one in-flight detail read and its original timestamp with a manual refresh", async () => {
+  const gate = Promise.withResolvers<string>();
+  const recordObservation = vi.fn();
+  const paid = vi.fn(() => true);
+  const run = vi.fn(async (_command: string, args: string[]) => args.at(-1) === `${prefix}/1` ? await gate.promise : "{}");
+  const getObservationTimestamp = vi.fn().mockReturnValueOnce(100).mockReturnValue(200);
+  const gitlab = new GitLabPrFetcher({ discover, run, tryTakeRequestToken: paid, getObservationTimestamp });
+  const manual = gitlab.fetchByRef(ref(1));
+  await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+  const background = gitlab.pollProject([ref(1)], { takeFirstRequestToken: paid, defer: vi.fn(), recordObservation });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(run).toHaveBeenCalledOnce();
+  gate.resolve(JSON.stringify(fixtureMr(1)));
+  expect(await background).toEqual([await manual]);
+  expect(paid).toHaveBeenCalledTimes(2);
+  expect(recordObservation).toHaveBeenCalledWith(expect.objectContaining({ number: 1 }), 100);
+});
 
 it.each([false, true])("matches singleton status with fewer paid background requests (synthetic pipelines: %s)", async (synthetic) => {
   vi.useFakeTimers({ toFake: ["Date"] });

@@ -18,6 +18,8 @@ const execFileAsync = promisify(execFile);
 /** How long a project whose merge train setting could not be read waits before it is asked again. */
 const MERGE_TRAIN_RETRY_MS = 60 * 60_000;
 const GRAPHQL_COMPATIBILITY_RETRY_MS = 60 * 60_000;
+const DEFERRED_OBSERVATION_TTL_MS = 60_000;
+const MAX_DEFERRED_OBSERVATIONS = 64;
 /** Concurrent `glab` subprocesses admitted at once. */
 const API_CONCURRENCY = 3;
 export class GitLabReadError extends Error {
@@ -64,13 +66,19 @@ export type GitLabRef = { host: string; owner: string; repo: string; number: num
 /** Admission and deferred cadence are owned by the background scheduler. */
 export type GitLabPollRequest = {
   takeFirstRequestToken: () => boolean;
-  defer: (iid: number) => void;
+  defer: (iid: number, retryAt?: number) => void;
+  recordObservation?: (pr: PrSummary, fetchedAt: number) => void;
 };
 
 type GitLabPollRoute = { command: string; takeToken: () => boolean };
+type GitLabActiveRequest = { pending: Promise<unknown>; startedAt: number };
 
 class GitLabBudgetDeferred extends Error {
   constructor() { super("PR status refresh budget is temporarily exhausted."); }
+}
+
+function providerRetryAt(error: unknown): number | undefined {
+  return error instanceof GitLabReadError ? error.retryAt : undefined;
 }
 
 export function parseGitLabMrUrl(value: string): GitLabRef | undefined {
@@ -105,6 +113,26 @@ export type GitLabMrPayload = {
   closed_at?: string;
   head_pipeline?: { status?: string; web_url?: string; sha?: string; ref?: string; project_id?: number } | null;
 };
+
+type GitLabObservation = {
+  payload: GitLabMrPayload;
+  fetchedAt: number;
+  verifiedSourceHead?: string | null;
+  expiresAt?: number;
+};
+
+function compactMrPayload(payload: GitLabMrPayload): GitLabMrPayload {
+  const { iid, web_url, state, title, draft, source_branch, target_branch, sha,
+    detailed_merge_status, has_conflicts, created_at, merged_at, closed_at, head_pipeline } = payload;
+  return {
+    iid, web_url, state, title, draft, source_branch, target_branch, sha,
+    detailed_merge_status, has_conflicts, created_at, merged_at, closed_at,
+    head_pipeline: head_pipeline ? {
+      status: head_pipeline.status, sha: head_pipeline.sha, ref: head_pipeline.ref,
+      project_id: head_pipeline.project_id, web_url: head_pipeline.web_url,
+    } : head_pipeline,
+  };
+}
 
 type GitLabPollNode = {
   iid: string;
@@ -161,6 +189,10 @@ function toPolledMr(node: GitLabPollNode, ref: GitLabRef): GitLabMrPayload | und
   // permissions. Read the REST detail when it cannot prove the observation.
   if (!node.diffHeadSha || !node.detailedMergeStatus || !pipeline?.sha || !pipeline.status
     || typeof node.state !== "string" || typeof node.draft !== "boolean" || typeof node.conflicts !== "boolean") return undefined;
+  const state = node.state.toLowerCase();
+  const mergeStatus = node.detailedMergeStatus.toLowerCase();
+  // The REST detail serializer asks GitLab to recheck an unchecked MR.
+  if (state === "opened" && mergeStatus === "unchecked") return undefined;
   const projectId = /^gid:\/\/gitlab\/Project\/(\d+)$/.exec(pipeline.project?.id ?? "")?.[1];
   if (pipeline.sha !== node.diffHeadSha && (!pipeline.ref || !projectId)) return undefined;
   let pipelineUrl: string | undefined;
@@ -171,9 +203,9 @@ function toPolledMr(node: GitLabPollNode, ref: GitLabRef): GitLabMrPayload | und
   const status = pipeline.status.toLowerCase();
   if ((status === "failed" || status === "canceled") && !pipelineUrl) return undefined;
   return {
-    iid: ref.number, web_url: node.webUrl, state: node.state.toLowerCase(), title: node.title,
+    iid: ref.number, web_url: node.webUrl, state, title: node.title,
     draft: node.draft, source_branch: node.sourceBranch, target_branch: node.targetBranch,
-    sha: node.diffHeadSha, detailed_merge_status: node.detailedMergeStatus.toLowerCase(),
+    sha: node.diffHeadSha, detailed_merge_status: mergeStatus,
     has_conflicts: node.conflicts, created_at: node.createdAt,
     merged_at: node.mergedAt ?? undefined, closed_at: node.closedAt ?? undefined,
     head_pipeline: {
@@ -235,6 +267,7 @@ export type GitLabPrFetcherOptions = {
   run?: (command: string, args: string[]) => Promise<string>;
   resolveRepos?: typeof resolveGitLabReposForDirectory;
   tryTakeRequestToken?: () => boolean;
+  getObservationTimestamp?: () => number;
   /** Attachment uploads only; every other request goes through glab. */
   fetch?: typeof fetch;
 };
@@ -256,7 +289,8 @@ export class GitLabPrFetcher {
 
   private discovery?: { at: number; pending: Promise<DesktopGlabDiscoverySnapshot> };
   private readonly statuses = new Map<string, { at: number; pending: Promise<GlabStatus> }>();
-  private readonly requests = new Map<string, Promise<unknown>>();
+  private readonly requests = new Map<string, GitLabActiveRequest>();
+  private deferredObservations = new Map<string, GitLabObservation>();
   private readonly retryAt = new Map<string, number>();
   private readonly graphqlUnavailableUntil = new Map<string, number>();
   private requestSequence = 0;
@@ -281,6 +315,7 @@ export class GitLabPrFetcher {
     // A re-check follows a sign-in change; never upload with the previous account's token.
     this.tokens.clear();
     this.graphqlUnavailableUntil.clear();
+    this.deferredObservations = new Map();
     this.mergeTrains.clear();
     this.mergeTrainRetryAt.clear();
   }
@@ -409,8 +444,9 @@ export class GitLabPrFetcher {
     includeHeaders?: boolean;
     poll?: GitLabPollRoute;
     query?: string;
+    onStarted?: (startedAt: number) => void;
   } = {}): Promise<T> {
-    const { reportFailure, signal, raw, poll, query, includeHeaders = Boolean(poll) } = options;
+    const { reportFailure, signal, raw, poll, query, onStarted, includeHeaders = Boolean(poll) } = options;
     signal?.throwIfAborted();
     if (!/^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?$/i.test(host) || host === "github.com") {
       throw new Error("Invalid GitLab hostname.");
@@ -422,6 +458,11 @@ export class GitLabPrFetcher {
     const route = `${command}\0${host}`;
     const key = JSON.stringify([route, endpoint, query, raw, includeHeaders, signal ? ++this.requestSequence : 0]);
     for (;;) {
+      const existing = this.requests.get(key);
+      if (existing) {
+        onStarted?.(existing.startedAt);
+        return await existing.pending as T;
+      }
       // Recheck after each wait. An active request may have set Retry-After
       // while this page was waiting for a slot. A denied start costs no token.
       const retryAt = this.retryAt.get(route);
@@ -429,17 +470,17 @@ export class GitLabPrFetcher {
         if (retryAt > Date.now()) throw new GitLabReadError(429, retryAt);
         this.retryAt.delete(route);
       }
-      const existing = this.requests.get(key);
-      if (existing) return await existing as T;
       if (this.requests.size < API_CONCURRENCY) break;
       // Only the scheduler's bounded batches wait. Manual and detail reads
       // retain their existing concurrency behavior.
       if (!poll) throw new Error("GitLab request concurrency limit reached.");
-      await Promise.race([...this.requests.values()].map((request) => request.then(() => {}, () => {})));
+      await Promise.race([...this.requests.values()].map(({ pending }) => pending.then(() => {}, () => {})));
     }
     if (poll ? !poll.takeToken() : reportFailure && this.options.tryTakeRequestToken?.() === false) {
       throw new GitLabBudgetDeferred();
     }
+    const startedAt = this.options.getObservationTimestamp?.() ?? Date.now();
+    onStarted?.(startedAt);
     const pending = (async () => {
       try {
         const args = ["api", "--hostname", host, "--method", query ? "POST" : "GET",
@@ -479,11 +520,12 @@ export class GitLabPrFetcher {
         throw new Error(message);
       }
     })();
-    this.requests.set(key, pending);
+    const active = { pending, startedAt };
+    this.requests.set(key, active);
     try {
       return await pending;
     } finally {
-      if (this.requests.get(key) === pending) this.requests.delete(key);
+      if (this.requests.get(key) === active) this.requests.delete(key);
     }
   }
 
@@ -492,7 +534,13 @@ export class GitLabPrFetcher {
     if (recheck) this.invalidate();
     const cached = this.statuses.get(host);
     if (cached && Date.now() - cached.at < 5 * 60_000) return await cached.pending;
-    const pending = this.probeAuth(host);
+    const pending = this.probeAuth(host).catch((error: unknown) => {
+      if (this.statuses.get(host)?.pending === pending) this.statuses.delete(host);
+      if (providerRetryAt(error) !== undefined) {
+        throw new Error("GitLab is rate-limiting requests. Try checking sign-in again after the cooldown.", { cause: error });
+      }
+      throw error;
+    });
     this.statuses.set(host, { at: Date.now(), pending });
     return await pending;
   }
@@ -507,20 +555,22 @@ export class GitLabPrFetcher {
     };
     if (!status.installed) return { ...status, reason: "Install glab or select an executable below." };
     try {
-      const user = await this.api<{ username?: string }>(host, "user");
+      const user = await this.api<{ username?: string }>(host, "user", { includeHeaders: true });
       if (!user.username) throw new Error("No user returned");
       status.loggedIn = true;
       status.account = user.username;
-    } catch {
+    } catch (error) {
+      if (providerRetryAt(error) !== undefined) throw error;
       // The pane's sign-in field carries the command; this says only what
       // that field cannot — that being signed in already does not rule out a
       // connectivity problem reaching this host.
       return { ...status, reason: `Could not verify login to ${host}. If you are already signed in, check connectivity to that host.` };
     }
     try {
-      const token = await this.api<{ scopes?: string[] }>(host, "personal_access_tokens/self");
+      const token = await this.api<{ scopes?: string[] }>(host, "personal_access_tokens/self", { includeHeaders: true });
       status.scopes = token.scopes?.filter((scope) => typeof scope === "string") ?? [];
-    } catch {
+    } catch (error) {
+      if (providerRetryAt(error) !== undefined) throw error;
       // OAuth and older GitLab versions do not expose PAT introspection.
     }
     if (status.scopes.length > 0) {
@@ -528,10 +578,11 @@ export class GitLabPrFetcher {
       status.permissionState = status.hasRepoScope ? "sufficient" : "insufficient";
     } else {
       try {
-        await this.api(host, "merge_requests?scope=assigned_to_me&per_page=1");
+        await this.api(host, "merge_requests?scope=assigned_to_me&per_page=1", { includeHeaders: true });
         status.hasRepoScope = true;
         status.permissionState = "sufficient";
-      } catch {
+      } catch (error) {
+        if (providerRetryAt(error) !== undefined) throw error;
         status.permissionState = "unknown";
       }
     }
@@ -641,17 +692,47 @@ export class GitLabPrFetcher {
         return started;
       },
     };
+    const deferredObservations = this.deferredObservations;
     const pending = new Map(refs.map((ref) => [ref.number, ref]));
     const results: PrSummary[] = [];
-    const accept = async (ref: GitLabRef, read: () => Promise<PrSummary>) => {
+    const observationKey = (iid: number) => JSON.stringify([command, host, owner, repo, iid]);
+    const deferFor = (iid: number, error: unknown) => {
+      const retryAt = providerRetryAt(error);
+      if (retryAt !== undefined) request.defer(iid, retryAt);
+      else if (error instanceof GitLabBudgetDeferred) request.defer(iid);
+    };
+    const accept = async (ref: GitLabRef, read: () => Promise<GitLabObservation>) => {
       pending.delete(ref.number);
+      let observation: GitLabObservation | undefined;
       try {
-        results.push(await read());
+        observation = await read();
+        const pr = await this.observeMr(ref, observation, poll);
+        results.push(pr);
+        request.recordObservation?.(pr, observation.fetchedAt);
       } catch (error) {
-        if (error instanceof GitLabBudgetDeferred) request.defer(ref.number);
+        if (observation && error instanceof GitLabBudgetDeferred) {
+          // Carry only the fields used for status. Keep the original read time
+          // and any completed source-parent check across short budget stalls.
+          if (deferredObservations.size >= MAX_DEFERRED_OBSERVATIONS) {
+            const oldest = deferredObservations.keys().next();
+            if (!oldest.done) deferredObservations.delete(oldest.value);
+          }
+          deferredObservations.set(observationKey(ref.number), {
+            ...observation, payload: compactMrPayload(observation.payload),
+            expiresAt: observation.expiresAt ?? Date.now() + DEFERRED_OBSERVATION_TTL_MS,
+          });
+        }
+        deferFor(ref.number, error);
         // Failed observations leave the registry's previous value in place.
       }
     };
+    for (const ref of pending.values()) {
+      const key = observationKey(ref.number);
+      const previous = deferredObservations.get(key);
+      if (!previous) continue;
+      deferredObservations.delete(key);
+      if (previous.expiresAt! > Date.now()) await accept(ref, async () => previous);
+    }
     try {
       if (pending.size > 1) {
         for await (const page of this.pollGraphqlPages(host, `${owner}/${repo}`, [...pending.values()], poll)) {
@@ -661,7 +742,7 @@ export class GitLabPrFetcher {
             if (!ref) continue;
             let payload: GitLabMrPayload | undefined;
             try { payload = toPolledMr(node, ref); } catch { continue; }
-            if (payload) await accept(ref, () => this.observeMr(ref, payload, poll));
+            if (payload) await accept(ref, async () => ({ payload, fetchedAt: page.fetchedAt }));
           }
           if (pending.size === 0) break;
         }
@@ -669,11 +750,9 @@ export class GitLabPrFetcher {
       // Older schemas, missing nodes, and moved projects use the same detail
       // endpoint as a manual refresh. The REST list omits head_pipeline and
       // includes full descriptions, so it cannot replace these reads.
-      for (const ref of pending.values()) await accept(ref, () => this.readMr(ref, poll));
+      for (const ref of pending.values()) await accept(ref, () => this.readMrObservation(ref, poll));
     } catch (error) {
-      if (error instanceof GitLabBudgetDeferred) {
-        for (const iid of pending.keys()) request.defer(iid);
-      }
+      for (const iid of pending.keys()) deferFor(iid, error);
     }
     return results;
   }
@@ -686,9 +765,11 @@ export class GitLabPrFetcher {
     const cursors = new Set<string>();
     while (cursors.size < refs.length) {
       let response: GitLabPollGraphql;
+      let fetchedAt = 0;
       try {
         response = await this.api<GitLabPollGraphql>(host, "graphql", {
           reportFailure: true, poll, query: pollQuery(project, refs, first, after),
+          onStarted: (at) => { fetchedAt = at; },
         });
       } catch (error) {
         if (!(error instanceof GitLabReadError) || error.retryAt) throw error;
@@ -696,7 +777,7 @@ export class GitLabPrFetcher {
           first = Math.floor(first / 2);
           continue;
         }
-        if ([404, 405, 501].includes(error.status)) {
+        if ([403, 404, 405, 501].includes(error.status)) {
           this.graphqlUnavailableUntil.set(route, Date.now() + GRAPHQL_COMPATIBILITY_RETRY_MS);
           return;
         }
@@ -714,7 +795,7 @@ export class GitLabPrFetcher {
         }
         return;
       }
-      yield { ...page, errors: response.errors };
+      yield { ...page, errors: response.errors, fetchedAt };
       const cursor = page.pageInfo?.endCursor;
       if (!page.pageInfo?.hasNextPage || !cursor || cursors.has(cursor)) return;
       cursors.add(cursor);
@@ -723,31 +804,32 @@ export class GitLabPrFetcher {
   }
 
   async fetchByRef(ref: GitLabRef): Promise<PrSummary> {
-    return await this.readMr(ref);
+    return await this.observeMr(ref, await this.readMrObservation(ref));
   }
 
-  private async readMr(ref: GitLabRef, poll?: GitLabPollRoute): Promise<PrSummary> {
+  private async readMrObservation(ref: GitLabRef, poll?: GitLabPollRoute): Promise<GitLabObservation> {
+    let fetchedAt = 0;
     const payload = await this.api<GitLabMrPayload>(ref.host,
-      `projects/${encodeURIComponent(`${ref.owner}/${ref.repo}`)}/merge_requests/${ref.number}`, { reportFailure: true, poll });
-    return await this.observeMr(ref, payload, poll);
+      `projects/${encodeURIComponent(`${ref.owner}/${ref.repo}`)}/merge_requests/${ref.number}`,
+      { reportFailure: true, includeHeaders: true, poll, onStarted: (at) => { fetchedAt = at; } });
+    return { payload, fetchedAt };
   }
 
-  private async observeMr(ref: GitLabRef, payload: GitLabMrPayload, poll?: GitLabPollRoute): Promise<PrSummary> {
+  private async observeMr(ref: GitLabRef, observation: GitLabObservation, poll?: GitLabPollRoute): Promise<PrSummary> {
+    const { payload } = observation;
     const pipeline = payload.head_pipeline;
-    let pipelineSourceHeadSha: string | undefined;
-    if (payload.sha && pipeline?.sha && pipeline.sha !== payload.sha
+    if (observation.verifiedSourceHead === undefined && payload.sha && pipeline?.sha && pipeline.sha !== payload.sha
       && (pipeline.ref === `refs/merge-requests/${ref.number}/merge`
         || pipeline.ref === `refs/merge-requests/${ref.number}/train`)) {
       // GitLab's merged-results/train commit joins the source head to the
       // target (or preceding train entry). Verify that parent, not SHA equality.
       const project = pipeline.project_id ?? `${ref.owner}/${ref.repo}`;
       const commit = await this.api<{ id?: string; parent_ids?: string[] }>(ref.host,
-        `projects/${encodeURIComponent(String(project))}/repository/commits/${encodeURIComponent(pipeline.sha)}`, { reportFailure: true, poll });
-      if (commit.id === pipeline.sha && commit.parent_ids?.includes(payload.sha)) {
-        pipelineSourceHeadSha = payload.sha;
-      }
+        `projects/${encodeURIComponent(String(project))}/repository/commits/${encodeURIComponent(pipeline.sha)}`,
+        { reportFailure: true, includeHeaders: true, poll });
+      observation.verifiedSourceHead = commit.id === pipeline.sha && commit.parent_ids?.includes(payload.sha) ? payload.sha : null;
     }
-    const pr = parseGitLabMr(payload, pipelineSourceHeadSha);
+    const pr = parseGitLabMr(payload, observation.verifiedSourceHead ?? undefined);
     // A renamed or transferred project's old path redirects to
     // projects/<id>, and glab follows it, so the MR comes back under the
     // project's current path. That path is the answer, not a mismatch: the
@@ -763,7 +845,7 @@ export class GitLabPrFetcher {
   /** One MR read for merge details when a merge or close watch fires. */
   async fetchTerminalPayload(ref: GitLabRef): Promise<GitLabTerminalPayload> {
     return await this.api<GitLabTerminalPayload>(ref.host,
-      `projects/${encodeURIComponent(`${ref.owner}/${ref.repo}`)}/merge_requests/${ref.number}`, { reportFailure: true });
+      `projects/${encodeURIComponent(`${ref.owner}/${ref.repo}`)}/merge_requests/${ref.number}`, { reportFailure: true, includeHeaders: true });
   }
 
   async fetchForBranch(cwd: string, branch: string): Promise<PrSummary[]> {
