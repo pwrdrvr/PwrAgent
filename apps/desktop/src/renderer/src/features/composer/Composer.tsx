@@ -959,6 +959,8 @@ type QueuedTurnDraft = {
   /** See `ComposerQueuedTurnSnapshot.pendingMove`. */
   pendingMove?: { beforeQueueEntryId?: string; requestId?: number };
   scheduledActionId?: string;
+  /** See `ComposerQueuedTurnSnapshot.reviewTodoId`. */
+  reviewTodoId?: string;
   failedScheduledActionId?: string;
   errorMessage?: string;
   manualReleaseRequired?: boolean;
@@ -9447,6 +9449,9 @@ function useComposerController(props: ComposerProps) {
         upsertScheduledProjectionInScope(submittedScopeKey, {
           id: `scheduled-projection:${response.action.id}`,
           scheduledActionId: response.action.id,
+          ...(submittedReviewConfig?.reviewTodo
+            ? { reviewTodoId: submittedReviewConfig.reviewTodo.id }
+            : {}),
           text,
           imageAttachments: [],
           fileAttachments: [],

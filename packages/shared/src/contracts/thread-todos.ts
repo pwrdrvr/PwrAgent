@@ -1087,6 +1087,49 @@ export function isThreadTodoStatus(value: unknown): value is ThreadTodoStatus {
   );
 }
 
+const REMOTE_THREAD_TODO_ID = /^remote-todo:([^:]+):(.+)$/;
+
+/**
+ * A peer's card as a viewer names it. Owner-local ids are only unique on
+ * their owner, so the viewer qualifies each with the owner's instance id.
+ */
+export function remoteThreadTodoId(target: Pick<FederationRemoteTarget, "instanceId">, id: string): string {
+  return `remote-todo:${encodeURIComponent(target.instanceId)}:${encodeURIComponent(id)}`;
+}
+
+/** Whether `id` is a viewer's name for a peer's card, from `remoteThreadTodoId`. */
+export function isRemoteThreadTodoId(id: string): boolean {
+  return REMOTE_THREAD_TODO_ID.test(id);
+}
+
+/**
+ * The id `target`'s owner knows a viewer's card by. An id that is not a
+ * viewer's remote id is already owner-local. Throws for a card another
+ * owner holds, which `target` could never find.
+ */
+export function ownerLocalThreadTodoId(id: string, target: Pick<FederationRemoteTarget, "instanceId">): string {
+  const remote = parseRemoteThreadTodoId(id);
+  if (!remote) return id;
+  if (remote.instanceId !== target.instanceId) throw new Error("To-do owner does not match its target.");
+  return remote.id;
+}
+
+/**
+ * The owner and owner-local id inside a viewer's remote id, or undefined for
+ * an id without the `remote-todo:` prefix. Throws for a prefixed id that
+ * `remoteThreadTodoId` could not have produced.
+ */
+export function parseRemoteThreadTodoId(id: string): { instanceId: string; id: string } | undefined {
+  if (!id.startsWith("remote-todo:")) return undefined;
+  const match = REMOTE_THREAD_TODO_ID.exec(id);
+  if (!match) throw new Error("Invalid remote to-do id.");
+  try {
+    return { instanceId: decodeURIComponent(match[1]!), id: decodeURIComponent(match[2]!) };
+  } catch {
+    throw new Error("Invalid remote to-do id.");
+  }
+}
+
 /** The same owner-qualified key navigation uses for mounted threads. */
 export function threadTodoThreadKey(todo: Pick<ThreadTodo, "backend" | "threadId" | "federationTarget">): string {
   return todo.federationTarget

@@ -9,7 +9,9 @@ import type {
   ScheduledThreadActionMutationResponse,
   UpdateScheduledThreadActionRequest,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
+import { ownerLocalThreadTodoId } from "@pwragent/shared/contracts/thread-todos";
 import {
   SCHEDULED_ACTIONS_CANCEL_CHANNEL,
   SCHEDULED_ACTIONS_CREATE_CHANNEL,
@@ -37,6 +39,20 @@ function stripFederationTarget<T extends {
 }>(request: T): Omit<T, "federationTarget"> {
   const { federationTarget: _federationTarget, ...localRequest } = request;
   return localRequest;
+}
+
+/**
+ * A review queued from a peer's card names that card as the viewer does,
+ * `remote-todo:<owner>:<id>`. The owner completes the card by its own id
+ * when the review starts, so the request carries that one.
+ */
+function withOwnerLocalReviewTodo(
+  request: CreateScheduledThreadActionRequest,
+  target: FederationRemoteTarget,
+): CreateScheduledThreadActionRequest {
+  const todo = request.review?.todo;
+  if (!request.review || !todo) return request;
+  return { ...request, review: { ...request.review, todo: { ...todo, id: ownerLocalThreadTodoId(todo.id, target) } } };
 }
 
 export function registerScheduledActionIpcHandlers(): void {
@@ -154,8 +170,10 @@ export function registerScheduledActionIpcHandlers(): void {
       request: CreateScheduledThreadActionRequest,
     ): Promise<ScheduledThreadActionMutationResponse> => {
       const remote = remoteBackendFor(request);
-      return remote
-        ? await remote.createScheduledThreadAction(stripFederationTarget(request))
+      return remote && request.federationTarget && isRemoteFederationTarget(request.federationTarget)
+        ? await remote.createScheduledThreadAction(
+            stripFederationTarget(withOwnerLocalReviewTodo(request, request.federationTarget)),
+          )
         : await getScheduledThreadActionService().create(request);
     },
   );

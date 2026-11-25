@@ -161,6 +161,11 @@ export type ThreadTodoCardHandlers = {
 export type ThreadTodoReviewSetup = {
   todoId?: string;
   onShow: (todo: ThreadTodo) => void;
+  /**
+   * Cards whose review waits in a thread's queue. Each says its review is
+   * queued until it starts, rather than offering Start review again.
+   */
+  queuedTodoIds?: ReadonlySet<string>;
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
@@ -997,6 +1002,17 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
                 <ChevronDownIcon size={12} />
                 Show
               </button>
+            </>
+          );
+        }
+        if (props.reviewSetup?.queuedTodoIds?.has(todo.id)) {
+          return (
+            <>
+              <span role="status" className="thread-todo-card__waiting">
+                <span className="thread-todo-card__waiting-dot" aria-hidden="true" />
+                Review queued
+              </span>
+              {done}
             </>
           );
         }
