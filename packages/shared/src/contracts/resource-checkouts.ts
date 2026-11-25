@@ -59,6 +59,12 @@ export type ResourceCheckoutsSnapshot = {
   resources: ResourceDomain[];
   /** Gate for the Register resource affordance. */
   registerGate: ResourceActionGate;
+  /**
+   * Whether this profile's agents get the checkout tools (Settings →
+   * Experimental → Federation resources). While `disabled`, no agent on this
+   * profile can discover or reserve a resource; the operator still can.
+   */
+  agentTools: "enabled" | "disabled";
 };
 
 export type ResourceViewer = {

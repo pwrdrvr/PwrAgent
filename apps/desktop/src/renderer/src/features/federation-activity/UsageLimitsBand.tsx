@@ -1,7 +1,7 @@
 import { limitLabel, type LimitAccount, type LimitSeries } from "./usage-limits";
 import { formatBackendPlanType } from "../../lib/backend-status-format";
 import { usageProviderLabel } from "./usage-activity-accounts";
-import { describeLimitPace, usageClock, usageCount, usageMoney, usagePercent as percent, usageWhen as when } from "./usage-activity-presentation";
+import { describeLimitPace, usageClock, usageCount, usagePercent as percent, usageWhen as when } from "./usage-activity-presentation";
 
 function LimitMeter({ series, now }: { series: LimitSeries; now: number }) {
   const { latest } = series;
@@ -28,22 +28,16 @@ function LimitMeter({ series, now }: { series: LimitSeries; now: number }) {
   </div>;
 }
 
-export function UsageLimitsBand({ accounts, accountLabel, focusKey, onFocus, cost, threads, turns, cacheShare, uncached, output, now }: {
+export function UsageLimitsBand({ accounts, accountLabel, focusKey, onFocus, now }: {
   accounts: LimitAccount[];
   /** The account's name as the rest of the screen gives it. */
   accountLabel?: (account: LimitAccount) => string | undefined;
   focusKey?: string;
   onFocus: (key: string) => void;
-  cost?: number;
-  threads: number;
-  turns: number;
-  cacheShare: number;
-  uncached: number;
-  output: number;
   now: number;
 }) {
   const newest = accounts[0];
-  return <section className="usage-band" aria-label="Limits and cost">
+  return <section className="usage-band" aria-label="Account limits">
     <div className="usage-band__accounts">
       {accounts.length === 0 ? <div className="usage-limit usage-limit--empty"><span className="usage-eyebrow">Account limits</span>
         <p>No limit readings from these instances yet. They appear after Codex, Claude or Grok reports account limits.</p></div> : null}
@@ -59,17 +53,8 @@ export function UsageLimitsBand({ accounts, accountLabel, focusKey, onFocus, cos
         </div>
       </div>)}
     </div>
-    <div className="usage-band__cost">
-      <span className="usage-eyebrow">API-equivalent · same window</span>
-      <div className="usage-limit__figure"><strong>{cost === undefined ? "Unavailable" : usageMoney(cost)}</strong>
-        <span>{threads} {threads === 1 ? "thread" : "threads"} · {turns} {turns === 1 ? "turn" : "turns"}</span></div>
-      <div className="usage-limit__meter usage-limit__meter--cache" role="img" aria-label={`${Math.round(cacheShare * 100)}% of input cached`}>
-        <i style={{ width: `${cacheShare * 100}%` }} /></div>
-      <div className="usage-limit__sub"><span><strong>{Math.round(cacheShare * 100)}%</strong> of input cached</span>
-        <span><strong>{usageCount(uncached)}</strong> uncached</span><span><strong>{usageCount(output)}</strong> output</span></div>
-    </div>
     <p className="usage-band__note">{newest
-      ? `Limits are the newest reading, from ${newest.observedBy} at ${usageClock(newest.observedAt)}. They include usage outside PwrAgent and are not split among threads. Dollars are list-price estimates for the turns contained in the window.`
-      : "Dollars are list-price estimates for the turns contained in the window, not a subscription charge."}</p>
+      ? `Limits are the newest reading, from ${newest.observedBy} at ${usageClock(newest.observedAt)}. They include usage outside PwrAgent and are not split among threads. Dollars on this page are list-price estimates, not a subscription charge.`
+      : "Dollars on this page are list-price estimates, not a subscription charge."}</p>
   </section>;
 }

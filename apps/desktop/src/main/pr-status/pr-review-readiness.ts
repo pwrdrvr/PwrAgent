@@ -177,7 +177,7 @@ export type OpenPrOffer = {
   headSha?: string;
 };
 
-export type PrOfferRetireReason = "superseded" | "reviewed" | "stale" | "closed";
+export type PrOfferRetireReason = "superseded" | "reviewed" | "stale" | "closed" | "never_merge";
 
 export type PrOfferPlan = {
   retire?: { cardId: string; reason: PrOfferRetireReason };
@@ -262,6 +262,7 @@ export const PR_OFFER_RETIRE_RESULTS: Record<PrOfferRetireReason, string> = {
   reviewed: "Reviewed",
   stale: "Withdrawn: the head changed since this was offered",
   closed: "The pull request closed",
+  never_merge: "Withdrawn: this project never merges its pull requests",
 };
 
 /** Every result PwrAgent gives an offer it withdraws, as opposed to one the operator closed. */
@@ -277,8 +278,14 @@ export function describePrReviewReadiness(params: {
   headSha?: string;
   reviewed: boolean;
   openFindings?: number;
+  /**
+   * The project's label when its Forge Automation never merges. Its PRs
+   * land upstream, so the guidance never mentions a merge offer.
+   */
+  neverMergeProject?: string;
 }): string {
   const name = `#${params.prNumber}`;
+  if (params.neverMergeProject !== undefined) return describeNeverMergeReadiness(name, params);
   const at = params.headSha ? ` at ${params.headSha.slice(0, 7)}` : "";
   if (params.readiness === "closed") return `${name} is closed.`;
   if (params.readiness === "stack_parent_open") return `${name} is waiting for its lower stack layers to merge and its base to be trunk.`;
@@ -292,4 +299,25 @@ export function describePrReviewReadiness(params: {
     return `${name} is reviewed${at}, its findings are settled, and CI is green. PwrAgent offers the merge; do not raise another merge card.`;
   }
   return `${name} is reviewed${at} and its findings are settled. PwrAgent offers the merge once CI is green and it can merge.`;
+}
+
+/**
+ * Readiness guidance in a project that never merges its pull requests: the
+ * review steps are the same, but nothing ends in a merge offer.
+ */
+function describeNeverMergeReadiness(
+  name: string,
+  params: { readiness: PrReviewReadiness; headSha?: string; reviewed: boolean; openFindings?: number; neverMergeProject?: string },
+): string {
+  const at = params.headSha ? ` at ${params.headSha.slice(0, 7)}` : "";
+  const never = `${params.neverMergeProject} never merges its pull requests, so do not merge ${name}, offer a merge, or raise a merge card.`;
+  if (params.readiness === "closed") return `${name} is closed.`;
+  if (params.readiness === "stack_parent_open") {
+    return `${name} is waiting for its lower stack layers to merge and its base to be trunk. ${never}`;
+  }
+  if ((params.openFindings ?? 0) > 0) {
+    return `${name}'s latest review has ${params.openFindings} unsettled finding(s). Commit and push each fix, then settle the finding with update_review_item. ${never}`;
+  }
+  if (!params.reviewed) return `${name} has no review covering its head${at}. PwrAgent offers a review once CI is green. ${never}`;
+  return `${name} is reviewed${at} and its findings are settled. ${never}`;
 }

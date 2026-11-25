@@ -147,6 +147,7 @@ import {
   shouldShowDetachPullRequestWarning,
 } from "../pr-status/DetachPullRequestWarning";
 import { resolvePullRequestMergeOffer } from "@pwragent/shared/pull-request-merge-offer";
+import { projectNeverMerges } from "@pwragent/shared/project-forge-automation";
 import { MergePullRequestDialog } from "../pr-status/MergePullRequestDialog";
 import {
   threadPullRequestMergeTarget,
@@ -171,6 +172,7 @@ import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog
 import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
 import {
   canEditProjectForgeAutomation,
+  findThreadProjectDirectory,
   isProjectForgeActivityPaused,
   withProjectForgePause,
 } from "../forge-automation/forge-automation-view";
@@ -881,22 +883,24 @@ function SidebarContent(props: SidebarProps) {
   };
   const sidebarRef = useRef<HTMLElement>(null);
   const handledRevealRequestRef = useRef(0);
+  const selectedItemKey = props.selectedItemKey;
   const selectionAnchorKeyRef = useRef<string | undefined>(
-    props.selectedItemKey,
+    selectedItemKey,
   );
   const selectionAnchorDirectoryKeyRef = useRef<string | undefined>(undefined);
   const directorySelectionAnchorKeyRef = useRef<string | undefined>(undefined);
   const previousSelectedItemKeyRef = useRef<string | undefined>(
-    props.selectedItemKey,
+    selectedItemKey,
   );
   const [projectReveal, setProjectReveal] = useState<ProjectRevealRequest>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
-  const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
-    () =>
-      props.selectedItemKey
-        ? new Set([props.selectedItemKey])
-        : new Set<string>(),
+  const [threadBatch, setThreadBatch] = useState<{ itemKey?: string; keys: ReadonlySet<string> }>();
+  const batchThreadKeys = threadBatch && threadBatch.itemKey === selectedItemKey ? threadBatch.keys : undefined;
+  const defaultThreadActionKeys = useMemo(
+    () => new Set(selectedItemKey ? [selectedItemKey] : []),
+    [selectedItemKey],
   );
+  const threadActionKeys = batchThreadKeys ?? defaultThreadActionKeys;
   const [selectedDirectoryKeys, setSelectedDirectoryKeys] = useState<Set<string>>(
     () => new Set<string>(),
   );
@@ -1391,7 +1395,6 @@ function SidebarContent(props: SidebarProps) {
     attentionCounts.activeRemote,
   );
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
-  const selectedItemKey = props.selectedItemKey;
   const navigationThreads = props.threads;
   const navigationThreadByKey = useMemo(
     () => new Map(
@@ -1466,11 +1469,8 @@ function SidebarContent(props: SidebarProps) {
     revealSelectedThread?.();
   });
 
-  // A direct navigation change (history, search, a thread link, etc.) starts a
-  // fresh selection. Modified clicks deliberately do not navigate, so they can
-  // build a batch without making the detail pane jump around. Keep this in a
-  // layout effect so a launchpad cannot paint once with the previous thread's
-  // local batch-selection highlight still visible.
+  // A new destination starts a fresh batch. The render above scopes batch
+  // paint to its originating destination, even before this effect resets it.
   useLayoutEffect(() => {
     if (selectedItemKey === previousSelectedItemKeyRef.current) {
       return;
@@ -1483,9 +1483,7 @@ function SidebarContent(props: SidebarProps) {
     }
     selectionAnchorKeyRef.current = selectedItemKey;
     directorySelectionAnchorKeyRef.current = undefined;
-    setSelectedThreadKeys(
-      selectedItemKey ? new Set([selectedItemKey]) : new Set<string>(),
-    );
+    setThreadBatch(undefined);
     setSelectedDirectoryKeys((current) =>
       current.size === 0 ? current : new Set<string>(),
     );
@@ -1535,13 +1533,20 @@ function SidebarContent(props: SidebarProps) {
       focusOrigin?.focus({ preventScroll: true });
       selectionAnchorKeyRef.current = threadKey;
       selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
-      setSelectedThreadKeys(new Set([threadKey]));
+      setThreadBatch(undefined);
       props.onSelectThread(thread, {
         focusComposer: Boolean(focusOrigin),
         ...(focusOrigin ? { focusOrigin } : {}),
       });
       return;
     }
+
+    const updateBatch = (update: (current: ReadonlySet<string>) => Set<string>) => {
+      setThreadBatch((current) => ({
+        itemKey: selectedItemKey,
+        keys: update(current && current.itemKey === selectedItemKey ? current.keys : defaultThreadActionKeys),
+      }));
+    };
 
     if (event.shiftKey) {
       const anchorKey = selectionAnchorKeyRef.current;
@@ -1552,7 +1557,7 @@ function SidebarContent(props: SidebarProps) {
       if (anchorIndex < 0 || targetIndex < 0) {
         selectionAnchorKeyRef.current = threadKey;
         selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
-        setSelectedThreadKeys((current) => {
+        updateBatch((current) => {
           const next = event.metaKey ? new Set(current) : new Set<string>();
           next.add(threadKey);
           return next;
@@ -1564,7 +1569,7 @@ function SidebarContent(props: SidebarProps) {
       const rangeEnd = Math.max(anchorIndex, targetIndex);
       // Resolve row occurrences first; only the final selected identities deduplicate.
       const range = occurrences.slice(rangeStart, rangeEnd + 1);
-      setSelectedThreadKeys((current) => {
+      updateBatch((current) => {
         const next = event.metaKey ? new Set(current) : new Set<string>();
         for (const entry of range) {
           next.add(entry.threadKey);
@@ -1576,7 +1581,7 @@ function SidebarContent(props: SidebarProps) {
 
     selectionAnchorKeyRef.current = threadKey;
     selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
-    setSelectedThreadKeys((current) => {
+    updateBatch((current) => {
       const next = new Set(current);
       if (next.has(threadKey)) {
         next.delete(threadKey);
@@ -1987,15 +1992,16 @@ function SidebarContent(props: SidebarProps) {
     thread: NavigationThreadSummary,
   ): NavigationThreadSummary[] => {
     const threadKey = threadSummaryIdentityKey(thread);
-    if (!selectedThreadKeys.has(threadKey)) {
+    if (!threadActionKeys.has(threadKey)) {
       selectionAnchorKeyRef.current = threadKey;
       selectionAnchorDirectoryKeyRef.current = undefined;
-      setSelectedThreadKeys(new Set([threadKey]));
+      // Modified clicks after closing the menu start from the row it targeted.
+      setThreadBatch({ itemKey: selectedItemKey, keys: new Set([threadKey]) });
       return [thread];
     }
 
     const selectedThreads = props.threads.filter((candidate) =>
-      selectedThreadKeys.has(
+      threadActionKeys.has(
         threadSummaryIdentityKey(candidate),
       ),
     );
@@ -2756,7 +2762,7 @@ function SidebarContent(props: SidebarProps) {
     if (action === null) return;
     const targets = resolveThreadHotkeyTargets({
       focusedRowKey: focusedThreadRowKey(event),
-      selectedKeys: selectedThreadKeys,
+      selectedKeys: threadActionKeys,
       openThreadKey: props.selectedItemKey,
     });
     const threads = (targets?.keys ?? [])
@@ -3063,7 +3069,9 @@ function SidebarContent(props: SidebarProps) {
     contextMenuHasLocalWorkspace || contextMenuHasWorktreeWorkspace;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
   const contextMenuPullRequest = contextMenu?.pullRequest;
+  // A project that never merges its pull requests offers no merge here.
   const contextMenuMergeTarget = contextMenuPullRequest && pullRequestMerge
+    && !projectNeverMerges(findThreadProjectDirectory(contextMenu.thread, props.directories)?.forgeAutomation)
     ? threadPullRequestMergeTarget(contextMenu.thread)
     : undefined;
   // Opened from the row, not a chip: one item detaches the thread's PRs.
@@ -3915,7 +3923,7 @@ function SidebarContent(props: SidebarProps) {
                 revealSelectedThreadRequest={directoryRevealRequest}
                 selectedItemKey={props.selectedItemKey}
                 selectedDirectoryKeys={selectedDirectoryKeys}
-                selectedThreadKeys={selectedThreadKeys}
+                batchThreadKeys={batchThreadKeys}
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 threads={renderedThreads}
@@ -4005,7 +4013,7 @@ function SidebarContent(props: SidebarProps) {
                   onCommitRenameThread={commitRenameFromRow}
                   revealSelectedThreadRequest={revealSelectedThreadRequest}
                   selectedThreadKey={props.selectedItemKey}
-                  selectedThreadKeys={selectedThreadKeys}
+                  batchThreadKeys={batchThreadKeys}
                   thinkingThreadKeys={props.thinkingThreadKeys}
                   agentCommandThreadKeys={props.agentCommandThreadKeys}
                   threads={renderedThreads}

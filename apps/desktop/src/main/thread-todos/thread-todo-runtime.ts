@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { assertMergeNotHeld } from "../app-server/thread-dependency-merge-hold";
+import { getProjectForgeAutomationIndex } from "../app-server/project-forge-automation-index";
+import { projectNeverMerges } from "@pwragent/shared/project-forge-automation";
 import { ciApprovalsForDependency } from "../app-server/thread-dependency-ci-runs";
 import { createThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -795,6 +797,14 @@ export function createThreadTodoRunners(params: {
       return { summary: `Sent to ${request.target.title ?? request.target.threadId}` };
     },
     mergePullRequest: async (request) => {
+      // A card raised before the project was set to never merge, or by an
+      // older build, must not land the PR either.
+      const project = getProjectForgeAutomationIndex().resolveThread({
+        backend: request.sourceBackend, threadId: request.sourceThreadId,
+      });
+      if (project && projectNeverMerges(project.automation)) {
+        throw new Error(`${project.label} never merges its pull requests. Change it from the project menu: Forge Automation.`);
+      }
       const overlay = getDesktopOverlayStore();
       const assertNotHeld = (pullRequest: string) => assertMergeNotHeld(createThreadDependencyStorage().active(), {
         backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest,

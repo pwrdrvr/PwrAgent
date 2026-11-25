@@ -1,6 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { PendingMcpInteraction } from "../PendingMcpInteraction";
 import {
   buildMcpElicitationResponse,
@@ -47,12 +49,64 @@ function formState(properties: Record<string, unknown>, required: string[] = [])
   })!;
 }
 
+
+function StatefulCard(props: {
+  initial: PendingMcpInteractionState;
+  onSubmit: (state: PendingMcpInteractionState, action: "accept" | "decline" | "cancel") => void;
+}) {
+  const [state, setState] = useState(props.initial);
+  return <PendingMcpInteraction state={state} onChange={setState} onSubmit={props.onSubmit} />;
+}
+
 afterEach(() => {
   cleanup();
   openExternalUrl.mockReset();
 });
 
 describe("PendingMcpInteraction", () => {
+  it("asks a single choice through the shared Select, never a native select", () => {
+    const onSubmit = vi.fn();
+    const { container } = render(
+      <StatefulCard
+        initial={formState({
+          tier: { type: "string", title: "Tier", oneOf: [
+            { const: "free", title: "Free" },
+            { const: "pro", title: "Pro" },
+          ] },
+        }, ["tier"])}
+        onSubmit={onSubmit}
+      />
+    );
+
+    expect(container.querySelector("select")).toBeNull();
+    const trigger = screen.getByRole("combobox", { name: /Tier/ });
+    expect(selectOptionLabels(trigger)).toEqual(["Free", "Pro"]);
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
+
+    chooseSelectOption(trigger, "Pro");
+    expect(trigger).toHaveAttribute("data-value", "pro");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(buildMcpElicitationResponse(onSubmit.mock.lastCall![0], "accept").content).toEqual({ tier: "pro" });
+  });
+
+  it("lets an optional single choice go back to no answer", () => {
+    const onSubmit = vi.fn();
+    render(
+      <StatefulCard
+        initial={formState({
+          tier: { type: "string", title: "Tier", oneOf: [{ const: "pro", title: "Pro" }] },
+        })}
+        onSubmit={onSubmit}
+      />
+    );
+    const trigger = screen.getByRole("combobox", { name: /Tier/ });
+    expect(selectOptionLabels(trigger)).toEqual(["No answer", "Pro"]);
+    chooseSelectOption(trigger, "Pro");
+    chooseSelectOption(trigger, "No answer");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(buildMcpElicitationResponse(onSubmit.mock.lastCall![0], "accept").content).toEqual({ tier: "" });
+  });
+
   it("renders native tool argument objects and long display names without hiding credentials", () => {
     const name = "pwragent-hosted-sandboxer-smoke-fixture";
     const state = createMcpElicitationState({

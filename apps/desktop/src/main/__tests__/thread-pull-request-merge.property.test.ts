@@ -26,7 +26,7 @@ const githubUrl = (ref: { repo: readonly [string, string]; number: number }, upp
 };
 const identity = (ref: { repo: readonly [string, string]; number: number }) => `${ref.repo.join("/")}#${ref.number}`;
 
-function harness(attached: string[], held: Set<string>) {
+function harness(attached: string[], held: Set<string>, neverMerge = false) {
   const calls: string[] = [];
   const remember = vi.fn((method: ThreadTodoMergeMethod) => calls.push(`remember:${method}`));
   const merge = vi.fn(async (params: { pullRequest: string; method: ThreadTodoMergeMethod; assertCanMerge: (url: string) => void }) => {
@@ -38,6 +38,7 @@ function harness(attached: string[], held: Set<string>) {
     readThreadPullRequestUrls: () => attached,
     readPreference: async () => ({ remembered: "rebase", remember }),
     defaultMethod: () => "squash",
+    neverMergeProject: () => neverMerge ? "canvas" : undefined,
     resolveCwd: async () => "/work/PwrAgent",
     assertNotHeld: (_thread, url) => {
       if (held.has(url)) throw new Error("Merge held: waiting for #9 to merge.");
@@ -49,20 +50,24 @@ function harness(attached: string[], held: Set<string>) {
 }
 
 describe("mergeThreadPullRequest (property)", () => {
-  it("merges exactly when the PR is attached to the thread and not held", async () => {
+  it("merges exactly when the PR is attached to the thread, not held, and its project merges", async () => {
     await fc.assert(fc.asyncProperty(
       fc.uniqueArray(prRef, { selector: identity, maxLength: 4 }),
       prRef,
       fc.boolean(),
       fc.boolean(),
       fc.constantFrom<ThreadTodoMergeMethod>("squash", "rebase", "merge"),
-      async (attachedRefs, requested, upper, hold, method) => {
+      fc.boolean(),
+      async (attachedRefs, requested, upper, hold, method, neverMerge) => {
         const attached = attachedRefs.map((ref) => githubUrl(ref));
         const stored = attachedRefs.find((ref) => identity(ref) === identity(requested));
         const held = new Set(hold && stored ? [githubUrl(stored)] : []);
-        const { deps, merge } = harness(attached, held);
+        const { deps, merge } = harness(attached, held, neverMerge);
         const result = mergeThreadPullRequest(deps, { ...THREAD, url: githubUrl(requested, upper), method });
-        if (stored && !hold) {
+        if (stored && neverMerge) {
+          await expect(result).rejects.toThrow(/canvas never merges/);
+          expect(merge).not.toHaveBeenCalled();
+        } else if (stored && !hold) {
           await expect(result).resolves.toEqual({ summary: `Squash-merged #${requested.number}` });
           // The stored URL, not the renderer's spelling of it, goes to gh.
           expect(merge).toHaveBeenCalledTimes(1);
@@ -114,5 +119,11 @@ describe("mergeThreadPullRequest (property)", () => {
   it("reads the remembered pick and the Settings default", async () => {
     const { deps } = harness([], new Set());
     await expect(readThreadPullRequestMerge(deps, THREAD)).resolves.toEqual({ remembered: "rebase", fallback: "squash" });
+  });
+
+  it("tells the card when the thread's project never merges", async () => {
+    const { deps } = harness([], new Set(), true);
+    await expect(readThreadPullRequestMerge(deps, THREAD))
+      .resolves.toEqual({ remembered: "rebase", fallback: "squash", neverMergeProject: "canvas" });
   });
 });

@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
@@ -6,6 +7,8 @@ import {
   deriveLifecycleState,
   deriveMergeState,
   deriveReviewState,
+  ghFailureLine,
+  ghServerErrorStatus,
   hasChecksStillRunning,
   mergeScopeHint,
   parseGhAuthStatus,
@@ -1111,5 +1114,117 @@ describe("mergeScopeHint", () => {
   it("adds nothing to other merge failures", () => {
     expect(mergeScopeHint("Pull request #12 is not mergeable: the base branch policy prohibits the merge."))
       .toBe("");
+  });
+});
+
+describe("a merge GitHub answers with a 5xx", () => {
+  const url = "https://github.com/fixture/gateway/pull/3631";
+  const statuses = fc.constantFrom(
+    ["502", "Bad Gateway"], ["503", "Service Unavailable"], ["504", "Gateway Time-out"], ["500", "Internal Server Error"],
+  );
+  const htmlBody = fc.tuple(fc.constantFrom("nginx", "cloudflare", "GitHub"), fc.string({ maxLength: 40 }))
+    .map(([server, text]) => `<html>\\r\\n<head><title>${text}</title></head>\\r\\n<body><center>${server}</center></body></html>`);
+  const ghLine = fc.constantFrom(
+    (code: string, reason: string, body: string) => `non-200 OK status code: ${code} ${reason} body: "${body}"`,
+    (code: string, reason: string) => `HTTP ${code}: ${reason} (https://api.github.com/graphql)`,
+  );
+  // What the PR status client answers afterwards; "unanswered" is its slow mode or a missing token.
+  const afterwards = fc.constantFrom("MERGED", "OPEN", "unreadable", "unanswered");
+
+  /** `merges` records every gh call: the merge is the only one. */
+  function fetcherFor(failure: string | Error, state: string, merges: string[][]) {
+    const fetchPullRequests = vi.fn(async (): Promise<PrSummary[]> => {
+      if (state === "unreadable") throw new Error("GitHub GraphQL request failed: 502");
+      if (state === "unanswered") return [];
+      if (state === "hung") return await new Promise<PrSummary[]>(() => {});
+      return [{ lifecycleState: state === "MERGED" ? "merged" : "open" } as PrSummary];
+    });
+    return new GithubPrFetcher({
+      graphqlClient: { fetchPullRequests, fetchPullRequestsForBranches: vi.fn() },
+      discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+      runGhCommand: async (_command, args) => {
+        merges.push(args);
+        throw typeof failure === "string" ? Object.assign(new Error("exit 1"), { stderr: `${failure}\n` }) : failure;
+      },
+    });
+  }
+
+  it("names the status without the proxy's page, and reports a merge that landed", async () => {
+    await fc.assert(fc.asyncProperty(statuses, htmlBody, ghLine, afterwards, async ([code, reason], body, line, state) => {
+      const merges: string[][] = [];
+      const merge = fetcherFor(line(code, reason, body), state, merges).mergePullRequest({ pullRequest: url, method: "squash" });
+      if (state === "MERGED") {
+        await expect(merge).resolves.toMatchObject({ mergedUrl: url });
+      } else {
+        const message = await merge.then(() => "", (error: Error) => error.message);
+        expect(message).toContain(`GitHub returned ${code} ${reason}`);
+        expect(message).toContain("#3631");
+        expect(message).not.toMatch(/[<>]|body:|\\r\\n/);
+        // The merge can still land after the read, so the card never says it failed.
+        expect(message).not.toMatch(/did not merge/);
+        expect(message).toMatch(state === "OPEN" ? /had not merged when checked/ : /could not be checked/);
+      }
+      expect(merges).toHaveLength(1);
+    }), { numRuns: 60 });
+  });
+
+  it("reads the state before reporting a gh it had to kill", async () => {
+    await fc.assert(fc.asyncProperty(afterwards, async (state) => {
+      const merges: string[][] = [];
+      const killed = Object.assign(new Error("Command failed: gh pr merge"), { killed: true, signal: "SIGTERM", stderr: "" });
+      const merge = fetcherFor(killed, state, merges).mergePullRequest({ pullRequest: url, method: "squash" });
+      if (state === "MERGED") {
+        await expect(merge).resolves.toMatchObject({ mergedUrl: url });
+      } else {
+        await expect(merge).rejects.toThrow(state === "OPEN" ? /within 60 seconds, and it had not merged/ : /within 60 seconds, and its state could not be checked/);
+      }
+    }), { numRuns: 10 });
+  });
+
+  it("reports the failure once the state read passes its deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const merges: string[][] = [];
+      const merge = fetcherFor("non-200 OK status code: 502 Bad Gateway", "hung", merges)
+        .mergePullRequest({ pullRequest: url, method: "squash" })
+        .then(() => "", (error: Error) => error.message);
+      await vi.advanceTimersByTimeAsync(14_999);
+      let settled = false;
+      void merge.then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await merge).toBe("GitHub returned 502 Bad Gateway while merging #3631, and its state could not be checked."
+        + " Retry the merge: one that went through reports as already merged.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a refusal's reason but not an HTML body gh attached", async () => {
+    await fc.assert(fc.asyncProperty(htmlBody, async (body) => {
+      const merges: string[][] = [];
+      const failure = `non-200 OK status code: 405 Method Not Allowed body: "${body}"`;
+      const message = await fetcherFor(failure, "OPEN", merges).mergePullRequest({ pullRequest: url, method: "squash" })
+        .then(() => "", (error: Error) => error.message);
+      expect(message).toBe("gh pr merge failed: non-200 OK status code: 405 Method Not Allowed");
+    }), { numRuns: 30 });
+  });
+
+  it("reads a refusal's own status, not a 5xx quoted in its body", async () => {
+    await fc.assert(fc.asyncProperty(statuses, fc.constantFrom("405 Method Not Allowed", "422 Unprocessable Entity"), async ([code], refusal) => {
+      const failure = `non-200 OK status code: ${refusal} body: "{\\"message\\":\\"upstream HTTP ${code}\\"}"`;
+      expect(ghServerErrorStatus(failure)).toBeUndefined();
+      const message = await fetcherFor(failure, "OPEN", []).mergePullRequest({ pullRequest: url, method: "squash" })
+        .then(() => "", (error: Error) => error.message);
+      expect(message).toBe(`gh pr merge failed: ${failure}`);
+    }), { numRuns: 20 });
+  });
+
+  it("names a 5xx without its page on every gh read in the merge", () => {
+    fc.assert(fc.property(statuses, htmlBody, ghLine, ([code, reason], body, line) => {
+      const failure = ghFailureLine(`${line(code, reason, body)}\nmore output`);
+      expect(failure).toBe(`GitHub returned ${code} ${reason}, which is usually temporary`);
+    }));
   });
 });

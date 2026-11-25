@@ -23,6 +23,8 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
+import type { AgentToolMcpCatalogId } from "../agent-tools/agent-tool-mcp-server";
+import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
 import { isOnlyTaskMonitorWake, type SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
@@ -72,6 +74,7 @@ import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pw
 import type { ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import type { ThreadPrAutoDispatchPreferenceChange } from "../pr-status/pr-auto-dispatch";
 import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
+import type { PrAttachmentDemand } from "../pr-status/pr-detection";
 import type { ForgePrToolArgs } from "../pr-status/forge-pr-tool-contract";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
@@ -109,6 +112,7 @@ import {
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
+import { readCodexAccountTokenUsage } from "./codex-account-token-usage";
 import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
 
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
@@ -1701,7 +1705,7 @@ export class DesktopBackendRegistry {
   }
 
   canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>,
-    demand?: PrMetadataDemand, verifyAttachments?: boolean): Promise<typeof prs> {
+    demand?: PrAttachmentDemand, verifyAttachments?: boolean): Promise<typeof prs> {
     return this.forgeToolBridge.canonicalizeNavigationPullRequests(prs, demand, verifyAttachments);
   }
 
@@ -6240,8 +6244,13 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
+    managedReview?: boolean;
     requiredAntigravityMode?: string;
-  }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }> {
+  }): Promise<{
+    threadId: string;
+    executionMode: ThreadExecutionMode;
+    managedReviewLedgerAvailable?: boolean;
+  }> {
     if (params.executionMode === "auto") {
       throw new Error("Auto access is supported only by Codex.");
     }
@@ -6261,6 +6270,7 @@ export class DesktopBackendRegistry {
       acpRuntime: effectiveAcpRuntime,
       additionalMcpRegistration: params.mcpRegistration,
       ...(params.hidden ? { hidden: true } : {}),
+      ...(params.managedReview ? { managedReview: true } : {}),
       requiredAntigravityMode: params.requiredAntigravityMode,
     }));
     if (
@@ -6287,6 +6297,9 @@ export class DesktopBackendRegistry {
         session.sessionId,
         params.executionMode,
       ),
+      ...(client.sessionSupportsManagedReviewLedger?.(session.sessionId)
+        ? { managedReviewLedgerAvailable: true }
+        : {}),
     };
   }
 
@@ -6344,14 +6357,9 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async startAcpTurnLocked(params: {
-    backend: AcpBackendId;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    model?: string;
-    reasoningEffort?: string;
-    requiredAntigravityMode?: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  private async startAcpTurnLocked(
+    params: Parameters<RegistryHostPorts["startAcpTurn"]>[0],
+  ): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const promptPayload = await inputToAcpPrompt(params.input, {
       owner: { backend: params.backend, threadId: params.threadId },
       privateStorageRoots: this.localFilePrivateStorageRoots,
@@ -6458,6 +6466,9 @@ export class DesktopBackendRegistry {
       }
     }
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
+    if (params.managedReviewLedger) {
+      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId);
+    }
     await this.emit({
       backend: params.backend,
       notification: {
@@ -7982,7 +7993,33 @@ export class DesktopBackendRegistry {
 
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
-    const activity = await this.overlayStore.readUsageActivity(request);
+    const includeAccountTokenUsage = request.includeAccountTokenUsage === true;
+    const policy = getOwnerHostServices().runtimePolicy;
+    const codexSummary = includeAccountTokenUsage && !this.closed ? this.readCodexBackendSummary() : undefined;
+    const codexAvailable = Boolean(
+      codexSummary?.available
+      || (codexSummary && !this.codexBackendSummary && codexSummary.discoveryPending
+        && !this.readCodexProvider().provider?.validation.error),
+    );
+    let usageAccountGroup: string | undefined;
+    if (includeAccountTokenUsage) {
+      // A Settings failure leaves the series owner-scoped; it must not fail
+      // the ledger read this response carries.
+      try { usageAccountGroup = this.resolveUsageAccountGroupsFn().codex; } catch { /* Owner-scoped. */ }
+    }
+    const accountTokenUsagePromise = includeAccountTokenUsage && !this.closed
+      ? readCodexAccountTokenUsage({
+          client: this.codexClient,
+          openAiProviderEnabled: (!policy || policy.enabledBackends.includes("codex")) && this.codexOpenAiProviderEnabled,
+          codexAvailable,
+          cachedAccount: this.codexBackendSummary?.account,
+          usageAccountGroup,
+        })
+      : Promise.resolve(undefined);
+    const [activity, codexAccountTokenUsage] = await Promise.all([
+      this.overlayStore.readUsageActivity(request),
+      accountTokenUsagePromise,
+    ]);
     const codex = this.codexLimitObservation();
     return { ...activity,
       // Navigation indexing can lag a live thread or rename. The information
@@ -8006,7 +8043,10 @@ export class DesktopBackendRegistry {
       ],
       providerLimitHistory: activity.limitHistory.filter((reading) => !isCodexLimitObservation(reading)),
       analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
-        backend === "codex" || hasAcpStructuredHelper(backend)) };
+        backend === "codex" || hasAcpStructuredHelper(backend)),
+      ...(includeAccountTokenUsage
+        ? { accountTokenUsage: codexAccountTokenUsage ? [codexAccountTokenUsage] : [] }
+        : {}) };
   }
 
   /**
@@ -16293,6 +16333,7 @@ export class DesktopBackendRegistry {
       unsubscribe();
     }
     this.streamNoticeOwners.clear();
+    this.managedReviewService.clearCandidateLedger();
     this.planLimits.close();
 
     for (const [key, pending] of this.pendingServerRequests) {
@@ -17381,9 +17422,16 @@ export class DesktopBackendRegistry {
         const codexStartDelivery = backend === "codex" && notification.method === "turn/started"
           ? this.context.turnState.beginStartDelivery(notification.params.threadId, turnIdFromStartedNotification(notification as Extract<AppServerNotification, { method: "turn/started" }>))
           : undefined;
+        if (codexStartDelivery && !isPendingTurnId(codexStartDelivery.threadId, codexStartDelivery.turnId)) {
+          this.managedReviewService.candidateLedger.confirmToolTurn({ backend, ...codexStartDelivery });
+        }
         if (backend === "codex" && (notification.method === "turn/completed"
           || notification.method === "turn/failed" || notification.method === "turn/cancelled")) {
-          this.context.turnState.observeTurnTerminal(notification.params.threadId, turnIdFromTerminalNotification(notification));
+          const turnId = turnIdFromTerminalNotification(notification);
+          if (turnId) {
+            this.managedReviewService.candidateLedger.retireToolTurn({ backend, threadId: notification.params.threadId, turnId });
+          }
+          this.context.turnState.observeTurnTerminal(notification.params.threadId, turnId);
         }
         try {
           if (backend === "codex" && notification.method === "thread/started") {
@@ -19888,6 +19936,26 @@ export class DesktopBackendRegistry {
         call: hostToolCall,
       });
     }
+    const managedReviewLedgerRouter = buildManagedReviewLedgerToolRouter(
+      this.managedReviewService.candidateLedger,
+    );
+    if (
+      hostToolCall
+      && managedReviewLedgerRouter.acceptsDynamicToolCall(hostToolCall)
+    ) {
+      if (!this.managedReviewService.candidateLedger.hasToolTurn({ backend, ...hostToolCall })) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message:
+            "Review candidate tools are callable only during an active managed code review turn.",
+        });
+      }
+      return await managedReviewLedgerRouter.handleDynamicToolCall({
+        backend,
+        call: hostToolCall,
+      });
+    }
 
     if (hostToolCall) {
       // Use the same definitions as advertisement, including compatibility
@@ -20362,7 +20430,7 @@ export class DesktopBackendRegistry {
 
   private async authorizeAgentToolMcpCall(params: {
     backend: AppServerBackendKind;
-    catalogId?: AgentToolCatalogId;
+    catalogId?: AgentToolMcpCatalogId;
     threadId: string;
     tool: string;
     turnId: string;
@@ -20371,6 +20439,11 @@ export class DesktopBackendRegistry {
     const refusal = localAgentToolRefusal(params.tool);
     if (refusal) return refusal;
     if (params.tool === GET_CURRENT_TURN_INPUT_SOURCE) return null;
+    if (params.catalogId === "managed_review") {
+      return this.managedReviewService.candidateLedger.hasToolTurn(params)
+        ? null
+        : "an active managed code review turn";
+    }
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {
       return null;
@@ -22227,6 +22300,14 @@ export class DesktopBackendRegistry {
     const notification = event.notification;
     const isTerminal = notification.method === "turn/completed"
       || notification.method === "turn/failed" || notification.method === "turn/cancelled";
+    if (isTerminal && !event.federationTarget) {
+      const turnId = turnIdFromTerminalNotification(notification);
+      if (turnId) {
+        this.managedReviewService.candidateLedger.retireToolTurn({
+          backend: event.backend, threadId: notification.params.threadId, turnId,
+        });
+      }
+    }
     if (!event.federationTarget) {
       try {
         if (notification.method === "item/completed") {

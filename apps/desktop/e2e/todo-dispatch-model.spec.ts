@@ -9,41 +9,48 @@ import { StateDb } from "../src/main/state/state-db";
 import { recordModelSettingsRecent } from "../src/main/state/model-settings-recents-store";
 import { ThreadTodoService } from "../src/main/thread-todos/thread-todo-service";
 import { ThreadTodoStore } from "../src/main/storage/thread-todo-store";
-import { ROW_CHECK_INSET } from "../src/renderer/src/features/thread-todos/todo-model-menu-placement";
 
-/** Where the Model chip sits in its facts row, in CSS pixels. */
+/**
+ * Where a chip sits in its facts row, in CSS pixels: the model pill or a
+ * fact dropdown such as Where.
+ */
 async function measureModelChip(chip: Locator) {
   return chip.evaluate((element) => {
     const value = element.closest("dd");
-    const label = element.querySelector(".composer-dropdown__label");
+    const label = element.querySelector(".model-settings__pill-model, .composer-dropdown__label");
     const term = value?.previousElementSibling;
-    const facts = element.closest(".thread-todo-card__facts");
-    if (!value || !label || !term || !facts) throw new Error("Missing chip fact parts");
+    if (!value || !label || !term) throw new Error("Missing chip fact parts");
     const chip = element.getBoundingClientRect();
     const valueBox = value.getBoundingClientRect();
     const termBox = term.getBoundingClientRect();
+    // The span its children cover plus padding and border: what the chip
+    // would be if it only wrapped them. A stretched chip is wider than this.
+    const parts = [...element.children].map((child) => child.getBoundingClientRect())
+      .filter((box) => box.width > 0);
+    const style = getComputedStyle(element);
+    const frame = ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"]
+      .reduce((sum, key) => sum + Number.parseFloat(style[key as "paddingLeft"]), 0);
     return {
       chipWidth: chip.width,
       chipRight: chip.right,
-      labelWidth: label.scrollWidth,
+      contentWidth: Math.max(...parts.map((box) => box.right)) - Math.min(...parts.map((box) => box.left)) + frame,
       labelTruncated: label.scrollWidth > label.clientWidth,
       valueWidth: valueBox.width,
       valueRight: valueBox.right,
       termCenterOffset: Math.abs((chip.top + chip.bottom) / 2 - (termBox.top + termBox.bottom) / 2),
-      factsLeft: facts.getBoundingClientRect().left,
     };
   });
 }
 
 /**
- * The chip hugs its label: padding, gap, chevron and border add about 35px.
- * `.composer-dropdown__button` sets `width: 100%`, which stretched the chip
- * across the whole value column once.
+ * The chip hugs its contents: it is as wide as its provider, model, effort
+ * and chevron, never stretched across the value column, which a
+ * `width: 100%` chip once was. It also stays inside that column.
  */
 function expectChipHugsLabel(layout: Awaited<ReturnType<typeof measureModelChip>>) {
   expect(layout.labelTruncated).toBe(false);
-  expect(layout.chipWidth).toBeLessThanOrEqual(layout.labelWidth + 40);
-  expect(layout.chipWidth).toBeLessThan(layout.valueWidth - 40);
+  expect(Math.abs(layout.chipWidth - layout.contentWidth)).toBeLessThanOrEqual(2);
+  expect(layout.chipRight).toBeLessThanOrEqual(layout.valueRight + 0.5);
   expect(layout.termCenterOffset).toBeLessThanOrEqual(1.5);
 }
 
@@ -123,26 +130,38 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
       return;
     }
     const chip = stack.getByRole("button", { name: /Model for the new thread:/ });
-    await expect(chip).toHaveAccessibleName(/GPT-5.5, high/);
+    await expect(chip).toHaveAccessibleName(/GPT-5.5, high effort/);
     // At rest the settings are a chip row; the grid's geometry is measured open.
     await expect(stack.getByRole("group", { name: "Start settings" })).toBeVisible();
     await showStartSettings(stack);
     const stackLayout = await measureModelChip(chip);
     expectChipHugsLabel(stackLayout);
     await chip.click();
-    const menu = app.window.getByRole("menu", { name: "Model for the new thread", exact: true });
-    await expect(menu.getByRole("menuitemradio").first()).toBeFocused();
+    const menu = app.window.getByRole("dialog", { name: "Model for the new thread", exact: true });
+    const readyRows = menu.getByRole("listbox", { name: "Ready settings" }).getByRole("option");
+    await expect(readyRows.first()).toBeFocused();
+    // The panel fills in after it opens: the Recent rows and the provider
+    // come from requests still in flight. "GPT-5.4" alone was also in the
+    // catalog shown before them, so on a slow Windows runner ArrowDown ran
+    // before the row it moves to existed, and focus stayed put.
+    const recentXhigh = menu.getByRole("option", { name: /GPT-5.5, xhigh effort/ });
+    await expect(recentXhigh).toBeVisible();
+    await expect(menu.getByRole("listbox", { name: "Provider" }).getByRole("option", { name: "OpenAI" })).toBeVisible();
     await expect(menu).toContainText("GPT-5.4");
-    // The menu hangs under the card's facts, not off the chip.
+    // The panel opens beside the chip (under it when it fits, else above),
+    // never over it, and stays inside the window.
     const menuBox = await menu.boundingBox();
-    expect(menuBox?.width).toBeCloseTo(312, 0);
-    expect(Math.abs((menuBox?.x ?? 0) - (stackLayout.factsLeft - ROW_CHECK_INSET))).toBeLessThanOrEqual(1);
+    const chipBox = await chip.boundingBox();
+    const viewportWidth = await app.window.evaluate(() => window.innerWidth);
+    expect(menuBox!.y >= chipBox!.y + chipBox!.height || menuBox!.y + menuBox!.height <= chipBox!.y).toBe(true);
+    expect(menuBox!.x).toBeGreaterThanOrEqual(8);
+    expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewportWidth - 8 + 0.5);
     await menu.screenshot({ path: testInfo.outputPath("todo-dispatch-popover.png"), animations: "disabled" });
-    await menu.getByRole("menuitemradio").first().press("ArrowDown");
-    await expect(menu.getByRole("menuitemradio", { name: /GPT-5.5 · xhigh/ })).toBeFocused();
+    await readyRows.first().press("ArrowDown");
+    await expect(recentXhigh).toBeFocused();
     await app.window.keyboard.press("Enter");
     await expect(menu).not.toBeVisible();
-    await expect(chip).toHaveAccessibleName(/GPT-5.5, xhigh/);
+    await expect(chip).toHaveAccessibleName(/GPT-5.5, xhigh effort/);
     await expect(stack).toContainText("Picked for this card");
     await stack.getByRole("heading", { name: "Cache the signing-key lookup", exact: true }).click();
     await expect(app.window.locator(".data-tooltip-layer")).not.toBeVisible();
@@ -204,8 +223,8 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
       return Boolean(bounds && anchor && bounds.y >= 8 && bounds.y + bounds.height <= viewportHeight - 8
         && bounds.y + bounds.height <= anchor.y);
     }).toBe(true);
-    await menu.getByRole("menuitemradio").first().press("End");
-    await expect(menu.getByRole("menuitem", { name: /To-do reasoning:/ })).toBeFocused();
+    await readyRows.first().press("End");
+    await expect(readyRows.last()).toBeFocused();
     await app.window.keyboard.press("Escape");
     await todosTab.click();
     await expect(panel).not.toBeVisible();

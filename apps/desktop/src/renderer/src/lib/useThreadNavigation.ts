@@ -1,4 +1,5 @@
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
+import { newThreadModelSettingsRecent } from "./model-settings-recents";
 import { useLockedArchiveWorktreeNotice } from "./useLockedArchiveWorktreeNotice";
 import { lockChangedBeforeHandoffNotice } from "./locked-worktree-notice";
 import { BackgroundArchiveCleanupReport, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS } from "./background-archive-cleanup-report";
@@ -1026,6 +1027,7 @@ function threadSummariesEqual(
     left.prAutoDispatchEnabled === right.prAutoDispatchEnabled &&
     JSON.stringify(left.prAutoDispatchPending ?? null) ===
       JSON.stringify(right.prAutoDispatchPending ?? null) &&
+    left.prAutoDispatchActive === right.prAutoDispatchActive &&
     // A peer row's eye comes from its owner's marks.
     JSON.stringify(left.prCiWatches ?? null) ===
       JSON.stringify(right.prCiWatches ?? null) &&
@@ -2305,6 +2307,13 @@ function applyThreadPrAutoDispatchUpdate(
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
+/** A pendingUpdated event: the repair, and the row's active marker with it. */
+function prAutoDispatchPendingFields(pending: NavigationThreadSummary["prAutoDispatchPending"]): Pick<
+  NavigationThreadSummary, "prAutoDispatchPending" | "prAutoDispatchActive"
+> {
+  return { prAutoDispatchPending: pending, prAutoDispatchActive: pending ? true : undefined };
+}
+
 function applyThreadPrAutoDispatchPendingUpdate(
   snapshot: NavigationLoadedRows | undefined,
   params: {
@@ -2328,7 +2337,7 @@ function applyThreadPrAutoDispatchPendingUpdate(
       return thread;
     }
     changed = true;
-    return { ...thread, prAutoDispatchPending: params.pending };
+    return { ...thread, ...prAutoDispatchPendingFields(params.pending) };
   });
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
@@ -5229,7 +5238,7 @@ export function useThreadNavigation(
         }));
         setOptimisticThread((current) =>
           current && agentEventMatchesThread(event, current, params.threadId)
-            ? { ...current, prAutoDispatchPending: pending }
+            ? { ...current, ...prAutoDispatchPendingFields(pending) }
             : current
         );
         return;
@@ -8682,6 +8691,13 @@ export function useThreadNavigation(
           }));
         }
         materialized = true;
+        // The next new-thread panel offers these settings under Recent. The
+        // owner keeps the list, since its catalog has to run them.
+        void desktopApi.recordModelSettingsRecent?.({
+          ...(federationTarget ? { federationTarget } : {}),
+          scope: "composer",
+          recent: newThreadModelSettingsRecent(launchpad),
+        })?.catch(() => undefined);
         const landing = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
         if (landing) {
           pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, {

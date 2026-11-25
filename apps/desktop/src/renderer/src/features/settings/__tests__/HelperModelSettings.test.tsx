@@ -1,14 +1,20 @@
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { DesktopHelperModelSettings } from "@pwragent/shared/helper-models";
-import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
   codexCatalogModels,
-  expectedCodexSelectSections,
-  selectSections,
+  expectModelSettingsToList,
+  expectedModelDropdown,
 } from "../../../test/model-catalog";
+import {
+  chooseEffort,
+  chooseModelSettingsOption,
+  effortStops,
+  modelSettingsPill,
+  openModelSettings,
+} from "../../../test/model-settings";
 import { HelperModelSettings } from "../HelperModelSettings";
 
 const EFFORTS = ["low", "medium", "high"];
@@ -27,6 +33,8 @@ const codex = {
     ],
   },
 } as unknown as BackendSummary;
+
+const LABEL = "Helper model";
 
 const grok = {
   kind: "acp:grok",
@@ -53,24 +61,27 @@ function renderRow(
 }
 
 describe("HelperModelSettings", () => {
-  it("lists models the way the composer does: current first, superseded under Other models", () => {
+  it("lists models the way the composer does: current first, superseded under Other", () => {
+    const models = codexCatalogModels();
     renderRow({ helpers: {} }, [{
       ...codex,
-      launchpadOptions: { reasoningEfforts: EFFORTS, models: codexCatalogModels() },
+      launchpadOptions: { reasoningEfforts: EFFORTS, models },
     } as BackendSummary]);
-    const sections = selectSections(screen.getByRole("combobox", { name: "Helper model" }));
-    expect(sections[0]?.labels[0]).toMatch(/^Automatic/);
-    expect(sections).toEqual(expectedCodexSelectSections([sections[0]!.labels[0]!]));
+    expectModelSettingsToList(openModelSettings(LABEL), expectedModelDropdown({
+      kind: "codex",
+      models,
+      leading: ["Automatic"],
+      otherInline: true,
+    }));
   });
 
-  it("is one model picker and one reasoning picker, with no row per helper", () => {
+  it("is one model pill, with no row per helper", () => {
     renderRow({ helpers: {} });
 
-    expect(screen.getAllByRole("combobox")).toHaveLength(2);
-    expect(screen.getByRole("combobox", { name: "Helper model" }))
-      .toHaveTextContent("Automatic (GPT-6-Luna)");
-    expect(screen.getByRole("combobox", { name: "Helper reasoning" }))
-      .toHaveTextContent("Per helper");
+    expect(screen.getAllByRole("button", { name: /^Helper model/ })).toHaveLength(1);
+    expect(modelSettingsPill(LABEL)).toHaveAccessibleName(
+      "Helper model: Automatic (GPT-6-Luna), per helper effort",
+    );
     expect(screen.getByText(/^Runs \./)).toHaveTextContent(
       "Runs GPT-6-Luna. Automatic prefers GPT-6-Luna, then GPT-5.6-Luna.",
     );
@@ -80,35 +91,35 @@ describe("HelperModelSettings", () => {
   it("saves the model and the effort, and keeps the effort when the new model offers it", () => {
     const onSave = renderRow({ defaultReasoningEffort: "medium", helpers: {} });
 
-    chooseSelectOption(screen.getByRole("combobox", { name: "Helper model" }), "GPT-5.5");
+    chooseModelSettingsOption("Model", "GPT-5.5", LABEL);
     expect(onSave).toHaveBeenLastCalledWith({
       defaultModel: "gpt-5.5",
       defaultReasoningEffort: "medium",
       helpers: {},
     });
 
-    chooseSelectOption(screen.getByRole("combobox", { name: "Helper reasoning" }), "high");
+    chooseEffort("high", LABEL);
     expect(onSave).toHaveBeenLastCalledWith({
       defaultReasoningEffort: "high",
       helpers: {},
     });
 
-    chooseSelectOption(screen.getByRole("combobox", { name: "Helper reasoning" }), "Per helper");
+    chooseEffort("Per helper", LABEL);
     expect(onSave).toHaveBeenLastCalledWith({ helpers: {} });
   });
 
   it("drops an effort the newly chosen model does not offer", () => {
     const onSave = renderRow({ defaultReasoningEffort: "high", helpers: {} });
 
-    chooseSelectOption(screen.getByRole("combobox", { name: "Helper model" }), "GPT-5.6-Luna");
+    chooseModelSettingsOption("Model", "GPT-5.6-Luna", LABEL);
     expect(onSave).toHaveBeenLastCalledWith({ defaultModel: "gpt-5.6-luna", helpers: {} });
   });
 
   it("lists the efforts of the model that runs", () => {
     renderRow({ defaultModel: "gpt-5.6-luna", helpers: {} });
 
-    expect(selectOptionLabels(screen.getByRole("combobox", { name: "Helper reasoning" })))
-      .toEqual(["Per helper", "low", "medium"]);
+    expect(effortStops(LABEL)).toEqual(["low", "medium"]);
+    expect(within(openModelSettings(LABEL)).getByRole("button", { name: "Per helper" })).toBeInTheDocument();
   });
 
   it("does not call a saved effort unavailable when the model lists no efforts", () => {
@@ -122,8 +133,8 @@ describe("HelperModelSettings", () => {
       } as unknown as BackendSummary],
     );
 
-    expect(screen.getByRole("combobox", { name: "Helper reasoning" }))
-      .toHaveTextContent(/^high$/);
+    expect(modelSettingsPill(LABEL)).toHaveAttribute("data-effort", "high");
+    expect(modelSettingsPill(LABEL)).toHaveAccessibleName(/, high effort$/);
     expect(screen.queryByText(/not offer/)).not.toBeInTheDocument();
     expect(screen.getByText(/^Runs ,/)).toHaveTextContent("Runs GPT-6-Luna, high.");
   });
@@ -131,8 +142,10 @@ describe("HelperModelSettings", () => {
   it("keeps a saved model Codex does not offer and names what runs instead", () => {
     renderRow({ defaultModel: "gpt-6.1-luna", helpers: {} });
 
-    expect(screen.getByRole("combobox", { name: "Helper model" }))
-      .toHaveTextContent("gpt-6.1-luna (not offered)");
+    expect(modelSettingsPill(LABEL)).toHaveAccessibleName(/^Helper model: gpt-6\.1-luna/);
+    const saved = within(openModelSettings(LABEL)).getByRole("option", { name: /^gpt-6\.1-luna/ });
+    expect(saved).toHaveAttribute("aria-selected", "true");
+    expect(saved).toHaveAccessibleDescription("Not offered by Codex.");
     expect(screen.getByText(/Codex does not offer this model/))
       .toHaveTextContent("Running GPT-6-Luna (automatic) until it does.");
   });
@@ -163,10 +176,7 @@ describe("HelperModelSettings", () => {
       [{ ...codex, available: false, discoveryPending: true, launchpadOptions: undefined }],
     );
 
-    expect(screen.getByRole("combobox", { name: "Helper model" }))
-      .toHaveTextContent(/^gpt-5\.5$/);
-    expect(screen.getByRole("combobox", { name: "Helper reasoning" }))
-      .toHaveTextContent(/^high$/);
+    expect(modelSettingsPill(LABEL)).toHaveAccessibleName("Helper model: gpt-5.5, high effort");
     expect(screen.queryByText(/not offered/)).not.toBeInTheDocument();
     expect(screen.getByText("Checking Codex models…")).toBeInTheDocument();
   });

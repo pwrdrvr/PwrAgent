@@ -7,6 +7,53 @@ export type ReadUsageActivityRequest = {
   from: number;
   to: number;
   federationTarget?: FederationTarget;
+  /**
+   * Read provider-reported account-wide daily token history (such as Codex
+   * `account/usage/read`) when true. Omitted for sidebar pace probes so
+   * refresh stays scoped to the Usage Activity surface. Older peers ignore it.
+   */
+  includeAccountTokenUsage?: boolean;
+};
+
+/** One UTC day reported by a provider's account-wide token history endpoint. */
+export type AccountTokenUsageDailyBucket = {
+  /** Calendar date in `YYYY-MM-DD` (UTC), as reported by the provider. */
+  startDate: string;
+  /** Total tokens reported for the account across all clients on this day. */
+  tokens: number;
+};
+
+/** Provider-reported account-wide summary statistics, when available. */
+export type AccountTokenUsageSummary = {
+  lifetimeTokens?: number;
+  peakDailyTokens?: number;
+  longestRunningTurnSec?: number;
+  currentStreakDays?: number;
+  longestStreakDays?: number;
+};
+
+export type AccountTokenUsageUnavailableReason =
+  | "unsupported"
+  | "auth_required"
+  | "unavailable";
+
+/**
+ * Provider-reported account-wide daily token history. Never a quota percentage
+ * and never additive with PwrAgent's measured per-thread ledger rows. Kept
+ * apart from `limitObservations` so older viewers never chart tokens as quota.
+ */
+export type AccountTokenUsageObservation = {
+  /** Ledger provider (`openai`, or another provider with a supported API). */
+  provider: string;
+  /** Opaque per-account key, matching `UsageLimitObservation.accountKey`. */
+  accountKey?: string;
+  planType?: string;
+  /** When this owner read the provider endpoint. */
+  observedAt: number;
+  status: "available" | AccountTokenUsageUnavailableReason;
+  /** Reported days only; omitted calendar dates stay absent, never zero-filled. */
+  dailyUsageBuckets?: AccountTokenUsageDailyBucket[];
+  summary?: AccountTokenUsageSummary;
 };
 
 /** Opening the Usage Activity window from a provider's surface. */
@@ -112,6 +159,12 @@ export type ReadUsageActivityResponse = {
    * which run it on Codex only and ignore `modelBackend`.
    */
   analysisModelBackends?: UsageAnalysisModelBackend[];
+  /**
+   * Provider-reported account-wide daily token history when requested by
+   * Usage Activity (`includeAccountTokenUsage`). Absent from older peers and
+   * omitted for non-Usage-Activity probes.
+   */
+  accountTokenUsage?: AccountTokenUsageObservation[];
 };
 
 /**
@@ -159,6 +212,118 @@ export type AnalyzeUsageActivityResponse = {
 
 const LIMIT_WINDOW_KEYS = new Set(["primary", "secondary", "individual", "credits"]);
 const finite = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+const nonNegativeFinite = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+const UTC_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+/** Most UTC days an account-token series keeps, and the widest span a viewer charts. */
+export const MAX_ACCOUNT_TOKEN_USAGE_BUCKETS = 4_000;
+
+/** Whether `value` is a real calendar date in `YYYY-MM-DD` (UTC). */
+export function isValidUtcDateString(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = UTC_DATE_PATTERN.exec(value);
+  if (!match) return false;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
+/**
+ * Parse a provider `account/usage/read` response without inventing zero buckets
+ * for omitted dates. Returns undefined when the payload carries neither a valid
+ * bucket array nor any valid summary statistic.
+ */
+export function parseAccountTokenUsagePayload(raw: unknown): {
+  dailyUsageBuckets: AccountTokenUsageDailyBucket[];
+  summary?: AccountTokenUsageSummary;
+} | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const root = raw as Record<string, unknown>;
+  const hasBucketsArray = Array.isArray(root.dailyUsageBuckets);
+  const byDate = new Map<string, number>();
+  if (hasBucketsArray) {
+    for (const entry of (root.dailyUsageBuckets as unknown[]).slice(0, MAX_ACCOUNT_TOKEN_USAGE_BUCKETS * 2)) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const bucket = entry as Record<string, unknown>;
+      const tokens = nonNegativeFinite(bucket.tokens);
+      if (!isValidUtcDateString(bucket.startDate) || tokens === undefined) continue;
+      const existing = byDate.get(bucket.startDate);
+      byDate.set(bucket.startDate, existing === undefined ? tokens : Math.max(existing, tokens));
+    }
+  }
+  const dailyUsageBuckets = [...byDate.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .slice(-MAX_ACCOUNT_TOKEN_USAGE_BUCKETS)
+    .map(([startDate, tokens]) => ({ startDate, tokens }));
+
+  const rawSummary = root.summary && typeof root.summary === "object" && !Array.isArray(root.summary)
+    ? root.summary as Record<string, unknown>
+    : undefined;
+  const parsedSummary: AccountTokenUsageSummary = {
+    ...(nonNegativeFinite(rawSummary?.lifetimeTokens) !== undefined
+      ? { lifetimeTokens: nonNegativeFinite(rawSummary?.lifetimeTokens) } : {}),
+    ...(nonNegativeFinite(rawSummary?.peakDailyTokens) !== undefined
+      ? { peakDailyTokens: nonNegativeFinite(rawSummary?.peakDailyTokens) } : {}),
+    ...(nonNegativeFinite(rawSummary?.longestRunningTurnSec) !== undefined
+      ? { longestRunningTurnSec: nonNegativeFinite(rawSummary?.longestRunningTurnSec) } : {}),
+    ...(nonNegativeFinite(rawSummary?.currentStreakDays) !== undefined
+      ? { currentStreakDays: nonNegativeFinite(rawSummary?.currentStreakDays) } : {}),
+    ...(nonNegativeFinite(rawSummary?.longestStreakDays) !== undefined
+      ? { longestStreakDays: nonNegativeFinite(rawSummary?.longestStreakDays) } : {}),
+  };
+  const summary = Object.keys(parsedSummary).length > 0 ? parsedSummary : undefined;
+
+  if (!hasBucketsArray && !summary) return undefined;
+  return { dailyUsageBuckets, ...(summary ? { summary } : {}) };
+}
+
+const ACCOUNT_TOKEN_USAGE_STATUSES = new Set<AccountTokenUsageObservation["status"]>([
+  "available", "unsupported", "auth_required", "unavailable",
+]);
+
+/** Parse a relayed account-wide token observation; anything malformed reads as absent. */
+export function parseAccountTokenUsageObservation(value: unknown): AccountTokenUsageObservation | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const source = value as Record<string, unknown>;
+  const observedAt = finite(source.observedAt);
+  const status = typeof source.status === "string" && ACCOUNT_TOKEN_USAGE_STATUSES.has(source.status as AccountTokenUsageObservation["status"])
+    ? source.status as AccountTokenUsageObservation["status"]
+    : undefined;
+  if (observedAt === undefined || !status) return undefined;
+  const provider = typeof source.provider === "string" && source.provider.trim()
+    ? source.provider.trim().slice(0, 32)
+    : "openai";
+  const accountKey = typeof source.accountKey === "string" && source.accountKey.trim()
+    ? source.accountKey.trim().slice(0, 64)
+    : undefined;
+  const planType = typeof source.planType === "string" && source.planType.trim()
+    ? source.planType.trim().slice(0, 64)
+    : undefined;
+  if (status !== "available") {
+    return {
+      provider,
+      ...(accountKey ? { accountKey } : {}),
+      ...(planType ? { planType } : {}),
+      observedAt,
+      status,
+    };
+  }
+  const parsed = parseAccountTokenUsagePayload(source);
+  if (!parsed) return undefined;
+  return {
+    provider,
+    ...(accountKey ? { accountKey } : {}),
+    ...(planType ? { planType } : {}),
+    observedAt,
+    status: "available",
+    dailyUsageBuckets: parsed.dailyUsageBuckets,
+    ...(parsed.summary ? { summary: parsed.summary } : {}),
+  };
+}
 
 /** Parse a stored or relayed reading; anything malformed reads as absent. */
 export function parseUsageLimitObservation(value: unknown): UsageLimitObservation | undefined {

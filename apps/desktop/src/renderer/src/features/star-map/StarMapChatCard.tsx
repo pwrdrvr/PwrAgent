@@ -1,5 +1,4 @@
-import { buildModelMenu, modelMenuOtherLabel } from "@pwragent/shared/model-menu";
-import { codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed } from "@pwragent/shared/codex-speed";
+import { codexSpeedOptions, codexSpeedSettings, selectedCodexSpeed, type CodexSpeed } from "@pwragent/shared/codex-speed";
 import {
   memo,
   useCallback,
@@ -31,6 +30,7 @@ import {
   type ProviderAccessAcpOption,
 } from "@pwragent/shared/provider-access-mode";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { hashReferenceThreadIdentity } from "../../lib/hash-references";
 import type { ThreadLinkSource } from "../../lib/thread-links";
@@ -41,8 +41,10 @@ import {
   CompactComposer,
   type CompactComposerAction,
   type CompactComposerDraftRestore,
+  type CompactComposerModelSettings,
   type CompactComposerSettingsMenu,
 } from "../composer/CompactComposer";
+import { MODEL_DEFAULT_EFFORT, splitEffortChoices } from "../composer/model-settings-picker-model";
 import {
   QueuedMessageInspector,
   QueuedRowGrip,
@@ -1707,19 +1709,17 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     selectedConfiguration?.acpRuntime?.configValues?.mode ?? thread.acpRuntime?.configValues?.mode;
 
   /**
-   * The settings chip's menu: the same mutations the full composer's chip
-   * row drives, minus what a floating card cannot honestly host (workspace
-   * handoff and environments need the handoff dialog and launchpad state —
-   * those stay behind Open in full view).
+   * The model pill: the same control and the same mutations as the full
+   * composer's, for this thread's own provider. A floating card cannot
+   * switch providers, so the provider is fixed.
    *
    * Deliberately delta-stable: nothing here reads the streaming session,
    * and the deps are scalars, so the memo boundary on the composer holds
    * through a running turn and across snapshot refreshes.
    */
-  const settingsMenu = useMemo<CompactComposerSettingsMenu | undefined>(() => {
+  const modelSettings = useMemo<CompactComposerModelSettings | undefined>(() => {
     if (!desktopApi) return undefined;
     const setModelSettings = desktopApi.setThreadModelSettings;
-    const setExecutionMode = desktopApi.setThreadExecutionMode;
     const patchModelSettings = (
       patch: Partial<
         Pick<NavigationThreadSummary, "model" | "reasoningEffort" | "fastMode" | "serviceTier">
@@ -1770,30 +1770,136 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       });
     };
     const launchpadOptions = backendSummary?.launchpadOptions;
-    const models = launchpadOptions?.models;
-    // The card changes this thread, so it lists what the full composer's
-    // model chip lists for it.
-    const modelMenu = buildModelMenu({
-      kind: threadSource,
-      models: models ?? [],
-      thread: { model: threadModel },
-    });
-    const currentModelOption = models?.find(
+    const models = launchpadOptions?.models ?? [];
+    const currentModelOption = models.find(
       (option) => option.id === threadModel,
     );
-    const reasoningEfforts =
-      currentModelOption?.reasoningEfforts
-      ?? launchpadOptions?.reasoningEfforts
-      ?? [];
     const supportsReasoning =
       currentModelOption?.supportsReasoning
       ?? Boolean(launchpadOptions?.reasoningEfforts?.length);
+    const reasoningEfforts = supportsReasoning
+      ? currentModelOption?.reasoningEfforts
+        ?? launchpadOptions?.reasoningEfforts
+        ?? []
+      : [];
     const supportsFast =
       threadSource === "codex"
         ? currentModelOption?.supportsFast
           ?? launchpadOptions?.supportsFastMode
           ?? false
         : false;
+    const speeds = threadSource === "codex"
+      ? codexSpeedOptions(currentModelOption, backendSummary?.codexFastAllowed !== false, supportsFast)
+      : [];
+    const fastOnly = speeds.includes("fast") && !speeds.includes("ultrafast");
+    const loading = Boolean(desktopApi.listBackends) && !backendSummaries.loaded;
+    const { stops, hasModelDefault } = splitEffortChoices(reasoningEfforts);
+    // Shown before any catalog is read: the card names the thread's own
+    // model, and why there is nothing else to choose yet.
+    if (!threadModel && models.length === 0 && stops.length === 0) return undefined;
+    const modelLabel = currentModelOption?.label ?? threadModel ?? "Default model";
+    const canChange = Boolean(setModelSettings);
+    return {
+      ariaLabel: "Model settings",
+      provider: {
+        label: formatOwnerProviderLabel(threadSource, threadModel, backendSummaries.backends),
+        note: "Fixed for this thread",
+      },
+      model: {
+        value: threadModel ?? "",
+        label: modelLabel,
+        kind: threadSource,
+        models,
+        // The card changes this thread, so it lists what the full
+        // composer's pill lists for it.
+        thread: { model: threadModel },
+        leadingOptions: threadModel && models.length > 0 && !currentModelOption
+          ? [{ value: threadModel, label: threadModel, disabled: true,
+              description: "This model is absent from this provider's catalog. Choose an available model." }]
+          : [],
+        emptyOptions: [{
+          value: threadModel ?? "",
+          label: modelLabel,
+          description: loading
+            ? "Loading models…"
+            : backendSummaries.error
+              ? "Couldn't load models."
+              : "No other models available.",
+        }],
+        disabled: !canChange || models.length === 0,
+        onChange: (model: string) => {
+          // Mirror the full composer's model change: a model that cannot
+          // reason clears the effort, one that cannot go fast clears fast.
+          const nextOption = models.find((option) => option.id === model);
+          const nextSupportsReasoning =
+            nextOption?.supportsReasoning
+            ?? Boolean(launchpadOptions?.reasoningEfforts?.length);
+          const nextSupportsFast =
+            threadSource === "codex"
+              ? nextOption?.supportsFast
+                ?? launchpadOptions?.supportsFastMode
+                ?? false
+              : false;
+          patchModelSettings({
+            model,
+            ...(nextSupportsReasoning ? {} : { reasoningEffort: undefined }),
+            ...(nextSupportsFast ? {} : { fastMode: undefined }),
+          });
+        },
+      },
+      ...(stops.length > 0 || hasModelDefault || threadReasoningEffort ? {
+        effort: {
+          stops,
+          value: threadReasoningEffort,
+          ...(hasModelDefault ? { defaultOption: { value: MODEL_DEFAULT_EFFORT, label: "Default" } } : {}),
+          disabled: !canChange,
+          onChange: (reasoningEffort: string) => patchModelSettings({ reasoningEffort }),
+        },
+      } : {}),
+      ...(speeds.includes("ultrafast") ? {
+        speed: {
+          options: speeds,
+          value: selectedCodexSpeed({ serviceTier: threadServiceTier, fastMode: threadFastMode }),
+          disabled: !canChange,
+          onChange: (speed: CodexSpeed) => patchModelSettings(codexSpeedSettings(speed)),
+        },
+      } : fastOnly ? {
+        speed: {
+          options: ["standard", "fast"] as CodexSpeed[],
+          value: threadFastMode ? "fast" as const : "standard" as const,
+          disabled: !canChange,
+          onChange: (speed: CodexSpeed) => patchModelSettings({ fastMode: speed === "fast" }),
+        },
+      } : {}),
+      onOpenChange: (open: boolean) => {
+        if (open) onSettingsMenuOpen();
+      },
+    };
+  }, [
+    backendSummaries.backends,
+    backendSummaries.error,
+    backendSummaries.loaded,
+    backendSummary,
+    desktopApi,
+    federationTarget,
+    onSettingsMenuOpen,
+    threadId,
+    threadModel,
+    threadReasoningEffort,
+    threadSource,
+    threadFastMode,
+    threadServiceTier,
+  ]);
+
+  /**
+   * The settings chip's menu: the same access control the full composer
+   * offers, minus what a floating card cannot honestly host (workspace
+   * handoff and environments need the handoff dialog and launchpad state —
+   * those stay behind Open in full view).
+   */
+  const settingsMenu = useMemo<CompactComposerSettingsMenu | undefined>(() => {
+    if (!desktopApi) return undefined;
+    const setExecutionMode = desktopApi.setThreadExecutionMode;
     // Use the shared provider access control so Star Map cards offer the exact
     // same single Access menu as the full composer (including Antigravity's
     // unified Default Access / native modes / Full Access list).
@@ -1820,32 +1926,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             }))
         : undefined;
     return {
-      loading: Boolean(desktopApi.listBackends) && !backendSummaries.loaded,
-      loadFailed: Boolean(backendSummaries.error),
       onOpen: onSettingsMenuOpen,
       executionModes: setExecutionMode ? availableExecutionModes : undefined,
       accessLabel:
         accessControl && accessControl.kind !== "acp"
           ? accessControl.selectedOption?.label
           : undefined,
-      models: modelMenu.primary.map((option) => ({
-        id: option.id,
-        label: option.label,
-      })),
-      otherModels: modelMenu.other.map((option) => ({
-        id: option.id,
-        label: option.label,
-      })),
-      otherModelsLabel: modelMenuOtherLabel(threadSource),
-      reasoningEfforts: supportsReasoning ? reasoningEfforts : [],
-      supportsFastMode: supportsFast,
-      speeds: threadSource === "codex"
-        ? codexSpeedOptions(currentModelOption, backendSummary?.codexFastAllowed !== false, supportsFast)
-        : undefined,
-      speed: selectedCodexSpeed({ serviceTier: threadServiceTier, fastMode: threadFastMode }),
-      onSelectSpeed: setModelSettings && threadSource === "codex"
-        ? (speed) => patchModelSettings(codexSpeedSettings(speed))
-        : undefined,
       // The gate decides between prompting and applying; the apply half
       // is `applyExecutionMode` above.
       onSelectExecutionMode: setExecutionMode
@@ -1863,52 +1949,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             applyExecutionMode(option.executionMode);
           }
         : undefined,
-      onSelectModel: setModelSettings
-        ? (model) => {
-            // Mirror the full composer's model change: a model that cannot
-            // reason clears the effort, one that cannot go fast clears fast.
-            const nextOption = models?.find((option) => option.id === model);
-            const nextSupportsReasoning =
-              nextOption?.supportsReasoning
-              ?? Boolean(launchpadOptions?.reasoningEfforts?.length);
-            const nextSupportsFast =
-              threadSource === "codex"
-                ? nextOption?.supportsFast
-                  ?? launchpadOptions?.supportsFastMode
-                  ?? false
-                : false;
-            patchModelSettings({
-              model,
-              ...(nextSupportsReasoning ? {} : { reasoningEffort: undefined }),
-              ...(nextSupportsFast ? {} : { fastMode: undefined }),
-            });
-          }
-        : undefined,
-      onSelectReasoningEffort: setModelSettings
-        ? (reasoningEffort) => patchModelSettings({ reasoningEffort })
-        : undefined,
-      onToggleFastMode:
-        setModelSettings && threadSource === "codex"
-          ? (enabled) => patchModelSettings({ fastMode: enabled })
-          : undefined,
     };
   }, [
     applyExecutionMode,
-    backendSummaries.error,
-    backendSummaries.loaded,
     backendSummary,
     desktopApi,
-    federationTarget,
     onSettingsMenuOpen,
     requestExecutionModeSelection,
     threadAcpCurrentModeId,
     threadAcpModeConfigValue,
     threadExecutionMode,
-    threadId,
-    threadModel,
-    threadSource,
-    threadFastMode,
-    threadServiceTier,
   ]);
 
   /**
@@ -2334,14 +2384,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           draftScopeKey={composerScopeKey}
           draftStore={ownedComposerDraftStore}
           executionMode={threadExecutionMode}
-          fastMode={threadFastMode}
           fetchLinearPastedImages={desktopApi?.fetchLinearPastedImages}
           getPathForFile={desktopApi?.getPathForFile}
           imagesSupported={imagesSupported}
           imagesUnsupportedLabel={imagesUnsupportedLabel}
           key={reviewComposerKey}
           mentionSources={mentionSources}
-          model={threadModel}
+          modelSettings={modelSettings}
           normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
           preserveImageBytes={federationTarget?.scope === "remote"}
           onAttachmentError={onAttachmentError}
@@ -2350,7 +2399,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           onSend={send}
           onSteer={steer}
           pastedImageMaxPatches={props.pastedImageMaxPatches}
-          reasoningEffort={threadReasoningEffort}
           secondaryActions={secondaryActions}
           settingsMenu={settingsMenu}
           threadTitle={thread.title}

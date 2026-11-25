@@ -119,6 +119,26 @@ describe("ForgeAutomationDialog", () => {
     await waitFor(() => expect(back.props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
   });
 
+  it("marks a contribution fork's project as never merging, and the offers switch then names only reviews", async () => {
+    const { props } = renderDialog();
+    const merging = screen.getByRole("group", { name: "Merging" });
+    const never = within(merging).getByRole("checkbox", { name: "Never merge this project's pull requests" });
+    expect(never).not.toBeChecked();
+    fireEvent.click(never);
+    const cards = screen.getByRole("group", { name: "To-do cards" });
+    expect(within(cards).getByRole("checkbox", { name: "Review offers" }))
+      .toHaveAccessibleDescription("A Review card when CI passes on unreviewed changes.");
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, neverMerge: true }));
+    cleanup();
+    const back = renderDialog({ automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, neverMerge: true } });
+    const stored = screen.getByRole("checkbox", { name: "Never merge this project's pull requests" });
+    expect(stored).toBeChecked();
+    fireEvent.click(stored);
+    save();
+    await waitFor(() => expect(back.props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
+  });
+
   it("hides the offers switch while paused, since a paused project gets no offers", () => {
     renderDialog();
     fireEvent.click(screen.getByRole("radio", { name: "Paused" }));

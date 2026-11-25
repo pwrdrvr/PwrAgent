@@ -10,8 +10,11 @@ import { getMainLogger } from "../log";
 import { applicationHost as app, getOwnerHostServices } from "../owner-host";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
+import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
+import { ManagedReviewCandidateLedger } from "./managed-review-candidate-ledger";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
+import { resolveMainEntryPath } from "../runtime-resources";
 import { openClaudeSessionReader } from "../claude/claude-session-reader";
 import { PlanLimitStore } from "./plan-limit-store";
 import { usageAccountKey } from "../usage-account-identity";
@@ -889,7 +892,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       stateDir: tokenMiserStateDir,
       profileName: resolveActiveProfileName(),
       executablePath: process.execPath,
-      hookEntryPath: path.join(__dirname, "token-miser-hook.js"),
+      hookEntryPath: resolveMainEntryPath("token-miser-hook.js", __dirname),
     });
   }
   const acpWorktreeRepositoryResolver =
@@ -961,6 +964,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     options?.worktreeRecoveryService ??
     new WorktreeRecoveryService({ gitEnv: codexEnv });
   const worktreeContainerService = new WorktreeContainerService({ codexHome });
+  const managedReviewCandidateLedger = new ManagedReviewCandidateLedger();
+  const managedReviewLedgerRouter = buildManagedReviewLedgerToolRouter(
+    managedReviewCandidateLedger,
+  );
   const agentToolMcpServer =
     options?.agentToolMcpServer === null
       ? undefined
@@ -968,7 +975,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         new AgentToolMcpServer({
           resolveCallContext: (context) =>
             ports.resolveAgentToolMcpCallContext(context),
-          resolveCatalogs: (context) => context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
+          resolveCatalogs: (context) => context.managedReview
+            ? [{ id: "managed_review", router: managedReviewLedgerRouter }]
+            : context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
             ? [
                 { id: "thread_orchestration", router: new AgentToolRouter([
                   ...buildPwrAgentTaskMonitorToolDefinitions(async (request) => await ports.handleAgentTaskMonitorRequest(request), "monitor"),
@@ -1050,7 +1059,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     // A chunk's __dirname is its own folder; this module is bundled into
     // the main entry, beside the worker.
     openSessionReader: (env) => openClaudeSessionReader(env, {
-      workerPath: path.join(__dirname, "claude-session-reader-worker.js"),
+      workerPath: resolveMainEntryPath("claude-session-reader-worker.js", __dirname),
     }),
     emit: async (event) => { await ports.emit(event); },
     onFollowUpTurnStarted: (turn) => { context.turnState.rememberTurnInputSource({ ...turn, backend: "claude" }, "agent"); },
@@ -1099,6 +1108,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: options?.acpSessionStore,
     agentToolMcpServer,
+    onTurnTerminalIngress: (turn) => managedReviewCandidateLedger.retireToolTurn(turn),
     readJobMonitorCreationPreference: (backend, threadId) => ports.isJobMonitorCreationEnabled({ backend, threadId }),
     captureStores: captureStores,
     managedMcpGatewayAvailable: mcpGatewayTools !== undefined,
@@ -1598,7 +1608,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   }, context.emit, () => ports);
   const acpSessionRuntimeOptions = new AcpSessionRuntimeOptions(acpBackend, overlayStore, context.emit, () => ports);
   const headlessAutomation = new HeadlessAutomationTurns(context, threadMcpConnections, mcpGatewayTools, () => ports);
-  const managedReviewService = new ManagedReviewService(context, () => ports);
+  const managedReviewService = new ManagedReviewService(
+    context,
+    () => ports,
+    managedReviewCandidateLedger,
+  );
   const subAgentMonitorService = new SubAgentMonitorService(context, {
     forgeToolBridge,
     managedReviewService,

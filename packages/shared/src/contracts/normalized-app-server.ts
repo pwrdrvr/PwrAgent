@@ -747,6 +747,15 @@ export type ThreadGitWorkingState = {
   baseAheadCommitCount?: number;
   /** True when `baseBranch` has commits after `baseCommit`. */
   isBehindBase?: boolean;
+  /**
+   * The `upstream` remote's default branch (`upstream/main`), when the
+   * checkout has one and `baseBranch` was found on another remote: a fork's
+   * own `main` only moves when the operator syncs it, so this is the count
+   * that says how stale the branch is.
+   */
+  upstreamBranch?: string;
+  /** Commits on `upstreamBranch` that HEAD does not have. */
+  upstreamBehindCommitCount?: number;
 };
 
 export type AppServerThreadSummary = {
@@ -2165,8 +2174,18 @@ export type AppServerToolRequestUserInputQuestion = {
   isOther: boolean;
   isSecret: boolean;
   options: AppServerToolRequestUserInputOption[] | null;
+  /**
+   * The operator may pick any number of `options`. Codex never sets it; ACP
+   * forms, Grok's ask_user_question, and Claude's AskUserQuestion can. A
+   * surface that cannot show it still lets the operator pick one option.
+   */
+  multiSelect?: boolean;
 };
 
+/**
+ * Each entry is an option's `label`, or the operator's own text when the
+ * question `isOther`. A multi-select answer lists every chosen label.
+ */
 export type AppServerToolRequestUserInputAnswer = {
   answers: string[];
 };

@@ -9,12 +9,9 @@ import {
   type HelperModelResolution,
 } from "@pwragent/shared/helper-models";
 import { type BackendModelOption, type BackendSummary } from "@pwragent/shared/contracts/backend";
-import { Select } from "../../components/Select";
-import { modelSelectOptions } from "../../lib/model-select-options";
+import { ModelSettingsPicker } from "../composer/ModelSettingsPicker";
+import { splitEffortChoices } from "../composer/model-settings-picker-model";
 import { SettingsField, SettingsSection } from "./SettingsLayout";
-
-/** The closed pickers draw as the AI Providers page's chip pills. */
-const PICKER_CLASS = "settings-select settings-select--chip";
 
 type BackendState =
   | { kind: "loading"; label: string }
@@ -266,66 +263,62 @@ export function HelperModelSettings(props: {
           sub="Runs on Codex."
           control={
             <div className="settings-provider-defaults__selectors">
-              <Select
-                aria-label="Helper model"
-                className={PICKER_CLASS}
+              <ModelSettingsPicker
+                ariaLabel="Helper model"
                 disabled={props.saving}
-                value={savedModel ?? ""}
-                options={[
-                  {
-                    value: "",
-                    label: automaticLabel ? `Automatic (${automaticLabel})` : "Automatic",
-                  },
-                  ...(savedModel && !models.some((model) => model.id === savedModel)
-                    ? [{
-                        value: savedModel,
-                        label: modelOffered ? savedModel : `${savedModel} (not offered)`,
-                      }]
-                    : []),
-                  ...modelSelectOptions({ kind: "codex", models }),
-                ]}
-                onChange={(model) => {
-                  const next = models.find((entry) => entry.id === model);
-                  const nextEfforts = next?.reasoningEfforts
-                    ?? (codex.kind === "ready" ? codex.reasoningEfforts : undefined);
-                  // An effort the new model does not offer would silently
-                  // fall back, so the choice goes with the old model.
-                  const keepEffort =
-                    savedEffort
-                    && next?.supportsReasoning !== false
-                    && (!nextEfforts || nextEfforts.includes(savedEffort));
-                  save(withDefaults(settings, {
-                    defaultModel: model || undefined,
-                    defaultReasoningEffort: keepEffort ? savedEffort : undefined,
-                  }));
-                }}
-              />
-              {efforts.length > 0 || savedEffort ? (
-                <Select
-                  aria-label="Helper reasoning"
-                  className={PICKER_CLASS}
-                  disabled={props.saving}
-                  value={savedEffort ?? ""}
-                  options={[
-                    { value: "", label: "Per helper" },
-                    ...(savedEffort && !efforts.includes(savedEffort)
+                size="setting"
+                provider={{ label: "Codex", note: "Runs on Codex" }}
+                model={{
+                  value: savedModel ?? "",
+                  label: savedModel
+                    ? modelLabel(savedModel, models)
+                    : automaticLabel ? `Automatic (${automaticLabel})` : "Automatic",
+                  kind: "codex",
+                  models,
+                  leadingOptions: [
+                    {
+                      value: "",
+                      label: "Automatic",
+                      ...(automaticLabel ? { description: `Runs ${automaticLabel} today.` } : {}),
+                    },
+                    ...(savedModel && !models.some((model) => model.id === savedModel)
                       ? [{
-                          value: savedEffort,
-                          label: effortOffered
-                            ? savedEffort
-                            : `${savedEffort} (not offered)`,
+                          value: savedModel,
+                          label: savedModel,
+                          ...(modelOffered ? {} : { description: "Not offered by Codex.", disabled: true }),
                         }]
                       : []),
-                    ...efforts.map((effort) => ({ value: effort, label: effort })),
-                  ]}
-                  onChange={(effort) => {
+                  ],
+                  onChange: (model) => {
+                    const next = models.find((entry) => entry.id === model);
+                    const nextEfforts = next?.reasoningEfforts
+                      ?? (codex.kind === "ready" ? codex.reasoningEfforts : undefined);
+                    // An effort the new model does not offer would silently
+                    // fall back, so the choice goes with the old model.
+                    const keepEffort =
+                      savedEffort
+                      && next?.supportsReasoning !== false
+                      && (!nextEfforts || nextEfforts.includes(savedEffort));
                     save(withDefaults(settings, {
-                      defaultModel: savedModel,
-                      defaultReasoningEffort: effort || undefined,
+                      defaultModel: model || undefined,
+                      defaultReasoningEffort: keepEffort ? savedEffort : undefined,
                     }));
-                  }}
-                />
-              ) : null}
+                  },
+                }}
+                {...(efforts.length > 0 || savedEffort ? {
+                  effort: {
+                    stops: splitEffortChoices(efforts).stops,
+                    value: savedEffort ?? "",
+                    defaultOption: { value: "", label: "Per helper" },
+                    onChange: (effort: string) => {
+                      save(withDefaults(settings, {
+                        defaultModel: savedModel,
+                        defaultReasoningEffort: effort || undefined,
+                      }));
+                    },
+                  },
+                } : {})}
+              />
             </div>
           }
           help={

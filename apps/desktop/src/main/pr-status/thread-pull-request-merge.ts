@@ -29,6 +29,8 @@ export type ThreadPullRequestMergeDeps = {
     remember?: (method: ThreadTodoMergeMethod) => void;
   }>;
   defaultMethod: () => ThreadTodoMergeMethod;
+  /** The thread's project label when its Forge Automation never merges. */
+  neverMergeProject?: (thread: ThreadPullRequestMergeTarget) => string | undefined;
   resolveCwd: (thread: ThreadPullRequestMergeTarget) => Promise<string | undefined>;
   /** Throws while a Continue After wait holds this thread's merge of `url`. */
   assertNotHeld: (thread: ThreadPullRequestMergeTarget, url: string) => void;
@@ -77,9 +79,11 @@ export async function readThreadPullRequestMerge(
 ): Promise<ReadThreadPullRequestMergeResponse> {
   const thread = readTarget(request);
   const preference = await deps.readPreference(thread);
+  const neverMergeProject = deps.neverMergeProject?.(thread);
   return {
     ...(preference.remembered ? { remembered: preference.remembered } : {}),
     fallback: deps.defaultMethod(),
+    ...(neverMergeProject ? { neverMergeProject } : {}),
   };
 }
 
@@ -106,6 +110,10 @@ export async function mergeThreadPullRequest(
   const attached = deps.readThreadPullRequestUrls(thread)
     .find((candidate) => pullRequestIdentity(candidate) === identity);
   if (!attached) throw new Error(`#${reference.number} is not attached to this thread.`);
+  const neverMergeProject = deps.neverMergeProject?.(thread);
+  if (neverMergeProject) {
+    throw new Error(`${neverMergeProject} never merges its pull requests. Change it from the project menu: Forge Automation.`);
+  }
   deps.assertNotHeld(thread, attached);
   // Remembered before the merge runs, as a to-do card's pick is: it is the
   // operator's preference whether or not this merge succeeds.

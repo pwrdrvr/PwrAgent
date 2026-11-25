@@ -1,4 +1,5 @@
-import { threadRowInstanceKey } from "./thread-row-instance";
+import { threadRowBatchSelected, threadRowInstanceKey } from "./thread-row-instance";
+import { getDesktopApi } from "../../lib/desktop-api";
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
@@ -188,7 +189,7 @@ type DirectoriesListProps = {
   revealSelectedThreadRequest?: number;
   selectedItemKey?: string;
   selectedDirectoryKeys?: ReadonlySet<string>;
-  selectedThreadKeys?: ReadonlySet<string>;
+  batchThreadKeys?: ReadonlySet<string>;
   thinkingThreadKeys?: Record<string, boolean>;
   agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -815,12 +816,54 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     },
     [pagedNavigation, visibleDirectories],
   );
+  // A ProjectIndex jump needs the directory index and initial pages for
+  // projects at or above the target so scrollTop lands accurately.
+  const { projectReveal, onProjectRevealComplete } = props;
+  const jumpWait = useMemo(
+    () => {
+      if (!projectReveal?.jump || !pagedNavigation) return undefined;
+      const resources = pagedNavigation.resources;
+      const indexState = resources.get("directory-index")?.state;
+      if (!indexState?.page && !indexState?.error) {
+        return "directory-index";
+      }
+      const targetIndex = directorySelectionOrder.indexOf(projectReveal.key);
+      for (let index = 0; index <= targetIndex; index++) {
+        const key = directorySelectionOrder[index];
+        const unpinned = resources.get(`directory:${key}`)?.state;
+        const pinned = resources.get(`directory-pins:${key}`)?.state;
+        if ((unpinned && !unpinned.page && !unpinned.error)
+          || (pinned && !pinned.page && !pinned.error)) return "project-pages";
+      }
+      return undefined;
+    },
+    [directorySelectionOrder, pagedNavigation, projectReveal],
+  );
+  const jumpTimingRef = useRef<{
+    request: ProjectRevealRequest;
+    startedAt: number;
+    waitedForDirectoryIndex: boolean;
+    waitedForPages: boolean;
+  } | undefined>(undefined);
   useEffect(() => {
-    const request = props.projectReveal;
+    const request = projectReveal;
     if (!request || handledProjectReveal.current === request
-      || (!request.jump && props.selectedItemKey !== (
+      || (!request.jump && selectedItemKeyForReveal !== (
         request.selectedThreadKey ?? buildLaunchpadSelectionKey(request.key)
       ))) return;
+    if (request.jump && jumpTimingRef.current?.request !== request) {
+      jumpTimingRef.current = {
+        request,
+        startedAt: performance.now(),
+        waitedForDirectoryIndex: false,
+        waitedForPages: false,
+      };
+    }
+    const timing = jumpTimingRef.current;
+    if (request.jump && timing?.request === request) {
+      if (jumpWait === "directory-index") timing.waitedForDirectoryIndex = true;
+      if (jumpWait === "project-pages") timing.waitedForPages = true;
+    }
     const header = projectHeaders.current.get(request.key);
     if (!header) return;
     if (expandedByKey[request.key] !== true) {
@@ -829,7 +872,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     }
     // Loaded threads provide the scroll extent below the header and can
     // shift it when another expanded directory above finishes loading.
-    if (revealPagesInFlight) return;
+    if (request.jump ? jumpWait : revealPagesInFlight) return;
     const frame = requestAnimationFrame(() => {
       // The header is sticky: its visual top may already be at the viewport
       // edge while the project's threads are scrolled out above it. Reveal the
@@ -850,12 +893,32 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
           ?.scrollIntoView?.({ block: "nearest" });
         setFlashedProjectKey(request.key);
       }
-      if (request.jump) setFlashedProjectKey(request.key);
+      if (request.jump) {
+        setFlashedProjectKey(request.key);
+        const timing = jumpTimingRef.current;
+        if (timing?.request === request) {
+          const elapsedMs = Math.round(performance.now() - timing.startedAt);
+          if (elapsedMs >= 1_000) {
+            void getDesktopApi()
+              ?.logRendererDiagnostic?.({
+                level: "warn",
+                message: "project index jump delayed",
+                details: {
+                  elapsedMs,
+                  waitedForDirectoryIndex: timing.waitedForDirectoryIndex,
+                  waitedForPages: timing.waitedForPages,
+                },
+              })
+              ?.catch(() => undefined);
+          }
+          jumpTimingRef.current = undefined;
+        }
+      }
       handledProjectReveal.current = request;
-      props.onProjectRevealComplete?.();
+      onProjectRevealComplete?.();
     });
     return () => cancelAnimationFrame(frame);
-  }, [props.projectReveal, props.onProjectRevealComplete, props.selectedItemKey, visibleDirectories, expandedByKey, setExpandedByKey, revealPagesInFlight, landJump]);
+  }, [projectReveal, onProjectRevealComplete, selectedItemKeyForReveal, visibleDirectories, expandedByKey, setExpandedByKey, jumpWait, revealPagesInFlight, landJump]);
 
   // Released monotonically: once the rows have been handed a request it is
   // never taken back. ThreadRow re-runs its scroll on EVERY change of the
@@ -1462,7 +1525,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                 nestedDepth={trays.depth(childKey)}
                 revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey === childKey ? childKey : undefined}
-                selected={props.selectedThreadKeys?.has(childKey)}
+                batchSelected={threadRowBatchSelected(props.batchThreadKeys, childKey, props.selectedItemKey)}
                 subthreadCount={childSubthreadCount}
                 subthreadsCollapsed={isSubthreadSectionCollapsed(child) && !trays.heldOpen(childKey)}
                 onToggleSubthreads={
@@ -1629,7 +1692,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
             linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(thread)}
             revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
             selectedThreadKey={props.selectedItemKey === threadKey ? threadKey : undefined}
-            selected={props.selectedThreadKeys?.has(threadKey)}
+            batchSelected={threadRowBatchSelected(props.batchThreadKeys, threadKey, props.selectedItemKey)}
             subthreadCount={subthreadCount}
             subthreadsCollapsed={subthreadsCollapsed}
             thinkingThreadKeys={props.thinkingThreadKeys}
@@ -1967,7 +2030,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             rowRevealSelectedThreadRequest
                           }
 	                          selectedThreadKey={props.selectedItemKey === threadKey ? threadKey : undefined}
-	                          selected={props.selectedThreadKeys?.has(threadKey)}
+	                          batchSelected={threadRowBatchSelected(props.batchThreadKeys, threadKey, props.selectedItemKey)}
                               subthreadCount={subthreadCount}
                               subthreadsCollapsed={subthreadsCollapsed}
 	                          thinkingThreadKeys={props.thinkingThreadKeys}

@@ -215,6 +215,7 @@ export type AcpRuntimeClient = Pick<
       | "closeIdleSessions"
       | "closeSessionForArchive"
       | "closeSessionForTransfer"
+      | "retireManagedReviewSession"
       | "didSessionLoadReplayHistory"
       | "disconnected"
       | "configureWorkflowBudget"
@@ -227,6 +228,7 @@ export type AcpRuntimeClient = Pick<
       | "readProviderStatus"
       | "rebindAntigravityWorkspace"
       | "sendControlPrompt"
+      | "sessionSupportsManagedReviewLedger"
       | "setRuntimeOption"
       | "steerSession"
       | "supportsArchivedSessionRestore"
@@ -408,6 +410,7 @@ export type AcpBackendAdapterOptions = {
     backend: AcpBackendId,
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
+  onTurnTerminalIngress?: (turn: { backend: AcpBackendId; threadId: string; turnId: string }) => void;
 };
 
 export function readAcpUpdateKind(
@@ -2399,6 +2402,10 @@ export class AcpBackendAdapter {
     }
   }
 
+  retireManagedReviewSession(backend: AcpBackendId, sessionId: string): void {
+    this.findSessionOwner(backend, sessionId)?.client.retireManagedReviewSession?.(sessionId);
+  }
+
   /**
    * Close sessions idle for `idleMs` on every live ACP process, so each agent
    * stops their MCP servers (`AcpAgentClient.closeIdleSessions`). The next
@@ -3574,6 +3581,9 @@ export class AcpBackendAdapter {
           updateKind === "turn_finished"
           && !fromSessionLoad
           && replay.threadStatus !== "active";
+        if (promptSettledTurnFinished && turnId) {
+          this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
+        }
         const completedUsage =
           promptSettledTurnFinished && turnId
             ? this.liveTurnUsage.get(
@@ -3846,6 +3856,7 @@ export class AcpBackendAdapter {
         // prompt-settled terminal events, not transcript replay snapshots.
       },
       onPromptError: async ({ sessionId, turnId, error, usage }) => {
+        this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
         );
@@ -4005,9 +4016,40 @@ export class AcpBackendAdapter {
         backendId,
         runtimeCapabilities,
         sessionId,
+        managedReview,
       }): Promise<AcpMcpServerRegistration> => {
         let baseRegistration: AcpMcpServerRegistration | undefined;
         const http = acpRuntimeSupportsHttpMcp(runtimeCapabilities);
+        if (managedReview) {
+          if (!http || !this.agentToolMcpServer || localMemberRole() === "contained") {
+            return { servers: [] };
+          }
+          try {
+            const registration = await this.agentToolMcpServer.registerClient({
+              backend: backendId,
+              threadId: sessionId,
+              managedReview: true,
+            });
+            const readTool = registration.readTool;
+            return {
+              servers: [registration.server],
+              bindThread: registration.bindThread,
+              managedReviewLedgerAvailable: true,
+              ...(readTool ? {
+                hostApprovesToolCall: async (serverName: string, toolName: string) =>
+                  serverName === registration.server.name
+                  && pwragentToolSkipsAgentApproval(await readTool(toolName)),
+              } : {}),
+            };
+          } catch (error) {
+            acpBackendAdapterLog.warn("agent_tool_mcp_start_failed", {
+              backend: backendId,
+              error: error instanceof Error ? error.message : String(error),
+              sessionId: sessionId ?? null,
+            });
+            return { servers: [] };
+          }
+        }
         if (this.agentToolMcpServer) {
           try {
             const registration = await this.agentToolMcpServer.registerClient({

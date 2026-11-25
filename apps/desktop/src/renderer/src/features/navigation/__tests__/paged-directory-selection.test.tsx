@@ -113,7 +113,7 @@ it("does not render unrelated rows when batch selection changes", () => {
   mount();
   const before = new Map(renders);
 
-  fireEvent.click(screen.getByRole("button", { name: "first" }));
+  fireEvent.click(screen.getByRole("button", { name: "first" }), { metaKey: true });
 
   expect(screen.getByRole("button", { name: "first" })).toHaveAttribute("aria-pressed", "true");
   expect(renders.get("first")).toBe(before.get("first")! + 1);

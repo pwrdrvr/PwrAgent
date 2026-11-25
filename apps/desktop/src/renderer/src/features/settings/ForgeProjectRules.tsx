@@ -30,8 +30,8 @@ import { type BackendModelOption, type BackendSummary } from "@pwragent/shared/c
 import { type NavigationDirectoryRow } from "@pwragent/shared/contracts/navigation";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Select, type SelectOption } from "../../components/Select";
+import { ModelSettingsPicker } from "../composer/ModelSettingsPicker";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { modelSelectOptions } from "../../lib/model-select-options";
 import {
   isNavigationPreviewCancelled,
   useNavigationSettingsPreview,
@@ -88,8 +88,11 @@ type AgentChoice = {
   label: string;
   description: string;
   agent: ForgeAgentRuleAgent;
-  /** Models the renderer already knows for this agent, as Model rows. */
-  models: SelectOption[];
+  /** The catalog the Model list arranges: a backend id, or none for a
+   *  Codex model provider's own ids. */
+  kind: BackendSummary["kind"] | undefined;
+  /** Models the renderer already knows for this agent. */
+  models: BackendModelOption[];
 };
 
 const sameRepository = sameForgeRuleRepository;
@@ -143,15 +146,6 @@ function backendModels(
   return [...byId.values()];
 }
 
-/** A catalog's models in the composer's order, superseded ones grouped last. */
-function catalogModelRows(
-  backends: readonly BackendSummary[] | undefined,
-  kind: string,
-  keep?: (option: { id: string; providerId?: string }) => boolean,
-): SelectOption[] {
-  return modelSelectOptions({ kind, models: backendModels(backends, kind, keep) });
-}
-
 function buildAgentChoices(input: {
   acpAgents: readonly ForgeRuleAcpAgent[];
   backends?: readonly BackendSummary[];
@@ -163,14 +157,16 @@ function buildAgentChoices(input: {
       label: "Claude",
       description: "Claude threads on any model.",
       agent: { backend: "claude" },
-      models: catalogModelRows(input.backends, "claude"),
+      kind: "claude",
+      models: backendModels(input.backends, "claude"),
     },
     {
       key: "codex",
       label: "Codex",
       description: "Codex threads on OpenAI models.",
       agent: { backend: "codex" },
-      models: catalogModelRows(
+      kind: "codex",
+      models: backendModels(
         input.backends,
         "codex",
         (option) => !option.providerId && !parseCodexProviderModelId(option.id).providerId,
@@ -188,8 +184,9 @@ function buildAgentChoices(input: {
       label: `Codex · ${provider.name || provider.id}`,
       description: `Codex threads on models ${provider.name || provider.id} serves.`,
       agent: { backend: "codex", codexModelProvider: provider.id },
+      kind: undefined,
       models: uniqueSorted([...(provider.models ?? []), ...served])
-        .map((id) => ({ value: id, label: id })),
+        .map((id) => ({ id, label: id })),
     });
   }
   for (const agent of input.acpAgents) {
@@ -198,7 +195,8 @@ function buildAgentChoices(input: {
       label: agent.name,
       description: `${agent.name} threads on any model.`,
       agent: { backend: `acp:${agent.registryId}` },
-      models: catalogModelRows(input.backends, `acp:${agent.registryId}`),
+      kind: `acp:${agent.registryId}` as const,
+      models: backendModels(input.backends, `acp:${agent.registryId}`),
     });
   }
   return choices;
@@ -986,19 +984,27 @@ function AddAgentForm(props: {
           {knownModels.length > 0 ? (
             <div className="forge-rules__picker-field">
               <span aria-hidden="true" className="forge-rules__picker-label">Model</span>
-              <Select
-                aria-label="Model"
-                className="settings-select settings-select--chip"
-                listboxClassName="forge-rules__model-list"
-                value={modelChoice}
-                options={[
-                  { value: "", label: "Any model", description: `Every ${choice.label} thread.` },
-                  ...knownModels,
-                  { value: OTHER_MODEL_VALUE, label: "Another model…" },
-                ]}
-                onChange={(value) => {
-                  setModelChoice(value);
-                  setError(undefined);
+              <ModelSettingsPicker
+                ariaLabel="Model"
+                size="setting"
+                provider={{ label: choice.label }}
+                model={{
+                  value: modelChoice,
+                  label: modelChoice === ""
+                    ? "Any model"
+                    : modelChoice === OTHER_MODEL_VALUE
+                      ? "Another model…"
+                      : knownModels.find((entry) => entry.id === modelChoice)?.label ?? modelChoice,
+                  kind: choice.kind,
+                  models: knownModels,
+                  leadingOptions: [
+                    { value: "", label: "Any model", description: `Every ${choice.label} thread.` },
+                    { value: OTHER_MODEL_VALUE, label: "Another model…", description: "Type its id." },
+                  ],
+                  onChange: (value) => {
+                    setModelChoice(value);
+                    setError(undefined);
+                  },
                 }}
               />
             </div>

@@ -60,50 +60,8 @@ export function codexCatalogModels(
 /** Option labels of an open `ComposerDropdown` list, in order. */
 export function composerDropdownOptionLabels(root: ParentNode = document): string[] {
   return [...root.querySelectorAll('[role="option"]')].map((option) =>
-    option.querySelector(".composer-dropdown__option-label")?.textContent ?? "",
+    option.querySelector(".composer-dropdown__option-label, .model-settings__option-label")?.textContent ?? "",
   );
-}
-
-/**
- * A `Select` list as titled sections, in order: options outside any group
- * read as one section with no title. Leaves the list as it found it.
- */
-export function selectSections(
-  trigger: HTMLElement,
-): Array<{ group?: string; labels: string[] }> {
-  const wasOpen = trigger.getAttribute("aria-expanded") === "true";
-  if (!wasOpen) fireEvent.click(trigger);
-  const id = trigger.getAttribute("aria-controls");
-  const listbox = id === null ? null : document.getElementById(id);
-  if (listbox === null) throw new Error("The Select did not open.");
-  const label = (option: Element) =>
-    option.querySelector(".select-option__label")?.textContent ?? "";
-  const sections: Array<{ group?: string; labels: string[] }> = [];
-  for (const child of listbox.children) {
-    if (child.getAttribute("role") === "group") {
-      sections.push({
-        group: child.querySelector(".select-group__label")?.textContent ?? "",
-        labels: [...child.querySelectorAll('[role="option"]')].map(label),
-      });
-    } else if (child.getAttribute("role") === "option") {
-      const last = sections.at(-1);
-      if (last && last.group === undefined) last.labels.push(label(child));
-      else sections.push({ labels: [label(child)] });
-    }
-  }
-  if (!wasOpen) fireEvent.click(trigger);
-  return sections;
-}
-
-/** The sections every Settings model list must show for `codexCatalogModels()`. */
-export function expectedCodexSelectSections(
-  leading: string[],
-): Array<{ group?: string; labels: string[] }> {
-  return [
-    { labels: [...leading, ...CURRENT_CODEX_MODEL_LABELS] },
-    { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
-    { group: PROVIDER_MODEL.providerLabel!, labels: [PROVIDER_MODEL.label!] },
-  ];
 }
 
 /**
@@ -170,6 +128,8 @@ export function expectedModelDropdown(params: {
   leading?: string[];
   /** The menu opens below its trigger, as on a to-do card. */
   opensDown?: boolean;
+  /** Other is a disclosure after the list (the model pill's panel), not a row. */
+  otherInline?: boolean;
 }): { rows: string[]; groups: Array<{ label: string; rows: string[] }>; other: string[] } {
   const menu = buildModelMenu(params);
   const groups = menu.providerGroups.map((group) => ({
@@ -178,7 +138,7 @@ export function expectedModelDropdown(params: {
   }));
   // The Other row sits at the end farthest from the trigger: first in a menu
   // that opens up, last in one that opens down.
-  const otherRow = menu.other.length > 0 ? [modelMenuOtherLabel(params.kind)] : [];
+  const otherRow = menu.other.length > 0 && !params.otherInline ? [modelMenuOtherLabel(params.kind)] : [];
   return {
     rows: [
       ...(params.opensDown ? [] : otherRow),
@@ -206,23 +166,6 @@ export function readModelDropdown(list: HTMLElement): {
   };
 }
 
-/** What a Settings model list (`Select`) must show for a catalog, by the shared rule. */
-export function expectedModelSelectSections(params: {
-  kind: string;
-  models: readonly BackendModelOption[];
-  leading?: string[];
-}): Array<{ group?: string; labels: string[] }> {
-  const menu = buildModelMenu(params);
-  const sections: Array<{ group?: string; labels: string[] }> = [];
-  const lead = [...(params.leading ?? []), ...menu.primary.map(labelOf)];
-  if (lead.length > 0) sections.push({ labels: lead });
-  if (menu.other.length > 0) sections.push({ group: "Other models", labels: menu.other.map(labelOf) });
-  for (const group of menu.providerGroups) {
-    sections.push({ group: group.label, labels: group.models.map(labelOf) });
-  }
-  return sections;
-}
-
 /**
  * Check an open model chip against `expectedModelDropdown`, opening its Other
  * submenu when the rule puts anything there.
@@ -237,5 +180,26 @@ export function expectModelDropdownToList(
   if (expected.other.length === 0) return;
   fireEvent.click(within(list).getByRole("option", { name: otherLabel }));
   const other = screen.getByRole("listbox", { name: `${ariaLabel}: ${otherLabel}` });
+  expect(composerDropdownOptionLabels(other)).toEqual(expected.other);
+}
+
+/**
+ * The model pill panel's Model list matches `expected` (built with
+ * `otherInline`), and its Other disclosure opens on `expected.other`.
+ */
+export function expectModelSettingsToList(
+  panel: HTMLElement,
+  expected: ReturnType<typeof expectedModelDropdown>,
+  otherLabel = "Other",
+): void {
+  const list = within(panel).getByRole("listbox", { name: "Model" });
+  expect(readModelDropdown(list)).toEqual({ rows: expected.rows, groups: expected.groups });
+  if (expected.other.length === 0) {
+    expect(within(panel).queryByRole("button", { name: otherLabel })).toBeNull();
+    return;
+  }
+  const disclosure = within(panel).getByRole("button", { name: otherLabel });
+  if (disclosure.getAttribute("aria-expanded") !== "true") fireEvent.click(disclosure);
+  const other = within(panel).getByRole("listbox", { name: `Model: ${otherLabel}` });
   expect(composerDropdownOptionLabels(other)).toEqual(expected.other);
 }

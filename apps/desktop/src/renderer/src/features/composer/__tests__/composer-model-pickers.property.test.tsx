@@ -8,8 +8,10 @@ import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import {
   codexCatalogWithChoiceArbitrary,
   expectModelDropdownToList,
+  expectModelSettingsToList,
   expectedModelDropdown,
 } from "../../../test/model-catalog";
+import { openModelSettings } from "../../../test/model-settings";
 import { Composer as ProductionComposer } from "../Composer";
 
 /**
@@ -115,16 +117,15 @@ describe("composer model picker properties", () => {
     }), { numRuns: 10 });
   });
 
-  it("lists an existing thread's own provider on the model chip by the same rule", async () => {
+  it("lists an existing thread's own provider in the model pill by the same rule", async () => {
     await fc.assert(fc.asyncProperty(codexCatalogWithChoiceArbitrary, async ([models, threadModel]) => {
       try {
         await renderThreadComposer(models, threadModel.id);
-        fireEvent.click(screen.getByRole("button", { name: /^Model(?::|$)/ }));
-        const list = screen.getByRole("listbox", { name: "Model" });
-        expectModelDropdownToList(list, "Model", expectedModelDropdown({
+        expectModelSettingsToList(openModelSettings(), expectedModelDropdown({
           kind: "codex",
           models,
           thread: { model: threadModel.id },
+          otherInline: true,
         }));
       } finally {
         cleanup();

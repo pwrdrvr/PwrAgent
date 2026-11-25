@@ -36,7 +36,9 @@ import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
-import { StackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
+import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
+import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
+import { getDesktopStackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
@@ -352,6 +354,7 @@ import {
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
   type ProjectForgeAutomation,
+  buildProjectNeverMergeRefusal,
   buildProjectPrDependencyNotice,
   buildProjectPrWatchRefusal,
   isDefaultProjectForgeAutomation,
@@ -359,6 +362,7 @@ import {
   projectAllowsAutoFixKind,
   projectAllowsForgePolling,
   projectAllowsPrWatches,
+  projectNeverMerges,
   projectWatchesMergeBuilds,
   resolveProjectForgeAutomation,
 } from "@pwragent/shared/project-forge-automation";
@@ -458,6 +462,7 @@ import {
   createScheduledPrPrefetchRepoResolver,
   filterStoredDiscoveredPullRequests,
   resolveScheduledPrPrefetchRepos,
+  type PrAttachmentDemand,
 } from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
@@ -1235,7 +1240,7 @@ class DesktopAppServerService {
   >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
   private readonly prCardMerges = new Map<string, { transition?: PrStatusTransition }>();
-  private readonly stackReader = new StackReader();
+  private readonly stackReader = getDesktopStackReader();
   private readonly stackPublishAttempts = new Map<string,
     { signature: string; retryAfter?: number } | { declinedHead: string }
   >();
@@ -2090,7 +2095,7 @@ class DesktopAppServerService {
         const index = await loadLocalNavigationQueryIndex({
           backend: request.backend,
           callerReason: "renderer-navigation-query",
-          includeStacks: navigationQueryShowsStacks(request.query),
+          includeStacks: navigationQueryShowsStacks(request.query, request.consumer),
           signal: rpcOptions?.signal,
           ...(summaries ? { viewer: { source: summaries, project: async (local: NavigationQueryIndex) => {
             const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);
@@ -2842,18 +2847,20 @@ class DesktopAppServerService {
     threads: NavigationSnapshot["threads"],
     options: { replace: boolean; isCurrent?: () => boolean; resolveUnattached?: boolean; inventoryDemand?: PrMetadataDemand },
   ): Promise<void> {
-    const primaryRepoResolutionByPath = new Map<
-      string,
-      Promise<string | undefined>
-    >();
-    const primaryRepoKeys = await Promise.all(threads.map((thread) => {
+    const inventoryConfig = options.inventoryDemand && createInventoryRemoteConfigReader();
+    const primaryRepoResolutionByPath = new Map<string, Promise<string | undefined>>();
+    const freshPrimaryRepoResolutionByPath = new Map<string, Promise<string | undefined>>();
+    const storedRepositories = options.inventoryDemand
+      ? threads.map((thread) => thread.prs?.length ? readStoredPrimaryThreadRepository(thread) : undefined)
+      : undefined;
+    const primaryRepoKeys = await Promise.all(threads.map((thread, index) => {
       if (!options.inventoryDemand) {
         return thread.prs?.length || options.resolveUnattached
           ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath)
           : undefined;
       }
-      if (!thread.prs?.length) return undefined;
-      const stored = readStoredPrimaryThreadRepository(thread);
+      const stored = storedRepositories?.[index];
+      if (!stored || !thread.prs?.length) return undefined;
       const previous = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
       const workspaceChanged = previous?.workspace && primaryCheckoutKey(previous.workspace) !== primaryCheckoutKey(thread);
       const live = thread.prs.filter((pr) => !isTerminalPullRequest(pr));
@@ -2862,9 +2869,10 @@ class DesktopAppServerService {
       const unresolved = !stored.key || (live.length > 0
         && !live.some((pr) => this.matchesPrimaryRepository(pr, stored.key)));
       return workspaceChanged || (stored.canProbe && unresolved)
-        ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath, {
-            demand: options.inventoryDemand, ...(workspaceChanged ? { fresh: true } : {}),
-          })
+        ? prGitSubprocessCaller.run("pr-owner-navigation-inventory", () =>
+            resolvePrimaryThreadRepoKey(thread, workspaceChanged ? freshPrimaryRepoResolutionByPath : primaryRepoResolutionByPath, {
+              demand: options.inventoryDemand, ...(workspaceChanged ? { fresh: true } : { inventoryConfig }),
+            }))
         : stored.key;
     }));
     const liveThreadKeys = new Set<string>();
@@ -2873,7 +2881,12 @@ class DesktopAppServerService {
       if (options.isCurrent && !options.isCurrent()) return;
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       liveThreadKeys.add(threadKey);
-      const primaryRepoKey = primaryRepoKeys[index];
+      const stored = storedRepositories?.[index];
+      const current = stored && readStoredPrimaryThreadRepository(thread);
+      // A checkout read can supersede inventory while the rest of the batch
+      // is still running. A new conclusive absence also replaces an old key.
+      const primaryRepoKey = current?.conclusiveSampleOrder !== undefined
+        && current.conclusiveSampleOrder > (stored?.conclusiveSampleOrder ?? 0) ? current.key : primaryRepoKeys[index];
       this.setThreadPrAttachment(threadKey, {
         backend: thread.source,
         workspace: { gitOriginUrl: thread.gitOriginUrl, linkedDirectories: thread.linkedDirectories },
@@ -2922,7 +2935,7 @@ class DesktopAppServerService {
       },
     );
     if (params.prs.length > 0 && !current?.primaryRepoKey) {
-      const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
+      const primaryRepoKey = (await this.resolveUncachedPrimaryRepository(params))?.key;
       // Patch only the key onto whatever list is now current. A refresh may
       // have supplied a key, or dropped the thread, while this resolved.
       const latest = this.attachedPrsByThreadKey.get(threadKey);
@@ -2939,28 +2952,34 @@ class DesktopAppServerService {
    * that refresh lists it; without this, its PR would not count as primary
    * and the watch tool would refuse it until the next refresh.
    */
-  private async resolveUncachedPrimaryRepoKey(params: {
+  private async resolveUncachedPrimaryRepository(params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }, demand?: PrMetadataDemand, overlay?: ThreadOverlayState, fresh = false): Promise<string | undefined> {
+  }, demand?: PrMetadataDemand, overlay?: ThreadOverlayState, fresh = false) {
     const summary = getDesktopBackendRegistry().getCachedThreadSummary(params)
       ?? this.attachedPrsByThreadKey.get(buildThreadIdentityKey(params.backend, params.threadId))?.workspace;
     if (!summary) return undefined;
     overlay ??= await this.getOverlayStore().getThreadOverlayState(params);
-    return await resolvePrimaryThreadRepoKey({
+    const workspace = {
       gitOriginUrl: summary.gitOriginUrl,
       linkedDirectories: mergeThreadLinkedDirectories([
         ...summary.linkedDirectories,
         ...(overlay?.extraLinkedDirectories ?? []),
       ]),
-    }, undefined, demand ? { demand, confirmEmpty: true, ...(fresh ? { fresh } : {}) } : undefined);
+    };
+    let sampleOrder: number | undefined;
+    const key = await resolvePrimaryThreadRepoKey(workspace, undefined, demand ? {
+      demand, confirmEmpty: true, ...(fresh ? { fresh } : {}),
+      onOriginSample: (order) => { sampleOrder = order; },
+    } : undefined);
+    return { key, workspace, sampleOrder };
   }
 
   /** Repository authority for forge rules, resolved from the current workspace. */
   async resolvePrimaryGitRepository(backend: AppServerBackendKind, threadId: string): Promise<string | undefined> {
-    return this.canonicalPrimaryRepoKey(await this.resolveUncachedPrimaryRepoKey(
+    return this.canonicalPrimaryRepoKey((await this.resolveUncachedPrimaryRepository(
       { backend, threadId }, { priority: () => PR_METADATA_PRIORITY.selected },
-    ));
+    ))?.key);
   }
 
   readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
@@ -3096,7 +3115,8 @@ class DesktopAppServerService {
     const overlay = await this.getOverlayStore().getThreadOverlayState(params);
     if (!overlay?.prs?.length) return { overlay, prs: [] };
     const demand = { priority: () => PR_METADATA_PRIORITY.selected };
-    const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params, demand, overlay, fresh);
+    const repository = await this.resolveUncachedPrimaryRepository(params, demand, overlay, fresh);
+    const primaryRepoKey = repository?.key;
     const prs = await this.canonicalizeStoredPullRequests(overlay.prs, demand);
     const latest = this.attachedPrsByThreadKey.get(threadKey);
     if (before && (!latest || (before.workspace && latest.workspace
@@ -3106,9 +3126,16 @@ class DesktopAppServerService {
     const updatedKeys = latest && latest !== before
       ? new Set(latest.prs.map((pr) => this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(pr))))
       : undefined;
+    // The action uses its own checkout result. Polling may already have a
+    // newer conclusive origin or a newer confirmation that origin is absent.
+    let pollingRepoKey = primaryRepoKey;
+    if (repository?.sampleOrder !== undefined) {
+      const observed = readStoredPrimaryThreadRepository(repository.workspace);
+      if ((observed.conclusiveSampleOrder ?? 0) > repository.sampleOrder) pollingRepoKey = observed.key;
+    }
     this.setThreadPrAttachment(threadKey, {
       backend: params.backend, prs: this.canonicalizePrs(overlay.prs), ...latest,
-      primaryRepoKey,
+      primaryRepoKey: pollingRepoKey,
     });
     return { overlay, primaryRepoKey, prs: prs.filter((pr) =>
       this.matchesPrimaryRepository(pr, primaryRepoKey) && (!updatedKeys || updatedKeys.has(getPrStatusKey(pr))),
@@ -3658,7 +3685,7 @@ class DesktopAppServerService {
         const canonical = this.applyCanonicalPrStatuses(index.threads);
         const complete = !index.coverage || index.coverage.state === "complete";
         await this.rememberThreadPrAttachments(canonical.threads, {
-          replace: complete, isCurrent, inventoryDemand: { signal: abort.signal, priority: () => PR_METADATA_PRIORITY.page },
+          replace: complete, isCurrent, inventoryDemand: { signal: abort.signal, priority: () => PR_METADATA_PRIORITY.background },
         });
         if (!isCurrent()) continue;
         const ownerThreads = this.applyPrimaryGitRepositories(canonical.threads);
@@ -4061,6 +4088,16 @@ class DesktopAppServerService {
     });
   }
 
+  /** A merge from a thread whose project never merges is refused before any forge call. */
+  private assertProjectMerges(context: AgentToolCallContext, args: ForgePrToolArgs): void {
+    if (!isAppServerBackendKind(context.backend)) return;
+    const refusal = this.projectNeverMergeRefusal(
+      { backend: context.backend, threadId: context.threadId },
+      typeof args.number === "number" ? `#${args.number}` : undefined,
+    );
+    if (refusal) throw new ForgeReadError("forbidden", refusal);
+  }
+
   /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
   async prepareForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<ForgePrToolPreflightResult> {
     const scope = await this.forgePrToolScope(context);
@@ -4077,6 +4114,7 @@ class DesktopAppServerService {
     if (operation !== "merge_pull_request") {
       return await this.forgePrToolService().prepare(operation, args, scope, context.signal);
     }
+    this.assertProjectMerges(context, args);
     // A merge reads and keeps the project's merge-method pick, the one a
     // to-do merge card for this project would use.
     const preference = await readProjectMergeMethodPreference(getDesktopBackendRegistry(), context);
@@ -4132,6 +4170,7 @@ class DesktopAppServerService {
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
+    if (operation === "merge_pull_request") this.assertProjectMerges(context, args);
     const scope = await this.forgePrToolScope(context);
     const stackDemand = { signal: context.signal, priority: () => PR_METADATA_PRIORITY.selected };
     if (operation === "publish_stack_layer") return await this.publishStackLayer(args, context, scope);
@@ -5173,6 +5212,7 @@ class DesktopAppServerService {
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
     const projectSkippedKind = projectSkipsMergeConflicts ? "merge conflicts" : "failing CI";
     const reviewReadiness = await this.readPrReviewReadiness(params, primaryPrs);
+    const neverMerge = forgeProject && projectNeverMerges(forgeProject.automation) ? forgeProject.label : undefined;
     const readinessGuidance = reviewReadiness
       .filter((entry) => entry.readiness !== "closed")
       .map((entry) => describePrReviewReadiness({
@@ -5181,16 +5221,23 @@ class DesktopAppServerService {
         ...(entry.headSha ? { headSha: entry.headSha } : {}),
         reviewed: entry.reviewed,
         ...(entry.openFindings !== undefined ? { openFindings: entry.openFindings } : {}),
+        ...(neverMerge ? { neverMergeProject: neverMerge } : {}),
       }));
     const automationGuidance = autoFixEnabled && forgeProject && projectBlocksAutoFix
       ? `Auto-fix PR is saved for this thread, but it is in ${forgeProject.label}, where ${forgeProject.automation.paused ? "forge activity is paused" : "Auto-fix is turned off in Forge Automation"}. PwrAgent will not start a repair turn. Do not poll CI or create a monitor in its place. Tell the operator, who can change it from the project menu: Forge Automation.`
       : autoFixActive && forgeProject && (projectSkipsMergeConflicts || projectSkipsCiFailures)
         ? `${baseGuidance} ${forgeProject.label} skips ${projectSkippedKind} in Forge Automation, so PwrAgent will not start a repair turn for ${projectSkippedKind}.`
         : baseGuidance;
+    // Readiness lines name the project only for PRs this thread owns offers
+    // for; any other thread in a never-merge project still hears it.
+    const neverMergeGuidance = neverMerge && readinessGuidance.length === 0
+      ? [buildProjectNeverMergeRefusal({ projectLabel: neverMerge })]
+      : [];
     const stackGuidance = await this.threadStackGuidance(primaryPrs);
     const stackLines = stackGuidance.map(({ text }) => text);
     const guidance = (stackGuidance.some(({ held }) => held)
-      ? stackLines : [...stackLines, automationGuidance, ...readinessGuidance]).join(" ");
+      ? [...stackLines, ...neverMergeGuidance]
+      : [...stackLines, automationGuidance, ...readinessGuidance, ...neverMergeGuidance]).join(" ");
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -5387,7 +5434,7 @@ class DesktopAppServerService {
     prs: PrSummary[],
     fetchedAt: number,
     source: string,
-    options: { skipMergeBuildWatch?: boolean } = {},
+    options: { skipMergeBuildWatch?: boolean; fetchedAtByKey?: ReadonlyMap<string, number> } = {},
   ): PrSummary[] {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
@@ -5395,10 +5442,11 @@ class DesktopAppServerService {
     const endedChanged = new Set<string>();
     for (const pr of prs.map(stripPrLinkedDirectoryPaths)) {
       const key = getPrStatusKey(pr);
+      const prFetchedAt = options.fetchedAtByKey?.get(key) ?? fetchedAt;
       const current = this.prStatusRegistry.get(key);
       // A merge is irreversible. Reads started either side of the write can
       // briefly report the pre-merge state.
-      if (current && (current.fetchedAt > fetchedAt
+      if (current && (current.fetchedAt > prFetchedAt
         || (current.pr.lifecycleState === "merged" && pr.lifecycleState !== "merged"))) {
         staleKeys.push(key);
         continue;
@@ -5420,10 +5468,10 @@ class DesktopAppServerService {
       this.prStatusRegistry.set(key, {
         ...current,
         pr,
-        fetchedAt,
+        fetchedAt: prFetchedAt,
       });
       this.applyPrStatusToAttachments(pr);
-      this.transcriptPrSubscriptions.observe([pr], fetchedAt);
+      this.transcriptPrSubscriptions.observe([pr], prFetchedAt);
     }
     if (staleKeys.length > 0) {
       // Losing to a newer registry entry is ordinary bookkeeping: cache loads
@@ -5438,7 +5486,7 @@ class DesktopAppServerService {
       });
     }
     if (transitions.length > 0) {
-      this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source });
+      this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source }, options.fetchedAtByKey);
       if (!options.skipMergeBuildWatch) this.armMergeBuildWatches(transitions);
     }
     this.publishPrAutoFixPrEndedChanges(endedChanged);
@@ -5510,6 +5558,7 @@ class DesktopAppServerService {
   private emitPrStatusTransitions(
     transitions: PrStatusTransition[],
     observation: { observedAt: number; source: string },
+    fetchedAtByKey?: ReadonlyMap<string, number>,
   ): void {
     for (const transition of transitions) {
       appServerLog.info(
@@ -5517,6 +5566,7 @@ class DesktopAppServerService {
         {
           ...summarizePrStatusTransition(transition),
           ...observation,
+          observedAt: fetchedAtByKey?.get(transition.prKey) ?? observation.observedAt,
         },
       );
       this.prReviewOfferCoordinator?.handleTransition(transition);
@@ -5589,13 +5639,15 @@ class DesktopAppServerService {
   private async writePrStatusesToCache(
     prs: PrSummary[],
     fetchedAt: number,
+    fetchedAtByKey?: ReadonlyMap<string, number>,
   ): Promise<void> {
     const entries: PrStatusCacheEntry[] = prs.flatMap((pr) => {
       const current = this.matchingPrStatus(pr);
-      if (!current || current.fetchedAt < fetchedAt) return [];
+      const prFetchedAt = fetchedAtByKey?.get(getPrStatusKey(pr)) ?? fetchedAt;
+      if (!current || current.fetchedAt < prFetchedAt) return [];
       // Keep this observation's timestamp. The cache's own ordering guard
       // drops the write if an agreeing, fresher result is already durable.
-      return [{ provider: current.pr.provider, prKey: getPrStatusKey(current.pr), fetchedAt, pr: current.pr }];
+      return [{ provider: current.pr.provider, prKey: getPrStatusKey(current.pr), fetchedAt: prFetchedAt, pr: current.pr }];
     });
     if (entries.length) await this.getOverlayStore().writePrStatusCacheEntries(entries);
   }
@@ -5827,7 +5879,7 @@ class DesktopAppServerService {
    */
   async canonicalizeStoredPullRequests(
     prs: PrSummary[],
-    demand?: PrMetadataDemand,
+    demand?: PrAttachmentDemand,
     verifyAttachments = true,
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
@@ -6049,7 +6101,7 @@ class DesktopAppServerService {
    * still carry the old name, so a stored PR no remote names asks GitHub what
    * that remote is called now before it is dropped.
    */
-  private async filterStoredDiscoveredPrs(prs: PrSummary[], demand?: PrMetadataDemand): Promise<PrSummary[]> {
+  private async filterStoredDiscoveredPrs(prs: PrSummary[], demand?: PrAttachmentDemand): Promise<PrSummary[]> {
     return await filterStoredDiscoveredPullRequests(prs, {
       demand,
       resolveRepositoryNames: demand?.allowForgeLookup === false ? undefined : async (repos) => {
@@ -6370,8 +6422,7 @@ class DesktopAppServerService {
       getFocusedThreadKeys: () => this.prPollingFocus.union(),
       isWindowVisible: () =>
         getOwnerHostServices().ui.isWindowVisible(),
-      // Admission pays for one GitHub batch or one GitLab MR read.
-      // Additional GitLab REST reads consume their own shared token.
+      // GitLab takes this token when its first request actually starts.
       onPollUnavailable: (targets, failed) => {
         for (const target of targets) this.prActivity.record({
           category: "check", source: "background poll", threadKeys: target.threadKeys, prKeys: [target.prKey],
@@ -6380,20 +6431,20 @@ class DesktopAppServerService {
         });
       },
       tryTakeToken: (targets = []) => this.takePrPollingToken("background poll", targets.map((t) => t.prKey), targets.flatMap((t) => t.threadKeys)),
-      fetchPullRequests: async (refs) =>
-        await this.fetchForgePullRequests(refs, false, true),
-      fetchPullRequestsAfterReconnect: async (refs) =>
-        await this.fetchForgePullRequests(refs, true, true),
+      fetchPullRequests: async (refs, gitlabPoll) =>
+        await this.fetchForgePullRequests(refs, { gitlabPoll }),
+      fetchPullRequestsAfterReconnect: async (refs, gitlabPoll) =>
+        await this.fetchForgePullRequests(refs, { reconnect: true, gitlabPoll }),
       getObservationTimestamp: () => this.nextPrObservationTimestamp(),
       onTargetsHandled: (keys) => this.transcriptPrSubscriptions.markHandled(keys),
-      applyResults: async (prs, fetchedAt) => {
+      applyResults: async (prs, fetchedAt, fetchedAtByKey) => {
         // Mention-only results must never enter persistence, transitions, or
         // automatic repair. Attached PRs keep their existing result path.
-        this.transcriptPrSubscriptions.observe(prs, fetchedAt);
+        this.transcriptPrSubscriptions.observe(prs, fetchedAt, fetchedAtByKey);
         const attached = prs.filter((pr) =>
           this.primaryPrThreadsByKey.has(getPrStatusKey(pr))
         );
-        return attached.length ? await this.applyPolledPrStatuses(attached, fetchedAt) : [];
+        return attached.length ? await this.applyPolledPrStatuses(attached, fetchedAt, fetchedAtByKey) : [];
       },
     });
     this.prPollingScheduler = scheduler;
@@ -6702,6 +6753,22 @@ class DesktopAppServerService {
     return identity ? this.threadForgeAutomation(identity) : undefined;
   }
 
+  /**
+   * The refusal for a merge in the thread's project when its Forge
+   * Automation never merges; undefined when the project merges.
+   */
+  private projectNeverMergeRefusal(
+    ref: { backend: AppServerBackendKind; threadId: string },
+    pullRequest?: string,
+  ): string | undefined {
+    const project = this.resolveThreadForgeProject(ref);
+    if (!project || !projectNeverMerges(project.automation)) return undefined;
+    return buildProjectNeverMergeRefusal({
+      projectLabel: project.label,
+      ...(pullRequest ? { pullRequest } : {}),
+    });
+  }
+
   private resolveThreadForgeProject(ref: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -6770,11 +6837,13 @@ class DesktopAppServerService {
     prs: PrSummary[],
     observedAt: number,
     operatorInitiated = false,
+    fetchedAtByKey?: ReadonlyMap<string, number>,
   ): Promise<void> {
     await this.refreshPrAutoDispatchBudgetSafetyStop();
     const coordinator = this.getPrAutoDispatchCoordinator();
     for (const pr of prs) {
       const prKey = getPrStatusKey(pr);
+      const prObservedAt = fetchedAtByKey?.get(prKey) ?? observedAt;
       const winner = await this.getPrAutoDispatchWinner(pr, prKey);
       const threadKeys = winner
         ? [buildThreadIdentityKey(winner.backend, winner.threadId)]
@@ -6783,7 +6852,7 @@ class DesktopAppServerService {
         ? await coordinator.handleStatusSnapshot({
             pr,
             threadKeys,
-            observedAt,
+            observedAt: prObservedAt,
             backgroundPollingEnabled: this.isPrAutoDispatchAvailable(),
             operatorInitiated,
           })
@@ -6832,7 +6901,7 @@ class DesktopAppServerService {
           ),
         );
         const dispatched = await this.getPrStatusWatchCoordinator()
-          .handleStatusSnapshot(pr, observedAt, failureCoveredThreadKeys);
+          .handleStatusSnapshot(pr, prObservedAt, failureCoveredThreadKeys);
         if (dispatched > 0) {
           appServerLog.info("pr status watch completed", {
             prKey,
@@ -7213,6 +7282,7 @@ class DesktopAppServerService {
   private async applyPolledPrStatuses(
     prs: PrSummary[],
     fetchedAt: number,
+    fetchedAtByKey?: ReadonlyMap<string, number>,
   ): Promise<string[]> {
     // The GraphQL client fetches only the PR's head commit (see the cost note
     // in github-graphql-client). Union forward so a status poll does not
@@ -7223,18 +7293,22 @@ class DesktopAppServerService {
       return commitShas.length > 0 ? { ...pr, commitShas } : pr;
     });
 
-    const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll");
+    const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll", { fetchedAtByKey });
     const canonical = this.canonicalizePrs(merged);
     const changedKeys = new Set(changed.map(getPrStatusKey));
+    const hasCurrentObservation = (pr: PrSummary) => {
+      const key = getPrStatusKey(pr);
+      return this.prStatusRegistry.get(key)?.fetchedAt === (fetchedAtByKey?.get(key) ?? fetchedAt);
+    };
     this.prReviewOfferCoordinator?.handleObservations(canonical.filter((pr) =>
       this.primaryPrThreadsByKey.has(getPrStatusKey(pr))
       && !changedKeys.has(getPrStatusKey(pr))
-      && this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt));
+      && hasCurrentObservation(pr)));
     this.recordPrCheck(canonical, "background poll");
-    await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt);
+    await this.handlePrAutoDispatchSnapshots(canonical, fetchedAt, false, fetchedAtByKey);
     // An unchanged accepted poll refreshes CI freshness without publishing a
     // field-change event. Dependencies still need that observation for admission.
-    const fresh = canonical.filter((pr) => this.prStatusRegistry.get(getPrStatusKey(pr))?.fetchedAt === fetchedAt);
+    const fresh = canonical.filter(hasCurrentObservation);
     this.queueStackAdvance(fresh);
     const freshPrUrls = fresh.map((pr) => pr.url);
     // Evaluation can start a continuation turn; the poll must not wait on it.
@@ -7246,7 +7320,7 @@ class DesktopAppServerService {
       return [];
     }
 
-    await this.writePrStatusesToCache(changed, fetchedAt);
+    await this.writePrStatusesToCache(changed, fetchedAt, fetchedAtByKey);
 
     // Publish on the backend that owns each PR's thread. Group so we emit one
     // batch per backend rather than one call per PR.
@@ -7295,8 +7369,8 @@ class DesktopAppServerService {
     return new Set(refreshed.map((pr) => getPrStatusKey(pr)));
   }
 
-  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, requestTokenTaken = false): Promise<PrSummary[]> {
-    const prs = await this.getPrFetcher().fetchPullRequests(refs, { reconnect, requestTokenTaken });
+  private async fetchForgePullRequests(refs: ForgePrRef[], options?: Parameters<ForgePrFetcher["fetchPullRequests"]>[1]): Promise<PrSummary[]> {
+    const prs = await this.getPrFetcher().fetchPullRequests(refs, options);
     this.learnPolledPullRequestRepositories(refs, prs);
     return prs;
   }
@@ -8432,6 +8506,16 @@ class DesktopAppServerService {
         if (identity) await coordinator.cancelPendingDisallowedByProject(identity);
       }
     }
+    if (projectNeverMerges(previous) !== projectNeverMerges(next)) {
+      // Withdraw an open merge offer now, or offer it again: a reviewed,
+      // green PR may see no further transition to re-evaluate it.
+      this.prReviewOfferCoordinator?.reevaluate(threadKeys.flatMap((threadKey) => {
+        const attachment = this.attachedPrsByThreadKey.get(threadKey);
+        return (attachment?.prs ?? [])
+          .filter((pr) => this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey))
+          .map(getPrStatusKey);
+      }));
+    }
     const resumedPolling = !projectAllowsForgePolling(previous) && projectAllowsForgePolling(next);
     if (resumedPolling) {
       // Thaw and poll the project's PRs now rather than on their next slot.
@@ -8959,7 +9043,10 @@ class DesktopAppServerService {
         // while the app runs and the very next poll must respect it.
         isProviderEnabled: (provider) =>
           getDesktopSettingsService().isForgeEnabled(provider),
-      }, new GitLabPrFetcher({ tryTakeRequestToken: () => this.takePrPollingToken("GitLab additional request") }));
+      }, new GitLabPrFetcher({
+        tryTakeRequestToken: () => this.takePrPollingToken("GitLab additional request"),
+        getObservationTimestamp: () => this.nextPrObservationTimestamp(),
+      }));
     }
     return this.prFetcher;
   }
@@ -9031,6 +9118,7 @@ class DesktopAppServerService {
           .map(getPrStatusKey);
       },
       getPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
+      neverMergeRefusal: (thread, pr) => this.projectNeverMergeRefusal(thread, `#${pr.number}`),
       stackHold: (pr) => this.prStackHoldEvidence(pr),
       stackMergeEvidence: (thread, pr) => this.readStackMergeEvidence(thread, pr),
       isLowerPolled: (key) => this.prPollBackendByKey.has(key) || this.transcriptPrSubscriptions.hasTarget(key),
@@ -9092,8 +9180,12 @@ class DesktopAppServerService {
     thread: PrReviewOfferThread,
     pullRequest: string,
   ): Promise<string | undefined> {
-    const coordinator = this.prReviewOfferCoordinator;
     const pr = this.findPrimaryAttachedPr(thread, pullRequest);
+    // Before the owner and coordinator gates: a never-merge project refuses
+    // every merge card, whoever owns the PR's offers.
+    const neverMerge = this.projectNeverMergeRefusal(thread, pr ? `#${pr.number}` : undefined);
+    if (neverMerge) return `${neverMerge} This card was not raised.`;
+    const coordinator = this.prReviewOfferCoordinator;
     if (!coordinator || !pr) return undefined;
     const hold = await this.prStackHold(pr);
     if (hold) return hold;

@@ -8,10 +8,14 @@ import {
   findAcpMirroredModeConfigOption,
 } from "@pwragent/shared/acp-permission-mode";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { ACP_AGENT_ELICITATION_META_KEY } from "@pwragent/shared/mcp-elicitation-purpose";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
+  AppServerMcpElicitationRequestNotification,
+  AppServerMcpElicitationSchema,
   AppServerPendingRequestNotification,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
@@ -31,6 +35,7 @@ import {
   acpSessionReplayNormalizerOptions,
   isAcpUserBoilerplateMessage,
   readAcpContentText,
+  readAcpToolCallId,
   readAcpTopicTitle,
   readAcpUpdateTimestamp,
   loadAcpReplayKit,
@@ -54,6 +59,8 @@ import {
   type AcpProviderStatus,
 } from "./acp-provider-status.js";
 import {
+  readAcpMcpToolName,
+  readAcpProviderTool,
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolText,
@@ -80,6 +87,7 @@ import {
 } from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { ANTIGRAVITY_CALL_PWRAGENT_TOOL, readPwrAgentCallTarget } from "../agent-tools/antigravity-mcp-catalog.js";
+import { isManagedReviewLedgerToolName } from "../agent-tools/pwragent-managed-review-ledger-tools.js";
 import { getMainLogger } from "../log.js";
 import {
   ACP_WORKSPACE_HANDOFF_RECORD,
@@ -87,6 +95,12 @@ import {
   acpWorkspaceContinuationText,
   acpWorkspaceHistory,
 } from "./acp-workspace-history.js";
+import {
+  acpElicitationUserInput,
+  grokAskUserQuestionInput,
+  userInputAnswers,
+  type GrokAskUserQuestionResponse,
+} from "./acp-user-input.js";
 
 const acpClientLog = getMainLogger("pwragent:acp-client");
 
@@ -177,6 +191,7 @@ export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-
 export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
   managedConnectionsViaGateway?: true;
+  managedReviewLedgerAvailable?: true;
   bindThread?: (threadId: string) => Promise<void> | void;
   readListedJobMonitorCreation?: () => boolean | undefined;
   /**
@@ -203,6 +218,9 @@ export function mergeMcpServerRegistrations(
     servers: present.flatMap((registration) => registration.servers),
     ...(present.some((registration) => registration.managedConnectionsViaGateway)
       ? { managedConnectionsViaGateway: true }
+      : {}),
+    ...(present.some((registration) => registration.managedReviewLedgerAvailable)
+      ? { managedReviewLedgerAvailable: true }
       : {}),
     readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
     ...(approvers.length ? {
@@ -409,6 +427,7 @@ export type AcpAgentClientOptions = {
     cwd: string;
     runtimeCapabilities?: BackendAcpRuntimeCapabilities;
     sessionId?: string;
+    managedReview?: boolean;
   }) =>
     | AcpMcpServerConfig[]
     | AcpMcpServerRegistration
@@ -488,10 +507,14 @@ export class AcpAgentClient {
    * session/load would bring back neither. They are never idle-closed.
    */
   private readonly sessionsWithoutFaithfulReload = new Set<string>();
+  private readonly pendingManagedReviewSessions = new Set<string>();
   /** The `agentToolCatalogKey` each session's MCP servers started under, by app session id. */
   private readonly sessionAgentToolCatalogKeys = new Map<string, string>();
   /** The MCP servers each session's agent last received. */
   private readonly sessionMcpServers = new Map<string, AcpSessionMcpServers>();
+  /** Managed review child sessions that received the in-memory candidate ledger MCP server. */
+  private readonly managedReviewLedgerSessions = new Set<string>();
+  private readonly managedReviewLedgerToolCalls = new Map<string, Map<string, string>>();
   /** MCP tools the operator allowed for the rest of a thread. */
   private readonly sessionMcpToolGrants = new Map<string, Set<string>>();
   private readonly now: () => number;
@@ -562,6 +585,11 @@ export class AcpAgentClient {
       clientCapabilities: {
         auth: {
           terminal: false,
+        },
+        // Without this, Antigravity's ask_question degrades to the questions
+        // as plain assistant text and ends the turn unanswered.
+        elicitation: {
+          form: {},
         },
         fs: {
           readTextFile: false,
@@ -729,6 +757,7 @@ export class AcpAgentClient {
       !this.loadedSessionCwds.has(protocolSessionId)
       || (idleClosed && !idleClosed.workerOpen)
       || this.sessionsWithoutFaithfulReload.has(sessionId)
+      || this.pendingManagedReviewSessions.has(sessionId)
       || this.activeTurns.has(sessionId)
       || this.pendingPermissionRequests.has(sessionId)
       || this.loadingSessions.has(protocolSessionId)
@@ -862,6 +891,9 @@ export class AcpAgentClient {
     this.idleClosedSessions.delete(sessionId);
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
+    this.retireManagedReviewSession(sessionId);
+    this.managedReviewLedgerSessions.delete(sessionId);
+    this.managedReviewLedgerToolCalls.delete(sessionId);
     this.sessionAgentToolCatalogKeys.delete(sessionId);
     const previousMcpServers = this.sessionMcpServers.get(sessionId);
     if (retainMcpGrants && previousMcpServers && this.sessionMcpToolGrants.has(sessionId)) {
@@ -875,6 +907,15 @@ export class AcpAgentClient {
     this.jobMonitorCatalogs.delete(sessionId);
     this.grokBackgroundSessions.delete(sessionId);
     this.antigravityBackgroundCommands.delete(sessionId);
+  }
+
+  sessionSupportsManagedReviewLedger(sessionId: string): boolean {
+    return this.managedReviewLedgerSessions.has(sessionId);
+  }
+
+  /** Managed review children need their original catalog only for one turn. */
+  retireManagedReviewSession(sessionId: string): void {
+    this.pendingManagedReviewSessions.delete(sessionId);
   }
 
   supportsTurnSteering(): boolean {
@@ -920,6 +961,9 @@ export class AcpAgentClient {
     this.pendingPermissionRequests.clear();
     this.idleClosedSessions.clear();
     this.sessionsWithoutFaithfulReload.clear();
+    this.pendingManagedReviewSessions.clear();
+    this.managedReviewLedgerSessions.clear();
+    this.managedReviewLedgerToolCalls.clear();
     this.jobMonitorCatalogs.clear();
     this.grokBackgroundSessions.clear();
     this.antigravityBackgroundCommands.clear();
@@ -1260,6 +1304,7 @@ export class AcpAgentClient {
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
+    managedReview?: boolean;
     /** An agent-requested review cannot prompt until the caller's mode is confirmed. */
     requiredAntigravityMode?: string;
     mcpServers?: "default" | "none";
@@ -1299,6 +1344,7 @@ export class AcpAgentClient {
         : await this.buildMcpServers({
             cwd,
             sessionId: params.sessionId,
+            ...(params.managedReview ? { managedReview: true } : {}),
           });
     const additional = params.additionalMcpRegistration;
     const mcpRegistration = defaultMcpRegistration.managedConnectionsViaGateway
@@ -1395,6 +1441,12 @@ export class AcpAgentClient {
     this.touchSession(appSessionId);
     if (params.sessionMeta || params.mcpServers === "none") {
       this.sessionsWithoutFaithfulReload.add(appSessionId);
+    }
+    if (params.managedReview) this.pendingManagedReviewSessions.add(appSessionId);
+    if (mcpRegistration.managedReviewLedgerAvailable) {
+      this.managedReviewLedgerSessions.add(appSessionId);
+    } else {
+      this.managedReviewLedgerSessions.delete(appSessionId);
     }
     if (!params.hidden && !this.sessionsWithoutFaithfulReload.has(appSessionId)) {
       this.rememberJobMonitorCatalog(appSessionId, mcpRegistration, jobMonitorCreationEnabled, false);
@@ -2609,6 +2661,12 @@ export class AcpAgentClient {
     params: Record<string, unknown>,
     id?: JsonRpcId,
   ): Promise<unknown> {
+    if (method === "elicitation/create") {
+      return await this.handleElicitationRequest(params, id);
+    }
+    if (GROK_ASK_USER_QUESTION_METHODS.has(method)) {
+      return await this.handleGrokAskUserQuestion(params, id);
+    }
     if (method !== "session/request_permission") {
       throw new Error(`Unsupported ACP request: ${method}`);
     }
@@ -2644,24 +2702,109 @@ export class AcpAgentClient {
       return cancelledPermissionOutcome();
     }
 
-    // A session waiting on the operator must stay open to hear the answer.
     const sessionId = request.params.threadId;
+    const response = await this.askOperator(sessionId, request);
+    const toolName = request.params.acpMcpToolName;
+    const allowOnce = allowOncePermissionOptionId(permissionOptions);
+    if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
+      const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
+      grants.add(toolName);
+      this.sessionMcpToolGrants.set(sessionId, grants);
+      return { outcome: { outcome: "selected", optionId: allowOnce } };
+    }
+    return permissionOutcomeFromResponse(response, permissionOptions);
+  }
+
+  /**
+   * Ask an agent's form elicitation, such as Antigravity's ask_question.
+   * A form of choices and text is asked on the questionnaire card, one
+   * question at a time; any other form is shown on the MCP elicitation card.
+   * Either way the answer goes back in ACP's shape. Only form mode is
+   * advertised, and only a session can show a card, so anything else is
+   * declined without asking.
+   */
+  private async handleElicitationRequest(
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): Promise<AcpElicitationResponse> {
+    const protocolSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+    const message = typeof params.message === "string" ? params.message.trim() : "";
+    if (params.mode !== "form" || !protocolSessionId || !message || id == null) {
+      return { action: "decline" };
+    }
+    const sessionId = this.appSessionIdFor(protocolSessionId);
+    const session = this.options.store.getSession(this.options.backendId, sessionId);
+    if (session?.approvalPolicy === "deny-all" || !this.options.onRequest) {
+      return { action: "cancel" };
+    }
+    const turnId = this.activeTurns.get(sessionId)?.turnId;
+    const questions = acpElicitationUserInput(params);
+    if (questions) {
+      const toolCallId = typeof params.toolCallId === "string" ? params.toolCallId : undefined;
+      const answers = userInputAnswers(await this.askOperator(sessionId, {
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: sessionId,
+          ...(turnId ? { turnId } : {}),
+          ...(toolCallId ? { itemId: toolCallId } : {}),
+          requestId: String(id),
+          questions: questions.questions,
+        },
+      }));
+      return answers ? { action: "accept", content: questions.content(answers) } : { action: "cancel" };
+    }
+    return acpElicitationResponse(await this.askOperator(sessionId, {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: sessionId,
+        turnId: turnId ?? null,
+        requestId: String(id),
+        serverName: this.approvalRequesterName,
+        mode: "form",
+        message,
+        // Main's own marker, so the card names the agent's question as one.
+        _meta: { [ACP_AGENT_ELICITATION_META_KEY]: true },
+        requestedSchema: acpElicitationFormSchema(params.requestedSchema),
+      },
+    } satisfies AppServerMcpElicitationRequestNotification));
+  }
+
+  /** Grok's own question request, asked on the questionnaire card. */
+  private async handleGrokAskUserQuestion(
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): Promise<GrokAskUserQuestionResponse> {
+    const input = grokAskUserQuestionInput(params);
+    if (!input || id == null || !this.options.onRequest) return { outcome: "cancelled" };
+    const sessionId = this.appSessionIdFor(input.sessionId);
+    const session = this.options.store.getSession(this.options.backendId, sessionId);
+    if (session?.approvalPolicy === "deny-all") return { outcome: "cancelled" };
+    const turnId = this.activeTurns.get(sessionId)?.turnId;
+    const answers = userInputAnswers(await this.askOperator(sessionId, {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: sessionId,
+        ...(turnId ? { turnId } : {}),
+        ...(input.toolCallId ? { itemId: input.toolCallId } : {}),
+        requestId: String(id),
+        questions: input.questions,
+      },
+    }));
+    return answers ? input.response(answers) : { outcome: "cancelled" };
+  }
+
+  /** A session waiting on the operator must stay open to hear the answer. */
+  private async askOperator(
+    sessionId: string,
+    request: AppServerPendingRequestNotification,
+  ): Promise<unknown> {
     this.pendingPermissionRequests.set(
       sessionId,
       (this.pendingPermissionRequests.get(sessionId) ?? 0) + 1,
     );
     this.touchSession(sessionId);
     try {
-      const response = await this.options.onRequest(request);
-      const toolName = request.params.acpMcpToolName;
-      const allowOnce = allowOncePermissionOptionId(permissionOptions);
-      if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
-        const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
-        grants.add(toolName);
-        this.sessionMcpToolGrants.set(sessionId, grants);
-        return { outcome: { outcome: "selected", optionId: allowOnce } };
-      }
-      return permissionOutcomeFromResponse(response, permissionOptions);
+      return await this.options.onRequest!(request);
     } finally {
       const remaining = (this.pendingPermissionRequests.get(sessionId) ?? 1) - 1;
       if (remaining > 0) this.pendingPermissionRequests.set(sessionId, remaining);
@@ -3311,12 +3454,14 @@ export class AcpAgentClient {
   private async buildMcpServers(params: {
     cwd: string;
     sessionId?: string;
+    managedReview?: boolean;
   }): Promise<AcpMcpServerRegistration> {
     const registration = await this.options.mcpServers?.({
       backendId: this.options.backendId,
       cwd: params.cwd,
       runtimeCapabilities: this.runtimeCapabilities,
       sessionId: params.sessionId,
+      ...(params.managedReview ? { managedReview: true } : {}),
     });
     return Array.isArray(registration)
       ? { servers: registration }
@@ -3441,6 +3586,7 @@ export class AcpAgentClient {
   } {
     const activeTurn = this.activeTurns.get(sessionId);
     this.activeTurns.delete(sessionId);
+    this.retireManagedReviewSession(sessionId);
     // The idle clock starts when the turn ends, not when it began.
     this.touchSession(sessionId);
     const replay = this.normalizerFor(sessionId).recordTurnFinished(
@@ -3581,8 +3727,44 @@ export class AcpAgentClient {
       backendId: this.options.backendId,
       sessionId,
       receivedAt,
-      update,
+      update: this.managedReviewRolloutUpdate(sessionId, update),
     });
+  }
+
+  private managedReviewRolloutUpdate(
+    sessionId: string,
+    update: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!this.managedReviewLedgerSessions.has(sessionId)) return update;
+    const kind = readUpdateKind(update);
+    if (kind !== "tool_call" && kind !== "tool_call_update") return update;
+
+    const id = readAcpToolCallId(update);
+    let calls = this.managedReviewLedgerToolCalls.get(sessionId);
+    const knownName = id ? calls?.get(id) : undefined;
+    const prefix = `mcp_${PWRAGENT_TOOL_NAMESPACE}_`;
+    const toolName = knownName ?? [
+      readAcpMcpToolName(update), readAcpProviderTool(update)?.name,
+      update.name, update.toolName, update.title,
+    ].flatMap((name) => typeof name === "string"
+      ? [name.startsWith(prefix) ? name.slice(prefix.length) : name]
+      : []).find(isManagedReviewLedgerToolName);
+    if (!toolName) return update;
+    if (id && !knownName) {
+      if (!calls) {
+        calls = new Map();
+        this.managedReviewLedgerToolCalls.set(sessionId, calls);
+      }
+      calls.set(id, toolName);
+    }
+    // Completion updates can carry a result without repeating the tool name.
+    // Write only transcript bookkeeping, including for future updates by ID.
+    return {
+      sessionUpdate: kind,
+      ...(id ? { toolCallId: id } : {}),
+      title: toolName,
+      status: update.status,
+    };
   }
 
   private updateSessionStatus(
@@ -4002,6 +4184,30 @@ function isThreadToolGrantResponse(
   return typeof decision === "string"
     && [ACP_THREAD_TOOL_GRANT_OPTION_ID, "accept_for_session", "allow_always"]
       .includes(decision.toLowerCase());
+}
+
+/** Grok Build sends the underscore form; t3code also accepts the bare name. */
+const GROK_ASK_USER_QUESTION_METHODS = new Set(["_x.ai/ask_user_question", "x.ai/ask_user_question"]);
+
+type AcpElicitationResponse =
+  | { action: "accept"; content: Record<string, unknown> }
+  | { action: "decline" }
+  | { action: "cancel" };
+
+/** Anything but an explicit accept or decline is a dismissal. */
+export function acpElicitationResponse(response: unknown): AcpElicitationResponse {
+  const record = asRecord(response);
+  if (record?.action === "decline") return { action: "decline" };
+  if (record?.action !== "accept") return { action: "cancel" };
+  return { action: "accept", content: asRecord(record.content) ?? {} };
+}
+
+// The card refuses anything but an object schema. An agent that sent none
+// asks for confirmation only, which is an empty form.
+function acpElicitationFormSchema(schema: unknown): AppServerMcpElicitationSchema {
+  const record = asRecord(schema);
+  if (record?.type === "object") return record as AppServerMcpElicitationSchema;
+  return { type: "object", properties: {} };
 }
 
 function cancelledPermissionOutcome(): { outcome: { outcome: "cancelled" } } {

@@ -71,6 +71,16 @@ const MERGE_METHOD_RESULTS: Record<ThreadTodoMergeMethod, string> = {
   merge: "Merged",
 };
 
+function mergedResult(mergedUrl: string, params: GithubMergeOptions): ThreadPullRequestMergeResult {
+  const verb = MERGE_METHOD_RESULTS[params.method];
+  return {
+    mergedUrl,
+    summary: /^\d+$/.test(params.pullRequest)
+      ? `${verb} #${params.pullRequest}`
+      : verb,
+  };
+}
+
 /**
  * GitHub refuses, for a token without `workflow`, any merge that changes
  * `.github/workflows/`. A retry fails the same way, so name the fix.
@@ -79,6 +89,51 @@ export function mergeScopeHint(message: string): string {
   return /without [`'"]?workflow[`'"]? scope/i.test(message)
     ? ". Run `gh auth refresh -s workflow`, then retry."
     : "";
+}
+
+/**
+ * gh appends the response body to a forge HTTP failure, so a gateway error
+ * carries the proxy's whole HTML page. Returns the status of a 5xx, which is
+ * GitHub's side and usually temporary, such as "502 Bad Gateway".
+ */
+export function ghServerErrorStatus(message: string): string | undefined {
+  // Only the line's own status counts, never one quoted in its body.
+  const match = /(?:status code:\s*|\bHTTP\s+)(\d{3})\b:?(?:\s+([A-Z][\w-]*(?: [A-Z][\w-]*)*))?/.exec(message);
+  if (!match?.[1].startsWith("5")) return undefined;
+  return match[2] ? `${match[1]} ${match[2]}` : match[1];
+}
+
+/** Drops an HTML response body gh appended to a failure line. */
+export function withoutHtmlBody(message: string): string {
+  return message.replace(/\s*body:\s*"\s*<[\s\S]*$/i, "");
+}
+
+/** The first line of a gh failure, without an HTML body, naming a 5xx as GitHub's. */
+export function ghFailureLine(detail: string): string {
+  const line = withoutHtmlBody(detail.split("\n")[0]);
+  const serverError = ghServerErrorStatus(line);
+  return serverError ? `GitHub returned ${serverError}, which is usually temporary` : line;
+}
+
+/**
+ * What a failed gh run reports. A gh killed at its time limit has no stderr,
+ * and its message starts with the whole command line, query and all.
+ */
+function ghErrorDetail(error: unknown): string {
+  const err = error as { stderr?: string; message?: string; killed?: boolean };
+  return err.stderr?.trim() || (err.killed ? "gh did not answer in time" : err.message || String(error));
+}
+
+/** How long the one state read after an unsettled merge may take. */
+const UNSETTLED_MERGE_READ_MS = 15_000;
+
+async function withinDeadline<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([promise, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms); })]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
 
@@ -323,7 +378,7 @@ export class GithubPrFetcher {
     try {
       output = await run(["pr", "merge", mergeTarget, `--${params.method}`], 60_000);
     } catch (error) {
-      const err = error as { stderr?: string; message?: string };
+      const err = error as { stderr?: string; message?: string; killed?: boolean };
       const detail = err.stderr?.trim() || err.message || String(error);
       // Refused for want of the queue: learn the repository and queue it.
       if (!queueRepository && mentionsMergeQueue(detail)) {
@@ -331,8 +386,33 @@ export class GithubPrFetcher {
         const queued = await this.mergeThroughQueue(reference, label, run, checkedBase);
         if (queued) return queued;
       }
-      const firstLine = detail.split("\n")[0];
-      throw new Error(`gh pr merge failed: ${firstLine}${mergeScopeHint(firstLine)}`);
+      const firstLine = withoutHtmlBody(detail.split("\n")[0]);
+      const serverError = ghServerErrorStatus(firstLine);
+      // A gateway error or a killed gh can follow a merge GitHub accepted,
+      // and the merge can land moments later: read what happened.
+      const unsettled = serverError
+        ? `GitHub returned ${serverError} while merging ${label}`
+        : err.killed ? `gh pr merge did not finish ${label} within 60 seconds` : undefined;
+      if (unsettled) {
+        // One read through the client PR status polls with; no other route.
+        const ref = parsePrRefFromUrl(reference.url);
+        // The client retries with backoff, so bound the read: a degraded
+        // GitHub must not hold the card after the merge already failed.
+        const state = ref
+          ? await withinDeadline(this.graphqlClient.fetchPullRequests([ref]), UNSETTLED_MERGE_READ_MS)
+            .then((prs) => prs?.[0]?.lifecycleState, (readError: unknown) => {
+              fetcherLog.warn("could not read a pull request's state after an unsettled merge", {
+                pullRequest: reference.url, error: readError instanceof Error ? readError.message : String(readError),
+              });
+              return undefined;
+            })
+          : undefined;
+        if (state === "merged") return mergedResult(reference.url, params);
+        throw new Error(state
+          ? `${unsettled}, and it had not merged when checked. Retry the merge: one that has since landed reports as already merged.`
+          : `${unsettled}, and its state could not be checked. Retry the merge: one that went through reports as already merged.`, { cause: error });
+      }
+      throw new Error(`gh pr merge failed: ${firstLine}${mergeScopeHint(firstLine)}`, { cause: error });
     }
     // `gh pr merge` adds a PR to a required queue itself, and says so rather
     // than merging: report that, not a merge.
@@ -348,13 +428,7 @@ export class GithubPrFetcher {
     if (lines.some((line) => line.endsWith(`${label} was already merged`))) {
       return { summary: `Pull request ${label} was already merged`, mergedUrl: reference.url, alreadyMerged: true };
     }
-    const verb = MERGE_METHOD_RESULTS[params.method];
-    return {
-      mergedUrl: reference.url,
-      summary: /^\d+$/.test(params.pullRequest)
-        ? `${verb} #${params.pullRequest}`
-        : verb,
-    };
+    return mergedResult(reference.url, params);
   }
 
   private async checkStackOrder(
@@ -381,8 +455,7 @@ export class GithubPrFetcher {
         if (parsed.errors?.length) throw new Error("GitHub returned partial stack history.");
         return parsed.data;
       } catch (error) {
-        const detail = (error as { stderr?: string }).stderr?.trim() || String(error);
-        throw new Error(detail.split("\n")[0], { cause: error });
+        throw new Error(ghFailureLine(ghErrorDetail(error)), { cause: error });
       }
     });
   }
@@ -404,9 +477,8 @@ export class GithubPrFetcher {
         const result = await run(["api", "graphql", ...host, "-f", `query=${query}`, ...fields]);
         return (JSON.parse(result.stdout) as { data?: unknown }).data;
       } catch (error) {
-        const err = error as { stderr?: string; message?: string };
-        const detail = (err.stderr?.trim() || err.message || String(error)).split("\n")[0];
-        throw new Error(`gh api graphql failed: ${detail}${mergeScopeHint(detail)}`);
+        const detail = ghFailureLine(ghErrorDetail(error));
+        throw new Error(`gh api graphql failed: ${detail}${mergeScopeHint(detail)}`, { cause: error });
       }
     };
     let gate;

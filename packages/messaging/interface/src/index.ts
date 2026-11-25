@@ -877,6 +877,8 @@ export type MessagingQuestionnaireQuestion = {
   question: string;
   options: MessagingChoice[];
   allowFreeform?: boolean;
+  /** Any number of options may be chosen; a choice toggles and never moves on. */
+  multiSelect?: boolean;
   secret?: boolean;
 };
 
@@ -889,7 +891,64 @@ export type MessagingQuestionnaireAnswer =
   | {
       kind: "custom";
       value: string;
+    }
+  | {
+      kind: "multi";
+      /** In the order the options are listed. */
+      optionIds: string[];
+      /** The chosen options' values, in the same order. */
+      values: string[];
+      /** The operator's own answer beside the chosen options. */
+      custom?: string;
+      /** Every chosen value and the custom answer, for display. */
+      value: string;
     };
+
+/**
+ * Choose or unchoose `optionId` on a multi-select question, keeping any
+ * custom answer. Returns undefined for an option the question does not list.
+ */
+export function toggleMessagingQuestionnaireOption(
+  question: MessagingQuestionnaireQuestion,
+  answer: MessagingQuestionnaireAnswer | null | undefined,
+  optionId: string,
+): MessagingQuestionnaireAnswer | undefined {
+  if (!question.options.some((option) => option.id === optionId)) return undefined;
+  const chosen = new Set(answer?.kind === "multi" ? answer.optionIds : []);
+  if (chosen.has(optionId)) chosen.delete(optionId);
+  else chosen.add(optionId);
+  return messagingMultiAnswer(
+    question,
+    question.options.filter((option) => chosen.has(option.id)).map((option) => option.id),
+    answer?.kind === "multi" ? answer.custom : undefined,
+  );
+}
+
+/** Set the custom answer of a multi-select question, keeping its choices. */
+export function messagingMultiAnswerWithCustom(
+  question: MessagingQuestionnaireQuestion,
+  answer: MessagingQuestionnaireAnswer | null | undefined,
+  custom: string,
+): MessagingQuestionnaireAnswer {
+  return messagingMultiAnswer(question, answer?.kind === "multi" ? answer.optionIds : [], custom);
+}
+
+function messagingMultiAnswer(
+  question: MessagingQuestionnaireQuestion,
+  optionIds: string[],
+  custom: string | undefined,
+): MessagingQuestionnaireAnswer {
+  const chosen = question.options.filter((option) => optionIds.includes(option.id));
+  const values = chosen.map((option) => typeof option.value === "string" ? option.value : option.label);
+  const trimmed = custom?.trim();
+  return {
+    kind: "multi",
+    optionIds: chosen.map((option) => option.id),
+    values,
+    ...(trimmed ? { custom: trimmed } : {}),
+    value: [...values, ...(trimmed ? [trimmed] : [])].join(", "),
+  };
+}
 
 export type MessagingQuestionnairePhase =
   | "answering"
@@ -1212,7 +1271,7 @@ export function messagingQuestionnaireActions(
     (option) => ({
       ...option,
       label:
-        answer?.kind === "option" && answer.optionId === option.id
+        messagingQuestionnaireOptionSelected(answer, option.id)
           ? `Selected: ${option.label}`
           : option.label,
     }),
@@ -1240,6 +1299,14 @@ export function messagingQuestionnaireActions(
   return actions;
 }
 
+function messagingQuestionnaireOptionSelected(
+  answer: MessagingQuestionnaireAnswer | null | undefined,
+  optionId: string,
+): boolean {
+  if (answer?.kind === "multi") return answer.optionIds.includes(optionId);
+  return answer?.kind === "option" && answer.optionId === optionId;
+}
+
 export function messagingQuestionnaireAnswerComplete(
   answer: MessagingQuestionnaireAnswer | null | undefined,
 ): boolean {
@@ -1259,6 +1326,9 @@ export function messagingQuestionnaireAnswerDisplay(
   }
   if (options.secret && answer.kind === "custom") {
     return "Secret answer provided";
+  }
+  if (answer.kind === "multi") {
+    return [...answer.values, ...(answer.custom ? [`Custom: ${answer.custom}`] : [])].join(", ");
   }
   return answer.kind === "custom" ? `Custom: ${value}` : value;
 }
@@ -1316,8 +1386,11 @@ export function formatMessagingQuestionnaireText(
   lines.push(question.question);
 
   const answer = normalized.answers[normalized.currentIndex];
+  if (question.multiSelect) {
+    lines.push("", "Choose any that apply.");
+  }
   question.options.forEach((option, index) => {
-    const selected = answer?.kind === "option" && answer.optionId === option.id;
+    const selected = messagingQuestionnaireOptionSelected(answer, option.id);
     lines.push("");
     lines.push(`${selected ? "[selected] " : ""}${index + 1}. ${option.label}`);
     if (option.description) {

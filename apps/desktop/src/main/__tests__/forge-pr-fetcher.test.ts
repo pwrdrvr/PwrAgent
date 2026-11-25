@@ -60,7 +60,7 @@ describe("forge provider registry", () => {
     await h.fetcher.fetchPullRequestByUrl({ cwd: "/fixture", url: urls[kind], onProviderFailure: failure });
     await h.fetcher.fetchAllPullRequestsForBranch({ cwd: "/fixture", branch: "feature", onProviderFailure: failure });
     await h.fetcher.getProviderAvailability(["/fixture"], Object.values(urls));
-    await h.fetcher.fetchPullRequests([ref], { reconnect: true, requestTokenTaken: true });
+    await h.fetcher.fetchPullRequests([ref], { reconnect: true });
     for (const method of Object.values(h[kind].provider)) expect(method).not.toHaveBeenCalled();
     expect(failure).not.toHaveBeenCalled();
     h.enabled.add(kind);
@@ -79,7 +79,7 @@ describe("forge provider registry", () => {
   it("partitions polling refs and forwards reconnect and paid-request semantics", async () => {
     const h = fixture();
     const refs = FORGE_KINDS.map((kind) => parseForgePrRefFromUrl(urls[kind])!);
-    const options = { reconnect: true, requestTokenTaken: true };
+    const options = { reconnect: true, gitlabPoll: { takeFirstRequestToken: () => true, defer: () => {} } };
     const results = await h.fetcher.fetchPullRequests(refs, options);
     expect(results).toEqual([h.github.pr, h.gitlab.pr]);
     for (const kind of FORGE_KINDS) {

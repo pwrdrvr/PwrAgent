@@ -339,6 +339,7 @@ describe("snapshot ordering", () => {
     authorities: [],
     resources: [],
     registerGate: { allowed: true },
+    agentTools: "enabled",
   });
 
   it("shows the newest revision whatever order reads land in, and never moves back", () => {

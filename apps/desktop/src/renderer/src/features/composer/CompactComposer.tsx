@@ -1,4 +1,3 @@
-import { CODEX_SPEED_LABELS, type CodexSpeed } from "@pwragent/shared/codex-speed";
 import { mayContainLinearPastedImages } from "@pwragent/shared/linear-paste";
 import {
   useCallback,
@@ -39,6 +38,7 @@ import {
 } from "./composer-image-files";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { useDismissableMenu } from "./ComposerDropdown";
+import { ModelSettingsPicker, type ModelSettingsPickerProps } from "./ModelSettingsPicker";
 import {
   useComposerMentions,
   type ComposerMentionSources,
@@ -59,24 +59,20 @@ export type CompactComposerAction = {
   onSelect: () => void;
 };
 
-export type CompactComposerSettingsOption = {
-  id: string;
-  label?: string;
-};
+/**
+ * The model pill on the strip: model, effort and speed, as every other
+ * composer shows them. The card portals its panel out of the card, so it
+ * is not clipped by the card's edges.
+ */
+export type CompactComposerModelSettings = Omit<ModelSettingsPickerProps, "size" | "id">;
 
 /**
  * Everything the settings chip's menu can offer beyond the host's plain
- * actions. Each section renders only when its options AND its callback are
+ * actions: Access. It renders only when its options AND its callback are
  * supplied, so a host exposes exactly what its thread can actually change.
+ * Model, effort and speed are the model pill's (`modelSettings`).
  */
 export type CompactComposerSettingsMenu = {
-  /**
-   * The host's option fetch failed. Keeps the setting rows visible so the
-   * failure is reportable in place instead of the rows silently vanishing.
-   */
-  loadFailed?: boolean;
-  /** True while the host is still fetching the option lists. */
-  loading?: boolean;
   /**
    * Called when the menu opens. Lazy on purpose: a card the operator only
    * reads must not pay for a backend describe it never shows.
@@ -91,22 +87,8 @@ export type CompactComposerSettingsMenu = {
   }>;
   /** Override display label for the Access row when a provider has named native modes (e.g. Antigravity). */
   accessLabel?: string;
-  /** The current models. Arrange them with `buildModelMenu`. */
-  models?: CompactComposerSettingsOption[];
-  /** Superseded models, listed behind an Other row in the Model view. */
-  otherModels?: CompactComposerSettingsOption[];
-  /** That row's name. Defaults to "Other". */
-  otherModelsLabel?: string;
-  reasoningEfforts?: string[];
-  supportsFastMode?: boolean;
-  speeds?: CodexSpeed[];
-  speed?: CodexSpeed;
-  onSelectSpeed?: (speed: CodexSpeed) => void;
   onSelectExecutionMode?: (mode: ThreadExecutionMode) => void;
   onSelectAccessOption?: (value: string) => void;
-  onSelectModel?: (model: string) => void;
-  onSelectReasoningEffort?: (effort: string) => void;
-  onToggleFastMode?: (enabled: boolean) => void;
 };
 
 /** A queued message the host took back so the operator can edit it. */
@@ -141,8 +123,6 @@ export type CompactComposerProps = {
   draftRestore?: CompactComposerDraftRestore;
   onDraftRestoreApplied?: (id: number) => void;
   executionMode?: ThreadExecutionMode;
-  /** Thread's current fast-mode state, shown on the chip menu's toggle. */
-  fastMode?: boolean;
   /**
    * Downloads the images in text pasted from Linear. Without it, such a
    * paste stays plain text.
@@ -162,8 +142,8 @@ export type CompactComposerProps = {
    * literal prose, so adopting this component never requires them.
    */
   mentionSources?: ComposerMentionSources;
-  /** Thread's current model, the chip's leading segment. */
-  model?: string;
+  /** The model pill, leading the strip. Without it the strip has none. */
+  modelSettings?: CompactComposerModelSettings;
   getPathForFile?: (file: File) => string;
   normalizeImageForUpload?: (
     request: ImageFallbackRequest,
@@ -192,7 +172,6 @@ export type CompactComposerProps = {
   ) => void | boolean | Promise<boolean | void>;
   pastedImageMaxPatches?: number;
   placeholder?: string;
-  reasoningEffort?: string;
   /** Rendered at the bottom of the settings chip's menu. */
   secondaryActions?: CompactComposerAction[];
   /** Setting sections for the chip menu; see the type's doc comment. */
@@ -200,13 +179,7 @@ export type CompactComposerProps = {
   threadTitle: string;
 };
 
-type SettingsMenuView =
-  | "access"
-  | "model"
-  | "otherModels"
-  | "reasoning"
-  | "speed"
-  | "root";
+type SettingsMenuView = "access" | "root";
 
 const MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS = 5;
 const MAX_COMPACT_COMPOSER_FILE_ATTACHMENTS = 20;
@@ -216,10 +189,6 @@ const MENU_VIEW_TITLES: Record<
   string
 > = {
   access: "Access",
-  model: "Model",
-  otherModels: "Other",
-  reasoning: "Reasoning",
-  speed: "Speed",
 };
 
 /**
@@ -247,12 +216,13 @@ const MENU_VIEW_TITLES: Record<
  * token minting and markdown serialization are the same modules the full
  * composer calls.
  *
- * Model / reasoning / access render as a chip on a status strip below the
- * field — a strip, not ambient text inside the field, because the field
- * scrolls at max height and anything pinned inside it ends up painting
- * over the draft. The chip doubles as the trigger for the settings menu,
- * which also absorbs the host's secondary actions; the strip stays one
- * line: chip on the left, Stop / Send pills on the right.
+ * Model and access render on a status strip below the field — a strip, not
+ * ambient text inside the field, because the field scrolls at max height
+ * and anything pinned inside it ends up painting over the draft. The model
+ * pill (`ModelSettingsPicker`, the same control as the thread composer's)
+ * leads it; the access chip doubles as the trigger for the settings menu,
+ * which also absorbs the host's secondary actions. The strip stays one
+ * line: pill and chip on the left, Stop / Send pills on the right.
  */
 export function CompactComposer(props: CompactComposerProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -346,19 +316,6 @@ export function CompactComposer(props: CompactComposerProps) {
     ? formatExecutionModeLabel(props.executionMode)
     : undefined;
   const chipSegments = [
-    props.model
-      ? { danger: false, key: "model", text: props.model }
-      : undefined,
-    props.reasoningEffort
-      ? { danger: false, key: "reasoning", text: props.reasoningEffort }
-      : undefined,
-    // Any paid tier the model offers is named, Fast as well as Ultrafast.
-    // A saved tier the model does not offer does not run, so it is not.
-    settings?.speed
-      && settings.speed !== "standard"
-      && settings.speeds?.includes(settings.speed)
-      ? { danger: false, key: "speed", text: CODEX_SPEED_LABELS[settings.speed] }
-      : undefined,
     accessLabel
       ? {
           danger: props.executionMode === "full-access",
@@ -794,36 +751,13 @@ export function CompactComposer(props: CompactComposerProps) {
     );
 
   const actions = props.secondaryActions ?? [];
-  // A section renders only when its mutation callback exists. The option
-  // lists may still be loading the first time the menu opens, and a failed
-  // load keeps the rows visible so the failure is reported in place rather
-  // than the rows silently vanishing.
-  const modelSection = Boolean(
-    settings?.onSelectModel
-      && (settings.loading
-        || settings.loadFailed
-        || (settings.models?.length ?? 0) > 0
-        || (settings.otherModels?.length ?? 0) > 0),
-  );
-  const reasoningSection = Boolean(
-    settings?.onSelectReasoningEffort
-      && (settings.loading
-        || settings.loadFailed
-        || (settings.reasoningEfforts?.length ?? 0) > 0),
-  );
-  const speedSection = Boolean(settings?.onSelectSpeed && settings.speeds?.includes("ultrafast"));
-  const fastSection = !speedSection && Boolean(
-    settings?.onToggleFastMode && settings.supportsFastMode,
-  );
+  // A section renders only when its mutation callback exists.
   const accessSection = Boolean(
     (settings?.onSelectAccessOption || settings?.onSelectExecutionMode)
       && (settings.executionModes?.length ?? 0) > 1,
   );
-  const hasSettingsRows =
-    modelSection || reasoningSection || speedSection || fastSection || accessSection;
+  const hasSettingsRows = accessSection;
   const hasMenu = hasSettingsRows || actions.length > 0;
-
-  const otherModelsTitle = settings?.otherModelsLabel ?? MENU_VIEW_TITLES.otherModels;
   const settingRow = (
     label: string,
     value: ReactNode,
@@ -872,15 +806,11 @@ export function CompactComposer(props: CompactComposerProps) {
     </button>
   );
 
-  const submenu = (
-    title: string,
-    rows: ReactNode,
-    back: SettingsMenuView = "root",
-  ) => (
+  const submenu = (title: string, rows: ReactNode) => (
     <>
       <button
         className="compact-composer__menu-item compact-composer__menu-item--back"
-        onClick={() => setMenuView(back)}
+        onClick={() => setMenuView("root")}
         role="menuitem"
         type="button"
       >
@@ -898,83 +828,9 @@ export function CompactComposer(props: CompactComposerProps) {
     </>
   );
 
-  // A disabled menuitem, not a bare div: `role="menu"` only admits menu
-  // children, and this notice has to be announced too.
-  const emptySubmenuNotice = (
-    <div
-      aria-disabled="true"
-      className="compact-composer__menu-empty"
-      role="menuitem"
-    >
-      {settings?.loading
-        ? "Loading options…"
-        : settings?.loadFailed
-          ? "Couldn't load options."
-          : "No options available."}
-    </div>
-  );
-
   // Built only while the menu is open: this component re-renders per
   // keystroke, and a closed menu must not cost an element tree per key.
   const menuBody = (): ReactNode => {
-    const modelRows = (options: CompactComposerSettingsOption[]) =>
-      options.map((option) =>
-        optionRow({
-          checked: option.id === props.model,
-          key: option.id,
-          label: option.label ?? option.id,
-          onSelect: () => settings?.onSelectModel?.(option.id),
-        }),
-      );
-    if (menuView === "model") {
-      const options = settings?.models ?? [];
-      const otherModels = settings?.otherModels ?? [];
-      return submenu(
-        MENU_VIEW_TITLES.model,
-        options.length || otherModels.length ? (
-          <>
-            {modelRows(options)}
-            {otherModels.length
-              ? settingRow(otherModelsTitle, null, "otherModels")
-              : null}
-          </>
-        ) : emptySubmenuNotice,
-      );
-    }
-    if (menuView === "otherModels") {
-      return submenu(
-        otherModelsTitle,
-        modelRows(settings?.otherModels ?? []),
-        "model",
-      );
-    }
-    if (menuView === "reasoning") {
-      const efforts = settings?.reasoningEfforts ?? [];
-      return submenu(
-        MENU_VIEW_TITLES.reasoning,
-        efforts.length
-          ? efforts.map((effort) =>
-              optionRow({
-                checked: effort === props.reasoningEffort,
-                key: effort,
-                label: effort,
-                onSelect: () => settings?.onSelectReasoningEffort?.(effort),
-              }),
-            )
-          : emptySubmenuNotice,
-      );
-    }
-    if (menuView === "speed") {
-      return submenu(
-        MENU_VIEW_TITLES.speed,
-        (settings?.speeds ?? []).map((speed) => optionRow({
-          checked: speed === settings?.speed,
-          key: speed,
-          label: CODEX_SPEED_LABELS[speed],
-          onSelect: () => settings?.onSelectSpeed?.(speed),
-        })),
-      );
-    }
     if (menuView === "access") {
       const modes = settings?.executionModes ?? [];
       return submenu(
@@ -998,52 +854,6 @@ export function CompactComposer(props: CompactComposerProps) {
     }
     return (
       <>
-        {modelSection
-          ? settingRow(
-              "Model",
-              <span className="compact-composer__menu-value">
-                {props.model}
-              </span>,
-              "model",
-            )
-          : null}
-        {reasoningSection
-          ? settingRow(
-              "Reasoning",
-              <span className="compact-composer__menu-value">
-                {props.reasoningEffort}
-              </span>,
-              "reasoning",
-            )
-          : null}
-        {speedSection ? settingRow(
-          "Speed",
-          <span className="compact-composer__menu-value">
-            {CODEX_SPEED_LABELS[settings?.speed ?? "standard"]}
-          </span>,
-          "speed",
-        ) : null}
-        {fastSection ? (
-          <button
-            aria-checked={Boolean(props.fastMode)}
-            className="compact-composer__menu-item"
-            onClick={() => settings?.onToggleFastMode?.(!props.fastMode)}
-            role="menuitemcheckbox"
-            type="button"
-          >
-            <span className="compact-composer__menu-label">Fast mode</span>
-            <span
-              aria-hidden="true"
-              className={
-                props.fastMode
-                  ? "compact-composer__menu-toggle is-checked"
-                  : "compact-composer__menu-toggle"
-              }
-            >
-              <span className="compact-composer__menu-toggle-thumb" />
-            </span>
-          </button>
-        ) : null}
         {accessSection
           ? settingRow(
               "Access",
@@ -1104,8 +914,8 @@ export function CompactComposer(props: CompactComposerProps) {
         ))}
       </>
     ) : (
-      // A thread with no model info still needs a door to the menu; the
-      // bare glyph is the old kebab's, on the chip's own geometry.
+      // A thread with no access readout still needs a door to the menu;
+      // the bare glyph is the old kebab's, on the chip's own geometry.
       <span aria-hidden="true">⋯</span>
     );
 
@@ -1207,6 +1017,26 @@ export function CompactComposer(props: CompactComposerProps) {
       ) : null}
 
       <div className="compact-composer__strip">
+        {props.modelSettings ? (
+          <div
+            className="compact-composer__model"
+            // The pill's panel portals out of the card's DOM but not out of
+            // its React tree. On the Star Map the card's ancestors handle
+            // pointerdown (canvas pan, marquee) and keydown (Escape drops
+            // the selection), and the panel sits outside every container
+            // `shouldStartCanvasPan` tests for, so a drag on the effort bar
+            // would pan the map under it. Input from the panel stops here;
+            // the pill's own input still reaches the card, which raises it.
+            onKeyDown={(event) => {
+              if (!event.currentTarget.contains(event.target as Node)) event.stopPropagation();
+            }}
+            onPointerDown={(event) => {
+              if (!event.currentTarget.contains(event.target as Node)) event.stopPropagation();
+            }}
+          >
+            <ModelSettingsPicker {...props.modelSettings} size="card" />
+          </div>
+        ) : null}
         {hasMenu ? (
           <div className="compact-composer__menu" ref={menuRef}>
             <button
@@ -1235,9 +1065,7 @@ export function CompactComposer(props: CompactComposerProps) {
                 aria-label={
                   menuView === "root"
                     ? "Thread settings"
-                    : menuView === "otherModels"
-                      ? otherModelsTitle
-                      : MENU_VIEW_TITLES[menuView]
+                    : MENU_VIEW_TITLES[menuView]
                 }
                 className="compact-composer__menu-list"
                 role="menu"

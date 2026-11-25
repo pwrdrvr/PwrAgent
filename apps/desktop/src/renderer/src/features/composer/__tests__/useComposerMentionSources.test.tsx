@@ -128,24 +128,60 @@ describe("bounded composer mention sources", () => {
     expect(getNavigationQueryPage).toHaveBeenCalledTimes(6);
   });
 
-  it("clears the previous owner's rows while the next owner is pending or unavailable", async () => {
+  it("clears stale suggestions when the directory owner changes", async () => {
     let rejectRemote!: (error: Error) => void;
+    let resolveThreads!: () => void;
+    let switchedOwner = false;
     const desktopApi: DesktopApi = {
       getNavigationQueryPage: (request) => request.federationTarget?.scope === "remote"
         ? new Promise((_resolve, reject) => { rejectRemote = reject; })
-        : Promise.resolve(ownerPage(request)),
+        : switchedOwner
+          ? new Promise((resolve) => { resolveThreads = () => resolve(ownerPage(request)); })
+          : Promise.resolve(ownerPage(request)),
     };
     const { result, rerender } = renderHook(({ federationTarget }: { federationTarget?: FederationTarget }) =>
       useComposerMentionSources({ desktopApi, federationTarget }), { initialProps: {} });
     act(() => result.current.ensureLoaded("microapps"));
-    await waitFor(() => expect(result.current.directories).toHaveLength(1));
+    await waitFor(() => expect(result.current.settledQuery).toBe("microapps"));
+    switchedOwner = true;
     rerender({ federationTarget: { scope: "remote", instanceId: "offline-peer" } });
     expect(result.current.directories).toEqual([]);
     expect(result.current.threads).toEqual([]);
     expect(result.current.settledQuery).toBeUndefined();
-    await act(async () => rejectRemote(new Error("Peer disconnected")));
+    await act(async () => {
+      rejectRemote(new Error("Peer disconnected"));
+      resolveThreads();
+    });
     expect(result.current.directories).toEqual([]);
-    expect(result.current.threads).toEqual([]);
+    expect(result.current.threads.map((row) => row.id)).toEqual(["local"]);
+  });
+
+  it.each(["threads first", "directory failure first"])("keeps local thread suggestions with an offline directory owner (%s)", async (order) => {
+    let rejectDirectories!: (error: Error) => void;
+    let resolveThreads!: () => void;
+    const desktopApi: DesktopApi = {
+      getNavigationQueryPage: (request) => request.query.kind === "directory-index"
+        ? new Promise((_resolve, reject) => { rejectDirectories = reject; })
+        : new Promise((resolve) => { resolveThreads = () => resolve(ownerPage(request)); }),
+    };
+    const { result } = renderHook(() => useComposerMentionSources({
+      desktopApi, federationTarget: { scope: "remote", instanceId: "offline-peer" },
+    }));
+    act(() => result.current.ensureLoaded("microapps"));
+    const failDirectories = () => rejectDirectories(new Error("Peer disconnected"));
+    if (order === "threads first") {
+      await act(async () => resolveThreads());
+      expect(result.current.threads.map((row) => row.id)).toEqual(["local"]);
+      await act(async () => failDirectories());
+    } else {
+      await act(async () => failDirectories());
+      expect(result.current.loading).toBe(true);
+      await act(async () => resolveThreads());
+    }
+    expect(result.current.threads.map((row) => row.id)).toEqual(["local"]);
+    expect(result.current.directories).toEqual([]);
+    expect(result.current.settledQuery).toBe("microapps");
+    expect(result.current.loading).toBe(false);
   });
 
   it("ignores a late response from an owner after switching away", async () => {
@@ -187,6 +223,31 @@ describe("bounded composer mention sources", () => {
     } finally {
       delete (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget;
     }
+  });
+
+  it("publishes @ directory candidates as soon as directory-index resolves, even while the thread query is pending or fails", async () => {
+    let rejectThreads!: (error: Error) => void;
+    const logRendererDiagnostic = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = {
+      logRendererDiagnostic,
+      getNavigationQueryPage: (request) => request.query.kind === "directory-index"
+        ? Promise.resolve(ownerPage(request))
+        : new Promise((_resolve, reject) => { rejectThreads = reject; }),
+    };
+    const { result } = renderHook(() => useComposerMentionSources({ desktopApi }));
+    act(() => result.current.ensureLoaded("microapps"));
+    // @ project references must appear immediately without waiting for the # thread query.
+    await waitFor(() => expect(result.current.directories.map((row) => row.path)).toEqual(["/local/microapps"]));
+    expect(result.current.ownerRankedDirectoryQuery).toBe("microapps");
+
+    await act(async () => rejectThreads(new Error("Navigation admission deadline expired.")));
+    // A failed thread search must not erase already-resolved @ directories, and must log a diagnostic warning.
+    expect(result.current.directories.map((row) => row.path)).toEqual(["/local/microapps"]);
+    expect(result.current.loading).toBe(false);
+    expect(logRendererDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      message: "composer mention navigation query failed",
+    }));
   });
 
 });

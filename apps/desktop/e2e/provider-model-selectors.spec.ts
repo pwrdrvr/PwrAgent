@@ -100,16 +100,18 @@ test("OpenAI new-thread selector uses concrete model and reasoning defaults", as
     await expect(app.window.getByRole("heading", { level: 2, name: "New thread" })).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
-    const providerSelect = settings.getByLabel(/^Provider(?::|$)/);
-    const modelSelect = settings.getByLabel(/^Model(?::|$)/, { exact: true });
-    const reasoningSelect = settings.getByLabel(/^Reasoning(?::|$)/, { exact: true });
-    await expect(providerSelect).toHaveAttribute("data-value", "codex");
-    await expect(modelSelect).toHaveAttribute("data-value", "gpt-5.5");
-    await expect(reasoningSelect).toHaveAttribute("data-value", "medium");
-    await expect(settings.getByRole("option", { name: /^Default$/ })).toHaveCount(0);
-    await assertTangerineFocusRing(providerSelect);
-    await assertTangerineFocusRing(modelSelect);
-    await assertTangerineFocusRing(reasoningSelect);
+    // Provider, model and effort are one pill; its data attributes carry each.
+    const modelSettings = settings.getByTestId("composer-model-settings");
+    await expect(modelSettings).toHaveAttribute("data-provider", "codex");
+    await expect(modelSettings).toHaveAttribute("data-model", "gpt-5.5");
+    await expect(modelSettings).toHaveAttribute("data-effort", "medium");
+    await assertTangerineFocusRing(modelSettings);
+    await modelSettings.click();
+    const panel = app.window.getByRole("dialog", { name: "Model settings" });
+    await expect(panel.getByRole("slider", { name: "Effort" })).toHaveAttribute("aria-valuetext", "medium");
+    // A concrete default: no separate "Default" effort chip for Codex.
+    await expect(panel.getByRole("button", { name: /^Default$/ })).toHaveCount(0);
+    await app.window.keyboard.press("Escape");
   } finally {
     await app.close();
     await fixture.cleanup();
@@ -140,12 +142,11 @@ test("OpenAI new-thread launchpad wins when sticky ACP Grok defaults are unavail
     await expect(app.window.getByText("OpenAI", { exact: true }).first()).toBeVisible();
 
     const settings = app.window.getByLabel("New thread settings");
-    const providerSelect = settings.getByLabel(/^Provider(?::|$)/);
-    const modelSelect = settings.getByLabel(/^Model(?::|$)/, { exact: true });
+    const modelSettings = settings.getByTestId("composer-model-settings");
     const prompt = app.window.getByRole("textbox", { name: "New thread" });
 
-    await expect(providerSelect).toHaveAttribute("data-value", "codex");
-    await expect(modelSelect).toHaveAttribute("data-value", "gpt-5.5");
+    await expect(modelSettings).toHaveAttribute("data-provider", "codex");
+    await expect(modelSettings).toHaveAttribute("data-model", "gpt-5.5");
     await expect(
       app.window.getByText(
         "This backend is unavailable right now. Your draft stays here until send is available again."

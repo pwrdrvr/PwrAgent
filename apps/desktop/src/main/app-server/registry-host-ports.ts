@@ -198,8 +198,13 @@ export interface RegistryHostPorts {
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
+    managedReview?: boolean;
     requiredAntigravityMode?: string;
-  }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }>;
+  }): Promise<{
+    threadId: string;
+    executionMode: ThreadExecutionMode;
+    managedReviewLedgerAvailable?: boolean;
+  }>;
   startAcpTurn(params: {
     backend: AcpBackendId;
     threadId: string;
@@ -207,6 +212,7 @@ export interface RegistryHostPorts {
     model?: string;
     reasoningEffort?: string;
     requiredAntigravityMode?: string;
+    managedReviewLedger?: true;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
   /** A missing or local instance id resolves to the local owner. */
   ownerRelativeInstanceId(instanceId: string | undefined): string | undefined;

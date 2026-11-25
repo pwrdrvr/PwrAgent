@@ -179,6 +179,16 @@ separate poll or repository scan for merge offers.
   project's offers gets none of them. Turning offers off, like pausing,
   leaves an already-open card in place; it is not re-evaluated until offers
   come back on.
+- **Never-merge projects.** A contribution fork sends its pull requests
+  upstream and never merges them itself, so Forge Automation's **Never merge
+  this project's pull requests** (`neverMerge`) keeps Review offers and drops
+  everything that suggests a merge. The coordinator raises no merge offer,
+  and every evaluation withdraws an open one with the result "Withdrawn: this
+  project never merges its pull requests". `mergeOfferRefusal` refuses an
+  agent's merge card, readiness guidance tells the agent not to merge, and
+  `merge_pull_request` is refused before any forge call. The PR card and the
+  chip menu offer no merge, and the owner refuses a card merge. Pausing does
+  not change it.
 - **Git.** Git runs only when CI is green, or to withdraw an open offer: a
   review offer, or a merge offer for the current head. Reviews are read newest first, and the first one covering the head
   ends the reads. It runs in the thread's own checkout, through the shared
