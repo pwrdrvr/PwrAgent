@@ -539,6 +539,12 @@ export class GithubPrToolClient {
             isAlreadyRequested: (error) => error instanceof ForgeReadError && error.code === "conflict",
             // Polls share the forge budget: the agent can watch the PR past this.
             signal: ctx.signal, deadlineMs: 20_000,
+          }).catch((error: unknown) => {
+            // A conflict that is no merge in progress: the head moved past expectedHeadSha.
+            if (error instanceof ForgeReadError && error.code === "conflict") {
+              throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
+            }
+            throw error;
           });
           if (outcome.status === "merged") {
             const above = githubStackLayersAboveNote(args.number!, stack);

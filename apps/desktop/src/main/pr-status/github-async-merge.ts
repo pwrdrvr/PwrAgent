@@ -12,6 +12,17 @@ import { ForgeReadError } from "./forge-tool-contract";
 /** GitHub's refusal of a direct merge of a stacked pull request. */
 export const GITHUB_ASYNC_MERGE_REQUIRED = /part of a stack and must be merged using the asynchronous merge/i;
 
+/**
+ * A conflict over the head rather than a merge already running: the `sha`
+ * sent is no longer the pull request's head. It is no merge in progress.
+ */
+const HEAD_MOVED = /head branch was modified|head sha|sha .*(?:does not|did not|doesn't|didn't) match/i;
+
+function errorText(error: unknown): string {
+  const failure = error as { stderr?: unknown; message?: unknown } | null;
+  return [failure?.stderr, failure?.message].filter((part) => typeof part === "string").join("\n") || String(error);
+}
+
 export type GithubAsyncMergeRequest = (
   method: "GET" | "PUT",
   route: string,
@@ -62,7 +73,7 @@ export async function runGithubAsyncMerge(input: {
   try {
     current = reading(await input.request("PUT", route, { merge_method: input.method, ...(input.sha ? { sha: input.sha } : {}) }));
   } catch (error) {
-    if (input.isAlreadyRequested(error)) return { status: "pending", alreadyRequested: true };
+    if (input.isAlreadyRequested(error) && !HEAD_MOVED.test(errorText(error))) return { status: "pending", alreadyRequested: true };
     throw error;
   }
   const uuid = current.details?.uuid;

@@ -14,7 +14,9 @@ import { getMainLogger } from "../log";
  * (`PrSummary.githubStack`), but not the other members. Their list costs one
  * `GET /stacks/{number}`, made only when it can have changed: a stack seen for
  * the first time, a new size, a member that merged, closed or was retargeted
- * since the last read, or a merge that read the stack anyway. In memory only:
+ * since the last read, or a merge that read the stack anyway. A stack with
+ * open layers is also read again every ten minutes, since a layer no thread
+ * polls can change without any of these. In memory only:
  * the next poll after a restart learns it again.
  */
 
@@ -46,6 +48,13 @@ export function githubForgeStackRepository(repository: Pick<ForgeRepository, "ho
 const MAX_STACKS = 256;
 /** Least time between two reads of one stack's members that the poll asks for. */
 const MIN_READ_INTERVAL_MS = 60_000;
+/**
+ * Longest a stack with open layers goes unread. A layer no thread polls can
+ * merge or close without any polled PR changing (GitHub keeps the size, and
+ * retargets only the layer just above it), so the list is read again this
+ * often: at most 144 reads a day per open stack.
+ */
+const REFRESH_OPEN_STACK_MS = 10 * 60_000;
 
 const stacks = new Map<string, GithubForgeStack>();
 
@@ -158,10 +167,13 @@ export class GithubForgeStackDiscovery {
       if (!place || !pr.org || !pr.repo) continue;
       const repository: ForgeRepository = { provider: "github", host: pr.provider, owner: pr.org, repo: pr.repo };
       const key = stackKey(githubForgeStackRepository(repository), place.number);
-      const reason = githubForgeStackReadReason(pr, stacks.get(key));
-      if (!reason || this.inFlight.has(key)) continue;
+      const known = stacks.get(key);
       const now = (this.options.now ?? Date.now)();
-      if (now - (this.lastRead.get(key) ?? -Infinity) < MIN_READ_INTERVAL_MS) continue;
+      const since = now - (this.lastRead.get(key) ?? -Infinity);
+      const reason = githubForgeStackReadReason(pr, known)
+        ?? (known?.layers.some((layer) => layer.open) && since >= REFRESH_OPEN_STACK_MS ? "open layers unread" : undefined);
+      if (!reason || this.inFlight.has(key)) continue;
+      if (since < MIN_READ_INTERVAL_MS) continue;
       this.lastRead.set(key, now);
       if (this.lastRead.size > MAX_STACKS) this.lastRead.delete(this.lastRead.keys().next().value!);
       this.inFlight.add(key);

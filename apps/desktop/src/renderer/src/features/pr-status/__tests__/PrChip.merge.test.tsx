@@ -218,6 +218,23 @@ describe("PrChip sidebar card merge", () => {
     expect(within(card).getByText("Add #11 to the merge queue for main?")).toBeInTheDocument();
     expect(within(card).queryByLabelText("Merge options")).toBeNull();
   });
+
+  it("says a queued GitHub stack merge lands the open layers below, and sends that choice", async () => {
+    const { merge } = renderChip(
+      pr({ baseRefName: "layer-10", mergeQueue: { kind: "merge_queue", state: "not_queued" } }),
+      api(), THREAD, stackedThread(),
+    );
+    const card = await openCard();
+    fireEvent.click(within(card).getByText("Add 3 PRs to merge queue"));
+    expect(within(card).getByText("Add 3 PRs from its GitHub stack to the merge queue for main?")).toBeInTheDocument();
+    expect(within(card).getByText(
+      "#9 and #10 below #11 in its GitHub stack are still open. GitHub merges them first, then #11.",
+    )).toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(within(card).getByText("Add 3 PRs to queue"));
+    });
+    expect(merge).toHaveBeenCalledWith(expect.objectContaining({ mergeOpenLayersBelow: [9, 10] }));
+  });
 });
 
 describe("PrChip card merge on a peer's thread", () => {

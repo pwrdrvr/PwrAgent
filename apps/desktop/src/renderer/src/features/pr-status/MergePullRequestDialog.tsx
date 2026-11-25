@@ -46,14 +46,18 @@ export function MergePullRequestDialog(props: {
     initialFocus: cancelRef,
     ...(props.returnFocus === undefined ? {} : { returnFocus: props.returnFocus }),
   });
-  const stackPlan = offer.kind === "merge" ? pullRequestStackMergePlan(props.stack, props.thread) : undefined;
+  // GitHub's asynchronous merge lands the open layers below, queued or not.
+  const stackPlan = offer.kind === "merge" || offer.kind === "queue"
+    ? pullRequestStackMergePlan(props.stack, props.thread)
+    : undefined;
   const method = offer.kind === "merge" && stackPlan?.kind !== "merge_below_first"
     ? picked && offer.methods.includes(picked) ? picked : offer.method
     : undefined;
+  const queueable = offer.kind === "queue" && stackPlan?.kind !== "merge_below_first";
   const question = offer.kind === "queue"
-    ? pullRequestMergeQuestion(pr, { queue: offer.noun })
+    ? pullRequestMergeQuestion(pr, { queue: offer.noun }, stackPlan)
     : method ? pullRequestMergeQuestion(pr, { method }, stackPlan) : `Merge #${pr.number}?`;
-  const runnable = offer.kind === "queue" || method !== undefined;
+  const runnable = queueable || method !== undefined;
   const warning = runnable ? pullRequestMergeCheckWarning(pr) : undefined;
   const merge = (): void => {
     if (running) return;
@@ -141,7 +145,8 @@ export function MergePullRequestDialog(props: {
               aria-disabled={running}
               onClick={merge}
             >
-              {offer.kind === "queue" ? "Add to queue"
+              {offer.kind === "queue"
+                ? stackPlan?.kind === "with_layers_below" ? `Add ${stackPlan.count} PRs to queue` : "Add to queue"
                 : stackPlan?.kind === "with_layers_below" ? pullRequestMergeButtonLabel(method!, stackPlan)
                 : THREAD_TODO_MERGE_METHOD_LABELS[method!].verb}
             </button>

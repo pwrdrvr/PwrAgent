@@ -130,6 +130,11 @@ export async function mergeThreadPullRequest(
     throw new Error(`${neverMergeProject} never merges its pull requests. Change it from the project menu: Forge Automation.`);
   }
   deps.assertNotHeld(thread, attached);
+  // GitHub lands the chosen layers below with this one, so a wait that holds
+  // any of them holds this merge too.
+  for (const layer of layersBelow ?? []) {
+    deps.assertNotHeld(thread, `https://${reference.provider}/${reference.org}/${reference.repo}/pull/${layer}`);
+  }
   // Remembered before the merge runs, as a to-do card's pick is: it is the
   // operator's preference whether or not this merge succeeds.
   if (rememberMethod === true) {

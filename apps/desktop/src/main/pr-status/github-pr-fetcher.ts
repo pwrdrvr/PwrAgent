@@ -404,6 +404,8 @@ export class GithubPrFetcher {
       if (GITHUB_ASYNC_MERGE_REQUIRED.test(detail)) {
         const get = this.githubGet(reference, run);
         const pull = await get(`/pulls/${reference.number}`) as GithubStackPull;
+        // The order check passed at one base; a stack GitHub formed since may have retargeted it.
+        if (checkedBase !== undefined) assertStackMergeBaseUnchanged(checkedBase, pull?.base?.ref);
         // Learned from the refusal: read the whole stack, so the decision and
         // the result account for every pull request in it.
         const stack = await assertGithubNativeStackMergeAllowed(reference.number, pull, get, undefined, {

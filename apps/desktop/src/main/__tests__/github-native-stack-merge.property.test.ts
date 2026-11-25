@@ -123,6 +123,20 @@ describe("GitHub's asynchronous merge", () => {
       isAlreadyRequested: (error) => error === conflict,
     })).resolves.toEqual({ status: "pending", alreadyRequested: true });
   });
+
+  it("refuses a conflict over a moved head instead of calling it a merge in progress", async () => {
+    for (const message of [
+      "gh: Head branch was modified. Review and try the merge again. (HTTP 409)",
+      "GitHub returned HTTP 409: head sha didn't match current head ref",
+    ]) {
+      const conflict = Object.assign(new Error("exit status 1"), { stderr: message });
+      await expect(runGithubAsyncMerge({
+        number: 7, method: "squash", sha: "a".repeat(40),
+        request: async () => { throw conflict; },
+        isAlreadyRequested: () => true,
+      })).rejects.toBe(conflict);
+    }
+  });
 });
 
 describe("a card merge of a stacked pull request", () => {

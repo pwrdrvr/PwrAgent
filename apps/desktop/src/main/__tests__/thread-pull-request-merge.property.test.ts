@@ -142,6 +142,26 @@ describe("mergeThreadPullRequest (property)", () => {
     ));
   });
 
+  it("holds a stack merge while a wait holds any layer below it that GitHub would land too", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.uniqueArray(fc.integer({ min: 1, max: 3 }), { minLength: 1, maxLength: 3 }),
+      fc.option(fc.integer({ min: 1, max: 3 }), { nil: undefined }),
+      async (below, heldLayer) => {
+        const url = githubUrl({ repo: REPOS[0], number: 4 });
+        const held = new Set(heldLayer === undefined ? [] : [githubUrl({ repo: REPOS[0], number: heldLayer })]);
+        const { deps, merge } = harness([url], held);
+        const request = { ...THREAD, url, method: "squash", mergeOpenLayersBelow: below };
+        if (heldLayer !== undefined && below.includes(heldLayer)) {
+          await expect(mergeThreadPullRequest(deps, request)).rejects.toThrow("Merge held");
+          expect(merge).not.toHaveBeenCalled();
+        } else {
+          await mergeThreadPullRequest(deps, request);
+          expect(merge).toHaveBeenCalledOnce();
+        }
+      },
+    ));
+  });
+
   it("reads the remembered pick and the Settings default", async () => {
     const { deps } = harness([], new Set());
     await expect(readThreadPullRequestMerge(deps, THREAD)).resolves.toEqual({ remembered: "rebase", fallback: "squash" });

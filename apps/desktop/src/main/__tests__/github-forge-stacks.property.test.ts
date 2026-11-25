@@ -145,6 +145,39 @@ describe("when a poll reads a stack's members", () => {
     expect(reads).toHaveLength(2);
   });
 
+  it("reads an open stack again after ten minutes, when a layer no thread polls changed", async () => {
+    let now = 0;
+    // GitHub's answer: #100 below is open, then merges with nothing polled noticing.
+    let lowerMerged = false;
+    const reads: number[] = [];
+    const discovery = new GithubForgeStackDiscovery({
+      read: async () => {
+        reads.push(now);
+        return body([
+          { state: "open", merged: lowerMerged, retargeted: false },
+          { state: "open", merged: false, retargeted: false },
+        ]);
+      },
+      learned: () => {},
+      now: () => now,
+    });
+    // Only #101, the upper layer, is polled; its own view never changes.
+    const poll = [summary(101, { number: 4402, position: 2, size: 2 }, { baseRefName: "layer-1" })];
+    const settle = async () => await new Promise((resolve) => setImmediate(resolve));
+    discovery.observe(poll);
+    await settle();
+    lowerMerged = true;
+    for (now = 60_000; now < 600_000; now += 60_000) discovery.observe(poll);
+    await settle();
+    expect(reads).toEqual([0]);
+    expect(readGithubForgeStack(KEY, 4402)?.layers[0]).toMatchObject({ number: 100, open: true });
+    now = 600_000;
+    discovery.observe(poll);
+    await settle();
+    expect(reads).toEqual([0, 600_000]);
+    expect(readGithubForgeStack(KEY, 4402)?.layers[0]).toMatchObject({ number: 100, open: false, merged: true });
+  });
+
   it("keeps what it knew when a read fails", async () => {
     recordGithubForgeStack(known());
     const discovery = new GithubForgeStackDiscovery({

@@ -30,6 +30,10 @@ export function pullRequestMergeQuestion(
 ): string {
   const into = pr.baseRefName ? ` into ${pr.baseRefName}` : "";
   if ("queue" in action) {
+    if (stack?.kind === "with_layers_below") {
+      const branch = stack.trunk ?? pr.baseRefName;
+      return `Add ${stack.count} PRs from its GitHub stack to the ${action.queue}${branch ? ` for ${branch}` : ""}?`;
+    }
     return `Add #${pr.number} to the ${action.queue}${pr.baseRefName ? ` for ${pr.baseRefName}` : ""}?`;
   }
   if (stack?.kind === "with_layers_below") {
@@ -87,7 +91,10 @@ export function PrCardMergeControl(props: {
 }) {
   const { pr, service, onLayoutChange } = props;
   const offer = usePullRequestMergeOffer(pr, props.thread, service);
-  const stackPlan = offer.kind === "merge" ? pullRequestStackMergePlan(props.stack, props.thread) : undefined;
+  // GitHub's asynchronous merge lands the open layers below, queued or not.
+  const stackPlan = offer.kind === "merge" || offer.kind === "queue"
+    ? pullRequestStackMergePlan(props.stack, props.thread)
+    : undefined;
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const mounted = useRef(true);
   useEffect(() => () => { mounted.current = false; }, []);
@@ -114,7 +121,7 @@ export function PrCardMergeControl(props: {
 
   if (phase.kind === "confirm" && (offer.kind === "merge" || offer.kind === "queue")) {
     const warning = pullRequestMergeCheckWarning(pr);
-    const plan = offer.kind === "merge" ? stackPlan : undefined;
+    const plan = stackPlan;
     return (
       <div className="pr-status-card__confirm" aria-hidden="true">
         <span className="pr-status-card__confirm-question">
@@ -138,7 +145,7 @@ export function PrCardMergeControl(props: {
             onClick={() => run(phase.method, phase.remember)}
           >
             {offer.kind === "queue" ? <MergeQueueIcon size={12} /> : <MergeIcon size={12} />}
-            {offer.kind === "queue" ? "Add to queue"
+            {offer.kind === "queue" ? plan?.kind === "with_layers_below" ? `Add ${plan.count} PRs to queue` : "Add to queue"
               : plan?.kind === "with_layers_below" ? pullRequestMergeButtonLabel(phase.method, plan)
               : THREAD_TODO_MERGE_METHOD_LABELS[phase.method].verb}
           </button>
@@ -184,7 +191,8 @@ export function PrCardMergeControl(props: {
         onClick={() => setPhase({ kind: "confirm", method: "squash", remember: false })}
       >
         <MergeQueueIcon size={12} />
-        {offer.again ? `Add to ${noun} again` : `Add to ${noun}`}
+        {offer.again ? `Add to ${noun} again`
+          : stackPlan?.kind === "with_layers_below" ? `Add ${stackPlan.count} PRs to ${noun}` : `Add to ${noun}`}
       </button>
     );
   } else if (offer.kind === "merge" && offer.methods.length === 1) {
