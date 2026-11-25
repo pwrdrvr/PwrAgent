@@ -10,6 +10,16 @@ import { formatFederationPeerDisplayLabelParts, type FederationTarget } from "@p
 import { UsageTimeline, type UsageChartForecast, type UsageChartMember } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
 import { UsageAccountTokenTrend } from "./UsageAccountTokenTrend";
+import { UsageOverviewBand } from "./UsageOverviewBand";
+import {
+  cycleTriStateFilter,
+  hasTriStateFilter,
+  matchesTriStateFilter,
+  overviewRowModelKey,
+  overviewRowProviderLabel,
+  removeTriStateFilterKey,
+  type TriStateFilter,
+} from "./usage-activity-overview";
 import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,
   type AnalysisModelChoice, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
@@ -124,14 +134,17 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   // replaced; the first read waits for it.
   const [peersReady, setPeersReady] = useState(() => !desktopApi?.readFederationActivity);
   const [disabled, setDisabled] = useState<Set<string>>(() => new Set());
-  const [preset, setPreset] = useState<Preset>("reset");
+  const [preset, setPreset] = useState<Preset>("week");
   const [lens, setLens] = useState<"threads" | "excluded">("threads");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("cost");
   const [bucket, setBucket] = useState<number>();
   const [dimension, setDimension] = useState<UsageDimension>("thread");
-  // One model, provider or instance the thread list is narrowed to.
+  // One model, provider or instance the thread list is narrowed to from Spend by.
   const [facet, setFacet] = useState<string>();
+  // Tri-state multi-select filters from the Overview band (unfiltered → include → exclude → unfiltered).
+  const [providerFilters, setProviderFilters] = useState<TriStateFilter>({});
+  const [modelFilters, setModelFilters] = useState<TriStateFilter>({});
   const [from, setFrom] = useState(() => { const day = new Date(); day.setHours(0, 0, 0, 0); return localDate(day); });
   const [to, setTo] = useState(() => localDate(new Date()));
   const [snapshot, setSnapshot] = useState<Snapshot>();
@@ -226,6 +239,14 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   const summary = useMemo(() => snapshot && allSummary && accountFilter
     ? summarizeUsageActivity(allSummary.rows.filter((row) => usageAccountKey(row) === accountFilter), snapshot.from, snapshot.to)
     : allSummary, [snapshot, allSummary, accountFilter]);
+  // Overview filters scope everything below the Overview except account
+  // limits, which a provider or model cannot split.
+  const hasOverviewFilters = hasTriStateFilter(providerFilters) || hasTriStateFilter(modelFilters);
+  const scopedSummary = useMemo(() => snapshot && summary && hasOverviewFilters
+    ? summarizeUsageActivity(summary.groups.flatMap((group) => group.rows).filter((row) =>
+      matchesTriStateFilter(providerFilters, overviewRowProviderLabel(row.line))
+      && matchesTriStateFilter(modelFilters, overviewRowModelKey(row.line))), snapshot.from, snapshot.to)
+    : summary, [snapshot, summary, hasOverviewFilters, providerFilters, modelFilters]);
   const selectedGroup = selectedKey ? summary?.groups.find((group) => group.key === selectedKey) : undefined;
   const inspected = selectedGroup?.rows[0] ?? selectedExcluded;
   const analysisTarget = scope === "turn" && turn?.line.turnId ? turn : inspected;
@@ -330,6 +351,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     setPending(true); setError(undefined);
     if (!sameQuery) {
       setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setBucket(undefined); setFacet(undefined);
+      setProviderFilters({}); setModelFilters({});
     }
     let results = await readAll(enabledSources, start, end, () => true);
     if (!mounted.current || seq !== readSeq.current) return;
@@ -391,18 +413,19 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     return () => window.removeEventListener("focus", onFocus);
   }, [discoverPeers]);
 
-  const included = summary?.groups.flatMap((group) => group.rows) ?? [];
+  const accountRows = summary?.groups.flatMap((group) => group.rows) ?? [];
+  const included = scopedSummary?.groups.flatMap((group) => group.rows) ?? [];
   const instances = (snapshot?.sources ?? []).filter((source) => source.data).length;
   const shownDimension: UsageDimension = (dimension === "instance" && instances < 2) || (dimension === "account" && !multipleAccounts)
     ? "thread" : dimension;
   // The five most expensive threads (or models, providers, instances) get
   // chart colors; a thread keeps its color in every row, strip, and legend entry.
   const seriesIndex = new Map(shownDimension === "thread"
-    ? (summary?.groups ?? []).slice(0, USAGE_SERIES).map((group, index) => [group.key, index]) : []);
+    ? (scopedSummary?.groups ?? []).slice(0, USAGE_SERIES).map((group, index) => [group.key, index]) : []);
   const rowSeries = new Map<OwnedUsageRow, number>();
   let facets: Array<{ value: string; cost: number }> = [];
   if (shownDimension === "thread") {
-    for (const group of summary?.groups ?? []) {
+    for (const group of scopedSummary?.groups ?? []) {
       const index = seriesIndex.get(group.key);
       if (index !== undefined) for (const row of group.rows) rowSeries.set(row, index);
     }
@@ -422,30 +445,32 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   const activeFacet = shownDimension !== "thread" && facet !== undefined && facets.some((item) => item.value === facet) ? facet : undefined;
   // A bucket member is the row's thread, model, provider or instance; its
   // thread is the group it rolls up to, so a helper counts as its parent.
-  const rowThread = new Map((summary?.groups ?? []).flatMap((group) => group.rows.map((row) => [row, group.key] as const)));
+  const rowThread = new Map((scopedSummary?.groups ?? []).flatMap((group) => group.rows.map((row) => [row, group.key] as const)));
   const buckets = snapshot ? usageCompletionBuckets(included, snapshot.from, snapshot.to, (row) => rowSeries.get(row), (row) => {
     const thread = rowThread.get(row) ?? "";
     return { key: shownDimension === "thread" ? thread : usageDimensionValue(row, shownDimension), thread };
   }) : undefined;
   const selectedInterval = bucket === undefined ? undefined : buckets?.[bucket];
+  const clearOverviewFilters = () => {
+    setProviderFilters({});
+    setModelFilters({});
+  };
+  const overviewFilterSummary = [
+    ...Object.entries(providerFilters).map(([label, mode]) => `${mode === "include" ? "+" : "−"}${label}`),
+    ...Object.entries(modelFilters).map(([name, mode]) => `${mode === "include" ? "+" : "−"}${name}`),
+  ].join(", ");
   const filteredSummary = snapshot && (selectedInterval || activeFacet !== undefined)
     ? summarizeUsageActivity(included.filter((row) => (!selectedInterval
       || (row.line.completedAt! >= selectedInterval.from && row.line.completedAt! < selectedInterval.to))
       && (activeFacet === undefined || usageDimensionValue(row, shownDimension as Exclude<UsageDimension, "thread">) === activeFacet)),
     snapshot.from, snapshot.to)
-    : summary;
+    : scopedSummary;
   const matches = (text: string) => text.toLocaleLowerCase().includes(search.toLocaleLowerCase());
   const groups = [...(filteredSummary?.groups ?? [])].filter((group) => matches(`${group.title} ${group.rows[0].owner} ${group.rows[0].line.threadId}`))
     .sort((a, b) => sort === "tokens" ? (b.uncached + b.cached + b.output) - (a.uncached + a.cached + a.output)
       : sort === "recent" ? Math.max(...b.rows.map((row) => row.line.completedAt!)) - Math.max(...a.rows.map((row) => row.line.completedAt!)) : b.cost - a.cost);
   const excluded = (summary?.excluded ?? []).filter((row) => matches(`${row.title} ${row.owner}`));
   const total = summary?.groups.reduce((value, group) => value + group.cost, 0) ?? 0;
-  const totals = included.reduce((value, { line }) => ({
-    uncached: value.uncached + line.uncachedInputTokens, cached: value.cached + line.cachedInputTokens,
-    output: value.output + line.outputTokens,
-  }), { uncached: 0, cached: 0, output: 0 });
-  const cacheShare = totals.cached + totals.uncached ? totals.cached / (totals.cached + totals.uncached) : 0;
-  const available = snapshot?.sources.filter((source) => source.data).length ?? 0;
   const failures = (snapshot?.sources ?? []).filter((source) => source.error)
     .map((source) => ({ ...source, kind: unavailableKind(source.error!) }));
   const outdated = failures.filter((source) => source.kind === "outdated").map((source) => source.label);
@@ -484,7 +509,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   // A thread opens in the main window; a model, provider or instance narrows
   // the thread list to itself, and an account scopes the page. The legend and
   // the slice card both name members this way.
-  const groupsByKey = new Map((summary?.groups ?? []).map((group) => [group.key, group]));
+  const groupsByKey = new Map((scopedSummary?.groups ?? []).map((group) => [group.key, group]));
   const chartMember = (key: string): UsageChartMember => {
     if (shownDimension === "thread") {
       const group = groupsByKey.get(key);
@@ -510,6 +535,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   const closeInspector = () => { setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); };
   const selectAccount = (key: string) => {
     setAccountFilter(key); closeInspector(); setBucket(undefined); setFacet(undefined); setRenaming(undefined);
+    clearOverviewFilters();
     const account = accountChoices.find((item) => item.key === key);
     setRememberedAccount(account);
     setFocusKey(account?.limitKey);
@@ -643,18 +669,31 @@ export function UsageActivity({ desktopApi, initialProvider }: {
         </>}
         <button type="button" className="usage-link" onClick={() => selectAccount("")}>All accounts</button>
       </div> : null}
+      <UsageOverviewBand
+        groups={summary.groups}
+        from={snapshot.from}
+        to={snapshot.to}
+        providerFilters={providerFilters}
+        onToggleProvider={(providerLabel) => setProviderFilters((current) => cycleTriStateFilter(current, providerLabel))}
+        onRemoveProviderFilter={(providerLabel) => setProviderFilters((current) => removeTriStateFilterKey(current, providerLabel))}
+        modelFilters={modelFilters}
+        onToggleModel={(modelName) => setModelFilters((current) => cycleTriStateFilter(current, modelName))}
+        onRemoveModelFilter={(modelName) => setModelFilters((current) => removeTriStateFilterKey(current, modelName))}
+        onClearModelFilters={() => setModelFilters({})}
+        onClearFilters={clearOverviewFilters}
+        readable={snapshot.sources.some((source) => source.data)}
+      />
       <UsageLimitsBand accounts={limitAccounts} focusKey={focus?.key} onFocus={setFocusKey} now={snapshot.to}
-        accountLabel={(limit) => { const key = limitUsageAccountKey(limit); return key ? accountLabels.get(key) : undefined; }}
-        cost={available ? total : undefined} threads={summary.groups.length} turns={summary.contained}
-        cacheShare={cacheShare} uncached={totals.uncached} output={totals.output} />
+        accountLabel={(limit) => { const key = limitUsageAccountKey(limit); return key ? accountLabels.get(key) : undefined; }} />
+      {/* Account-wide, like the limits above: compared against every measured turn, not the Overview's filter. */}
       <UsageAccountTokenTrend accounts={tokenAccounts} focusKey={focusKey ?? focus?.key} onFocus={setFocusKey}
         accountLabel={(account) => { const key = accountTokenUsageAccountKey(account); return key ? accountLabels.get(key) : undefined; }}
-        measuredRows={included} now={snapshot.readAt} legacyOwnerLabels={legacyTokenOwners} />
+        measuredRows={accountRows} now={snapshot.readAt} legacyOwnerLabels={legacyTokenOwners} />
       {buckets ? <UsageTimeline buckets={buckets} selected={bucket} onSelect={setBucket}
         dimension={shownDimension} onDimension={(next) => { setDimension(next); setFacet(undefined); }}
         dimensions={["thread", "model", "provider", ...multipleAccounts ? ["account" as const] : [], ...instances > 1 ? ["instance" as const] : []]}
         series={shownDimension === "thread"
-          ? summary.groups.slice(0, USAGE_SERIES).map((group) => ({ ...chartMember(group.key), cost: money(group.cost) }))
+          ? (scopedSummary?.groups ?? []).slice(0, USAGE_SERIES).map((group) => ({ ...chartMember(group.key), cost: money(group.cost) }))
           : facets.slice(0, USAGE_SERIES).map((item) => ({ ...chartMember(item.value), cost: money(item.cost) }))}
         member={chartMember}
         limit={lineSeries ? { label: limitLabel(lineSeries), points: lineSeries.points, resets: lineSeries.resets } : undefined}
@@ -674,6 +713,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
             ]} /></label> : null}
           </div>
           {activeFacet !== undefined && lens === "threads" ? <div className="usage-filter-note">{DIMENSION_LABELS[shownDimension]}: {activeFacet}<button type="button" onClick={() => setFacet(undefined)}>Clear {DIMENSION_LABELS[shownDimension].toLocaleLowerCase()} filter ×</button></div> : null}
+          {hasOverviewFilters && lens === "threads" ? <div className="usage-filter-note">Overview filter: {overviewFilterSummary}<button type="button" onClick={clearOverviewFilters}>Clear filters ×</button></div> : null}
           {lens === "excluded" ? <p className="usage-list-note">Only work that both started and finished in this period counts toward the total.
             These did not, or were never tied to a turn. Their prices are shown for context and are not part of any total above.</p> : null}
           {lens === "threads" ? <div className="usage-list-head"><span>Thread / instance</span><span>When</span><span>Signals</span><span>Input · cached</span><span>API-eq.</span></div> : null}
@@ -705,7 +745,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
               <span className="usage-thread__reason">{usageNotCountedReason(row, snapshot.from, snapshot.to)}</span>
               <span className="usage-thread__cost"><strong>{row.line.priceStatus === "priced" && row.line.currency === "USD" ? money(row.line.totalCostMicros) : "Unpriced"}</strong><small>not counted</small></span>
             </button>)}
-            {(lens === "threads" ? groups : excluded).length === 0 ? <div className="usage-empty"><strong>{search ? "No matching threads" : "No usage in this period"}</strong><p>{search ? "Try a thread title or instance name." : "Choose a longer period."}</p></div> : null}
+            {(lens === "threads" ? groups : excluded).length === 0 ? <div className="usage-empty"><strong>{search || hasOverviewFilters || activeFacet !== undefined ? "No matching threads" : "No usage in this period"}</strong><p>{search ? "Try a thread title or instance name." : hasOverviewFilters || activeFacet !== undefined ? "Try adjusting or clearing active filters." : "Choose a longer period."}</p></div> : null}
             {(lens === "threads" ? groups : excluded).length > 250 ? <p className="usage-list-note">Showing 250 results. Filter by thread name or choose a shorter period.</p> : null}
           </div>
           <div className="usage-list-footer"><span>{summary.groups.length} threads · {summary.contained} turns in the total</span>

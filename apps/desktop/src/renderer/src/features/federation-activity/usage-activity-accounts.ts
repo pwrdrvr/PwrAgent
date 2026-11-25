@@ -4,7 +4,7 @@ import { accountTokenUsageAccountKey, type AccountTokenAccount } from "./usage-a
 import { formatBackendPlanType } from "../../lib/backend-status-format";
 
 const PROVIDER_LABELS: Record<string, string> = {
-  openai: "OpenAI", xai: "xAI", anthropic: "Anthropic", google: "Google", moonshot: "Moonshot", qwen: "Qwen",
+  openai: "OpenAI", openai_decisions: "OpenAI Decisions", xai: "xAI", anthropic: "Anthropic", google: "Google", moonshot: "Moonshot", qwen: "Qwen",
 };
 
 /**
