@@ -18,41 +18,46 @@ const transcriptText = (id: string) => `Transcript for fixture ${id}`;
 
 it("keeps the active row and transcript on the same thread through navigation and row actions", async ({ signal }) => {
   const action = fc.constantFrom("open", "back", "forward", "context menu", "toggle batch");
-  await fc.assert(fc.asyncProperty(fc.array(action, { minLength: 1, maxLength: 7 }), async (actions) => {
-    signal.throwIfAborted();
-    const previous = Object.getOwnPropertyDescriptor(window, "pwragent");
-    Object.defineProperty(window, "pwragent", { configurable: true, value: navigationOwnerApiFixture({
-      readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
-        inboxThreadKeys: threads.map(({ source, id }) => `${source}:${id}`), threads, directories: [],
-        launchpadDefaults: { backend: "codex", executionMode: "default" } }),
-      readThread: async ({ backend = "codex", threadId }) => ({ backend, threadId, fetchedAt: 1,
-        replay: {
-          entries: [{ type: "message", id: `message-${threadId}`, role: "assistant", text: transcriptText(threadId) }],
-          messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
-        },
-      }),
-    }) });
-    const app = render(<App />);
-    try {
-      const main = within(app.getByRole("main"));
-      const sidebar = app.getByRole("complementary", { name: "Threads" });
-      const visits = [0];
-      let cursor = 0;
-      const row = (index: number) => within(sidebar).getByRole("button", { name: threads[index]!.title });
+  const previous = Object.getOwnPropertyDescriptor(window, "pwragent");
+  Object.defineProperty(window, "pwragent", { configurable: true, value: navigationOwnerApiFixture({
+    readPopulation: async () => ({ backend: "all", fetchedAt: 1, unchanged: false,
+      inboxThreadKeys: threads.map(({ source, id }) => `${source}:${id}`), threads, directories: [],
+      launchpadDefaults: { backend: "codex", executionMode: "default" } }),
+    readThread: async ({ backend = "codex", threadId }) => ({ backend, threadId, fetchedAt: 1,
+      replay: {
+        entries: [{ type: "message", id: `message-${threadId}`, role: "assistant", text: transcriptText(threadId) }],
+        messages: [], pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    }),
+  }) });
+  const app = render(<App />);
+  try {
+    const main = within(app.getByRole("main"));
+    const sidebar = app.getByRole("complementary", { name: "Threads" });
+    const row = (index: number) => within(sidebar).getByRole("button", { name: threads[index]!.title });
 
-      const checkSelection = async () => {
-        const index = visits[cursor]!;
-        const { id, source } = threads[index]!;
-        const activeKeys = [...sidebar.querySelectorAll("[data-thread-key] > .thread-row.is-selected")]
-          .map((card) => card.parentElement?.dataset.threadKey);
-        expect(activeKeys).toEqual([`${source}:${id}`]);
-        expect([...sidebar.querySelectorAll(".thread-row__open[aria-current='true']")]).toEqual([row(index)]);
-        await main.findByText(transcriptText(id));
-        expect(main.queryByText(transcriptText(threads[1 - index]!.id))).toBeNull();
-      };
+    const checkSelection = async (index: number) => {
+      const { id, source } = threads[index]!;
+      const activeKeys = [...sidebar.querySelectorAll("[data-thread-key] > .thread-row.is-selected")]
+        .map((card) => card.parentElement?.dataset.threadKey);
+      expect(activeKeys).toEqual([`${source}:${id}`]);
+      expect([...sidebar.querySelectorAll(".thread-row__open[aria-current='true']")]).toEqual([row(index)]);
+      await main.findByText(transcriptText(id));
+      expect(main.queryByText(transcriptText(threads[1 - index]!.id))).toBeNull();
+    };
 
-      await main.findByText(transcriptText(threads[0]!.id));
-      await checkSelection();
+    await main.findByText(transcriptText(threads[0]!.id));
+    await checkSelection(0);
+    await fc.assert(fc.asyncProperty(fc.array(action, { minLength: 1, maxLength: 7 }), async (actions) => {
+      signal.throwIfAborted();
+      // Start each generated case at a known history suffix with batch state cleared.
+      // Staying within the suffix makes shrinking independent of older visits.
+      for (const index of [1, 0]) {
+        await act(async () => { fireEvent.click(row(index)); });
+        await checkSelection(index);
+      }
+      const visits = [1, 0];
+      let cursor = 1;
       for (const command of actions) {
         signal.throwIfAborted();
         const other = 1 - visits[cursor]!;
@@ -64,8 +69,10 @@ it("keeps the active row and transcript on the same thread through navigation an
               cursor = visits.length - 1;
               break;
             case "back":
-              fireEvent.click(app.getByTestId("history-nav-back"));
-              cursor = Math.max(0, cursor - 1);
+              if (cursor > 0) {
+                fireEvent.click(app.getByTestId("history-nav-back"));
+                cursor -= 1;
+              }
               break;
             case "forward":
               fireEvent.click(app.getByTestId("history-nav-forward"));
@@ -80,15 +87,19 @@ it("keeps the active row and transcript on the same thread through navigation an
           }
         });
         if (command === "context menu") {
-          await checkSelection();
-          fireEvent.keyDown(app.getByRole("menu"), { key: "Escape" });
+          const menu = app.getByRole("menu");
+          try {
+            await checkSelection(visits[cursor]!);
+          } finally {
+            fireEvent.keyDown(menu, { key: "Escape" });
+          }
         }
-        await checkSelection();
+        await checkSelection(visits[cursor]!);
       }
-    } finally {
-      app.unmount();
-      if (previous) Object.defineProperty(window, "pwragent", previous);
-      else Reflect.deleteProperty(window, "pwragent");
-    }
-  }), { numRuns: 12 });
+    }), { numRuns: 12 });
+  } finally {
+    app.unmount();
+    if (previous) Object.defineProperty(window, "pwragent", previous);
+    else Reflect.deleteProperty(window, "pwragent");
+  }
 });
