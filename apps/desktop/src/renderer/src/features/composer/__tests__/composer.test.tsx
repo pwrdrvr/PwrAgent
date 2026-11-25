@@ -14063,12 +14063,20 @@ describe("Composer", () => {
       expect(screen.getByText("Steering now")).toBeInTheDocument();
     });
 
-    it("explains an Interrupt the provider cannot do", async () => {
+    // Every steer × interrupt capability pair. Interrupt is listed exactly
+    // when the provider can cut in; listed but blocked, it carries the reason
+    // Steer gives, since an interrupt is delivered as a steer.
+    it.each([
+      { steerTurn: true, interruptSteerTurn: true },
+      { steerTurn: true, interruptSteerTurn: false },
+      { steerTurn: false, interruptSteerTurn: true },
+      { steerTurn: false, interruptSteerTurn: false },
+    ])("lists Interrupt only for a provider that can cut in (%o)", (capabilities) => {
       const steerTurn = vi.fn();
       render(
         <Composer
           activeTurnId="turn-1"
-          backends={[capableBackend("codex", { steerTurn: true })]}
+          backends={[capableBackend("codex", capabilities)]}
           desktopApi={{ startTurn: vi.fn(), steerTurn }}
           disabled={false}
           skills={[]}
@@ -14081,10 +14089,24 @@ describe("Composer", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: "Send options" }));
 
-      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      const interrupt = screen.queryByRole("menuitem", { name: /^Interrupt/ });
+      if (!capabilities.interruptSteerTurn) {
+        expect(interrupt).not.toBeInTheDocument();
+        expect(screen.queryByText(/can't cut in/)).not.toBeInTheDocument();
+        // Steer and Queue are still offered in their places.
+        expect(screen.getByRole("menuitem", { name: /^Steer/ })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: /^Queue/ })).toBeInTheDocument();
+        return;
+      }
+      expect(interrupt).toBeInTheDocument();
+      if (capabilities.steerTurn) {
+        expect(interrupt).not.toHaveAttribute("aria-disabled");
+        expect(interrupt).toHaveTextContent("Cut off the current response and send now");
+        return;
+      }
       expect(interrupt).toHaveAttribute("aria-disabled", "true");
-      expect(interrupt).toHaveTextContent("codex can't cut in mid-response");
-      fireEvent.click(interrupt);
+      expect(interrupt).toHaveTextContent("can't take messages mid-turn");
+      fireEvent.click(screen.getByRole("menuitem", { name: /^Interrupt/ }));
       expect(steerTurn).not.toHaveBeenCalled();
       // A refused pick keeps the menu open on its explanation.
       expect(screen.getByRole("menu")).toBeInTheDocument();
@@ -14113,6 +14135,73 @@ describe("Composer", () => {
       expect(
         screen.getByRole("menuitem", { name: /^Queue/ }),
       ).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("blames the model, not the provider, when only the model cannot steer", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[{
+            ...capableBackend("codex", { steerTurn: true, interruptSteerTurn: true }),
+            launchpadOptions: {
+              models: [{
+                id: "model-1",
+                label: "Model One",
+                current: true,
+                supportsSteering: false,
+              }],
+            },
+          }]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("codex")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Model One can't take messages mid-turn");
+      expect(screen.queryByText(/can't cut in/)).not.toBeInTheDocument();
+    });
+
+    it("points a peer thread to its owner's window even when this instance cannot interrupt", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          // The local summary lacks Interrupt; the peer that owns the
+          // thread may have it, and this window cannot tell.
+          backends={[capableBackend("claude", { steerTurn: true })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            ...runningThread("claude"),
+            federation: {
+              ref: {
+                backend: "claude",
+                target: { scope: "remote", instanceId: "peer-1" },
+                threadId: "thread-1",
+              },
+              instanceLabel: "Studio",
+            },
+          }}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Open this instance's window to interrupt");
     });
 
     it("dims Interrupt on a pinned peer thread whose owner it cannot see", () => {
