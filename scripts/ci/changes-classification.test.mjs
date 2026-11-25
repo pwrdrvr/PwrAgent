@@ -238,6 +238,7 @@ it("accepts a skipped lane in the Desktop E2E gate only when the classifier or t
   const gate = jobSection("desktop-e2e-result");
   const script = gate.split("        run: |\n")[1].split("\n").map((line) => line.slice(10)).join("\n");
   const results = ["success", "failure", "cancelled", "skipped"];
+  const cases = [];
   for (const linux of results) {
     for (const a11y of results) {
       for (const requested of ["true", "false"]) {
@@ -245,23 +246,37 @@ it("accepts a skipped lane in the Desktop E2E gate only when the classifier or t
           for (const full of ["true", "false"]) {
             // Unset when the plan job did not succeed, then no lane and one lane.
             for (const lanes of [undefined, "", "[]", "[1]"]) {
-              const run = spawnSync("bash", ["-c", script], {
-                env: { PATH: process.env.PATH, LINUX_E2E_RESULT: linux, MACOS_E2E_RESULT: macos, FULL_PLATFORMS: full,
-                  A11Y_RESULT: a11y, A11Y_REQUESTED: requested,
-                  GITHUB_STEP_SUMMARY: "/dev/null", ...(lanes === undefined ? {} : { E2E_LANES: lanes }) },
-                encoding: "utf8",
-              });
-              const pass = (linux === "success" || (lanes === "[]" && linux === "skipped"))
-                && (a11y === "success" || (requested === "false" && a11y === "skipped"))
-                && (macos === "success" || (full === "false" && macos === "skipped"));
-              const name = `linux=${linux} a11y=${a11y} requested=${requested} macos=${macos} full=${full} lanes=${lanes}`;
-              expect(run.status === 0, `${name}: ${run.stdout}${run.stderr}`).toBe(pass);
+              cases.push({ linux, a11y, requested, macos, full, lanes });
             }
           }
         }
       }
     }
   }
+  // One shell runs every case in its own subshell. A process per case made
+  // 1,024 spawns, which took 8.6s on a GitHub-hosted macOS runner.
+  const driver = cases.map(({ linux, a11y, requested, macos, full, lanes }, index) => [
+    "(",
+    `  export LINUX_E2E_RESULT='${linux}' A11Y_RESULT='${a11y}' A11Y_REQUESTED='${requested}'`,
+    `  export MACOS_E2E_RESULT='${macos}' FULL_PLATFORMS='${full}'`,
+    lanes === undefined ? "  unset E2E_LANES" : `  export E2E_LANES='${lanes}'`,
+    "  gate",
+    `) > /dev/null 2>&1; echo "${index} $?"`,
+  ].join("\n")).join("\n");
+  const run = spawnSync("bash", ["-c", `gate() {\n${script}\n}\n${driver}`], {
+    env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: "/dev/null" },
+    encoding: "utf8",
+  });
+  expect(run.status, run.stderr).toBe(0);
+  const statuses = new Map(run.stdout.trim().split("\n").map((line) => line.split(" ").map(Number)));
+  expect(statuses.size).toBe(cases.length);
+  cases.forEach(({ linux, a11y, requested, macos, full, lanes }, index) => {
+    const pass = (linux === "success" || (lanes === "[]" && linux === "skipped"))
+      && (a11y === "success" || (requested === "false" && a11y === "skipped"))
+      && (macos === "success" || (full === "false" && macos === "skipped"));
+    const name = `linux=${linux} a11y=${a11y} requested=${requested} macos=${macos} full=${full} lanes=${lanes}`;
+    expect(statuses.get(index) === 0, name).toBe(pass);
+  });
 });
 
 it("gates the accessibility job, its required check and its flake slices on the same request", () => {
