@@ -230,6 +230,12 @@ async function run(ops: readonly Op[]): Promise<void> {
       }
       // A merge that read the PR first never sends GitHub one it will refuse; the fallback sends at most one.
       expect(log.refused).toBeLessThanOrEqual(step.checkStackOrder ? 0 : 1);
+      // A stack learned from GitHub's refusal is read whole: the result names every layer still open above.
+      if (log.refused && "merged" in result && stack) {
+        const above = model.stacks.get(stack.number)!.slice(stack.position)
+          .filter((number) => open(model.prs.find((p) => p.number === number)!));
+        for (const number of above) expect(result.merged.summary, `merging #${pr.number}`).toContain(`#${number}`);
+      }
     }
   }
 }

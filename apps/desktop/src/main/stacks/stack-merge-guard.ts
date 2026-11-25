@@ -77,7 +77,13 @@ export async function assertStackMergeAllowed(input: {
 }
 
 /** A pull request in one of GitHub's own stacks, which merges only through the asynchronous merge API. */
-export type GithubNativeStack = { number: number; position: number; size: number };
+export type GithubNativeStack = {
+  number: number;
+  position: number;
+  size: number;
+  /** Every pull request in the stack, bottom first, when its member list was read. */
+  layers?: Array<{ number: number; open: boolean }>;
+};
 
 type GithubNativeStackLayer = { number?: number; state?: string; merged_at?: string | null };
 
@@ -89,12 +95,15 @@ type GithubNativeStackLayer = { number?: number; state?: string; merged_at?: str
  * The pull request read every merge already makes carries the membership, so
  * a pull request outside a stack, or at its bottom, costs no request here.
  * Only a higher layer reads the stack: GitHub would land its open layers.
+ * `readLayers` reads it for any layer: a stack PwrAgent only learned of when
+ * GitHub refused a merge is read whole, so its result names every member.
  */
 export async function assertGithubNativeStackMergeAllowed(
   number: number,
   pull: GithubStackPull,
   get: (route: string) => Promise<unknown>,
   observeLower?: (number: number) => void,
+  options: { readLayers?: boolean } = {},
 ): Promise<GithubNativeStack | undefined> {
   const stack = pull?.stack;
   if (!stack) return undefined;
@@ -103,7 +112,7 @@ export async function assertGithubNativeStackMergeAllowed(
   if (!Number.isInteger(stack.number) || !Number.isInteger(stack.position) || !Number.isInteger(stack.size)
     || stack.position! < 1 || stack.position! > stack.size!) throw unreadable();
   const known = { number: stack.number!, position: stack.position!, size: stack.size! };
-  if (known.position === 1) return known;
+  if (known.position === 1 && !options.readLayers) return known;
   let layers: GithubNativeStackLayer[] | undefined;
   try {
     layers = (await get(`/stacks/${stack.number}`) as { pull_requests?: GithubNativeStackLayer[] } | undefined)?.pull_requests;
@@ -122,14 +131,25 @@ export async function assertGithubNativeStackMergeAllowed(
     const named = open.map((layer) => `#${layer.number}`).join(", ");
     throw new ForgeReadError("stack_parent_open", `Pull request #${number} is layer ${index + 1} of ${layers.length} in a GitHub stack, and ${named} below it ${open.length === 1 ? "is" : "are"} still open. GitHub would merge ${open.length === 1 ? "it" : "them"} too: merge ${named} first.`);
   }
-  return known;
+  return {
+    ...known, position: index + 1, size: layers.length,
+    layers: layers.flatMap((layer) => Number.isSafeInteger(layer.number) && layer.number! > 0
+      ? [{ number: layer.number!, open: !layer.merged_at && layer.state !== "closed" }] : []),
+  };
 }
 
 /** Said after merging one layer of a GitHub stack while layers above it stay open. */
 export function githubStackLayersAboveNote(number: number, stack: GithubNativeStack | undefined): string | undefined {
   if (!stack || stack.position >= stack.size) return undefined;
+  const lead = `#${number} was layer ${stack.position} of ${stack.size} in a GitHub stack`;
+  if (stack.layers) {
+    const open = stack.layers.slice(stack.position).filter((layer) => layer.open && layer.number !== number);
+    if (!open.length) return undefined;
+    const named = open.map((layer) => `#${layer.number}`).join(", ");
+    return `${lead}: ${named} above it ${open.length === 1 ? "is" : "are"} still open.`;
+  }
   const above = stack.size - stack.position;
-  return `#${number} was layer ${stack.position} of ${stack.size} in a GitHub stack: the ${above === 1 ? "layer" : `${above} layers`} above it ${above === 1 ? "is" : "are"} still open.`;
+  return `${lead}: the ${above === 1 ? "layer" : `${above} layers`} above it ${above === 1 ? "is" : "are"} still open.`;
 }
 
 export type GithubStackMergeCheck = { base: string; headSha?: string; nativeStack?: GithubNativeStack };
@@ -153,11 +173,12 @@ export async function checkGithubStackMerge(
   get: (route: string) => Promise<unknown>,
   graphql: GithubStackGraphql,
   observeLower?: (number: number) => void,
+  options: { readLayers?: boolean } = {},
 ): Promise<GithubStackMergeCheck> {
   const current = await get(`/pulls/${number}`) as GithubStackPull;
   const base = current?.base?.ref;
   if (!base) throw new ForgeReadError("unavailable", `Could not confirm the base of pull request #${number}.`);
-  const nativeStack = await assertGithubNativeStackMergeAllowed(number, current, get, observeLower);
+  const nativeStack = await assertGithubNativeStackMergeAllowed(number, current, get, observeLower, options);
   const repo = `${repository.owner}/${repository.repo}`.toLowerCase();
   const fromBranch = async (branch: string) => {
     const params = new URLSearchParams({ state: "all", head: `${repository.owner}:${branch}`, per_page: "100" });

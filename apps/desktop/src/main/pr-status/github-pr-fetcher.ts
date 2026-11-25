@@ -398,7 +398,9 @@ export class GithubPrFetcher {
       if (GITHUB_ASYNC_MERGE_REQUIRED.test(detail)) {
         const get = this.githubGet(reference, run);
         const pull = await get(`/pulls/${reference.number}`) as GithubStackPull;
-        const stack = await assertGithubNativeStackMergeAllowed(reference.number, pull, get);
+        // Learned from the refusal: read the whole stack, so the decision and
+        // the result account for every pull request in it.
+        const stack = await assertGithubNativeStackMergeAllowed(reference.number, pull, get, undefined, { readLayers: true });
         return await this.mergeAsynchronously(reference, params, run, pull?.head?.sha, stack);
       }
       // Refused for want of the queue: learn the repository and queue it.

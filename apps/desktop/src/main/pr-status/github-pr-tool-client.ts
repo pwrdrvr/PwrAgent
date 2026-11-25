@@ -531,6 +531,8 @@ export class GithubPrToolClient {
         // layer below, which that merge would land too.
         const mergeAsynchronously = async (stack: GithubNativeStack | undefined) => {
           const url = `${repositoryUrl(r)}/pull/${args.number}`;
+          // The stack, with its members when they were read, for the agent to account for.
+          const githubStack = stack ? { githubStack: stack } : {};
           const outcome = await runGithubAsyncMerge({
             number: args.number!, method, ...(args.expectedHeadSha ? { sha: args.expectedHeadSha } : {}),
             request: async (verb, route, body) => await call(verb, route, body),
@@ -540,14 +542,14 @@ export class GithubPrToolClient {
           });
           if (outcome.status === "merged") {
             const above = githubStackLayersAboveNote(args.number!, stack);
-            return writeResult({ merged: true, number: args.number, method, ...(outcome.sha ? { mergeCommitSha: str(outcome.sha, 64) } : {}), url, ...(above ? { note: above } : {}) });
+            return writeResult({ merged: true, number: args.number, method, ...(outcome.sha ? { mergeCommitSha: str(outcome.sha, 64) } : {}), url, ...githubStack, ...(above ? { note: above } : {}) });
           }
           if (outcome.status === "enqueued") {
             noteMergeQueueRepository(r.host, r.owner, r.repo);
-            return writeResult({ merged: false, queued: true, number: args.number, url, note: queuedNote(checkedBase, false), nextStep: QUEUE_NEXT_STEP });
+            return writeResult({ merged: false, queued: true, number: args.number, url, ...githubStack, note: queuedNote(checkedBase, false), nextStep: QUEUE_NEXT_STEP });
           }
           return writeResult({
-            merged: false, pending: true, number: args.number, url,
+            merged: false, pending: true, number: args.number, url, ...githubStack,
             ...(outcome.uuid ? { mergeRequestId: outcome.uuid } : {}),
             note: outcome.alreadyRequested
               ? "GitHub was already running a merge of this pull request. Nothing was changed."
@@ -567,7 +569,10 @@ export class GithubPrToolClient {
         } catch (error) {
           // A stack GitHub formed after the order check read the pull request.
           if (error instanceof ForgeReadError && GITHUB_ASYNC_MERGE_REQUIRED.test(error.message)) {
-            const recheck = await checkGithubStackMerge(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route), graphql);
+            // Learned from the refusal: read the whole stack, so the decision and
+            // the result account for every pull request in it.
+            const recheck = await checkGithubStackMerge(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route), graphql,
+              undefined, { readLayers: true });
             assertStackMergeBaseUnchanged(checkedBase, recheck.base);
             return await mergeAsynchronously(recheck.nativeStack);
           }

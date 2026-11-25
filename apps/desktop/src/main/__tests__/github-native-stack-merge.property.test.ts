@@ -167,6 +167,14 @@ describe("a card merge of a stacked pull request", () => {
     expect(runs.some((args) => args.some((arg) => arg.includes("/stacks/")))).toBe(false);
   });
 
+  it("reads the whole stack when only GitHub's refusal revealed it, and names each open layer above", async () => {
+    const runs: string[][] = [];
+    const url = "https://github.com/fixture/project/pull/101";
+    const result = await fetcherFor(["open", "open", "merged", "open"], 0, runs).mergePullRequest({ pullRequest: url, method: "squash" });
+    expect(result).toMatchObject({ mergedUrl: url, summary: expect.stringContaining("#101 was layer 1 of 4 in a GitHub stack: #102, #104 above it are still open") });
+    expect(runs.filter((args) => args.some((arg) => arg.endsWith(`/stacks/${STACK}`)))).toHaveLength(1);
+  });
+
   it.each([true, false])("never lands an open lower layer with it, with the stack order checked first: %s", async (checkStackOrder) => {
     const runs: string[][] = [];
     const merge = fetcherFor(["open", "open"], 1, runs)
