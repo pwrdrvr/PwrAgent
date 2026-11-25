@@ -6,6 +6,7 @@ import { IterableMapper } from "@shutterstock/p-map-iterable";
 import {
   createGitDirectoryObserver, gitPointerTarget, parseGitDirPointer, parseGitPathPointer, readBoundedGitPointer,
 } from "./private/directory-observation";
+import { isPackagedBundledGit } from "../bundled-git";
 import { hasGitDiscoveryOverrides } from "./private/directory-probe";
 import { getSelectedManagedGit } from "../git-command";
 import { gitCommandPreference } from "../git-runtime";
@@ -34,10 +35,18 @@ function hasRelativeConfigRoot(env: NodeJS.ProcessEnv): boolean {
  * Keep enclosing .git candidates because Git can skip an invalid directory
  * marker. If we cannot enumerate the candidates, let Git resolve the path.
  */
-export function createStackCheckoutHints(demand: PrMetadataDemand) {
+export function createStackCheckoutHints(demand: PrMetadataDemand, purpose: "read" | "recovery" = "read") {
   const configuredGit = gitCommandPreference(process.env);
   const discoveryOverrides = hasGitDiscoveryOverrides();
   const requiresGitDiscovery = Boolean(configuredGit || discoveryOverrides);
+  // An explicit selection of this package's Git can use the same negative
+  // discovery evidence as the default. A custom executable may redirect
+  // even missing paths, so keep probing every path for custom selections.
+  const selectsPackagedGit = () => configuredGit !== undefined && isPackagedBundledGit(configuredGit)
+    && gitCommandPreference(process.env) === configuredGit && !hasGitDiscoveryOverrides()
+    && !Object.keys(process.env).some((key) => /^(?:DYLD_|LD_|GIT_TEST_)/.test(key));
+  const usePackagedRecoveryHints = purpose === "recovery" && process.platform !== "win32"
+    && !discoveryOverrides && selectsPackagedGit();
   // A selected executable can be a wrapper. Its Git result is required on
   // the first read and retained only while the environment and disk agree.
   const installedGitVersion = configuredGit && !discoveryOverrides && !Object.keys(process.env).some((key) =>
@@ -47,6 +56,12 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
   const ancestors = new Map<string, Promise<readonly string[] | undefined>>();
   const paths = new Map<string, Promise<readonly string[] | undefined>>();
   const markerPresence = new Map<string, Promise<boolean>>();
+
+  function possiblyLossyPath(value: string): boolean {
+    // Git reads POSIX pointer paths as bytes. A replacement character can
+    // represent an invalid UTF-8 byte sequence in a different path.
+    return usePackagedRecoveryHints && value.includes("\uFFFD");
+  }
 
   async function probe<T>(read: (signal: AbortSignal) => Promise<T>): Promise<T> {
     const result = await runPrMetadataFileProbe(read, demand);
@@ -78,20 +93,21 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
       if (!dotGit.isFile()) return null;
       signal.throwIfAborted();
       const gitdir = parseGitDirPointer(await readBoundedGitPointer(marker));
-      if (!gitdir) return null;
+      if (!gitdir || possiblyLossyPath(gitdir)) return null;
       admin = gitPointerTarget(directory, gitdir);
     }
     signal.throwIfAborted();
     const resolvedAdmin = await realpath(admin);
+    if (possiblyLossyPath(resolvedAdmin)) return null;
     const commonFile = path.join(resolvedAdmin, "commondir");
     signal.throwIfAborted();
     if (!await status(commonFile)) return { commonDir: resolvedAdmin };
     signal.throwIfAborted();
     const common = parseGitPathPointer(await readBoundedGitPointer(commonFile));
-    if (!common) return null;
+    if (!common || possiblyLossyPath(common)) return null;
     signal.throwIfAborted();
     const commonDir = common === "../.." ? path.dirname(path.dirname(resolvedAdmin)) : await realpath(gitPointerTarget(admin, common));
-    return { commonDir };
+    return possiblyLossyPath(commonDir) ? null : { commonDir };
   }
 
   async function inspect(directory: string): Promise<readonly string[] | undefined> {
@@ -104,13 +120,14 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
   }
 
   async function observePath(cwd: string): Promise<readonly string[] | undefined> {
-    if ((requiresGitDiscovery && !installedGitVersion) || !path.isAbsolute(cwd)) return undefined;
+    if ((requiresGitDiscovery && !installedGitVersion && !usePackagedRecoveryHints) || !path.isAbsolute(cwd)) return undefined;
     try {
       const directory = await probe(async (signal) => {
         const info = await status(cwd);
         if (!info || (!info.isDirectory() && !info.isSymbolicLink())) return null;
         signal.throwIfAborted();
         const resolved = await realpath(cwd);
+        if (possiblyLossyPath(resolved)) throw new Error("Unrecognized checkout path");
         if (info.isDirectory()) return resolved;
         signal.throwIfAborted();
         return (await status(resolved))?.isDirectory() ? resolved : null;
@@ -183,17 +200,18 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
     hasMarker,
     async markerCandidates(directories: readonly string[], marker = "gh-stack"): Promise<string[]> {
       demand.signal?.throwIfAborted();
-      if (requiresGitDiscovery) return [...new Set(directories)];
-      const scan = new IterableMapper(new Set(directories), async (cwd) => {
+      const unique = new Set(directories);
+      if (requiresGitDiscovery && !usePackagedRecoveryHints) return [...unique];
+      const scan = new IterableMapper(unique, async (cwd) => {
         const commonDirs = await possibleCommonDirs(cwd);
-        if (!commonDirs) return { cwd, present: true };
+        if (!commonDirs || (usePackagedRecoveryHints && commonDirs.length === 0)) return { cwd, present: true };
         const markers = await Promise.all(commonDirs.map((commonDir) => hasMarker(commonDir, marker)));
         return { cwd, present: markers.some(Boolean) };
       }, STACK_CHECKOUT_SCAN_LIMITS);
       const eligible: string[] = [];
       for await (const { cwd, present } of scan) if (present) eligible.push(cwd);
       demand.signal?.throwIfAborted();
-      return eligible;
+      return usePackagedRecoveryHints && !selectsPackagedGit() ? [...unique] : eligible;
     },
   };
 }
