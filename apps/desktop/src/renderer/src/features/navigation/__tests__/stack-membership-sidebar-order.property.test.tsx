@@ -26,6 +26,8 @@ const STACK = "fixture-stack";
 const directory: NavigationDirectoryRow = { key: "directory:/repo", label: "Repo", path: "/repo", kind: "directory",
   counts: { total: 2, pinned: 0, active: 0, unread: 0, review: 0 }, pinnedRootCount: 0, unpinnedRootCount: 2,
   launchpadPresent: false };
+const pinnedDirectory: NavigationDirectoryRow = { ...directory, counts: { ...directory.counts, pinned: 2 },
+  pinnedRootCount: 2, unpinnedRootCount: 0 };
 
 function membership(position: number, count: number): CompactStackMembership {
   return { key: STACK, name: "fixture/stack", inferred: true, position, count, health: "in_sync" };
@@ -50,6 +52,8 @@ type Shape = {
   childPositions: number[];
   plainChildren: number;
   order: number[];
+  /** Pinned roots render through their own path in both lenses. */
+  pinned: boolean;
 };
 
 /**
@@ -59,8 +63,9 @@ type Shape = {
 function layout(shape: Shape, withStacks: boolean) {
   const count = Math.max(shape.leadPosition, ...shape.childPositions);
   const stacked = (position: number) => withStacks ? { stackMemberships: [membership(position, count)] } : {};
-  const before = navRow("before", { title: "Before", updatedAt: 20, createdAt: 20 });
-  const lead = navRow("lead", { title: "Lead", updatedAt: 10, createdAt: 10,
+  const before = navRow("before", { title: "Before", updatedAt: 20, createdAt: 20,
+    ...(shape.pinned ? { pinnedRank: "1" } : {}) });
+  const lead = navRow("lead", { title: "Lead", updatedAt: 10, createdAt: 10, ...(shape.pinned ? { pinnedRank: "2" } : {}),
     ordinaryChildCount: shape.childPositions.length + shape.plainChildren, ...stacked(shape.leadPosition) });
   const unordered = [
     ...shape.childPositions.map((position) => navRow(`layer-${position}`, { title: `Layer ${position}`,
@@ -69,30 +74,34 @@ function layout(shape: Shape, withStacks: boolean) {
       parentThreadId: "lead" })),
   ];
   const children = shape.order.map((index) => unordered[index]!);
-  return { before, lead, children };
+  return { before, lead, children, pinned: shape.pinned };
 }
 
 function mount(browseMode: "directories" | "inbox", rows: ReturnType<typeof layout>) {
-  const { before, lead, children } = rows;
+  const { before, lead, children, pinned } = rows;
   const roots = [before, lead].map((row, index) => ({ row, placement: { kind: "root" as const }, orderKey: String(index) }));
+  const pinnedRoots = pinned ? roots : [];
+  const unpinnedRoots = pinned ? [] : roots;
+  const owningDirectory = pinned ? pinnedDirectory : directory;
   const childrenId = 'children:[null,"codex","lead"]';
   const resources = new Map<string, NavigationWindowResource>([
-    ["directory-index", resource("directory-index", { kind: "directory-index" }, { directories: [directory] })],
+    ["directory-index", resource("directory-index", { kind: "directory-index" }, { directories: [owningDirectory] })],
     [`directory-pins:${directory.key}`, resource(`directory-pins:${directory.key}`,
-      { kind: "directory", directoryKey: directory.key, roots: "pinned" }, {})],
+      { kind: "directory", directoryKey: directory.key, roots: "pinned" }, { entries: pinnedRoots })],
     [`directory:${directory.key}`, resource(`directory:${directory.key}`,
-      { kind: "directory", directoryKey: directory.key, roots: "unpinned" }, { entries: roots })],
-    ["lens", resource("lens", { kind: "lens", lens: "inbox", roots: "unpinned" }, { entries: roots })],
+      { kind: "directory", directoryKey: directory.key, roots: "unpinned" }, { entries: unpinnedRoots })],
+    ["lens-pins", resource("lens-pins", { kind: "lens", lens: "inbox", roots: "pinned" }, { entries: pinnedRoots })],
+    ["lens", resource("lens", { kind: "lens", lens: "inbox", roots: "unpinned" }, { entries: unpinnedRoots })],
     [childrenId, resource(childrenId,
       { kind: "children", parent: lead.ref, directoryKey: browseMode === "directories" ? directory.key : undefined }, {
         entries: children.map((row, index) => ({ row, placement: { kind: "child" as const, parent: lead.ref },
           orderKey: String(index) })),
       })],
   ]);
-  const navigation = { resources, presentationReady: true, directories: [directory], selectedDirectoryKeys: [directory.key],
+  const navigation = { resources, presentationReady: true, directories: [owningDirectory], selectedDirectoryKeys: [directory.key],
     connected: true, invalidate: () => undefined, refresh: async () => undefined, loadMore: async () => undefined,
     rebaseline: async () => undefined, restart: async () => undefined, setVisibleAnchor: () => undefined };
-  return render(<Sidebar backends={[]} browseMode={browseMode} directories={[directory]}
+  return render(<Sidebar backends={[]} browseMode={browseMode} directories={[owningDirectory]}
     threads={[before, lead, ...children]} loading={false} selectedItemKey="codex:before"
     selectedThreadDirectoryKeys={[directory.key]} pagedNavigation={navigation} onBrowseModeChange={() => undefined}
     onSelectThread={() => undefined} onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined}
@@ -110,7 +119,10 @@ const shapes: fc.Arbitrary<Shape> = fc.integer({ min: 2, max: 5 }).chain((count)
 })).filter(({ childPositions }) => childPositions.length > 0).chain((shape) => {
   const size = shape.childPositions.length + shape.plainChildren;
   const indices = Array.from({ length: size }, (_, index) => index);
-  return fc.shuffledSubarray(indices, { minLength: size, maxLength: size }).map((order) => ({ ...shape, order }));
+  return fc.record({
+    order: fc.shuffledSubarray(indices, { minLength: size, maxLength: size }),
+    pinned: fc.boolean(),
+  }).map(({ order, pinned }) => ({ ...shape, order, pinned }));
 });
 
 /** Row and tray order plus tray markup, without the rows' own chips. */
