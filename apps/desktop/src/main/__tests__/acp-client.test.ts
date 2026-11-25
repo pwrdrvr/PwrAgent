@@ -1197,6 +1197,9 @@ describe("AcpAgentClient", () => {
         auth: {
           terminal: false,
         },
+        elicitation: {
+          form: {},
+        },
         fs: {
           readTextFile: false,
           writeTextFile: false,
@@ -1974,6 +1977,227 @@ describe("AcpAgentClient", () => {
         await checkRequest(`mcp_${name}`, "execute", false);
       },
     ));
+  });
+
+  // Antigravity 1.5.16's ask_question, captured live with form elicitation
+  // advertised (see apps/desktop/docs/protocol-captures.md).
+  const antigravityAskQuestion = {
+    sessionId: "session-1",
+    toolCallId: "call_14875168372478126767",
+    mode: "form",
+    message: "The agent has 2 questions.",
+    requestedSchema: {
+      type: "object",
+      properties: {
+        q1: {
+          type: "string",
+          title: "Pick a color",
+          oneOf: [
+            { const: "1", title: "Red" },
+            { const: "2", title: "Green" },
+            { const: "3", title: "Blue" },
+          ],
+        },
+        q1_other: { type: "string", title: "Other", description: "Optional free-form answer to: Pick a color" },
+        q2: {
+          type: "array",
+          title: "Pick fruits",
+          items: {
+            anyOf: [
+              { const: "1", title: "Apple" },
+              { const: "2", title: "Pear" },
+              { const: "3", title: "Plum" },
+            ],
+          },
+        },
+        q2_other: { type: "string", title: "Other", description: "Optional free-form answer to: Pick fruits" },
+      },
+    },
+  };
+
+  it("asks Antigravity's ask_question one question at a time and returns the form answer", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((_request: AppServerPendingRequestNotification): unknown => ({
+      answers: { q1: { answers: ["Teal"] }, q2: { answers: ["Apple", "Plum"] } },
+    }));
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "full-access" });
+
+    const answer = await transport.emitRequest("elicitation/create", {
+      ...antigravityAskQuestion,
+      sessionId: session.sessionId,
+    }, "jetski-acp-front:2");
+
+    expect(onRequest).toHaveBeenCalledTimes(1);
+    expect(onRequest.mock.lastCall![0]).toEqual({
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: session.sessionId,
+        itemId: "call_14875168372478126767",
+        requestId: "jetski-acp-front:2",
+        questions: [
+          { id: "q1", header: "", question: "Pick a color", isOther: true, isSecret: false, options: [
+            { label: "Red", description: "" }, { label: "Green", description: "" }, { label: "Blue", description: "" },
+          ] },
+          { id: "q2", header: "", question: "Pick fruits", isOther: true, isSecret: false, multiSelect: true, options: [
+            { label: "Apple", description: "" }, { label: "Pear", description: "" }, { label: "Plum", description: "" },
+          ] },
+        ],
+      },
+    });
+    expect(answer).toEqual({ action: "accept", content: { q1_other: "Teal", q2: ["1", "3"] } });
+  });
+
+  it("cancels an asked form unless the operator answered it (oracle)", async () => {
+    let reply: unknown;
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((_request: AppServerPendingRequestNotification): unknown => reply);
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const operatorReply = fc.oneof(
+      fc.constant({ answers: { q1: { answers: ["Green"] } } }),
+      // A turn interrupt or a headless automation settles a pending request this way.
+      fc.constant({ decision: "cancel" }),
+      fc.constantFrom(undefined, null, "accept", ["accept"], { answers: null }, { answers: [] }),
+    );
+    await fc.assert(fc.asyncProperty(operatorReply, fc.integer({ min: 0, max: 1000 }), async (generated, requestId) => {
+      reply = generated;
+      onRequest.mockClear();
+      const answer = await transport.emitRequest("elicitation/create", {
+        ...antigravityAskQuestion,
+        sessionId: session.sessionId,
+      }, requestId);
+      expect(onRequest.mock.lastCall![0].params.requestId).toBe(String(requestId));
+      const answered = generated && typeof generated === "object" && !Array.isArray(generated)
+        && (generated as { answers?: unknown }).answers
+        && typeof (generated as { answers?: unknown }).answers === "object"
+        && !Array.isArray((generated as { answers?: unknown }).answers);
+      expect(answer).toEqual(answered ? { action: "accept", content: { q1: "2" } } : { action: "cancel" });
+    }));
+  });
+
+  it("shows a form the questionnaire cannot ask on the form card, answering only what the operator chose (oracle)", async () => {
+    let reply: unknown;
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((_request: AppServerPendingRequestNotification): unknown => reply);
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const countForm = {
+      sessionId: session.sessionId,
+      mode: "form",
+      message: "How many replicas?",
+      requestedSchema: { type: "object", properties: { replicas: { type: "integer", title: "Replicas" } } },
+    };
+    const content = fc.dictionary(
+      fc.string({ minLength: 1, maxLength: 8 }),
+      fc.oneof(fc.string(), fc.boolean(), fc.integer(), fc.array(fc.string(), { maxLength: 3 })),
+      { maxKeys: 4 },
+    );
+    const operatorReply = fc.oneof(
+      fc.record({ action: fc.constant("accept"), content: fc.option(content, { nil: undefined }) }),
+      fc.record({ action: fc.constantFrom("decline", "cancel"), content: fc.constant(null) }),
+      fc.constant({ decision: "cancel" }),
+      fc.constantFrom(undefined, null, "accept", ["accept"]),
+    );
+    const id = fc.oneof(fc.integer({ min: 1, max: 1000 }), fc.string({ minLength: 1, maxLength: 20 }));
+
+    await fc.assert(fc.asyncProperty(operatorReply, id, async (generated, requestId) => {
+      reply = generated;
+      onRequest.mockClear();
+      const answer = await transport.emitRequest("elicitation/create", countForm, requestId);
+
+      expect(onRequest).toHaveBeenCalledTimes(1);
+      expect(onRequest.mock.lastCall![0]).toMatchObject({
+        method: "mcpServer/elicitation/request",
+        params: {
+          requestId: String(requestId),
+          serverName: "Antigravity",
+          _meta: { pwragent_acp_agent_elicitation: true },
+          requestedSchema: countForm.requestedSchema,
+        },
+      });
+      // Oracle: only an explicit accept carries content, and only the
+      // operator's own object; only an explicit decline declines.
+      const record = generated && typeof generated === "object" && !Array.isArray(generated)
+        ? generated as { action?: unknown; content?: unknown }
+        : undefined;
+      if (record?.action === "accept") {
+        expect(answer).toEqual({ action: "accept", content: record.content ?? {} });
+      } else if (record?.action === "decline") {
+        expect(answer).toEqual({ action: "decline" });
+      } else {
+        expect(answer).toEqual({ action: "cancel" });
+      }
+    }));
+  });
+
+  it("asks Grok's ask_user_question on the questionnaire and answers in Grok's shape", async () => {
+    let reply: unknown = { answers: { "0": { answers: ["Teal"] }, "1": { answers: ["Apple", "Pear"] } } };
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((_request: AppServerPendingRequestNotification): unknown => reply);
+    const client = new AcpAgentClient({ backendId: "acp:grok", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    // Grok Build 1.0.45-pwragent.2, captured live; its first request id is 0.
+    const request = {
+      sessionId: session.sessionId,
+      toolCallId: "call-a01b1553-613e-48be-b800-b4769d8603a2-0",
+      questions: [
+        { question: "Pick a color", options: [{ label: "Red", description: "Red" }, { label: "Green", description: "Green" }], multiSelect: null },
+        { question: "Pick fruits", options: [{ label: "Apple", description: "Apple" }, { label: "Pear", description: "Pear" }], multiSelect: true },
+      ],
+      mode: "default",
+    };
+
+    await expect(transport.emitRequest("_x.ai/ask_user_question", request, 0)).resolves.toEqual({
+      outcome: "accepted",
+      answers: { "Pick a color": ["Other"], "Pick fruits": ["Apple", "Pear"] },
+      annotations: { "Pick a color": { notes: "Teal" } },
+    });
+    expect(onRequest.mock.lastCall![0]).toMatchObject({
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: session.sessionId,
+        itemId: request.toolCallId,
+        requestId: "0",
+        questions: [
+          { id: "0", question: "Pick a color", isOther: true },
+          { id: "1", question: "Pick fruits", isOther: true, multiSelect: true },
+        ],
+      },
+    });
+
+    reply = { decision: "cancel" };
+    await expect(transport.emitRequest("x.ai/ask_user_question", request, 1)).resolves.toEqual({ outcome: "cancelled" });
+  });
+
+  it("declines an ACP elicitation it cannot show without asking the operator", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((_request: AppServerPendingRequestNotification): unknown => ({ action: "accept" }));
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+
+    await fc.assert(fc.asyncProperty(
+      fc.oneof(fc.constantFrom("url", "_custom", ""), fc.string().filter((mode) => mode !== "form")),
+      async (mode) => {
+        await expect(transport.emitRequest("elicitation/create", {
+          ...antigravityAskQuestion,
+          sessionId: session.sessionId,
+          mode,
+        }, 7)).resolves.toEqual({ action: "decline" });
+      },
+    ));
+    // A request-scoped elicitation has no thread to show a card in.
+    const { sessionId: _sessionId, ...withoutSession } = antigravityAskQuestion;
+    await expect(transport.emitRequest("elicitation/create", {
+      ...withoutSession,
+      requestId: 3,
+    }, 8)).resolves.toEqual({ action: "decline" });
+    expect(onRequest).not.toHaveBeenCalled();
   });
 
   it("resolves an Antigravity MCP name to one session server or none", () => {

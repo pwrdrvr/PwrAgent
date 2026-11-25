@@ -482,6 +482,7 @@ export function buildQuestionnaireIntent(params: {
       header: question.header || undefined,
       question: question.question || question.header,
       allowFreeform: question.isOther,
+      ...(question.multiSelect === true && (question.options ?? []).length > 0 ? { multiSelect: true } : {}),
       secret: question.isSecret,
       options: (question.options ?? []).map((option, index) => ({
         id: `${question.id}:option:${index + 1}`,

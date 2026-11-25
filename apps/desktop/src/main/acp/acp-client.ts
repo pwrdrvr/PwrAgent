@@ -9,10 +9,13 @@ import {
 } from "@pwragent/shared/acp-permission-mode";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { ACP_AGENT_ELICITATION_META_KEY } from "@pwragent/shared/mcp-elicitation-purpose";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
+  AppServerMcpElicitationRequestNotification,
+  AppServerMcpElicitationSchema,
   AppServerPendingRequestNotification,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
@@ -92,6 +95,12 @@ import {
   acpWorkspaceContinuationText,
   acpWorkspaceHistory,
 } from "./acp-workspace-history.js";
+import {
+  acpElicitationUserInput,
+  grokAskUserQuestionInput,
+  userInputAnswers,
+  type GrokAskUserQuestionResponse,
+} from "./acp-user-input.js";
 
 const acpClientLog = getMainLogger("pwragent:acp-client");
 
@@ -576,6 +585,11 @@ export class AcpAgentClient {
       clientCapabilities: {
         auth: {
           terminal: false,
+        },
+        // Without this, Antigravity's ask_question degrades to the questions
+        // as plain assistant text and ends the turn unanswered.
+        elicitation: {
+          form: {},
         },
         fs: {
           readTextFile: false,
@@ -2647,6 +2661,12 @@ export class AcpAgentClient {
     params: Record<string, unknown>,
     id?: JsonRpcId,
   ): Promise<unknown> {
+    if (method === "elicitation/create") {
+      return await this.handleElicitationRequest(params, id);
+    }
+    if (GROK_ASK_USER_QUESTION_METHODS.has(method)) {
+      return await this.handleGrokAskUserQuestion(params, id);
+    }
     if (method !== "session/request_permission") {
       throw new Error(`Unsupported ACP request: ${method}`);
     }
@@ -2682,24 +2702,109 @@ export class AcpAgentClient {
       return cancelledPermissionOutcome();
     }
 
-    // A session waiting on the operator must stay open to hear the answer.
     const sessionId = request.params.threadId;
+    const response = await this.askOperator(sessionId, request);
+    const toolName = request.params.acpMcpToolName;
+    const allowOnce = allowOncePermissionOptionId(permissionOptions);
+    if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
+      const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
+      grants.add(toolName);
+      this.sessionMcpToolGrants.set(sessionId, grants);
+      return { outcome: { outcome: "selected", optionId: allowOnce } };
+    }
+    return permissionOutcomeFromResponse(response, permissionOptions);
+  }
+
+  /**
+   * Ask an agent's form elicitation, such as Antigravity's ask_question.
+   * A form of choices and text is asked on the questionnaire card, one
+   * question at a time; any other form is shown on the MCP elicitation card.
+   * Either way the answer goes back in ACP's shape. Only form mode is
+   * advertised, and only a session can show a card, so anything else is
+   * declined without asking.
+   */
+  private async handleElicitationRequest(
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): Promise<AcpElicitationResponse> {
+    const protocolSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+    const message = typeof params.message === "string" ? params.message.trim() : "";
+    if (params.mode !== "form" || !protocolSessionId || !message || id == null) {
+      return { action: "decline" };
+    }
+    const sessionId = this.appSessionIdFor(protocolSessionId);
+    const session = this.options.store.getSession(this.options.backendId, sessionId);
+    if (session?.approvalPolicy === "deny-all" || !this.options.onRequest) {
+      return { action: "cancel" };
+    }
+    const turnId = this.activeTurns.get(sessionId)?.turnId;
+    const questions = acpElicitationUserInput(params);
+    if (questions) {
+      const toolCallId = typeof params.toolCallId === "string" ? params.toolCallId : undefined;
+      const answers = userInputAnswers(await this.askOperator(sessionId, {
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: sessionId,
+          ...(turnId ? { turnId } : {}),
+          ...(toolCallId ? { itemId: toolCallId } : {}),
+          requestId: String(id),
+          questions: questions.questions,
+        },
+      }));
+      return answers ? { action: "accept", content: questions.content(answers) } : { action: "cancel" };
+    }
+    return acpElicitationResponse(await this.askOperator(sessionId, {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: sessionId,
+        turnId: turnId ?? null,
+        requestId: String(id),
+        serverName: this.approvalRequesterName,
+        mode: "form",
+        message,
+        // Main's own marker, so the card names the agent's question as one.
+        _meta: { [ACP_AGENT_ELICITATION_META_KEY]: true },
+        requestedSchema: acpElicitationFormSchema(params.requestedSchema),
+      },
+    } satisfies AppServerMcpElicitationRequestNotification));
+  }
+
+  /** Grok's own question request, asked on the questionnaire card. */
+  private async handleGrokAskUserQuestion(
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): Promise<GrokAskUserQuestionResponse> {
+    const input = grokAskUserQuestionInput(params);
+    if (!input || id == null || !this.options.onRequest) return { outcome: "cancelled" };
+    const sessionId = this.appSessionIdFor(input.sessionId);
+    const session = this.options.store.getSession(this.options.backendId, sessionId);
+    if (session?.approvalPolicy === "deny-all") return { outcome: "cancelled" };
+    const turnId = this.activeTurns.get(sessionId)?.turnId;
+    const answers = userInputAnswers(await this.askOperator(sessionId, {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: sessionId,
+        ...(turnId ? { turnId } : {}),
+        ...(input.toolCallId ? { itemId: input.toolCallId } : {}),
+        requestId: String(id),
+        questions: input.questions,
+      },
+    }));
+    return answers ? input.response(answers) : { outcome: "cancelled" };
+  }
+
+  /** A session waiting on the operator must stay open to hear the answer. */
+  private async askOperator(
+    sessionId: string,
+    request: AppServerPendingRequestNotification,
+  ): Promise<unknown> {
     this.pendingPermissionRequests.set(
       sessionId,
       (this.pendingPermissionRequests.get(sessionId) ?? 0) + 1,
     );
     this.touchSession(sessionId);
     try {
-      const response = await this.options.onRequest(request);
-      const toolName = request.params.acpMcpToolName;
-      const allowOnce = allowOncePermissionOptionId(permissionOptions);
-      if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
-        const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
-        grants.add(toolName);
-        this.sessionMcpToolGrants.set(sessionId, grants);
-        return { outcome: { outcome: "selected", optionId: allowOnce } };
-      }
-      return permissionOutcomeFromResponse(response, permissionOptions);
+      return await this.options.onRequest!(request);
     } finally {
       const remaining = (this.pendingPermissionRequests.get(sessionId) ?? 1) - 1;
       if (remaining > 0) this.pendingPermissionRequests.set(sessionId, remaining);
@@ -4079,6 +4184,30 @@ function isThreadToolGrantResponse(
   return typeof decision === "string"
     && [ACP_THREAD_TOOL_GRANT_OPTION_ID, "accept_for_session", "allow_always"]
       .includes(decision.toLowerCase());
+}
+
+/** Grok Build sends the underscore form; t3code also accepts the bare name. */
+const GROK_ASK_USER_QUESTION_METHODS = new Set(["_x.ai/ask_user_question", "x.ai/ask_user_question"]);
+
+type AcpElicitationResponse =
+  | { action: "accept"; content: Record<string, unknown> }
+  | { action: "decline" }
+  | { action: "cancel" };
+
+/** Anything but an explicit accept or decline is a dismissal. */
+export function acpElicitationResponse(response: unknown): AcpElicitationResponse {
+  const record = asRecord(response);
+  if (record?.action === "decline") return { action: "decline" };
+  if (record?.action !== "accept") return { action: "cancel" };
+  return { action: "accept", content: asRecord(record.content) ?? {} };
+}
+
+// The card refuses anything but an object schema. An agent that sent none
+// asks for confirmation only, which is an empty form.
+function acpElicitationFormSchema(schema: unknown): AppServerMcpElicitationSchema {
+  const record = asRecord(schema);
+  if (record?.type === "object") return record as AppServerMcpElicitationSchema;
+  return { type: "object", properties: {} };
 }
 
 function cancelledPermissionOutcome(): { outcome: { outcome: "cancelled" } } {

@@ -38059,6 +38059,12 @@ div.composer-error-row__toggle {
   line-height: 1.35;
 }
 
+.transcript-questionnaire__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 /* The MCP card is denser than the questionnaire it shares a frame with: the
    title, its warning and its parameters read as one 6px block, and the card
    spends 10px between header, block, fields and actions. */
@@ -38383,6 +38389,8 @@ div.composer-error-row__toggle {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  /* A question's legend would otherwise sit 2px right of its options. */
+  padding: 0;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 650;
@@ -38396,7 +38404,7 @@ div.composer-error-row__toggle {
 }
 
 .transcript-mcp__field input,
-.transcript-mcp__field select {
+.transcript-mcp__field .select-trigger {
   min-height: 36px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -38407,12 +38415,12 @@ div.composer-error-row__toggle {
 }
 
 .transcript-mcp__field input:focus,
-.transcript-mcp__field select:focus {
+.transcript-mcp__field .select-trigger:focus {
   border-color: var(--accent-border);
 }
 
 .transcript-mcp__field input:focus-visible,
-.transcript-mcp__field select:focus-visible {
+.transcript-mcp__field .select-trigger:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }

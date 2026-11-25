@@ -203,6 +203,57 @@ requests offered `allow_always`.
 Raw captures are under the ignored `apps/desktop/.local/protocol-captures/`
 in a directory named `antigravity-default-mcp.*`.
 
+### Antigravity ask_question elicitation
+
+Antigravity 1.5.16 ran with `agy acp --process-per-session`. When
+`initialize` omits `clientCapabilities.elicitation`, its `ask_question` tool
+leaves the tool call pending, streams the questions as plain
+`agent_message_chunk` text with `[1]`-style options, and ends the turn
+unanswered. With `elicitation: { form: {} }` advertised (November 25, 2026
+capture), the same tool sends `elicitation/create` with a string JSON-RPC id
+such as `jetski-acp-front:2`, the session's `sessionId` and the tool's
+`toolCallId`, `mode: "form"`, and `message: "The agent has 2 questions."`.
+Each question `qN` is a string property with `oneOf` `{ const, title }`
+options for single select, or an `array` property with `items.anyOf` for
+multi select. The `const` values are 1-based option numbers. Each question
+also gets an optional free-text `qN_other` string property, and no property
+is `required`. Answering `{ "action": "accept", "content": { ... } }`
+completes the tool call, and the agent continues the same turn with the
+chosen titles and any `qN_other` text.
+
+PwrAgent asks such a form on the questionnaire card, one question per
+choice field, with each `qN_other` (or OMP's `qN__other`) folded into its
+question as Other. `acp-user-input.ts` maps the card's labels back to the
+`const` values. A form with any other field type goes to the MCP
+elicitation card instead. A November 25, 2026 run of PwrAgent's own
+`AcpAgentClient` and stdio transport against the same binary sent
+`{ q1_other: "Teal", q2: ["1", "2"] }`, and Antigravity replied
+"Color: Teal; Fruits: Apple, Pear."
+
+Raw capture and probe:
+`apps/desktop/.local/protocol-captures/antigravity-ask-question/`; the
+client run is in `live-client-probe/`.
+
+### Grok ask_user_question
+
+Grok Build `1.0.45-pwragent.2` (`grok agent stdio`) asks the operator with
+its own agent-to-client request, `_x.ai/ask_user_question`, whether or not
+the client advertises elicitation. It sends a numeric JSON-RPC id (`0` for
+the first), `sessionId`, `toolCallId`, `mode`, and
+`questions: [{ question, options: [{ label, description }], multiSelect }]`,
+with `multiSelect` `true`, `false`, or `null` and no per-question id. The
+answer is `{ "outcome": "accepted", "answers": { "<question text>": [labels] } }`,
+or `{ "outcome": "cancelled" }`. Free text is an `"Other"` label plus
+`annotations: { "<question text>": { "notes": "..." } }`. Grok then
+completes the tool call with
+`"Pick a color"="Other" user notes: Teal, "Pick fruits"="Apple, Other" user notes: Kiwi`.
+Before PwrAgent handled the method, its ACP client threw
+`Unsupported ACP request`, which the transport returns as JSON-RPC error
+`-32603`.
+
+Raw captures and probe:
+`apps/desktop/.local/protocol-captures/grok-ask-user-question/`.
+
 ### Antigravity managed MCP context
 
 The November 24, 2026 probes used Antigravity 1.5.16

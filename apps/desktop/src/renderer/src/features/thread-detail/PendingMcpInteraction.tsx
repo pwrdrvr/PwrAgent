@@ -5,7 +5,7 @@ import {
   type ThreadTodoMergeMethod,
 } from "@pwragent/shared/contracts/thread-todos";
 import { type ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
-import { placeListbox, type ListboxPlacement } from "../../components/Select";
+import { placeListbox, Select, type ListboxPlacement } from "../../components/Select";
 import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { openExternalUrl } from "../../lib/open-external-url";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
@@ -79,7 +79,7 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
     : sessionApproval
       ? gatewayApproval ? "Allow this tool for this conversation" : "Allow this conversation"
       // Not "Send": E2E specs find the composer's Send button page-wide.
-      : purpose === "form" ? "Submit" : "Allow";
+      : purpose === "form" || purpose === "agent-question" ? "Submit" : "Allow";
   const submitPrimary = (): void => {
     if (url) {
       // Accept means the operator consented to open the page; the
@@ -565,29 +565,27 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
   }
 
   if (props.field.kind === "singleSelect") {
+    const field = props.field;
     return (
       <label className="transcript-mcp__field">
         <span className="transcript-mcp__field-label">
-          <span>{props.field.label}</span>
+          <span>{field.label}</span>
           <span>{requiredText}</span>
         </span>
-        <select
-          aria-describedby={props.field.description ? descriptionId : undefined}
+        <Select
+          aria-describedby={field.description ? descriptionId : undefined}
           disabled={props.busy}
-          value={props.field.value}
-          onChange={(event) => {
-            props.onChange(
-              updateMcpFieldValue(props.state, props.field.key, event.target.value)
-            );
+          // An optional choice can go back to no answer, as the empty
+          // value it starts with.
+          options={field.required
+            ? field.options
+            : [{ value: "", label: "No answer" }, ...field.options]}
+          placeholder="Choose..."
+          value={field.value}
+          onChange={(value) => {
+            props.onChange(updateMcpFieldValue(props.state, field.key, value));
           }}
-        >
-          <option value="">Choose...</option>
-          {props.field.options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        />
         {props.field.description ? (
           <span id={descriptionId} className="transcript-mcp__field-help">
             {props.field.description}

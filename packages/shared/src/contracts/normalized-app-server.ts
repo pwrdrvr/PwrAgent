@@ -2165,8 +2165,18 @@ export type AppServerToolRequestUserInputQuestion = {
   isOther: boolean;
   isSecret: boolean;
   options: AppServerToolRequestUserInputOption[] | null;
+  /**
+   * The operator may pick any number of `options`. Codex never sets it; ACP
+   * forms, Grok's ask_user_question, and Claude's AskUserQuestion can. A
+   * surface that cannot show it still lets the operator pick one option.
+   */
+  multiSelect?: boolean;
 };
 
+/**
+ * Each entry is an option's `label`, or the operator's own text when the
+ * question `isOther`. A multi-select answer lists every chosen label.
+ */
 export type AppServerToolRequestUserInputAnswer = {
   answers: string[];
 };

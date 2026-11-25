@@ -16,6 +16,8 @@ export type PendingQuestionnaireQuestion = {
   question: string;
   options: PendingQuestionnaireOption[];
   allowFreeform: boolean;
+  /** Any number of options may be chosen, beside an Other answer. */
+  multiSelect?: boolean;
   secret: boolean;
 };
 
@@ -28,6 +30,12 @@ export type PendingQuestionnaireAnswer =
   | {
       kind: "text";
       value: string;
+    }
+  | {
+      kind: "multi";
+      /** In the order the options are listed, not the order they were picked. */
+      optionKeys: string[];
+      text: string;
     };
 
 export type PendingQuestionnairePhase = "answering" | "review" | "submitted";
@@ -48,7 +56,7 @@ export function createQuestionnaireState(
   request: AppServerToolRequestUserInputNotification
 ): PendingQuestionnaireState | undefined {
   const questions = request.params.questions
-    .map((question) => {
+    .map((question): PendingQuestionnaireQuestion | undefined => {
       const rawOptions = Array.isArray(question.options) ? question.options : [];
       const options: PendingQuestionnaireOption[] = [];
       for (const option of rawOptions) {
@@ -83,6 +91,7 @@ export function createQuestionnaireState(
         question: prompt || header,
         options,
         allowFreeform,
+        multiSelect: question.multiSelect === true && options.length > 0,
         secret: question.isSecret === true,
       };
     })
@@ -129,6 +138,26 @@ export function answerQuestionnaireOption(
   });
 }
 
+/** Choose or unchoose one option of a multi-select question. */
+export function toggleQuestionnaireOption(
+  state: PendingQuestionnaireState,
+  optionKey: string
+): PendingQuestionnaireState {
+  const question = state.questions[state.currentIndex];
+  if (!question?.multiSelect || !question.options.some((option) => option.key === optionKey)) {
+    return state;
+  }
+  const current = state.answers[state.currentIndex];
+  const chosen = new Set(current?.kind === "multi" ? current.optionKeys : []);
+  if (chosen.has(optionKey)) chosen.delete(optionKey);
+  else chosen.add(optionKey);
+  return answerCurrentQuestion(state, {
+    kind: "multi",
+    optionKeys: question.options.filter((option) => chosen.has(option.key)).map((option) => option.key),
+    text: current?.kind === "multi" ? current.text : "",
+  });
+}
+
 export function answerQuestionnaireText(
   state: PendingQuestionnaireState,
   value: string
@@ -136,6 +165,15 @@ export function answerQuestionnaireText(
   const question = state.questions[state.currentIndex];
   if (!question?.allowFreeform) {
     return state;
+  }
+  if (question.multiSelect) {
+    // Other text sits beside the chosen options rather than replacing them.
+    const current = state.answers[state.currentIndex];
+    return answerCurrentQuestion(state, {
+      kind: "multi",
+      optionKeys: current?.kind === "multi" ? current.optionKeys : [],
+      text: value,
+    });
   }
 
   return answerCurrentQuestion(state, {
@@ -199,7 +237,7 @@ export function buildQuestionnaireResponse(
       state.questions.map((question, index) => [
         question.id,
         {
-          answers: answerValue(state.answers[index]),
+          answers: answerValue(state.answers[index], question),
         },
       ])
     ),
@@ -236,12 +274,25 @@ function answerCurrentQuestion(
 function isAnswerComplete(
   answer: PendingQuestionnaireAnswer | null | undefined
 ): boolean {
+  if (answer?.kind === "multi") {
+    return answer.optionKeys.length > 0 || answer.text.trim().length > 0;
+  }
   return Boolean(answer && answerValue(answer).length > 0);
 }
 
-function answerValue(answer: PendingQuestionnaireAnswer | null | undefined): string[] {
+function answerValue(
+  answer: PendingQuestionnaireAnswer | null | undefined,
+  question?: PendingQuestionnaireQuestion
+): string[] {
   if (!answer) {
     return [];
+  }
+  if (answer.kind === "multi") {
+    const labels = (question?.options ?? [])
+      .filter((option) => answer.optionKeys.includes(option.key))
+      .map((option) => option.label);
+    const text = answer.text.trim();
+    return text ? [...labels, text] : labels;
   }
 
   const value = answer.value.trim();

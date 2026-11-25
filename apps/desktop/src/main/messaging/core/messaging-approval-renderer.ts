@@ -99,6 +99,7 @@ function titleForRequest(request: AppServerPendingRequestNotification): string {
       case "tool-approval": return "Tool Approval";
       case "confirmation": return "MCP Confirmation";
       case "form": return "MCP Input";
+      case "agent-question": return "Question";
       case "url": return "MCP Link";
     }
   }
