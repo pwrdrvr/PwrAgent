@@ -39,7 +39,7 @@ export function readStoredPrimaryThreadRepository(thread: ThreadWorkspace): {
 export async function resolvePrimaryThreadRepoKey(
   thread: ThreadWorkspace,
   resolutionByPath = new Map<string, Promise<string | undefined>>(),
-  options?: Pick<ResolveGitHubRepoOptions, "demand" | "fresh" | "confirmEmpty" | "inventoryConfig">,
+  options?: Pick<ResolveGitHubRepoOptions, "demand" | "fresh" | "confirmEmpty" | "inventoryConfig" | "onOriginSample">,
 ): Promise<string | undefined> {
   options?.demand?.signal?.throwIfAborted();
   // The owning checkout's current origin wins over session-start metadata:

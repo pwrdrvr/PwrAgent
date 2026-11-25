@@ -118,7 +118,7 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
     }
     if (!inputs) return undefined;
     const pending = observeLinkedPrCheckout(cwd, demand).then((checkout) =>
-      checkout ? { checkout, observation: ++checkoutObservations } : undefined);
+      checkout ? { checkout, observation: ++checkoutObservations, sampleOrder: nextRemoteSampleOrder() } : undefined);
     pendingCheckouts.add(pending);
     const observed = await pending.finally(() => { pendingCheckouts.delete(pending); });
     if (!observed) return undefined;
@@ -156,6 +156,8 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
       checking = current.checking = next;
     }
     const sampleOrder = await checking.result.read(demand);
-    return sampleOrder !== undefined && await checkout.unchanged() ? { ...sample.exact, sampleOrder } : undefined;
+    return sampleOrder !== undefined && await checkout.unchanged()
+      ? { ...sample.exact, sampleOrder: Math.max(sampleOrder, observed.sampleOrder) }
+      : undefined;
   };
 }

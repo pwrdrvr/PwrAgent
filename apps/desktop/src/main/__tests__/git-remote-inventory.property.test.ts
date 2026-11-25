@@ -250,3 +250,37 @@ it.skipIf(process.platform === "win32").each(["native URL", "deleted checkout"] 
     }
   },
 );
+
+it.skipIf(process.platform === "win32")("orders a borrowed origin after removal of a sibling override", async () => {
+  const { checkouts: [seed, sibling] } = await ordinaryWorktrees();
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  await expect(resolveGitHubRepoForDirectory(seed, { inventoryConfig })).resolves.toEqual(parseForgeRemote(origin));
+  const override = `url.${editedOrigin}.insteadOf`;
+  await git.runGitCommand(sibling, ["config", "--worktree", override, origin]);
+  const config = (await git.runGitCommand(sibling, ["rev-parse", "--path-format=absolute", "--git-path", "config.worktree"])).stdout.trim();
+
+  const checkoutReached = Promise.withResolvers<void>();
+  const releaseCheckout = Promise.withResolvers<void>();
+  const observeLinked = checkoutConfig.observeLinkedPrCheckout;
+  const observe = vi.spyOn(checkoutConfig, "observeLinkedPrCheckout").mockImplementation(async (cwd, demand) => {
+    if (cwd === sibling) {
+      checkoutReached.resolve();
+      await releaseCheckout.promise;
+    }
+    return observeLinked(cwd, demand);
+  });
+  onTestFinished(() => { observe.mockRestore(); });
+  const inventory = resolveGitHubRepoForDirectory(sibling, { inventoryConfig });
+  try {
+    await Promise.race([checkoutReached.promise, inventory.then(() => { throw new Error("Inventory did not observe the sibling"); })]);
+    await expect(resolveGitHubRepoForDirectory(sibling, { demand: { priority: () => PR_METADATA_PRIORITY.page } }))
+      .resolves.toEqual(parseForgeRemote(editedOrigin));
+    await rm(config);
+    releaseCheckout.resolve();
+    await expect(inventory).resolves.toEqual(parseForgeRemote(origin));
+    await expect(resolveGitHubRepoForDirectory(sibling)).resolves.toEqual(parseForgeRemote(origin));
+  } finally {
+    releaseCheckout.resolve();
+    await inventory;
+  }
+});

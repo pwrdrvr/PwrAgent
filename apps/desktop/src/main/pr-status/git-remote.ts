@@ -110,6 +110,7 @@ type RemoteCacheEntry = {
   sshResolutionFailed?: true;
   readFailed?: true;
   sampleOrder: number;
+  originSampleOrder?: number;
   fetchedAt: number;
 };
 type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
@@ -123,6 +124,10 @@ let remoteSampleOrder = 0;
 
 export function nextRemoteSampleOrder(): number {
   return ++remoteSampleOrder;
+}
+
+function orderOfOrigin(observation: ParsedRemoteObservation): number {
+  return observation.originSampleOrder ?? observation.sampleOrder;
 }
 
 type SshResolver = (host: string, demand?: PrMetadataDemand) => Promise<string | undefined>;
@@ -155,6 +160,8 @@ export type ResolveGitHubRepoOptions = {
   confirmEmpty?: boolean;
   /** Batch-only config evidence for owner inventory reads. */
   inventoryConfig?: InventoryRemoteConfigReader;
+  /** Lets an action compare its own origin evidence with later polling evidence. */
+  onOriginSample?: (sampleOrder: number) => void;
 };
 
 /**
@@ -170,6 +177,7 @@ export async function resolveGitHubRepoForDirectory(
   options: ResolveGitHubRepoOptions = {},
 ): Promise<GitHubRepoRef | undefined> {
   const observation = await readParsedGitRemotes(cwd, options);
+  options.onOriginSample?.(orderOfOrigin(observation));
   return observation.value.find((remote) => remote.name === "origin")?.repo;
 }
 
@@ -196,7 +204,7 @@ export function readObservedGitOrigin(cwd: string): {
 } | undefined {
   const observation = remoteCache.get(cwd);
   if (!observation) return undefined;
-  return { ...observedOrigin(observation), retryAt: observation.fetchedAt + REMOTE_CACHE_TTL_MS, sampleOrder: observation.sampleOrder };
+  return { ...observedOrigin(observation), retryAt: observation.fetchedAt + REMOTE_CACHE_TTL_MS, sampleOrder: orderOfOrigin(observation) };
 }
 
 function observedOrigin(observation: ParsedRemoteObservation) {
@@ -442,7 +450,7 @@ async function readParsedGitRemotes(
           const { conclusive } = observedOrigin(observation);
           const currentConclusive = observedOrigin(current).conclusive;
           if ((currentConclusive && !conclusive)
-            || (currentConclusive === conclusive && current.sampleOrder > observation.sampleOrder)) {
+            || (currentConclusive === conclusive && orderOfOrigin(current) > orderOfOrigin(observation))) {
             return { checkout: observation, polling: current };
           }
         }
@@ -486,7 +494,7 @@ async function loadParsedGitRemotes(
     if (prior && (remotes === prior.value || (isCurrentRemoteObservation(prior) && sameRemoteUrls(remotes, prior.value)))) {
       return {
         observation: { names, value: prior.value, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes,
-          sshResolutionFailed: prior.sshResolutionFailed, sampleOrder: prior.sampleOrder },
+          sshResolutionFailed: prior.sshResolutionFailed, sampleOrder: prior.sampleOrder, originSampleOrder: prior.originSampleOrder },
         refreshRemoteNames,
       };
     }
@@ -514,7 +522,10 @@ async function loadParsedGitRemotes(
       }),
     );
     return {
-      observation: { names, value, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes, sshResolutionFailed, sampleOrder },
+      observation: {
+        names, value, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes, sshResolutionFailed,
+        sampleOrder, originSampleOrder: raw.originSampleOrder,
+      },
       refreshRemoteNames,
     };
   } catch {
@@ -551,7 +562,7 @@ async function defaultReadRemotes(
   inventoryConfig?: InventoryRemoteConfigReader,
 ): Promise<{
   names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true;
-  hasConditionalIncludes?: true; configSampleOrder?: number; urlSampleOrder?: number;
+  hasConditionalIncludes?: true; configSampleOrder?: number; urlSampleOrder?: number; originSampleOrder?: number;
 }> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const gitOptions = {
@@ -603,8 +614,8 @@ async function defaultReadRemotes(
     && names.every((name, index) => name === previous.names?.[index]) && hasAllRemoteUrls(previous)) {
     return { names, remotes: previous.value, readWithGitRemote: true, hasConditionalIncludes: previous.hasConditionalIncludes };
   }
-  // The list establishes absence. When origin is listed, its successful
-  // URL command establishes the repository and supplies its sample order.
+  // The full observation starts at the list because the URL reads can span
+  // an edit. Only the primary origin comparison uses its own URL command.
   const namesSampleOrder = listSampleOrder ?? nextRemoteSampleOrder();
   let originSampleOrder: number | undefined;
   const entries = await Promise.all(
@@ -627,7 +638,7 @@ async function defaultReadRemotes(
   );
   return {
     names, remotes: entries.flat(), readWithGitRemote: true, hasConditionalIncludes: previous?.hasConditionalIncludes,
-    urlSampleOrder: originSampleOrder ?? namesSampleOrder,
+    urlSampleOrder: namesSampleOrder, originSampleOrder,
   };
 }
 

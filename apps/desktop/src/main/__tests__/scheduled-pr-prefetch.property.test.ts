@@ -347,29 +347,30 @@ it.skipIf(process.platform === "win32")("prefers the owner URL sampled during a 
   expect(starts.calls.filter(([, args]) => args[0] === "remote" && args[1] === "get-url")).toHaveLength(0);
 });
 
-it("prefers the owner URLs when native remote probes span an owner refresh", async () => {
+it.each(["origin", "upstream"] as const)("prefers owner URLs when native prefetch samples %s before an owner refresh", async (first) => {
+  const second = first === "origin" ? "upstream" : "origin";
   const cwd = await fixture();
   await readGit(cwd, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
-  const originSampled = Promise.withResolvers<void>();
-  const releaseUpstream = Promise.withResolvers<void>();
+  const firstSampled = Promise.withResolvers<void>();
+  const releaseSecond = Promise.withResolvers<void>();
   let delayScheduledReads = true;
   const runner = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (directory, args, options) => {
     const delay = delayScheduledReads && directory === cwd && args[0] === "remote" && args[1] === "get-url";
-    if (delay && args[3] === "upstream") await releaseUpstream.promise;
+    if (delay && args[3] === second) await releaseSecond.promise;
     const result = await runGitCommand(directory, args, options);
-    if (delay && args[3] === "origin") originSampled.resolve();
+    if (delay && args[3] === first) firstSampled.resolve();
     return result;
   });
   onTestFinished(() => { runner.mockRestore(); });
   const resolve = createScheduledPrPrefetchRepoResolver();
   const scheduled = resolve(cwd, "topic-0");
   try {
-    await Promise.race([originSampled.promise, scheduled.then(() => { throw new Error("Scheduled lookup did not read the origin URL"); })]);
+    await Promise.race([firstSampled.promise, scheduled.then(() => { throw new Error("Scheduled lookup did not sample its first URL"); })]);
     delayScheduledReads = false;
-    await readGit(cwd, "remote", "set-url", "origin", "https://github.com/fixture/owner-overlap.git");
-    expect((await resolveGitHubReposForDirectory(cwd, { fresh: true })).map(({ repo }) => repo)).toEqual(["owner-overlap", "upstream"]);
+    await readGit(cwd, "remote", "set-url", first, "https://github.com/fixture/owner-overlap.git");
+    expect((await resolveGitHubReposForDirectory(cwd, { fresh: true })).map(({ repo }) => repo)).toEqual(first === "origin" ? ["owner-overlap", "upstream"] : ["origin", "owner-overlap"]);
   } finally {
-    releaseUpstream.resolve();
+    releaseSecond.resolve();
     await scheduled;
   }
 
