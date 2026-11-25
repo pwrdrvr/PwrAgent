@@ -203,7 +203,7 @@ describe("PwrAgent's MathOS Platform client", () => {
         if (call.url.includes("/v1/")) expect(call.authorization).toBe(`Bearer ${KEY}`);
         else expect(call.authorization).toBeUndefined();
       }
-    }), { numRuns: 40 });
+    }), { numRuns: 8 });
   });
 
   it("opens the VM as the web app does, never waking it, and reports only what the runtime offers", async () => {

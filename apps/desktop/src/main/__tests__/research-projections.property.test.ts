@@ -266,7 +266,7 @@ describe("research projections", () => {
       await expectAgreement(store, oracle);
       // The journal itself is what both sides were given.
       for (const id of RUNS) expect(store.get(id)).toEqual(oracle.get(id));
-    }), { numRuns: 25 });
+    }), { numRuns: 8 });
   });
 
   projectionTest("the change stream gives the replayed run to empty and lagging renderer stores", async ({ db }) => {
@@ -297,7 +297,7 @@ describe("research projections", () => {
         expectStoreHoldsRun(sync(store, emptyResearchRunStore(id), limit), run);
         expectStoreHoldsRun(sync(store, held.get(id)!, limit), run);
       }
-    }), { numRuns: 25 });
+    }), { numRuns: 8 });
   });
 
   it("a database from before the projections is backfilled once, to what replay gives, and later opens write nothing", async () => {

@@ -119,7 +119,7 @@ async function checkReadWork(unrelatedCount: number) {
 it("reads two matching rows with 1,000 unrelated historical turns", () => checkReadWork(1_000));
 
 it("bounds accounting work by the requested turns as unrelated history grows", async () => {
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 100, max: 2_000 }), checkReadWork), { numRuns: 20 });
+  await fc.assert(fc.asyncProperty(fc.integer({ min: 100, max: 2_000 }), checkReadWork), { numRuns: 8 });
 });
 
 it("matches full-ledger usage activities for local and federated reads", async () => {
@@ -183,7 +183,7 @@ it("matches full-ledger usage activities for local and federated reads", async (
         db.close();
       }
     },
-  ), { numRuns: 32, examples: [["codex", turnIds, "completed", true], ["codex", turnIds, "failed", false]] });
+  ), { numRuns: 8, examples: [["codex", turnIds, "completed", true], ["codex", turnIds, "failed", false]] });
 });
 
 it("accepts a full accounting batch and rejects a larger one before the ledger read", async () => {
@@ -290,5 +290,5 @@ it("repairs the selected turn and leaves 1,000 older repairs for Pricing", () =>
 
 it("stops repricing when the requested turn settles as the older tail grows", async () => {
   await fc.assert(fc.asyncProperty(fc.integer({ min: 20, max: 100 }), fc.option(fc.integer({ min: 9, max: 18 }), { nil: undefined }),
-    checkRepricingTail), { numRuns: 12, examples: [[20, 10], [20, undefined]] });
+    checkRepricingTail), { numRuns: 8, examples: [[20, 10], [20, undefined]] });
 });

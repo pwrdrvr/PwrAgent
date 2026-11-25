@@ -172,57 +172,55 @@ describe("describeInstalledAcpBackend", () => {
     }
   });
 
-  it("records known Google account rejections from session/new for the currently selected runtime", async () => {
+  it.each([
+    ["acp:gemini", false],
+    ["acp:gemini", true],
+    ["acp:antigravity", false],
+    ["acp:antigravity", true],
+  ] as const)("records known Google account rejections from session/new for the currently selected runtime [%#]", async (backendId, changedRuntime) => {
     const gemini = "acp:gemini";
-    const antigravity = "acp:antigravity";
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom(gemini, antigravity),
-      fc.boolean(),
-      async (backendId, changedRuntime) => {
-        const registryId = backendId === gemini ? "gemini" : "antigravity";
-        const rejection = backendId === gemini
-          ? "json-rpc error (-32000): This client is no longer supported for Gemini Code Assist for individuals."
-          : "json-rpc error (-32000): Authentication required";
-        let current = {
-          ...buildInstalledAgent(), backendId, registryId,
-          launchDescriptor: {
-            backendId, registryId, distributionKind: "local" as const,
-            command: `/opt/example/${registryId}`, args: [], env: {},
-          },
-        };
-        const transport = new FakeAcpAgentTransport();
-        const request = transport.request.bind(transport);
-        vi.spyOn(transport, "request").mockImplementation(async (method, params, timeout) => {
-          if (method !== "session/new") return await request(method, params, timeout);
-          if (changedRuntime) current = { ...current, version: "999.0.0" };
-          throw new Error(rejection);
-        });
-        const emit = vi.fn(async (_event: AgentEvent) => undefined);
-        const adapter = createTestAcpBackendAdapter({
-          captureStores: [],
-          acpAgentStore: {
-            getInstalledAgent: () => current,
-            listInstalledAgents: () => [current],
-            upsertInstalledAgent: (agent) => { current = agent as typeof current; },
-          },
-          acpSessionStore: { getSession: () => undefined, listSessions: () => [], upsertSession: vi.fn() },
-          createAcpTransport: () => transport,
-          emit,
-          handleServerRequest: vi.fn(async () => ({})),
-        });
-        try {
-          const client = await adapter.getClient(backendId);
-          emit.mockClear();
-          await expect(client.startSession({ executionMode: "default" })).rejects.toThrow(rejection);
-          expect(describeInstalledAcpBackend(current).available).toBe(changedRuntime);
-          expect(installedAcpAgentSettingsEntry(current).unavailableReason !== undefined).toBe(!changedRuntime);
-          expect(emit.mock.calls.some(([event]) =>
-            event.notification.method === "backend/acpRuntimeCapabilities/updated")).toBe(!changedRuntime);
-        } finally {
-          await adapter.close();
-        }
+    const registryId = backendId === gemini ? "gemini" : "antigravity";
+    const rejection = backendId === gemini
+      ? "json-rpc error (-32000): This client is no longer supported for Gemini Code Assist for individuals."
+      : "json-rpc error (-32000): Authentication required";
+    let current = {
+      ...buildInstalledAgent(), backendId, registryId,
+      launchDescriptor: {
+        backendId, registryId, distributionKind: "local" as const,
+        command: `/opt/example/${registryId}`, args: [], env: {},
       },
-    ), { numRuns: 12 });
+    };
+    const transport = new FakeAcpAgentTransport();
+    const request = transport.request.bind(transport);
+    vi.spyOn(transport, "request").mockImplementation(async (method, params, timeout) => {
+      if (method !== "session/new") return await request(method, params, timeout);
+      if (changedRuntime) current = { ...current, version: "999.0.0" };
+      throw new Error(rejection);
+    });
+    const emit = vi.fn(async (_event: AgentEvent) => undefined);
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => current,
+        listInstalledAgents: () => [current],
+        upsertInstalledAgent: (agent) => { current = agent as typeof current; },
+      },
+      acpSessionStore: { getSession: () => undefined, listSessions: () => [], upsertSession: vi.fn() },
+      createAcpTransport: () => transport,
+      emit,
+      handleServerRequest: vi.fn(async () => ({})),
+    });
+    try {
+      const client = await adapter.getClient(backendId);
+      emit.mockClear();
+      await expect(client.startSession({ executionMode: "default" })).rejects.toThrow(rejection);
+      expect(describeInstalledAcpBackend(current).available).toBe(changedRuntime);
+      expect(installedAcpAgentSettingsEntry(current).unavailableReason !== undefined).toBe(!changedRuntime);
+      expect(emit.mock.calls.some(([event]) =>
+        event.notification.method === "backend/acpRuntimeCapabilities/updated")).toBe(!changedRuntime);
+    } finally {
+      await adapter.close();
+    }
   });
 
   it("shows a sign-in action for Antigravity's observed logged-out response", () => {
@@ -1098,79 +1096,75 @@ describe("AcpBackendAdapter", () => {
     expect(transport.close).toHaveBeenCalledOnce();
   });
 
-  it("propagates every incomplete pooled shutdown instead of reporting a successful drain", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (fails) => {
-      vi.useFakeTimers();
-      try {
-        const agent = buildInstalledAgent();
-        const dispose = vi.fn(() => fails
-          ? Promise.reject(new Error("fixture dispose failed"))
-          : new Promise<void>(() => undefined));
-        const adapter = createTestAcpBackendAdapter({
-          acpAgentStore: { getInstalledAgent: () => agent, listInstalledAgents: () => [agent], upsertInstalledAgent: vi.fn() },
-          captureStores: [], closeTimeoutMs: 25,
-          createAcpClient: () => ({ initialize: async () => {}, dispose }) as never,
-          emit: async () => {}, handleServerRequest: async () => ({}),
-        });
-        await adapter.getClient("acp:gemini");
-        const result = adapter.close().then(() => "success", () => "incomplete");
-        await vi.advanceTimersByTimeAsync(25);
-        expect(await result).toBe("incomplete");
-        expect(dispose).toHaveBeenCalledOnce();
-      } finally { vi.useRealTimers(); }
-    }), { numRuns: 10 });
+  it.each([false, true] as const)("propagates every incomplete pooled shutdown instead of reporting a successful drain [%#]", async (fails) => {
+    vi.useFakeTimers();
+    try {
+      const agent = buildInstalledAgent();
+      const dispose = vi.fn(() => fails
+        ? Promise.reject(new Error("fixture dispose failed"))
+        : new Promise<void>(() => undefined));
+      const adapter = createTestAcpBackendAdapter({
+        acpAgentStore: { getInstalledAgent: () => agent, listInstalledAgents: () => [agent], upsertInstalledAgent: vi.fn() },
+        captureStores: [], closeTimeoutMs: 25,
+        createAcpClient: () => ({ initialize: async () => {}, dispose }) as never,
+        emit: async () => {}, handleServerRequest: async () => ({}),
+      });
+      await adapter.getClient("acp:gemini");
+      const result = adapter.close().then(() => "success", () => "incomplete");
+      await vi.advanceTimersByTimeAsync(25);
+      expect(await result).toBe("incomplete");
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
   });
 
-  it("drains admitted ephemeral runs across lookup, prompt and disposal shutdown interleavings", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("lookup", "prompt", "dispose"), async (phase) => {
-      const agent = { ...buildInstalledAgent(), launchDescriptor: {
-        backendId: "acp:gemini" as const, registryId: "gemini", distributionKind: "local" as const,
-        command: "/fixture/gemini", args: [], env: {},
-      } };
-      const lookup = Promise.withResolvers<AcpInstalledAgentRecord>();
-      const prompt = Promise.withResolvers<unknown>();
-      const promptEntered = Promise.withResolvers<void>();
-      const disposal = Promise.withResolvers<void>();
-      const disposalEntered = Promise.withResolvers<void>();
-      const transport = new FakeAcpAgentTransport();
-      const rawRequest = transport.request.bind(transport);
-      vi.spyOn(transport, "request").mockImplementation(async (method, ...args) => {
-        if (method === "session/prompt") { promptEntered.resolve(); return await prompt.promise; }
-        return await rawRequest(method, ...args);
-      });
-      vi.spyOn(transport, "close").mockImplementation(async () => {
-        disposalEntered.resolve();
-        prompt.reject(new Error("fixture transport stopped"));
-        await disposal.promise;
-      });
-      const createAcpTransport = vi.fn(() => transport);
-      const adapter = createTestAcpBackendAdapter({
-        captureStores: [], createAcpTransport, emit: async () => {}, handleServerRequest: async () => ({}),
-      });
-      vi.spyOn(adapter, "resolveInstalledAgent").mockImplementation(() => lookup.promise);
-      const run = adapter.runEphemeralPrompt("acp:gemini", {
-        cwd: "/fixture", prompt: "fixture", timeoutMs: 5_000, maxOutputChars: 100,
-      }).catch(error => error);
-      if (phase !== "lookup") {
-        lookup.resolve(agent);
-        await promptEntered.promise;
-      }
-      if (phase === "dispose") {
-        prompt.resolve({ stopReason: "end_turn" });
-        await disposalEntered.promise;
-      }
-      let closed = false;
-      const closing = adapter.close().then(() => { closed = true; });
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(closed).toBe(false);
-      if (phase === "lookup") lookup.resolve(agent);
-      disposal.resolve();
-      await run;
-      await closing;
-      expect(createAcpTransport).toHaveBeenCalledTimes(phase === "lookup" ? 0 : 1);
-      expect(transport.close).toHaveBeenCalledTimes(phase === "lookup" ? 0 : 1);
-    }), { numRuns: 15 });
+  it.each(["lookup", "prompt", "dispose"] as const)("drains admitted ephemeral runs across lookup, prompt and disposal shutdown interleavings [%#]", async (phase) => {
+    const agent = { ...buildInstalledAgent(), launchDescriptor: {
+      backendId: "acp:gemini" as const, registryId: "gemini", distributionKind: "local" as const,
+      command: "/fixture/gemini", args: [], env: {},
+    } };
+    const lookup = Promise.withResolvers<AcpInstalledAgentRecord>();
+    const prompt = Promise.withResolvers<unknown>();
+    const promptEntered = Promise.withResolvers<void>();
+    const disposal = Promise.withResolvers<void>();
+    const disposalEntered = Promise.withResolvers<void>();
+    const transport = new FakeAcpAgentTransport();
+    const rawRequest = transport.request.bind(transport);
+    vi.spyOn(transport, "request").mockImplementation(async (method, ...args) => {
+      if (method === "session/prompt") { promptEntered.resolve(); return await prompt.promise; }
+      return await rawRequest(method, ...args);
+    });
+    vi.spyOn(transport, "close").mockImplementation(async () => {
+      disposalEntered.resolve();
+      prompt.reject(new Error("fixture transport stopped"));
+      await disposal.promise;
+    });
+    const createAcpTransport = vi.fn(() => transport);
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [], createAcpTransport, emit: async () => {}, handleServerRequest: async () => ({}),
+    });
+    vi.spyOn(adapter, "resolveInstalledAgent").mockImplementation(() => lookup.promise);
+    const run = adapter.runEphemeralPrompt("acp:gemini", {
+      cwd: "/fixture", prompt: "fixture", timeoutMs: 5_000, maxOutputChars: 100,
+    }).catch(error => error);
+    if (phase !== "lookup") {
+      lookup.resolve(agent);
+      await promptEntered.promise;
+    }
+    if (phase === "dispose") {
+      prompt.resolve({ stopReason: "end_turn" });
+      await disposalEntered.promise;
+    }
+    let closed = false;
+    const closing = adapter.close().then(() => { closed = true; });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    if (phase === "lookup") lookup.resolve(agent);
+    disposal.resolve();
+    await run;
+    await closing;
+    expect(createAcpTransport).toHaveBeenCalledTimes(phase === "lookup" ? 0 : 1);
+    expect(transport.close).toHaveBeenCalledTimes(phase === "lookup" ? 0 : 1);
   });
 
   it("checks profile owner admission before pooled and ephemeral ACP provider startup", async () => {
@@ -4084,49 +4078,47 @@ describe("AcpBackendAdapter", () => {
     }), { numRuns: 12, examples: [["account-a", undefined], [undefined, "account-b"]] });
   });
 
-  it("only shows quota from the selected Antigravity executable, including when a retired read finishes late", async () => {
+  it.each([false, true] as const)("only shows quota from the selected Antigravity executable, including when a retired read finishes late [%#]", async (oldReadCompleted) => {
     const oldLimits = [{ name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 20 }];
     // The selected executable determines both quota visibility and eligibility
     // to read, regardless of whether its predecessor had finished reading.
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (oldReadCompleted) => {
-      let agent = buildAntigravityQuotaAgent("/old/agy");
-      const oldRead = Promise.withResolvers<{ rateLimits: BackendRateLimitSummary[] }>();
-      const readAntigravityUsage = vi.fn((launch: AcpLaunchDescriptor, _signal: AbortSignal) =>
-        launch.command === "/old/agy" ? oldRead.promise : Promise.resolve(undefined));
-      const adapter = createTestAcpBackendAdapter({
-        captureStores: [],
-        acpAgentStore: {
-          getInstalledAgent: () => agent,
-          listInstalledAgents: () => [agent],
-          upsertInstalledAgent: vi.fn(),
-        },
-        createAcpClient: () => ({
-          initialize: async () => undefined,
-          dispose: async () => undefined,
-        }) as never,
-        readAntigravityUsage,
-        emit: async () => undefined,
-        handleServerRequest: async () => ({}),
-      });
-      try {
-        await adapter.getClient(agent.backendId);
-        await adapter.describeInstalledBackends(true);
-        if (oldReadCompleted) {
-          oldRead.resolve({ rateLimits: oldLimits });
-          await vi.waitFor(async () => expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toEqual(oldLimits));
-        }
-        agent = buildAntigravityQuotaAgent("/new/agy");
-        expect((await adapter.describeInstalledBackends(true))[0]?.rateLimits).toBeUndefined();
-        expect(readAntigravityUsage.mock.calls.map(([launch]) => launch.command)).toEqual(["/old/agy", "/new/agy"]);
-        expect(readAntigravityUsage.mock.calls[0]?.[1].aborted).toBe(true);
+    let agent = buildAntigravityQuotaAgent("/old/agy");
+    const oldRead = Promise.withResolvers<{ rateLimits: BackendRateLimitSummary[] }>();
+    const readAntigravityUsage = vi.fn((launch: AcpLaunchDescriptor, _signal: AbortSignal) =>
+      launch.command === "/old/agy" ? oldRead.promise : Promise.resolve(undefined));
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      createAcpClient: () => ({
+        initialize: async () => undefined,
+        dispose: async () => undefined,
+      }) as never,
+      readAntigravityUsage,
+      emit: async () => undefined,
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      await adapter.getClient(agent.backendId);
+      await adapter.describeInstalledBackends(true);
+      if (oldReadCompleted) {
         oldRead.resolve({ rateLimits: oldLimits });
-        await new Promise<void>((resolve) => setImmediate(resolve));
-        expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toBeUndefined();
-      } finally {
-        oldRead.resolve({ rateLimits: oldLimits });
-        await adapter.close();
+        await vi.waitFor(async () => expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toEqual(oldLimits));
       }
-    }), { numRuns: 12, examples: [[false], [true]] });
+      agent = buildAntigravityQuotaAgent("/new/agy");
+      expect((await adapter.describeInstalledBackends(true))[0]?.rateLimits).toBeUndefined();
+      expect(readAntigravityUsage.mock.calls.map(([launch]) => launch.command)).toEqual(["/old/agy", "/new/agy"]);
+      expect(readAntigravityUsage.mock.calls[0]?.[1].aborted).toBe(true);
+      oldRead.resolve({ rateLimits: oldLimits });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toBeUndefined();
+    } finally {
+      oldRead.resolve({ rateLimits: oldLimits });
+      await adapter.close();
+    }
   });
 
   it("aborts Antigravity quota and keeps ACP close pending until the probe drains", async () => {

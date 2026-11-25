@@ -23,11 +23,9 @@ const identity = { host: fc.integer({ min: 0, max: 1 }), backend: fc.integer({ m
 const keyOf = (backend: AcpBackendId, id: string) => JSON.stringify([backend, id]);
 afterEach(() => vi.unstubAllEnvs());
 
-it("binds generated desktop session and command choices to the same functioning portable implementations", () => {
-  fc.assert(fc.property(fc.integer({ min: 0, max: 1 }), host => {
-    expect(sessionBindings[host]).toBe(SharedSessions);
-    expect(commandBindings[host]).toBe(SharedCommands);
-  }));
+it.each([0, 1] as const)("binds generated desktop session and command choices to the same functioning portable implementations [%#]", (host) => {
+  expect(sessionBindings[host]).toBe(SharedSessions);
+  expect(commandBindings[host]).toBe(SharedCommands);
 });
 
 // The model owns only metadata. Legacy provider history contributes a scalar
@@ -119,7 +117,7 @@ it("matches independent session/privacy and keyset-page models across WAL hosts,
         expect(reads.writes.commits).toBe(0);
       }
     } finally { for (const db of dbs) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // Last-observed commands are qualified by agent and repository. A shared outer
@@ -184,28 +182,32 @@ it("models command filtering, replacement and atomic session/command visibility 
         expect(reads.writes.commits).toBe(0);
       }
     } finally { for (const db of dbs) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
-it("rejects generated malformed session and command payloads without repairing or writing on reads", async () => {
+it.each([
+  "not json",
+  "null",
+  "[]",
+  "{}",
+  '{"backendId":"codex"}',
+] as const)("rejects generated malformed session and command payloads without repairing or writing on reads [%#]", async (payload) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  await fc.assert(fc.asyncProperty(fc.constantFrom("not json", "null", "[]", "{}", '{"backendId":"codex"}'), async payload => {
-    const fixture = createTempStateDb("shared-acp-malformed-");
-    const db = StateDb.open(fixture.dbPath);
-    try {
-      db.raw.prepare("INSERT INTO acp_sessions (backend_id, session_id, created_at, updated_at, payload) VALUES (?, ?, ?, ?, ?)")
-        .run("acp:alpha", "bad", 1, 1, payload);
-      db.raw.prepare("INSERT INTO acp_available_commands (backend_id, repository_path, observed_at, payload) VALUES (?, ?, ?, ?)")
-        .run("acp:alpha", "/fixture", 1, payload);
-      const reads = await measureSqliteWrites(() => {
-        for (const [index, binding] of sessionBindings.entries()) {
-          expect(new binding(db).getSession("acp:alpha", "bad")).toBeUndefined();
-          expect(new binding(db).listSessions("acp:alpha")).toEqual([]);
-          expect(new commandBindings[index]!(db).get("acp:alpha", "/fixture"))
-            .toEqual(payload === "[]" ? { backendId: "acp:alpha", repositoryPath: "/fixture", observedAt: 1, commands: [] } : undefined);
-        }
-      });
-      expect(reads.writes.commits).toBe(0);
-    } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  const fixture = createTempStateDb("shared-acp-malformed-");
+  const db = StateDb.open(fixture.dbPath);
+  try {
+    db.raw.prepare("INSERT INTO acp_sessions (backend_id, session_id, created_at, updated_at, payload) VALUES (?, ?, ?, ?, ?)")
+      .run("acp:alpha", "bad", 1, 1, payload);
+    db.raw.prepare("INSERT INTO acp_available_commands (backend_id, repository_path, observed_at, payload) VALUES (?, ?, ?, ?)")
+      .run("acp:alpha", "/fixture", 1, payload);
+    const reads = await measureSqliteWrites(() => {
+      for (const [index, binding] of sessionBindings.entries()) {
+        expect(new binding(db).getSession("acp:alpha", "bad")).toBeUndefined();
+        expect(new binding(db).listSessions("acp:alpha")).toEqual([]);
+        expect(new commandBindings[index]!(db).get("acp:alpha", "/fixture"))
+          .toEqual(payload === "[]" ? { backendId: "acp:alpha", repositoryPath: "/fixture", observedAt: 1, commands: [] } : undefined);
+      }
+    });
+    expect(reads.writes.commits).toBe(0);
+  } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
 });

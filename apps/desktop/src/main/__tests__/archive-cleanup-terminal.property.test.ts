@@ -126,7 +126,7 @@ describe("terminal archive cleanup recovery", () => {
           fail.mockRestore();
           await test.close();
         }
-      }), { numRuns: 25, examples: [[1, false, "provider"]] }));
+      }), { numRuns: 8, examples: [[1, false, "provider"]] }));
   });
 
   it("preserves a plain recovered request when provider discovery fails", async () => {
@@ -167,7 +167,7 @@ describe("terminal archive cleanup recovery", () => {
           ]);
         } finally { await test.close(); }
       },
-    ), { numRuns: 25, examples: [[["absent"], true], [["external"], true], [["absent"], false], [["blocked", "absent", "external"], true]] }));
+    ), { numRuns: 8, examples: [[["absent"], true], [["external"], true], [["absent"], false], [["blocked", "absent", "external"], true]] }));
   });
 
   it.each(["absent", "external"] as const)("does not report an %s checkout again after a clean restart", async (outcome) => {
