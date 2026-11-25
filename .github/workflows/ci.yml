@@ -623,7 +623,7 @@ jobs:
         run: >-
           ${{ needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
           && format('pnpm exec node scripts/ci/run-pr-test-impact.mjs unit windows-main {0}', matrix.lane)
-          || format('pnpm test --project desktop-main --shard={0}/4 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs', matrix.lane) }}
+          || format('pnpm exec vitest run --config vitest.windows-main-ci.mts --project desktop-main --shard={0}/4 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs', matrix.lane) }}
 
       - name: Verify the unit slice completed
         id: unit-completion
