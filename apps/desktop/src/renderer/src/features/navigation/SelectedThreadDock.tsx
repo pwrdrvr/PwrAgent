@@ -22,6 +22,7 @@ import {
   TOP_DOCK_CLASS,
   TOP_DOCK_RESERVE_CHANGE_EVENT,
   TOP_DOCK_RESERVE_PROPERTY as RESERVE_PROPERTY,
+  TOP_DOCK_RESERVE_SAMPLE_EVENT,
   topDockReserve,
 } from "./selected-thread-dock-reserve";
 import { formatRelativeTime } from "./thread-time";
@@ -281,7 +282,7 @@ function observeDockLayout(
   let observedCard: HTMLButtonElement | null;
   let initialized = false;
   let frame = 0;
-  let layoutPending = false;
+  let layoutSample: "pending" | "sampled" | undefined;
   const containsMatch = (node: Element, selector: string): boolean =>
     node.matches(selector) || node.querySelector(selector) !== null;
   const forgetTargets = (): void => {
@@ -322,7 +323,7 @@ function observeDockLayout(
       window.cancelAnimationFrame(frame);
       frame = 0;
     }
-    layoutPending = false;
+    layoutSample = undefined;
   };
   const refresh = (inFrame = false): void => {
     // Each lens renders one lane directly inside the region. Identify it
@@ -352,8 +353,15 @@ function observeDockLayout(
       }
     }
   };
+  const sampleLayout = (): void => {
+    if (layoutSample !== "pending") return;
+    // The Project Index may need the reserve before our observer runs. Its
+    // request performs the same sample and leaves the delivery accounted for.
+    layoutSample = "sampled";
+    refresh(true);
+  };
   const schedule = (): void => {
-    if (frame !== 0 || layoutPending) return;
+    if (frame !== 0 || layoutSample === "pending") return;
     frame = window.requestAnimationFrame(() => {
       frame = 0;
       if (!resize) {
@@ -363,18 +371,18 @@ function observeDockLayout(
       // Animation callbacks run before layout. A fresh observation delivers
       // after layout in this same rendering update, even on a pure scroll.
       // Reuse the region's observation so it still reports later resizes.
-      layoutPending = true;
+      layoutSample = "pending";
       resize.unobserve(region);
       resize.observe(region);
     });
   };
   const resize = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
-    if (!layoutPending) {
+    if (layoutSample === undefined) {
       schedule();
       return;
     }
-    layoutPending = false;
-    refresh(true);
+    sampleLayout();
+    layoutSample = undefined;
   }) : undefined;
   const mutation = typeof MutationObserver === "function" ? new MutationObserver((records) => {
     if (noteMutations(records)) schedule();
@@ -393,11 +401,13 @@ function observeDockLayout(
     if (event.target === lane) schedule();
   };
   region.addEventListener("scroll", onScroll, { capture: true, passive: true });
+  region.addEventListener(TOP_DOCK_RESERVE_SAMPLE_EVENT, sampleLayout);
   return {
     refresh,
     dispose() {
       cancelMeasure();
       region.removeEventListener("scroll", onScroll, { capture: true });
+      region.removeEventListener(TOP_DOCK_RESERVE_SAMPLE_EVENT, sampleLayout);
       resize?.disconnect();
       mutation?.disconnect();
       document.fonts?.removeEventListener("loadingdone", schedule);

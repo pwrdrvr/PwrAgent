@@ -31,7 +31,11 @@ import {
   type ProjectBlockBox,
   type ProjectSpy,
 } from "./project-index";
-import { TOP_DOCK_RESERVE_CHANGE_EVENT, topDockReserve } from "./selected-thread-dock-reserve";
+import {
+  TOP_DOCK_RESERVE_CHANGE_EVENT,
+  TOP_DOCK_RESERVE_SAMPLE_EVENT,
+  topDockReserve,
+} from "./selected-thread-dock-reserve";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
 
 export type ProjectIndexEntry = {
@@ -149,11 +153,14 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     // The list is a zero-gap column. Inline size changes do not move its
     // project bounds unless a child also changes block size.
     if (firstChanged < sections.length) invalidateFrom(firstChanged);
-    if (sampleRequested) {
-      resize?.unobserve(region);
-      samplePending = false;
-    }
     if (sampleRequested || viewportChanged || firstChanged < sections.length) {
+      // Observer delivery order can change when the selection changes. Finish
+      // the dock's pending sample before reading where the headers stick.
+      region.dispatchEvent(new Event(TOP_DOCK_RESERVE_SAMPLE_EVENT));
+      if (sampleRequested) {
+        resize?.unobserve(region);
+        samplePending = false;
+      }
       if (frame !== 0) {
         window.cancelAnimationFrame(frame);
         frame = 0;

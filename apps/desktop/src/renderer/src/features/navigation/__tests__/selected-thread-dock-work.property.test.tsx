@@ -4,6 +4,7 @@ import { useRef } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { FixtureDirectoriesList } from "../../../test/navigation-presentation-fixture";
+import { ProjectIndex } from "../ProjectIndex";
 import { SelectedThreadDock } from "../SelectedThreadDock";
 import { buildLargeDirectoryFixture } from "./fixtures/directory-performance";
 
@@ -26,14 +27,18 @@ function box(top: number, height: number): DOMRect {
   return new DOMRect(0, top, 300, height);
 }
 
-function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1, withResizeObserver = false) {
+function mountDock(
+  directoryCount: number, selectedDirectory = 0, zoom = 1,
+  { withResizeObserver = false, withProjectIndex = false } = {},
+) {
   const fixture = buildLargeDirectoryFixture({
     directoryCount, unpinnedThreadsPerDirectory: 2, directoryThreadsCollapsed: false,
   });
   const { directories, threads } = fixture;
-  const selected = threads[selectedDirectory * 3 + 1]!;
-  const selectedKey = buildThreadIdentityKey(selected.source, selected.id);
+  let selected = threads[selectedDirectory * 3 + 1]!;
+  let selectedKey = buildThreadIdentityKey(selected.source, selected.id);
   const directoryOrder = new Map(directories.map(({ key }, index) => [key, index]));
+  const projects = directories.map(({ key, label }) => ({ key, label, containsSelection: false, active: false, review: false }));
   const disclosure = {
     expandedByKey: Object.fromEntries(directories.map(({ key }) => [key, true])),
     unpinnedExpandedByKey: {},
@@ -105,7 +110,9 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1, with
   const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
 
   const observers = new Set<TestResizeObserver>();
+  let nextObserver = 0;
   class TestResizeObserver implements ResizeObserver {
+    readonly order = nextObserver++;
     private readonly pending = new Set<Element>();
     constructor(private readonly callback: ResizeObserverCallback) {}
     observe(target: Element): void {
@@ -146,28 +153,41 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1, with
       parentThreadId: parent.id, parentThreadBackend: parent.source,
     }));
     return (
-      <div className="sidebar__scroll-region" ref={regionRef}>
-        <FixtureDirectoriesList
-          directories={updatedDirectories}
-          directoryDisclosure={disclosure}
-          threads={[...updated, ...arrived]}
-          selectedItemKey={selectedKey}
-          onOpenLaunchpad={asyncNoop}
-          onOpenThreadContextMenu={noop}
-          onSelectThread={noop}
-        />
-        <SelectedThreadDock
-          regionRef={regionRef}
-          thread={selected}
-          threadKey={selectedKey}
-          status={undefined}
-          remoteWork={false}
-          projectLabel={(key) => key}
-          ancestorThreadKeys={[]}
-          directoryKeys={[directories[selectedDirectory]!.key]}
-          onRevealHiddenThread={noop}
-        />
-      </div>
+      <>
+        {withProjectIndex ? (
+          <ProjectIndex
+            projects={projects}
+            scrollRegionRef={regionRef}
+            scrollRegionId="fixture-region"
+            spy
+            width={null}
+            onWidthChange={noop}
+            onJump={noop}
+          />
+        ) : null}
+        <div id="fixture-region" className="sidebar__scroll-region" ref={regionRef}>
+          <FixtureDirectoriesList
+            directories={updatedDirectories}
+            directoryDisclosure={disclosure}
+            threads={[...updated, ...arrived]}
+            selectedItemKey={selectedKey}
+            onOpenLaunchpad={asyncNoop}
+            onOpenThreadContextMenu={noop}
+            onSelectThread={noop}
+          />
+          <SelectedThreadDock
+            regionRef={regionRef}
+            thread={selected}
+            threadKey={selectedKey}
+            status={undefined}
+            remoteWork={false}
+            projectLabel={(key) => key}
+            ancestorThreadKeys={[]}
+            directoryKeys={[directories[selectedDirectory]!.key]}
+            onRevealHiddenThread={noop}
+          />
+        </div>
+      </>
     );
   }
 
@@ -176,6 +196,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1, with
   const lane = queryOne.call(region, ".directory-list") as HTMLElement;
   lane.style.overflowY = "auto";
   Object.defineProperty(lane, "currentCSSZoom", { value: zoom });
+  Object.defineProperty(lane, "clientHeight", { value: VIEW_HEIGHT });
   const dividerStyle = document.createElement("style");
   dividerStyle.textContent = ".directory-row__thread-divider { --directory-row-header-height: 28px; }";
   document.head.append(dividerStyle);
@@ -187,7 +208,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1, with
     act(() => pending.forEach((callback) => callback(0)));
   }
   function deliverLayout() {
-    act(() => [...observers].forEach((observer) => observer.deliver()));
+    act(() => [...observers].sort((a, b) => a.order - b.order).forEach((observer) => observer.deliver()));
   }
   function flush() {
     runFrameCallbacks();
@@ -205,6 +226,15 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1, with
   }
   return {
     edge: () => region.querySelector<HTMLElement>(".selected-thread-dock")?.dataset.edge,
+    currentProject: () => view.container.querySelector("[aria-current=location]")?.getAttribute("data-project-key"),
+    projectKey: (index: number) => directories[index]!.key,
+    selectDirectory(index: number) {
+      selectedDirectory = index;
+      selected = threads[index * 3 + 1]!;
+      selectedKey = buildThreadIdentityKey(selected.source, selected.id);
+      disclosure.previousSelectedItemKeyRef.current = selectedKey;
+      view.rerender(<Fixture metadata={0} />);
+    },
     move(nextOffset: number) {
       queueScroll(nextOffset);
       flush();
@@ -412,7 +442,7 @@ it("coalesces child-page commits and a queued scroll while measuring the final r
 });
 
 it("samples final scroll and page geometry after layout in the same rendering update", () => {
-  const fixture = mountDock(4, 0, 1, true);
+  const fixture = mountDock(4, 0, 1, { withResizeObserver: true });
   try {
     fc.assert(fc.property(fc.integer({ min: 195, max: 245 }), fc.integer({ min: 0, max: 5 }), (offset, children) => {
       fixture.updatePage(0);
@@ -435,6 +465,34 @@ it("samples final scroll and page geometry after layout in the same rendering up
       expect(fixture.edge()).toBe(shown >= 39 ? undefined : "top");
       expect(fixture.work.row).toBe(1);
     }), { numRuns: 10, examples: [[218, 0], [218, 4]] });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+it("samples the project under the new sticky line when the index observer runs first", () => {
+  const fixture = mountDock(4, 1, 1, { withResizeObserver: true, withProjectIndex: true });
+  try {
+    fc.assert(fc.property(fc.integer({ min: PITCH - 55, max: PITCH - 15 }), (offset) => {
+      fixture.move(0);
+      // The selection change rebuilds the dock observer after the index observer.
+      fixture.selectDirectory(0);
+      expect(fixture.edge()).toBeUndefined();
+      fixture.reset();
+      fixture.move(offset);
+      expect(fixture.edge()).toBe("top");
+      expect(fixture.currentProject()).toBe(fixture.projectKey(1));
+      expect(fixture.work.row).toBe(1);
+
+      fixture.move(1000);
+      fixture.selectDirectory(1);
+      expect(fixture.edge()).toBe("top");
+      fixture.reset();
+      fixture.move(offset);
+      expect(fixture.edge()).toBeUndefined();
+      expect(fixture.currentProject()).toBe(fixture.projectKey(0));
+      expect(fixture.work.row).toBe(1);
+    }), { numRuns: 10 });
   } finally {
     fixture.cleanup();
   }

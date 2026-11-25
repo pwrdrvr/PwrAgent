@@ -22,6 +22,8 @@ export const TOP_DOCK_RESERVE_PROPERTY = "--selected-thread-dock-reserve";
  * whatever placed a project by the old reserve has to place it again.
  */
 export const TOP_DOCK_RESERVE_CHANGE_EVENT = "selected-thread-dock-reserve-change";
+/** Lets the Project Index finish an already scheduled dock sample before it reads the reserve after layout. */
+export const TOP_DOCK_RESERVE_SAMPLE_EVENT = "selected-thread-dock-reserve-sample";
 
 /** The lane region `element` sits in, or is. */
 export function topDockRegionOf(element: Element): HTMLElement | null {
