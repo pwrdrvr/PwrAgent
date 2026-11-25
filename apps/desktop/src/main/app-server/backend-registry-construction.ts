@@ -6,6 +6,7 @@ import type { CodexRuntimeSupervisor } from "./codex-runtime-supervisor";
 import type { RegistryHandlers } from "./backend-registry-handlers";
 import type { RegistryContext } from "./registry-context";
 import type { ForgeToolBridge } from "./forge-tool-bridge";
+import type { GitHubRepositoryParentLookup } from "../pr-status/github-repository-parent";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
@@ -101,6 +102,7 @@ export type DesktopBackendRegistryOptions = {
   pendingEnvironmentLaunchStore?: PendingEnvironmentLaunchStore;
   gitDirectoryService?: GitDirectoryService;
   gitWorkingStateService?: GitWorkingStateService;
+  resolveGitHubRepositoryParent?: GitHubRepositoryParentLookup;
   gitWorkspaceHandoffService?: GitWorkspaceHandoffService;
   worktreeArchiveService?: WorktreeArchiveService;
   worktreeRecoveryService?: WorktreeRecoveryService;

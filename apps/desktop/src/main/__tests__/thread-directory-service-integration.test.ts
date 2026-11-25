@@ -943,7 +943,7 @@ describe("DesktopBackendRegistry", () => {
         return "5509\t0\tsrc/kernel.cu\n";
       }
       if (args.includes("status")) return " M src/kernel.cu\0";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[1] === "remote" && args[2] === "--verbose") return "origin\thttps://github.com/fixture/repo (fetch)\n";
       if (args.includes("rev-list")) return "0\n";
       throw new Error(`unexpected git invocation: ${args.join(" ")}`);
     };

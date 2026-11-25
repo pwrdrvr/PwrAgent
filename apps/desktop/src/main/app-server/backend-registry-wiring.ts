@@ -956,7 +956,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     });
   const gitWorkingStateService =
     options?.gitWorkingStateService ??
-    new GitWorkingStateService({ gitEnv: codexEnv });
+    new GitWorkingStateService({
+      gitEnv: codexEnv,
+      resolveRepositoryParent: options?.resolveGitHubRepositoryParent,
+    });
   const worktreeArchiveService =
     options?.worktreeArchiveService ??
     new WorktreeArchiveService({ gitEnv: codexEnv });
