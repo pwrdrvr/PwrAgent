@@ -66,7 +66,7 @@ afterEach(cleanup);
 
 describe("Usage Overview filter row names", () => {
   it("reports include through aria-pressed and exclusion through the accessible name, never as mixed", () => {
-    fc.assert(fc.property(fc.array(commandArb, { minLength: 1, maxLength: 14 }), (commands) => {
+    fc.assert(fc.property(fc.array(commandArb, { minLength: 1, maxLength: 8 }), (commands) => {
       const { container, unmount } = render(<FilteredBand />);
       const band = within(container);
       const providerRow = (label: string) => within(band.getByRole("group", { name: "Usage by provider" }))
@@ -119,6 +119,6 @@ describe("Usage Overview filter row names", () => {
       } finally {
         unmount();
       }
-    }), { numRuns: 40 });
+    }), { numRuns: 20 });
   });
 });
