@@ -127,3 +127,45 @@ it.each([
   viewer.focusSource(true);
   expect(hasStartedNotice()).toBe(false);
 });
+
+const launchInteractions = ["return to source", "hover over tray", "focus tray action"] as const;
+type LaunchInteraction = typeof launchInteractions[number];
+
+async function noticeBeforeCallback(elapsedMs: number, interaction: LaunchInteraction) {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+  try {
+    const viewer = startFromSource(localCard);
+    await viewer.succeed();
+    if (interaction === "return to source") viewer.focusSource(false);
+
+    // Advance the clock without delivering the dismissal callback.
+    clock.mockReturnValue(elapsedMs);
+    if (interaction === "return to source") {
+      viewer.focusSource(true);
+    } else if (interaction === "hover over tray") {
+      fireEvent.pointerEnter(screen.getByRole("region", { name: "Started to-dos" }));
+    } else {
+      act(() => { screen.getByRole("button", { name: `Open thread: ${localCard.title}` }).focus(); });
+    }
+    return hasStartedNotice();
+  } finally {
+    cleanup();
+    resetThreadTodoLaunchesForTests();
+    clock.mockRestore();
+  }
+}
+
+it("uses the deadline when an interaction beats dismissal callback delivery", async () => {
+  const lifetime = THREAD_TODO_LAUNCH_DISMISS_MS;
+  await fc.assert(fc.asyncProperty(
+    fc.constantFrom(...launchInteractions),
+    fc.oneof(fc.constant(lifetime), fc.integer({ min: 0, max: 2 * lifetime })),
+    async (interaction, elapsedMs) => {
+      expect(await noticeBeforeCallback(elapsedMs, interaction)).toBe(elapsedMs < lifetime);
+    },
+  ), { numRuns: 25 });
+});
+
+it.each(launchInteractions)("expires at the deadline before callback delivery on %s", async (interaction) => {
+  expect(await noticeBeforeCallback(THREAD_TODO_LAUNCH_DISMISS_MS, interaction)).toBe(false);
+});

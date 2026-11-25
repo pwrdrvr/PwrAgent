@@ -1,4 +1,4 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 
 /** How long a successful start stays in the tray, while nothing pauses it. */
@@ -92,6 +92,7 @@ type TrackedLaunch = {
 // A start and its dismissal deadline outlive the stack that began it.
 let launches: readonly TrackedLaunch[] = [];
 const listeners = new Set<() => void>();
+const EMPTY_LAUNCH_VIEW = { launches: [], returnedIds: new Set<string>() };
 
 function publish(next: readonly TrackedLaunch[]): void {
   launches = next;
@@ -114,10 +115,16 @@ function scheduleDismissal(entry: TrackedLaunch, countdown: DismissCountdown): v
   };
 }
 
-function stopDismissal(countdown: DismissCountdown | undefined): void {
+function remainingDismissMs(countdown: DismissCountdown, now: number): number {
+  return countdown.scheduled
+    ? Math.max(0, countdown.scheduled.expiresAt - now)
+    : countdown.remainingMs;
+}
+
+function stopDismissal(countdown: DismissCountdown | undefined, now = Date.now()): void {
   if (!countdown?.scheduled) return;
   clearTimeout(countdown.scheduled.timer);
-  countdown.remainingMs = Math.max(0, countdown.scheduled.expiresAt - Date.now());
+  countdown.remainingMs = remainingDismissMs(countdown, now);
   countdown.scheduled = undefined;
 }
 
@@ -126,7 +133,12 @@ export function pauseThreadTodoLaunchDismissal(launch: ThreadTodoLaunch): (() =>
   const entry = launches.find((entry) => entry.launch === launch);
   const countdown = entry?.countdown;
   if (!entry || !countdown?.scheduled) return undefined;
-  stopDismissal(countdown);
+  const now = Date.now();
+  if (remainingDismissMs(countdown, now) === 0) {
+    dismissThreadTodoLaunch(launch.id);
+    return undefined;
+  }
+  stopDismissal(countdown, now);
   return () => {
     if (launches.includes(entry)) scheduleDismissal(entry, countdown);
   };
@@ -135,10 +147,7 @@ export function pauseThreadTodoLaunchDismissal(launch: ThreadTodoLaunch): (() =>
 /** Time left when the visual countdown mounts or remounts. */
 export function threadTodoLaunchDismissRemainingMs(launch: ThreadTodoLaunch): number {
   const countdown = launches.find((entry) => entry.launch === launch)?.countdown;
-  if (!countdown) return 0;
-  return countdown.scheduled
-    ? Math.max(0, countdown.scheduled.expiresAt - Date.now())
-    : countdown.remainingMs;
+  return countdown ? remainingDismissMs(countdown, Date.now()) : 0;
 }
 
 /**
@@ -219,16 +228,17 @@ export function useThreadTodoLaunches(threadKey: string): {
   returnedIds: ReadonlySet<string>;
 } {
   const all = useSyncExternalStore(subscribe, snapshot, snapshot);
-  return useMemo(() => {
-    const launches: ThreadTodoLaunch[] = [];
-    const returnedIds = new Set<string>();
-    for (const { launch, returnedToDeck } of all) {
-      if (launch.threadKey !== threadKey) continue;
-      if (returnedToDeck) returnedIds.add(launch.id);
-      else launches.push(launch);
-    }
-    return { launches, returnedIds };
-  }, [all, threadKey]);
+  if (all.length === 0) return EMPTY_LAUNCH_VIEW;
+  // A render can beat the dismissal callback after the deadline.
+  const now = Date.now();
+  const launches: ThreadTodoLaunch[] = [];
+  const returnedIds = new Set<string>();
+  for (const { launch, returnedToDeck, countdown } of all) {
+    if (launch.threadKey !== threadKey || (countdown && remainingDismissMs(countdown, now) === 0)) continue;
+    if (returnedToDeck) returnedIds.add(launch.id);
+    else launches.push(launch);
+  }
+  return { launches, returnedIds };
 }
 
 /** Test seam: forgets every start. */
