@@ -5,11 +5,10 @@ import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared/contracts
 import { THREAD_TODO_LAUNCH_DISMISS_MS, ThreadTodoLaunchTray } from "../ThreadTodoLaunchTray";
 import { launchThreadTodo, resetThreadTodoLaunchesForTests, useThreadTodoLaunches } from "../thread-todo-launches";
 
-const card: ThreadTodo = {
+const localCard: ThreadTodo = {
   id: "retry-queue",
-  backend: "acp:antigravity",
+  backend: "codex",
   threadId: "webhook-delivery",
-  federationTarget: { scope: "remote", instanceId: "fixture-owner" },
   kind: "handoff",
   status: "open",
   title: "Bound the retry queue",
@@ -17,9 +16,14 @@ const card: ThreadTodo = {
   createdAt: 0,
   updatedAt: 0,
 };
+const remoteCard: ThreadTodo = {
+  ...localCard,
+  backend: "acp:antigravity",
+  federationTarget: { scope: "remote", instanceId: "fixture-owner" },
+};
 
-function SourceTray() {
-  const { launches } = useThreadTodoLaunches(threadTodoThreadKey(card));
+function SourceTray({ threadKey }: { threadKey: string }) {
+  const { launches } = useThreadTodoLaunches(threadKey);
   return (
     <ThreadTodoLaunchTray
       launches={launches}
@@ -30,18 +34,20 @@ function SourceTray() {
   );
 }
 
-function startFromSource() {
-  const { rerender } = render(<SourceTray />);
+function startFromSource(card: ThreadTodo) {
+  const threadKey = threadTodoThreadKey(card);
+  const source = <SourceTray threadKey={threadKey} />;
+  const { rerender } = render(source);
   let complete!: (todo: ThreadTodo) => void;
   const reply = new Promise<ThreadTodo>((resolve) => { complete = resolve; });
   act(() => {
-    void launchThreadTodo({ todo: card, threadKey: threadTodoThreadKey(card) }, (begin) => {
+    void launchThreadTodo({ todo: card, threadKey }, (begin) => {
       begin();
       return reply;
     });
   });
   return {
-    focusSource: (visible: boolean) => rerender(visible ? <SourceTray /> : <div>Another thread</div>),
+    focusSource: (visible: boolean) => rerender(visible ? source : <div>Another thread</div>),
     succeed: () => act(async () => {
       complete({ ...card, status: "done", startedThread: { backend: card.backend, threadId: "retry-worker" } });
     }),
@@ -53,7 +59,7 @@ function elapse(ms: number) {
 }
 
 function hasStartedNotice() {
-  return screen.queryByRole("button", { name: `Open thread: ${card.title}` }) !== null;
+  return screen.queryByRole("button", { name: `Open thread: ${localCard.title}` }) !== null;
 }
 
 afterEach(() => {
@@ -66,14 +72,15 @@ it("lets only time paused in the visible tray extend a success's lifetime", asyn
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const lifetime = THREAD_TODO_LAUNCH_DISMISS_MS;
   await fc.assert(fc.asyncProperty(
+    fc.constantFrom(localCard, remoteCard),
     fc.boolean(),
     fc.array(fc.record({
       readingMs: fc.nat(lifetime),
       pauseMs: fc.nat(lifetime * 2),
       awayMs: fc.nat(lifetime),
     })),
-    async (settleWhileAway, visits) => {
-      const viewer = startFromSource();
+    async (card, settleWhileAway, visits) => {
+      const viewer = startFromSource(card);
       try {
         if (settleWhileAway) viewer.focusSource(false);
         await viewer.succeed();
@@ -106,9 +113,12 @@ it("lets only time paused in the visible tray extend a success's lifetime", asyn
   ), { numRuns: 25 });
 });
 
-it.each([false, true])("does not replay an expired success on return (completed while away: %s)", async (settleWhileAway) => {
+it.each([
+  { source: "local Codex", card: localCard, settleWhileAway: false },
+  { source: "mounted Antigravity", card: remoteCard, settleWhileAway: true },
+])("does not replay an expired success on return ($source)", async ({ card, settleWhileAway }) => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-  const viewer = startFromSource();
+  const viewer = startFromSource(card);
   if (settleWhileAway) viewer.focusSource(false);
   await viewer.succeed();
   viewer.focusSource(false);
