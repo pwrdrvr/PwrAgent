@@ -17,13 +17,16 @@ const ROW_HEIGHT = 60;
 const RESERVE = "has-selected-thread-dock-top";
 const DOCK_QUERY_ROOTS = ".sidebar__scroll-region, .directory-list";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function box(top: number, height: number): DOMRect {
   return new DOMRect(0, top, 300, height);
 }
 
-function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
+function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1, withResizeObserver = false) {
   const fixture = buildLargeDirectoryFixture({
     directoryCount, unpinnedThreadsPerDirectory: 2, directoryThreadsCollapsed: false,
   });
@@ -41,11 +44,16 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
   };
   let offset = 0;
   let arrivedChildren = 0;
+  let laneReads = 0;
   const work = { row: 0, sticky: 0, selectors: 0, reserveLifts: 0 };
   const viewportBox = (top: number, height: number) => box(top * zoom, height * zoom);
   const originalRect = Element.prototype.getBoundingClientRect;
   const geometry = vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
-    if (this.matches(".sidebar__scroll-region, .directory-list")) return viewportBox(VIEW_TOP, VIEW_HEIGHT);
+    if (this.matches(".directory-list")) {
+      laneReads++;
+      return viewportBox(VIEW_TOP, VIEW_HEIGHT);
+    }
+    if (this.matches(".sidebar__scroll-region")) return viewportBox(VIEW_TOP, VIEW_HEIGHT);
     const directory = this.closest<HTMLElement>(".directory-row");
     const index = directoryOrder.get(directory?.dataset.directoryKey ?? "");
     if (index === undefined) return originalRect.call(this);
@@ -96,6 +104,34 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
   });
   const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
 
+  const observers = new Set<TestResizeObserver>();
+  class TestResizeObserver implements ResizeObserver {
+    private readonly pending = new Set<Element>();
+    constructor(private readonly callback: ResizeObserverCallback) {}
+    observe(target: Element): void {
+      this.pending.add(target);
+      observers.add(this);
+    }
+    unobserve(target: Element): void {
+      this.pending.delete(target);
+      if (this.pending.size === 0) observers.delete(this);
+    }
+    disconnect(): void {
+      this.pending.clear();
+      observers.delete(this);
+    }
+    deliver(): void {
+      const entries = Array.from(this.pending, (target): ResizeObserverEntry => {
+        const height = target.matches(".directory-row__header") ? 28 : VIEW_HEIGHT;
+        const size = [{ inlineSize: 300, blockSize: height }];
+        return { target, contentRect: box(0, height), borderBoxSize: size, contentBoxSize: size, devicePixelContentBoxSize: size };
+      });
+      this.disconnect();
+      if (entries.length > 0) this.callback(entries, this);
+    }
+  }
+  if (withResizeObserver) vi.stubGlobal("ResizeObserver", TestResizeObserver);
+
   function Fixture({ metadata, children = 0 }: { metadata: number; children?: number }) {
     const regionRef = useRef<HTMLDivElement>(null);
     const updated = threads.map((thread, index) => index === 0
@@ -145,10 +181,17 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
   document.head.append(dividerStyle);
   view.rerender(<Fixture metadata={0} />);
   expect(queryAll.call(lane, ".directory-row__thread-divider")).toHaveLength(directoryCount);
-  function flush() {
+  function runFrameCallbacks() {
     const pending = [...frames.values()];
     frames.clear();
     act(() => pending.forEach((callback) => callback(0)));
+  }
+  function deliverLayout() {
+    act(() => [...observers].forEach((observer) => observer.deliver()));
+  }
+  function flush() {
+    runFrameCallbacks();
+    deliverLayout();
   }
   async function settle() {
     await act(async () => {});
@@ -175,6 +218,9 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
     update: (value: number) => view.rerender(<Fixture metadata={value} />),
     queueScroll,
     flush,
+    runFrameCallbacks,
+    deliverLayout,
+    laneReads: () => laneReads,
     settle,
     styleReads: () => laneStyleReads,
     updatePage(children: number) {
@@ -182,7 +228,10 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
       view.rerender(<Fixture metadata={0} children={children} />);
       expect(queryAll.call(lane, '.thread-row-shell[data-thread-key^="codex:child-"]')).toHaveLength(children);
     },
-    reset: () => Object.assign(work, { row: 0, sticky: 0, selectors: 0, reserveLifts: 0 }),
+    reset() {
+      laneReads = 0;
+      Object.assign(work, { row: 0, sticky: 0, selectors: 0, reserveLifts: 0 });
+    },
     work,
     cleanup() {
       queueScroll(offset);
@@ -196,6 +245,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
       reserve.mockRestore();
       style.mockRestore();
       dividerStyle.remove();
+      expect(observers.size).toBe(0);
       expect(pendingAfterUnmount).toBe(0);
     },
   };
@@ -356,6 +406,35 @@ it("coalesces child-page commits and a queued scroll while measuring the final r
       expect(fixture.work.row).toBe(1);
       expect(fixture.styleReads()).toBe(styleReads);
     }), { numRuns: 10, examples: [[210, 4], [210, 2]] });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+it("samples final scroll and page geometry after layout in the same rendering update", () => {
+  const fixture = mountDock(4, 0, 1, true);
+  try {
+    fc.assert(fc.property(fc.integer({ min: 195, max: 245 }), fc.integer({ min: 0, max: 5 }), (offset, children) => {
+      fixture.updatePage(0);
+      fixture.move(700);
+      expect(fixture.edge()).toBe("top");
+      fixture.reset();
+
+      fixture.queueScroll(offset);
+      fixture.runFrameCallbacks();
+      expect(fixture.laneReads()).toBe(0);
+      expect(fixture.work.row).toBe(0);
+      expect(fixture.edge()).toBe("top");
+
+      // A later animation callback can commit a child page before Chromium
+      // runs layout. It is the new row position that will be painted.
+      fixture.updatePage(children);
+      fixture.deliverLayout();
+      const rowTop = VIEW_TOP + ROW_TOP + children * 36 - offset;
+      const shown = rowTop + ROW_HEIGHT - Math.max(152, rowTop);
+      expect(fixture.edge()).toBe(shown >= 39 ? undefined : "top");
+      expect(fixture.work.row).toBe(1);
+    }), { numRuns: 10, examples: [[218, 0], [218, 4]] });
   } finally {
     fixture.cleanup();
   }

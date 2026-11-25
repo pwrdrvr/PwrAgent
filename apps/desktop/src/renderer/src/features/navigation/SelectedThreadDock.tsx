@@ -281,6 +281,7 @@ function observeDockLayout(
   let observedCard: HTMLButtonElement | null;
   let initialized = false;
   let frame = 0;
+  let layoutPending = false;
   const containsMatch = (node: Element, selector: string): boolean =>
     node.matches(selector) || node.querySelector(selector) !== null;
   const forgetTargets = (): void => {
@@ -316,11 +317,12 @@ function observeDockLayout(
     }
     return changed;
   };
-  const cancelFrame = (): void => {
+  const cancelMeasure = (): void => {
     if (frame !== 0) {
       window.cancelAnimationFrame(frame);
       frame = 0;
     }
+    layoutPending = false;
   };
   const refresh = (inFrame = false): void => {
     // Each lens renders one lane directly inside the region. Identify it
@@ -329,7 +331,7 @@ function observeDockLayout(
       child instanceof HTMLElement && child.matches(LANE));
     const replaced = !initialized || lane !== nextLane;
     if (replaced) {
-      cancelFrame();
+      cancelMeasure();
       mutation?.takeRecords();
       if (lane) resize?.unobserve(lane);
       lane = nextLane;
@@ -351,13 +353,29 @@ function observeDockLayout(
     }
   };
   const schedule = (): void => {
-    if (frame !== 0) return;
+    if (frame !== 0 || layoutPending) return;
     frame = window.requestAnimationFrame(() => {
       frame = 0;
-      refresh(true);
+      if (!resize) {
+        refresh(true);
+        return;
+      }
+      // Animation callbacks run before layout. A fresh observation delivers
+      // after layout in this same rendering update, even on a pure scroll.
+      // Reuse the region's observation so it still reports later resizes.
+      layoutPending = true;
+      resize.unobserve(region);
+      resize.observe(region);
     });
   };
-  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : undefined;
+  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
+    if (!layoutPending) {
+      schedule();
+      return;
+    }
+    layoutPending = false;
+    refresh(true);
+  }) : undefined;
   const mutation = typeof MutationObserver === "function" ? new MutationObserver((records) => {
     if (noteMutations(records)) schedule();
   }) : undefined;
@@ -378,7 +396,7 @@ function observeDockLayout(
   return {
     refresh,
     dispose() {
-      cancelFrame();
+      cancelMeasure();
       region.removeEventListener("scroll", onScroll, { capture: true });
       resize?.disconnect();
       mutation?.disconnect();
