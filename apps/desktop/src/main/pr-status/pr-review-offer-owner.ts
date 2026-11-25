@@ -9,12 +9,15 @@ export type PrReviewOfferCandidate = PrReviewOfferThread & {
   archived: boolean;
   /** The Forge Automation of the thread's project, when one is stored. */
   automation: ProjectForgeAutomation | undefined;
+  /** The project leaves this PR to its maintainers (a hands-off rule). */
+  handsOff?: true;
 };
 
 /**
  * The one thread a PR's review and merge offers go to, or none. Archived
- * threads, threads in paused projects, and threads in projects with PR offers
- * turned off never qualify. Among the rest, the elected Auto-fix owner wins;
+ * threads, threads in paused projects, threads in projects with PR offers
+ * turned off, and threads whose project leaves this PR hands-off never
+ * qualify. Among the rest, the elected Auto-fix owner wins;
  * else the first. `readWinner` runs only when more than one qualifies.
  */
 export async function selectPrReviewOfferOwner(params: {
@@ -22,7 +25,9 @@ export async function selectPrReviewOfferOwner(params: {
   readWinner: () => Promise<PrReviewOfferThread | undefined>;
 }): Promise<PrReviewOfferThread | undefined> {
   const eligible = params.candidates
-    .filter((candidate) => !candidate.archived && projectAllowsPrOffers(candidate.automation))
+    .filter((candidate) => !candidate.archived
+      && !candidate.handsOff
+      && projectAllowsPrOffers(candidate.automation))
     .map(({ backend, threadId }): PrReviewOfferThread => ({ backend, threadId }));
   if (eligible.length <= 1) return eligible[0];
   const winner = await params.readWinner();

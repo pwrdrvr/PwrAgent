@@ -184,6 +184,7 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       candidate.sourceRepository?.org === pr.sourceRepository?.org &&
       candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
       candidate.title === pr.title &&
+      JSON.stringify(candidate.labels ?? null) === JSON.stringify(pr.labels ?? null) &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
       candidate.checksStillRunning === pr.checksStillRunning &&

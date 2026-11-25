@@ -23,6 +23,7 @@ const VARIANTS: Variants = {
   repo: ["PwrAgent", "widgets"],
   sourceRepository: [undefined, { provider: "github.com", org: "fork", repo: "PwrAgent" }],
   title: ["Retain thread pull request history", "Retain thread history"],
+  labels: [undefined, ["takeover:in-progress"]],
   baseRefName: ["main", "release"],
   baseSha: { notCompared: "the base tip moves on every merge to the base; nothing drawn reads it" },
   headRefName: ["feat/history", "feat/other"],

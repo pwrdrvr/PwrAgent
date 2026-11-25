@@ -13,6 +13,7 @@ describe("PR auto-dispatch logging", () => {
     "missing-head": "debug",
     disabled: "debug",
     "project-off": "debug",
+    "hands-off": "debug",
     busy: "debug",
     pending: "debug",
     duplicate: "debug",

@@ -1,10 +1,15 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
+  MAX_HANDS_OFF_RULE_TEXT,
+  MAX_HANDS_OFF_RULES,
   MAX_PROJECT_MERGE_BRANCHES,
+  normalizeHandsOffRepository,
+  normalizeHandsOffRules,
   normalizeProjectMergeBranch,
   resolveProjectForgeAutomation,
   type ProjectForgeAutomation,
+  type ProjectForgeHandsOffRule,
   type ProjectHeldWakeup,
   type ProjectMergeBuildWatches,
 } from "@pwragent/shared/project-forge-automation";
@@ -21,6 +26,11 @@ export type ForgeAutomationDialogProps = {
   automation: ProjectForgeAutomation | undefined;
   /** Where focus goes on close when the opener is gone, as from a menu. */
   returnFocus?: RefObject<HTMLElement | null>;
+  /**
+   * The project's remote repositories, `owner/name`, offered as one-click
+   * picks for a hands-off rule: a fork's upstream is one.
+   */
+  repositorySuggestions?: readonly string[];
   /** Read once as the dialog opens on a paused project, for its status line. */
   listHeldWakeups?: () => Promise<ProjectHeldWakeup[]>;
   onCancel: () => void;
@@ -68,6 +78,11 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
   const update = (patch: Partial<ProjectForgeAutomation>) => {
     setDraft((current) => ({ ...current, ...patch }));
     setError(undefined);
+  };
+
+  const setHandsOff = (rules: ProjectForgeHandsOffRule[]) => {
+    // Stored only when it holds a rule, as the owner stores it.
+    update({ handsOff: rules.length > 0 ? rules : undefined });
   };
 
   const submit = async () => {
@@ -253,6 +268,14 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
           </fieldset>
         )}
         {draft.paused ? null : (
+          <HandsOffRules
+            busy={busy}
+            rules={draft.handsOff ?? []}
+            suggestions={props.repositorySuggestions ?? []}
+            onChange={setHandsOff}
+          />
+        )}
+        {draft.paused ? null : (
           <fieldset className="forge-automation-dialog__group forge-automation-dialog__fieldset">
             <legend className="forge-automation-dialog__label">To-do cards</legend>
             {option({
@@ -397,6 +420,169 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
       </section>
     </div>,
     document.body,
+  );
+}
+
+/**
+ * Hands-off pull requests: rules that leave a PR to its repository's
+ * maintainers. Each row is a repository and, optionally, a label pattern;
+ * the add row takes both and validates as the owner will.
+ */
+function HandsOffRules(props: {
+  busy: boolean;
+  rules: readonly ProjectForgeHandsOffRule[];
+  suggestions: readonly string[];
+  onChange: (rules: ProjectForgeHandsOffRule[]) => void;
+}) {
+  const id = useId();
+  const [repository, setRepository] = useState("");
+  const [label, setLabel] = useState("");
+  const [addError, setAddError] = useState<string>();
+  const repositoryRef = useRef<HTMLInputElement>(null);
+  const full = props.rules.length >= MAX_HANDS_OFF_RULES;
+  const picks = props.suggestions.filter((suggestion) =>
+    suggestion.toLowerCase() !== repository.trim().toLowerCase());
+
+  const add = () => {
+    const normalized = normalizeHandsOffRepository(repository);
+    if (!normalized) {
+      setAddError("Enter the repository as owner/name.");
+      repositoryRef.current?.focus();
+      return;
+    }
+    const next = normalizeHandsOffRules([
+      ...props.rules,
+      { repository: normalized, ...(label.trim() ? { label: label.trim() } : {}) },
+    ]);
+    if (next.length === props.rules.length) {
+      setAddError("That rule is already in the list.");
+      return;
+    }
+    props.onChange(next);
+    setRepository("");
+    setLabel("");
+    setAddError(undefined);
+    repositoryRef.current?.focus();
+  };
+
+  return (
+    <fieldset
+      aria-describedby={`${id}-hint`}
+      className="forge-automation-dialog__group forge-automation-dialog__fieldset"
+    >
+      <legend className="forge-automation-dialog__label">Hands-off pull requests</legend>
+      <p id={`${id}-hint`} className="forge-automation-dialog__hint forge-automation-dialog__hint--lead">
+        Leave a PR to its maintainers, such as an upstream PR they take over. Auto-fix skips it and no Review or Merge card is raised. <code>*</code> in a label matches any text.
+      </p>
+      {props.rules.length > 0 ? (
+        <ul aria-label="Hands-off rules" className="forge-automation-dialog__rules">
+          {props.rules.map((rule) => {
+            const description = rule.label ? `labeled ${rule.label}` : "every PR";
+            return (
+              <li key={`${rule.repository}\n${rule.label ?? ""}`} className="forge-automation-dialog__rule">
+                <span className="forge-automation-dialog__rule-repository">{rule.repository}</span>
+                <span className="forge-automation-dialog__rule-condition">{description}</span>
+                <button
+                  aria-label={`Remove ${rule.repository}, ${description}`}
+                  className="button button--ghost forge-automation-dialog__rule-remove"
+                  disabled={props.busy}
+                  type="button"
+                  onClick={() => props.onChange(props.rules.filter((candidate) => candidate !== rule))}
+                >
+                  Remove
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {full ? null : (
+        <div className="forge-automation-dialog__rule-add">
+          <label className="forge-automation-dialog__rule-field">
+            <span>Repository</span>
+            <input
+              ref={repositoryRef}
+              aria-describedby={addError ? `${id}-error` : undefined}
+              aria-invalid={addError ? true : undefined}
+              autoCapitalize="off"
+              autoComplete="off"
+              disabled={props.busy}
+              maxLength={MAX_HANDS_OFF_RULE_TEXT}
+              placeholder="owner/name"
+              spellCheck={false}
+              type="text"
+              value={repository}
+              onChange={(event) => {
+                setRepository(event.target.value);
+                setAddError(undefined);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  add();
+                }
+              }}
+            />
+          </label>
+          <label className="forge-automation-dialog__rule-field">
+            <span>Label</span>
+            <input
+              autoCapitalize="off"
+              autoComplete="off"
+              disabled={props.busy}
+              maxLength={MAX_HANDS_OFF_RULE_TEXT}
+              placeholder="Any PR"
+              spellCheck={false}
+              type="text"
+              value={label}
+              onChange={(event) => {
+                setLabel(event.target.value);
+                setAddError(undefined);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  add();
+                }
+              }}
+            />
+          </label>
+          <button
+            className="button button--secondary forge-automation-dialog__rule-submit"
+            disabled={props.busy || repository.trim().length === 0}
+            type="button"
+            onClick={add}
+          >
+            Add rule
+          </button>
+        </div>
+      )}
+      {!full && picks.length > 0 ? (
+        <div className="forge-automation-dialog__rule-picks">
+          <span id={`${id}-picks`}>Remotes</span>
+          <div aria-labelledby={`${id}-picks`} role="group">
+            {picks.map((suggestion) => (
+              <button
+                key={suggestion}
+                className="forge-automation-dialog__rule-pick"
+                disabled={props.busy}
+                type="button"
+                onClick={() => {
+                  setRepository(suggestion);
+                  setAddError(undefined);
+                  repositoryRef.current?.focus();
+                }}
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {addError ? (
+        <p id={`${id}-error`} className="rename-thread-dialog__error" role="alert">{addError}</p>
+      ) : null}
+    </fieldset>
   );
 }
 

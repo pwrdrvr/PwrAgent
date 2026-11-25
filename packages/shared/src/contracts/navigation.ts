@@ -630,6 +630,12 @@ export type PrSummary = {
   /** Last observed pull request title, when the provider returns one. */
   title?: string;
   /**
+   * Label names, read only for a repository that a project's Forge
+   * Automation hands-off rule names with a label pattern
+   * (`handsOffLabelRepositories`). Absent means not read, never "no labels".
+   */
+  labels?: string[];
+  /**
    * Branch the PR is proposing to merge into. Used to default a review to the
    * PR's actual target, including stacked pull requests.
    */

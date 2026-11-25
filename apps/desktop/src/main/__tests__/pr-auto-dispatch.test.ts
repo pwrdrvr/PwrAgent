@@ -25,6 +25,11 @@ import {
   pullRequestMatchesRepositoryKey,
 } from "../pr-status/pr-auto-dispatch";
 import {
+  describeHandsOffMatch,
+  findHandsOffMatch,
+  type ProjectForgeHandsOffRule,
+} from "@pwragent/shared/project-forge-automation";
+import {
   createTempStateDb,
   openInMemoryStateDb,
   removeTempStateDbDir,
@@ -109,6 +114,7 @@ function createHarness(options: {
   onPendingChanged?: (pending: ThreadPrAutoDispatchPending | null) => void;
   stackHold?: () => string | undefined;
   allowsEventKind?: (kind: ThreadPrAutoDispatchEventKind) => boolean;
+  handsOff?: (pr: PrSummary) => string | undefined;
 } = {}) {
   let busy = options.busy ?? false;
   let gate = options.gate ?? true;
@@ -141,6 +147,9 @@ function createHarness(options: {
     isBackgroundPollingEnabled: () => gate,
     ...(options.allowsEventKind
       ? { allowsEventKind: (_identity, kind) => options.allowsEventKind!(kind) }
+      : {}),
+    ...(options.handsOff
+      ? { handsOff: (_identity, value) => options.handsOff!(value) }
       : {}),
     getBudgetConfig: () => budgetConfig,
     now: () => clock,
@@ -1515,5 +1524,84 @@ describe("PrAutoDispatchCoordinator with project Forge Automation", () => {
     expect(harness.onActivity).toHaveBeenCalledWith(expect.objectContaining({
       message: "Cancelled: off in this project's Forge Automation",
     }));
+  });
+});
+
+describe("PrAutoDispatchCoordinator with Forge Automation hands-off rules", () => {
+  /** The owner's wiring: the project's rules read against the PR. */
+  function handsOffBy(rules: ProjectForgeHandsOffRule[]) {
+    return (value: PrSummary): string | undefined => {
+      const match = findHandsOffMatch({ handsOff: rules }, value);
+      return match ? describeHandsOffMatch(match) : undefined;
+    };
+  }
+  const takeover: ProjectForgeHandsOffRule[] = [{ repository: "pingdotgg/t3code", label: "takeover:*" }];
+  const upstream = (labels: string[]) => pr({
+    org: "pingdotgg",
+    repo: "t3code",
+    number: 43027,
+    labels,
+    url: "https://github.com/pingdotgg/t3code/pull/43027",
+  });
+
+  it("repairs neither an upstream PR a maintainer labeled nor schedules it, while the fork's PR still repairs", async () => {
+    const labeled = upstream(["size:L", "takeover:in-progress"]);
+    const harness = createHarness({ currentPr: labeled, handsOff: handsOffBy(takeover) });
+
+    expect((await observe(harness.coordinator, labeled))[0]?.status).toBe("hands-off");
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+
+    // The same rule leaves the fork's PR alone: it names another repository.
+    const fork = pr({ org: "pwrdrvr", repo: "t3code", number: 4, url: "https://github.com/pwrdrvr/t3code/pull/4", labels: ["takeover:in-progress"] });
+    harness.setCurrentPr(fork);
+    expect((await observe(harness.coordinator, fork))[0]?.status).toBe("scheduled");
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels a scheduled repair when the label lands before it is sent, and repairs again once it is removed", async () => {
+    const unlabeled = upstream(["size:L"]);
+    const harness = createHarness({ currentPr: unlabeled, handsOff: handsOffBy(takeover) });
+    expect((await observe(harness.coordinator, unlabeled))[0]?.status).toBe("scheduled");
+
+    harness.setCurrentPr(upstream(["size:L", "Takeover:In-Progress"]));
+    await runCountdown();
+
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(harness.pendingUpdates.at(-1)).toBeNull();
+    expect(harness.onActivity).toHaveBeenCalledWith(expect.objectContaining({
+      message: "Cancelled: hands-off, labeled Takeover:In-Progress",
+    }));
+
+    // Deferred, so the maintainers handing it back lets Auto-fix act again.
+    harness.setCurrentPr(unlabeled);
+    expect((await observe(harness.coordinator, unlabeled))[0]?.status).toBe("scheduled");
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels the pending repair when a later observation carries the label", async () => {
+    const unlabeled = upstream([]);
+    const harness = createHarness({ currentPr: unlabeled, handsOff: handsOffBy(takeover) });
+    expect((await observe(harness.coordinator, unlabeled))[0]?.status).toBe("scheduled");
+
+    const labeled = upstream(["takeover:requested"]);
+    harness.setCurrentPr(labeled);
+    expect((await observe(harness.coordinator, labeled))[0]?.status).toBe("hands-off");
+    expect(await store.getThreadPrAutoDispatchPending({ backend: "codex", threadId: "thread-1" }))
+      .toBeUndefined();
+    await runCountdown();
+    expect(harness.submitTurnIfIdle).not.toHaveBeenCalled();
+  });
+
+  it("leaves every PR into a repository alone with a repository rule, labels read or not", async () => {
+    const harness = createHarness({
+      currentPr: upstream([]),
+      handsOff: handsOffBy([{ repository: "PingDotGG/T3Code" }]),
+    });
+    const unread = pr({ org: "pingdotgg", repo: "t3code", url: "https://github.com/pingdotgg/t3code/pull/1105" });
+    harness.setCurrentPr(unread);
+    expect((await observe(harness.coordinator, unread))[0]?.status).toBe("hands-off");
   });
 });

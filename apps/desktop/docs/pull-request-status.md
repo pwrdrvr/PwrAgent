@@ -211,6 +211,24 @@ have:
   watch. The thread that confirmed the merge gets first choice. Locked
   threads are ineligible, including when the lock lands during registration.
 
+### Hands-off pull requests
+
+A project's Forge Automation can list hands-off rules: a destination
+repository, optionally with a label pattern (`*` matches any text, case is
+ignored). A thread in that project leaves a matching PR to its maintainers:
+Auto-fix neither schedules nor sends a repair for it, and PwrAgent raises no
+Review or Merge card. The rule is read at scheduling, at dispatch, and at turn
+admission, so a label that lands while a repair waits cancels the repair, and
+removing the label lets the next failing observation repair it. The thread's
+automation status tells the agent the PR is hands-off.
+
+Labels cost GraphQL rate-limit points, so the status poll and PR discovery ask
+for them (`...PrLabels`) only for repositories that a label rule names
+(`hands-off-label-repositories.ts`, kept in step by the Forge Automation
+index). A PR whose labels were not read never matches a label rule. A
+repository rule needs no labels. GitLab merge requests do not report labels
+yet, so only repository rules apply to them.
+
 ### Stack settlement and publishing
 
 The shared gate projects a tracked stack bottom-first. A live layer settles

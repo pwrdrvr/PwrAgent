@@ -5125,6 +5125,7 @@ function SidebarContent(props: SidebarProps) {
               listHeldWakeups={props.onListProjectHeldWakeups
                 ? () => props.onListProjectHeldWakeups!(directory)
                 : undefined}
+              repositorySuggestions={projectRemoteRepositories(directory)}
               projectDetail={directory.repositoryKey ?? directory.path}
               projectLabel={directory.label}
               returnFocus={directoryContextMenuOpenerRef}
@@ -5691,4 +5692,22 @@ function RuntimeIdentityButton(props: {
       {tooltip.tooltipNode}
     </>
   );
+}
+
+/**
+ * The project's fetch remotes as `owner/name`, origin first: a fork lists
+ * its upstream too, for the Forge Automation hands-off picks. Keys read
+ * `host/owner/name`.
+ */
+function projectRemoteRepositories(
+  directory: Pick<NavigationDirectorySummary, "repositoryKey" | "repositoryKeys">,
+): string[] {
+  const repositories = new Map<string, string>();
+  for (const key of [directory.repositoryKey, ...(directory.repositoryKeys ?? [])]) {
+    const repository = key?.split("/").slice(1).join("/");
+    if (repository?.includes("/") && !repositories.has(repository.toLowerCase())) {
+      repositories.set(repository.toLowerCase(), repository);
+    }
+  }
+  return [...repositories.values()].slice(0, 6);
 }

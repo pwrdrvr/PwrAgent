@@ -354,8 +354,12 @@ import {
   type ListProjectHeldWakeupsResponse,
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
+  type HandsOffMatch,
   type ProjectForgeAutomation,
+  buildHandsOffGuidance,
   buildProjectNeverMergeRefusal,
+  describeHandsOffMatch,
+  findHandsOffMatch,
   buildProjectPrDependencyNotice,
   buildProjectPrWatchRefusal,
   isDefaultProjectForgeAutomation,
@@ -5265,7 +5269,20 @@ class DesktopAppServerService {
             : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
     const projectSkippedKind = projectSkipsMergeConflicts ? "merge conflicts" : "failing CI";
-    const reviewReadiness = await this.readPrReviewReadiness(params, primaryPrs);
+    const handsOffPrs = forgeProject?.automation.handsOff
+      ? primaryPrs.flatMap((pr) => {
+        const match = this.prHandsOff(params, pr);
+        return match ? [{ pr, match }] : [];
+      })
+      : [];
+    const handsOffGuidance = handsOffPrs.map(({ pr, match }) => buildHandsOffGuidance({
+      projectLabel: forgeProject!.label,
+      pullRequest: `${pr.org}/${pr.repo}#${pr.number}`,
+      match,
+    }));
+    const handsOffNumbers = new Set(handsOffPrs.map(({ pr }) => pr.number));
+    const reviewReadiness = (await this.readPrReviewReadiness(params, primaryPrs))
+      .filter((entry) => !handsOffNumbers.has(entry.prNumber));
     const neverMerge = forgeProject && projectNeverMerges(forgeProject.automation) ? forgeProject.label : undefined;
     const mergeBranches = projectMergeBranches(forgeProject?.automation);
     const readinessGuidance = reviewReadiness
@@ -5302,8 +5319,8 @@ class DesktopAppServerService {
     const stackGuidance = await this.threadStackGuidance(primaryPrs);
     const stackLines = stackGuidance.map(({ text }) => text);
     const guidance = (stackGuidance.some(({ held }) => held)
-      ? [...stackLines, ...neverMergeGuidance]
-      : [...stackLines, automationGuidance, ...readinessGuidance, ...neverMergeGuidance]).join(" ");
+      ? [...stackLines, ...handsOffGuidance, ...neverMergeGuidance]
+      : [...stackLines, ...handsOffGuidance, automationGuidance, ...readinessGuidance, ...neverMergeGuidance]).join(" ");
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -6838,6 +6855,19 @@ class DesktopAppServerService {
       ref,
       () => getDesktopBackendRegistry().getCachedThreadSummary(ref),
     );
+  }
+
+  /**
+   * The hands-off rule in the thread's project that leaves this PR to its
+   * maintainers, read against the registry's latest status (its labels).
+   */
+  private prHandsOff(
+    ref: { backend: AppServerBackendKind; threadId: string },
+    pr: PrSummary,
+  ): HandsOffMatch | undefined {
+    const automation = this.threadForgeAutomation(ref);
+    if (!automation?.handsOff) return undefined;
+    return findHandsOffMatch(automation, this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr);
   }
 
   private threadKeyForgeAutomation(threadKey: string): ProjectForgeAutomation | undefined {
@@ -8603,8 +8633,16 @@ class DesktopAppServerService {
         if (identity) await coordinator.cancelPendingDisallowedByProject(identity);
       }
     }
+    const handsOffChanged = JSON.stringify(previous?.handsOff ?? [])
+      !== JSON.stringify(next?.handsOff ?? []);
+    if (handsOffChanged && getAppStateMode()) {
+      // A pending repair for a PR that just became hands-off is cancelled at
+      // dispatch; a label rule's labels arrive with the next poll.
+      this.prPollingScheduler?.noteThreadInteraction(threadKeys);
+    }
     if (projectNeverMerges(previous) !== projectNeverMerges(next)
-      || projectMergeBranches(previous).join("\n") !== projectMergeBranches(next).join("\n")) {
+      || projectMergeBranches(previous).join("\n") !== projectMergeBranches(next).join("\n")
+      || handsOffChanged) {
       // Withdraw an open merge offer now, or offer it again: a reviewed,
       // green PR may see no further transition to re-evaluate it.
       this.prReviewOfferCoordinator?.reevaluate(threadKeys.flatMap((threadKey) => {
@@ -9165,6 +9203,10 @@ class DesktopAppServerService {
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
         allowsEventKind: (identity, kind) =>
           projectAllowsAutoFixKind(this.threadForgeAutomation(identity), kind),
+        handsOff: (identity, pr) => {
+          const match = this.prHandsOff(identity, pr);
+          return match ? describeHandsOffMatch(match) : undefined;
+        },
         refreshPendingPrs: async (pending) =>
           await this.refreshPendingPrAutoDispatches(pending),
         isPrAttached: ({ backend, threadId, prKey }) =>
@@ -9335,6 +9377,7 @@ class DesktopAppServerService {
    */
   private async prReviewOfferOwner(prKey: string): Promise<PrReviewOfferThread | undefined> {
     if (!this.backgroundPrPollingEnabled) return undefined;
+    const current = this.prStatusRegistry.get(prKey)?.pr;
     const candidates: PrReviewOfferCandidate[] = [];
     for (const threadKey of this.primaryPrThreadsByKey.get(prKey) ?? []) {
       const identity = parseThreadIdentityKey(threadKey);
@@ -9344,6 +9387,7 @@ class DesktopAppServerService {
         threadId: identity.threadId,
         archived: getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true,
         automation: this.threadKeyForgeAutomation(threadKey),
+        ...(current && this.prHandsOff(identity, current) ? { handsOff: true } : {}),
       });
     }
     return await selectPrReviewOfferOwner({
