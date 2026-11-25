@@ -257,6 +257,57 @@ describe("MCP elicitation helpers", () => {
     });
   });
 
+  // Antigravity's ask_question as an ACP form elicitation, captured live.
+  it("answers Antigravity's ask_question questions with their option values", () => {
+    const state = createMcpElicitationState(
+      buildRequest({
+        serverName: "Antigravity",
+        message: "The agent has 2 questions.",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            q1: {
+              type: "string",
+              title: "Pick a color",
+              oneOf: [
+                { const: "1", title: "Red" },
+                { const: "2", title: "Green" },
+              ],
+            },
+            q1_other: { type: "string", title: "Other", description: "Optional free-form answer to: Pick a color" },
+            q2: {
+              type: "array",
+              title: "Pick fruits",
+              items: {
+                anyOf: [
+                  { const: "1", title: "Apple" },
+                  { const: "2", title: "Pear" },
+                ],
+              },
+            },
+          },
+        },
+      })
+    )!;
+
+    expect(state.form?.fields.map((field) => [field.key, field.kind, field.label])).toEqual([
+      ["q1", "singleSelect", "Pick a color"],
+      ["q1_other", "string", "Other"],
+      ["q2", "multiSelect", "Pick fruits"],
+    ]);
+    const answered = updateMcpFieldValue(
+      updateMcpFieldValue(updateMcpFieldValue(state, "q1", "2"), "q1_other", "Teal"),
+      "q2",
+      ["1", "2"],
+    );
+    expect(canAcceptMcpElicitation(answered)).toBe(true);
+    expect(buildMcpElicitationResponse(answered, "accept")).toEqual({
+      action: "accept",
+      content: { q1: "2", q1_other: "Teal", q2: ["1", "2"] },
+      _meta: null,
+    });
+  });
+
   it("preserves URL mode without embedding URL details in response content", () => {
     const state = createMcpElicitationState(
       buildRequest({

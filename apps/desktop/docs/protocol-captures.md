@@ -203,6 +203,27 @@ requests offered `allow_always`.
 Raw captures are under the ignored `apps/desktop/.local/protocol-captures/`
 in a directory named `antigravity-default-mcp.*`.
 
+### Antigravity ask_question elicitation
+
+Antigravity 1.5.16 ran with `agy acp --process-per-session`. When
+`initialize` omits `clientCapabilities.elicitation`, its `ask_question` tool
+leaves the tool call pending, streams the questions as plain
+`agent_message_chunk` text with `[1]`-style options, and ends the turn
+unanswered. With `elicitation: { form: {} }` advertised (November 25, 2026
+capture), the same tool sends `elicitation/create` with a string JSON-RPC id
+such as `jetski-acp-front:2`, the session's `sessionId` and the tool's
+`toolCallId`, `mode: "form"`, and `message: "The agent has 2 questions."`.
+Each question `qN` is a string property with `oneOf` `{ const, title }`
+options for single select, or an `array` property with `items.anyOf` for
+multi select. The `const` values are 1-based option numbers. Each question
+also gets an optional free-text `qN_other` string property, and no property
+is `required`. Answering `{ "action": "accept", "content": { ... } }`
+completes the tool call, and the agent continues the same turn with the
+chosen titles and any `qN_other` text.
+
+Raw capture and probe:
+`apps/desktop/.local/protocol-captures/antigravity-ask-question/`.
+
 ### Antigravity managed MCP context
 
 The November 24, 2026 probes used Antigravity 1.5.16

@@ -13,6 +13,8 @@ import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-de
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
+  AppServerMcpElicitationRequestNotification,
+  AppServerMcpElicitationSchema,
   AppServerPendingRequestNotification,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
@@ -576,6 +578,11 @@ export class AcpAgentClient {
       clientCapabilities: {
         auth: {
           terminal: false,
+        },
+        // Without this, Antigravity's ask_question degrades to the questions
+        // as plain assistant text and ends the turn unanswered.
+        elicitation: {
+          form: {},
         },
         fs: {
           readTextFile: false,
@@ -2647,6 +2654,9 @@ export class AcpAgentClient {
     params: Record<string, unknown>,
     id?: JsonRpcId,
   ): Promise<unknown> {
+    if (method === "elicitation/create") {
+      return await this.handleElicitationRequest(params, id);
+    }
     if (method !== "session/request_permission") {
       throw new Error(`Unsupported ACP request: ${method}`);
     }
@@ -2700,6 +2710,55 @@ export class AcpAgentClient {
         return { outcome: { outcome: "selected", optionId: allowOnce } };
       }
       return permissionOutcomeFromResponse(response, permissionOptions);
+    } finally {
+      const remaining = (this.pendingPermissionRequests.get(sessionId) ?? 1) - 1;
+      if (remaining > 0) this.pendingPermissionRequests.set(sessionId, remaining);
+      else this.pendingPermissionRequests.delete(sessionId);
+      this.touchSession(sessionId);
+    }
+  }
+
+  /**
+   * Show an agent's form elicitation, such as Antigravity's ask_question, on
+   * the same card MCP elicitations use, and answer in ACP's shape. Only form
+   * mode is advertised, and only a session can show a card, so anything else
+   * is declined without asking.
+   */
+  private async handleElicitationRequest(
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): Promise<AcpElicitationResponse> {
+    const protocolSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+    const message = typeof params.message === "string" ? params.message.trim() : "";
+    if (params.mode !== "form" || !protocolSessionId || !message || id == null) {
+      return { action: "decline" };
+    }
+    const sessionId = this.appSessionIdFor(protocolSessionId);
+    const session = this.options.store.getSession(this.options.backendId, sessionId);
+    if (session?.approvalPolicy === "deny-all" || !this.options.onRequest) {
+      return { action: "cancel" };
+    }
+    const request: AppServerMcpElicitationRequestNotification = {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: sessionId,
+        turnId: this.activeTurns.get(sessionId)?.turnId ?? null,
+        requestId: String(id),
+        serverName: this.approvalRequesterName,
+        mode: "form",
+        message,
+        _meta: null,
+        requestedSchema: acpElicitationFormSchema(params.requestedSchema),
+      },
+    };
+    // A session waiting on the operator must stay open to hear the answer.
+    this.pendingPermissionRequests.set(
+      sessionId,
+      (this.pendingPermissionRequests.get(sessionId) ?? 0) + 1,
+    );
+    this.touchSession(sessionId);
+    try {
+      return acpElicitationResponse(await this.options.onRequest(request));
     } finally {
       const remaining = (this.pendingPermissionRequests.get(sessionId) ?? 1) - 1;
       if (remaining > 0) this.pendingPermissionRequests.set(sessionId, remaining);
@@ -4079,6 +4138,27 @@ function isThreadToolGrantResponse(
   return typeof decision === "string"
     && [ACP_THREAD_TOOL_GRANT_OPTION_ID, "accept_for_session", "allow_always"]
       .includes(decision.toLowerCase());
+}
+
+type AcpElicitationResponse =
+  | { action: "accept"; content: Record<string, unknown> }
+  | { action: "decline" }
+  | { action: "cancel" };
+
+/** Anything but an explicit accept or decline is a dismissal. */
+export function acpElicitationResponse(response: unknown): AcpElicitationResponse {
+  const record = asRecord(response);
+  if (record?.action === "decline") return { action: "decline" };
+  if (record?.action !== "accept") return { action: "cancel" };
+  return { action: "accept", content: asRecord(record.content) ?? {} };
+}
+
+// The card refuses anything but an object schema. An agent that sent none
+// asks for confirmation only, which is an empty form.
+function acpElicitationFormSchema(schema: unknown): AppServerMcpElicitationSchema {
+  const record = asRecord(schema);
+  if (record?.type === "object") return record as AppServerMcpElicitationSchema;
+  return { type: "object", properties: {} };
 }
 
 function cancelledPermissionOutcome(): { outcome: { outcome: "cancelled" } } {
