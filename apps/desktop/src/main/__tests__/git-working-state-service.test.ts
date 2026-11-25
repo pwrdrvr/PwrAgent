@@ -63,7 +63,7 @@ function respondWorkingState(args: string[]): string | undefined {
   if (args.includes("status")) {
     return " M src/a.ts\n?? scratch/new.txt\n?? scratch/other.txt\n";
   }
-  if (args[args.length - 1] === "remote") {
+  if (args[args.length - 1] === "--verbose") {
     return "origin\n";
   }
   if (args.includes("rev-list")) {
@@ -96,7 +96,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit, calls } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "";
+      if (args[args.length - 1] === "--verbose") return "";
       if (args.includes("rev-list")) return "9\n";
       return undefined;
     });
@@ -120,7 +120,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit, calls } = fakeGit((args, input) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-list")) {
         return input?.includes(mergedPrHeadSha)
           ? "1\n"
@@ -253,7 +253,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit, calls } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-list")) {
         return args.includes("--stdin") ? undefined : "3\n";
       }
@@ -278,7 +278,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-parse") && args.includes("--verify")) {
         const target = args[args.length - 1];
         if (target === "HEAD^{commit}") return `${headCommit}\n`;
@@ -345,7 +345,7 @@ describe("probeWorktreeWorkingState", () => {
       const { runGit, calls } = fakeGit((args) => {
         if (args.includes("--numstat")) return "";
         if (args.includes("status")) return "";
-        if (args[args.length - 1] === "remote") return "origin\nupstream\n";
+        if (args[args.length - 1] === "--verbose") return "origin\nupstream\n";
         if (args.includes("rev-parse") && args.includes("--verify")) return `${headCommit}\n`;
         if (args.includes("rev-parse") && args.includes("--abbrev-ref")) return "test/benchmark\n";
         if (args.includes("config")) return "";
@@ -407,7 +407,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit, calls } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-parse") && args.includes("--verify")) {
         return `${headCommit}\n`;
       }
@@ -453,7 +453,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-parse") && args.includes("--verify")) {
         const target = args[args.length - 1];
         if (target === "HEAD^{commit}") return `${mainTip}\n`;
@@ -490,7 +490,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "";
+      if (args[args.length - 1] === "--verbose") return "";
       if (args.includes("rev-parse") && args.includes("--verify")) {
         const target = args[args.length - 1];
         if (target === "HEAD^{commit}") return `${baseTip}\n`;
@@ -533,7 +533,7 @@ describe("probeWorktreeWorkingState", () => {
         if (args.includes("status")) {
           return " M src/a.ts\0?? note.txt\0?? archive.zip\0?? scratch/\0";
         }
-        if (args[args.length - 1] === "remote") return "";
+        if (args[args.length - 1] === "--verbose") return "";
         return undefined;
       });
 
@@ -574,7 +574,7 @@ describe("probeWorktreeWorkingState", () => {
             ".codex/skills/diagnose-jvm-memory/references/example-jvm-memory.md",
           ].join("\0");
         }
-        if (args[args.length - 1] === "remote") return "";
+        if (args[args.length - 1] === "--verbose") return "";
         return undefined;
       });
 

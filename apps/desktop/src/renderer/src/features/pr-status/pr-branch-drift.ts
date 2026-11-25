@@ -14,10 +14,7 @@ export type PrBranchDrift = {
   behind?: number;
   /** Commits on the branch after the merge base. */
   ahead?: number;
-  /**
-   * The `upstream` remote's default branch, when the base is a fork's copy
-   * of it: the fork only moves when the operator syncs it.
-   */
+  /** The matching branch on the fork parent's remote. */
   upstreamBranch?: string;
   /** Commits on `upstreamBranch` the branch does not have. */
   upstreamBehind?: number;

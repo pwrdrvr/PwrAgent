@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { GitReadCache } from "../git-info/read-cache";
 import { parseGitRemoteConfiguration, type GitRemote, type GitRemoteConfiguration } from "./git-remote-config";
 import { PR_METADATA_PRIORITY, runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
@@ -405,6 +406,27 @@ function collectForgeRepositories(remotes: ParsedGitRemote[], kind?: ForgeKind):
 /** Unclassified hosts require explicit product evidence from the caller. */
 export async function readForgeRepositoryRemotes(cwd: string): Promise<GitHubRepoRef[]> {
   return (await readParsedGitRemotes(cwd, {})).value.flatMap(({ repo }) => repo ? [repo] : []);
+}
+
+const fetchRemoteSshHosts = new GitReadCache<string | undefined>({ ttlMs: REMOTE_CACHE_TTL_MS, maxEntries: 512 });
+
+/** Read GitHub identities from an existing `git remote --verbose` observation. */
+export async function readGitHubFetchRemotes(output: string): Promise<Array<{ name: string; repo: GitHubRepoRef }>> {
+  const fetchRemotes = output.split(/\r?\n/).flatMap((line) => {
+    const match = /^([^\t]+)\t(.+) \(fetch\)(?: \[[^\r\n]*\])?$/.exec(line);
+    return match ? [{ name: match[1]!, url: match[2]! }] : [];
+  });
+  if (fetchRemotes.length < 2) return [];
+  const identified = await Promise.all(fetchRemotes.map(async ({ name, url }) => {
+    const repo = parseGitHubRemote(url);
+    if (!repo) return undefined;
+    if (repo.host === "github.com") return { name, repo };
+    const host = readSshHost(url);
+    if (!host || !/^[\w][\w.-]*$/.test(host) || forgeKindForRemoteHost(repo.host)) return undefined;
+    const hostname = await fetchRemoteSshHosts.read(host, () => resolveSshHostInFlight(host, defaultResolveSshHostname, {}));
+    return hostname?.toLowerCase() === "github.com" ? { name, repo: { ...repo, host: "github.com" } } : undefined;
+  }));
+  return identified.filter((remote) => remote !== undefined);
 }
 
 async function readParsedGitRemotes(
