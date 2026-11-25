@@ -102,6 +102,7 @@ import type { StoredRestartContinuation } from "../storage/desktop-runtime-stora
 import type { RestartGateStatus } from "../../shared/restart-gate";
 import {
   OPEN_RESTART_GATE,
+  RESTART_DISPATCH_DEFAULTS,
   planRestartDispatch,
   restartContinuationSettles,
   transitionRestartGate,
@@ -1178,6 +1179,7 @@ export class DesktopBackendRegistry {
   private readonly restartGateTimers = new Set<ReturnType<typeof setTimeout>>();
   private readonly restartGateListeners = new Set<(closed: boolean) => void>();
   private readonly restartGateStatusListeners = new Set<(status: RestartGateStatus) => void>();
+  private restartDispatchReady = false;
   private restartDispatchStarted = false;
   private readonly restartDispatchPlanOptions: Omit<RestartDispatchPlanOptions, "now">;
   private readonly reportedCodexForks = new Map<BackendClient, Set<Promise<void>>>();
@@ -10328,6 +10330,96 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private clearRestartGateTimers(): void {
+    for (const timer of this.restartGateTimers) clearTimeout(timer);
+    this.restartGateTimers.clear();
+  }
+
+  private scheduleRestartGateContinuation(entryId: string, threadKey: string, dispatchAt: number): void {
+    const parsed = parseThreadIdentityKey(threadKey);
+    if (!parsed) return;
+    const remaining = dispatchAt - Date.now();
+    if (remaining <= 0) {
+      this.threadTurnQueue.scheduleThreadDrain(parsed);
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.restartGateTimers.delete(timer);
+      if (this.restartGate.phase !== "resuming") return;
+      const current = this.restartGate.scheduled.get(entryId);
+      if (!current) return;
+      if (Date.now() < current.dispatchAt) {
+        this.scheduleRestartGateContinuation(entryId, current.threadKey, current.dispatchAt);
+        return;
+      }
+      this.threadTurnQueue.scheduleThreadDrain(parsed);
+    }, remaining);
+    timer.unref?.();
+    this.restartGateTimers.add(timer);
+  }
+
+  private openRestartGateAtDeadline(): void {
+    if (this.restartGate.phase !== "resuming") return;
+    const now = Date.now();
+    if (now < this.restartGate.releaseBy) {
+      this.scheduleRestartGateDeadline(this.restartGate.releaseBy);
+      return;
+    }
+    backendRegistryLog.warn("restart gate opened at its deadline", {
+      pending: [...this.restartGate.pending.keys()],
+    });
+    this.applyRestartGate({ type: "deadline", at: now });
+  }
+
+  private scheduleRestartGateDeadline(releaseBy: number): void {
+    if (!Number.isFinite(releaseBy)) return;
+    const remaining = releaseBy - Date.now();
+    if (remaining <= 0) {
+      this.openRestartGateAtDeadline();
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.restartGateTimers.delete(timer);
+      if (this.restartGate.phase !== "resuming") return;
+      if (Date.now() < this.restartGate.releaseBy) {
+        this.scheduleRestartGateDeadline(this.restartGate.releaseBy);
+        return;
+      }
+      this.openRestartGateAtDeadline();
+    }, remaining);
+    timer.unref?.();
+    this.restartGateTimers.add(timer);
+  }
+
+  private armRestartGateTimers(): void {
+    this.clearRestartGateTimers();
+    if (this.restartGate.phase !== "resuming") return;
+    if (!this.restartDispatchStarted) {
+      if (this.restartDispatchReady) {
+        this.beginRestartContinuationDispatch();
+        return;
+      }
+      const fallback = setTimeout(() => {
+        this.restartGateTimers.delete(fallback);
+        this.beginRestartContinuationDispatch();
+      }, RESTART_DISPATCH_FALLBACK_MS);
+      fallback.unref?.();
+      this.restartGateTimers.add(fallback);
+      return;
+    }
+    const { releaseBy } = this.restartGate;
+    if (Number.isFinite(releaseBy) && Date.now() >= releaseBy) {
+      this.openRestartGateAtDeadline();
+      return;
+    }
+    const queued = new Set(this.threadTurnQueue.getAllQueuedEntries().map((entry) => entry.id));
+    const items = [...this.restartGate.scheduled.values()].filter((item) => queued.has(item.entryId));
+    for (const item of items) {
+      this.scheduleRestartGateContinuation(item.entryId, item.threadKey, item.dispatchAt);
+    }
+    this.scheduleRestartGateDeadline(releaseBy);
+  }
+
   private applyRestartGate(event: RestartGateEvent): void {
     const wasClosed = this.isRestartGateClosed();
     const previous = this.restartGate;
@@ -10336,8 +10428,7 @@ export class DesktopBackendRegistry {
     const closed = this.isRestartGateClosed();
     if (wasClosed === closed) return;
     if (!closed) {
-      for (const timer of this.restartGateTimers) clearTimeout(timer);
-      this.restartGateTimers.clear();
+      this.clearRestartGateTimers();
       backendRegistryLog.info("restart gate opened", { event: event.type });
       // Everything the gate held waits in its FIFO; start what can start.
       this.threadTurnQueue.drainAll();
@@ -10383,6 +10474,7 @@ export class DesktopBackendRegistry {
     if (this.restartGate.phase !== "quieting") {
       this.beforeQuietRestartGate = this.restartGate;
       this.quietRestartCheckpoint.clear();
+      this.clearRestartGateTimers();
     }
     this.applyRestartGate({ type: "quiet", at: Date.now() });
     return this.listQuietRestartTargets();
@@ -10411,6 +10503,7 @@ export class DesktopBackendRegistry {
 
   /** Restore admission, and recover checkpointed work if preparation had already quieted it. */
   cancelQuietRestart(resumeCheckpoint = false): void {
+    let restoredFromCheckpoint: ThreadTurnQueueEntry[] = [];
     if (resumeCheckpoint) {
       const saved = [...this.quietRestartCheckpoint.values()].map((entry) => entry.kind === undefined
         ? { ...entry, input: [{ type: "text" as const, text: "The PwrAgent restart was cancelled after quieting. Resume the preserved task, checking its current progress before repeating any action." }] }
@@ -10420,15 +10513,24 @@ export class DesktopBackendRegistry {
       catch (error) { backendRegistryLog.warn("cancelled restart receipt could not be updated", { error: String(error) }); }
       for (const entry of saved) this.durableRestartContinuations.set(entry.id, entry);
       this.threadTurnQueue.restoreQueued(receipts.map((entry) => restartQueuedEntry(entry)));
-      this.threadTurnQueue.restoreRestartContinuations(saved.filter((entry) => entry.kind === undefined).map((entry) => ({
+      restoredFromCheckpoint = this.threadTurnQueue.restoreRestartContinuations(saved.filter((entry) => entry.kind === undefined).map((entry) => ({
         id: entry.id, backend: entry.backend, threadId: entry.threadId, origin: "scheduled" as const,
         input: entry.input, messageOrigin: entry.messageOrigin, createdAt: entry.createdAt,
       })));
     }
     this.quietRestartCheckpoint.clear();
-    const previous = this.beforeQuietRestartGate ?? OPEN_RESTART_GATE;
+    const previous = transitionRestartGate(
+      this.beforeQuietRestartGate ?? OPEN_RESTART_GATE,
+      { type: "deadline", at: Date.now() },
+    );
     this.beforeQuietRestartGate = undefined;
-    this.applyRestartGate({ type: "cancel-quiet", previous: transitionRestartGate(previous, { type: "deadline", at: Date.now() }) });
+    this.applyRestartGate({ type: "cancel-quiet", previous });
+    if (this.restartGate.phase === "resuming") {
+      this.armRestartGateTimers();
+      for (const entry of restoredFromCheckpoint) {
+        this.threadTurnQueue.scheduleThreadDrain(entry);
+      }
+    }
   }
 
   /**
@@ -10602,9 +10704,7 @@ export class DesktopBackendRegistry {
       count: restored.length,
       entryIds: restored.map((entry) => entry.id),
     });
-    const fallback = setTimeout(() => this.beginRestartContinuationDispatch(), RESTART_DISPATCH_FALLBACK_MS);
-    fallback.unref?.();
-    this.restartGateTimers.add(fallback);
+    this.armRestartGateTimers();
   }
 
   /**
@@ -10612,6 +10712,7 @@ export class DesktopBackendRegistry {
    * batches, once providers can take a turn. Runs once; the first call wins.
    */
   beginRestartContinuationDispatch(): void {
+    this.restartDispatchReady = true;
     if (this.restartDispatchStarted) return;
     if (this.restartGate.phase !== "resuming") {
       // A caller can finish during quieting, leaving only queued input or
@@ -10624,52 +10725,44 @@ export class DesktopBackendRegistry {
       return;
     }
     this.restartDispatchStarted = true;
-    // Every restored continuation still in a queue gets a time, settled ones
-    // too: one a lock held before dispatch began still waits its turn once
-    // unlocked. One that was discarded takes no place in the stagger.
+    // Pending continuations take the earliest batch slots. Held ones keep a
+    // staggered slot behind them so unlocking cannot jump ahead, without
+    // stealing batch-0 slots or inflating the gate's deadline.
     const { pending } = this.restartGate;
     const queued = new Set(this.threadTurnQueue.getAllQueuedEntries().map((entry) => entry.id));
+    const pendingItems = [...this.restartGate.scheduled.values()]
+      .filter((item) => pending.has(item.entryId) && queued.has(item.entryId));
+    if (pendingItems.length === 0) {
+      this.applyRestartGate({ type: "release" });
+      return;
+    }
+    const heldItems = [...this.restartGate.scheduled.values()]
+      .filter((item) => !pending.has(item.entryId) && queued.has(item.entryId));
     const now = Date.now();
-    const plan = planRestartDispatch([...this.restartGate.scheduled.values()]
-      .filter((item) => pending.has(item.entryId) || queued.has(item.entryId)), {
+    const plan = planRestartDispatch([...pendingItems, ...heldItems], {
       ...this.restartDispatchPlanOptions,
       now,
     });
+    const pendingSchedule = plan.schedule.slice(0, pendingItems.length);
+    const releaseGraceMs = this.restartDispatchPlanOptions.releaseGraceMs !== undefined
+      && Number.isFinite(this.restartDispatchPlanOptions.releaseGraceMs)
+      ? Math.max(0, this.restartDispatchPlanOptions.releaseGraceMs)
+      : RESTART_DISPATCH_DEFAULTS.releaseGraceMs;
+    const lastPending = pendingSchedule.reduce((latest, item) => Math.max(latest, item.dispatchAt), now);
+    const releaseBy = lastPending + releaseGraceMs;
     this.restartGate = {
       phase: "resuming",
-      pending: new Map(plan.schedule
-        .filter((item) => pending.has(item.entryId))
-        .map((item) => [item.entryId, item])),
+      pending: new Map(pendingSchedule.map((item) => [item.entryId, item])),
       scheduled: new Map(plan.schedule.map((item) => [item.entryId, item])),
-      releaseBy: plan.releaseBy,
+      releaseBy,
     };
     this.publishRestartGateStatus();
     backendRegistryLog.info("restart continuation dispatch scheduled", {
       count: plan.schedule.length,
-      firstAt: Math.min(...plan.schedule.map((item) => item.dispatchAt)),
-      releaseBy: plan.releaseBy,
+      firstAt: Math.min(...pendingSchedule.map((item) => item.dispatchAt)),
+      releaseBy,
     });
-    for (const item of plan.schedule) {
-      const parsed = parseThreadIdentityKey(item.threadKey);
-      if (!parsed) continue;
-      const timer = setTimeout(() => {
-        this.restartGateTimers.delete(timer);
-        this.threadTurnQueue.scheduleThreadDrain(parsed);
-      }, Math.max(0, item.dispatchAt - now));
-      timer.unref?.();
-      this.restartGateTimers.add(timer);
-    }
-    const deadline = setTimeout(() => {
-      this.restartGateTimers.delete(deadline);
-      if (this.restartGate.phase === "resuming") {
-        backendRegistryLog.warn("restart gate opened at its deadline", {
-          pending: [...this.restartGate.pending.keys()],
-        });
-      }
-      this.applyRestartGate({ type: "deadline", at: Date.now() });
-    }, Math.max(0, plan.releaseBy - now));
-    deadline.unref?.();
-    this.restartGateTimers.add(deadline);
+    this.armRestartGateTimers();
   }
 
   /**
@@ -10684,6 +10777,12 @@ export class DesktopBackendRegistry {
       this.forgetRestartContinuation(entry.id);
     }
     if (entry.restartContinuation && restartContinuationSettles(event.type)) {
+      if (this.beforeQuietRestartGate) {
+        this.beforeQuietRestartGate = transitionRestartGate(this.beforeQuietRestartGate, {
+          type: "settled",
+          entryId: entry.id,
+        });
+      }
       this.applyRestartGate({ type: "settled", entryId: entry.id });
     }
   }
@@ -16254,8 +16353,7 @@ export class DesktopBackendRegistry {
     this.shutdownRequested = true;
     this.codexProviderCatalogRetry.close();
     this.threadDirectoryService.cancelLaunchpadCreations();
-    for (const timer of this.restartGateTimers) clearTimeout(timer);
-    this.restartGateTimers.clear();
+    this.clearRestartGateTimers();
     this.closeOperation ??= this.closeResources();
     return this.closeOperation;
   }
