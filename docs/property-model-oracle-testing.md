@@ -188,56 +188,22 @@ against the pre-fix code:
 
 ## What to check in
 
-A property finds a bug once. After that it is a regression test, and CI
-runs it on Linux, macOS and Windows for every PR. Every bug in the table
-above was found within 7 runs.
+Generated tests find bugs in a few runs: every bug in the table above took
+7 or fewer. In CI they then run on three platforms for every PR, so commit
+only what is cheap:
 
-On main on 2026-11-25, fast-check tests took 1,013 s of the 2,772 s of
-macOS unit-test time (36.5%). 79% of that was in tests that rebuilt a real
-git repository, `StateDb`, child process or mounted React tree on every
-run. Across 166 CI runs, property files caused 48% of the unit failures
-that passed on retry. Most of them were 5 s timeouts.
-
-So use generated tests two ways.
-
-**To find bugs, run them hard, locally.** Raise `numRuns` (for example
-`{ numRuns: 1000 }`) while you work, against the pre-fix code and the fix.
-Don't commit the raised count.
-
-**To guard against regressions, commit what is cheap:**
-
-- **Every counterexample, as a named example test.** That includes each
-  shrunk counterexample and each boundary the search found.
-- **Properties over in-memory code.** Pure functions, reducers,
-  projections, in-memory fakes, `fc.scheduler` and injected clocks qualify.
-  Keep the default `numRuns` (100), and the file under about 200 ms on
-  Linux.
-- **No generated loop over real git, a `StateDb`, a child process or a
-  mounted React tree.** Move the rule into the pure function, reducer or
-  model it depends on and give that the property. Then keep one to three
-  examples against the real fixture. If the loop truly cannot move, build
-  the fixture once per test, not once per run. Cap `numRuns` at 5, keep the
-  test under about 500 ms on Linux, and say in a comment why examples can't
-  cover it.
-- **Enumerate small spaces.** Some inputs that change behavior fit in fewer
-  cases than `numRuns`: a few booleans, or a `constantFrom` of two or three
-  values. Write an `it.each` table over every combination. Sampling 25
-  runs repeats cases and can still miss one.
-- **Don't randomize what doesn't matter.** A generated uuid or marker string
-  that never changes the code path makes one example look like a property.
-  Write the example.
-- **Keep `numRuns` at or below the default.** A higher count needs a comment
-  that names the bug which needed it.
-- **Name a file `.property.test.ts` only if its tests are properties.** Put
-  example tests that use a real fixture in the module's ordinary test file.
-
-Never make a property fit by raising its timeout, splitting it across more
-tests, or retrying it. Make it cheaper, or commit examples instead.
-
-Before you commit, run the file alone with the Vitest project it belongs to,
-for example
-`pnpm exec vitest run --config vitest.workspace.mts --project desktop-main <file>`.
-Check the summed duration against these budgets.
+- Commit each shrunk counterexample as a named example test.
+- Keep properties over in-memory code (pure functions, fakes,
+  `fc.scheduler`, injected clocks) at or below the default `numRuns`, and
+  the file under about 200 ms on Linux.
+- Don't loop over real git, a `StateDb`, a child process or a mounted
+  React tree. Put the property on the pure core and keep one to three
+  examples against the real fixture. If a loop can't move, build the
+  fixture once, cap `numRuns` at 5, and keep the test under about 500 ms.
+- Enumerate small input spaces with `it.each`. When the random values
+  don't change the code path, write one example.
+- Raise `numRuns` locally to search, but don't commit it. Never fit a test
+  by raising its timeout or retrying it.
 
 ## The updater is shared with PwrGit
 
