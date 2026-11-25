@@ -13,6 +13,7 @@ import {
   buildProviderPickerEntries,
   codexModelProviderCatalogNote,
   parseProviderPickerValue,
+  providerPickerValue,
 } from "@pwragent/shared/provider-picker";
 import { codexProviderIdOfModel } from "@pwragent/shared/codex-model-providers";
 import {
@@ -22,7 +23,9 @@ import {
 import { type BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { ModelDropdown } from "./ModelDropdown";
-import { ModelSettingsPicker, type ModelSettingsPickerProps } from "./ModelSettingsPicker";
+import { ModelSettingsPicker, ModelSettingsQuickList, type ModelSettingsPickerProps } from "./ModelSettingsPicker";
+import { useNewThreadRecents } from "./useNewThreadRecents";
+import { newThreadRecents, type NewThreadRecent } from "../../lib/model-settings-recents";
 import { MODEL_DEFAULT_EFFORT, splitEffortChoices } from "./model-settings-picker-model";
 import { ThreadHandoffComposerBand } from "../federation/ThreadHandoffProgress";
 import { mayContainLinearPastedImages } from "@pwragent/shared/linear-paste";
@@ -3641,6 +3644,11 @@ function useComposerController(props: ComposerProps) {
     isLaunchpad,
     launchpad,
   } = useComposerSessionState();
+  const newThreadRecentLists = useNewThreadRecents({
+    api: props.desktopApi,
+    enabled: Boolean(props.launchpad),
+    federationTarget: props.launchpad?.federationTarget ?? readRendererFederationTarget(),
+  });
   // Counts the times a card brought the review panel up, so each one
   // replays the panel's arrival, including Show from a waiting card.
   const [reviewPanelArrival, setReviewPanelArrival] = useState(0);
@@ -15773,9 +15781,11 @@ function useComposerController(props: ComposerProps) {
     // A provider can list efforts without a model catalog; the effort bar
     // is still its control.
     if (!backend || (!hasModels && !offersProviders && efforts.length === 0)) return undefined;
-    const onProviderChange = (value: string): void => {
+    // What moving the launchpad to another provider sets, with its side
+    // effects: a provider pick and a Recent row both start here.
+    const providerChangePatch = (value: string): Parameters<typeof handleLaunchpadPatch>[0] | undefined => {
       if (!props.launchpad) {
-        return;
+        return undefined;
       }
       const picked = parseProviderPickerValue(value);
       const nextBackend = picked.backend as NavigationLaunchpadDraft["backend"];
@@ -15821,7 +15831,7 @@ function useComposerController(props: ComposerProps) {
           ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
           ?? configuredDefaults?.reasoningEffortsByModel[ownerModel.id]
         : undefined;
-      handleLaunchpadPatch({
+      return {
         backend: nextBackend,
         ...(nextBackend === "codex" ? {
           codexModelProviderId: picked.codexModelProviderId,
@@ -15844,7 +15854,11 @@ function useComposerController(props: ComposerProps) {
             ? remembered?.serviceTier
             : undefined,
         } : {}),
-      }, { keepFocus: true });
+      };
+    };
+    const onProviderChange = (value: string): void => {
+      const patch = providerChangePatch(value);
+      if (patch) handleLaunchpadPatch(patch, { keepFocus: true });
     };
     const onModelChange = (value: string): void => {
       const model = value;
@@ -15913,6 +15927,33 @@ function useComposerController(props: ComposerProps) {
       handleThreadModelSettingsPatch(patch);
     };
     const modelLabel = selectedModelOption?.label ?? selectedModelOption?.id ?? "Default model";
+    // A new thread can start on any provider, so it is offered the whole
+    // settings recent threads started with, one click each.
+    const recentRows = providerChoices && props.launchpad
+      ? newThreadRecents({
+          composer: newThreadRecentLists.composer,
+          todoDispatch: newThreadRecentLists.todoDispatch,
+          backends: props.backends ?? [],
+        })
+      : [];
+    const pickRecent = (row: NewThreadRecent): void => {
+      const value = providerPickerValue(row.recent.backend, row.recent.model);
+      const codex = row.recent.backend === "codex";
+      const base = value === providerValue ? {} : providerChangePatch(value) ?? {};
+      handleLaunchpadPatch({
+        ...base,
+        backend: row.recent.backend,
+        ...(codex ? { codexModelProviderId: parseProviderPickerValue(value).codexModelProviderId } : {}),
+        ...(row.recent.model ? { model: row.recent.model } : {}),
+        ...(row.recent.reasoningEffort ? { reasoningEffort: row.recent.reasoningEffort } : {}),
+        ...(codex ? codexSpeedSettings(row.speed) : {}),
+      }, { keepFocus: true });
+    };
+    const recentSelected = (row: NewThreadRecent): boolean =>
+      providerPickerValue(row.recent.backend, row.recent.model) === providerValue
+      && (row.recent.model ?? "") === (selectedModelOption?.id ?? "")
+      && (row.recent.reasoningEffort ?? "") === (selectedReasoningEffort ?? "")
+      && row.speed === (backend.kind === "codex" ? selectedSpeed : "standard");
     return {
       provider: {
         label: providerLabel,
@@ -15984,6 +16025,42 @@ function useComposerController(props: ComposerProps) {
         },
       } : {}),
       ...(modelMenuFootnote ? { footnote: modelMenuFootnote } : {}),
+      ...(recentRows.length > 0 ? {
+        recents: {
+          startOpen: true,
+          content: (close: () => void) => (
+            <ModelSettingsQuickList
+              label="Recent settings"
+              sections={[{
+                heading: { title: "Recent", detail: "all threads" },
+                rows: recentRows.map((row, index) => {
+                  const efforts = row.model?.supportsReasoning === false
+                    ? []
+                    : row.model?.reasoningEfforts ?? row.backend.launchpadOptions?.reasoningEfforts ?? [];
+                  return {
+                    key: `recent-${index}`,
+                    provider: formatOwnerProviderLabel(row.recent.backend, row.recent.model, props.backends),
+                    model: row.model?.label ?? row.recent.model ?? "Default model",
+                    ...(row.recent.reasoningEffort ? {
+                      effort: row.recent.reasoningEffort,
+                      effortStops: splitEffortChoices(efforts).stops,
+                    } : {}),
+                    speed: row.speed,
+                    selected: recentSelected(row),
+                    onPick: () => {
+                      pickRecent(row);
+                      close();
+                    },
+                  };
+                }),
+              }]}
+            />
+          ),
+        },
+      } : {}),
+      onOpenChange: (open: boolean) => {
+        if (open) newThreadRecentLists.refresh();
+      },
     };
   }
 

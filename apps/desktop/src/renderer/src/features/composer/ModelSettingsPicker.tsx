@@ -14,7 +14,7 @@ import { CODEX_SPEED_LABELS, type CodexSpeed } from "@pwragent/shared/codex-spee
 import { formatModelOptionLabel } from "@pwragent/shared/codex-model-providers";
 import type { BackendModelOption, BackendSummary } from "@pwragent/shared/contracts/backend";
 import { buildModelMenu, modelMenuOtherLabel } from "@pwragent/shared/model-menu";
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LightningIcon } from "../../icons";
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, HistoryIcon, LightningIcon } from "../../icons";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import {
   CODEX_SPEED_DESCRIPTIONS,
@@ -113,6 +113,11 @@ export type ModelSettingsPickerProps = {
   reset?: { label: string; currentLabel?: string; detail?: string; current?: boolean; onSelect: () => void };
   /** Rows above the editor, such as the to-do card's This thread and Recent. */
   quickPicks?: (close: () => void) => ReactNode;
+  /**
+   * Whole settings to start from, behind a Recent tab at the top of the
+   * provider rail (shown only with one). `startOpen` opens the panel on it.
+   */
+  recents?: { content: (close: () => void) => ReactNode; startOpen?: boolean };
   footnote?: ReactNode;
   onOpenChange?: (open: boolean) => void;
 };
@@ -133,6 +138,7 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
   const ariaLabel = props.ariaLabel ?? "Model settings";
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<ModelSettingsPanelPlacement>();
+  const [view, setView] = useState<"recent" | "editor">("editor");
   const [abovePlacement, setAbovePlacement] = useState<{ offset: number; rise: number; maxHeight: number }>();
   // Where the panel opened: the pill's left edge and the panel's foot.
   // Cleared when it closes.
@@ -146,11 +152,16 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
   const onOpenChange = props.onOpenChange;
   const rail = props.provider?.choices;
   const width = rail ? PANEL_WIDTH.rail : PANEL_WIDTH.single;
+  const recents = rail ? props.recents : undefined;
+  const recentsStartOpen = Boolean(recents?.startOpen);
+  const showRecents = Boolean(recents) && view === "recent";
 
   const setOpenState = useCallback((next: boolean) => {
+    // Each opening starts where the host says: on Recent for a new thread.
+    if (next) setView(recentsStartOpen ? "recent" : "editor");
     setOpen(next);
     onOpenChange?.(next);
-  }, [onOpenChange]);
+  }, [onOpenChange, recentsStartOpen]);
   const close = useCallback(() => setOpenState(false), [setOpenState]);
   const closeAndFocus = useCallback(() => {
     setOpenState(false);
@@ -254,7 +265,9 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
     if (focusedOpenRef.current || (portalled && !placement)) return;
     focusedOpenRef.current = true;
     const panel = panelRef.current;
-    const target = panel?.querySelector<HTMLElement>('.model-settings__quick [aria-selected="true"]')
+    const target = panel?.querySelector<HTMLElement>('.model-settings__recent [aria-selected="true"]')
+      ?? panel?.querySelector<HTMLElement>('.model-settings__recent [role="option"]')
+      ?? panel?.querySelector<HTMLElement>('.model-settings__quick [aria-selected="true"]')
       ?? panel?.querySelector<HTMLElement>('[data-model-settings-list="model"] [aria-selected="true"]')
       ?? panel?.querySelector<HTMLElement>('[data-model-settings-list="model"] [role="option"]:not(:disabled)')
       ?? panel?.querySelector<HTMLElement>("button:not(:disabled), [tabindex='0']");
@@ -374,9 +387,17 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
       ) : null}
       {rail ? (
         <div className="model-settings__grid">
-          <ProviderRail choices={rail} />
+          <ProviderRail
+            choices={rail}
+            {...(recents ? { recent: { active: showRecents, onShow: () => setView("recent") } } : {})}
+            onActivate={() => setView("editor")}
+          />
           <div className="model-settings__main">
-            <PanelSections props={props} />
+            {showRecents && recents ? (
+              <div className="model-settings__recent">{recents.content(closeAndFocus)}</div>
+            ) : (
+              <PanelSections props={props} />
+            )}
           </div>
         </div>
       ) : (
@@ -534,6 +555,8 @@ function ChoiceOption(props: {
   selected: boolean;
   tabbable: boolean;
   onPick: (value: string) => void;
+  /** Called for every click, the chosen row's included. */
+  onActivate?: () => void;
 }) {
   const descriptionId = useId();
   return (
@@ -548,7 +571,9 @@ function ChoiceOption(props: {
       tabIndex={props.tabbable ? 0 : -1}
       type="button"
       onClick={() => {
-        if (props.choice.disabled || props.selected) return;
+        if (props.choice.disabled) return;
+        props.onActivate?.();
+        if (props.selected) return;
         props.onPick(props.choice.value);
       }}
     >
@@ -573,6 +598,7 @@ function ChoiceListbox(props: {
   groups: { label?: string; choices: ModelSettingsChoice[] }[];
   value: string;
   onPick: (value: string) => void;
+  onActivate?: () => void;
 }) {
   const all = props.groups.flatMap((group) => group.choices);
   const tabbableValue = all.some((choice) => choice.value === props.value)
@@ -585,6 +611,7 @@ function ChoiceListbox(props: {
       selected={choice.value === props.value}
       tabbable={choice.value === tabbableValue}
       onPick={props.onPick}
+      {...(props.onActivate ? { onActivate: props.onActivate } : {})}
     />
   ));
   return (
@@ -631,17 +658,40 @@ function Disclosure(props: { label: string; children: ReactNode; startOpen?: boo
   );
 }
 
-function ProviderRail({ choices }: { choices: NonNullable<NonNullable<ModelSettingsPickerProps["provider"]>["choices"]> }) {
+function ProviderRail({ choices, recent, onActivate }: {
+  choices: NonNullable<NonNullable<ModelSettingsPickerProps["provider"]>["choices"]>;
+  /** The Recent tab above the providers, and whether its rows are shown. */
+  recent?: { active: boolean; onShow: () => void };
+  /** A click on any provider row, the chosen one's included, shows its editor. */
+  onActivate: () => void;
+}) {
   const unavailable = choices.unavailable ?? [];
   const unavailableLabel = choices.unavailableLabel ?? "Unavailable";
   return (
-    <div className="model-settings__rail">
+    <div className={`model-settings__rail${recent?.active ? " model-settings__rail--recent" : ""}`}>
+      {recent ? (
+        <>
+          <button
+            aria-pressed={recent.active}
+            className={`model-settings__option model-settings__rail-recent${recent.active ? " is-on" : ""}`}
+            type="button"
+            onClick={recent.onShow}
+          >
+            <span aria-hidden="true" className="model-settings__check">
+              <HistoryIcon size={12} />
+            </span>
+            <span className="model-settings__option-label">Recent</span>
+          </button>
+          <div aria-hidden="true" className="model-settings__separator" />
+        </>
+      ) : null}
       <div aria-hidden="true" className="model-settings__label">Provider</div>
       <ChoiceListbox
         groups={[{ choices: choices.options }]}
         label="Provider"
         list="provider"
         value={choices.value}
+        onActivate={onActivate}
         onPick={choices.onChange}
       />
       {unavailable.length > 0 ? (
@@ -655,6 +705,7 @@ function ProviderRail({ choices }: { choices: NonNullable<NonNullable<ModelSetti
               groups={[{ choices: unavailable }]}
               label={`Provider: ${unavailableLabel}`}
               value={choices.value}
+              onActivate={onActivate}
               onPick={choices.onChange}
             />
           </Disclosure>
@@ -912,6 +963,8 @@ export type ModelSettingsQuickRow = {
   effort?: string;
   /** The effort scale the meter draws `effort` on; no meter without it. */
   effortStops?: string[];
+  /** A bolt for Fast, two for Ultrafast; nothing for Standard. */
+  speed?: CodexSpeed;
   /** Muted text at the row's end, such as "This thread". */
   detail?: string;
   selected: boolean;
@@ -936,8 +989,12 @@ export function ModelSettingsQuickList(props: {
     return (
       <button
         aria-description={row.detail}
-        aria-label={[row.provider, row.model, row.effort ? `${row.effort} effort` : undefined]
-          .filter(Boolean).join(", ")}
+        aria-label={[
+          row.provider,
+          row.model,
+          row.effort ? `${row.effort} effort` : undefined,
+          row.speed && row.speed !== "standard" ? CODEX_SPEED_LABELS[row.speed] : undefined,
+        ].filter(Boolean).join(", ")}
         aria-selected={row.selected}
         className="model-settings__option model-settings__quick-row"
         key={row.key}
@@ -961,6 +1018,13 @@ export function ModelSettingsQuickList(props: {
             <span className="model-settings__pill-effort">
               {stops.length > 0 ? <EffortMeter count={stops.length} index={stops.indexOf(row.effort)} /> : null}
               <span>{row.effort}</span>
+            </span>
+          ) : null}
+          {row.speed && row.speed !== "standard" ? (
+            <span className="model-settings__pill-bolt">
+              {Array.from({ length: SPEED_BOLTS[row.speed] }, (_, index) => (
+                <LightningIcon key={index} size={11} />
+              ))}
             </span>
           ) : null}
         </span>

@@ -50974,6 +50974,34 @@ button.composer__subthread-source-parent:hover {
   box-shadow: inset 2px 0 0 var(--accent);
 }
 
+/* The Recent tab heads the provider rail. While it is shown, the tab holds
+   the rail's mark and the chosen provider keeps only its check. */
+.model-settings__rail-recent .model-settings__check {
+  color: var(--text-muted);
+}
+
+.model-settings__rail-recent.is-on {
+  background: var(--bg-row-active);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.model-settings__rail-recent.is-on .model-settings__check {
+  color: var(--accent);
+}
+
+.model-settings__rail--recent .model-settings__option[aria-selected="true"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+.model-settings__recent {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
 /* The chosen row keeps its own paint under the pointer and the focus ring. */
 .model-settings__option:hover:not([aria-disabled="true"]):not([aria-selected="true"]),
 .model-settings__option:focus-visible:not([aria-disabled="true"]):not([aria-selected="true"]),
@@ -50981,6 +51009,12 @@ button.composer__subthread-source-parent:hover {
 .model-settings__disclosure:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-bright);
+}
+
+.model-settings__rail .model-settings__rail-recent.is-on:hover,
+.model-settings__rail .model-settings__rail-recent.is-on:focus-visible {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
 }
 
 .model-settings__option:focus-visible,

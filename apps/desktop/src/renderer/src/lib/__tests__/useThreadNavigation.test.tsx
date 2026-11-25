@@ -6442,6 +6442,73 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedThread?.optimisticUserMessage).toBeUndefined();
   });
 
+  it.each([true, false])("records the settings a new thread started with, only once it starts (starts: %s)", async (starts) => {
+    const directoryKey = "directory:/Users/fixture-user/github/Atlas";
+    const readPopulation = vi.fn(async (): Promise<NavigationSnapshot> => ({
+      backend: "all",
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: directoryKey,
+          kind: "directory",
+          label: "Atlas",
+          path: "/Users/fixture-user/github/Atlas",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          launchpad: {
+            directoryKey,
+            directoryKind: "directory",
+            directoryLabel: "Atlas",
+            directoryPath: "/Users/fixture-user/github/Atlas",
+            backend: "claude",
+            model: "opus",
+            reasoningEffort: "high",
+            // Speed is Codex's; a stale flag on another provider is not recorded.
+            fastMode: true,
+            executionMode: "default",
+            prompt: "Cache the key lookup",
+            workMode: "local",
+            createdAt: 1,
+            updatedAt: 1,
+          },
+        },
+      ],
+      launchpadDefaults: { backend: "codex", executionMode: "default" },
+    }));
+    const materializeDirectoryLaunchpad = vi.fn(async () => {
+      if (!starts) throw new Error("Claude is not connected.");
+      return { backend: "claude" as const, threadId: "thread-new", executionMode: "default" as const, workMode: "local" as const };
+    });
+    const recordModelSettingsRecent = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = {
+      readPopulation,
+      materializeDirectoryLaunchpad,
+      recordModelSettingsRecent,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.directories[0]?.launchpad?.prompt).toBe("Cache the key lookup");
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(directoryKey).catch(() => undefined);
+    });
+
+    if (starts) {
+      expect(recordModelSettingsRecent).toHaveBeenCalledTimes(1);
+      expect(recordModelSettingsRecent).toHaveBeenCalledWith(expect.objectContaining({
+        scope: "composer",
+        recent: { backend: "claude", model: "opus", reasoningEffort: "high" },
+      }));
+    } else {
+      expect(recordModelSettingsRecent).not.toHaveBeenCalled();
+    }
+  });
+
   it("keeps launchpad review turn metadata when hydration races materialization", async () => {
     const directoryKey = "directory:/Users/fixture-user/github/PwrAgent";
     const initialSnapshot: NavigationSnapshot = {

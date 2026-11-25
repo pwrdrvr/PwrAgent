@@ -161,7 +161,8 @@ it("preserves review ownership, ordering, enrollment and outcomes across host co
 });
 
 // A dispatch remembers only explicit changes until a preference exists.
-// Recents are per scope, unique by the whole setting, newest first, capped at ten.
+// Recents are per scope, unique by the whole setting, newest first, capped at ten,
+// and dispatching the newest one again writes nothing.
 it("matches dispatch preferences and shared recents without changing commit counts", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.array(fc.record({
@@ -184,7 +185,11 @@ it("matches dispatch preferences and shared recents without changing commit coun
           identity.backend, identity.threadId, settings, source));
         const differs = !command.defaultPick;
         const changed = previous && (previous.model !== settings.model || previous.reasoningEffort !== settings.reasoningEffort);
-        expect(measured.writes.commits).toBe(differs || changed ? 1 : 0);
+        // Dispatching the newest recent again changes no recent, so writes none.
+        const newest = recents[0];
+        const recentChanged = differs && !(newest && newest.backend === settings.backend
+          && newest.model === settings.model && newest.reasoningEffort === settings.reasoningEffort);
+        expect(measured.writes.commits).toBe(recentChanged || changed ? 1 : 0);
         if (differs || previous) prefs.set(command.identity, settings);
         if (differs) recents = [settings, ...recents.filter(r => r.backend !== settings.backend
           || r.model !== settings.model || r.reasoningEffort !== settings.reasoningEffort)].slice(0, 10);
