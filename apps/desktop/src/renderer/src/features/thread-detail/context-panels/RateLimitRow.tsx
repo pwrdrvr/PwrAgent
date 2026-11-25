@@ -1,27 +1,28 @@
 import { describeRateLimitRow, type BackendRateLimitSummary } from "../../../lib/backend-status-format";
-import { limitSeriesFor, sinceResetSeries } from "../../federation-activity/usage-limits";
+import { limitSeriesFor, sinceResetSeries, type LimitAccount } from "../../federation-activity/usage-limits";
 import { describeLimitPace } from "../../federation-activity/usage-activity-presentation";
-import type { LocalUsagePace } from "../../federation-activity/useLocalUsagePace";
 
 /**
  * One limit as a `dt`/`dd` pair: the figure, its reset, and a meter. The
  * meter also shows where the pace lands when a usage history exists.
  */
-export function RateLimitRow({ limit, now, pace, labelTooltip }: {
+export function RateLimitRow({ limit, now, account, labelTooltip }: {
   limit: BackendRateLimitSummary;
   now: number;
-  pace?: LocalUsagePace;
+  account?: LimitAccount;
   /** Shown on the label, e.g. the provider's own name for a generic row. */
   labelTooltip?: string;
 }) {
   const row = describeRateLimitRow(limit, now);
-  const series = limitSeriesFor(pace?.account, limit);
-  const described = series && pace && series.latest.usedPercent < 100
-    ? describeLimitPace(series, pace.readAt, true)
+  const series = limitSeriesFor(account, limit);
+  const described = series && series.latest.usedPercent < 100 && series.latest.resetAt === limit.resetAt
+    && (limit.resetAt === undefined || limit.resetAt > now)
+    ? describeLimitPace(series, now, true)
     : undefined;
-  // The meter always shows where the pace lands. The sentence is for the
-  // window the Pricing card follows, and for any window about to run out.
-  const sentence = described && (described.short || series === sinceResetSeries(pace?.account));
+  // Each Antigravity pool is a separate weekly allowance. Elsewhere, keep
+  // the sentence for the main window and any window about to run out.
+  const sentence = described && (described.short || series === sinceResetSeries(account)
+    || account?.provider === "google");
   const used = row.usedPercent === undefined ? undefined : Math.min(100, Math.max(0, row.usedPercent));
   const projected = described
     ? described.projection.kind === "full" ? 100 : Math.min(100, described.projection.percent)

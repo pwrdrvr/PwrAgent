@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
-import type {
-  ReadUsageActivityRequest,
-  ReadUsageActivityResponse,
+import {
+  usageLimitProviderForBackend,
+  type ReadUsageActivityRequest,
+  type ReadUsageActivityResponse,
 } from "@pwragent/shared/contracts/usage-activity";
-import { buildLimitAccounts, limitSeriesFor, seriesStart, sinceResetSeries, type LimitAccount } from "./usage-limits";
+import { formatUsedPercent } from "../../lib/backend-status-format";
+import { buildLimitAccounts, limitProvider, limitSeriesFor, seriesStart, sinceResetSeries, type LimitAccount } from "./usage-limits";
 import { summarizeUsageActivity } from "./usage-activity-summary";
 
 const DAY = 86_400_000;
@@ -18,9 +20,9 @@ const LOCAL: FederationTarget = { scope: "local" };
 export type LocalUsagePace = {
   /** When the read finished: "now" for every pace and projection drawn from it. */
   readAt: number;
-  /** The account's limits; absent until this instance has recorded a reading. */
-  account?: LimitAccount;
-  /** Start of the window the rail follows: the account's longest limit. */
+  /** Each provider's current account limits on the instance. */
+  accounts: ReadonlyMap<string, LimitAccount>;
+  /** Start of the Codex window the Pricing card follows. */
   windowStart?: number;
   /** The read instance's API-equivalent spend for turns contained in that window. */
   costMicros?: number;
@@ -29,23 +31,24 @@ export type LocalUsagePace = {
 type UsageReader = (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
 
 /**
- * Changes when Codex reports new account limits, which is when a turn has
- * added a reading worth rereading for. Whole percents, so a stream of
- * fractional updates is one change.
+ * Changes when a provider reports new account limits. Quantize to the
+ * precision the meter prints so small changes don't cause extra reads.
  */
 export function usagePaceRefreshKey(backends: readonly BackendSummary[] | undefined): string {
-  const codex = backends?.find((backend) => backend.kind === "codex");
-  return JSON.stringify((codex?.rateLimits ?? []).map((limit) => [
-    limit.windowKey ?? limit.name,
-    typeof limit.usedPercent === "number" ? Math.round(limit.usedPercent) : null,
-    limit.resetAt ?? null,
+  return JSON.stringify((backends ?? []).map((backend) => [
+    backend.kind,
+    (backend.rateLimits ?? []).map((limit) => [
+      limit.windowKey, limit.limitId, limit.name,
+      typeof limit.usedPercent === "number" ? formatUsedPercent(limit.usedPercent) : null,
+      limit.resetAt, limit.windowMinutes,
+    ]),
   ]));
 }
 
 /** Account identity is independent of changing limit readings. */
 export function usagePaceAccountKey(backends: readonly BackendSummary[] | undefined): string {
-  const account = backends?.find((backend) => backend.kind === "codex")?.account;
-  return JSON.stringify([account?.type, account?.email ?? account?.label]);
+  return JSON.stringify((backends ?? []).filter(({ kind }) => usageLimitProviderForBackend(kind)).map(({ kind, account }) =>
+    [kind, account?.type, account?.accountId ?? account?.email ?? account?.label, account?.planType]));
 }
 
 /**
@@ -55,28 +58,30 @@ export function usagePaceAccountKey(backends: readonly BackendSummary[] | undefi
 let readSequence = 0;
 let shared: { read: UsageReader; accountKey: string; key: string; sequence: number; pace: LocalUsagePace } | undefined;
 
-const accountOf = (data: ReadUsageActivityResponse) => {
-  const current = data.limitObservation;
-  // History can survive a failed startup or a login change. Only the current
-  // account observation establishes which account the rail may describe.
-  if (!current) return undefined;
-  const account = buildLimitAccounts([{
-    owner: "local",
-    target: LOCAL,
-    current,
-    history: data.limitHistory?.filter((observation) =>
-      observation.accountKey === current.accountKey
-      && observation.observedAt <= current.observedAt),
-  }])[0];
-  // A plan change can remove or move a bucket. History supplies its chart,
-  // while the current observation supplies the plan and active buckets.
-  return {
-    ...account,
-    planType: current.planType,
-    series: account.series.filter((series) =>
-      current.limits.some((limit) => limitSeriesFor(account, limit) === series)),
-  };
-};
+function accountsOf(data: ReadUsageActivityResponse): ReadonlyMap<string, LimitAccount> {
+  const currentReadings = data.limitObservations ?? (data.limitObservation ? [data.limitObservation] : []);
+  const history = [...data.limitHistory ?? [], ...data.providerLimitHistory ?? []];
+  return new Map(currentReadings.map((current) => {
+    const provider = limitProvider(current);
+    // A current observation establishes the account. History may survive an
+    // account or plan change and may include buckets the provider no longer reports.
+    const [account] = buildLimitAccounts([{
+      owner: "local",
+      target: LOCAL,
+      current,
+      history: history.filter((observation) =>
+        limitProvider(observation) === provider
+        && observation.accountKey === current.accountKey
+        && observation.observedAt <= current.observedAt),
+    }]);
+    return [provider, {
+      ...account,
+      planType: current.planType,
+      series: account.series.filter((series) =>
+        current.limits.some((limit) => limitSeriesFor(account, limit) === series)),
+    }];
+  }));
+}
 
 /**
  * One instance's account limits and spend since the limit window began, read
@@ -90,7 +95,7 @@ const accountOf = (data: ReadUsageActivityResponse) => {
  * immediate. An in-flight answer is retained only for the same account.
  */
 export function useLocalUsagePace(read: UsageReader | undefined, refreshKey: string, accountKey = "local"): LocalUsagePace | undefined {
-  const cached = read && shared?.read === read && shared.accountKey === accountKey && shared.pace.account ? shared : undefined;
+  const cached = read && shared?.read === read && shared.accountKey === accountKey && shared.pace.accounts.size ? shared : undefined;
   // Limit changes can defer a reread, but must not erase the same account's
   // chart when a different thread mounts the rail during that minute.
   const [state, setState] = useState(() => ({ read, accountKey, pace: cached?.pace }));
@@ -108,7 +113,7 @@ export function useLocalUsagePace(read: UsageReader | undefined, refreshKey: str
   }, []);
   useEffect(() => {
     if (!read) return;
-    const cached = shared?.read === read && shared.accountKey === accountKey && shared.pace.account ? shared : undefined;
+    const cached = shared?.read === read && shared.accountKey === accountKey && shared.pace.accounts.size ? shared : undefined;
     if (lastRead.current.read !== read || lastRead.current.accountKey !== accountKey) {
       lastRead.current = { read, accountKey, at: cached?.pace.readAt ?? 0 };
     }
@@ -130,19 +135,20 @@ export function useLocalUsagePace(read: UsageReader | undefined, refreshKey: str
         // over its own window, as the Usage Activity window does.
         let from = now - 8 * DAY;
         let data = await read({ from, to: now });
-        const known = seriesStart(sinceResetSeries(accountOf(data)));
+        let accounts = accountsOf(data);
+        const known = seriesStart(sinceResetSeries(accounts.get("openai")));
         if (known !== undefined && known < from) {
           from = Math.max(known, now - MAX_WINDOW);
           data = await read({ from, to: now });
+          accounts = accountsOf(data);
         }
-        const account = accountOf(data);
-        const windowStart = seriesStart(sinceResetSeries(account));
+        const windowStart = seriesStart(sinceResetSeries(accounts.get("openai")));
         const summary = summarizeUsageActivity(
           data.rows.map((row) => ({ ...row, owner: "local", target: LOCAL })),
           Math.max(windowStart ?? from, from),
           now,
         );
-        const next = { readAt: now, account, windowStart,
+        const next = { readAt: now, accounts, windowStart,
           costMicros: summary.groups.reduce((total, group) => total + group.cost, 0) };
         if (runId === latestRun.current && sameSource() && (!shared || sequence > shared.sequence)) {
           shared = { read, accountKey, key: refreshKey, sequence, pace: next };
@@ -151,7 +157,7 @@ export function useLocalUsagePace(read: UsageReader | undefined, refreshKey: str
       } catch {
         // The card falls back to its plain link; a failed read is not news.
         if (current()) setState((previous) => ({ read, accountKey,
-          pace: previous.read === read && previous.accountKey === accountKey ? previous.pace ?? { readAt: Date.now() } : { readAt: Date.now() },
+          pace: previous.read === read && previous.accountKey === accountKey ? previous.pace : undefined,
         }));
       } finally {
         if (pending.current?.runId === runId) pending.current = undefined;

@@ -11,16 +11,22 @@ export type ReadUsageActivityRequest = {
 
 /** Opening the Usage Activity window from a provider's surface. */
 export type OpenUsageActivityRequest = {
-  /** Focus this ledger provider's account limits (`openai`, `anthropic`, `xai`). */
+  /** Focus this ledger provider's account limits. */
   provider?: string;
 };
 
 /** Providers whose account limits Usage Activity charts. */
-export const USAGE_LIMIT_PROVIDERS = ["openai", "anthropic", "xai"] as const;
+export const USAGE_LIMIT_PROVIDERS = ["openai", "anthropic", "xai", "google"] as const;
 
 /** The ledger provider whose account limits a backend's turns count against. */
 export function usageLimitProviderForBackend(backend: string | undefined): string | undefined {
-  return backend === "codex" ? "openai" : backend === "claude" ? "anthropic" : backend === "acp:grok" ? "xai" : undefined;
+  switch (backend) {
+    case "codex": return "openai";
+    case "claude": return "anthropic";
+    case "acp:grok": return "xai";
+    case "acp:antigravity": return "google";
+    default: return undefined;
+  }
 }
 
 /** A provider named by an untrusted caller, if it is one Usage Activity knows. */
@@ -42,8 +48,8 @@ export type UsageLimitObservation = {
   /** When the owner last received these limits, not when the turn ended. */
   observedAt: number;
   /**
-   * The ledger provider whose account these limits describe (`openai`,
-   * `anthropic`, `xai`). Absent means OpenAI: older owners reported Codex only.
+   * The ledger provider whose account these limits describe.
+   * Absent means OpenAI: older owners reported Codex only.
    */
   provider?: string;
   /** Opaque per-account key, so owners on different accounts never blend. */

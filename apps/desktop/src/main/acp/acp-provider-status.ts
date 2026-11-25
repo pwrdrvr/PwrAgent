@@ -33,6 +33,7 @@ export function normalizeAntigravityUsageStatus(value: unknown): AcpProviderStat
         name: `Weekly ${label} limit`,
         limitId,
         usedPercent: 100 - remaining * 100,
+        windowMinutes: 7 * 24 * 60,
         ...(resetAt !== undefined ? { resetAt } : {}),
       });
     }

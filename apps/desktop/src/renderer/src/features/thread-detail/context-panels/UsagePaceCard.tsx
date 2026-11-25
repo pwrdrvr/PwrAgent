@@ -48,10 +48,12 @@ export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends,
   const open = desktopApi?.openUsageActivity;
   // Nothing renders without a way to open the window, so nothing is read.
   // Another provider's thread never reads the Codex account at all.
+  const codexBackends = backends?.filter((backend) => backend.kind === "codex");
   const pace = useLocalUsagePace(open && codexLimit ? desktopApi?.readUsageActivity : undefined,
-    usagePaceRefreshKey(backends), usagePaceAccountKey(backends));
+    usagePaceRefreshKey(codexBackends), usagePaceAccountKey(codexBackends));
   if (!open) return null;
-  const series = sinceResetSeries(pace?.account);
+  const account = pace?.accounts.get("openai");
+  const series = sinceResetSeries(account);
   if (!pace || !series) {
     return (
       <button className="usage-pace-card" onClick={() => void open()} type="button">
@@ -66,7 +68,7 @@ export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends,
 
   const now = pace.readAt;
   const { latest } = series;
-  const plan = pace.account?.planType ? ` ${formatBackendPlanType({ kind: "codex" }, pace.account.planType)}` : "";
+  const plan = account?.planType ? ` ${formatBackendPlanType({ kind: "codex" }, account.planType)}` : "";
   const exhausted = latest.usedPercent >= 100;
   const described = exhausted ? undefined : describeLimitPace(series, now, true);
   const tone = exhausted ? " is-out" : described?.short ? " is-short" : "";

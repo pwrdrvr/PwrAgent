@@ -1633,8 +1633,8 @@ export class AcpBackendAdapter {
 
   /**
    * The account limits an enabled agent last reported, as a Usage Activity
-   * reading. Grok reports a plan but no account identity, so its readings
-   * stay with the instance that read them.
+   * reading. Grok and Antigravity report no account identity here, so
+   * their readings stay with the instance unless an account group is configured.
    */
   limitObservation(backend: AcpBackendId): UsageLimitObservation | undefined {
     const reading = this.planLimits.snapshot(backend);

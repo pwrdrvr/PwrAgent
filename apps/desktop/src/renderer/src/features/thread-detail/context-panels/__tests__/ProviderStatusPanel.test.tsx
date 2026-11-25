@@ -253,7 +253,51 @@ describe("ProviderStatusPanel", () => {
     expect(readUsageActivity).toHaveBeenCalledWith({ from: now - 8 * 24 * HOUR, to: now });
   });
 
-  it("does not read usage history when no backend has Codex limits", () => {
+  it("gives each provider's sidebar rows the same trajectory as its own account window", async () => {
+    const now = Date.UTC(2026, 10, 24, 21);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    // Each provider's window began 48 hours ago. At constant pace, a week's
+    // usage is 3.5 times the observed percentage.
+    const weekly = {
+      limitId: "weekly", name: "Weekly limit",
+      resetAt: now + 120 * HOUR, windowMinutes: 10_080,
+    };
+    const claudeLimit = { ...weekly, usedPercent: 10 };
+    const claudeGptLimit = { ...weekly, usedPercent: 20 };
+    const geminiLimit = { ...weekly, limitId: "gemini", name: "Weekly Gemini limit", usedPercent: 22 };
+    const limitObservations: UsageLimitObservation[] = [
+      { observedAt: now, provider: "anthropic", accountKey: "same-key", limits: [claudeLimit] },
+      { observedAt: now, provider: "google", accountKey: "same-key", limits: [claudeGptLimit, geminiLimit] },
+    ];
+    const readUsageActivity = vi.fn(async () => ({
+      rows: [], readAt: now, rateLimits: [], truncated: false, limitObservations,
+    }));
+    const claude = { ...codexBackend, kind: "claude" as const, label: "Claude", rateLimits: [claudeLimit] };
+    const antigravity = {
+      ...codexBackend, kind: "acp:antigravity" as const, label: "Antigravity",
+      account: undefined, rateLimits: [claudeGptLimit, geminiLimit],
+    };
+    const backends = [claude, antigravity];
+    const { rerender } = render(<ProviderStatusPanel backends={backends} desktopApi={{ readUsageActivity }} />);
+    const claudeRow = screen.getByText("Claude", { selector: ".backend-status-list__name" }).closest("li")!;
+    const antigravityRow = screen.getByText("Antigravity", { selector: ".backend-status-list__name" }).closest("li")!;
+
+    expect(await within(claudeRow).findByText(/On pace for about 35%/)).toBeInTheDocument();
+    expect(within(antigravityRow).getByText(/On pace for about 70%/)).toBeInTheDocument();
+    expect(within(antigravityRow).getByText(/On pace for about 77%/)).toBeInTheDocument();
+    expect(readUsageActivity).toHaveBeenCalledTimes(1);
+
+    // The status stream can advance to a new window before its usage read.
+    // Never put the previous window's projection beside the new reading.
+    rerender(<ProviderStatusPanel
+      backends={[{ ...claude, rateLimits: [{ ...claudeLimit, resetAt: weekly.resetAt + 168 * HOUR }] }, antigravity]}
+      desktopApi={{ readUsageActivity }}
+    />);
+    expect(within(claudeRow).queryByText(/On pace/)).not.toBeInTheDocument();
+    expect(within(antigravityRow).getByText(/On pace for about 70%/)).toBeInTheDocument();
+  });
+
+  it("does not read usage history when no backend has chartable limits", () => {
     const readUsageActivity = vi.fn();
     render(<ProviderStatusPanel backends={[kimiBackend]} desktopApi={{ readUsageActivity }} />);
 
