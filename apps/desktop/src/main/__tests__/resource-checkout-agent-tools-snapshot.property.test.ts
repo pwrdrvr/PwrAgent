@@ -52,19 +52,31 @@ describe("agent checkout tools in the Resources snapshot", () => {
     }), { numRuns: 25 });
   });
 
-  it("reports the tools as off when the setting can't be read", async () => {
+  it("reports the tools as off when the setting can't be read, warning once per failure streak", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-agent-tools-snapshot-"));
     const warnings: unknown[] = [];
+    let failing = true;
     const service = new DesktopResourceCheckoutService({
       viewer: { instanceId: "default", instanceLabel: "Studio", profile: "default", machineId: "host" },
       machineStore: openResourceCheckoutStore(path.join(root, "machine.db"), "host"), machineCpuCount: 2,
       bindings: [], now: () => 1_000, requestPeer: async () => { throw new Error("Offline"); },
       warn: (error) => warnings.push(error),
-      agentToolsEnabled: () => { throw new Error("config unreadable"); },
+      agentToolsEnabled: () => {
+        if (failing) throw new Error("config unreadable");
+        return true;
+      },
     });
     try {
       expect(service.read().agentTools).toBe("disabled");
+      expect(service.read().agentTools).toBe("disabled");
       expect(warnings).toHaveLength(1);
+      expect(String(warnings[0])).toMatch(/Federation resources setting/);
+
+      failing = false;
+      expect(service.read().agentTools).toBe("enabled");
+      failing = true;
+      expect(service.read().agentTools).toBe("disabled");
+      expect(warnings).toHaveLength(2);
     } finally {
       await service.close();
       rmSync(root, { recursive: true, force: true });

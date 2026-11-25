@@ -96,6 +96,8 @@ export class DesktopResourceCheckoutService {
   /** The adopted machine store came from another identity in this process. */
   private machineAdopted = false;
   private machineConflictExplanation: ResourceOwnershipConflict = UNEXPLAINED_OWNERSHIP_CONFLICT;
+  /** The setting read failed last time; warn once per failure streak. */
+  private agentToolsReadFailing = false;
   private lastAdvertisementScan = -Infinity;
   private localAdvertisements: ResourceAdvertisement[] = [];
 
@@ -353,9 +355,14 @@ export class DesktopResourceCheckoutService {
 
   private readAgentTools(): ResourceCheckoutsSnapshot["agentTools"] {
     try {
-      return this.options.agentToolsEnabled?.() === true ? "enabled" : "disabled";
+      const enabled = this.options.agentToolsEnabled?.() === true;
+      this.agentToolsReadFailing = false;
+      return enabled ? "enabled" : "disabled";
     } catch (error) {
-      this.options.warn(error);
+      if (!this.agentToolsReadFailing) {
+        this.agentToolsReadFailing = true;
+        this.options.warn(new Error("Couldn't read the Federation resources setting; showing agent checkouts as off.", { cause: error }));
+      }
       return "disabled";
     }
   }
