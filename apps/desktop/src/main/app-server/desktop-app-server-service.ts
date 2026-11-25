@@ -458,6 +458,7 @@ import {
   createScheduledPrPrefetchRepoResolver,
   filterStoredDiscoveredPullRequests,
   resolveScheduledPrPrefetchRepos,
+  type PrAttachmentDemand,
 } from "../pr-status/pr-detection";
 import {
   GithubGraphqlPrClient,
@@ -5827,7 +5828,7 @@ class DesktopAppServerService {
    */
   async canonicalizeStoredPullRequests(
     prs: PrSummary[],
-    demand?: PrMetadataDemand,
+    demand?: PrAttachmentDemand,
     verifyAttachments = true,
   ): Promise<PrSummary[]> {
     await this.loadPrStatusRegistry();
@@ -6049,7 +6050,7 @@ class DesktopAppServerService {
    * still carry the old name, so a stored PR no remote names asks GitHub what
    * that remote is called now before it is dropped.
    */
-  private async filterStoredDiscoveredPrs(prs: PrSummary[], demand?: PrMetadataDemand): Promise<PrSummary[]> {
+  private async filterStoredDiscoveredPrs(prs: PrSummary[], demand?: PrAttachmentDemand): Promise<PrSummary[]> {
     return await filterStoredDiscoveredPullRequests(prs, {
       demand,
       resolveRepositoryNames: demand?.allowForgeLookup === false ? undefined : async (repos) => {

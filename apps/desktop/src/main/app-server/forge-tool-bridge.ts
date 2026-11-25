@@ -1,6 +1,7 @@
 import type { TurnEventObserver } from "./turn-event-observer";
 import type { RegistryHostPorts, RegistryHostQueryResult } from "./registry-host-ports";
 import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
+import type { PrAttachmentDemand } from "../pr-status/pr-detection";
 import { randomUUID } from "node:crypto";
 import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
@@ -1410,7 +1411,7 @@ export class ForgeToolBridge {
   }
 
   async canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>,
-    demand?: PrMetadataDemand, verifyAttachments = true): Promise<typeof prs> {
+    demand?: PrAttachmentDemand, verifyAttachments = true): Promise<typeof prs> {
     const canonicalizer = this.threadPullRequestCanonicalizer;
     if (!canonicalizer) return prs;
     try {

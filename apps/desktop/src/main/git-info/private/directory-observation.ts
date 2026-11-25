@@ -220,7 +220,7 @@ export function createGitDirectoryObserver(options: { navigation?: boolean; requ
     if (!commonInfo?.directory) return undefined;
     const configPath = path.join(commonDir, "config");
     const config = await observeCommon(configPath);
-    const worktreeConfig = await observeFile(path.join(gitdir, "config.worktree"));
+    const worktreeConfig = await fileState(path.join(gitdir, "config.worktree"), signal, !options.requireRegularHead);
     const backlink = await observeFile(path.join(gitdir, "gitdir"));
     // A reusable checkout identity must defer to Git for HEAD symlinks. The
     // same referent can outlive a literal target change that Git rejects.

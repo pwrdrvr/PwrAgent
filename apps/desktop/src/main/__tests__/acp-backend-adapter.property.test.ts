@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
@@ -7,11 +7,11 @@ import { createAcpAgentStoreMock, createAcpSessionStoreMock } from "./helpers/ba
 
 describe("Antigravity result usage", () => {
   it("emits normalized Antigravity session/prompt result usage with the selected model", async () => {
-    await checkAntigravityPromptUsage({ reply: "hello world", stopReason: "end_turn", outputTokens: 541 });
+    await checkAntigravityPromptUsage({ reply: ["hello world"], stopReason: "end_turn", outputTokens: 541 });
   });
 
   it("emits Antigravity usage before failing a turn that exhausts its output budget without a reply", async () => {
-    await checkAntigravityPromptUsage({ reply: undefined, stopReason: "max_tokens", outputTokens: 1 });
+    await checkAntigravityPromptUsage({ reply: [], stopReason: "max_tokens", outputTokens: 1 });
   });
 
   it("delivers Antigravity's reported usage exactly once before failing any prompt without visible text", async () => {
@@ -20,13 +20,26 @@ describe("Antigravity result usage", () => {
       fc.constantFrom("end_turn", "max_tokens"),
       fc.integer({ min: 0, max: 10_000 }),
       async (reply, stopReason, outputTokens) => {
-        await checkAntigravityPromptUsage({ reply, stopReason, outputTokens });
+        await checkAntigravityPromptUsage({
+          reply: reply === undefined ? [] : [reply],
+          stopReason,
+          outputTokens,
+        });
+      },
+    ), { numRuns: 25 });
+  });
+
+  it("streams assistant chunks without an adapter session lookup for each delta", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.array(fc.stringMatching(/^[a-z]{1,20}$/u), { minLength: 1, maxLength: 10 }),
+      async (reply) => {
+        await checkAntigravityPromptUsage({ reply, stopReason: "end_turn", outputTokens: 541 });
       },
     ), { numRuns: 25 });
   });
 
   async function checkAntigravityPromptUsage({ reply, stopReason, outputTokens }: {
-    reply: string | undefined;
+    reply: string[];
     stopReason: string;
     outputTokens: number;
   }): Promise<void> {
@@ -37,7 +50,7 @@ describe("Antigravity result usage", () => {
     });
     const events: AgentEvent[] = [];
     const terminal = Promise.withResolvers<void>();
-    const terminalMethod = reply?.trim() ? "turn/completed" : "turn/failed";
+    const terminalMethod = reply.join("").trim() ? "turn/completed" : "turn/failed";
     const adapter = new AcpBackendAdapter({
       discoverLocalAcpAgents: async () => [],
       acpAgentStore: createAcpAgentStoreMock([{
@@ -85,12 +98,15 @@ describe("Antigravity result usage", () => {
         prompt: "Read hello.txt",
         turnId: "turn-antigravity-usage",
       });
-      if (reply !== undefined) {
+      const getSession = vi.spyOn(adapter, "getSession");
+      for (const chunk of reply) {
         transport.emitSessionUpdate(session.sessionId, {
           sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text: reply },
+          content: { type: "text", text: chunk },
         });
       }
+      expect(getSession).not.toHaveBeenCalled();
+      getSession.mockRestore();
       const thoughtTokens = Math.min(436, outputTokens);
       const totalTokens = 29_161 + outputTokens;
       promptResponse.resolve({
@@ -105,6 +121,13 @@ describe("Antigravity result usage", () => {
         },
       });
       await terminal.promise;
+
+      if (terminalMethod === "turn/completed") {
+        const deltas = events.flatMap(({ notification }) =>
+          notification.method === "item/agentMessage/delta" ? [notification.params.delta] : [],
+        );
+        expect(deltas).toEqual(reply);
+      }
 
       const usageAndTerminal = events.filter(({ notification }) =>
         notification.method === "thread/tokenUsage/updated"

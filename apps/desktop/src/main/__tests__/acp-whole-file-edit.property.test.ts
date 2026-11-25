@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   AppServerThreadActivityEntry,
   AppServerThreadFileDiff,
@@ -254,6 +254,21 @@ describe("whole-file ACP edit diffs", () => {
     expect(toolInvocationFromNotification({
       backend: "acp:antigravity", notification: notification!,
     })).toMatchObject({ itemId: "antigravity-edit", toolName: "edit", status });
+  });
+
+  it("reads the workspace only when an Antigravity tool update has a diff to display", () => {
+    const [start, completed] = antigravityEditFrames({ oldText: "old\n", newText: "new\n" });
+    const cwd = vi.fn(() => "/work");
+    const context = { backendId: "acp:antigravity", threadId: sessionId, cwd };
+    const [opening] = acpToolUpdateNotifications({ ...context, update: start! });
+    expect(opening).toMatchObject({ params: { item: { acpFileEdit: true } } });
+    expect(cwd).not.toHaveBeenCalled();
+
+    const [completion] = acpToolUpdateNotifications({ ...context, update: completed! });
+    expect(cwd).toHaveBeenCalledTimes(1);
+    expect(completion).toMatchObject({ params: { item: { fileDiff: {
+      diff: expect.stringContaining("diff --git a/notes/checkers.md b/notes/checkers.md"),
+    } } } });
   });
 
   it("caps a replacement with more lines than a JavaScript call can take as arguments", () => {

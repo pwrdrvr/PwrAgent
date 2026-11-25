@@ -53,6 +53,8 @@ type Options = {
    * title they had when they asked, so a rename shows on the next read.
    */
   threadTitle?: (thread: ResourceThreadRef) => string | undefined;
+  /** Settings → Experimental → Federation resources, read on every observation. */
+  agentToolsEnabled?: () => boolean;
   warn: (error: unknown) => void;
   now?: () => number;
 };
@@ -94,6 +96,8 @@ export class DesktopResourceCheckoutService {
   /** The adopted machine store came from another identity in this process. */
   private machineAdopted = false;
   private machineConflictExplanation: ResourceOwnershipConflict = UNEXPLAINED_OWNERSHIP_CONFLICT;
+  /** The setting read failed last time; warn once per failure streak. */
+  private agentToolsReadFailing = false;
   private lastAdvertisementScan = -Infinity;
   private localAdvertisements: ResourceAdvertisement[] = [];
 
@@ -300,10 +304,10 @@ export class DesktopResourceCheckoutService {
   }
 
   read(): ResourceCheckoutsSnapshot {
-    const { authorities, resources, registerGate, observedAt } = this.observe();
+    const { authorities, resources, registerGate, agentTools, observedAt } = this.observe();
     return {
       contractVersion: RESOURCE_CHECKOUTS_CONTRACT_VERSION, revision: this.revision, observedAt,
-      viewer: this.options.viewer, authorities, registerGate,
+      viewer: this.options.viewer, authorities, registerGate, agentTools,
       resources: resources.map((resource) => {
         const usage = this.usage.history(resource.resourceId);
         return usage ? { ...resource, usage } : resource;
@@ -316,16 +320,19 @@ export class DesktopResourceCheckoutService {
    * the snapshot's `observedAt`, so a reader extends it to now until the
    * next revision, which comes only when a held or waiting value changes.
    */
-  private observe(): Pick<ResourceCheckoutsSnapshot, "authorities" | "resources" | "registerGate" | "observedAt"> {
+  private observe(): Pick<ResourceCheckoutsSnapshot, "authorities" | "resources" | "registerGate" | "agentTools" | "observedAt"> {
     const views = this.readView(this.operator, this.remoteViews);
     const authorities = [...new Map(views.map(({ authority }) => [authority.authorityId, authority])).values()];
     const resources = views.map(({ resource }) => resource);
     const registerGate = this.machineConflict
       ? { allowed: false as const, reason: "ownership_unresolved" as const, detail: "The machine store is unresolved." }
       : { allowed: true as const };
+    const agentTools = this.readAgentTools();
     const observedAt = this.now();
     this.usage.observe(resources, observedAt);
-    const fingerprint = JSON.stringify([authorities, resources, registerGate]);
+    // The setting is in the fingerprint, so turning it on or off publishes a
+    // revision on the next poll.
+    const fingerprint = JSON.stringify([authorities, resources, registerGate, agentTools]);
     if (fingerprint !== this.fingerprint) {
       this.fingerprint = fingerprint;
       this.threadsWithCheckouts.clear();
@@ -343,7 +350,21 @@ export class DesktopResourceCheckoutService {
       const revision = ++this.revision;
       for (const listener of this.listeners) listener(revision);
     }
-    return { authorities, resources, registerGate, observedAt };
+    return { authorities, resources, registerGate, agentTools, observedAt };
+  }
+
+  private readAgentTools(): ResourceCheckoutsSnapshot["agentTools"] {
+    try {
+      const enabled = this.options.agentToolsEnabled?.() === true;
+      this.agentToolsReadFailing = false;
+      return enabled ? "enabled" : "disabled";
+    } catch (error) {
+      if (!this.agentToolsReadFailing) {
+        this.agentToolsReadFailing = true;
+        this.options.warn(new Error("Couldn't read the Federation resources setting; showing agent checkouts as off.", { cause: error }));
+      }
+      return "disabled";
+    }
   }
 
   /** Discovery hint from the last owner poll. Mutations still check ownership at the authority. */

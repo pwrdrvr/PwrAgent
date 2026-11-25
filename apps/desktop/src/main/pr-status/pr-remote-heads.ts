@@ -159,6 +159,11 @@ function safeRef(ref: string): boolean {
     /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(part) && !part.endsWith(".") && !part.endsWith(".lock"));
 }
 
+function safeRemoteName(remote: string): boolean {
+  return safeRef(remote) && !remote.includes("/")
+    && !["refs", "worktrees", "main-worktree", "bisect", "worktree", "rewritten"].includes(remote);
+}
+
 type CheckoutLocation = { directory: string; gitDir: string; commonDir: string; gitDirLink?: string };
 
 async function locateRefs(cwd: string, files: RefFiles): Promise<CheckoutLocation | undefined> {
@@ -236,8 +241,7 @@ async function readRemoteHead(
   files: RefFiles,
   packed: Set<string>,
 ): Promise<string | undefined> {
-  if (!safeRef(remote) || remote.includes("/")
-    || ["refs", "worktrees", "main-worktree", "bisect", "worktree", "rewritten"].includes(remote)) return undefined;
+  if (!safeRemoteName(remote)) return undefined;
   const { gitDir, commonDir } = location;
   const prefix = `refs/remotes/${remote}/`;
   let ref = prefix + "HEAD";
@@ -284,25 +288,25 @@ async function observeRefs(cwd: string, remotes: string[], signal: AbortSignal):
     const head = await readRemoteHead(location, remote, files, packed);
     if (head) heads.set(remote, head);
   }
-  return heads.size >= 2 ? { ...location, heads, files } : undefined;
+  return { ...location, heads, files };
 }
 
 /**
- * Replace two or more subprocesses only when Git confirms the exact checkout
- * and SHA-1 files backend observed by the filesystem reader. One observation
- * is scoped to its checkout and refresh, including the abbreviation checks.
+ * Git confirms the exact checkout and SHA-1 files backend. One observation
+ * is scoped to its checkout and refresh, including abbreviation checks.
+ * A fleet can amortize that confirmation even for a single remote.
  */
 export async function observeProvenRemoteHeads(
-  cwd: string, remotes: string[], demand?: PrMetadataDemand,
+  cwd: string, remotes: string[], demand?: PrMetadataDemand, minimumHeads = 2,
 ) {
   const env = buildPwrAgentChildProcessEnv(process.env);
-  if (process.platform === "win32" || remotes.length < 2 || remotes.length > MAX_REMOTES || !path.isAbsolute(cwd)
+  if (process.platform === "win32" || remotes.length < minimumHeads || remotes.length > MAX_REMOTES || !path.isAbsolute(cwd)
     || !constants.O_NOFOLLOW || !constants.O_NONBLOCK || getConfiguredGitCommand()
     || Object.keys(env).some((key) =>
       /^(PWRAGENT_GIT_PATH|GIT_(DIR|WORK_TREE|COMMON_DIR|NAMESPACE|TEST_.*))$/i.test(key))) return undefined;
 
   const observation = await runPrMetadataFileProbe((signal) => observeRefs(cwd, remotes, signal), demand);
-  if (!observation) return undefined;
+  if (!observation || observation.heads.size < minimumHeads) return undefined;
   if (!await confirmPrFilesCheckout(cwd, observation, env, demand)) return undefined;
   const unchanged = () => runPrMetadataFileProbe((signal) => observation.files.unchanged(signal), demand);
   if (!await unchanged()) return undefined;
@@ -324,7 +328,20 @@ export async function confirmPrFilesCheckout(
 }
 
 export async function readProvenRemoteHeads(
-  cwd: string, remotes: string[], demand?: PrMetadataDemand,
+  cwd: string, remotes: string[], demand?: PrMetadataDemand, minimumHeads?: number,
 ): Promise<ReadonlyMap<string, string> | undefined> {
-  return (await observeProvenRemoteHeads(cwd, remotes, demand))?.heads;
+  return (await observeProvenRemoteHeads(cwd, remotes, demand, minimumHeads))?.heads;
+}
+
+/** A worktree-private pseudoref can change Git's abbreviation of a shared ref. */
+export async function sharesRemoteHeadAbbreviations(
+  gitDir: string, heads: ReadonlyMap<string, string>, demand?: PrMetadataDemand,
+): Promise<boolean> {
+  return await runPrMetadataFileProbe(async (signal) => {
+    const files = new RefFiles(signal);
+    for (const [remote, short] of heads) {
+      if (!safeRemoteName(remote) || !safeRef(short) || await files.refStatus(gitDir, short)) return false;
+    }
+    return true;
+  }, demand) === true;
 }

@@ -22,6 +22,7 @@ const snapshotAt = (revision: number): ResourceCheckoutsSnapshot => ({
   authorities: [],
   resources: [],
   registerGate: { allowed: true },
+  agentTools: "enabled",
 });
 
 type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void; reject: (error: Error) => void };

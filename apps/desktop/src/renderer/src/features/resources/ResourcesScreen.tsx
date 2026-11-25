@@ -20,6 +20,7 @@ import {
   RequestCheckoutDialog,
 } from "./ResourceDialogs";
 import {
+  effectiveGate,
   formatAge,
   matchesFilter,
   matchesSearch,
@@ -139,6 +140,7 @@ export function ResourcesScreen(props: {
 
   const snapshot = view.status === "loading" ? undefined : view.snapshot;
   const presented = useMemo(() => (snapshot ? presentResources(snapshot) : []), [snapshot]);
+  const operatorCanRequest = presented.some(({ resource, authority }) => effectiveGate(resource, authority, "request")?.allowed === true);
   const directKeys = useDirectActionKeys();
   const counts = useMemo(() => {
     const scoped = presented.filter((item) => scope === "all" || groupOf(item) === scope);
@@ -310,6 +312,17 @@ export function ResourcesScreen(props: {
             <span className="resources-preview-banner__label">Preview data</span>
             <span>Every resource here is invented and actions are simulated. Nothing is checked out.</span>
             {props.previewControls ? <span className="resources-preview-banner__controls">{props.previewControls}</span> : null}
+          </div>
+        ) : null}
+
+        {snapshot?.agentTools === "disabled" ? (
+          <div className="resources-agent-tools-banner" data-testid="resources-agent-tools-off" role="note">
+            <span className="resources-agent-tools-banner__label">Agent checkouts off</span>
+            <span>
+              Agents on the {snapshot.viewer.profile} profile can't find or reserve resources.
+              {" "}Turn on Federation resources in Settings › Experimental.
+              {operatorCanRequest ? " You can still request a checkout yourself." : null}
+            </span>
           </div>
         ) : null}
 
