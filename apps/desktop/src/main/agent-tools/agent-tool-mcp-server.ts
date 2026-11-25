@@ -20,7 +20,7 @@ import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized
 import { getMainLogger } from "../log.js";
 import { lazyModule } from "../lazy-module.js";
 import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStdio, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
-import { CodexAgentToolIpc, type CodexAgentToolStdioConfig, type CodexIpcConnection, type CodexIpcListener, type OwnedCodexProcess } from "./codex-agent-tool-ipc.js";
+import { CodexAgentToolIpc, type CodexAgentToolStdioConfig, type CodexIpcConnection, type OwnedCodexProcess } from "./codex-agent-tool-ipc.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
 import {
@@ -198,7 +198,6 @@ export type AgentToolMcpServerOptions = {
   verifyCodexThreadId?: boolean;
   codexRelayExecutable?: () => string;
   allowWindowsCodexIpc?: boolean;
-  createCodexIpcListener?: (onConnection: CodexIpcConnection) => CodexIpcListener;
   resolveCatalogs: (
     context: AgentToolMcpClientContext,
   ) => AgentToolMcpCatalog[] | Promise<AgentToolMcpCatalog[]>;
@@ -240,13 +239,12 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private port?: number;
   private startPromise?: Promise<void>;
   private closed = false;
-  private readonly codexIpc: CodexIpcListener;
+  private readonly codexIpc: CodexAgentToolIpc;
 
   constructor(private readonly options: AgentToolMcpServerOptions) {
     const onConnection: CodexIpcConnection = (stream, token, isAuthorized) =>
       this.openCodexSession(stream, token, isAuthorized);
-    this.codexIpc = options.createCodexIpcListener?.(onConnection)
-      ?? new CodexAgentToolIpc(onConnection, options.codexRelayExecutable, options.allowWindowsCodexIpc);
+    this.codexIpc = new CodexAgentToolIpc(onConnection, options.codexRelayExecutable, options.allowWindowsCodexIpc);
   }
 
   async registerClient(
@@ -299,7 +297,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     context: AgentToolMcpClientContext,
     owned: OwnedCodexProcess,
   ): Promise<OwnedAgentToolMcpRegistration | undefined> {
-    if (this.closed || process.platform !== "darwin" || context.backend === "codex" || !this.codexIpc.bindRuntime) {
+    if (this.closed || process.platform !== "darwin" || context.backend === "codex") {
       return undefined;
     }
     const token = randomBytes(32).toString("base64url");

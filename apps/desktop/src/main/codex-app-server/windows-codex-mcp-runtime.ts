@@ -9,6 +9,7 @@ const RELAY_PREFIX = "\\\\.\\pipe\\pwa-codex-relay-";
 const OWNER_PREFIX = "\\\\.\\pipe\\pwa-codex-owner-";
 const OWNER_STREAM_LIMIT = 96;
 const READY_TIMEOUT = 5_000;
+const SHUTDOWN_TIMEOUT = 5_000;
 
 export const WINDOWS_CODEX_MCP_SERVER_PID = "PWRAGENT_CODEX_MCP_SERVER_PID";
 
@@ -21,6 +22,8 @@ export class WindowsCodexMcpRuntime {
   readonly child;
   readonly endpoint: string;
   readonly ready: Promise<number>;
+  private readonly exited: Promise<void>;
+  rootPid?: number;
   private readonly lifetime: Writable;
   private readonly streams = new Set<Socket>();
   private accept?: (socket: Socket) => void;
@@ -38,6 +41,7 @@ export class WindowsCodexMcpRuntime {
     this.lifetime = (this.child.stdio as readonly unknown[])[3] as Writable;
     const events = (this.child.stdio as readonly unknown[])[4] as Readable;
     this.lifetime.on("error", () => this.stop());
+    this.exited = new Promise((resolve) => { this.child.once("close", () => resolve()); });
     this.ready = new Promise((resolve, reject) => {
       let pending = "";
       let ready = false;
@@ -62,7 +66,8 @@ export class WindowsCodexMcpRuntime {
           if (!ready && root) {
             ready = true;
             clearTimeout(timeout);
-            resolve(Number(root[1]));
+            this.rootPid = Number(root[1]);
+            resolve(this.rootPid);
           } else if (ready && line.startsWith("stream " + OWNER_PREFIX)) {
             const path = line.slice("stream ".length);
             if (!/^[a-f0-9]{32}$/u.test(path.slice(OWNER_PREFIX.length))) return failed();
@@ -87,8 +92,21 @@ export class WindowsCodexMcpRuntime {
     if (this.stopped) return;
     this.stopped = true;
     this.accept = undefined;
-    this.lifetime.end();
+    this.lifetime.destroy();
     for (const stream of this.streams) stream.destroy();
+  }
+
+  async close(): Promise<void> {
+    this.stop();
+    // Prefer the supervisor's verified job drain. The last-resort signal
+    // uses Node's original child handle. Closing that process ends the job.
+    const force = setTimeout(() => this.child.kill(), SHUTDOWN_TIMEOUT);
+    force.unref();
+    try {
+      await this.exited;
+    } finally {
+      clearTimeout(force);
+    }
   }
 
   private connect(path: string): void {

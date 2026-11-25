@@ -25,8 +25,6 @@ export type CodexAgentToolStdioConfig = {
   env: Record<string, string>;
 };
 export type CodexIpcConnection = (stream: Duplex, token: string, isAuthorized: () => boolean) => Promise<void>;
-export type CodexIpcListener = Pick<CodexAgentToolIpc, "configuration" | "revoke" | "close">
-  & Partial<Pick<CodexAgentToolIpc, "bindRuntime">>;
 
 export type OwnedCodexProcess = {
   child: ChildProcess;

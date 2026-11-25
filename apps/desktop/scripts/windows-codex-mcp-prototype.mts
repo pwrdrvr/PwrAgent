@@ -13,6 +13,7 @@ import { AgentToolMcpServer } from "../src/main/agent-tools/agent-tool-mcp-serve
 import { AgentToolRouter } from "../src/main/agent-tools/agent-tool-router";
 import { bindCodexAgentToolRuntime, type CodexAgentToolStdioConfig } from "../src/main/agent-tools/codex-agent-tool-ipc";
 import { buildCurrentTurnInputSourceTool } from "../src/main/agent-tools/current-turn-input-source-tool";
+import { StdioJsonRpcTransport } from "../src/main/codex-app-server/stdio-transport";
 import { WindowsCodexMcpRuntime } from "../src/main/codex-app-server/windows-codex-mcp-runtime";
 import { buildCodexAgentToolsMcpConfig } from "../src/main/app-server/codex-thread-config";
 
@@ -95,10 +96,7 @@ async function relayFixture() {
 }
 
 async function stop(runtime: WindowsCodexMcpRuntime, root: number) {
-  const closed = runtime.child.exitCode === null && runtime.child.signalCode === null
-    ? once(runtime.child, "close") : Promise.resolve();
-  runtime.stop();
-  await closed;
+  await runtime.close();
   const connection = createConnection(runtime.endpoint);
   try {
     await assert.rejects(once(connection, "connect"), { code: "ENOENT" });
@@ -228,13 +226,19 @@ hooks = false
 `);
   const owner = fixtureOwner();
   const start = async () => {
-    const runtime = launch(helper, executable, ["app-server", "--listen", "stdio://"],
-      { ...process.env, CODEX_HOME: codexHome, OPENAI_API_KEY: undefined });
+    const transport = new StdioJsonRpcTransport({
+      command: executable, args: ["--listen", "stdio://"],
+      env: { ...process.env, CODEX_HOME: codexHome, OPENAI_API_KEY: undefined },
+      windowsCodexMcpEnabled: () => true, windowsCodexMcpRelay: () => helper,
+    });
+    await transport.connect();
+    const runtime = transport.ownedProcess()?.windows;
+    assert(runtime, "the real native executable must use the production Windows launcher");
     const api = rpc(runtime);
     const nativeRoot = await runtime.ready;
     await api.request("initialize", { clientInfo: { name: "pwragent-windows-owner", version: "1" }, capabilities: { experimentalApi: true } });
     api.notify("initialized");
-    return { runtime, nativeRoot, api };
+    return { runtime, nativeRoot, api, transport };
   };
   const inventory = async (api: ReturnType<typeof rpc>, threadId: string) => {
     const result = await api.request<{ data: Array<{ name: string; tools: Record<string, unknown>; toolsError: string | null }> }>("mcpServerStatus/list", {
@@ -259,6 +263,18 @@ hooks = false
     original.registration.bindThread(thread.id);
     await ready(api, thread.id);
     await inventory(api, thread.id);
+    const resolved = await api.request<{ config: { windows?: { sandbox?: string } } }>("config/read", { cwd, includeLayers: false });
+    assert.equal(resolved.config.windows?.sandbox, "unelevated");
+    const command = await api.request<{ exitCode: number; stdout: string; stderr: string }>("command/exec", {
+      command: [join(process.env.SystemRoot ?? "C:\\Windows", "System32", "cmd.exe"), "/d", "/c", "echo", "verified-sandbox-child"],
+      cwd,
+      timeoutMs: 10_000,
+      sandboxPolicy: sandbox === "read-only"
+        ? { type: "readOnly", networkAccess: false }
+        : { type: "workspaceWrite", writableRoots: [cwd], networkAccess: false, excludeTmpdirEnvVar: true, excludeSlashTmp: true },
+    });
+    assert.equal(command.exitCode, 0, command.stderr);
+    assert.match(command.stdout, /verified-sandbox-child/u);
     const idle = await api.request<{ isError: boolean }>("mcpServer/tool/call", { threadId: thread.id, server: name, tool, arguments: {} });
     assert.equal(idle.isError, true);
     await api.request("turn/start", { threadId: thread.id, input: [{ type: "text", text: "Save one fixture turn.", text_elements: [] }] });
@@ -275,6 +291,7 @@ hooks = false
     await ready(api, forked.thread.id);
     await Promise.all([inventory(api, thread.id), inventory(api, forked.thread.id)]);
     const retiredEndpoint = generation.runtime.endpoint;
+    await generation.transport.close();
     await stop(generation.runtime, generation.nativeRoot);
     generation = undefined;
     generation = await start();
@@ -284,15 +301,22 @@ hooks = false
     await ready(generation.api, thread.id);
     await inventory(generation.api, thread.id);
     assert(modelCalls > 0);
-    console.log(`Real Windows Codex ${sandbox}: inspector, reload, fork, restart, and cleanup passed`);
+    console.log(`Real Windows Codex ${sandbox}: inspector, sandbox child, reload, fork, restart, and cleanup passed`);
   } finally {
-    if (generation) await stop(generation.runtime, generation.nativeRoot);
+    if (generation) {
+      await generation.transport.close();
+      await stop(generation.runtime, generation.nativeRoot);
+    }
     await owner.server.close();
     await new Promise<void>((resolve) => model.close(() => resolve()));
   }
 }
 
 async function main(helper: string, codex?: string) {
+  const inactive = new AgentToolMcpServer({ resolveCatalogs: () => [], resolveCallContext: () => undefined });
+  try {
+    await assert.rejects(inactive.registerCodexClient({ backend: "codex" }), /macOS and Linux/u);
+  } finally { await inactive.close(); }
   const cwd = await mkdtemp(join(tmpdir(), "pwa-win-codex-"));
   try {
     await proofOracle(helper);

@@ -418,8 +418,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     if (!child) {
       return;
     }
-    this.windowsMcp?.stop();
-    this.closePromise = this.stopChildProcessTree(child)
+    this.closePromise = (this.windowsMcp?.close() ?? this.stopChildProcessTree(child))
       .finally(() => {
         if (this.childProcess === child) {
           this.childProcess = null;
@@ -441,7 +440,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
 
   /** The running app server, or `undefined` when none is running. */
   getProcessInfo(): CodexAppServerProcessInfo | undefined {
-    const pid = this.childProcess?.pid;
+    const pid = this.windowsMcp?.rootPid ?? this.childProcess?.pid;
     return pid
       ? {
         pid,
