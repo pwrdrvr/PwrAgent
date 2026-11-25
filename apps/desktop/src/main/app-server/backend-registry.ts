@@ -72,6 +72,7 @@ import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pw
 import type { ForgeReadRequest } from "../pr-status/forge-tool-contract";
 import type { ThreadPrAutoDispatchPreferenceChange } from "../pr-status/pr-auto-dispatch";
 import type { PrMetadataDemand } from "../pr-status/pr-metadata-process";
+import type { PrAttachmentDemand } from "../pr-status/pr-detection";
 import type { ForgePrToolArgs } from "../pr-status/forge-pr-tool-contract";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { PlanLimitStore, planLimitKey } from "./plan-limit-store";
@@ -1701,7 +1702,7 @@ export class DesktopBackendRegistry {
   }
 
   canonicalizeNavigationPullRequests(prs: NonNullable<NavigationSnapshot["threads"][number]["prs"]>,
-    demand?: PrMetadataDemand, verifyAttachments?: boolean): Promise<typeof prs> {
+    demand?: PrAttachmentDemand, verifyAttachments?: boolean): Promise<typeof prs> {
     return this.forgeToolBridge.canonicalizeNavigationPullRequests(prs, demand, verifyAttachments);
   }
 

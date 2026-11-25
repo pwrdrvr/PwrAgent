@@ -500,8 +500,8 @@ async function projectNavigationStacks(
       const held = registry.stackThreadHeld?.(thread) ?? false;
       return { held, repair: !held && (Boolean(await getDesktopOverlayStore().getThreadPrAutoDispatchPending(thread))
         || await registry.stackRepairActive?.(thread) === true) };
-    }, new StackReadObservation(demand), async (row) => {
-      const prs = await registry.canonicalizeNavigationPullRequests(row.prs, demand);
+    }, new StackReadObservation(demand), async (row, attachmentDemand) => {
+      const prs = await registry.canonicalizeNavigationPullRequests(row.prs, attachmentDemand);
       validated.set(buildThreadIdentityKey(row.source, row.id), prs);
       return prs;
     });
