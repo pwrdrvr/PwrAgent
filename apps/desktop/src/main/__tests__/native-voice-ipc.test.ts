@@ -369,6 +369,30 @@ describe("native voice IPC permission boundary", () => {
     expect(mocks.judge).toHaveBeenCalledTimes(judged);
   });
 
+  // A fragment link or history update keeps the document and the controller
+  // that owns the session; only a real navigation replaces them.
+  it("keeps voice through an in-place navigation and logs what ended it", async () => {
+    const callbacks = new Map<string, (...args: unknown[]) => void>();
+    const sender = { id: 91, on: (name: string, callback: (...args: unknown[]) => void) => { callbacks.set(name, callback); },
+      once: (name: string, callback: (...args: unknown[]) => void) => { callbacks.set(name, callback); }, isDestroyed: () => false, send: vi.fn() };
+    const stopped = () => mocks.info.mock.calls.filter(([message]) => message === "native voice session stopped").map(([, fields]) => fields);
+    await startVoiceSession(sender, { threadId: "fixture-thread", sessionId: "fixture-session", sdp: "v=0\r\nfixture" });
+    callbacks.get("did-start-navigation")!({}, "app://main/#sample-anchor", true, true);
+    callbacks.get("did-start-navigation")!({}, "app://frame/", false, false);
+    await Promise.resolve();
+    expect(mocks.stop).not.toHaveBeenCalled();
+    callbacks.get("did-start-navigation")!({}, "app://main/", false, true);
+    await vi.waitFor(() => expect(mocks.stop).toHaveBeenCalledExactlyOnceWith("fixture-thread"));
+    expect(stopped().at(-1)).toMatchObject({ cause: "window-navigated" });
+
+    await startVoiceSession(sender, { threadId: "fixture-thread", sessionId: "fixture-session-2", sdp: "v=0\r\nfixture" });
+    await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, { sessionId: "fixture-session-2", cause: "muted-idle" });
+    expect(stopped().at(-1)).toMatchObject({ cause: "muted-idle" });
+    await startVoiceSession(sender, { threadId: "fixture-thread", sessionId: "fixture-session-3", sdp: "v=0\r\nfixture" });
+    await mocks.handlers.get(NATIVE_VOICE_STOP_CHANNEL)!({ sender }, { sessionId: "fixture-session-3", cause: "rm -rf" });
+    expect(stopped().at(-1)).toMatchObject({ cause: "unspecified" });
+  });
+
   it("rejects malformed offers before acquiring a session", async () => {
     await expect(mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender: { id: 78 } }, { threadId: "fixture", sessionId: "bad/session", sdp: "v=0" })).rejects.toThrow("Invalid voice session");
     await expect(mocks.handlers.get(NATIVE_VOICE_START_CHANNEL)!({ sender: { id: 78 } }, { threadId: "fixture", sessionId: "valid-session", sdp: "bad" })).rejects.toThrow("Invalid WebRTC");

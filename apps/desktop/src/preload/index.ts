@@ -92,7 +92,7 @@ import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL, NATIVE_VOICE_STOP_CHANNEL,
   NATIVE_VOICE_TEXT_CHANNEL, NATIVE_VOICE_EVENT_CHANNEL,
   NATIVE_VOICE_OPEN_MANAGER_CHANNEL, OPERATOR_FOCUS_PUBLISH_CHANNEL,
-  type NativeVoiceStart, type NativeVoiceTarget, type NativeVoiceText, type NativeVoiceEvent,
+  type NativeVoiceStart, type NativeVoiceStop, type NativeVoiceText, type NativeVoiceEvent,
   type OpenVoiceManagerResponse,
 } from "../shared/native-voice";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
@@ -1547,7 +1547,7 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke("thread:pendingWakes", request),
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
-  stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
+  stopNativeVoice: (request: NativeVoiceStop) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
   sendNativeVoiceCameraCue: (request: VoiceCameraCue) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_CUE_CHANNEL, request),
   setNativeVoiceCamera: (request: VoiceCameraRequest) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_CHANNEL, request),
   analyzeNativeVoiceCamera: (request: VoiceCameraFrame) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_FRAME_CHANNEL, request),

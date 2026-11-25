@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn() }));
+vi.mock("../log", () => ({ getMainLogger: () => log }));
 import { NATIVE_VOICE_PROMPTS, NativeVoiceSessionManager } from "../codex-app-server/native-voice-session";
 import {
   describeNativeVoiceAction,
@@ -58,7 +60,8 @@ describe("native voice ownership", () => {
     f.send({ method: "thread/realtime/transcript/done", params: { threadId: f.request.threadId, role: "user", text: "Steer the coding task." } });
     expect(f.emit).toHaveBeenCalledWith({ sessionId: f.request.sessionId, type: "transcript", role: "user", text: "Steer the coding task.", done: true });
     await f.manager.text(1, { sessionId: f.request.sessionId, text: "Check progress." });
-    expect(f.backend.text).toHaveBeenCalledWith(f.request.threadId, "Check progress.");
+    // v3 appends typed text as context with no speaker; the label says whose it is.
+    expect(f.backend.text).toHaveBeenCalledWith(f.request.threadId, "[Typed message] Check progress.");
     await f.manager.stop(1, f.request);
     expect(f.backend.stop).toHaveBeenCalledExactlyOnceWith(f.request.threadId);
     expect(f.backend.release).toHaveBeenCalledOnce();
@@ -262,6 +265,52 @@ describe("native voice ownership", () => {
     });
     await f.manager.stop(1, f.request);
     expect(f.toolCalls.size).toBe(0);
+  });
+});
+
+// "Voice ended" with nothing in the log left the cause of a session that
+// ended 30 seconds after a mute unknowable. Every stop now names one.
+describe("native voice stop causes", () => {
+  const stopped = () => log.info.mock.calls.filter(([message]) => message === "native voice session stopped").map(([, fields]) => fields);
+
+  it("logs the renderer's cause, and the first cause wins when the backend ends it first", async () => {
+    log.info.mockClear();
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    await f.manager.stop(1, f.request, "muted-idle");
+    expect(stopped().at(-1)).toMatchObject({ threadId: f.request.threadId, cause: "muted-idle" });
+
+    const g = fixture();
+    await g.manager.start(1, g.request, g.emit);
+    g.send({ method: "thread/realtime/closed", params: { threadId: g.request.threadId, reason: "transport_closed" } });
+    // The renderer hears the close and stops too; that does not rename the cause.
+    await g.manager.stop(1, g.request, "failure");
+    expect(stopped().at(-1)).toMatchObject({ cause: "realtime-closed:transport_closed" });
+
+    const h = fixture();
+    await h.manager.start(1, h.request, h.emit);
+    h.send({ method: "thread/realtime/error", params: { threadId: h.request.threadId, message: "Sample realtime failure." } });
+    await vi.waitFor(() => expect(stopped().at(-1)).toMatchObject({ cause: "realtime-error" }));
+    expect(log.warn).toHaveBeenCalledWith("native voice realtime error", { threadId: h.request.threadId, message: "Sample realtime failure." });
+
+    const owner = fixture();
+    await owner.manager.start(1, owner.request, owner.emit);
+    await owner.manager.stopOwner(1, "window-navigated");
+    expect(stopped().at(-1)).toMatchObject({ cause: "window-navigated" });
+  });
+
+  it("logs a refused typed message without its text and keeps the session open", async () => {
+    log.warn.mockClear();
+    const f = fixture();
+    await f.manager.start(1, f.request, f.emit);
+    vi.mocked(f.backend.text).mockRejectedValueOnce(new Error("Request timed out."));
+    await expect(f.manager.text(1, { sessionId: f.request.sessionId, text: "https://example.com/sample/private" })).rejects.toThrow("Request timed out.");
+    expect(log.warn).toHaveBeenCalledWith("typed voice message was not accepted", {
+      threadId: f.request.threadId, length: "https://example.com/sample/private".length, error: "Request timed out.",
+    });
+    expect(JSON.stringify(log.warn.mock.calls)).not.toContain("example.com");
+    expect(f.manager.allowsMicrophone(1)).toBe(true);
+    await f.manager.stop(1, f.request);
   });
 });
 

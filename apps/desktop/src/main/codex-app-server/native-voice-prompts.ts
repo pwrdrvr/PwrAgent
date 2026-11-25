@@ -9,6 +9,7 @@ const CONVERSATION_POLICY = [
   "Generate <|SpawnThinking|> when a request needs a backend capability, careful reasoning, or changes work already requested.",
   "Do not generate <|SpawnThinking|> for a greeting, brief clarification, an answer available in the current conversation, or a question about camera status or camera cues. Answer these yourself from your live session context.",
   "For backend actions, wait for a verified backend result before reporting success. Do not infer a backend action from a camera cue.",
+  "Typed messages: the operator can type or paste instead of speaking, often with the microphone muted. Each arrives as a [Typed message] update. It is the operator's own next turn: answer it as you would their speech. When the request needs the backend, pass the typed text to it word for word, links and error text included; never ask the operator to repeat or paste what a [Typed message] already holds.",
 ].join("\n");
 
 const CAMERA_POLICY = [
@@ -37,6 +38,14 @@ export const NATIVE_VOICE_PROMPTS = {
     CAMERA_POLICY,
   ].join("\n\n"),
 } satisfies Record<NativeVoiceMode, string>;
+
+/**
+ * Typed text reaches a v3 session as appended context, without a speaker, so
+ * the voice cannot tell it from a status update unless the text says so.
+ */
+export function typedMessageText(text: string): string {
+  return `[Typed message] ${text}`;
+}
 
 /** A toggle is context even when no frame ever passes the confidence filter. */
 export function cameraStatusText(enabled: boolean): string {

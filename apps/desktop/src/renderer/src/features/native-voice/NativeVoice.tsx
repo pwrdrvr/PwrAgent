@@ -310,8 +310,20 @@ export function VoiceTextInput({ controller, recipient = "voice", sendLabel = "S
   sendLabel?: string;
 }) {
   const [text, setText] = useState("");
+  const [error, setError] = useState<string>();
+  const errorId = useId();
   const sendText = () => {
-    if (text.trim()) { void controller.text(text.trim()); setText(""); }
+    const message = text.trim();
+    if (!message) return;
+    setText("");
+    setError(undefined);
+    // A message that did not reach the voice comes back to the field, unless
+    // the operator has started another.
+    void controller.text(message).then((failure) => {
+      if (failure === undefined) return;
+      setError(`Not sent: ${failure}`);
+      setText((current) => current || message);
+    });
   };
   return (
     <div className="native-voice__text" onKeyDown={(event) => {
@@ -321,8 +333,17 @@ export function VoiceTextInput({ controller, recipient = "voice", sendLabel = "S
         if (!event.nativeEvent.isComposing) sendText();
       }
     }}>
-      <input className="native-voice__input" aria-label={`Message ${recipient}`} placeholder={`Message ${recipient}…`} value={text} maxLength={8000} onChange={(event) => setText(event.target.value)} />
+      <input
+        className="native-voice__input"
+        aria-label={`Message ${recipient}`}
+        aria-describedby={error ? errorId : undefined}
+        placeholder={`Message ${recipient}…`}
+        value={text}
+        maxLength={8000}
+        onChange={(event) => setText(event.target.value)}
+      />
       <button className="button button--ghost" type="button" disabled={!text.trim()} onClick={sendText}>{sendLabel}</button>
+      {error ? <p className="native-voice__text-error" id={errorId} role="alert">{error}</p> : null}
     </div>
   );
 }
@@ -384,7 +405,7 @@ export function NativeVoiceToggle({ api, threadId, turnRunning }: {
       data-tooltip={tooltip}
       onClick={() => {
         if (elsewhere || view.status === "stopping") return;
-        if (mine) void controller.stop();
+        if (mine) void controller.stop("composer-mic");
         else void controller.start(threadId, "thread", { turnActive: turnRunning === true });
       }}
     >
@@ -406,7 +427,7 @@ export function NativeVoiceBar({ api, threadId }: { api: NativeVoiceApi; threadI
     setOpen(false);
     return () => {
       const current = controller.getView();
-      if (current.mode === "thread" && threadId && current.threadId === threadId) void controller.stop();
+      if (current.mode === "thread" && threadId && current.threadId === threadId) void controller.stop("thread-left");
     };
   }, [controller, threadId]);
   const visible = view.mode === "thread" && view.status !== "idle" && view.status !== "error"
@@ -426,7 +447,7 @@ export function NativeVoiceBar({ api, threadId }: { api: NativeVoiceApi; threadI
             Transcript
           </button>
         ) : null}
-        <button className="button button--ghost native-voice__end" type="button" disabled={view.status === "stopping"} onClick={() => void controller.stop()}>
+        <button className="button button--ghost native-voice__end" type="button" disabled={view.status === "stopping"} onClick={() => void controller.stop("end-button")}>
           End voice
         </button>
       </div>

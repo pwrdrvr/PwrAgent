@@ -222,6 +222,30 @@ director panel says so itself and stays open. Main logs `native voice session
 stopped` once `thread/realtime/stop` returns. The voice manager or
 coding turn itself is billed as usual, whatever the microphone does.
 
+That log line names its `cause`, so a session that ended unexpectedly can be
+traced. The renderer sends the control or rule that ended it: `end-button`,
+`close-button`, `masthead-mic`, `composer-mic`, `shortcut`, `thread-left`,
+`muted-idle`, `away`, `failure`, `backend-closed` or `window-closed`. Main
+names its own causes: `window-navigated`, `window-destroyed`,
+`renderer-gone`, `backend-disconnected`, `startup-failed`, `realtime-error`
+or `realtime-closed:<reason>`. The first cause wins. A realtime error is also
+logged with its message. An in-place navigation, such as a fragment link, keeps
+the document and its session; only a navigation that replaces the document ends
+voice.
+
+### Typed messages
+
+**Message voice** and **Message director** send typed or pasted text with
+`thread/realtime/appendText`. A v3 session receives it as appended context with
+no speaker, so main labels it `[Typed message]`, and the prompt tells the voice
+to answer that label as the operator's next turn. When the voice delegates, the
+prompt tells it to pass the typed text through verbatim, including links.
+Codex reports transcripts only for speech, so once the RPC is accepted, the
+renderer adds the line to the transcript as the operator's. The line sits where
+it was sent, even when speech arrived while the RPC was in flight. A send that
+fails does not end the session. The text returns to the field with **Not sent:**
+and the reason, and main logs the failure with the message's length only.
+
 A voice failure in either mode is an ordinary app notice titled **Live voice**,
 raised through the notice library. The voice controls clear as the notice
 appears. The notice stays until it is closed or the next voice start begins.
