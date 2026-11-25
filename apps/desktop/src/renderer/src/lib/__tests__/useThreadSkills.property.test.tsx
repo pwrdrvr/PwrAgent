@@ -272,6 +272,7 @@ describe("skill picker catalog freshness", () => {
 async function checkAntigravityCommandOrdering(commandsArriveFirst: boolean) {
   const thread: NavigationThreadSummary = {
     id: "agy-session", source: "acp:antigravity", title: "Garden release", titleSource: "explicit",
+    inbox: { inInbox: false },
     linkedDirectories: [{ id: "repo", path: "/repo", label: "Repo", kind: "local" }],
   };
   const skill = { name: "release", path: "/repo/.agents/skills/release/SKILL.md" };
