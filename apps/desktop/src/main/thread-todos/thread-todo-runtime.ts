@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { assertMergeNotHeld } from "../app-server/thread-dependency-merge-hold";
 import { getProjectForgeAutomationIndex } from "../app-server/project-forge-automation-index";
-import { projectNeverMerges } from "@pwragent/shared/project-forge-automation";
+import {
+  buildProjectNeverMergeError,
+  projectMergesPullRequest,
+  resolveProjectNeverMergePolicy,
+} from "@pwragent/shared/project-forge-automation";
 import { ciApprovalsForDependency } from "../app-server/thread-dependency-ci-runs";
 import { createThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -44,6 +48,7 @@ import { buildPullRequestReferenceUrl } from "../pr-status/forge-reference";
 import { resolveGitHubRepoForCheckoutAction } from "../pr-status/git-remote";
 import { parsePrRefFromUrl } from "../pr-status/github-graphql-client";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher.js";
+import { readPullRequestBase } from "../pr-status/pull-request-base-lookup";
 import { createThreadTodoStorage } from "../storage/desktop-runtime-storage.js";
 import {
   findPeerThreadTodoProject,
@@ -802,8 +807,14 @@ export function createThreadTodoRunners(params: {
       const project = getProjectForgeAutomationIndex().resolveThread({
         backend: request.sourceBackend, threadId: request.sourceThreadId,
       });
-      if (project && projectNeverMerges(project.automation)) {
-        throw new Error(`${project.label} never merges its pull requests. Change it from the project menu: Forge Automation.`);
+      // The base comes from this owner's PR status; one not read yet counts
+      // as a branch the project does not merge into.
+      const never = resolveProjectNeverMergePolicy(project);
+      if (never && !projectMergesPullRequest(project?.automation, readPullRequestBase(
+        { backend: request.sourceBackend, threadId: request.sourceThreadId },
+        request.pullRequest,
+      ))) {
+        throw new Error(buildProjectNeverMergeError(never));
       }
       const overlay = getDesktopOverlayStore();
       const assertNotHeld = (pullRequest: string) => assertMergeNotHeld(createThreadDependencyStorage().active(), {

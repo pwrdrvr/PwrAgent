@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
+  MAX_PROJECT_MERGE_BRANCHES,
+  normalizeProjectMergeBranch,
   resolveProjectForgeAutomation,
   type ProjectForgeAutomation,
   type ProjectHeldWakeup,
   type ProjectMergeBuildWatches,
 } from "@pwragent/shared/project-forge-automation";
+import { CloseIcon } from "../../icons/CloseIcon";
 import { useModalDialog } from "../../lib/useModalDialog";
 import { SegmentedControl } from "../settings/SettingsLayout";
 import { formatForgeAutomationTime, formatHeldWakeupCount } from "./forge-automation-view";
@@ -43,6 +46,9 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
   const [draft, setDraft] = useState<ProjectForgeAutomation>(stored);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [branchInput, setBranchInput] = useState("");
+  const [branchError, setBranchError] = useState<string>();
+  const mergeBranches = draft.mergeBranches ?? [];
   const heldCount = useHeldWakeupCount(stored.paused ? props.listHeldWakeups : undefined);
   const dialogRef = useModalDialog<HTMLElement>({
     // A save in flight cannot be called back, so the dialog waits for it.
@@ -62,8 +68,12 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
     if (busy) return;
     setBusy(true);
     setError(undefined);
-    // A pause that continues keeps the time it began.
-    const { pausedAt: _pausedAt, ...rest } = draft;
+    // A pause that continues keeps the time it began. The branch list is
+    // kept only with Never merge on, and only when it lists a branch.
+    const { pausedAt: _pausedAt, mergeBranches: draftBranches, ...unbranched } = draft;
+    const rest: ProjectForgeAutomation = draft.neverMerge && draftBranches?.length
+      ? { ...unbranched, mergeBranches: draftBranches }
+      : unbranched;
     const pausedAt = stored.paused && stored.pausedAt
       ? stored.pausedAt
       : props.now?.() ?? Date.now();
@@ -77,6 +87,28 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
       setBusy(false);
     }
   };
+
+  const addBranch = () => {
+    const branch = normalizeProjectMergeBranch(branchInput);
+    if (!branch) {
+      setBranchError(branchInput.trim() ? "A branch name has no spaces." : undefined);
+      return;
+    }
+    if (mergeBranches.includes(branch)) {
+      setBranchError(`${branch} is already listed.`);
+      return;
+    }
+    update({ mergeBranches: [...mergeBranches, branch] });
+    setBranchInput("");
+    setBranchError(undefined);
+  };
+
+  const removeBranch = (branch: string) => {
+    const next = mergeBranches.filter((entry) => entry !== branch);
+    update({ mergeBranches: next.length ? next : undefined });
+  };
+
+  const branchesFull = mergeBranches.length >= MAX_PROJECT_MERGE_BRANCHES;
 
   const option = (params: {
     id: string;
@@ -217,8 +249,8 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
             {option({
               id: `${optionId}-offers`,
               type: "checkbox",
-              title: draft.neverMerge ? "Review offers" : "Review and merge offers",
-              description: draft.neverMerge
+              title: draft.neverMerge && !mergeBranches.length ? "Review offers" : "Review and merge offers",
+              description: draft.neverMerge && !mergeBranches.length
                 ? "A Review card when CI passes on unreviewed changes."
                 : "A Review card when CI passes on unreviewed changes, then a Merge card once the review is settled.",
               checked: draft.prOffers,
@@ -238,6 +270,73 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
               // Stored only when on, as the owner stores it.
               onChange: () => update({ neverMerge: draft.neverMerge ? undefined : true }),
             })}
+            {draft.neverMerge ? (
+              <div className="forge-automation-dialog__merge-branches">
+                <p id={`${optionId}-branches-label`} className="forge-automation-dialog__sublabel">
+                  Except pull requests into
+                </p>
+                {mergeBranches.length ? (
+                  <ul aria-labelledby={`${optionId}-branches-label`} className="forge-automation-dialog__branch-list">
+                    {mergeBranches.map((branch) => (
+                      <li key={branch} className="forge-automation-dialog__branch">
+                        <span className="forge-automation-dialog__branch-name">{branch}</span>
+                        <button
+                          aria-label={`Remove ${branch}`}
+                          className="forge-automation-dialog__branch-remove tooltip-target"
+                          data-tooltip={`Remove ${branch}`}
+                          disabled={busy}
+                          type="button"
+                          onClick={() => removeBranch(branch)}
+                        >
+                          <CloseIcon size={12} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+                {branchesFull ? null : (
+                  <div className="forge-automation-dialog__branch-add">
+                    <input
+                      aria-describedby={`${optionId}-branches-hint${branchError ? ` ${optionId}-branches-error` : ""}`}
+                      aria-invalid={branchError ? true : undefined}
+                      aria-label="Branch that still merges"
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      disabled={busy}
+                      placeholder="Branch name"
+                      spellCheck={false}
+                      type="text"
+                      value={branchInput}
+                      onChange={(event) => {
+                        setBranchInput(event.target.value);
+                        setBranchError(undefined);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key !== "Enter") return;
+                        event.preventDefault();
+                        addBranch();
+                      }}
+                    />
+                    <button
+                      className="button button--secondary"
+                      disabled={busy || !branchInput.trim()}
+                      type="button"
+                      onClick={addBranch}
+                    >
+                      Add
+                    </button>
+                  </div>
+                )}
+                {branchError ? (
+                  <p id={`${optionId}-branches-error`} className="forge-automation-dialog__branch-error" role="alert">
+                    {branchError}
+                  </p>
+                ) : null}
+                <p id={`${optionId}-branches-hint`} className="forge-automation-dialog__hint">
+                  An integration branch of your own. Pull requests into any other branch stay unmerged.
+                </p>
+              </div>
+            ) : null}
           </fieldset>
         )}
         {draft.paused ? null : (

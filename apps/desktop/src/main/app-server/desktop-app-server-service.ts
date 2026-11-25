@@ -363,6 +363,8 @@ import {
   projectAllowsAutoFixKind,
   projectAllowsForgePolling,
   projectAllowsPrWatches,
+  projectMergeBranches,
+  projectMergesPullRequest,
   projectNeverMerges,
   projectWatchesMergeBuilds,
   resolveProjectForgeAutomation,
@@ -515,6 +517,7 @@ import {
 } from "../pr-status/pr-transitions";
 import type { PrStatusTransition } from "../pr-status/pr-transitions";
 import type { ThreadPullRequestMergeResult } from "../pr-status/thread-pull-request-merge";
+import { setPullRequestBaseLookup } from "../pr-status/pull-request-base-lookup";
 import { selectDiscoveryDueThreadKeys, selectRecentPrDiscoveryThreads } from "../pr-status/pr-discovery";
 
 /** Listener registered via `onPrStatusTransition`. */
@@ -4094,14 +4097,59 @@ class DesktopAppServerService {
     });
   }
 
-  /** A merge from a thread whose project never merges is refused before any forge call. */
-  private assertProjectMerges(context: AgentToolCallContext, args: ForgePrToolArgs): void {
+  /**
+   * A merge from a thread whose project never merges is refused before any
+   * forge call, unless the PR's base, as this owner last read it, is one the
+   * project still merges into.
+   */
+  private assertProjectMerges(
+    context: AgentToolCallContext,
+    args: ForgePrToolArgs,
+    scope: Awaited<ReturnType<DesktopAppServerService["forgePrToolScope"]>>,
+  ): void {
     if (!isAppServerBackendKind(context.backend)) return;
-    const refusal = this.projectNeverMergeRefusal(
-      { backend: context.backend, threadId: context.threadId },
-      typeof args.number === "number" ? `#${args.number}` : undefined,
-    );
+    const ref = { backend: context.backend, threadId: context.threadId };
+    const project = this.resolveThreadForgeProject(ref);
+    if (!project || !projectNeverMerges(project.automation)) return;
+    const number = typeof args.number === "number" ? args.number : undefined;
+    const refusal = this.projectNeverMergeRefusal(ref, number === undefined ? undefined : {
+      number,
+      baseRefName: this.forgePrToolBaseRef(args, scope, number),
+    });
     if (refusal) throw new ForgeReadError("forbidden", refusal);
+  }
+
+  /** The base this owner last read for the PR a merge call names; undefined when unknown. */
+  private forgePrToolBaseRef(
+    args: ForgePrToolArgs,
+    scope: Awaited<ReturnType<DesktopAppServerService["forgePrToolScope"]>>,
+    number: number,
+  ): string | undefined {
+    try {
+      const repository = this.forgePrToolService().resolveRepository(args, scope);
+      return this.prStatusRegistry.get(getPrStatusKey({
+        provider: repository.host, org: repository.owner, repo: repository.repo, number,
+      }))?.pr?.baseRefName;
+    } catch {
+      // The merge itself reports an unresolvable repository; here it is unknown.
+      return undefined;
+    }
+  }
+
+  /**
+   * The base branch this owner last read for one of a thread's PRs, named
+   * by URL or number; undefined when it has read none.
+   */
+  readThreadPullRequestBaseRef(
+    thread: { backend: AppServerBackendKind; threadId: string },
+    pullRequest: string,
+  ): string | undefined {
+    const attached = this.findPrimaryAttachedPr(thread, pullRequest);
+    if (attached) return (this.prStatusRegistry.get(getPrStatusKey(attached))?.pr ?? attached).baseRefName;
+    const ref = parsePullRequestReferenceUrl(pullRequest);
+    return ref
+      ? this.prStatusRegistry.get(getPrStatusKey({ provider: ref.provider, org: ref.org, repo: ref.repo, number: ref.number }))?.pr?.baseRefName
+      : undefined;
   }
 
   /** The repository and settled arguments of a call, so an approval prompt names them and a bad call fails first. */
@@ -4120,7 +4168,7 @@ class DesktopAppServerService {
     if (operation !== "merge_pull_request") {
       return await this.forgePrToolService().prepare(operation, args, scope, context.signal);
     }
-    this.assertProjectMerges(context, args);
+    this.assertProjectMerges(context, args, scope);
     // A merge reads and keeps the project's merge-method pick, the one a
     // to-do merge card for this project would use.
     const preference = await readProjectMergeMethodPreference(getDesktopBackendRegistry(), context);
@@ -4176,8 +4224,8 @@ class DesktopAppServerService {
 
   /** Pull request and issue tools act only in the calling thread's own repositories. */
   async runForgePrToolForAgent(operation: ForgePrToolOperation, args: ForgePrToolArgs, context: AgentToolCallContext): Promise<unknown> {
-    if (operation === "merge_pull_request") this.assertProjectMerges(context, args);
     const scope = await this.forgePrToolScope(context);
+    if (operation === "merge_pull_request") this.assertProjectMerges(context, args, scope);
     const stackDemand = { signal: context.signal, priority: () => PR_METADATA_PRIORITY.selected };
     if (operation === "publish_stack_layer") return await this.publishStackLayer(args, context, scope);
     if (operation === "plan_stack_operation" || operation === "apply_stack_operation" || operation === "manage_stack_operation") {
@@ -5219,16 +5267,25 @@ class DesktopAppServerService {
     const projectSkippedKind = projectSkipsMergeConflicts ? "merge conflicts" : "failing CI";
     const reviewReadiness = await this.readPrReviewReadiness(params, primaryPrs);
     const neverMerge = forgeProject && projectNeverMerges(forgeProject.automation) ? forgeProject.label : undefined;
+    const mergeBranches = projectMergeBranches(forgeProject?.automation);
     const readinessGuidance = reviewReadiness
       .filter((entry) => entry.readiness !== "closed")
-      .map((entry) => describePrReviewReadiness({
-        prNumber: entry.prNumber,
-        readiness: entry.readiness as Parameters<typeof describePrReviewReadiness>[0]["readiness"],
-        ...(entry.headSha ? { headSha: entry.headSha } : {}),
-        reviewed: entry.reviewed,
-        ...(entry.openFindings !== undefined ? { openFindings: entry.openFindings } : {}),
-        ...(neverMerge ? { neverMergeProject: neverMerge } : {}),
-      }));
+      .map((entry) => {
+        // A PR into a branch the project still merges into reads as in any project.
+        const blocked = neverMerge && !projectMergesPullRequest(
+          forgeProject?.automation,
+          primaryPrs.find((pr) => pr.number === entry.prNumber)?.baseRefName,
+        );
+        return describePrReviewReadiness({
+          prNumber: entry.prNumber,
+          readiness: entry.readiness as Parameters<typeof describePrReviewReadiness>[0]["readiness"],
+          ...(entry.headSha ? { headSha: entry.headSha } : {}),
+          reviewed: entry.reviewed,
+          ...(entry.openFindings !== undefined ? { openFindings: entry.openFindings } : {}),
+          ...(blocked ? { neverMergeProject: neverMerge } : {}),
+          ...(blocked && mergeBranches.length ? { mergeBranches } : {}),
+        });
+      });
     const automationGuidance = autoFixEnabled && forgeProject && projectBlocksAutoFix
       ? `Auto-fix PR is saved for this thread, but it is in ${forgeProject.label}, where ${forgeProject.automation.paused ? "forge activity is paused" : "Auto-fix is turned off in Forge Automation"}. PwrAgent will not start a repair turn. Do not poll CI or create a monitor in its place. Tell the operator, who can change it from the project menu: Forge Automation.`
       : autoFixActive && forgeProject && (projectSkipsMergeConflicts || projectSkipsCiFailures)
@@ -5237,7 +5294,7 @@ class DesktopAppServerService {
     // Readiness lines name the project only for PRs this thread owns offers
     // for; any other thread in a never-merge project still hears it.
     const neverMergeGuidance = neverMerge && readinessGuidance.length === 0
-      ? [buildProjectNeverMergeRefusal({ projectLabel: neverMerge })]
+      ? [buildProjectNeverMergeRefusal({ projectLabel: neverMerge, mergeBranches })]
       : [];
     const stackGuidance = await this.threadStackGuidance(primaryPrs);
     const stackLines = stackGuidance.map(({ text }) => text);
@@ -6787,18 +6844,21 @@ class DesktopAppServerService {
   }
 
   /**
-   * The refusal for a merge in the thread's project when its Forge
-   * Automation never merges; undefined when the project merges.
+   * The refusal for a merge of `pr` in the thread's project when its Forge
+   * Automation never merges into the PR's base; undefined when it merges.
+   * Without a PR, or with a base not read yet, a never-merge project refuses.
    */
   private projectNeverMergeRefusal(
     ref: { backend: AppServerBackendKind; threadId: string },
-    pullRequest?: string,
+    pr?: { number: number; baseRefName?: string },
   ): string | undefined {
     const project = this.resolveThreadForgeProject(ref);
-    if (!project || !projectNeverMerges(project.automation)) return undefined;
+    if (!project || projectMergesPullRequest(project.automation, pr?.baseRefName)) return undefined;
+    const mergeBranches = projectMergeBranches(project.automation);
     return buildProjectNeverMergeRefusal({
       projectLabel: project.label,
-      ...(pullRequest ? { pullRequest } : {}),
+      ...(pr ? { pullRequest: `#${pr.number}` } : {}),
+      ...(mergeBranches.length ? { mergeBranches } : {}),
     });
   }
 
@@ -8539,7 +8599,8 @@ class DesktopAppServerService {
         if (identity) await coordinator.cancelPendingDisallowedByProject(identity);
       }
     }
-    if (projectNeverMerges(previous) !== projectNeverMerges(next)) {
+    if (projectNeverMerges(previous) !== projectNeverMerges(next)
+      || projectMergeBranches(previous).join("\n") !== projectMergeBranches(next).join("\n")) {
       // Withdraw an open merge offer now, or offer it again: a reviewed,
       // green PR may see no further transition to re-evaluate it.
       this.prReviewOfferCoordinator?.reevaluate(threadKeys.flatMap((threadKey) => {
@@ -9151,7 +9212,7 @@ class DesktopAppServerService {
           .map(getPrStatusKey);
       },
       getPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
-      neverMergeRefusal: (thread, pr) => this.projectNeverMergeRefusal(thread, `#${pr.number}`),
+      neverMergeRefusal: (thread, pr) => this.projectNeverMergeRefusal(thread, pr),
       stackHold: (pr) => this.prStackHoldEvidence(pr),
       stackMergeEvidence: (thread, pr) => this.readStackMergeEvidence(thread, pr),
       isLowerPolled: (key) => this.prPollBackendByKey.has(key) || this.transcriptPrSubscriptions.hasTarget(key),
@@ -9216,7 +9277,8 @@ class DesktopAppServerService {
     const pr = this.findPrimaryAttachedPr(thread, pullRequest);
     // Before the owner and coordinator gates: a never-merge project refuses
     // every merge card, whoever owns the PR's offers.
-    const neverMerge = this.projectNeverMergeRefusal(thread, pr ? `#${pr.number}` : undefined);
+    const live = pr && (this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr);
+    const neverMerge = this.projectNeverMergeRefusal(thread, live);
     if (neverMerge) return `${neverMerge} This card was not raised.`;
     const coordinator = this.prReviewOfferCoordinator;
     if (!coordinator || !pr) return undefined;
@@ -10169,6 +10231,8 @@ const GIT_MUTATION_COMMAND =
 export let appServerService: DesktopAppServerService;
 
 export function initializeDesktopAppServerService(): DesktopAppServerService {
+  // Reads the live binding, so a service swapped in by a test answers too.
+  setPullRequestBaseLookup((thread, pullRequest) => appServerService?.readThreadPullRequestBaseRef(thread, pullRequest));
   return appServerService ??= new DesktopAppServerService();
 }
 

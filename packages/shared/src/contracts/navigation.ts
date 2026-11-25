@@ -3512,6 +3512,12 @@ export type ReadThreadPullRequestMergeResponse = {
    * older owner leaves it out.
    */
   neverMergeProject?: string;
+  /**
+   * With `neverMergeProject`, the base branches the project still merges
+   * into: a PR into one of them is offered as in any project. An older
+   * owner leaves it out, and then no PR is offered.
+   */
+  mergeBranches?: string[];
 };
 
 export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {

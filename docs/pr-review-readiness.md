@@ -189,6 +189,15 @@ separate poll or repository scan for merge offers.
   `merge_pull_request` is refused before any forge call. The PR card and the
   chip menu offer no merge, and the owner refuses a card merge. Pausing does
   not change it.
+- **Branches a never-merge project still merges into.** A fork can keep its
+  own integration branch (such as `pwrdrvr`) and merge sets of changes there.
+  `mergeBranches`, stored only with `neverMerge`, lists those exact base
+  branch names, and every gate above decides per pull request: a PR merges
+  exactly when its project merges or its `baseRefName` is listed
+  (`projectMergesPullRequest`). The owner reads the base from its own PR
+  status, never from the request, and a base it has not read counts as not
+  listed. A base change re-evaluates the PR, as any readiness field does. An
+  owner or window that predates the list ignores it and merges nothing.
 - **Git.** Git runs only when CI is green, or to withdraw an open offer: a
   review offer, or a merge offer for the current head. Reviews are read newest first, and the first one covering the head
   ends the reads. It runs in the thread's own checkout, through the shared
