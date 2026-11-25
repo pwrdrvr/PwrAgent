@@ -364,10 +364,16 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
         {providerInPill ? (
           <>
             <span className="model-settings__pill-provider">{providerInPill}</span>
+            {" "}
             <span aria-hidden="true" className="model-settings__pill-sep">·</span>
+            {" "}
           </>
         ) : null}
+        {/* The spaces are words for the text, not layout: a flex row drops
+            them. Without them the text reads "Opus 5.5high", which is not
+            inside the accessible name, and axe flags the mismatch. */}
         <span className="model-settings__pill-model">{props.model.label}</span>
+        {" "}
         {showEffortInPill && props.effort ? (
           <span className="model-settings__pill-effort">
             <EffortMeter count={props.effort.stops.length} index={effortIndex} />

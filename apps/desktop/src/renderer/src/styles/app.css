@@ -6911,6 +6911,7 @@ a.button {
 .composer__attachment-remove:focus,
 .composer-dropdown__button:focus,
 .composer-dropdown__option:focus,
+.model-settings__pill:focus,
 .button:focus-visible,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
@@ -50675,11 +50676,6 @@ button.composer__subthread-source-parent:hover {
 .model-settings--open .model-settings__pill {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
-}
-
-.model-settings__pill:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 .model-settings__pill:disabled {

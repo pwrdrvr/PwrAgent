@@ -10,20 +10,30 @@ import { recordModelSettingsRecent } from "../src/main/state/model-settings-rece
 import { ThreadTodoService } from "../src/main/thread-todos/thread-todo-service";
 import { ThreadTodoStore } from "../src/main/storage/thread-todo-store";
 
-/** Where the Model chip sits in its facts row, in CSS pixels. */
+/**
+ * Where a chip sits in its facts row, in CSS pixels: the model pill or a
+ * fact dropdown such as Where.
+ */
 async function measureModelChip(chip: Locator) {
   return chip.evaluate((element) => {
     const value = element.closest("dd");
-    const label = element.querySelector(".model-settings__pill-model");
+    const label = element.querySelector(".model-settings__pill-model, .composer-dropdown__label");
     const term = value?.previousElementSibling;
     if (!value || !label || !term) throw new Error("Missing chip fact parts");
     const chip = element.getBoundingClientRect();
     const valueBox = value.getBoundingClientRect();
     const termBox = term.getBoundingClientRect();
+    // The span its children cover plus padding and border: what the chip
+    // would be if it only wrapped them. A stretched chip is wider than this.
+    const parts = [...element.children].map((child) => child.getBoundingClientRect())
+      .filter((box) => box.width > 0);
+    const style = getComputedStyle(element);
+    const frame = ["paddingLeft", "paddingRight", "borderLeftWidth", "borderRightWidth"]
+      .reduce((sum, key) => sum + Number.parseFloat(style[key as "paddingLeft"]), 0);
     return {
       chipWidth: chip.width,
       chipRight: chip.right,
-      contentWidth: element.scrollWidth,
+      contentWidth: Math.max(...parts.map((box) => box.right)) - Math.min(...parts.map((box) => box.left)) + frame,
       labelTruncated: label.scrollWidth > label.clientWidth,
       valueWidth: valueBox.width,
       valueRight: valueBox.right,
@@ -35,12 +45,12 @@ async function measureModelChip(chip: Locator) {
 /**
  * The chip hugs its contents: it is as wide as its provider, model, effort
  * and chevron, never stretched across the value column, which a
- * `width: 100%` chip once was.
+ * `width: 100%` chip once was. It also stays inside that column.
  */
 function expectChipHugsLabel(layout: Awaited<ReturnType<typeof measureModelChip>>) {
   expect(layout.labelTruncated).toBe(false);
   expect(Math.abs(layout.chipWidth - layout.contentWidth)).toBeLessThanOrEqual(2);
-  expect(layout.chipWidth).toBeLessThan(layout.valueWidth - 40);
+  expect(layout.chipRight).toBeLessThanOrEqual(layout.valueRight + 0.5);
   expect(layout.termCenterOffset).toBeLessThanOrEqual(1.5);
 }
 
