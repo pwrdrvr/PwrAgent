@@ -83,7 +83,12 @@ says when to read this document. Relative links were updated for this location.
     scrolling or leaving does not close it: the sidebar keeps reflowing
     (a row above gains a Scheduled chip, scroll anchoring compensates), and
     closing on that pulled the card out from under a pointer resting on
-    Squash merge. Letting go of a card whose anchor moved closes it at once.
+    Squash merge. Leaving a card is never instant: for the hover grace
+    (`HOVER_TRANSITION_GRACE_MS`) after the pointer leaves, the card still
+    counts as held, so a layout move in that window does not close it, and
+    the owner's grace (the bridge's, or `dismissAfterGrace`) closes it only
+    if the pointer stays out. A pointer that slips out and straight back keeps
+    the card even after its anchor moved.
   - **A card read from its trigger follows the trigger.** While keyboard
     focus is on an enterable card's trigger, or the pointer still rests on
     the trigger where it now sits, the same moves re-anchor the card to the

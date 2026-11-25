@@ -19,6 +19,7 @@ import {
 } from "./native-drag-interaction";
 import { anchorRectsMatch, observeTooltipAnchor } from "./observe-tooltip-anchor";
 import { anchoredTooltipPosition, TOOLTIP_GAP, tooltipBridgeRect } from "./tooltip-placement";
+import { HOVER_TRANSITION_GRACE_MS } from "./useHoverTransitionGrace";
 
 const VIEWPORT_PADDING = 12;
 /** Where a pointer-anchored tooltip sits relative to the cursor's hotspot:
@@ -523,6 +524,12 @@ export function useViewportTooltip(options: {
   /** The pointer is inside an enterable card. */
   const pointerInCardRef = useRef(false);
   /**
+   * Runs for the hover grace after the pointer leaves an enterable card. The
+   * card still holds the operator until it ends: a pointer that slips out and
+   * back is still using it, even if the layout moved meanwhile.
+   */
+  const cardLeaveGraceRef = useRef<number | null>(null);
+  /**
    * The anchor moved, scrolled or left while an enterable card held the
    * operator. The card stayed; letting go of it closes it.
    */
@@ -580,6 +587,10 @@ export function useViewportTooltip(options: {
     targetRectRef.current = null;
     anchorSettlingRef.current = false;
     pointerInCardRef.current = false;
+    if (cardLeaveGraceRef.current !== null) {
+      window.clearTimeout(cardLeaveGraceRef.current);
+      cardLeaveGraceRef.current = null;
+    }
     anchorLostWhileHeldRef.current = false;
     pointerRef.current = null;
     if (pointerFrameRef.current !== null) {
@@ -592,15 +603,17 @@ export function useViewportTooltip(options: {
   hideRef.current = hide;
 
   /**
-   * Whether an enterable card holds the operator: the pointer is in it or
-   * focus is on one of its controls. A held card is no longer about its
-   * anchor, so layout under it (a row above gaining a chip, scroll anchoring
-   * compensating for it) must not close it while the operator is mid-action.
+   * Whether an enterable card holds the operator: the pointer is in it, left
+   * it less than the hover grace ago, or focus is on one of its controls. A
+   * held card is no longer about its anchor, so layout under it (a row above
+   * gaining a chip, scroll anchoring compensating for it) must not close it
+   * while the operator is mid-action.
    */
   const cardHoldsOperator = useCallback((): boolean => {
     if (!interactiveRef.current) return false;
     const card = tooltipRef.current;
     return pointerInCardRef.current
+      || cardLeaveGraceRef.current !== null
       || (card !== null && card.contains(document.activeElement));
   }, []);
 
@@ -929,6 +942,9 @@ export function useViewportTooltip(options: {
     if (activePlainTooltip === hideRef) {
       activePlainTooltip = null;
     }
+    if (cardLeaveGraceRef.current !== null) {
+      window.clearTimeout(cardLeaveGraceRef.current);
+    }
     anchorGenerationRef.current += 1;
     if (pointerFrameRef.current !== null) {
       window.cancelAnimationFrame(pointerFrameRef.current);
@@ -1085,16 +1101,22 @@ export function useViewportTooltip(options: {
             className={className}
             onMouseEnter={interactive ? () => {
               pointerInCardRef.current = true;
+              if (cardLeaveGraceRef.current !== null) {
+                window.clearTimeout(cardLeaveGraceRef.current);
+                cardLeaveGraceRef.current = null;
+              }
               interactiveRef.current?.onPointerEnter();
             } : undefined}
+            // Leaving is never instant, moved anchor or not: the owner's own
+            // grace closes the card, and until it ends, the card is held.
             onMouseLeave={interactive ? () => {
               pointerInCardRef.current = false;
-              // Its anchor moved while the card held the pointer, so the
-              // bridge back to it no longer leads anywhere.
-              if (anchorLostWhileHeldRef.current && !cardHoldsOperator()) {
-                hide();
-                return;
+              if (cardLeaveGraceRef.current !== null) {
+                window.clearTimeout(cardLeaveGraceRef.current);
               }
+              cardLeaveGraceRef.current = window.setTimeout(() => {
+                cardLeaveGraceRef.current = null;
+              }, HOVER_TRANSITION_GRACE_MS);
               interactiveRef.current?.onPointerLeave();
             } : undefined}
             onBlur={interactive ? (event) => {

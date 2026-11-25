@@ -22,12 +22,14 @@ import { PrChip } from "../PrChip";
  *
  * - A card the pointer is inside stays open, whatever the layout does under
  *   it. Only the operator closes it: leaving it, Escape, or a press outside.
+ * - Leaving a card is never instant: for the bridge's grace the card stays,
+ *   layout moves included, so a pointer that slips out and back keeps it.
  * - A card whose chip still has keyboard focus, or still has the pointer over
  *   it where it now sits, follows the chip when it moves or its lane scrolls.
  * - Any other card closes when its chip moves or its lane scrolls, as any
  *   tooltip does: it no longer points at anything.
- * - Leaving a card whose chip moved while it was held closes it, since the
- *   bridge back to the chip no longer leads there.
+ * - Leaving a card for longer than the grace closes it, whether or not its
+ *   chip moved meanwhile.
  */
 
 const ROW_SHIFT = 24;
@@ -39,6 +41,8 @@ const CHIP_X = 230;
 /** Where the pointer rests on the chip, from its top edge. */
 const POINTER_IN_CHIP = 10;
 const CARD_POINT = { clientX: 400, clientY: 150 };
+/** A pointer slipping out of the card by accident, well inside the grace. */
+const JIGGLE_MS = 100;
 const SIDEBAR = { left: 0, right: 320 };
 
 function rect(left: number, right: number, top: number, bottom: number): DOMRect {
@@ -319,10 +323,8 @@ class LeaveCard implements fc.AsyncCommand<Model, Real> {
   async run(model: Model): Promise<void> {
     const element = card();
     if (element) fireEvent.mouseLeave(element);
-    if (model.movedWhileHeld) {
-      model.visible = false;
-      check(model);
-    }
+    // Still there for the grace, even when its chip moved meanwhile.
+    check(model);
     act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
     await flushMutations();
     model.pointer = "outside";
@@ -349,6 +351,40 @@ class LeaveChip implements fc.AsyncCommand<Model, Real> {
   }
 
   toString(): string { return "leaveChip"; }
+}
+
+/**
+ * The pointer slips out of the card and comes straight back, maybe while the
+ * row above flips its chip. The card stays where it is.
+ */
+class JiggleOutOfCard implements fc.AsyncCommand<Model, Real> {
+  constructor(private readonly moveMeanwhile: boolean) {}
+
+  check(model: Readonly<Model>): boolean {
+    return model.pointer === "card" && model.visible;
+  }
+
+  async run(model: Model, real: Real): Promise<void> {
+    fireEvent.mouseLeave(card()!);
+    act(() => vi.advanceTimersByTime(JIGGLE_MS / 2));
+    if (this.moveMeanwhile) {
+      real.props = { ...real.props, scheduled: !real.props.scheduled };
+      model.layout = { scheduled: real.props.scheduled, nudged: real.props.nudged };
+      real.rerender(real.props);
+      await flushMutations();
+      real.layoutChanged();
+      fireEvent.scroll(screen.getByTestId("lane"));
+      await flushMutations();
+      model.movedWhileHeld = true;
+      check(model);
+    }
+    act(() => vi.advanceTimersByTime(JIGGLE_MS / 2));
+    fireEvent.mouseEnter(card()!, CARD_POINT);
+    await flushMutations();
+    check(model);
+  }
+
+  toString(): string { return `jiggleOutOfCard(${this.moveMeanwhile ? "move" : "still"})`; }
 }
 
 /** Tab onto the chip: focus shows its card. */
@@ -442,6 +478,7 @@ const commands = [
   fc.constant(new EnterCard()),
   fc.constant(new LeaveCard()),
   fc.constant(new LeaveChip()),
+  fc.boolean().map((moveMeanwhile) => new JiggleOutOfCard(moveMeanwhile)),
   fc.constant(new FocusChip()),
   fc.constant(new BlurChip()),
   fc.constant(new ToggleRowAbove()),
@@ -461,7 +498,10 @@ afterEach(() => {
 describe("a held sidebar PR card", () => {
   it("stays open under layout churn until the operator leaves it", async () => {
     await fc.assert(
-      fc.asyncProperty(fc.commands(commands, { maxCommands: 30 }), async (cmds) => {
+      // One size up: a slip with a move under it needs a hover, an entry and
+      // the slip with nothing closing the card between, and the default
+      // length reached it in only 2 of 5 runs against a hook without the rule.
+      fc.asyncProperty(fc.commands(commands, { maxCommands: 30, size: "+1" }), async (cmds) => {
         vi.useFakeTimers();
         mockSidebarGeometry();
         const { layoutChanged } = stubNativeGeometryObservers();
@@ -512,12 +552,47 @@ describe("a held sidebar PR card", () => {
     await flushMutations();
     expect(card()).toBe(held);
 
-    // Leaving it now closes it at once: its chip is not where it was.
+    // Slipping out and straight back keeps it, though its chip moved.
     view.rerender(<Sidebar scheduled nudged={false} checkState="pending" />);
     await flushMutations();
     layoutChanged();
     fireEvent.mouseLeave(held);
+    act(() => vi.advanceTimersByTime(JIGGLE_MS));
+    expect(card()).toBe(held);
+    fireEvent.mouseEnter(held);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
+    expect(card()).toBe(held);
+
+    // Leaving it for good closes it after the grace.
+    fireEvent.mouseLeave(held);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
     expect(card()).toBeNull();
+  });
+
+  it("keeps a card the pointer slipped out of while the row above flips its chip", async () => {
+    vi.useFakeTimers();
+    mockSidebarGeometry();
+    const { layoutChanged } = stubNativeGeometryObservers();
+    const view = render(<Sidebar scheduled={false} nudged={false} checkState="pending" />);
+    fireEvent.mouseEnter(chip());
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+    const held = card()!;
+    fireEvent.mouseLeave(chip());
+    fireEvent.mouseEnter(held, CARD_POINT);
+
+    fireEvent.mouseLeave(held);
+    act(() => vi.advanceTimersByTime(JIGGLE_MS / 2));
+    view.rerender(<Sidebar scheduled nudged={false} checkState="pending" />);
+    await flushMutations();
+    layoutChanged();
+    fireEvent.scroll(screen.getByTestId("lane"));
+    await flushMutations();
+    expect(card()).toBe(held);
+    expect(held.style.top).toBe(`${CHIP_TOP}px`);
+    act(() => vi.advanceTimersByTime(JIGGLE_MS / 2));
+    fireEvent.mouseEnter(held, CARD_POINT);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 1));
+    expect(card()).toBe(held);
   });
 
   it("holds a card while focus is on one of its controls, and closes it when focus leaves after a move", async () => {
