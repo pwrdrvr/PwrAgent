@@ -15,6 +15,7 @@ const PITCH = 480;
 const ROW_TOP = 120;
 const ROW_HEIGHT = 60;
 const RESERVE = "has-selected-thread-dock-top";
+const DOCK_QUERY_ROOTS = ".sidebar__scroll-region, .directory-list";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -74,13 +75,12 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
   });
   const queryAll = Element.prototype.querySelectorAll;
   const selectors = vi.spyOn(Element.prototype, "querySelectorAll").mockImplementation(function (this: Element, query) {
-    if (this.matches(".sidebar__scroll-region")) work.selectors++;
-    if (this.matches(".directory-list") && (query === ".directory-row__header" || query === ".directory-row__thread-divider")) work.selectors++;
+    if (this.matches(DOCK_QUERY_ROOTS)) work.selectors++;
     return queryAll.call(this, query);
   });
   const queryOne = Element.prototype.querySelector;
   const singleSelectors = vi.spyOn(Element.prototype, "querySelector").mockImplementation(function (this: Element, query) {
-    if (this.matches(".sidebar__scroll-region") && !query.startsWith(".selected-thread-dock")) work.selectors++;
+    if (this.matches(DOCK_QUERY_ROOTS) && !query.startsWith(".selected-thread-dock")) work.selectors++;
     return queryOne.call(this, query);
   });
   const originalRemove = DOMTokenList.prototype.remove;
@@ -144,7 +144,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
   dividerStyle.textContent = ".directory-row__thread-divider { --directory-row-header-height: 28px; }";
   document.head.append(dividerStyle);
   view.rerender(<Fixture metadata={0} />);
-  expect(lane.querySelectorAll(".directory-row__thread-divider")).toHaveLength(directoryCount);
+  expect(queryAll.call(lane, ".directory-row__thread-divider")).toHaveLength(directoryCount);
   function flush() {
     const pending = [...frames.values()];
     frames.clear();
@@ -180,7 +180,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
     updatePage(children: number) {
       arrivedChildren = children;
       view.rerender(<Fixture metadata={0} children={children} />);
-      expect(lane.querySelectorAll('.thread-row-shell[data-thread-key^="codex:child-"]')).toHaveLength(children);
+      expect(queryAll.call(lane, '.thread-row-shell[data-thread-key^="codex:child-"]')).toHaveLength(children);
     },
     reset: () => Object.assign(work, { row: 0, sticky: 0, selectors: 0, reserveLifts: 0 }),
     work,
@@ -317,14 +317,17 @@ it("releases and restores the dock when a folder drag folds and unfolds the lane
   }
 });
 
-it("performs no geometry reads on commits that leave the sidebar DOM unchanged", () => {
+it("performs no geometry reads on commits that leave the sidebar DOM unchanged", async () => {
   const fixture = mountDock(24);
   try {
     fixture.move(700);
     expect(fixture.edge()).toBe("top");
-    fc.assert(fc.property(fc.integer({ min: 1, max: 6 }), (commits) => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 6 }), async (commits) => {
       fixture.reset();
-      for (let index = 0; index < commits; index += 1) fixture.update(0);
+      for (let index = 0; index < commits; index += 1) {
+        fixture.update(0);
+        await fixture.settle();
+      }
       expect(fixture.work).toEqual({ row: 0, sticky: 0, selectors: 0, reserveLifts: 0 });
     }), { numRuns: 6 });
   } finally {
