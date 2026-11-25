@@ -211,6 +211,12 @@ describe("KTD-P3 normalizer parity", () => {
       label: "/bin/bash -c ' '",
     },
     {
+      scenario: "an unterminated Bash script quote",
+      fields: { title: "Bash", command: "bash -c 'echo hello" },
+      command: "bash -c 'echo hello",
+      label: "bash -c 'echo hello",
+    },
+    {
       scenario: "a completion that echoes a long script with positional arguments",
       fields: { title: "Bash", command: longInvocation },
       completionFields: { title: longScriptEcho },

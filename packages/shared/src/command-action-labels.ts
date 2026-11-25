@@ -101,25 +101,38 @@ function readMeaningfulPathName(value: string | null | undefined): string | unde
 
 const MAX_COMMAND_LABEL_LENGTH = 72;
 
-function readPosixScriptWord(text: string): { length: number; display: string; echo: string } {
+function readPosixScriptWord(text: string): { length: number; display: string; echo: string } | undefined {
   let length = 0;
-  let display = "";
   let echo = "";
   // Adjacent quoted and escaped fragments form one word. Sticky matching
   // stops at the first separator so a trailing argument never joins it.
   for (const [fragment, single, double, escaped] of text.matchAll(
     /'([^']*)'|"((?:[^"\\]|\\[\s\S])*)"|\\([\s\S])|[^\s'"\\;&|<>()]+/gy,
   )) {
+    const end = length + fragment.length;
     const literal = single ?? (escaped === "\n" ? "" : escaped);
-    display += literal ?? double ?? fragment;
-    // An agent can echo the script with the outer shell's escapes removed.
+    // An unquoted dollar before a quote introduces Bash-specific quoting.
+    if (
+      literal === undefined
+      && double === undefined
+      && fragment.endsWith("$")
+      && /['"]/.test(text.charAt(end))
+    ) {
+      return undefined;
+    }
     const doubleEcho = double?.replace(/\\(["\\$`\n])/g, (_, char: string) =>
       char === "\n" ? "" : char,
     );
-    echo += literal ?? doubleEcho ?? fragment;
-    length += fragment.length;
+    const decoded = literal ?? doubleEcho ?? fragment;
+    // Keep the existing display for a standalone double-quoted script.
+    // Joined fragments use the decoded word that the shell passes to -c.
+    if (double !== undefined && fragment.length === text.length) {
+      return { length: end, display: double, echo: decoded };
+    }
+    echo += decoded;
+    length = end;
   }
-  return { length, display, echo };
+  return { length, display: echo, echo };
 }
 
 function readCommandLabelText(command: string): { display: string; scriptEcho?: string } {
@@ -128,10 +141,13 @@ function readCommandLabelText(command: string): { display: string; scriptEcho?: 
   if (posixWrapper) {
     const tail = trimmed.slice(posixWrapper[0].length);
     const word = readPosixScriptWord(tail);
+    if (!word) {
+      return { display: trimmed };
+    }
     let display = trimmed;
     // Noclobber's script path can be echoed as a title. Keep its flag visible.
     if (posixWrapper[1] !== "-C") {
-      if (!/^['"]/.test(tail) || word.length === 0) {
+      if (!/^['"]/.test(tail)) {
         display = tail;
       } else if (word.length === tail.length && word.display.trim()) {
         display = word.display;

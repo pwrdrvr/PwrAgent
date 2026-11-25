@@ -62,4 +62,19 @@ describe("unwrapCommandText", () => {
     const script = String.raw`printf \"ready\"`;
     expect(unwrapCommandText(`/bin/bash -c "${script}"`)).toBe(script);
   });
+
+  it.each([
+    [String.raw`bash -c 'printf %s '"\"a b\""`, 'printf %s "a b"'],
+    [String.raw`sh -c 'printf '"\$value"'first'`, "printf $valuefirst"],
+  ])("decodes outer escapes when joining the script fragments in %j", (command, script) => {
+    expect(unwrapCommandText(command)).toBe(script);
+  });
+
+  it.each([
+    String.raw`bash -c $'\n'`,
+    String.raw`bash -c 'echo one'$'\n''echo two'`,
+    'sh -c "pwd\n  pwd',
+  ])("keeps the full invocation when the script cannot be decoded in %j", (command) => {
+    expect(unwrapCommandText(command)).toBe(command);
+  });
 });
