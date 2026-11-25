@@ -4178,6 +4178,22 @@ describe("Claude permission bridge", () => {
       { signal: new AbortController().signal, toolUseID: "question", requestId: "sdk-request" }))
       .resolves.toMatchObject({ behavior: "allow", updatedInput: { answers: { "Color?": "Blue" } } });
   });
+
+  it("asks a multi-select AskUserQuestion as one and returns every choice", async () => {
+    const request = vi.fn(async (_request: unknown) => ({ answers: { "0": { answers: ["Blue", "Green"] } } }));
+    const handler = createClaudePermissionHandler({
+      threadId: "thread", turnId: () => "turn", cancelRequest: async () => {}, request,
+    });
+    await expect(handler("AskUserQuestion", { questions: [{
+      question: "Colors?", header: "Colors", multiSelect: true,
+      options: [{ label: "Blue", description: "" }, { label: "Green", description: "" }],
+    }] }, { signal: new AbortController().signal, toolUseID: "question", requestId: "sdk-request" }))
+      .resolves.toMatchObject({ behavior: "allow", updatedInput: { answers: { "Colors?": "Blue, Green" } } });
+    expect(request.mock.lastCall![0]).toMatchObject({
+      method: "item/tool/requestUserInput",
+      params: { questions: [{ id: "0", question: "Colors?", multiSelect: true }] },
+    });
+  });
 });
 
 describe("Claude MCP elicitation bridge", () => {

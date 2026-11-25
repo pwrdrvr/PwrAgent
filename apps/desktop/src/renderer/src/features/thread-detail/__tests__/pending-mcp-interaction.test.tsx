@@ -1,8 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ACP_AGENT_ELICITATION_META_KEY } from "@pwragent/shared/mcp-elicitation-purpose";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import { PendingMcpInteraction } from "../PendingMcpInteraction";
 import {
@@ -50,33 +49,6 @@ function formState(properties: Record<string, unknown>, required: string[] = [])
   })!;
 }
 
-
-// Antigravity's ask_question as PwrAgent's ACP client relays it.
-function agentQuestionState(): PendingMcpInteractionState {
-  return createMcpElicitationState({
-    method: "mcpServer/elicitation/request",
-    params: {
-      threadId: "thread-1", turnId: "turn-1", requestId: "jetski-acp-front:2",
-      serverName: "Antigravity", mode: "form", message: "The agent has 2 questions.",
-      _meta: { [ACP_AGENT_ELICITATION_META_KEY]: true },
-      requestedSchema: {
-        type: "object",
-        properties: {
-          q1: { type: "string", title: "Which channel should the nightly job publish to?", oneOf: [
-            { const: "1", title: "(Recommended) Beta only" },
-            { const: "2", title: "Beta and stable" },
-          ] },
-          q1_other: { type: "string", title: "Other", description: "Optional free-form answer to: Which channel should the nightly job publish to?" },
-          q2: { type: "array", title: "Which platforms should it build?", items: { anyOf: [
-            { const: "1", title: "macOS" },
-            { const: "2", title: "Linux" },
-          ] } },
-          q2_other: { type: "string", title: "Other", description: "Optional free-form answer to: Which platforms should it build?" },
-        },
-      },
-    },
-  })!;
-}
 
 function StatefulCard(props: {
   initial: PendingMcpInteractionState;
@@ -135,48 +107,6 @@ describe("PendingMcpInteraction", () => {
     expect(buildMcpElicitationResponse(onSubmit.mock.lastCall![0], "accept").content).toEqual({ tier: "" });
   });
 
-  it("shows an agent's questions with their options and their own Other answer", () => {
-    const onSubmit = vi.fn();
-    render(<StatefulCard initial={agentQuestionState()} onSubmit={onSubmit} />);
-
-    const first = screen.getByRole("group", { name: /Which channel should the nightly job publish to\?/ });
-    const second = screen.getByRole("group", { name: /Which platforms should it build\?/ });
-    // Every option is in view, as the agent wrote it, with its recommendation marked once.
-    expect(within(first).queryByRole("combobox")).toBeNull();
-    const recommended = within(first).getByRole("button", { name: /Beta only/ });
-    expect(recommended).toHaveTextContent("Recommended");
-    expect(recommended.textContent).not.toMatch(/\(Recommended\)/i);
-    // Each Other answer sits inside its own question, not as a field of its own.
-    expect(within(first).getByRole("textbox", { name: "Other answer" })).toBeInTheDocument();
-    expect(within(second).getByRole("textbox", { name: "Other answer" })).toBeInTheDocument();
-    expect(screen.getAllByRole("textbox")).toHaveLength(2);
-    expect(screen.queryByText(/Optional free-form answer to/)).toBeNull();
-
-    fireEvent.click(within(first).getByRole("button", { name: /Beta and stable/ }));
-    expect(within(first).getByRole("button", { name: /Beta and stable/ })).toHaveAttribute("aria-pressed", "true");
-    expect(recommended).toHaveAttribute("aria-pressed", "false");
-    fireEvent.click(within(second).getByRole("button", { name: "macOS" }));
-    fireEvent.change(within(second).getByRole("textbox", { name: "Other answer" }), { target: { value: "FreeBSD" } });
-    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
-
-    expect(buildMcpElicitationResponse(onSubmit.mock.lastCall![0], "accept").content).toEqual({
-      q1: "2", q1_other: "", q2: ["1"], q2_other: "FreeBSD",
-    });
-  });
-
-  it("keeps an MCP server's Other field a field of its own", () => {
-    render(
-      <StatefulCard
-        initial={formState({
-          q1: { type: "string", title: "Color", oneOf: [{ const: "1", title: "Red" }] },
-          q1_other: { type: "string", title: "Other" },
-        })}
-        onSubmit={vi.fn()}
-      />
-    );
-    expect(screen.getByRole("combobox", { name: /Color/ })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: /^Other/ })).toBeInTheDocument();
-  });
   it("renders native tool argument objects and long display names without hiding credentials", () => {
     const name = "pwragent-hosted-sandboxer-smoke-fixture";
     const state = createMcpElicitationState({

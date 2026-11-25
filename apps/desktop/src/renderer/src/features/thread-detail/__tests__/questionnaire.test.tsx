@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type {
   AppServerToolRequestUserInputNotification,
@@ -11,6 +12,7 @@ import {
   createQuestionnaireState,
   goToNextQuestion,
   goToPreviousQuestion,
+  toggleQuestionnaireOption,
 } from "../questionnaire";
 
 function buildRequest(
@@ -29,6 +31,49 @@ function buildRequest(
 }
 
 describe("questionnaire helpers", () => {
+  it("answers a multi-select question with every chosen label and the Other text (model)", () => {
+    const labels = ["Apple", "Pear", "Plum", "Fig"];
+    const step = fc.oneof(
+      fc.record({ kind: fc.constant("toggle" as const), index: fc.nat({ max: labels.length - 1 }) }),
+      fc.record({ kind: fc.constant("text" as const), text: fc.constantFrom("", "  ", "Kiwi", " Kiwi ") }),
+    );
+    fc.assert(fc.property(fc.array(step, { maxLength: 12 }), (steps) => {
+      let state = createQuestionnaireState(buildRequest([{
+        id: "fruits", header: "", question: "Pick fruits", isOther: true, isSecret: false, multiSelect: true,
+        options: labels.map((label) => ({ label, description: "" })),
+      }]))!;
+      // Model: a set of chosen options and the last Other text.
+      const chosen = new Set<number>();
+      let text = "";
+      for (const next of steps) {
+        if (next.kind === "toggle") {
+          state = toggleQuestionnaireOption(state, state.questions[0]!.options[next.index]!.key);
+          if (chosen.has(next.index)) chosen.delete(next.index);
+          else chosen.add(next.index);
+        } else {
+          state = answerQuestionnaireText(state, next.text);
+          text = next.text;
+        }
+      }
+      const expected = [
+        ...labels.filter((_, index) => chosen.has(index)),
+        ...(text.trim() ? [text.trim()] : []),
+      ];
+      expect(state.currentIndex).toBe(0);
+      expect(canSubmitQuestionnaire(state)).toBe(expected.length > 0);
+      expect(buildQuestionnaireResponse(state).answers.fruits?.answers).toEqual(expected);
+    }));
+  });
+
+  it("keeps a single-select question's toggle a no-op", () => {
+    const state = createQuestionnaireState(buildRequest([{
+      id: "color", header: "", question: "Pick a color", isOther: false, isSecret: false,
+      options: [{ label: "Red", description: "" }],
+    }]))!;
+    expect(state.questions[0]?.multiSelect).toBe(false);
+    expect(toggleQuestionnaireOption(state, "A")).toBe(state);
+  });
+
   it("formats selected option answers for the Codex request_user_input response shape", () => {
     const state = createQuestionnaireState(
       buildRequest([

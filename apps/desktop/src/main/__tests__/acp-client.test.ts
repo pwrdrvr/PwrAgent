@@ -2015,12 +2015,10 @@ describe("AcpAgentClient", () => {
     },
   };
 
-  it("shows Antigravity's ask_question to the operator and returns the answer", async () => {
+  it("asks Antigravity's ask_question one question at a time and returns the form answer", async () => {
     const transport = new FakeAcpAgentTransport();
     const onRequest = vi.fn((_request: AppServerPendingRequestNotification): unknown => ({
-      action: "accept",
-      content: { q1: "2", q1_other: "", q2: ["1", "3"], q2_other: "" },
-      _meta: null,
+      answers: { q1: { answers: ["Teal"] }, q2: { answers: ["Apple", "Plum"] } },
     }));
     const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
     await client.initialize();
@@ -2033,31 +2031,66 @@ describe("AcpAgentClient", () => {
 
     expect(onRequest).toHaveBeenCalledTimes(1);
     expect(onRequest.mock.lastCall![0]).toEqual({
-      method: "mcpServer/elicitation/request",
+      method: "item/tool/requestUserInput",
       params: {
         threadId: session.sessionId,
-        turnId: null,
+        itemId: "call_14875168372478126767",
         requestId: "jetski-acp-front:2",
-        serverName: "Antigravity",
-        mode: "form",
-        message: "The agent has 2 questions.",
-        _meta: { pwragent_acp_agent_elicitation: true },
-        requestedSchema: antigravityAskQuestion.requestedSchema,
+        questions: [
+          { id: "q1", header: "", question: "Pick a color", isOther: true, isSecret: false, options: [
+            { label: "Red", description: "" }, { label: "Green", description: "" }, { label: "Blue", description: "" },
+          ] },
+          { id: "q2", header: "", question: "Pick fruits", isOther: true, isSecret: false, multiSelect: true, options: [
+            { label: "Apple", description: "" }, { label: "Pear", description: "" }, { label: "Plum", description: "" },
+          ] },
+        ],
       },
     });
-    expect(answer).toEqual({
-      action: "accept",
-      content: { q1: "2", q1_other: "", q2: ["1", "3"], q2_other: "" },
-    });
+    expect(answer).toEqual({ action: "accept", content: { q1_other: "Teal", q2: ["1", "3"] } });
   });
 
-  it("answers an ACP elicitation only with what the operator chose (oracle)", async () => {
+  it("cancels an asked form unless the operator answered it (oracle)", async () => {
     let reply: unknown;
     const transport = new FakeAcpAgentTransport();
     const onRequest = vi.fn((_request: AppServerPendingRequestNotification): unknown => reply);
     const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
     await client.initialize();
     const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const operatorReply = fc.oneof(
+      fc.constant({ answers: { q1: { answers: ["Green"] } } }),
+      // A turn interrupt or a headless automation settles a pending request this way.
+      fc.constant({ decision: "cancel" }),
+      fc.constantFrom(undefined, null, "accept", ["accept"], { answers: null }, { answers: [] }),
+    );
+    await fc.assert(fc.asyncProperty(operatorReply, fc.integer({ min: 0, max: 1000 }), async (generated, requestId) => {
+      reply = generated;
+      onRequest.mockClear();
+      const answer = await transport.emitRequest("elicitation/create", {
+        ...antigravityAskQuestion,
+        sessionId: session.sessionId,
+      }, requestId);
+      expect(onRequest.mock.lastCall![0].params.requestId).toBe(String(requestId));
+      const answered = generated && typeof generated === "object" && !Array.isArray(generated)
+        && (generated as { answers?: unknown }).answers
+        && typeof (generated as { answers?: unknown }).answers === "object"
+        && !Array.isArray((generated as { answers?: unknown }).answers);
+      expect(answer).toEqual(answered ? { action: "accept", content: { q1: "2" } } : { action: "cancel" });
+    }));
+  });
+
+  it("shows a form the questionnaire cannot ask on the form card, answering only what the operator chose (oracle)", async () => {
+    let reply: unknown;
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((_request: AppServerPendingRequestNotification): unknown => reply);
+    const client = new AcpAgentClient({ backendId: "acp:antigravity", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    const countForm = {
+      sessionId: session.sessionId,
+      mode: "form",
+      message: "How many replicas?",
+      requestedSchema: { type: "object", properties: { replicas: { type: "integer", title: "Replicas" } } },
+    };
     const content = fc.dictionary(
       fc.string({ minLength: 1, maxLength: 8 }),
       fc.oneof(fc.string(), fc.boolean(), fc.integer(), fc.array(fc.string(), { maxLength: 3 })),
@@ -2066,7 +2099,6 @@ describe("AcpAgentClient", () => {
     const operatorReply = fc.oneof(
       fc.record({ action: fc.constant("accept"), content: fc.option(content, { nil: undefined }) }),
       fc.record({ action: fc.constantFrom("decline", "cancel"), content: fc.constant(null) }),
-      // A turn interrupt or a headless automation settles a pending request this way.
       fc.constant({ decision: "cancel" }),
       fc.constantFrom(undefined, null, "accept", ["accept"]),
     );
@@ -2075,13 +2107,18 @@ describe("AcpAgentClient", () => {
     await fc.assert(fc.asyncProperty(operatorReply, id, async (generated, requestId) => {
       reply = generated;
       onRequest.mockClear();
-      const answer = await transport.emitRequest("elicitation/create", {
-        ...antigravityAskQuestion,
-        sessionId: session.sessionId,
-      }, requestId);
+      const answer = await transport.emitRequest("elicitation/create", countForm, requestId);
 
       expect(onRequest).toHaveBeenCalledTimes(1);
-      expect(onRequest.mock.lastCall![0].params.requestId).toBe(String(requestId));
+      expect(onRequest.mock.lastCall![0]).toMatchObject({
+        method: "mcpServer/elicitation/request",
+        params: {
+          requestId: String(requestId),
+          serverName: "Antigravity",
+          _meta: { pwragent_acp_agent_elicitation: true },
+          requestedSchema: countForm.requestedSchema,
+        },
+      });
       // Oracle: only an explicit accept carries content, and only the
       // operator's own object; only an explicit decline declines.
       const record = generated && typeof generated === "object" && !Array.isArray(generated)
@@ -2095,6 +2132,46 @@ describe("AcpAgentClient", () => {
         expect(answer).toEqual({ action: "cancel" });
       }
     }));
+  });
+
+  it("asks Grok's ask_user_question on the questionnaire and answers in Grok's shape", async () => {
+    let reply: unknown = { answers: { "0": { answers: ["Teal"] }, "1": { answers: ["Apple", "Pear"] } } };
+    const transport = new FakeAcpAgentTransport();
+    const onRequest = vi.fn((_request: AppServerPendingRequestNotification): unknown => reply);
+    const client = new AcpAgentClient({ backendId: "acp:grok", store, transport, onRequest });
+    await client.initialize();
+    const session = await client.startSession({ cwd: "/repo", executionMode: "default" });
+    // Grok Build 1.0.45-pwragent.2, captured live; its first request id is 0.
+    const request = {
+      sessionId: session.sessionId,
+      toolCallId: "call-a01b1553-613e-48be-b800-b4769d8603a2-0",
+      questions: [
+        { question: "Pick a color", options: [{ label: "Red", description: "Red" }, { label: "Green", description: "Green" }], multiSelect: null },
+        { question: "Pick fruits", options: [{ label: "Apple", description: "Apple" }, { label: "Pear", description: "Pear" }], multiSelect: true },
+      ],
+      mode: "default",
+    };
+
+    await expect(transport.emitRequest("_x.ai/ask_user_question", request, 0)).resolves.toEqual({
+      outcome: "accepted",
+      answers: { "Pick a color": ["Other"], "Pick fruits": ["Apple", "Pear"] },
+      annotations: { "Pick a color": { notes: "Teal" } },
+    });
+    expect(onRequest.mock.lastCall![0]).toMatchObject({
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: session.sessionId,
+        itemId: request.toolCallId,
+        requestId: "0",
+        questions: [
+          { id: "0", question: "Pick a color", isOther: true },
+          { id: "1", question: "Pick fruits", isOther: true, multiSelect: true },
+        ],
+      },
+    });
+
+    reply = { decision: "cancel" };
+    await expect(transport.emitRequest("x.ai/ask_user_question", request, 1)).resolves.toEqual({ outcome: "cancelled" });
   });
 
   it("declines an ACP elicitation it cannot show without asking the operator", async () => {

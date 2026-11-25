@@ -1,4 +1,3 @@
-import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type {
   AppServerMcpElicitationRequestNotification,
@@ -8,7 +7,6 @@ import {
   canAcceptMcpElicitation,
   createMcpElicitationState,
   mcpElicitationPurposeLabel,
-  mcpFieldGroups,
   mcpFieldFormatError,
   redactDisplayValue,
   readMcpApprovalPersistence,
@@ -260,53 +258,9 @@ describe("MCP elicitation helpers", () => {
     });
   });
 
-  it("pairs an agent question's Other answer with that question only (model)", () => {
-    const kinds = {
-      single: { type: "string", oneOf: [{ const: "1", title: "One" }] },
-      multi: { type: "array", items: { anyOf: [{ const: "1", title: "One" }] } },
-      text: { type: "string" },
-      flag: { type: "boolean" },
-    } as const;
-    const kind = fc.constantFrom(...(Object.keys(kinds) as Array<keyof typeof kinds>));
-    const key = fc.constantFrom("q1", "q1_other", "q2", "q2_other", "x_other", "q1_other_other");
-    fc.assert(fc.property(
-      fc.uniqueArray(fc.tuple(key, kind), { selector: ([name]) => name, maxLength: 6 }),
-      fc.boolean(),
-      (entries, agent) => {
-        const state = createMcpElicitationState(buildRequest({
-          _meta: agent ? { pwragent_acp_agent_elicitation: true } : null,
-          requestedSchema: {
-            type: "object",
-            properties: Object.fromEntries(entries.map(([name, k]) => [name, { ...kinds[k], title: name }])),
-          },
-        }))!;
-        const fields = state.form?.fields ?? [];
-        const groups = mcpFieldGroups(state);
-
-        // Oracle: on an agent's question form, a free-text `<key>_other`
-        // belongs to the single or multiple choice `<key>`. Nothing else pairs.
-        const choice = (name: string) => fields.find((field) => field.key === name
-          && (field.kind === "singleSelect" || field.kind === "multiSelect"));
-        const ownerOf = (name: string) => {
-          const field = fields.find((candidate) => candidate.key === name);
-          if (!agent || field?.kind !== "string" || !name.endsWith("_other")) return undefined;
-          return choice(name.slice(0, -"_other".length));
-        };
-        expect(groups).toEqual(fields
-          .filter((field) => !ownerOf(field.key))
-          .map((field) => {
-            const other = fields.find((candidate) => ownerOf(candidate.key) === field);
-            return other ? { field, other } : { field };
-          }));
-        // Every field is drawn exactly once.
-        expect(groups.flatMap((group) => group.other ? [group.field, group.other] : [group.field]))
-          .toHaveLength(fields.length);
-      },
-    ));
-  });
-
-  // Antigravity's ask_question as an ACP form elicitation, captured live.
-  it("answers Antigravity's ask_question questions with their option values", () => {
+  // An agent form the questionnaire cannot ask still names itself a question,
+  // and the card answers each choice with its option value.
+  it("answers an agent's choice form with option values and Other text", () => {
     const state = createMcpElicitationState(
       buildRequest({
         serverName: "Antigravity",

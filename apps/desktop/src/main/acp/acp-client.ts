@@ -95,6 +95,12 @@ import {
   acpWorkspaceContinuationText,
   acpWorkspaceHistory,
 } from "./acp-workspace-history.js";
+import {
+  acpElicitationUserInput,
+  grokAskUserQuestionInput,
+  userInputAnswers,
+  type GrokAskUserQuestionResponse,
+} from "./acp-user-input.js";
 
 const acpClientLog = getMainLogger("pwragent:acp-client");
 
@@ -2658,6 +2664,9 @@ export class AcpAgentClient {
     if (method === "elicitation/create") {
       return await this.handleElicitationRequest(params, id);
     }
+    if (GROK_ASK_USER_QUESTION_METHODS.has(method)) {
+      return await this.handleGrokAskUserQuestion(params, id);
+    }
     if (method !== "session/request_permission") {
       throw new Error(`Unsupported ACP request: ${method}`);
     }
@@ -2720,10 +2729,12 @@ export class AcpAgentClient {
   }
 
   /**
-   * Show an agent's form elicitation, such as Antigravity's ask_question, on
-   * the same card MCP elicitations use, and answer in ACP's shape. Only form
-   * mode is advertised, and only a session can show a card, so anything else
-   * is declined without asking.
+   * Ask an agent's form elicitation, such as Antigravity's ask_question.
+   * A form of choices and text is asked on the questionnaire card, one
+   * question at a time; any other form is shown on the MCP elicitation card.
+   * Either way the answer goes back in ACP's shape. Only form mode is
+   * advertised, and only a session can show a card, so anything else is
+   * declined without asking.
    */
   private async handleElicitationRequest(
     params: Record<string, unknown>,
@@ -2739,11 +2750,27 @@ export class AcpAgentClient {
     if (session?.approvalPolicy === "deny-all" || !this.options.onRequest) {
       return { action: "cancel" };
     }
-    const request: AppServerMcpElicitationRequestNotification = {
+    const turnId = this.activeTurns.get(sessionId)?.turnId;
+    const questions = acpElicitationUserInput(params);
+    if (questions) {
+      const toolCallId = typeof params.toolCallId === "string" ? params.toolCallId : undefined;
+      const answers = userInputAnswers(await this.askOperator(sessionId, {
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: sessionId,
+          ...(turnId ? { turnId } : {}),
+          ...(toolCallId ? { itemId: toolCallId } : {}),
+          requestId: String(id),
+          questions: questions.questions,
+        },
+      }));
+      return answers ? { action: "accept", content: questions.content(answers) } : { action: "cancel" };
+    }
+    return acpElicitationResponse(await this.askOperator(sessionId, {
       method: "mcpServer/elicitation/request",
       params: {
         threadId: sessionId,
-        turnId: this.activeTurns.get(sessionId)?.turnId ?? null,
+        turnId: turnId ?? null,
         requestId: String(id),
         serverName: this.approvalRequesterName,
         mode: "form",
@@ -2752,15 +2779,45 @@ export class AcpAgentClient {
         _meta: { [ACP_AGENT_ELICITATION_META_KEY]: true },
         requestedSchema: acpElicitationFormSchema(params.requestedSchema),
       },
-    };
-    // A session waiting on the operator must stay open to hear the answer.
+    } satisfies AppServerMcpElicitationRequestNotification));
+  }
+
+  /** Grok's own question request, asked on the questionnaire card. */
+  private async handleGrokAskUserQuestion(
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): Promise<GrokAskUserQuestionResponse> {
+    const input = grokAskUserQuestionInput(params);
+    if (!input || id == null || !this.options.onRequest) return { outcome: "cancelled" };
+    const sessionId = this.appSessionIdFor(input.sessionId);
+    const session = this.options.store.getSession(this.options.backendId, sessionId);
+    if (session?.approvalPolicy === "deny-all") return { outcome: "cancelled" };
+    const turnId = this.activeTurns.get(sessionId)?.turnId;
+    const answers = userInputAnswers(await this.askOperator(sessionId, {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: sessionId,
+        ...(turnId ? { turnId } : {}),
+        ...(input.toolCallId ? { itemId: input.toolCallId } : {}),
+        requestId: String(id),
+        questions: input.questions,
+      },
+    }));
+    return answers ? input.response(answers) : { outcome: "cancelled" };
+  }
+
+  /** A session waiting on the operator must stay open to hear the answer. */
+  private async askOperator(
+    sessionId: string,
+    request: AppServerPendingRequestNotification,
+  ): Promise<unknown> {
     this.pendingPermissionRequests.set(
       sessionId,
       (this.pendingPermissionRequests.get(sessionId) ?? 0) + 1,
     );
     this.touchSession(sessionId);
     try {
-      return acpElicitationResponse(await this.options.onRequest(request));
+      return await this.options.onRequest!(request);
     } finally {
       const remaining = (this.pendingPermissionRequests.get(sessionId) ?? 1) - 1;
       if (remaining > 0) this.pendingPermissionRequests.set(sessionId, remaining);
@@ -4141,6 +4198,9 @@ function isThreadToolGrantResponse(
     && [ACP_THREAD_TOOL_GRANT_OPTION_ID, "accept_for_session", "allow_always"]
       .includes(decision.toLowerCase());
 }
+
+/** Grok Build sends the underscore form; t3code also accepts the bare name. */
+const GROK_ASK_USER_QUESTION_METHODS = new Set(["_x.ai/ask_user_question", "x.ai/ask_user_question"]);
 
 type AcpElicitationResponse =
   | { action: "accept"; content: Record<string, unknown> }

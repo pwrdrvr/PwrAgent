@@ -182,6 +182,7 @@ export function createClaudePermissionHandler(options: {
                 isOther: true,
                 isSecret: false,
                 options: question.options ?? null,
+                ...(question.multiSelect === true ? { multiSelect: true } : {}),
               };
             }) : [],
           },

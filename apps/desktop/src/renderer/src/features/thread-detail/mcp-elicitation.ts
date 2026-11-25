@@ -205,50 +205,6 @@ export function mcpElicitationPurposeLabel(purpose: McpElicitationPurpose): stri
   }
 }
 
-const OTHER_ANSWER_SUFFIX = "_other";
-
-export type PendingMcpFieldGroup = {
-  field: PendingMcpField;
-  /** The free-text answer drawn inside this question rather than after it. */
-  other?: PendingMcpField;
-};
-
-/**
- * The fields in the order the card draws them. On an agent's question form,
- * such as Antigravity's ask_question, a free-text `<key>_other` belongs to
- * the single or multiple choice `<key>`. An MCP server's form keeps every
- * field its own, because nothing says its `_other` means the same thing.
- */
-export function mcpFieldGroups(state: PendingMcpInteractionState): PendingMcpFieldGroup[] {
-  const fields = state.form?.fields ?? [];
-  if (state.purpose !== "agent-question") return fields.map((field) => ({ field }));
-  const owners = new Map<string, PendingMcpField>();
-  for (const field of fields) {
-    if (field.kind !== "string" || !field.key.endsWith(OTHER_ANSWER_SUFFIX)) continue;
-    const ownerKey = field.key.slice(0, -OTHER_ANSWER_SUFFIX.length);
-    const owner = fields.find((candidate) => candidate.key === ownerKey
-      && (candidate.kind === "singleSelect" || candidate.kind === "multiSelect"));
-    if (owner) owners.set(field.key, owner);
-  }
-  return fields
-    .filter((field) => !owners.has(field.key))
-    .map((field) => {
-      const other = fields.find((candidate) => owners.get(candidate.key) === field);
-      return other ? { field, other } : { field };
-    });
-}
-
-/**
- * An agent marks its suggested option in the label, as Claude's and
- * Antigravity's question tools do. The card shows it as a badge instead.
- */
-export function readRecommendedOptionLabel(label: string): { label: string; recommended: boolean } {
-  const recommended = /\(recommended\)/i.test(label);
-  if (!recommended) return { label, recommended };
-  const stripped = label.replace(/\s*\(recommended\)\s*/gi, " ").trim();
-  return { label: stripped || label, recommended };
-}
-
 /** The form fields that make this request impossible to submit. */
 export function mcpSecretFields(state: PendingMcpInteractionState): PendingMcpField[] {
   return state.form?.fields.filter((field) => field.kind === "secret") ?? [];

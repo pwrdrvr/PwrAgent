@@ -7,6 +7,7 @@ import {
   canSubmitQuestionnaire,
   goToNextQuestion,
   goToPreviousQuestion,
+  toggleQuestionnaireOption,
   type PendingQuestionnaireState,
 } from "./questionnaire";
 
@@ -51,7 +52,9 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
   const question = props.state.questions[props.state.currentIndex];
   const answer = props.state.answers[props.state.currentIndex];
   const freeformRef = useRef<HTMLTextAreaElement | null>(null);
-  const textAnswer = answer?.kind === "text" ? answer.value : "";
+  const textAnswer = answer?.kind === "text"
+    ? answer.value
+    : answer?.kind === "multi" ? answer.text : "";
 
   useLayoutEffect(() => {
     resizeFreeformTextarea(freeformRef.current);
@@ -79,13 +82,17 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
       <div className="transcript-questionnaire__prompt">
         {question.header ? <p className="eyebrow">{question.header}</p> : null}
         <h3>{question.question}</h3>
+        {question.multiSelect ? (
+          <p className="transcript-questionnaire__hint">Choose any that apply.</p>
+        ) : null}
       </div>
 
       {question.options.length > 0 ? (
         <div className="transcript-questionnaire__options">
           {question.options.map((option) => {
-            const selected =
-              answer?.kind === "option" && answer.optionKey === option.key;
+            const selected = answer?.kind === "multi"
+              ? answer.optionKeys.includes(option.key)
+              : answer?.kind === "option" && answer.optionKey === option.key;
             return (
               <button
                 key={option.key}
@@ -96,6 +103,12 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
                 aria-pressed={selected}
                 disabled={props.busy}
                 onClick={() => {
+                  // A multi-select answer is done only when the operator
+                  // says so, so a choice never moves on by itself.
+                  if (question.multiSelect) {
+                    props.onChange(toggleQuestionnaireOption(props.state, option.key));
+                    return;
+                  }
                   if (isLastQuestion) {
                     const answered = answerQuestionnaireOption(props.state, option.key);
                     void props.onSubmit(answered);
@@ -109,7 +122,7 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
                   <span className="transcript-questionnaire__option-key">
                     {option.key}
                   </span>
-                  <span>{option.label}</span>
+                  <span>{option.recommended ? withoutRecommendedMarker(option.label) : option.label}</span>
                   {option.recommended ? (
                     <span className="transcript-questionnaire__recommended">
                       Recommended
@@ -180,4 +193,12 @@ export function PendingQuestionnaire(props: PendingQuestionnaireProps) {
       </div>
     </div>
   );
+}
+
+/**
+ * The badge says it, so the label need not. The answer still sends the
+ * agent's own label, which is how it knows which option was chosen.
+ */
+function withoutRecommendedMarker(label: string): string {
+  return label.replace(/\s*\(recommended\)\s*/gi, " ").trim() || label;
 }

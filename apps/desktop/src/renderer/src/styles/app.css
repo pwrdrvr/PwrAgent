@@ -38059,6 +38059,12 @@ div.composer-error-row__toggle {
   line-height: 1.35;
 }
 
+.transcript-questionnaire__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 /* The MCP card is denser than the questionnaire it shares a frame with: the
    title, its warning and its parameters read as one 6px block, and the card
    spends 10px between header, block, fields and actions. */
