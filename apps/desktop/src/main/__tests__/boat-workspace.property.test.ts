@@ -194,10 +194,12 @@ describe("Boat workspace push", () => {
   it("reads and writes only a directory of the thread, at a plain path in the sandbox", async () => {
     const root = await repository({ "a.txt": "a\n" });
     const elsewhere = await repository({ "secret.txt": "not this thread's\n" });
+    const validRemote = "/home/user/ok";
+    const invalidRemote = "/home/user/a b";
     const paths = [
       elsewhere, path.dirname(root), `${root}/..`, `${root}/sub`, "/", "", ".", "relative", `${root}x`,
-      "/home/user/x'; rm -rf /; '", "/etc", "/home/user/../../etc", "/home/user", "/tmp/", "/home/user/a b",
-      "/home/user/$(id)", "/home/user/ok", root,
+      "/home/user/x'; rm -rf /; '", "/etc", "/home/user/../../etc", "/home/user", "/tmp/", invalidRemote,
+      "/home/user/$(id)", validRemote, root,
     ];
     type Args = { directory?: string; remotePath?: string };
     for (const name of ["push_workspace", "pull_changes"] as const) {
@@ -226,6 +228,8 @@ describe("Boat workspace push", () => {
         }
       };
       await check({});
+      await check({ directory: root, remotePath: invalidRemote });
+      await check({ directory: elsewhere, remotePath: validRemote });
       for (const candidate of paths) {
         await check({ directory: candidate });
         await check({ remotePath: candidate });

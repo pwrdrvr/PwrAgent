@@ -183,11 +183,13 @@ async function scenario(actions: Array<"settings" | "discover" | "call" | "inspe
 }
 
 describe("local command recovery", () => {
-  it("keeps discovery and calls blocked across repeated successful Settings probes until operator reconnect", async () => {
-    // The scenario first checks the ended report after one successful probe.
-    // Exercise both discovery/call orders on either side of the second probe.
-    await scenario(["discover", "call", "settings", "call", "discover"]);
-  });
+  it.each(["discover", "call"] as const)(
+    "keeps the ended session blocked until operator reconnect when %s comes first after a successful Settings probe",
+    async (first) => {
+      const second = first === "discover" ? "call" : "discover";
+      await scenario([first, second, "settings", second, first]);
+    },
+  );
 
   it("requires another operator reconnect after a command exits before initialization", async () => {
     await scenario([], true);

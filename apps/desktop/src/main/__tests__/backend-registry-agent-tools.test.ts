@@ -607,7 +607,9 @@ describe("DesktopBackendRegistry", () => {
           await registry.close();
         }
       },
-    ), { numRuns: 5, examples: [
+    ), { numRuns: 7, examples: [
+      ["default", undefined, undefined, undefined],
+      ["auto", undefined, undefined, undefined],
       ["default", undefined, undefined, "workspace-write"],
       ["auto", "read-only", undefined, undefined],
       ["auto", "workspace-write", "default", "read-only"],
