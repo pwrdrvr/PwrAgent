@@ -31,7 +31,7 @@ test("every Windows desktop-main run keeps native diagnostic build products on t
   const job = workflow.split(/\n  (?=[\w-]+:\n)/).find((block) => block.startsWith("windows-desktop-main:"));
   expect(job).toBeDefined();
   const testSteps = job.split("\n      - ").filter((step) =>
-    /pnpm test --project desktop-main\b|run-retry-failures\.mjs unit$/.test(step.trim()));
+    /^ {8}id: unit-(?:tests|retry)$/m.test(step));
   expect(testSteps).toHaveLength(2);
   for (const step of testSteps) {
     expect(step).toMatch(/^ {10}TEMP: \$\{\{ runner\.temp \}\}$/m);
