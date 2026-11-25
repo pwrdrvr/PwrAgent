@@ -31,6 +31,19 @@ export type NativeVoiceCapability = {
 };
 export type NativeVoiceStart = { threadId: string; sessionId: string; sdp: string; mode?: NativeVoiceMode };
 export type NativeVoiceTarget = { sessionId: string };
+/**
+ * What ended a session, as the renderer saw it. Main logs it beside the stop,
+ * so "voice ended" always names a control, a rule, or a failure.
+ */
+export const NATIVE_VOICE_STOP_CAUSES = [
+  "end-button", "close-button", "masthead-mic", "composer-mic", "shortcut",
+  "thread-left", "muted-idle", "away", "failure", "backend-closed", "window-closed",
+] as const;
+export type NativeVoiceStopCause = typeof NATIVE_VOICE_STOP_CAUSES[number];
+export type NativeVoiceStop = NativeVoiceTarget & { cause?: NativeVoiceStopCause };
+export function isNativeVoiceStopCause(value: unknown): value is NativeVoiceStopCause {
+  return NATIVE_VOICE_STOP_CAUSES.some((cause) => cause === value);
+}
 export type NativeVoiceText = NativeVoiceTarget & { text: string };
 export type { NativeVoiceAction } from "@pwragent/shared/native-voice-action";
 import type { NativeVoiceAction } from "@pwragent/shared/native-voice-action";
@@ -48,7 +61,7 @@ export type OpenVoiceManagerResponse =
 export type NativeVoiceApi = {
   nativeVoiceCapability: () => Promise<NativeVoiceCapability>;
   startNativeVoice: (request: NativeVoiceStart) => Promise<void>;
-  stopNativeVoice: (request: NativeVoiceTarget) => Promise<void>;
+  stopNativeVoice: (request: NativeVoiceStop) => Promise<void>;
   sendNativeVoiceText: (request: NativeVoiceText) => Promise<void>;
   onNativeVoiceEvent: (callback: (event: NativeVoiceEvent) => void) => () => void;
   sendNativeVoiceCameraCue?: (request: VoiceCameraCue) => Promise<void>;

@@ -42,9 +42,17 @@
 }
 .native-voice__text {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin-top: 6px;
+}
+/* Its own line under the field, so a long reason never squeezes the input. */
+.native-voice__text-error {
+  flex: 0 0 100%;
+  margin: 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
 }
 .native-voice__input {
   flex: 1;
