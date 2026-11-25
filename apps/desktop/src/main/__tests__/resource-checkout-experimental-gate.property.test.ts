@@ -8,12 +8,15 @@ import type { AppServerPendingRequestNotification } from "@pwragent/shared/contr
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { openResourceCheckoutStore } from "@pwragent/sqlite-storage/resource-checkout-store";
-import type { AgentToolMcpServerLike } from "../agent-tools/agent-tool-mcp-server";
+import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
+import type { AgentToolHttpMcpServerConfig } from "../agent-tools/agent-tool-mcp-server";
 import { createResourceCheckoutToolHandler } from "../agent-tools/pwragent-resource-checkout-agent-tools";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { DesktopResourceCheckoutService } from "../resource-checkouts/resource-checkout-service";
 import {
-  createKimiAcpRegistry,
+  createAcpAgentStoreMock,
+  createAcpSessionStoreMock,
+  createKimiAgentRecord,
   createOverlayStoreMock,
   MockBackendClient,
 } from "./helpers/backend-registry-fixture";
@@ -306,90 +309,151 @@ describe("resource checkout experimental gate", () => {
       .toMatchObject({ state: "ended" });
   });
 
-  it("gates Claude and ACP MCP listing and tool calls across arbitrary toggle sequences", async () => {
+  it("gates the MCP registration delivered to ACP across flag and checkout changes", async () => {
     let enabled = false;
     let hasCheckout = false;
     const backend = "acp:kimi" as const;
     const threadId = "kimi-session-1";
-    const { registry } = createKimiAcpRegistry({
-      startPrompt: vi.fn((params) => ({ sessionId: params.sessionId, turnId: params.turnId! })),
+    const client = new McpClient({ name: "acp-checkout-gate-fixture", version: "1.0.0" });
+    const promptStarted = Promise.withResolvers<void>();
+    const finishPrompt = Promise.withResolvers<void>();
+    const transport = new class extends FakeAcpAgentTransport {
+      override async request(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<unknown> {
+        if (method === "session/new") {
+          // Connect as the provider receives the registration, before it
+          // assigns the session ID that the registry must bind it to.
+          const servers = (params?.mcpServers ?? []) as AgentToolHttpMcpServerConfig[];
+          const server = servers.find(({ name, type }) => name === "pwragent" && type === "http");
+          if (!server) throw new Error("ACP session/new did not receive the PwrAgent HTTP MCP registration.");
+          const headers = Object.fromEntries(server.headers.map(({ name, value }) => [name, value]));
+          await client.connect(new StreamableHTTPClientTransport(new URL(server.url), { requestInit: { headers } }));
+        }
+        if (method === "session/prompt") {
+          promptStarted.resolve();
+          await finishPrompt.promise;
+          this.emitSessionUpdate(threadId, {
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: "Done." },
+          });
+          return { stopReason: "end_turn" };
+        }
+        return await super.request(method, params, timeoutMs);
+      }
+    }({
+      initialize: { protocolVersion: 1, agentCapabilities: { mcpCapabilities: { http: true } } },
+      "session/new": { sessionId: threadId },
     });
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([createKimiAgentRecord(backend)]),
+      acpSessionStore: createAcpSessionStoreMock([]),
+      createAcpTransport: () => transport,
+      threadTitleGenerationService: null,
+    });
+    onTestFinished(async () => {
+      finishPrompt.resolve();
+      try {
+        await client.close();
+      } finally {
+        await registry.close();
+      }
+    });
+
     const handler = vi.fn(async () => []);
     registry.setResourceCheckoutHandler(
       handler, undefined, () => enabled,
       (ownerBackend, ownerThreadId) => hasCheckout && ownerBackend === backend && ownerThreadId === threadId,
     );
 
-    const client = new McpClient({ name: "acp-checkout-gate-fixture", version: "1.0.0" });
-    onTestFinished(async () => {
-      await client.close();
-      await registry.close();
+    const thread = await registry.startThread({ backend, cwd: "/repo", executionMode: "default" });
+    expect(thread.threadId).toBe(threadId);
+    const listCheckoutTools = async () => (await client.listTools()).tools
+      .map(({ name }) => name)
+      .filter((name) => name.startsWith("resource_checkout_"));
+    const discover = async () => await client.callTool({ name: "resource_checkout_discover", arguments: {} });
+    expect(await listCheckoutTools()).toEqual([]);
+
+    enabled = true;
+    expect(await discover()).toMatchObject({ isError: true });
+    expect(handler).not.toHaveBeenCalled();
+
+    const { turnId } = await registry.startTurn({
+      backend, threadId, input: [{ type: "text", text: "Check resources" }],
     });
+    await promptStarted.promise;
+    const context = expect.objectContaining({ backend, threadId, turnId });
+    const allTools = [...RESOURCE_CHECKOUT_TOOLS].sort();
+    expect(await listCheckoutTools()).toEqual(allTools);
+    expect((await discover()).isError).not.toBe(true);
+    expect(handler).toHaveBeenCalledExactlyOnceWith("resource_checkout_discover", {}, context);
 
-    await registry.startThread({ backend, cwd: "/repo", executionMode: "default" });
-    await registry.startTurn({ backend, threadId, input: [{ type: "text", text: "Check resources" }] });
-    const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike })
-      .claudeAgentToolMcpServer;
-    const registration = await server.registerClient({ backend, threadId });
-    await client.connect(
-      new StreamableHTTPClientTransport(new URL(registration.server.url), {
-        requestInit: {
-          headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])),
-        },
-      }),
-    );
+    // Disabling the flag hides the catalog immediately for a nonholder on this connection.
+    enabled = false;
+    expect(await listCheckoutTools()).toEqual([]);
+    handler.mockClear();
+    expect(await discover()).toMatchObject({ isError: true });
+    expect(handler).not.toHaveBeenCalled();
 
-    const stepArb = fc.record({
-      nextEnabled: fc.boolean(),
-      hasCheckout: fc.boolean(),
-      tool: fc.constantFrom<CheckoutTool>(...RESOURCE_CHECKOUT_TOOLS),
+    enabled = true;
+    expect(await listCheckoutTools()).toEqual(allTools);
+
+    // The same client can still call cleanup tools from its previous listing.
+    hasCheckout = true;
+    expect(await listCheckoutTools()).toEqual(allTools);
+    enabled = false;
+    const resourceId = "machine:fixture:cpu";
+    const status = { resourceId, idempotencyKey: "request" };
+    const request = {
+      action: { kind: "request", resourceId, idempotencyKey: "new", purpose: "Fixture work", expectedDurationMs: 5_000 },
+    };
+    for (const ownsCheckout of [true, false]) {
+      hasCheckout = ownsCheckout;
+      expect(await listCheckoutTools()).toEqual(ownsCheckout ? CHECKOUT_CLEANUP_TOOLS : []);
+      handler.mockClear();
+      expect((await client.callTool({ name: "resource_checkout_status", arguments: status })).isError).not.toBe(true);
+      expect(handler).toHaveBeenCalledExactlyOnceWith("resource_checkout_status", status, context);
+
+      handler.mockClear();
+      for (const name of RESOURCE_CHECKOUT_TOOLS.filter((tool) => tool !== "resource_checkout_status")) {
+        const args = name === "resource_checkout_action" ? request : {};
+        expect(await client.callTool({ name, arguments: args })).toMatchObject({ isError: true });
+      }
+      expect(handler).not.toHaveBeenCalled();
+
+      if (ownsCheckout) {
+        for (const action of [
+          { kind: "release", resourceId, idempotencyKey: "release", allocationId: "grant", generation: 1 },
+          { kind: "cancel_request", resourceId, idempotencyKey: "cancel", queueEntryId: "queued" },
+        ]) {
+          handler.mockClear();
+          const args = { action };
+          expect((await client.callTool({ name: "resource_checkout_action", arguments: args })).isError).not.toBe(true);
+          expect(handler).toHaveBeenCalledExactlyOnceWith("resource_checkout_action", args, context);
+        }
+      }
+    }
+
+    enabled = true;
+    expect(await listCheckoutTools()).toEqual(allTools);
+    handler.mockClear();
+    expect((await discover()).isError).not.toBe(true);
+    expect(handler).toHaveBeenCalledExactlyOnceWith("resource_checkout_discover", {}, context);
+
+    const turnFinished = Promise.withResolvers<string>();
+    const unsubscribe = registry.onEvent((event) => {
+      const { notification } = event;
+      if (event.backend === backend
+        && (notification.method === "turn/completed" || notification.method === "turn/failed" || notification.method === "turn/cancelled")
+        && notification.params.threadId === threadId && notification.params.turnId === turnId) {
+        turnFinished.resolve(notification.method);
+      }
     });
-
-    await fc.assert(
-      fc.asyncProperty(
-        fc.array(stepArb, { minLength: 1, maxLength: 6 }),
-        async (steps) => {
-          for (const step of steps) {
-            enabled = step.nextEnabled;
-            hasCheckout = step.hasCheckout;
-            handler.mockClear();
-
-            const listed = (await client.listTools()).tools
-              .map(({ name }) => name)
-              .filter((name) => name.startsWith("resource_checkout_"));
-            expect(listed).toEqual(enabled ? [...RESOURCE_CHECKOUT_TOOLS].sort()
-              : hasCheckout ? CHECKOUT_CLEANUP_TOOLS : []);
-
-            if (enabled) {
-              const result = await client.callTool({
-                name: "resource_checkout_discover",
-                arguments: {},
-              });
-              expect(result.isError).not.toBe(true);
-              expect(handler).toHaveBeenCalledTimes(1);
-            } else if (step.tool === "resource_checkout_status" || (hasCheckout && step.tool === "resource_checkout_action")) {
-              const args = step.tool === "resource_checkout_status"
-                ? { resourceId: "machine:fixture:cpu", idempotencyKey: "request" }
-                : { action: { kind: "release", resourceId: "machine:fixture:cpu", allocationId: "grant",
-                    generation: 1, idempotencyKey: "release" } };
-              const result = await client.callTool({ name: step.tool, arguments: args });
-              expect(result.isError).not.toBe(true);
-              expect(handler).toHaveBeenCalledExactlyOnceWith(step.tool, args, expect.objectContaining({ backend, threadId }));
-            } else {
-              let refused = false;
-              try {
-                const result = await client.callTool({ name: step.tool, arguments: {} });
-                refused = result.isError === true;
-              } catch {
-                refused = true;
-              }
-              expect(refused).toBe(true);
-              expect(handler).not.toHaveBeenCalled();
-            }
-          }
-        },
-      ),
-      { numRuns: 20 },
-    );
+    onTestFinished(unsubscribe);
+    finishPrompt.resolve();
+    expect(await turnFinished.promise).toBe("turn/completed");
+    handler.mockClear();
+    expect(await discover()).toMatchObject({ isError: true });
+    expect(handler).not.toHaveBeenCalled();
   });
 });
