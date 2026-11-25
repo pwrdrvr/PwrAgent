@@ -140,6 +140,13 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     const menu = app.window.getByRole("dialog", { name: "Model for the new thread", exact: true });
     const readyRows = menu.getByRole("listbox", { name: "Ready settings" }).getByRole("option");
     await expect(readyRows.first()).toBeFocused();
+    // The panel fills in after it opens: the Recent rows and the provider
+    // come from requests still in flight. "GPT-5.4" alone was also in the
+    // catalog shown before them, so on a slow Windows runner ArrowDown ran
+    // before the row it moves to existed, and focus stayed put.
+    const recentXhigh = menu.getByRole("option", { name: /GPT-5.5, xhigh effort/ });
+    await expect(recentXhigh).toBeVisible();
+    await expect(menu.getByRole("listbox", { name: "Provider" }).getByRole("option", { name: "OpenAI" })).toBeVisible();
     await expect(menu).toContainText("GPT-5.4");
     // The panel opens beside the chip (under it when it fits, else above),
     // never over it, and stays inside the window.
@@ -151,7 +158,7 @@ test("picks dispatch settings with the keyboard and remembers them on the raisin
     expect(menuBox!.x + menuBox!.width).toBeLessThanOrEqual(viewportWidth - 8 + 0.5);
     await menu.screenshot({ path: testInfo.outputPath("todo-dispatch-popover.png"), animations: "disabled" });
     await readyRows.first().press("ArrowDown");
-    await expect(menu.getByRole("option", { name: /GPT-5.5, xhigh effort/ })).toBeFocused();
+    await expect(recentXhigh).toBeFocused();
     await app.window.keyboard.press("Enter");
     await expect(menu).not.toBeVisible();
     await expect(chip).toHaveAccessibleName(/GPT-5.5, xhigh effort/);
