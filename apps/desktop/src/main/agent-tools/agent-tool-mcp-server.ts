@@ -118,6 +118,7 @@ export type AgentToolMcpClientContext = {
   backend: AppServerBackendKind;
   threadId?: string;
   memoryOnly?: boolean;
+  managedReview?: boolean;
   observeJobMonitorCatalog?: boolean;
 };
 
@@ -154,16 +155,23 @@ export type AgentToolMcpServerLike = {
   close(): Promise<void>;
 };
 
+export type AgentToolMcpCatalogId =
+  | ResolvedAgentToolCatalog["id"]
+  | "managed_review";
+
 /**
  * `id` is required: `authorizeToolCall` resolves a catalog's RBAC category
  * from it, and a catalog without one would dispatch every tool it owns with no
  * permission check rather than failing closed.
  */
-export type AgentToolMcpCatalog = Pick<ResolvedAgentToolCatalog, "id" | "router">;
+export type AgentToolMcpCatalog = {
+  id: AgentToolMcpCatalogId;
+  router: ResolvedAgentToolCatalog["router"];
+};
 
 export type AgentToolMcpAuthorization = {
   backend: AppServerBackendKind;
-  catalogId?: ResolvedAgentToolCatalog["id"];
+  catalogId?: AgentToolMcpCatalogId;
   threadId: string;
   tool: string;
   turnId: string;
@@ -320,6 +328,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const normalizedContext = {
       backend: context.backend,
       ...(context.memoryOnly ? { memoryOnly: true } : {}),
+      ...(context.managedReview ? { managedReview: true } : {}),
       ...(normalizedThreadId ? { threadId: normalizedThreadId } : {}),
     };
     this.contextsByToken.set(token, normalizedContext);
@@ -474,11 +483,13 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           resources: {},
           extensions: { [PWRAGENT_SKILLS_EXTENSION]: {} },
         },
-        instructions: buildPwrAgentMcpInstructions(toolNames)
-          + (deferTools
-            ? ` ${ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS}` : "")
-          + (isAntigravity && toolNames.includes("search_mcp_tools") && toolNames.includes("call_mcp_tool")
-            ? ` ${ANTIGRAVITY_MCP_CONNECTION_INSTRUCTIONS}` : ""),
+        instructions: params.clientContext.managedReview
+          ? "PwrAgent in-memory review candidate ledger for this review turn."
+          : buildPwrAgentMcpInstructions(toolNames)
+            + (deferTools
+              ? ` ${ANTIGRAVITY_TOOL_DISCOVERY_INSTRUCTIONS}` : "")
+            + (isAntigravity && toolNames.includes("search_mcp_tools") && toolNames.includes("call_mcp_tool")
+              ? ` ${ANTIGRAVITY_MCP_CONNECTION_INSTRUCTIONS}` : ""),
       },
     );
     mcpServer.setRequestHandler(ListSkillsRequestSchema, async (request) => {
@@ -936,7 +947,9 @@ function unsupportedMcpTool(): AgentMcpToolCallResponse {
 }
 
 function usesAntigravityCatalog(context: AgentToolMcpClientContext): boolean {
-  return context.backend === "acp:antigravity" && !context.memoryOnly;
+  return context.backend === "acp:antigravity"
+    && !context.memoryOnly
+    && !context.managedReview;
 }
 
 function canDeferAntigravityTools(discoveryTools: readonly AgentMcpTool[]): boolean {
@@ -948,7 +961,12 @@ function boundThreadKey(
   context: AgentToolMcpClientContext,
   threadId: string,
 ): string {
-  return JSON.stringify([context.backend, threadId, context.memoryOnly === true]);
+  return JSON.stringify([
+    context.backend,
+    threadId,
+    context.memoryOnly === true,
+    context.managedReview === true,
+  ]);
 }
 
 function readBearerToken(value: string | undefined): string | undefined {

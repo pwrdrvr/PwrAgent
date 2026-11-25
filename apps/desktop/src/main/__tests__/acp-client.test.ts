@@ -37,6 +37,60 @@ afterEach(() => {
   removeTempStateDbDir(tempDir);
 });
 
+it("persists ordinary ACP activity but strips review ledger payloads across tool updates", async () => {
+  await fc.assert(fc.asyncProperty(fc.constantFrom(
+    { name: "mcp_pwragent_record_review_candidate" },
+    { title: "dispose_review_candidate" },
+    { rawInput: { variant: "UseTool", tool_name: "list_review_candidates" } },
+  ), async (identity) => {
+    const transport = new FakeAcpAgentTransport();
+    const rolloutStore = new AcpRolloutStore(mkdtempSync(path.join(tempDir, "review-rollout-")));
+    const backendId = "acp:antigravity";
+    const client = new AcpAgentClient({
+      backendId, store, transport, rolloutStore,
+      mcpServers: () => ({
+        servers: [{ type: "http", name: "pwragent", url: "http://127.0.0.1/mcp", headers: [] }],
+        managedReviewLedgerAvailable: true,
+      }),
+    });
+    try {
+      await client.initialize();
+      const { sessionId } = await client.startSession({
+        cwd: "/repo", executionMode: "default", managedReview: true,
+      });
+      transport.emitSessionUpdate(sessionId, {
+        sessionUpdate: "tool_call", toolCallId: "ledger", status: "pending",
+        ...identity,
+        rawInput: { ...("rawInput" in identity ? identity.rawInput : {}), input: "private-candidate-input" },
+      });
+      transport.emitSessionUpdate(sessionId, {
+        sessionUpdate: "tool_call", toolCallId: "ordinary", title: "read_file", status: "pending",
+        rawInput: { path: "ordinary-source.ts" },
+      });
+      transport.emitSessionUpdate(sessionId, {
+        sessionUpdate: "tool_call_update", toolCallId: "ledger", status: "completed",
+        rawOutput: "private-candidate-result",
+        content: [{ type: "content", content: { type: "text", text: "private-candidate-result" } }],
+        _meta: { output: "private-candidate-result" },
+      });
+      const updates = rolloutStore.readUpdates({ backendId, sessionId }).map((record) => record.update);
+      expect(JSON.stringify(updates)).not.toContain("private-candidate-");
+      expect(updates).toContainEqual(expect.objectContaining({
+        toolCallId: "ordinary", rawInput: { path: "ordinary-source.ts" },
+      }));
+      expect(updates).toContainEqual(expect.objectContaining({
+        toolCallId: "ledger", status: "completed",
+      }));
+    } finally {
+      await client.dispose();
+    }
+  }), { numRuns: 3, examples: [
+    [{ name: "mcp_pwragent_record_review_candidate" }],
+    [{ title: "dispose_review_candidate" }],
+    [{ rawInput: { variant: "UseTool", tool_name: "list_review_candidates" } }],
+  ] });
+});
+
 it("keeps Grok planning provenance when selecting permissions and receiving mode updates", async () => {
   const configOptions = [{
     id: "permission_mode",

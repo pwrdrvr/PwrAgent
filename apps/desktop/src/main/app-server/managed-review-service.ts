@@ -2,7 +2,7 @@ import type { TurnEventDelivery, TurnEventObserver } from "./turn-event-observer
 import { errorMessageFromTerminalNotification, turnIdFromTerminalNotification } from "./backend-registry-notifications";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
-import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
+import { buildPendingTurnId, isPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
   buildThreadIdentityKey,
   isAcpBackendId,
@@ -70,11 +70,14 @@ import type {
   ReviewSubAgentRecord,
   ReviewTerminal,
 } from "./backend-registry-types";
-import { buildCodexTokenMiserDynamicToolSpecs } from "./codex-thread-config";
+import { buildCodexTokenMiserDynamicToolSpecs, mergeCodexDynamicToolSpecs } from "./codex-thread-config";
 import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
 import { buildManagedReviewPrompt, managedReviewAcpRuntime } from "./managed-review";
+import { ManagedReviewCandidateLedger } from "./managed-review-candidate-ledger";
+import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
+import { localMemberRole } from "../member-containment";
 import { prepareClaudeCodeReview, validateClaudeCodeReview } from "./claude-code-review-start";
 import { resolvePullRequestReview, resolvePullRequestSetReview } from "./pull-request-review";
 import type { RegistryContext, RegistryHost } from "./registry-context";
@@ -178,15 +181,22 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
 export class ManagedReviewService {
   private readonly context: RegistryContext;
   private readonly host: RegistryHost<ManagedReviewServiceHost>;
+  readonly candidateLedger: ManagedReviewCandidateLedger;
   private readonly operatorReviewInputs = new Map<string, OperatorReviewInput>();
   private readonly drainingReviewTerminals = new Set<string>();
 
   constructor(
     context: RegistryContext,
     host: RegistryHost<ManagedReviewServiceHost>,
+    candidateLedger = new ManagedReviewCandidateLedger(),
   ) {
     this.context = context;
     this.host = host;
+    this.candidateLedger = candidateLedger;
+  }
+
+  clearCandidateLedger(): void {
+    this.candidateLedger.clearAll();
   }
 
   observeOperatorReviewInput(turn: { backend: AppServerBackendKind; threadId: string; turnId: string }, source?: TurnInputSource): void {
@@ -241,25 +251,31 @@ export class ManagedReviewService {
         delivery.event = { ...event, relatedReviewTurnId };
       }
     }
-    if (turnId) {
-      await this.completeReviewSubAgent({
-        backend: event.backend,
-        completedAt: completedAtFromTerminalNotification(event.notification),
-        errorMessage: errorMessageFromTerminalNotification(event.notification),
-        method: event.notification.method,
-        threadId: notification.params.threadId,
-        turnId,
+    if (!turnId) return;
+    const turn = { backend: event.backend, threadId: notification.params.threadId, turnId };
+    const ledgerSummary = managedReview?.mode === "managed" ? this.candidateLedger.snapshot(turn) : undefined;
+    // Once terminal ingress has fenced the tools, only the counts are needed.
+    // Dispose before any card write or duplicate terminal can intervene.
+    this.candidateLedger.clearTurn(turn);
+    await this.completeReviewSubAgent({
+      ...turn,
+      completedAt: completedAtFromTerminalNotification(notification),
+      errorMessage: errorMessageFromTerminalNotification(notification),
+      method: notification.method,
+    }).catch((error) => {
+      if (managedReview?.mode !== "managed") throw error;
+      // Card bookkeeping must not prevent publishing the managed review
+      // result or delivering the terminal to its parent.
+      backendRegistryLog.warn("could not persist managed review sub-agent terminal", {
+        ...turn, error: String(error),
       });
-    }
-    if (managedReview?.mode === "managed") {
+    });
+    if (managedReview && ledgerSummary) {
       await this.publishManagedReviewTerminal({
-        method: event.notification.method,
-        notification: event.notification as Extract<
-          AppServerNotification,
-          { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
-        >,
+        method: notification.method,
+        notification,
         record: managedReview,
-      });
+      }, ledgerSummary);
     }
   }
 
@@ -953,20 +969,35 @@ export class ManagedReviewService {
         // turn below applies the two together.
         reasoningEffort: acpRuntime?.reasoningEffort,
         hidden: true,
+        managedReview: true,
       });
-      const turn = await this.host().startAcpTurn({
-        backend: params.backend,
-        threadId: thread.threadId,
-        input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
-        model: params.modelSettings.model,
-        reasoningEffort: params.modelSettings.reasoningEffort,
-        requiredAntigravityMode: params.agentAntigravityAccess?.mode,
-      });
-      return {
-        threadId: params.parentThreadId,
-        reviewThreadId: turn.threadId,
-        turnId: turn.turnId,
-      };
+      const candidateLedger = thread.managedReviewLedgerAvailable === true;
+      try {
+        const turn = await this.host().startAcpTurn({
+          backend: params.backend,
+          threadId: thread.threadId,
+          input: [{
+            type: "text",
+            text: buildManagedReviewPrompt(params.target, { candidateLedger }),
+          }],
+          model: params.modelSettings.model,
+          reasoningEffort: params.modelSettings.reasoningEffort,
+          requiredAntigravityMode: params.agentAntigravityAccess?.mode,
+          ...(candidateLedger ? { managedReviewLedger: true } : {}),
+        });
+        return {
+          threadId: params.parentThreadId,
+          reviewThreadId: turn.threadId,
+          turnId: turn.turnId,
+        };
+      } catch (error) {
+        this.context.providers.acp.retireManagedReviewSession(params.backend, thread.threadId);
+        this.candidateLedger.clearThread({
+          backend: params.backend,
+          threadId: thread.threadId,
+        });
+        throw error;
+      }
     }
 
     const executionMode = inheritsParentSession
@@ -989,6 +1020,14 @@ export class ManagedReviewService {
     const tokenMiserDynamicTools = params.tokenMiserEnabled
       ? buildCodexTokenMiserDynamicToolSpecs(this.host().tokenMiserStore, this.host().tokenMiserService?.focused)
       : [];
+    const candidateLedger = localMemberRole() !== "contained";
+    const reviewLedgerDynamicTools = candidateLedger
+      ? buildManagedReviewLedgerToolRouter(this.candidateLedger).buildDynamicToolSpecs()
+      : [];
+    const dynamicTools = mergeCodexDynamicToolSpecs([
+      ...tokenMiserDynamicTools,
+      ...reviewLedgerDynamicTools,
+    ]);
     const thread = await this.host().withArchiveWorkspaceWrite(params.cwd ? [params.cwd] : [], async () => await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
@@ -1005,8 +1044,8 @@ export class ManagedReviewService {
         : {}),
       ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
       ...(pwrdrvrTokenMiser ? { pwrdrvrTokenMiser } : {}),
-      ...(tokenMiserDynamicTools.length > 0
-        ? { dynamicTools: tokenMiserDynamicTools }
+      ...(dynamicTools.length > 0
+        ? { dynamicTools }
         : {}),
     }));
     let managedReviewChildKey = buildThreadIdentityKey(
@@ -1017,12 +1056,18 @@ export class ManagedReviewService {
       parentBackend: params.parentBackend,
       parentThreadId: params.parentThreadId,
     });
+    if (candidateLedger) {
+      this.candidateLedger.armToolTurn({ backend: "codex", threadId: thread.threadId }, null);
+    }
     const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
     try {
       const turn = await client.startTurn({
         ...params.turnAttribution,
         threadId: thread.threadId,
-        input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
+        input: [{
+          type: "text",
+          text: buildManagedReviewPrompt(params.target, { candidateLedger }),
+        }],
         ...(params.cwd ? { cwd: params.cwd } : {}),
         approvalPolicy: modeSettings.approvalPolicy,
         approvalsReviewer: modeSettings.approvalsReviewer,
@@ -1045,6 +1090,7 @@ export class ManagedReviewService {
           managedReviewChildKey,
         );
         this.context.turnState.unlinkReviewChild(managedReviewChildKey);
+        this.candidateLedger.clearThread({ backend: "codex", threadId: thread.threadId });
         managedReviewChildKey = startedReviewChildKey;
         if (parent) {
           this.context.turnState.linkReviewChild(
@@ -1052,6 +1098,9 @@ export class ManagedReviewService {
             parent,
           );
         }
+      }
+      if (!isPendingTurnId(turn.threadId, turn.turnId)) {
+        this.candidateLedger.confirmToolTurn({ backend: "codex", threadId: turn.threadId, turnId: turn.turnId });
       }
       this.context.turnState.registerTurn(
         { backend: "codex", threadId: turn.threadId, turnId: turn.turnId },
@@ -1066,6 +1115,10 @@ export class ManagedReviewService {
         turnId: turn.turnId,
       };
     } catch (error) {
+      this.candidateLedger.clearThread({
+        backend: "codex",
+        threadId: thread.threadId,
+      });
       this.context.turnState.unlinkReviewChild(managedReviewChildKey);
       throw error;
     } finally {
@@ -1836,14 +1889,17 @@ export class ManagedReviewService {
     );
   }
 
-  async publishManagedReviewTerminal(params: {
-    method: "turn/completed" | "turn/failed" | "turn/cancelled";
-    notification: Extract<
-      AppServerNotification,
-      { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
-    >;
-    record: ReviewSubAgentRecord;
-  }): Promise<void> {
+  private async publishManagedReviewTerminal(
+    params: {
+      method: "turn/completed" | "turn/failed" | "turn/cancelled";
+      notification: Extract<
+        AppServerNotification,
+        { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
+      >;
+      record: ReviewSubAgentRecord;
+    },
+    ledgerSummary: { total: number; pending: number; keep: number; drop: number },
+  ): Promise<void> {
     const completedAt =
       completedAtFromTerminalNotification(params.notification) ?? Date.now();
     const completedItemOutput = this.takeManagedReviewOutput(params.record);
@@ -1907,6 +1963,14 @@ export class ManagedReviewService {
         reviewThreadId: params.record.reviewThreadId,
         structured: Boolean(parsed),
         turnId: params.record.turnId,
+        ...(ledgerSummary.total > 0
+          ? {
+              candidateLedgerTotal: ledgerSummary.total,
+              candidateLedgerKeep: ledgerSummary.keep,
+              candidateLedgerDrop: ledgerSummary.drop,
+              candidateLedgerPending: ledgerSummary.pending,
+            }
+          : {}),
       });
       await this.context.emit({
         backend: params.record.parentBackend,
