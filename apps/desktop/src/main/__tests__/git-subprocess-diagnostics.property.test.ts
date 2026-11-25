@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { expect, it } from "vitest";
 import { GitSubprocessDiagnostics, prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 
-const callers = ["pr-scheduled-prefetch", "pr-live-branch-lookup", "pr-stored-attachment-validation"] as const;
+const callers = ["pr-scheduled-prefetch", "pr-live-branch-lookup", "pr-stored-attachment-validation", "pr-owner-navigation-inventory"] as const;
 
 it("counts every attributed start by caller when all directory rows are occupied", () => {
   fc.assert(fc.property(
@@ -23,7 +23,7 @@ it("counts every attributed start by caller when all directory rows are occupied
       expect(starts.startsByCaller).toEqual(Object.fromEntries(callers.map((caller) =>
         [caller, overflowCallers.filter((candidate) => candidate === caller).length],
       )));
-      expect(Object.values(completions.startsByCaller)).toEqual([0, 0, 0]);
+      expect(Object.values(completions.startsByCaller)).toEqual(callers.map(() => 0));
       expect(completions.totals.succeeded).toBe(overflowCallers.length);
       expect(completions.rows.map((row) => row.caller)).toEqual(overflowCallers.slice(0, 32));
       expect(completions.overflow.succeeded).toBe(overflowCallers.length - 32);

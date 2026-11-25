@@ -24,6 +24,7 @@ export function primaryCheckoutKey(thread: ThreadWorkspace): string {
 export function readStoredPrimaryThreadRepository(thread: ThreadWorkspace): {
   key?: string;
   canProbe: boolean;
+  conclusiveSampleOrder?: number;
 } {
   const { path, origin } = primaryCheckout(thread);
   const observation = path ? readObservedGitOrigin(path) : undefined;
@@ -31,13 +32,14 @@ export function readStoredPrimaryThreadRepository(thread: ThreadWorkspace): {
   return {
     key: repo && buildPrRepositoryKey(repo.host, repo.owner, repo.repo),
     canProbe: Boolean(path && !observation?.conclusive && (observation?.retryAt ?? 0) <= Date.now()),
+    conclusiveSampleOrder: observation?.conclusive ? observation.sampleOrder : undefined,
   };
 }
 
 export async function resolvePrimaryThreadRepoKey(
   thread: ThreadWorkspace,
   resolutionByPath = new Map<string, Promise<string | undefined>>(),
-  options?: Pick<ResolveGitHubRepoOptions, "demand" | "fresh" | "confirmEmpty">,
+  options?: Pick<ResolveGitHubRepoOptions, "demand" | "fresh" | "confirmEmpty" | "inventoryConfig" | "onOriginSample">,
 ): Promise<string | undefined> {
   options?.demand?.signal?.throwIfAborted();
   // The owning checkout's current origin wins over session-start metadata:

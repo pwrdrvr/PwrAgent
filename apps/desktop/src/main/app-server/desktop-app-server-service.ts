@@ -36,6 +36,8 @@ import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
+import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
+import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 import { getDesktopStackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
@@ -2843,18 +2845,20 @@ class DesktopAppServerService {
     threads: NavigationSnapshot["threads"],
     options: { replace: boolean; isCurrent?: () => boolean; resolveUnattached?: boolean; inventoryDemand?: PrMetadataDemand },
   ): Promise<void> {
-    const primaryRepoResolutionByPath = new Map<
-      string,
-      Promise<string | undefined>
-    >();
-    const primaryRepoKeys = await Promise.all(threads.map((thread) => {
+    const inventoryConfig = options.inventoryDemand && createInventoryRemoteConfigReader();
+    const primaryRepoResolutionByPath = new Map<string, Promise<string | undefined>>();
+    const freshPrimaryRepoResolutionByPath = new Map<string, Promise<string | undefined>>();
+    const storedRepositories = options.inventoryDemand
+      ? threads.map((thread) => thread.prs?.length ? readStoredPrimaryThreadRepository(thread) : undefined)
+      : undefined;
+    const primaryRepoKeys = await Promise.all(threads.map((thread, index) => {
       if (!options.inventoryDemand) {
         return thread.prs?.length || options.resolveUnattached
           ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath)
           : undefined;
       }
-      if (!thread.prs?.length) return undefined;
-      const stored = readStoredPrimaryThreadRepository(thread);
+      const stored = storedRepositories?.[index];
+      if (!stored || !thread.prs?.length) return undefined;
       const previous = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
       const workspaceChanged = previous?.workspace && primaryCheckoutKey(previous.workspace) !== primaryCheckoutKey(thread);
       const live = thread.prs.filter((pr) => !isTerminalPullRequest(pr));
@@ -2863,9 +2867,10 @@ class DesktopAppServerService {
       const unresolved = !stored.key || (live.length > 0
         && !live.some((pr) => this.matchesPrimaryRepository(pr, stored.key)));
       return workspaceChanged || (stored.canProbe && unresolved)
-        ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath, {
-            demand: options.inventoryDemand, ...(workspaceChanged ? { fresh: true } : {}),
-          })
+        ? prGitSubprocessCaller.run("pr-owner-navigation-inventory", () =>
+            resolvePrimaryThreadRepoKey(thread, workspaceChanged ? freshPrimaryRepoResolutionByPath : primaryRepoResolutionByPath, {
+              demand: options.inventoryDemand, ...(workspaceChanged ? { fresh: true } : { inventoryConfig }),
+            }))
         : stored.key;
     }));
     const liveThreadKeys = new Set<string>();
@@ -2874,7 +2879,12 @@ class DesktopAppServerService {
       if (options.isCurrent && !options.isCurrent()) return;
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       liveThreadKeys.add(threadKey);
-      const primaryRepoKey = primaryRepoKeys[index];
+      const stored = storedRepositories?.[index];
+      const current = stored && readStoredPrimaryThreadRepository(thread);
+      // A checkout read can supersede inventory while the rest of the batch
+      // is still running. A new conclusive absence also replaces an old key.
+      const primaryRepoKey = current?.conclusiveSampleOrder !== undefined
+        && current.conclusiveSampleOrder > (stored?.conclusiveSampleOrder ?? 0) ? current.key : primaryRepoKeys[index];
       this.setThreadPrAttachment(threadKey, {
         backend: thread.source,
         workspace: { gitOriginUrl: thread.gitOriginUrl, linkedDirectories: thread.linkedDirectories },
@@ -2923,7 +2933,7 @@ class DesktopAppServerService {
       },
     );
     if (params.prs.length > 0 && !current?.primaryRepoKey) {
-      const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params);
+      const primaryRepoKey = (await this.resolveUncachedPrimaryRepository(params))?.key;
       // Patch only the key onto whatever list is now current. A refresh may
       // have supplied a key, or dropped the thread, while this resolved.
       const latest = this.attachedPrsByThreadKey.get(threadKey);
@@ -2940,28 +2950,34 @@ class DesktopAppServerService {
    * that refresh lists it; without this, its PR would not count as primary
    * and the watch tool would refuse it until the next refresh.
    */
-  private async resolveUncachedPrimaryRepoKey(params: {
+  private async resolveUncachedPrimaryRepository(params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }, demand?: PrMetadataDemand, overlay?: ThreadOverlayState, fresh = false): Promise<string | undefined> {
+  }, demand?: PrMetadataDemand, overlay?: ThreadOverlayState, fresh = false) {
     const summary = getDesktopBackendRegistry().getCachedThreadSummary(params)
       ?? this.attachedPrsByThreadKey.get(buildThreadIdentityKey(params.backend, params.threadId))?.workspace;
     if (!summary) return undefined;
     overlay ??= await this.getOverlayStore().getThreadOverlayState(params);
-    return await resolvePrimaryThreadRepoKey({
+    const workspace = {
       gitOriginUrl: summary.gitOriginUrl,
       linkedDirectories: mergeThreadLinkedDirectories([
         ...summary.linkedDirectories,
         ...(overlay?.extraLinkedDirectories ?? []),
       ]),
-    }, undefined, demand ? { demand, confirmEmpty: true, ...(fresh ? { fresh } : {}) } : undefined);
+    };
+    let sampleOrder: number | undefined;
+    const key = await resolvePrimaryThreadRepoKey(workspace, undefined, demand ? {
+      demand, confirmEmpty: true, ...(fresh ? { fresh } : {}),
+      onOriginSample: (order) => { sampleOrder = order; },
+    } : undefined);
+    return { key, workspace, sampleOrder };
   }
 
   /** Repository authority for forge rules, resolved from the current workspace. */
   async resolvePrimaryGitRepository(backend: AppServerBackendKind, threadId: string): Promise<string | undefined> {
-    return this.canonicalPrimaryRepoKey(await this.resolveUncachedPrimaryRepoKey(
+    return this.canonicalPrimaryRepoKey((await this.resolveUncachedPrimaryRepository(
       { backend, threadId }, { priority: () => PR_METADATA_PRIORITY.selected },
-    ));
+    ))?.key);
   }
 
   readPrimaryGitRepository(backend: AppServerBackendKind, threadId: string): string | undefined {
@@ -3097,7 +3113,8 @@ class DesktopAppServerService {
     const overlay = await this.getOverlayStore().getThreadOverlayState(params);
     if (!overlay?.prs?.length) return { overlay, prs: [] };
     const demand = { priority: () => PR_METADATA_PRIORITY.selected };
-    const primaryRepoKey = await this.resolveUncachedPrimaryRepoKey(params, demand, overlay, fresh);
+    const repository = await this.resolveUncachedPrimaryRepository(params, demand, overlay, fresh);
+    const primaryRepoKey = repository?.key;
     const prs = await this.canonicalizeStoredPullRequests(overlay.prs, demand);
     const latest = this.attachedPrsByThreadKey.get(threadKey);
     if (before && (!latest || (before.workspace && latest.workspace
@@ -3107,9 +3124,16 @@ class DesktopAppServerService {
     const updatedKeys = latest && latest !== before
       ? new Set(latest.prs.map((pr) => this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(pr))))
       : undefined;
+    // The action uses its own checkout result. Polling may already have a
+    // newer conclusive origin or a newer confirmation that origin is absent.
+    let pollingRepoKey = primaryRepoKey;
+    if (repository?.sampleOrder !== undefined) {
+      const observed = readStoredPrimaryThreadRepository(repository.workspace);
+      if ((observed.conclusiveSampleOrder ?? 0) > repository.sampleOrder) pollingRepoKey = observed.key;
+    }
     this.setThreadPrAttachment(threadKey, {
       backend: params.backend, prs: this.canonicalizePrs(overlay.prs), ...latest,
-      primaryRepoKey,
+      primaryRepoKey: pollingRepoKey,
     });
     return { overlay, primaryRepoKey, prs: prs.filter((pr) =>
       this.matchesPrimaryRepository(pr, primaryRepoKey) && (!updatedKeys || updatedKeys.has(getPrStatusKey(pr))),
@@ -3659,7 +3683,7 @@ class DesktopAppServerService {
         const canonical = this.applyCanonicalPrStatuses(index.threads);
         const complete = !index.coverage || index.coverage.state === "complete";
         await this.rememberThreadPrAttachments(canonical.threads, {
-          replace: complete, isCurrent, inventoryDemand: { signal: abort.signal, priority: () => PR_METADATA_PRIORITY.page },
+          replace: complete, isCurrent, inventoryDemand: { signal: abort.signal, priority: () => PR_METADATA_PRIORITY.background },
         });
         if (!isCurrent()) continue;
         const ownerThreads = this.applyPrimaryGitRepositories(canonical.threads);
