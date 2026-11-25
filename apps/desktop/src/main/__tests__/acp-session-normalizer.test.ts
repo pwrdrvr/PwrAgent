@@ -599,6 +599,35 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("keeps a wide table intact when ACP splits a bold cell before its closing markers", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const chunks = [
+      "| Shape | Cold | Warm | Per turn | Watch |\n"
+        + "| --- | ---: | ---: | ---: | ---: |\n"
+        + "| Default | 28 | 24 | **12.0",
+      "** | — |\n| Dormant | 26 | 32 | **",
+      "14.0** | — |\n| Fresh | 39 | 42 | **21.0** | — |",
+    ];
+    for (const [index, text] of chunks.entries()) {
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1000 + index,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        },
+      });
+    }
+
+    const replay = normalizer.replay();
+    expect(replay.entries).toMatchObject([
+      { type: "message", phase: "final", text: chunks.join("") },
+    ]);
+    expect(replay.messages).toMatchObject([
+      { role: "assistant", text: chunks.join("") },
+    ]);
+  });
+
   it("records local user prompts as active replay state", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

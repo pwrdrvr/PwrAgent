@@ -1399,6 +1399,7 @@ export class AcpSessionReplayNormalizer {
       existingMessage.text = appendAcpTranscriptChunk(
         existingMessage.text,
         params.text,
+        params.phase,
       );
     } else {
       this.appendMessage({
@@ -1416,6 +1417,7 @@ export class AcpSessionReplayNormalizer {
       existingEntry.text = appendAcpTranscriptChunk(
         existingEntry.text,
         params.text,
+        params.phase,
       );
     } else {
       this.appendEntry(this.withCurrentTurn({
@@ -1473,11 +1475,14 @@ export class AcpSessionReplayNormalizer {
   }
 }
 
-export function appendAcpTranscriptChunk(
+function appendAcpTranscriptChunk(
   existing: string,
   next: string,
+  phase: AppServerTranscriptPhase | undefined,
 ): string {
-  if (!existing || !next) {
+  // Final ACP text is a stream of literal deltas. A chunk can start inside
+  // Markdown syntax, so guessing a paragraph boundary can corrupt the reply.
+  if (phase === "final" || !existing || !next) {
     return `${existing}${next}`;
   }
   if (shouldSeparateTranscriptChunks(existing, next)) {
