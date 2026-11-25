@@ -374,6 +374,7 @@ export type AcpBackendAdapterOptions = {
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
   readAntigravityUsage?: typeof readAntigravityUsage;
+  resolveAntigravityUsageAccountKey?: () => string | undefined;
   /**
    * Required so no caller can silently inherit machine-wide discovery.
    * Production passes `createLocalAcpAgentDiscovery(...)`; tests pass a stub.
@@ -1412,11 +1413,14 @@ export class AcpBackendAdapter {
       // Backend discovery is also used by launchpad and messaging flows.
       // Merge only cached decoration here; provider quota reads must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
+      const reading = providerStatus && this.planLimits.snapshot(agent.backendId);
       return providerStatus
         ? {
             ...summary,
             account: providerStatus.account,
-            rateLimits: this.planLimits.limits(agent.backendId),
+            rateLimits: reading?.limits,
+            rateLimitsObservedAt: reading?.observedAt,
+            rateLimitsAccountKey: reading?.account,
           }
         : summary;
     });
@@ -1602,12 +1606,21 @@ export class AcpBackendAdapter {
   ): Promise<void> {
     try {
       // Reads for the current selection run one at a time.
+      const antigravity = backend === "acp:antigravity";
+      const account = antigravity ? this.options.resolveAntigravityUsageAccountKey?.() : undefined;
       let since = this.planLimits.mark(backend);
       const providerStatus = await read();
       if (!providerStatus || this.closed || !isCurrent()) {
         return;
       }
       this.providerStatuses.set(backend, { account: providerStatus.account });
+      // Quota buckets from a previous account must not fill gaps in this read.
+      // This also covers adding or removing an explicit account group.
+      const previous = antigravity ? this.planLimits.snapshot(backend) : undefined;
+      if (previous?.limits.length && previous.account !== account) {
+        this.planLimits.clear(backend);
+        since = this.planLimits.mark(backend);
+      }
       // A new plan changes the allowance and clears the limits; this reading
       // is the first of the new plan's.
       if (this.planLimits.setAccount(backend, { plan: providerStatus.account?.planType })) {
@@ -1615,6 +1628,7 @@ export class AcpBackendAdapter {
       }
       this.planLimits.record(backend, {
         limits: providerStatus.rateLimits ?? [], since, precise: true, dated: true,
+        ...(antigravity ? { account } : {}),
       });
       await this.emit({
         backend,
@@ -1645,6 +1659,7 @@ export class AcpBackendAdapter {
     return {
       observedAt,
       provider,
+      ...(reading.account !== undefined ? { accountKey: reading.account } : {}),
       planType: reading.plan,
       limits: reading.limits.map((limit) => ({
         name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,

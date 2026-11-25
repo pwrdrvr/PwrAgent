@@ -249,6 +249,30 @@ describe("DesktopBackendRegistry usage turn ends", () => {
       .find((line) => line.turnId === "historical-without-start")?.accountKey).toBeUndefined();
   });
 
+  it("keeps a cached Antigravity reading out of a new account group's history", async () => {
+    const backend = "acp:antigravity";
+    let group = "original-account";
+    const registry = createRegistry([], { resolveUsageAccountGroups: () => ({ [backend]: group }) });
+    const originalAccount = usageAccountKey(undefined, group);
+    const observedAt = Date.now();
+    const { planLimits } = registry.constructionPorts();
+    planLimits.record(backend, {
+      account: originalAccount, precise: true, since: planLimits.mark(backend),
+      limits: [{ name: "Weekly Gemini limit", usedPercent: 20, windowMinutes: 10_080 }],
+    });
+    group = "new-account";
+    await runTurn(registry, backend, "new-account-turn");
+    await internals(registry).emit({ backend, notification: { method: "turn/completed",
+      params: {
+        threadId: "thread-1", turnId: "new-account-turn",
+        turn: { id: "new-account-turn", status: "completed", output: [] },
+      } } });
+    const snapshot = await registry.readUsageActivity({ from: observedAt - 60_000, to: Date.now() + 60_000 });
+    expect(snapshot.rows[0].accountKey).toBe(usageAccountKey(undefined, group));
+    expect(snapshot.limitObservations?.find((reading) => reading.provider === "google")?.accountKey).toBe(originalAccount);
+    expect(snapshot.providerLimitHistory).toEqual([]);
+  });
+
   it("does not relabel a cached limit reading after the explicit account group changes", async () => {
     let group = "original-account";
     const readRateLimits = vi.fn(async () => [{ name: "5h limit", usedPercent: 10, windowMinutes: 300 }]);

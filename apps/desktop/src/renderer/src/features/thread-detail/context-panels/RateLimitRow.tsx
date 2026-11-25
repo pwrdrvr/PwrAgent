@@ -1,5 +1,5 @@
 import { describeRateLimitRow, type BackendRateLimitSummary } from "../../../lib/backend-status-format";
-import { limitSeriesFor, sinceResetSeries, type LimitAccount } from "../../federation-activity/usage-limits";
+import { limitSeriesFor, limitUsageDropped, sinceResetSeries, type LimitAccount } from "../../federation-activity/usage-limits";
 import { describeLimitPace } from "../../federation-activity/usage-activity-presentation";
 
 /**
@@ -15,7 +15,8 @@ export function RateLimitRow({ limit, now, account, labelTooltip }: {
 }) {
   const row = describeRateLimitRow(limit, now);
   const series = limitSeriesFor(account, limit);
-  const described = series && series.latest.usedPercent < 100 && series.latest.resetAt === limit.resetAt
+  const described = series && series.latest.usedPercent < 100 && row.usedPercent !== undefined && row.usedPercent < 100
+    && !limitUsageDropped(series.latest.usedPercent, row.usedPercent) && series.latest.resetAt === limit.resetAt
     && (limit.resetAt === undefined || limit.resetAt > now)
     ? describeLimitPace(series, now, true)
     : undefined;

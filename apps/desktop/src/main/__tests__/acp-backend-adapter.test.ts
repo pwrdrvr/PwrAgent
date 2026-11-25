@@ -4034,6 +4034,53 @@ describe("AcpBackendAdapter", () => {
     }
   });
 
+  it("binds Antigravity quota to the account selected when each probe starts", async () => {
+    const group = fc.option(fc.uuid(), { nil: undefined });
+    await fc.assert(fc.asyncProperty(group, group, async (first, second) => {
+      fc.pre(first !== second);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+      const agent = buildAntigravityQuotaAgent("/fake/agy");
+      const initial = Promise.withResolvers<{ rateLimits: BackendRateLimitSummary[] }>();
+      const weekly = { name: "Weekly Gemini limit", limitId: "gemini", usedPercent: 20 };
+      const readAntigravityUsage = vi.fn()
+        .mockReturnValueOnce(initial.promise)
+        .mockResolvedValueOnce({ rateLimits: [weekly] });
+      let accountKey = first;
+      const adapter = createTestAcpBackendAdapter({
+        captureStores: [],
+        acpAgentStore: {
+          getInstalledAgent: () => agent,
+          listInstalledAgents: () => [agent],
+          upsertInstalledAgent: vi.fn(),
+        },
+        readAntigravityUsage,
+        emit: async () => {},
+        handleServerRequest: async () => ({}),
+        resolveAntigravityUsageAccountKey: () => accountKey,
+      });
+      try {
+        await adapter.describeInstalledBackends(true);
+        expect(readAntigravityUsage).toHaveBeenCalledTimes(1);
+        accountKey = second;
+        initial.resolve({ rateLimits: [weekly, { ...weekly, name: "Weekly Claude/GPT limit", limitId: "claude-gpt" }] });
+        await vi.waitFor(() => expect(adapter.limitObservation(agent.backendId)).toBeDefined());
+        expect(adapter.limitObservation(agent.backendId)?.accountKey).toBe(first);
+        expect((await adapter.describeInstalledBackends())[0]?.rateLimitsObservedAt).toBe(1_800_000_000_000);
+
+        clock.mockReturnValue(1_800_000_600_000);
+        await adapter.describeInstalledBackends(true);
+        await vi.waitFor(() => expect(adapter.limitObservation(agent.backendId)?.observedAt).toBe(1_800_000_600_000));
+        const next = adapter.limitObservation(agent.backendId);
+        expect(next?.accountKey).toBe(second);
+        expect(next?.limits.map((limit) => limit.limitId)).toEqual(["gemini"]);
+        expect((await adapter.describeInstalledBackends())[0]?.rateLimitsObservedAt).toBe(1_800_000_600_000);
+      } finally {
+        await adapter.close();
+        clock.mockRestore();
+      }
+    }), { numRuns: 12, examples: [["account-a", undefined], [undefined, "account-b"]] });
+  });
+
   it("only shows quota from the selected Antigravity executable, including when a retired read finishes late", async () => {
     const oldLimits = [{ name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 20 }];
     // The selected executable determines both quota visibility and eligibility

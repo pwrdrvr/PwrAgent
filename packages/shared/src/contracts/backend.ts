@@ -396,6 +396,10 @@ export type BackendSummary = {
   runtimeBuild?: BackendRuntimeBuild;
   account?: BackendAccountSummary;
   rateLimits?: BackendRateLimitSummary[];
+  /** When the owner observed these limits, including an unchanged reading. */
+  rateLimitsObservedAt?: number;
+  /** Opaque account group captured by the request that observed these limits. */
+  rateLimitsAccountKey?: string;
   serverName?: string;
   serverVersion?: string;
   methods: string[];

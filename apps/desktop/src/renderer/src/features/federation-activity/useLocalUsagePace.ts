@@ -31,12 +31,13 @@ export type LocalUsagePace = {
 type UsageReader = (request: ReadUsageActivityRequest) => Promise<ReadUsageActivityResponse>;
 
 /**
- * Changes when a provider reports new account limits. Quantize to the
- * precision the meter prints so small changes don't cause extra reads.
+ * A new observation can change the pace at the same percentage. For older
+ * owners without observation times, track the precision the meter prints.
  */
 export function usagePaceRefreshKey(backends: readonly BackendSummary[] | undefined): string {
   return JSON.stringify((backends ?? []).map((backend) => [
     backend.kind,
+    backend.rateLimitsObservedAt,
     (backend.rateLimits ?? []).map((limit) => [
       limit.windowKey, limit.limitId, limit.name,
       typeof limit.usedPercent === "number" ? formatUsedPercent(limit.usedPercent) : null,
@@ -47,8 +48,9 @@ export function usagePaceRefreshKey(backends: readonly BackendSummary[] | undefi
 
 /** Account identity is independent of changing limit readings. */
 export function usagePaceAccountKey(backends: readonly BackendSummary[] | undefined): string {
-  return JSON.stringify((backends ?? []).filter(({ kind }) => usageLimitProviderForBackend(kind)).map(({ kind, account }) =>
-    [kind, account?.type, account?.accountId ?? account?.email ?? account?.label, account?.planType]));
+  return JSON.stringify((backends ?? []).filter(({ kind }) => usageLimitProviderForBackend(kind))
+    .map(({ kind, account, rateLimitsAccountKey }) =>
+      [kind, rateLimitsAccountKey, account?.type, account?.accountId ?? account?.email ?? account?.label, account?.planType]));
 }
 
 /**
@@ -57,6 +59,13 @@ export function usagePaceAccountKey(backends: readonly BackendSummary[] | undefi
  */
 let readSequence = 0;
 let shared: { read: UsageReader; accountKey: string; key: string; sequence: number; pace: LocalUsagePace } | undefined;
+
+function cachedPace(read: UsageReader | undefined, accountKey: string, requiredProvider: string | undefined) {
+  if (!shared || shared.read !== read || shared.accountKey !== accountKey) return undefined;
+  const { accounts } = shared.pace;
+  const usable = requiredProvider ? sinceResetSeries(accounts.get(requiredProvider)) : accounts.size;
+  return usable ? shared : undefined;
+}
 
 function accountsOf(data: ReadUsageActivityResponse): ReadonlyMap<string, LimitAccount> {
   const currentReadings = data.limitObservations ?? (data.limitObservation ? [data.limitObservation] : []);
@@ -94,8 +103,10 @@ function accountsOf(data: ReadUsageActivityResponse): ReadonlyMap<string, LimitA
  * of changes collapses into one refresh per `MIN_REREAD`. First readings are
  * immediate. An in-flight answer is retained only for the same account.
  */
-export function useLocalUsagePace(read: UsageReader | undefined, refreshKey: string, accountKey = "local"): LocalUsagePace | undefined {
-  const cached = read && shared?.read === read && shared.accountKey === accountKey && shared.pace.accounts.size ? shared : undefined;
+export function useLocalUsagePace(
+  read: UsageReader | undefined, refreshKey: string, accountKey: string, requiredProvider?: string,
+): LocalUsagePace | undefined {
+  const cached = cachedPace(read, accountKey, requiredProvider);
   // Limit changes can defer a reread, but must not erase the same account's
   // chart when a different thread mounts the rail during that minute.
   const [state, setState] = useState(() => ({ read, accountKey, pace: cached?.pace }));
@@ -113,7 +124,7 @@ export function useLocalUsagePace(read: UsageReader | undefined, refreshKey: str
   }, []);
   useEffect(() => {
     if (!read) return;
-    const cached = shared?.read === read && shared.accountKey === accountKey && shared.pace.accounts.size ? shared : undefined;
+    const cached = cachedPace(read, accountKey, requiredProvider);
     if (lastRead.current.read !== read || lastRead.current.accountKey !== accountKey) {
       lastRead.current = { read, accountKey, at: cached?.pace.readAt ?? 0 };
     }
@@ -170,6 +181,6 @@ export function useLocalUsagePace(read: UsageReader | undefined, refreshKey: str
       ? Math.max(0, lastRead.current.at + MIN_REREAD - Date.now()) : 0);
     // A scheduled read is superseded; one already in flight is not.
     return () => window.clearTimeout(timer);
-  }, [read, refreshKey, accountKey]);
+  }, [read, refreshKey, accountKey, requiredProvider]);
   return state.read === read && state.accountKey === accountKey ? state.pace : cached?.pace;
 }

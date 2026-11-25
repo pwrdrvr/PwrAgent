@@ -50,7 +50,7 @@ export const UsagePaceCard = memo(function UsagePaceCard({ desktopApi, backends,
   // Another provider's thread never reads the Codex account at all.
   const codexBackends = backends?.filter((backend) => backend.kind === "codex");
   const pace = useLocalUsagePace(open && codexLimit ? desktopApi?.readUsageActivity : undefined,
-    usagePaceRefreshKey(codexBackends), usagePaceAccountKey(codexBackends));
+    usagePaceRefreshKey(codexBackends), usagePaceAccountKey(codexBackends), "openai");
   if (!open) return null;
   const account = pace?.accounts.get("openai");
   const series = sinceResetSeries(account);
