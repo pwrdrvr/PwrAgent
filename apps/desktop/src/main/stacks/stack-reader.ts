@@ -373,7 +373,10 @@ const COMMIT_GRAPH_ANSWERS = 4_096;
  * already upstream, are fixed for a pair of commit ids. Only metadata that
  * rewrites the graph can change them: a shallow boundary, grafts, or loose
  * replace refs. Their state scopes a clone's answers, so a projection whose
- * refs are unchanged spends no Git on its layers.
+ * refs are unchanged spends no Git on its layers. Replace refs kept in
+ * packed-refs or a reftable are not observed: their scope would change on
+ * every ref update and defeat the memo, and stacks do not use replace refs.
+ * A reader created after such a change starts with no answers.
  */
 class CommitGraphMemo {
   private readonly answers = new Map<string, boolean>();

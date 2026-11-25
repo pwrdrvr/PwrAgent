@@ -6,6 +6,7 @@ import { compactStackMembership, type StackSummary } from "@pwragent/shared/stac
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { PrChip } from "../../pr-status/PrChip";
 import { resetStackDetailCacheForTests, STACK_DETAIL_FRESH_MS, STACK_DETAIL_USABLE_MS } from "../stack-detail-cache";
+import { useSelectedStackDetails } from "../useSelectedStackDetails";
 
 type Read = NonNullable<DesktopApi["getNavigationSelectedDetail"]>;
 
@@ -169,6 +170,61 @@ it("draws an aging copy at once, reads it again behind it, and stops drawing it 
     await act(async () => {});
     expect(expired.loadedRows()).toBe(3);
     expect(read).toHaveBeenCalledTimes(3);
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it("trusts a re-read that no longer has the stack over the aging copy", async () => {
+  const { prs, stack, thread } = fixture(3);
+  installOwner(stack);
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const first = openStack(thread(1, "r1"), prs[0]!, false);
+    await act(async () => {});
+    first.view.unmount();
+    // The stack was dissolved before the rows saw a new revision.
+    const row = thread(2, "r1");
+    now += STACK_DETAIL_FRESH_MS + 1;
+    stack.layers.length = 0;
+    const reopened = openStack(row, prs[1]!, false);
+    expect(reopened.loadedRows()).toBe(3);
+    await act(async () => {});
+    expect(reopened.loadedRows()).toBe(0);
+    expect(screen.getByRole("status").textContent).toBe("Stack details unavailable");
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it("re-reads an aging copy when a reader mounts, not whenever a mounted reader renders", async () => {
+  const { stack, thread } = fixture(3);
+  const read = installOwner(stack);
+  const api = (window as Window & { pwragent?: Partial<DesktopApi> }).pwragent as DesktopApi;
+  function Reader({ row }: { row: NavigationThreadSummary; tick: number }) {
+    const { stacks } = useSelectedStackDetails({ thread: row, desktopApi: api, allowLegacyLookup: false });
+    return <span data-testid="layers">{stacks?.[0]?.layers.length ?? "none"}</span>;
+  }
+  let now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  try {
+    const row = thread(1, "r1");
+    const view = render(<Reader row={row} tick={0} />);
+    await act(async () => {});
+    expect(screen.getByTestId("layers").textContent).toBe("3");
+    expect(read).toHaveBeenCalledTimes(1);
+    // An unrelated render after the copy aged must not read again.
+    now += STACK_DETAIL_FRESH_MS + 1;
+    view.rerender(<Reader row={row} tick={1} />);
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(1);
+    view.unmount();
+    // A reader that mounts with an aging copy draws it and reads it again.
+    render(<Reader row={row} tick={2} />);
+    expect(screen.getByTestId("layers").textContent).toBe("3");
+    await act(async () => {});
+    expect(read).toHaveBeenCalledTimes(2);
   } finally {
     clock.mockRestore();
   }

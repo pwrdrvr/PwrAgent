@@ -29,7 +29,10 @@ import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY, SharedPrMetadataRead } from "../pr-status/pr-metadata-process";
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
-import { compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import {
+  compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, STACK_DETAIL_REUSE_MS,
+  type CompactStackMembership, type SelectedStackLayer, type StackSummary,
+} from "@pwragent/shared/stacks/stack-status";
 import { comparePullRequestStack } from "@pwragent/shared/pull-request-rollup";
 import { readNavigationCheckouts } from "../git-info/directory-store";
 
@@ -62,13 +65,6 @@ function stackInputEpoch(registry: DesktopBackendRegistry): { value: number } | 
   return epoch;
 }
 
-/**
- * How long a stack detail read may answer from the newest whole-owner stack
- * projection. The row whose stack is being expanded came from a projection
- * at least that old, so the detail is never staler than the row's own tag.
- */
-export const STACK_DETAIL_REUSE_MS = 15_000;
-
 type StackProjectionRecord = {
   stacks: StackSummary[];
   overlayStore: object;
@@ -83,7 +79,12 @@ function navigationIndexVersion(registry: DesktopBackendRegistry, overlayStore: 
   return `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
 }
 
-/** The newest projection, while no stack input has changed since it started. */
+/**
+ * The newest projection, while no stack input has changed since it started
+ * and it is younger than STACK_DETAIL_REUSE_MS. The row whose stack is being
+ * expanded came from a projection at least that old, so the detail is never
+ * staler than the row's own tag.
+ */
 function currentStackProjection(registry: DesktopBackendRegistry): StackProjectionRecord | undefined {
   const record = latestStackProjections.get(registry);
   const overlayStore = getDesktopOverlayStore();

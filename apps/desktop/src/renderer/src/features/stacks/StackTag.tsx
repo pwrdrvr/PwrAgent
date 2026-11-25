@@ -30,7 +30,8 @@ function StackPopover({ thread, pr, member, onOpen, close, focus, body, onResize
   // An older copy draws at once while it is read again.
   const cached = legacy ? undefined : readCachedStack(stackOwnerInstanceId(thread), member);
   const details = useSelectedStackDetails({ thread, desktopApi: getDesktopApi(), enabled: !legacy && !cached?.fresh, allowLegacyLookup: false });
-  const stack = legacy ?? details.stacks?.find(({ key }) => key === member.key) ?? cached?.value;
+  // A settled read is the truth, including one that no longer has this stack.
+  const stack = legacy ?? (details.stacks ? details.stacks.find(({ key }) => key === member.key) : cached?.value);
   const loading = !stack && !details.error && !details.stacks && Boolean(getDesktopApi()?.getNavigationSelectedDetail);
 
   useLayoutEffect(() => {

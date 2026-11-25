@@ -27,9 +27,8 @@ vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStor
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
-import {
-  loadLocalNavigationQueryIndex, projectSelectedStackLayers, readNavigationStackLayers, STACK_DETAIL_REUSE_MS,
-} from "../app-server/navigation-query-source";
+import { STACK_DETAIL_REUSE_MS } from "@pwragent/shared/stacks/stack-status";
+import { loadLocalNavigationQueryIndex, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 
 const git = (cwd: string, ...args: string[]) => runIsolatedGitSync(cwd, args).trim();
@@ -44,7 +43,8 @@ type Step =
   | { kind: "detail"; layer: number }
   | { kind: "event"; method: string }
   | { kind: "advance"; ms: number }
-  | { kind: "git-change"; layer: number };
+  | { kind: "git-change"; layer: number }
+  | { kind: "durable-change" };
 
 const steps: fc.Arbitrary<Step[]> = fc.array(fc.oneof(
   fc.record({ kind: fc.constant("sidebar" as const), eventDuringRead: fc.boolean() }),
@@ -53,6 +53,7 @@ const steps: fc.Arbitrary<Step[]> = fc.array(fc.oneof(
   fc.record({ kind: fc.constant("event" as const), method: fc.constantFrom(...INVALIDATING, ...QUIET) }),
   fc.record({ kind: fc.constant("advance" as const), ms: fc.constantFrom(2_000, 9_000, STACK_DETAIL_REUSE_MS + 1) }),
   fc.record({ kind: fc.constant("git-change" as const), layer: fc.integer({ min: 1, max: 3 }) }),
+  fc.record({ kind: fc.constant("durable-change" as const) }),
 ), { minLength: 2, maxLength: 9 });
 
 it("answers a stack detail read from the newest projection exactly while no stack input has changed", async () => {
@@ -132,10 +133,12 @@ it("answers a stack detail read from the newest projection exactly while no stac
       vi.mocked(getDesktopBackendRegistry).mockReturnValue(registry);
       const read = () => loadLocalNavigationQueryIndex({ registry, callerReason: "renderer-navigation-query", includeStacks: true });
 
-      // Model: the stack input epoch, and the newest projection's epoch,
-      // completion time and index.
+      // Model: the stack input epoch, the durable navigation version, and the
+      // newest projection's epoch, version, completion time and index.
       let epoch = 0;
-      let projection: { epoch: number; at: number; index: NavigationQueryIndex } | undefined;
+      let version = 0;
+      mocks.store.readNavigationSourceVersion.mockReturnValue(`v${version}`);
+      let projection: { epoch: number; version: number; at: number; index: NavigationQueryIndex } | undefined;
       for (const step of plan) {
         if (step.kind === "sidebar") {
           // Past the pool's one-second retention, so every sidebar read projects.
@@ -144,10 +147,11 @@ it("answers a stack detail read from the newest projection exactly while no stac
           const startedAt = epoch;
           const index = await read();
           if (step.eventDuringRead) epoch += 1;
-          projection = { epoch: startedAt, at: now, index };
+          projection = { epoch: startedAt, version, at: now, index };
         } else if (step.kind === "detail") {
           const ref = { backend: "codex" as const, threadId: `layer-${step.layer}` };
-          const reusable = projection && projection.epoch === epoch && now - projection.at <= STACK_DETAIL_REUSE_MS;
+          const reusable = projection && projection.epoch === epoch && projection.version === version
+            && now - projection.at <= STACK_DETAIL_REUSE_MS;
           const before = spawns;
           const detail = await readNavigationStackLayers(ref);
           if (reusable) {
@@ -155,7 +159,7 @@ it("answers a stack detail read from the newest projection exactly while no stac
           } else {
             // Git is observed afresh; that read is now the newest projection.
             expect(spawns - before).toBeGreaterThan(0);
-            projection = { epoch, at: now, index: await read() };
+            projection = { epoch, version, at: now, index: await read() };
           }
           const expected = projectSelectedStackLayers(projection!.index, ref);
           expect(detail.count).toBe(3);
@@ -166,6 +170,11 @@ it("answers a stack detail read from the newest projection exactly while no stac
           if ((INVALIDATING as readonly string[]).includes(step.method)) epoch += 1;
         } else if (step.kind === "advance") {
           now += step.ms;
+        } else if (step.kind === "durable-change") {
+          // A durable membership change, such as a saved viewer pin, can
+          // advance the source version with no row event.
+          version += 1;
+          mocks.store.readNavigationSourceVersion.mockReturnValue(`v${version}`);
         } else {
           // Git moves with no event: only a projection observes it.
           commit(worktrees[step.layer - 1]!, "moved");
@@ -185,6 +194,8 @@ it("answers a stack detail read from the newest projection exactly while no stac
           { kind: "git-change", layer: 3 }, { kind: "detail", layer: 3 }, { kind: "advance", ms: 2_000 }, { kind: "detail", layer: 1 }]],
         // A change that lands while the projection reads leaves it stale.
         [[{ kind: "sidebar", eventDuringRead: true }, { kind: "detail", layer: 2 }]],
+        // A durable change with no event retires the projection too.
+        [[{ kind: "sidebar", eventDuringRead: false }, { kind: "durable-change" }, { kind: "detail", layer: 1 }]],
         // Past the window, even with nothing evented.
         [[{ kind: "sidebar", eventDuringRead: false }, { kind: "advance", ms: STACK_DETAIL_REUSE_MS + 1 }, { kind: "detail", layer: 2 }]],
       ],
@@ -193,6 +204,7 @@ it("answers a stack detail read from the newest projection exactly while no stac
     spy.mockRestore();
     clock.mockRestore();
     vi.mocked(getDesktopBackendRegistry).mockReset();
+    mocks.store.readNavigationSourceVersion.mockReset();
     restoreGit();
     await rm(base, { recursive: true, force: true });
   }

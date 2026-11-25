@@ -1,5 +1,5 @@
 import { NAVIGATION_QUERY_PROTOCOL_VERSION, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
-import type { CompactStackMembership, StackSummary } from "@pwragent/shared/stacks/stack-status";
+import { STACK_DETAIL_REUSE_MS, type CompactStackMembership, type StackSummary } from "@pwragent/shared/stacks/stack-status";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 
@@ -10,10 +10,10 @@ const RESULT_LIMIT = 32;
 const STACK_LIMIT = 64;
 /**
  * A copy this young draws with no read. The owner answers a detail read from
- * its newest projection for the same 15 seconds, so asking sooner could only
+ * its newest projection for the same window, so asking sooner could only
  * return the same stack.
  */
-export const STACK_DETAIL_FRESH_MS = 15_000;
+export const STACK_DETAIL_FRESH_MS = STACK_DETAIL_REUSE_MS;
 /**
  * An older copy still draws at once, so the popover keeps its size, and is
  * read again behind it. Git can move with no event, so the copy cannot stand

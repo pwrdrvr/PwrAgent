@@ -23,14 +23,16 @@ export function useSelectedStackDetails({ thread, desktopApi, enabled = true, al
   // A row another reader already loaded at the same revisions draws at once;
   // an older copy is read again behind it.
   const cached = enabled && read && hasWorkspace ? readCachedSelectedStacks(thread, ownerInstanceId) : undefined;
-  const fresh = cached?.fresh === true;
   // The read takes the row as rendered; `source` says when that changes.
-  const threadRef = useRef(thread);
+  // Freshness is judged when the row or demand changes, not on each render:
+  // a long-mounted reader must not re-read because an unrelated render
+  // happened after its copy aged.
+  const latest = useRef({ thread, fresh: cached?.fresh === true });
   useLayoutEffect(() => {
-    threadRef.current = thread;
+    latest.current = { thread, fresh: cached?.fresh === true };
   });
   useEffect(() => {
-    const latestThread = threadRef.current;
+    const { thread: latestThread, fresh } = latest.current;
     if (!enabled || !read || !hasWorkspace || !backend || !threadId || !latestThread || fresh) return;
     let active = true;
     const ref = { backend, threadId, ownerInstanceId };
@@ -57,7 +59,7 @@ export function useSelectedStackDetails({ thread, desktopApi, enabled = true, al
       setLoaded({ source, error: "Could not load stack details." });
     });
     return () => { active = false; };
-  }, [enabled, allowLegacyLookup, read, readLegacyRow, needsLegacyLookup, hasWorkspace, backend, threadId, ownerInstanceId, source, attempt, fresh]);
+  }, [enabled, allowLegacyLookup, read, readLegacyRow, needsLegacyLookup, hasWorkspace, backend, threadId, ownerInstanceId, source, attempt]);
   const settled = loaded?.source === source ? loaded : undefined;
   // A newer read wins; a failed re-read keeps the copy it was checking.
   const current = settled?.stacks ? settled : cached ? { stacks: cached.value, error: undefined } : settled;
