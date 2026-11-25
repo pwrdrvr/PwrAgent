@@ -388,6 +388,16 @@ describe("resource checkout experimental gate", () => {
     expect((await discover()).isError).not.toBe(true);
     expect(handler).toHaveBeenCalledExactlyOnceWith("resource_checkout_discover", {}, context);
 
+    // Disabling the flag hides the catalog immediately for a nonholder on this connection.
+    enabled = false;
+    expect(await listCheckoutTools()).toEqual([]);
+    handler.mockClear();
+    expect(await discover()).toMatchObject({ isError: true });
+    expect(handler).not.toHaveBeenCalled();
+
+    enabled = true;
+    expect(await listCheckoutTools()).toEqual(allTools);
+
     // The same client can still call cleanup tools from its previous listing.
     hasCheckout = true;
     expect(await listCheckoutTools()).toEqual(allTools);
