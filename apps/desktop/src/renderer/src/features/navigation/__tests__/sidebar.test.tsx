@@ -42,6 +42,7 @@ import type {
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_GAP } from "../../../lib/tooltip-placement";
 import { PROJECT_CARD_HOVER_DELAY_MS } from "../ProjectHeaderCard";
+import { TOP_DOCK_CLASS, TOP_DOCK_RESERVE_PROPERTY, topDockReserve } from "../selected-thread-dock-reserve";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
 import { ThreadMaintenanceLauncherContext } from "../../maintenance/thread-maintenance-launcher";
@@ -10168,6 +10169,33 @@ describe("Sidebar directory pinning", () => {
     expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
     expect(onReorderDirectoryPins).not.toHaveBeenCalled();
     expect(list.querySelector(".directories-pin-slot")).toBeNull();
+  });
+
+  it.each([46, 58, 86])("hits the Pin slot before layout can clear a %ipx dock reserve", async (reserve) => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+    renderSidebar([projectADirectory, projectBDirectory], {
+      onSetDirectoryPin, onReorderDirectoryPins: async () => undefined,
+    });
+    layoutDirectoryHeaders([[/ProjectA/i, 40], [/ProjectB/i, 70]]);
+    const region = document.querySelector<HTMLElement>(".sidebar__scroll-region")!;
+    region.classList.add(TOP_DOCK_CLASS);
+    region.style.setProperty(TOP_DOCK_RESERVE_PROPERTY, `${reserve}px`);
+
+    startThreadPinPointerDrag(directoryHeader(/ProjectB/i), { x: 50, y: 80 });
+    moveThreadPinPointer({ x: 50, y: 12 });
+    const slot = region.querySelector<HTMLElement>(".directories-pin-slot")!;
+    // CSS puts the slot below the sticky inset. Keep the pointer stationary
+    // from lift through drop so a later move cannot repair stale feedback.
+    vi.spyOn(slot, "getBoundingClientRect").mockImplementation(() =>
+      new DOMRect(0, 2 + topDockReserve(slot), 300, 34));
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(slot).toHaveClass("is-drop-target");
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 12 });
+    });
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
   });
 
   it("keeps the directory launchpad button a single click and puts machines behind the chevron", async () => {

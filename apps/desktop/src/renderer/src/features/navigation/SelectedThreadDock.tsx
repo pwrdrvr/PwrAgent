@@ -23,6 +23,7 @@ import {
   TOP_DOCK_RESERVE_CHANGE_EVENT,
   TOP_DOCK_RESERVE_PROPERTY as RESERVE_PROPERTY,
   TOP_DOCK_RESERVE_SAMPLE_EVENT,
+  clearTopDockReserve,
   topDockReserve,
 } from "./selected-thread-dock-reserve";
 import { formatRelativeTime } from "./thread-time";
@@ -480,8 +481,9 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       }
       if (!region.classList.contains(TOP_DOCK_CLASS)) region.classList.add(TOP_DOCK_CLASS);
       reservedRegionRef.current = region;
-    } else if (region && reserved === region && reserveBefore > 0) {
-      region.classList.remove(TOP_DOCK_CLASS);
+    } else if (region && reserved === region) {
+      clearTopDockReserve(region);
+      return;
     }
     if (region && topDockReserve(region) !== reserveBefore) {
       region.dispatchEvent(new Event(TOP_DOCK_RESERVE_CHANGE_EVENT));

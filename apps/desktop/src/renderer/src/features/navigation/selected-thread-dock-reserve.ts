@@ -5,8 +5,8 @@
  * list sticks lower by this reserve (see `.has-selected-thread-dock-top` in
  * app.css). Anything that places a project at the top of the list has to
  * place it under the dock, at the reserve, or its own stuck header slides
- * down over the project's first rows. `SelectedThreadDock` owns the value;
- * this module is how the rest of the sidebar reads it.
+ * down over the project's first rows. `SelectedThreadDock` sets the value;
+ * a folder drag releases it before the first hit test.
  */
 
 import { SIDEBAR_REGION } from "./reveal-selected-thread-row";
@@ -38,4 +38,11 @@ export function topDockReserve(element: Element): number {
   }
   const reserve = Number.parseFloat(region.style.getPropertyValue(TOP_DOCK_RESERVE_PROPERTY));
   return Number.isFinite(reserve) && reserve > 0 ? reserve : 0;
+}
+
+/** Release the sticky inset without reading layout. */
+export function clearTopDockReserve(region: HTMLElement): void {
+  if (topDockReserve(region) === 0) return;
+  region.classList.remove(TOP_DOCK_CLASS);
+  region.dispatchEvent(new Event(TOP_DOCK_RESERVE_CHANGE_EVENT));
 }

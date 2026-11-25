@@ -113,27 +113,31 @@ function mountDock(
   let nextObserver = 0;
   class TestResizeObserver implements ResizeObserver {
     readonly order = nextObserver++;
-    private readonly pending = new Set<Element>();
+    private readonly observations = new Map<Element, { box: ResizeObserverBoxOptions; lastHeight?: number }>();
     constructor(private readonly callback: ResizeObserverCallback) {}
-    observe(target: Element): void {
-      this.pending.add(target);
+    observe(target: Element, options?: ResizeObserverOptions): void {
+      const observedBox = options?.box ?? "content-box";
+      if (this.observations.get(target)?.box === observedBox) return;
+      this.observations.set(target, { box: observedBox });
       observers.add(this);
     }
     unobserve(target: Element): void {
-      this.pending.delete(target);
-      if (this.pending.size === 0) observers.delete(this);
+      this.observations.delete(target);
+      if (this.observations.size === 0) observers.delete(this);
     }
     disconnect(): void {
-      this.pending.clear();
+      this.observations.clear();
       observers.delete(this);
     }
     deliver(): void {
-      const entries = Array.from(this.pending, (target): ResizeObserverEntry => {
+      const entries: ResizeObserverEntry[] = [];
+      for (const [target, observation] of this.observations) {
         const height = target.matches(".directory-row__header") ? 28 : VIEW_HEIGHT;
+        if (height === observation.lastHeight) continue;
+        observation.lastHeight = height;
         const size = [{ inlineSize: 300, blockSize: height }];
-        return { target, contentRect: box(0, height), borderBoxSize: size, contentBoxSize: size, devicePixelContentBoxSize: size };
-      });
-      this.disconnect();
+        entries.push({ target, contentRect: box(0, height), borderBoxSize: size, contentBoxSize: size, devicePixelContentBoxSize: size });
+      }
       if (entries.length > 0) this.callback(entries, this);
     }
   }
@@ -492,6 +496,23 @@ it("samples the project under the new sticky line when the index observer runs f
       expect(fixture.edge()).toBeUndefined();
       expect(fixture.currentProject()).toBe(fixture.projectKey(0));
       expect(fixture.work.row).toBe(1);
+    }), { numRuns: 10 });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+it("samples successive pure scrolls whose observed box sizes stay fixed", () => {
+  const fixture = mountDock(4, 0, 1, { withResizeObserver: true });
+  try {
+    fixture.move(0);
+    fc.assert(fc.property(fc.integer({ min: 700, max: 1000 }), (offscreen) => {
+      for (const [offset, edge] of [[offscreen, "top"], [0, undefined], [offscreen + 1, "top"], [1, undefined]] as const) {
+        fixture.reset();
+        fixture.move(offset);
+        expect(fixture.edge()).toBe(edge);
+        expect(fixture.work.row).toBe(1);
+      }
     }), { numRuns: 10 });
   } finally {
     fixture.cleanup();
