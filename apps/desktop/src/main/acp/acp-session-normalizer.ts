@@ -14,9 +14,9 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
+  commandTitleMatchesInvocation,
   formatCommandLabel,
   formatWebSearchLabel,
-  normalizeCommandText,
 } from "@pwragent/shared/command-action-labels";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { ACP_WORKSPACE_HISTORY_URI } from "./acp-workspace-history.js";
@@ -1960,8 +1960,7 @@ function toolActivity(
           && (
             isGenericShellToolTitle(labelCandidate)
             || (followsTitleScript && isGenericActivityLabel(labelCandidate))
-            // Antigravity titles a `run_command` with the whole script.
-            || normalizeCommandText(labelCandidate) === normalizeCommandText(displayCommand)
+            || commandTitleMatchesInvocation(labelCandidate, displayCommand)
           )
         ? formatCommandLabel(displayCommand)
         : labelCandidate;

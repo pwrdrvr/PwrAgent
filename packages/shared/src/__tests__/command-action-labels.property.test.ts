@@ -5,7 +5,7 @@ import { unwrapCommandText } from "../command-action-labels";
 const posixShell = fc.constantFrom("sh", "bash", "zsh", "/bin/sh", "/bin/bash", "/bin/zsh");
 
 describe("unwrapCommandText", () => {
-  it("unwraps POSIX -c scripts, removing quotes only as a matched pair after the wrapper", () => {
+  it("unwraps paired POSIX -c script quotes and retains incomplete invocations", () => {
     fc.assert(fc.property(
       posixShell,
       fc.array(fc.constantFrom("pwd", "git status", "printf ready"), { minLength: 2 }),
@@ -18,8 +18,8 @@ describe("unwrapCommandText", () => {
         const mismatchedScript = `${quote}${script}${quote === '"' ? "'" : '"'}`;
 
         expect(unwrapCommandText(`${wrapper}${quotedScript}`)).toBe(script);
-        expect(unwrapCommandText(`${wrapper}${mismatchedScript}`)).toBe(mismatchedScript);
-        expect(unwrapCommandText(`${wrapper}${quote}${script}`)).toBe(`${quote}${script}`);
+        expect(unwrapCommandText(`${wrapper}${mismatchedScript}`)).toBe(`${wrapper}${mismatchedScript}`);
+        expect(unwrapCommandText(`${wrapper}${quote}${script}`)).toBe(`${wrapper}${quote}${script}`);
         expect(unwrapCommandText(quotedScript)).toBe(quotedScript);
       },
     ));
@@ -34,6 +34,43 @@ describe("unwrapCommandText", () => {
       fc.array(fc.constantFrom("_", "hello", "'two words'", '"three more words"'), { minLength: 1 }),
       (shell, option, quote, script, args) => {
         const command = `${shell} ${option} ${quote}${script}${quote} ${args.join(" ")}`;
+        expect(unwrapCommandText(command)).toBe(command);
+      },
+    ));
+  });
+
+  it("joins adjacent POSIX script fragments and keeps arguments after the word", () => {
+    fc.assert(fc.property(
+      posixShell,
+      fc.constantFrom("-c", "-lc"),
+      fc.array(fc.constantFrom(
+        { encoded: "'first'", text: "first" },
+        { encoded: '" second"', text: " second" },
+        { encoded: '"\\"a b\\""', text: '"a b"' },
+        { encoded: '"\\$value"', text: "$value" },
+        { encoded: "\\'", text: "'" },
+      ), { minLength: 1 }),
+      (shell, option, fragments) => {
+        const word = "'printf '" + fragments.map(({ encoded }) => encoded).join("");
+        const script = "printf " + fragments.map(({ text }) => text).join("");
+        const command = `${shell} ${option} ${word}`;
+        const withArgument = `${command} _ 'hello'`;
+
+        expect(unwrapCommandText(command)).toBe(script);
+        expect(unwrapCommandText(withArgument)).toBe(withArgument);
+      },
+    ));
+  });
+
+  it("keeps the invocation for Bash quoting that the parser cannot decode", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("bash", "/bin/bash"),
+      fc.constantFrom("-c", "-lc"),
+      fc.constantFrom("", "'echo one'", "'echo one'word"),
+      fc.constantFrom("$'\\n'", '$"localized"'),
+      fc.constantFrom("", "'echo two'", " _ 'arg'"),
+      (shell, option, prefix, quote, suffix) => {
+        const command = `${shell} ${option} ${prefix}${quote}${suffix}`;
         expect(unwrapCommandText(command)).toBe(command);
       },
     ));

@@ -128,6 +128,16 @@ describe("KTD-P3 normalizer parity", () => {
   ].join("\n");
   // The one-line, 72-character heading both pipelines should give the script.
   const scriptLabel = "printf '%s\\n' 'Checking fixture configuration' printf '%s\\n' 'Checkin...";
+  const singleQuotedInvocation = "bash -c 'echo \"$1\"' _ 'hello'";
+  const doubleQuotedInvocation = 'bash -c "echo $1" _ "hello"';
+  const escapedDoubleQuotedInvocation = 'bash -c "echo \\"$1\\"" _ "hello"';
+  const noclobberInvocation = "/bin/bash -C ./build.sh";
+  const emptyInvocation = '/bin/bash -c ""';
+  const blankInvocation = "/bin/bash -c ' \n\t '";
+  const longScriptEcho = "echo " + "0123456789".repeat(8);
+  const longInvocation = `bash -c '${longScriptEcho}' _ 'hello'`;
+  const adjacentQuoteInvocation = "bash -c 'printf \"%s\\n\" '\\''hello'\\'''";
+  const adjacentQuoteInvocationWithArg = `${adjacentQuoteInvocation} _ 'arg'`;
 
   it.each([
     {
@@ -164,11 +174,90 @@ describe("KTD-P3 normalizer parity", () => {
       command: "/bin/zsh -lc 'git status'",
       label: "git status",
     },
-  ])("shell label parity for $scenario", ({ fields, command, label }) => {
+    {
+      scenario: "a single-quoted Bash script with positional arguments",
+      fields: { title: "Bash", command: singleQuotedInvocation },
+      command: singleQuotedInvocation,
+      label: "bash -c 'echo \"$1\"' _ 'hello'",
+    },
+    {
+      scenario: "a double-quoted Bash script with positional arguments",
+      fields: { title: "Bash", command: doubleQuotedInvocation },
+      command: doubleQuotedInvocation,
+      label: 'bash -c "echo $1" _ "hello"',
+    },
+    {
+      scenario: "an uppercase Bash noclobber flag",
+      fields: { title: "Bash", command: noclobberInvocation },
+      command: noclobberInvocation,
+      label: "/bin/bash -C ./build.sh",
+    },
+    {
+      scenario: "a noclobber invocation titled with the script path",
+      fields: { title: "./build.sh", command: noclobberInvocation },
+      command: noclobberInvocation,
+      label: "/bin/bash -C ./build.sh",
+    },
+    {
+      scenario: "an empty Bash script",
+      fields: { title: "Bash", command: emptyInvocation },
+      command: emptyInvocation,
+      label: '/bin/bash -c ""',
+    },
+    {
+      scenario: "a whitespace-only Bash script",
+      fields: { title: "Bash", command: blankInvocation },
+      command: blankInvocation,
+      label: "/bin/bash -c ' '",
+    },
+    {
+      scenario: "an unterminated Bash script quote",
+      fields: { title: "Bash", command: "bash -c 'echo hello" },
+      command: "bash -c 'echo hello",
+      label: "bash -c 'echo hello",
+    },
+    {
+      scenario: "a completion that echoes a long script with positional arguments",
+      fields: { title: "Bash", command: longInvocation },
+      completionFields: { title: longScriptEcho },
+      command: longInvocation,
+      label: "bash -c 'echo 0123456789012345678901234567890123456789012345678901234...",
+    },
+    {
+      scenario: "a completion that first supplies the invocation and echoes its long script",
+      fields: { title: "Bash" },
+      completionFields: { title: longScriptEcho, command: longInvocation },
+      command: longInvocation,
+      label: "bash -c 'echo 0123456789012345678901234567890123456789012345678901234...",
+    },
+    {
+      scenario: "a title that echoes a script without the outer shell escapes",
+      fields: { title: 'echo "$1"', command: escapedDoubleQuotedInvocation },
+      command: escapedDoubleQuotedInvocation,
+      label: 'bash -c "echo \\"$1\\"" _ "hello"',
+    },
+    {
+      scenario: "adjacent quoted fragments forming one script word",
+      fields: { title: "Bash", command: adjacentQuoteInvocation },
+      command: adjacentQuoteInvocation,
+      label: "printf \"%s\\n\" 'hello'",
+    },
+    {
+      scenario: "adjacent quoted fragments followed by a positional argument",
+      fields: { title: "Bash", command: adjacentQuoteInvocationWithArg },
+      command: adjacentQuoteInvocationWithArg,
+      label: "bash -c 'printf \"%s\\n\" '\\''hello'\\''' _ 'arg'",
+    },
+  ])("shell label parity for $scenario", ({ fields, completionFields, command, label }) => {
     const call = { toolCallId: "fixture-command", kind: "execute", ...fields };
     const updates: Update[] = [
       { sessionUpdate: "tool_call", ...call, status: "in_progress" },
-      { sessionUpdate: "tool_call_update", ...call, status: "completed" },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: call.toolCallId,
+        ...(completionFields ?? call),
+        status: "completed",
+      },
     ];
     const kit = runKit(updates);
     const inTree = runInTree(updates);
