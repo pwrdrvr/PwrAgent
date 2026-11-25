@@ -618,9 +618,14 @@ function readAcpToolPath(
   return (
     readString(update, "path") ??
     readString(rawInput ?? {}, "path") ??
+    readString(rawInput ?? {}, "Path") ??
     readString(rawInput ?? {}, "file") ??
     readString(rawInput ?? {}, "filePath") ??
     readString(rawInput ?? {}, "file_path") ??
+    readString(rawInput ?? {}, "target_file") ??
+    readString(rawInput ?? {}, "target_directory") ??
+    readString(rawInput ?? {}, "DirectoryPath") ??
+    readString(rawInput ?? {}, "directory_path") ??
     readFirstLocationPath(update)
   );
 }

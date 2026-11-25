@@ -1,15 +1,19 @@
-import type { AcpProviderTool } from "./acp-command-extraction.js";
+import {
+  type AcpProviderTool,
+  readFirstLocationPath,
+} from "./acp-command-extraction.js";
 
 /**
  * A file read or directory listing made through an ACP tool call, named the
  * way Claude's rows name them: `Read checkers.ts`, `Listed src`.
  *
  * Grok titles these calls `Read \`/absolute/path\`` and
- * `List \`/absolute/path\``, which in a worktree is mostly path. Its
- * `read_file` input is `target_file` with an optional 1-based `offset`, a
- * line `limit`, and `pages` for documents; `list_dir` input is
- * `target_directory`. The completing update can omit both the input and the
- * tool identity, so the caller remembers the first read it derives.
+ * `List \`/absolute/path\``, while Antigravity titles `read_file` as
+ * `File Users/...` (omitting the leading `/` on POSIX paths). Both expose the
+ * canonical path in `rawInput` or `locations`, along with optional line/page
+ * bounds (`offset`/`limit`/`pages` for Grok, `StartLine`/`EndLine` for
+ * Antigravity). The completing update can omit both the input and the tool
+ * identity, so the caller remembers the first read it derives.
  * `target_file` can also be an http(s) URL, which Grok fetches.
  */
 export type AcpFileRead = {
@@ -21,22 +25,39 @@ export function readAcpFileRead(
   record: Record<string, unknown>,
   providerTool: AcpProviderTool | undefined,
 ): AcpFileRead | undefined {
-  const rawInput = asRecord(record.rawInput);
-  if (!rawInput || !providerTool) {
+  const toolName = providerTool?.name ?? readString(record, "name");
+  if (!toolName) {
     return undefined;
   }
-  if (providerTool.name === "list_dir") {
-    const path = readString(rawInput, "target_directory");
+  const rawInput = asRecord(record.rawInput);
+  if (toolName === "list_dir") {
+    const path =
+      (rawInput
+        ? readString(rawInput, "target_directory")
+          ?? readString(rawInput, "DirectoryPath")
+          ?? readString(rawInput, "directory_path")
+          ?? readString(rawInput, "Path")
+          ?? readString(rawInput, "path")
+        : undefined)
+      ?? readFirstLocationPath(record);
     return path ? { path, label: `Listed ${targetName(path)}` } : undefined;
   }
-  if (providerTool.name !== "read_file") {
+  if (toolName !== "read_file") {
     return undefined;
   }
-  const path = readString(rawInput, "target_file");
+  const path =
+    (rawInput
+      ? readString(rawInput, "target_file")
+        ?? readString(rawInput, "file_path")
+        ?? readString(rawInput, "filePath")
+        ?? readString(rawInput, "Path")
+        ?? readString(rawInput, "path")
+      : undefined)
+    ?? readFirstLocationPath(record);
   if (!path) {
     return undefined;
   }
-  const range = readRange(rawInput);
+  const range = rawInput ? readRange(rawInput) : undefined;
   return {
     path,
     label: `Read ${targetName(path)}${range ? ` (${range})` : ""}`,
@@ -54,8 +75,25 @@ function readRange(rawInput: Record<string, unknown>): string | undefined {
     const from = offset ?? 1;
     return `lines ${from}-${from + limit - 1}`;
   }
-  return offset !== undefined && offset > 1
-    ? `from line ${offset}`
+  if (offset !== undefined && offset > 1) {
+    return `from line ${offset}`;
+  }
+  const startLine =
+    readPositiveInteger(rawInput, "StartLine")
+    ?? readPositiveInteger(rawInput, "start_line")
+    ?? readPositiveInteger(rawInput, "startLine");
+  const endLine =
+    readPositiveInteger(rawInput, "EndLine")
+    ?? readPositiveInteger(rawInput, "end_line")
+    ?? readPositiveInteger(rawInput, "endLine");
+  if (endLine !== undefined) {
+    const from = startLine ?? 1;
+    if (endLine >= from) {
+      return `lines ${from}-${endLine}`;
+    }
+  }
+  return startLine !== undefined && startLine > 1
+    ? `from line ${startLine}`
     : undefined;
 }
 

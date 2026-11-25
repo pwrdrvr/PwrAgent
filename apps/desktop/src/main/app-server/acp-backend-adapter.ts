@@ -3582,12 +3582,13 @@ export class AcpBackendAdapter {
               turnId,
               update,
             });
+        const sessionCwd = resolvedToolUpdate || (promptSettledTurnFinished && turnId && !fromSessionLoad)
+          ? this.getSession(agent.backendId, sessionId)?.cwd
+          : undefined;
         const toolNotifications = resolvedToolUpdate
           ? acpToolUpdateNotifications({
               backendId: agent.backendId,
-              cwd: agent.backendId === "acp:antigravity" && resolvedToolUpdate.kind === "edit"
-                ? this.getSession(agent.backendId, sessionId)?.cwd
-                : undefined,
+              cwd: sessionCwd,
               threadId: sessionId,
               turnId,
               update: resolvedToolUpdate,
@@ -3606,6 +3607,7 @@ export class AcpBackendAdapter {
                 .flatMap((deferredUpdate) =>
                   acpToolUpdateNotifications({
                     backendId: agent.backendId,
+                    cwd: sessionCwd,
                     threadId: sessionId,
                     turnId,
                     update: deferredUpdate,

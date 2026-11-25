@@ -993,10 +993,16 @@ export class AcpSessionReplayNormalizer {
     createdAt: number,
     toolCallId: string | undefined,
   ): void {
-    const name = this.fileEditOptions.antigravity ? readString(update.update, "name") : undefined;
-    const declared = name === "write_file" || name === "edit_file"
-      ? { name, kind: "edit" }
-      : readAcpProviderTool(update.update);
+    const rawName = readString(update.update, "name");
+    const declared =
+      readAcpProviderTool(update.update)
+      ?? (rawName === "read_file"
+        ? { name: rawName, kind: "read" }
+        : rawName === "list_dir"
+          ? { name: rawName, kind: "list" }
+          : this.fileEditOptions.antigravity && (rawName === "write_file" || rawName === "edit_file")
+            ? { name: rawName, kind: "edit" }
+            : undefined);
     if (toolCallId && declared) {
       this.providerTools.set(toolCallId, {
         ...this.providerTools.get(toolCallId),
