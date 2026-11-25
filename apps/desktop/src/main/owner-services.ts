@@ -457,13 +457,14 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     });
   }
   const federationRuntime = initializeDesktopFederationRuntime();
+  const resourceCheckoutsEnabled = () => getDesktopSettingsService().resolveResourceCheckoutsEnabled?.() === true;
   const resourceCheckouts = bootMode === "active-profile"
     ? await initializeResourceCheckouts(
       federationRuntime, options.approvedLabCheckouts, host.application.isPackaged,
       ({ backend, threadId }) => getExistingDesktopBackendRegistry()?.getThreadInfo({ backend, threadId })?.title,
+      resourceCheckoutsEnabled,
     )
     : undefined;
-  const resourceCheckoutsEnabled = () => getDesktopSettingsService().resolveResourceCheckoutsEnabled?.() === true;
   if (resourceCheckouts) registry.setResourceCheckoutHandler(
     createResourceCheckoutToolHandler(
       resourceCheckouts,

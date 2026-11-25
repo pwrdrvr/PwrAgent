@@ -24,6 +24,11 @@ async function status(file: string) {
   }
 }
 
+function hasRelativeConfigRoot(env: NodeJS.ProcessEnv): boolean {
+  return [env.HOME, env.XDG_CONFIG_HOME, env.USERPROFILE].some((root) => root !== undefined
+    && (!path.isAbsolute(root) || (process.platform === "win32" && !/^(?:[a-z]:|[\\/]{2})/i.test(root))));
+}
+
 /**
  * Filesystem evidence can rule out stack demand. It cannot admit a checkout.
  * Keep enclosing .git candidates because Git can skip an invalid directory
@@ -147,13 +152,13 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
       // Nonstandard discovery or runtime settings belong to Git. Do not
       // transfer a confirmed inventory checkout across these environments.
       const env = process.env;
-      if ((requiresGitDiscovery && !installedGitVersion)
+      if ((requiresGitDiscovery && !installedGitVersion) || hasRelativeConfigRoot(env)
         || gitCommandPreference(env) !== configuredGit || hasGitDiscoveryOverrides() || Object.keys(env).some((key) =>
         /^GIT_(?:CONFIG(?:_|$)|TEST_|NAMESPACE$|OBJECT_DIRECTORY$)/i.test(key))) return undefined;
       const runtime = getSelectedManagedGit();
       return await runPrMetadataFileProbe(async (signal) => {
         const observed = await observeInventoryCheckout(cwd, undefined, signal);
-        if (!observed?.repository || !observed.checkoutRoot || !observed.commonDirectory) return undefined;
+        if (!observed?.repository || !observed.checkoutRoot || !observed.commonDirectory || !observed.gitDirectory) return undefined;
         signal.throwIfAborted();
         const commonDir = observed.dotGitDirectory ? await realpath(observed.commonDirectory) : observed.commonDirectory;
         // Git can skip a nested .git directory when either discovery
@@ -165,6 +170,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand) {
         return {
           root: observed.checkoutRoot,
           commonDir,
+          gitDir: observed.gitDirectory,
           physicalDirectory: observed.physicalDirectory,
           commonVersion: JSON.stringify([observed.commonVersion, runtime, env.HOME, env.USERPROFILE, env.XDG_CONFIG_HOME, env.SUDO_UID]),
           registeredWorktree: observed.registeredWorktree === true,

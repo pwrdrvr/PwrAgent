@@ -5502,6 +5502,7 @@ describe("Sidebar", () => {
         directories={directories}
         inboxThreads={[firstThread, secondThread, thirdThread]}
         loading={false}
+        selectedItemKey={threadSummaryIdentityKey(firstThread)}
         threads={[firstThread, secondThread, thirdThread]}
         onArchiveThread={onArchiveThread}
         onBrowseModeChange={() => undefined}
@@ -5534,6 +5535,11 @@ describe("Sidebar", () => {
     expect(firstButton).toHaveAttribute("aria-pressed", "false");
     expect(secondButton).toHaveAttribute("aria-pressed", "true");
     expect(thirdButton).toHaveAttribute("aria-pressed", "true");
+    expect(firstButton).toHaveAttribute("aria-current", "true");
+    expect(threadCard(firstButton)).toHaveClass("is-selected");
+    expect(threadCard(firstButton)).not.toHaveClass("is-batch-selected");
+    expect(threadCard(secondButton)).toHaveClass("is-batch-selected");
+    expect(threadCard(secondButton)).not.toHaveClass("is-selected");
 
     fireEvent.click(firstButton, { metaKey: true, shiftKey: true });
     expect(firstButton).toHaveAttribute("aria-pressed", "true");
@@ -5571,6 +5577,31 @@ describe("Sidebar", () => {
     expect(onArchiveThread).toHaveBeenCalledWith(thirdThread);
   });
 
+  it("archives the menu target and the next Cmd-clicked row while a different thread stays open", async () => {
+    const [open, target, added] = ["Open", "Menu target", "Added"].map((title, index) => ({
+      ...sharedThread, id: `thread-${index}`, title,
+    }));
+    const threads = [open!, target!, added!];
+    const onArchiveThread = vi.fn(async () => undefined);
+    const onSelectThread = vi.fn();
+    render(<Sidebar backends={backends} browseMode="recents" directories={directories}
+      inboxThreads={threads} threads={threads} loading={false} selectedItemKey={threadSummaryIdentityKey(open!)}
+      onArchiveThread={onArchiveThread} onSelectThread={onSelectThread} onBrowseModeChange={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />);
+
+    const row = (title: string) => screen.getByRole("button", { name: title });
+    fireEvent.contextMenu(row("Menu target"));
+    pressEscape();
+    fireEvent.click(row("Added"), { metaKey: true });
+    expect(threadCard(row("Open"))).toHaveClass("is-selected");
+    expect(threadCard(row("Menu target"))).not.toHaveClass("is-selected");
+    expect(onSelectThread).not.toHaveBeenCalled();
+
+    fireEvent.contextMenu(row("Added"));
+    await act(async () => { fireEvent.click(screen.getByRole("menuitem", { name: "Archive 2 Threads" })); });
+    expect(onArchiveThread.mock.calls).toEqual([[target], [added]]);
+  });
+
   it("limits each batch action to its compatible thread subset", async () => {
     const onSetThreadParent = vi.fn(async () => undefined);
     const onSetThreadPin = vi.fn(async () => undefined);
@@ -5606,6 +5637,7 @@ describe("Sidebar", () => {
         directories={directories}
         inboxThreads={[pinnedThread, parentThread, childThread, unpinnedThread]}
         loading={false}
+        selectedItemKey={threadSummaryIdentityKey(childThread)}
         threads={[pinnedThread, parentThread, childThread, unpinnedThread]}
         onBrowseModeChange={() => undefined}
         onCreateThread={async () => undefined}
@@ -8514,6 +8546,7 @@ describe("Sidebar", () => {
     expect(onCopyThreadDiagnostics).toHaveBeenCalledWith(sharedThread);
     expect(onSelectThread).not.toHaveBeenCalled();
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(threadCard(screen.getByRole("button", { name: sharedThread.title }))).not.toHaveClass("is-selected");
   });
 
   it("omits Copy Diagnostics Info without a handler", () => {

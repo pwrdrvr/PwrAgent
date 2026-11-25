@@ -76,6 +76,39 @@ describe("ResourcesScreen", () => {
     expect(screen.queryByTestId("resources-preview-banner")).toBeNull();
   });
 
+  it("says when this profile's agents can't check out, and clears it once they can", async () => {
+    const base = buildPreviewSnapshot(NOW);
+    const { source, publish } = liveSource({ ...base, agentTools: "disabled" });
+    await renderScreen(source);
+    const notice = screen.getByTestId("resources-agent-tools-off");
+    expect(notice).toHaveTextContent(`Agents on the ${base.viewer.profile} profile can't find or reserve resources.`);
+    expect(notice).toHaveTextContent("Settings › Experimental");
+
+    expect(notice).toHaveTextContent("You can still request a checkout yourself.");
+
+    await publish({ ...base, revision: base.revision + 1, agentTools: "enabled" });
+    expect(screen.queryByTestId("resources-agent-tools-off")).toBeNull();
+  });
+
+  it("offers the operator's own request only when some resource allows one", async () => {
+    const base = buildPreviewSnapshot(NOW);
+    const blocked = {
+      ...base,
+      agentTools: "disabled" as const,
+      resources: base.resources.map((resource) => ({
+        ...resource,
+        actions: {
+          ...resource.actions,
+          request: { allowed: false as const, reason: "not_authorized" as const, detail: "Viewers can't request." },
+        },
+      })),
+    };
+    await renderScreen(liveSource(blocked).source);
+    const notice = screen.getByTestId("resources-agent-tools-off");
+    expect(notice).toHaveTextContent("Settings › Experimental.");
+    expect(notice).not.toHaveTextContent("request a checkout yourself");
+  });
+
   it("shows a cached busy resource behind an unreachable authority as unreachable, with its request blocked", async () => {
     await renderScreen(liveSource(buildPreviewSnapshot(Date.now())).source);
     expect(within(row("gpu-bench-02")).getByText("Authority unreachable")).toBeInTheDocument();

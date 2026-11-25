@@ -213,3 +213,102 @@ it("uses application CPU over the actual sample interval across recorder rotatio
     failedCpuRead: fc.option(fc.integer({ min: 1, max: 4 }), { nil: undefined }),
   }), exerciseRotation), { numRuns: 30 });
 });
+
+it("still emits throttled hot-CPU warnings after maxProfiles is reached", async () => {
+  vi.useFakeTimers();
+  const samples: HotCpuProfileSample[] = [];
+  const events: HotCpuProfileEvent[] = [];
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+  let processCpuMs = 0;
+  let attached = false;
+  const session: HotCpuProfileSession = {
+    target: "main",
+    id: "cap-warn",
+    directoryName: "cap-warn",
+    directoryPath: workspace.path,
+    samplesPath: "",
+    eventsPath: "",
+    appendSample: async (sample) => { samples.push(sample); },
+    appendEvent: async (event) => { events.push(event); },
+    createProfilePath: (index) => path.join(workspace.path, `profile-${index}.cpuprofile`),
+    createHeapSnapshotPath: () => "",
+    registerArtifact: async () => {},
+  };
+  const target: HotCpuTarget = {
+    getOSProcessId: () => 1,
+    debugger: {
+      attach: () => { attached = true; },
+      detach: () => { attached = false; },
+      isAttached: () => attached,
+      on: () => {},
+      off: () => {},
+      sendCommand: async (method) => method === "Profiler.stop"
+        ? { profile: { nodes: [{ id: 1, callFrame: { functionName: "(root)" } }], startTime: 0, endTime: 1000, samples: [], timeDeltas: [] } }
+        : {},
+    },
+  };
+  let resolveProfileWritten: (() => void) | undefined;
+  const profileWritten = new Promise<void>((resolve) => {
+    resolveProfileWritten = resolve;
+  });
+  const profiler = new HotCpuProfiler({
+    config: {
+      enabled: true, repoRoot: workspace.path, outputRoot: workspace.path,
+      intervalMs: SAMPLE_MS, startDelayMs: 0, triggerMode: "spike",
+      rules: [{ id: "spike", sampleCount: 1, thresholdPercent: THRESHOLD_PERCENT, durationMs: SAMPLE_MS }],
+      thresholdPercent: THRESHOLD_PERCENT, slowburnThresholdPercent: 20, consecutiveSamples: 2,
+      profileDurationMs: 50, maxProfiles: 1, cooldownMs: 60_000,
+      captureHeapSnapshot: false, heapSnapshotLimit: 0,
+    },
+    target,
+    session,
+    logger,
+    onProfileWritten: async () => { resolveProfileWritten?.(); },
+    now: () => new Date(Date.now()),
+    sampleNow: () => Date.now(),
+    getAppMetrics: () => [{
+      pid: 1, type: "Browser", creationTime: 0,
+      cpu: { cumulativeCPUUsage: processCpuMs / 1_000, percentCPUUsage: 0, idleWakeupsPerSecond: 0 },
+      memory: { workingSetSize: 0, peakWorkingSetSize: 0 },
+    } as ProcessMetric],
+  });
+  try {
+    await profiler.start();
+    // Baseline sample.
+    await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+    // First spike consumes maxProfiles (1).
+    processCpuMs += 1_800;
+    await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+    await vi.advanceTimersByTimeAsync(100);
+    await profileWritten;
+    await Promise.resolve();
+    expect(events.filter((event) => event.type === "profile-written")).toHaveLength(1);
+
+    // Baseline sample after profile completion resets the delta window.
+    await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+
+    // Within cooldown: no cap warning yet.
+    logger.warn.mockClear();
+    processCpuMs += 1_800;
+    await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+    expect(logger.warn).not.toHaveBeenCalled();
+
+    // Past cooldown: hot CPU still logs a throttled warning even though maxProfiles was reached.
+    await vi.advanceTimersByTimeAsync(60_000);
+    processCpuMs += 1_800;
+    await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "[pwragent:hot-cpu] hot CPU detected after profile cap reached",
+      expect.objectContaining({ target: "main", profileCount: 1, maxProfiles: 1 }),
+    );
+    expect(events.filter((event) => event.type === "profile-cap-warning")).toHaveLength(1);
+    // Throttled again on the immediately following sample.
+    logger.warn.mockClear();
+    processCpuMs += 1_800;
+    await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+    expect(logger.warn).not.toHaveBeenCalled();
+  } finally {
+    await profiler.stop();
+    vi.useRealTimers();
+  }
+});

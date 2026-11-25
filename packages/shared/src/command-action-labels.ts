@@ -101,9 +101,10 @@ function readMeaningfulPathName(value: string | null | undefined): string | unde
 
 const MAX_COMMAND_LABEL_LENGTH = 72;
 
-function readPosixScriptWord(text: string): { length: number; display: string; echo: string } | undefined {
+function readPosixScriptWord(text: string): { length: number; display: string; echoes: string[] } | undefined {
   let length = 0;
-  let echo = "";
+  let decodedScript = "";
+  let escapedScript = "";
   // Adjacent quoted and escaped fragments form one word. Sticky matching
   // stops at the first separator so a trailing argument never joins it.
   for (const [fragment, single, double, escaped] of text.matchAll(
@@ -111,12 +112,12 @@ function readPosixScriptWord(text: string): { length: number; display: string; e
   )) {
     const end = length + fragment.length;
     const literal = single ?? (escaped === "\n" ? "" : escaped);
-    // An unquoted dollar before a quote introduces Bash-specific quoting.
+    // Bash removes unquoted line continuations before recognizing $'…' or $"…".
     if (
       literal === undefined
       && double === undefined
       && fragment.endsWith("$")
-      && /['"]/.test(text.charAt(end))
+      && /^(?:\\\n)*['"]/.test(text.slice(end))
     ) {
       return undefined;
     }
@@ -127,15 +128,17 @@ function readPosixScriptWord(text: string): { length: number; display: string; e
     // Keep the existing display for a standalone double-quoted script.
     // Joined fragments use the decoded word that the shell passes to -c.
     if (double !== undefined && fragment.length === text.length) {
-      return { length: end, display: double, echo: decoded };
+      return { length: end, display: double, echoes: [decoded, double] };
     }
-    echo += decoded;
+    decodedScript += decoded;
+    escapedScript += literal ?? double ?? fragment;
     length = end;
   }
-  return { length, display: echo, echo };
+  // A provider can echo the script with or without its outer shell escapes.
+  return { length, display: decodedScript, echoes: [decodedScript, escapedScript] };
 }
 
-function readCommandLabelText(command: string): { display: string; scriptEcho?: string } {
+function readCommandLabelText(command: string): { display: string; scriptEchoes?: string[] } {
   const trimmed = command.trim();
   const posixWrapper = /^(?:\/\S+\/)?(?:ba|z)?sh\s+(-l?c|-C)\s+/.exec(trimmed);
   if (posixWrapper) {
@@ -153,7 +156,7 @@ function readCommandLabelText(command: string): { display: string; scriptEcho?: 
         display = word.display;
       }
     }
-    return { display, scriptEcho: word.length > 0 ? word.echo : undefined };
+    return word.length > 0 ? { display, scriptEchoes: word.echoes } : { display };
   }
 
   // Quoted Windows executable paths can contain spaces, as in Program Files.
@@ -186,9 +189,9 @@ export function normalizeCommandText(command: string): string {
 /** Matches an echoed command title without changing which text is displayed. */
 export function commandTitleMatchesInvocation(title: string, command: string): boolean {
   const candidate = normalizeCommandText(title);
-  const { display, scriptEcho } = readCommandLabelText(command);
+  const { display, scriptEchoes } = readCommandLabelText(command);
   return candidate === oneLine(display)
-    || (scriptEcho !== undefined && candidate === oneLine(scriptEcho));
+    || (scriptEchoes?.some((echo) => candidate === oneLine(echo)) ?? false);
 }
 
 /**

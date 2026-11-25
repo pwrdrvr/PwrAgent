@@ -1025,8 +1025,9 @@ describe("Sidebar commands under a resting pointer", () => {
     });
     const view = render(renderRepo([pinnedAlpha, pinnedBravo, charlie]));
     expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread", "Charlie thread"]);
+    fireEvent.click(screen.getByRole("button", { name: /^Charlie thread/ }), { metaKey: true });
     fireEvent.pointerOver(threadRow("Alpha thread"), { pointerType: "mouse" });
-    fireEvent.click(screen.getByRole("button", { name: /^Alpha thread/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Alpha thread/ }), { metaKey: true });
     fireEvent.click(screen.getByRole("button", { name: /^Bravo thread/ }), { metaKey: true });
     fireEvent.contextMenu(screen.getByRole("button", { name: /^Bravo thread/ }));
     await chooseFromMenuOverRows(

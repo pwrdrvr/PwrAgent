@@ -47,7 +47,7 @@ it("keeps managed installation passive until requested, then refreshes only loca
     expect(mock.install).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
     await expect(call(owner(), { action: "install" })).resolves.toEqual({ ok: true, runtime: { status: "installed", runtime } });
-    expect(refresh.mock.calls).toEqual([[false]]);
+    expect(refresh.mock.calls).toEqual([[false, runtime.command]]);
   } finally {
     dispose();
   }

@@ -108,7 +108,7 @@ type ThreadRowProps = {
    * row's selection does not render every visible row. Undefined follows the
    * thread open in the detail pane.
    */
-  selected?: boolean;
+  batchSelected?: boolean;
   subthreadCount?: number;
   subthreadsCollapsed?: boolean;
   thinkingThreadKeys?: Record<string, boolean>;
@@ -199,7 +199,6 @@ type ThreadRowProps = {
 
 export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
   const threadKey = threadSummaryIdentityKey(props.thread);
-  const selected = props.selected ?? threadKey === props.selectedThreadKey;
   const active = threadKey === props.selectedThreadKey;
   const isComposerSource = threadKey === props.composerSourceThreadKey;
   // A thread link elsewhere in the window (a provenance chip in the
@@ -469,7 +468,9 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
       <div
         ref={rowRef}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
-          selected ? " is-selected" : ""
+          active ? " is-selected" : ""
+        }${
+          props.batchSelected ? " is-batch-selected" : ""
         }${
           isComposerSource ? " is-composer-source" : ""
         }${isLinkTarget ? " is-link-target" : ""}${
@@ -522,7 +523,8 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             isPinnedRow ? `${props.thread.title}, pinned`
               : isRetainedRow ? `${props.thread.title}, shown while open` : props.thread.title
           }
-          aria-pressed={selected}
+          aria-current={active ? true : undefined}
+          aria-pressed={props.batchSelected ?? active}
           className="thread-row__open"
           type="button"
           onKeyDown={(event) => {

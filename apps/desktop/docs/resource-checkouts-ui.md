@@ -48,6 +48,16 @@ The popout shows the local instance's catalog, including external resources
 it can see over Federation. Remote viewer windows have no checkout UI.
 The popout shares the local owner's existing service and monitor.
 
+The Resources window stays available when Settings → Experimental →
+Federation resources is off, but this profile's agents then have no checkout
+tools. The snapshot's `agentTools` reports that setting, and the screen shows
+an **Agent checkouts off** strip while it is `disabled`, so an idle pool is
+not mistaken for no demand. The service reads the setting on every
+observation and includes it in the revision fingerprint, so a toggle reaches
+an open window on the next 2-second poll.
+`src/main/__tests__/resource-checkout-agent-tools-snapshot.property.test.ts`
+holds this rule.
+
 ## Owner wiring
 
 The owner starts the [resource checkout authority](resource-checkout-authority.md)

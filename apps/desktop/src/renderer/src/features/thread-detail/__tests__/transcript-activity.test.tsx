@@ -223,6 +223,41 @@ describe("TranscriptActivity", () => {
     expect(screen.getByRole("button", { name: "Copy invocation" })).toBeInTheDocument();
   });
 
+  it("relativizes a slash-stripped worktree path in both the header and expanded detail", () => {
+    const worktreeRoot = "/Users/fixture-user/.pwragent/worktrees/ms2ai7od/PwrAgnt";
+    const absolutePath = `${worktreeRoot}/docs/local-cpu-checkout.md`;
+    const slashlessLabel = `File ${absolutePath.slice(1)}`;
+
+    render(
+      <TranscriptActivity
+        directoryPaths={[
+          "/Users/fixture-user/pwrdrvr/PwrAgnt",
+          worktreeRoot,
+        ]}
+        entry={{
+          type: "activity",
+          id: "read-slashless",
+          summary: slashlessLabel,
+          details: [
+            {
+              id: "read-slashless:detail",
+              kind: "read",
+              label: slashlessLabel,
+              path: absolutePath,
+            },
+          ],
+        }}
+      />,
+    );
+
+    const toggle = screen.getByRole("button", { name: "File docs/local-cpu-checkout.md" });
+    expect(toggle).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+
+    expect(screen.getAllByText("File docs/local-cpu-checkout.md")).toHaveLength(2);
+  });
+
   it("formats nested detail labels while keeping outside paths absolute", () => {
     const projectPath = "/repo/PwrAgnt/apps/desktop/src/main.ts";
     const outsidePath = "/repo/PwrAgnt-other/scripts/release.ts";

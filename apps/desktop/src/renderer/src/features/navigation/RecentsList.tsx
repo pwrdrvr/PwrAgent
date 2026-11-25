@@ -35,6 +35,7 @@ import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { renderSubthreadPages, subthreadPageResources } from "./SubthreadPagination";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
+import { threadRowBatchSelected } from "./thread-row-instance";
 import { isRenamingRow, type RenamingThreadRow } from "./thread-action-hotkeys";
 import { AttentionReviewReadout, AttentionTurnReadouts, describeAttentionCounts } from "./AttentionSignals";
 import { isThreadActive, isThreadAwaitingReview, isThreadRemoteWork } from "./ThreadRowStatus";
@@ -83,7 +84,7 @@ type RecentsListProps = {
   onCommitRenameThread?: (thread: NavigationThreadSummary, name: string | null) => void;
   revealSelectedThreadRequest?: number;
   selectedThreadKey?: string;
-  selectedThreadKeys?: ReadonlySet<string>;
+  batchThreadKeys?: ReadonlySet<string>;
   thinkingThreadKeys?: Record<string, boolean>;
   agentCommandThreadKeys?: Record<string, boolean>;
   threads: NavigationThreadSummary[];
@@ -440,7 +441,7 @@ export function RecentsList(props: RecentsListProps) {
               nestedDepth={trays.depth(childKey)}
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedThreadKey === childKey ? childKey : undefined}
-              selected={props.selectedThreadKeys?.has(childKey)}
+              batchSelected={threadRowBatchSelected(props.batchThreadKeys, childKey, props.selectedThreadKey)}
               subthreadCount={childSubthreadCount}
               subthreadsCollapsed={isSubthreadSectionCollapsed(child) && !trays.heldOpen(childKey)}
               onToggleSubthreads={
@@ -553,7 +554,7 @@ export function RecentsList(props: RecentsListProps) {
       includeLinkedDirectories: true,
       revealSelectedThreadRequest: props.revealSelectedThreadRequest,
       selectedThreadKey: props.selectedThreadKey === key ? key : undefined,
-      selected: props.selectedThreadKeys?.has(key),
+      batchSelected: threadRowBatchSelected(props.batchThreadKeys, key, props.selectedThreadKey),
       thinkingThreadKeys: props.thinkingThreadKeys,
       agentCommandThreadKeys: props.agentCommandThreadKeys,
       thread,

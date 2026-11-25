@@ -53,9 +53,10 @@ export type ReadAcpFileEditOptions = {
   antigravity?: boolean;
   /**
    * The session's workspace. A file inside it is named relative to it in the
-   * diff header, as Claude's edits are.
+   * diff header, as Claude's edits are. A lookup runs only when a diff has a
+   * header to render.
    */
-  cwd?: string;
+  cwd?: string | (() => string | undefined);
 };
 
 export function readAcpFileEdit(
@@ -209,7 +210,8 @@ function buildFileDiff(
   if (hunks.length === 0) {
     return undefined;
   }
-  const name = unifiedDiffFileName(path.replace(/\\/g, "/"), options.cwd);
+  const cwd = typeof options.cwd === "function" ? options.cwd() : options.cwd;
+  const name = unifiedDiffFileName(path.replace(/\\/g, "/"), cwd);
   return renderUnifiedFileDiff({ name, created, hunks }).fileDiff;
 }
 

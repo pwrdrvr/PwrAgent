@@ -3,6 +3,7 @@ import { addAbortListener } from "node:events";
 import { join } from "node:path";
 import { codexAuthState } from "../../codex-auth-state";
 import { claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable } from "../../claude/claude-executable";
+import { resolveMainEntryPath } from "../../runtime-resources";
 import { openClaudeSessionReader } from "../../claude/claude-session-reader";
 import { getOwnerHostServices } from "../../owner-host";
 import { registerReceivingFolderIpc } from "./receiving-folder";
@@ -204,7 +205,7 @@ import {
   ensureAcpRuntimeDiscoveryWorkspace,
   probeAcpRuntimeCapabilities,
 } from "../../acp/acp-capability-probe";
-import { shouldReprobeAcpCapabilities } from "../../acp/acp-capability-freshness";
+import { retainedManagedAntigravityCatalog, shouldReprobeAcpCapabilities } from "../../acp/acp-capability-freshness";
 import { acpDiscoveryActionRequiredMessage } from "../../acp/acp-discovery-error";
 import { acpAgentLaunchIdentity } from "../../acp/acp-launch-descriptor";
 import { describeDistributionSource } from "../../acp/acp-install-provenance";
@@ -257,6 +258,9 @@ function invalidateAcpRefreshCacheAfterWrite(
 ): void {
   if (patch.acpAgents !== undefined) {
     recentAcpRefreshes.clear();
+  }
+  if (patch.acpAgents?.antigravity !== undefined) {
+    antigravityDiscoveryRevision += 1;
   }
   // A config write only invalidates normalized provider state. It is never
   // authority to launch discovery or rebuild a provider harness; the Settings
@@ -351,17 +355,23 @@ function invalidateRecentAcpRefreshes(
   }
 }
 
-async function refreshAntigravitySetup(settingsService: DesktopSettingsService, probeCapabilities: boolean) {
+async function refreshAntigravitySetup(
+  settingsService: DesktopSettingsService,
+  probeCapabilities: boolean,
+  installedCommand?: string,
+) {
   antigravityDiscoveryRevision += 1;
   const registryIds = ["antigravity"];
   invalidateRecentAcpRefreshes(new Set(registryIds));
   const registry = getDesktopBackendRegistry();
   registry.invalidateProviderRuntimeSelections({ acp: true, acpRegistryIds: registryIds, codex: false });
   const store = new AcpAgentService();
+  const previouslyInstalled = installedCommand
+    && store.getInstalledAgent("acp:antigravity")?.installStatus === "installed";
   const env = await settingsService.resolveTerminalSpawnEnvAsync().catch(() => undefined);
   const records = await listInstalledAndLocalAcpAgents(store, {
     permit: issueProviderDiscoveryPermit("settings-user-action"),
-    providers: settingsService.readProvidersConfig(),
+    readProviders: () => settingsService.readProvidersConfig(),
     refreshLocal: true,
     registryIds,
     probeCapabilities,
@@ -369,6 +379,13 @@ async function refreshAntigravitySetup(settingsService: DesktopSettingsService, 
     env,
   });
   registry.invalidateProviderRuntimeSelections({ acp: true, acpRegistryIds: registryIds, codex: false });
+  if (installedCommand && previouslyInstalled) {
+    void registry.refreshManagedAntigravityCatalog(installedCommand).catch((error: unknown) => {
+      settingsIpcLog.warn("antigravity_catalog_refresh_failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
   return records.find((record) => record.registryId === "antigravity" && record.installStatus === "installed")?.launchDescriptor;
 }
 
@@ -545,7 +562,7 @@ async function listAcpAgentSettingsImpl(
   }
   const installed = await listInstalledAndLocalAcpAgents(store, {
     ...(permit ? { permit } : {}),
-    providers: settingsService.readProvidersConfig(),
+    readProviders: () => settingsService.readProvidersConfig(),
     refreshLocal: request.refresh === true,
     ...(request.force === true ? { force: true } : {}),
     ...(request.probeCapabilities === false
@@ -825,7 +842,7 @@ async function listInstalledAndLocalAcpAgents(
   store: AcpAgentService,
   options?: {
     permit?: ProviderDiscoveryPermit;
-    providers?: ReturnType<DesktopSettingsService["readProvidersConfig"]>;
+    readProviders?: DesktopSettingsService["readProvidersConfig"];
     refreshLocal?: boolean;
     force?: boolean;
     probeCapabilities?: boolean;
@@ -835,8 +852,13 @@ async function listInstalledAndLocalAcpAgents(
   },
 ): Promise<AcpInstalledAgentRecord[]> {
   const antigravityRevision = antigravityDiscoveryRevision;
-  const superseded = (registryId: string) => registryId === "antigravity"
-    && antigravityRevision !== antigravityDiscoveryRevision;
+  const readProviders = options?.readProviders ?? (() => getDesktopSettingsService().readProvidersConfig());
+  const superseded = (record: AcpInstalledAgentRecord) => {
+    if (record.registryId !== "antigravity") return false;
+    if (antigravityRevision !== antigravityDiscoveryRevision) return true;
+    const fingerprint = providerProjectionForRegistryId(readProviders(), record.registryId)?.dependencyFingerprint;
+    return record.configDependencyFingerprint !== fingerprint;
+  };
   const installed = store.listInstalledAgents();
   let discovered: AcpInstalledAgentRecord[] = [];
   const progress = options?.progress;
@@ -859,8 +881,7 @@ async function listInstalledAndLocalAcpAgents(
       "setup-user-action",
     ]);
     try {
-      const providers = options.providers
-        ?? getDesktopSettingsService().readProvidersConfig();
+      const providers = readProviders();
       const preferences: Record<string, AcpAgentPreference> = {};
       const requestedRegistryIds = LOCAL_ACP_REGISTRY_IDS.filter(
         (registryId) =>
@@ -938,7 +959,7 @@ async function listInstalledAndLocalAcpAgents(
         : undefined;
       const toProbe: AcpInstalledAgentRecord[] = [];
       for (const record of discovered) {
-        if (superseded(record.registryId)) continue;
+        if (superseded(record)) continue;
         if (record.installStatus !== "installed") {
           // Compatibility diagnostics (for example a legacy Python kimi-cli)
           // are durable records but must never inherit the previous usable
@@ -965,7 +986,7 @@ async function listInstalledAndLocalAcpAgents(
         const nextRecord = {
           ...record,
           runtimeCapabilities: runtimeChanged
-            ? undefined
+            ? retainedManagedAntigravityCatalog(current, record)
             : current?.runtimeCapabilities,
           update: pwrAgentOwnedGrok ? undefined : current?.update,
           updateCommand: pwrAgentOwnedGrok
@@ -1014,12 +1035,14 @@ async function listInstalledAndLocalAcpAgents(
       const probes = new IterableMapper(
         toProbe,
         (record) =>
-          probeInstalledAcpAgent(record, {
-            cwd: discoveryCwd,
-            report,
-            ...(probeTimeoutMs !== undefined ? { probeTimeoutMs } : {}),
-            ...(progress ? { signal: progress.signal } : {}),
-          }),
+          superseded(record)
+            ? { record, update: { status: "cancelled" as const } }
+            : probeInstalledAcpAgent(record, {
+              cwd: discoveryCwd,
+              report,
+              ...(probeTimeoutMs !== undefined ? { probeTimeoutMs } : {}),
+              ...(progress ? { signal: progress.signal } : {}),
+            }),
         { concurrency: ACP_PROBE_CONCURRENCY, maxUnread: ACP_PROBE_CONCURRENCY },
       );
       // Drain every probe before answering, even past a failed write: leaving
@@ -1027,9 +1050,9 @@ async function listInstalledAndLocalAcpAgents(
       // agents are still being probed, inviting a second copy of each.
       let storeFailure: unknown;
       for await (const outcome of probes) {
-        if (superseded(outcome.record.registryId)) continue;
+        if (superseded(outcome.record)) continue;
         try {
-          store.upsertInstalledAgent(keepConcurrentAcpRestriction(store, outcome));
+          store.upsertInstalledAgent(keepConcurrentAcpDiscovery(store, outcome));
         } catch (error) {
           storeFailure ??= error;
           continue;
@@ -1064,31 +1087,37 @@ async function listInstalledAndLocalAcpAgents(
     ...discovered.filter(
       (record) =>
         !installedBackendIds.has(record.backendId) &&
-        !superseded(record.registryId) &&
+        !superseded(record) &&
         !isBannedAcpRegistryId(record.registryId),
     ),
   ];
 }
 
-function keepConcurrentAcpRestriction(
+function keepConcurrentAcpDiscovery(
   store: AcpAgentService,
   { record, update }: AcpProbeOutcome,
 ): AcpInstalledAgentRecord {
   const { registryId } = record;
   if ((registryId !== "gemini" && registryId !== "antigravity")
-    || update.status === "succeeded"
+    || (update.status === "succeeded" && record.runtimeCapabilities?.status !== "stale")
     || acpDiscoveryActionRequiredMessage(registryId, record.lastDiscoveryError)) {
     return record;
   }
-  // An ordinary session may have learned the restriction after this probe
-  // started. An inconclusive result must keep it for the same runtime.
   const current = store.getInstalledAgent(record.backendId);
   if (!current || current.version !== record.version
-    || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record)
-    || !acpDiscoveryActionRequiredMessage(registryId, current.lastDiscoveryError)) {
+    || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(record)) {
     return record;
   }
-  return { ...record, lastDiscoveryError: current.lastDiscoveryError, runtimeCapabilities: undefined };
+  // A live session can learn an account restriction while this probe runs.
+  if (acpDiscoveryActionRequiredMessage(registryId, current.lastDiscoveryError)) {
+    return { ...record, lastDiscoveryError: current.lastDiscoveryError, runtimeCapabilities: undefined };
+  }
+  // A late probe with only carried models must not replace a fresh catalog.
+  return registryId === "antigravity"
+    && record.runtimeCapabilities?.status === "stale"
+    && current.runtimeCapabilities?.status === "discovered"
+    && current.lastDiscoveredAt !== undefined
+    ? current : record;
 }
 
 function acpAgentSettingsEntry(params: {
@@ -1308,7 +1337,7 @@ async function discoverRecentProjectsForOnboarding(
       // Use the worker even when CLAUDE_CONFIG_DIR matches, so a cancelled
       // or timed-out discovery can stop reading immediately.
       const reader = openClaudeSessionReader(env, {
-        workerPath: join(__dirname, "claude-session-reader-worker.js"),
+        workerPath: resolveMainEntryPath("claude-session-reader-worker.js", __dirname),
       });
       using _abort = addAbortListener(claudeSignal, () => reader.close());
       try {
@@ -1854,7 +1883,7 @@ export function registerSettingsIpcHandlers(
   registerWorktreeFolderIpc(() => getService(service).resolveWorktreeFolder());
   disposeAntigravitySetup?.();
   disposeAntigravitySetup = registerAntigravitySetupIpc({
-    refresh: (probeCapabilities) => refreshAntigravitySetup(getService(service), probeCapabilities),
+    refresh: (probeCapabilities, installedCommand) => refreshAntigravitySetup(getService(service), probeCapabilities, installedCommand),
     // The same predicate that keeps the Grok vendor check out of E2E captures.
     updateChecksDisabled: grokUpdateChecksDisabled({ isPackaged: app?.isPackaged === true }),
   });

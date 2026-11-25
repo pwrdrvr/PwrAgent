@@ -26,7 +26,7 @@ const accepted: AntigravitySetupResult = { ok: true };
 const failed = (message: string): AntigravitySetupResult => ({ ok: false, message });
 
 export function registerAntigravitySetupIpc(options: {
-  refresh: (probeCapabilities: boolean) => Promise<AcpLaunchDescriptor | undefined>;
+  refresh: (probeCapabilities: boolean, installedCommand?: string) => Promise<AcpLaunchDescriptor | undefined>;
   /**
    * Skip the release check. Unpackaged E2E runs set this so a capture never
    * depends on what Google happens to publish, the same rule as the Grok
@@ -54,7 +54,7 @@ export function registerAntigravitySetupIpc(options: {
       progress.ready(runtime.version);
       // The install and its checksum/ACP checks have already succeeded. A
       // later discovery error does not roll back the active verified runtime.
-      await options.refresh(false).catch(() => undefined);
+      await options.refresh(false, runtime.command).catch(() => undefined);
       return { ok: true, runtime: { status: "installed", runtime } };
     } catch {
       const error = "Could not finish setting up Antigravity. Try again or install it manually.";

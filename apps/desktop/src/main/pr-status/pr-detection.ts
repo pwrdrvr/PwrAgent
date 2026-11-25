@@ -2,12 +2,14 @@ import type { LinkedDirectorySummary } from "@pwragent/shared/contracts/normaliz
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
-import { createScheduledPrefetchRemoteReader, observeForgeRepositoriesForDirectory, type GitHubRepoRef } from "./git-remote";
+import {
+  createScheduledPrefetchRemoteReader, observeForgeRepositoriesForDirectory, sampleForgeRepositoriesForDirectory, type GitHubRepoRef,
+} from "./git-remote";
 import type { GithubPrFetcher } from "./github-pr-fetcher";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 import { prMatchesSourceRepository } from "./pr-source-repository";
 import { hasForgeRepositoryName } from "./forge-repository-names";
-import { readGitRemoteHead, readProvenRemoteHeads } from "./pr-remote-heads";
+import { observeProvenRemoteHeads, readGitRemoteHead, readProvenRemoteHeads, sharesRemoteHeadAbbreviations } from "./pr-remote-heads";
 import { observeScheduledPrPrefetchMetadata, type ScheduledPrPrefetchMetadataScope } from "./pr-prefetch-metadata";
 
 const GIT_BRANCH_LOOKUP_TIMEOUT_MS = 2_000;
@@ -36,6 +38,52 @@ const storedDiscoveryContexts = new Map<string, { expiresAt: number; context: St
 const storedDiscoveryReads = new Map<string, SharedPrMetadataRead<StoredDiscoveryContext>>();
 const STORED_DISCOVERY_CONTEXT_TTL_MS = 60_000;
 const MAX_STORED_DISCOVERY_CONTEXTS = 256;
+
+export type PrAttachmentDemand = PrMetadataDemand & {
+  storedAttachmentObservation?: ReturnType<typeof createStoredAttachmentObservation>;
+};
+
+/** Share fresh remote and default refs only inside the current checkout observation. */
+export function createStoredAttachmentObservation(
+  representativeFor: (cwd: string) => Promise<{ root: string; gitDir: string; remoteCandidates: string[] } | undefined>,
+  freshFallback = false,
+) {
+  const reads = new Map<string, ReturnType<typeof sampleSharedStoredDiscoveryContext>>();
+  const proofs = new Set<() => Promise<boolean | undefined>>();
+  const exactReads = new Map<string, Promise<StoredDiscoveryContext>>();
+  function exact(cwd: string, demand?: PrMetadataDemand): Promise<StoredDiscoveryContext> {
+    if (!freshFallback) return readStoredDiscoveryContext(cwd, demand);
+    let read = exactReads.get(cwd);
+    if (!read) {
+      read = sampleStoredDiscoveryContext(cwd, demand, true);
+      exactReads.set(cwd, read);
+    }
+    return read;
+  }
+  return {
+    async unchanged(): Promise<boolean> {
+      return (await Promise.all([...proofs].map((check) => check()))).every((match) => match === true);
+    },
+    async read(cwd: string, demand?: PrMetadataDemand): Promise<StoredDiscoveryContext> {
+      const representative = await representativeFor(cwd);
+      if (!representative) return await exact(cwd, demand);
+      demand?.signal?.throwIfAborted();
+      let read = reads.get(representative.root);
+      if (!read) {
+        read = sampleSharedStoredDiscoveryContext(representative.root, representative.remoteCandidates, demand);
+        reads.set(representative.root, read);
+      }
+      const sample = await read;
+      if (!sample) return await exact(cwd, demand);
+      const { repos, remoteNames, proof } = sample;
+      const verifiedHeads = await sharesRemoteHeadAbbreviations(representative.gitDir, proof.heads, demand) ? proof.heads : null;
+      if (verifiedHeads) proofs.add(proof.unchanged);
+      const defaults = await prGitSubprocessCaller.run("pr-stored-attachment-validation", () =>
+        readDefaultBranchInfo(cwd, demand, remoteNames, verifiedHeads));
+      return { repos, defaults };
+    },
+  };
+}
 
 /**
  * Detect PRs for a single thread by walking the resolved directory paths that
@@ -348,14 +396,15 @@ async function readUnmergedBranchTip(params: {
  */
 export async function filterStoredDiscoveredPullRequests(
   prs: PrSummary[],
-  options: { resolveRepositoryNames?: (repos: GitHubRepoRef[]) => Promise<void>; demand?: PrMetadataDemand } = {},
+  options: { resolveRepositoryNames?: (repos: GitHubRepoRef[]) => Promise<void>; demand?: PrAttachmentDemand } = {},
 ): Promise<PrSummary[]> {
   options.demand?.signal?.throwIfAborted();
   const directories = uniqueNonEmpty(prs.flatMap((pr) => pr.explicitlyAttached ? [] : pr.linkedDirectoryPaths ?? []));
   if (directories.length === 0) return prs;
-  const contexts = new Map(await Promise.all(directories.map(async (cwd) =>
-    [cwd, await readStoredDiscoveryContext(cwd, options.demand)] as const,
-  )));
+  const observation = options.demand?.storedAttachmentObservation;
+  const contexts = new Map(await Promise.all(directories.map(async (cwd) => [
+    cwd, await (observation ? observation.read(cwd, options.demand) : readStoredDiscoveryContext(cwd, options.demand)),
+  ] as const)));
   // The repositories that decide each automatic PR, one list per linked
   // checkout; null where the checkout cannot say (missing, failed probe).
   const repairContexts = (pr: PrSummary): Array<GitHubRepoRef[] | null> =>
@@ -397,23 +446,43 @@ function unnamedGitHubRepositories(repos: GitHubRepoRef[]): GitHubRepoRef[] {
   return repos.filter((repo) => repo.host === "github.com" && !hasForgeRepositoryName(repo));
 }
 
+async function sampleSharedStoredDiscoveryContext(cwd: string, remoteCandidates: string[], demand?: PrMetadataDemand) {
+  return await prGitSubprocessCaller.run("pr-stored-attachment-validation", async () => {
+    // Candidate names come from the roster's config read. Check their loose
+    // refs before sampling remotes, then require Git to confirm the names.
+    if (!remoteCandidates.length) return undefined;
+    const proof = await observeProvenRemoteHeads(cwd, remoteCandidates, demand, remoteCandidates.length);
+    if (!proof) return undefined;
+    const { repos, refreshedRemoteNames: remoteNames } = await sampleForgeRepositoriesForDirectory(cwd, demand);
+    if (!repos.length || !remoteNames?.length || !remoteNames.every((name) => proof.heads.has(name))) return undefined;
+    return { repos, remoteNames, proof };
+  });
+}
+
+async function sampleStoredDiscoveryContext(cwd: string, demand?: PrMetadataDemand, fresh = false): Promise<StoredDiscoveryContext> {
+  return await prGitSubprocessCaller.run("pr-stored-attachment-validation", async () => {
+    const { repos, refreshedRemoteNames } = await (fresh
+      ? sampleForgeRepositoriesForDirectory(cwd, demand)
+      : observeForgeRepositoriesForDirectory(cwd, undefined, { demand }));
+    const defaults = repos.length > 0
+      ? await readDefaultBranchInfo(cwd, demand, refreshedRemoteNames)
+      : { defaultsByRemote: new Map<string, string>(), names: new Set<string>(), remotes: new Set<string>() };
+    demand?.signal?.throwIfAborted();
+    return { repos, defaults };
+  });
+}
+
 function readStoredDiscoveryContext(cwd: string, demand?: PrMetadataDemand): Promise<StoredDiscoveryContext> {
   const existing = storedDiscoveryReads.get(cwd);
   if (existing && !existing.signal.aborted) return existing.read(demand);
   const cached = storedDiscoveryContexts.get(cwd);
   if (cached && cached.expiresAt > Date.now()) return Promise.resolve(cached.context);
   storedDiscoveryContexts.delete(cwd);
-  const pending = new SharedPrMetadataRead((sharedDemand) => prGitSubprocessCaller.run("pr-stored-attachment-validation", async () => {
+  const pending = new SharedPrMetadataRead(async (sharedDemand) => {
     try {
-      const { repos, refreshedRemoteNames } = await observeForgeRepositoriesForDirectory(cwd, undefined, { demand: sharedDemand });
-      // Inconclusive identity keeps the attachment without reading default refs.
-      const defaults = repos.length > 0
-        ? await readDefaultBranchInfo(cwd, sharedDemand, refreshedRemoteNames)
-        : { defaultsByRemote: new Map<string, string>(), names: new Set<string>(), remotes: new Set<string>() };
-      sharedDemand.signal?.throwIfAborted();
       // Failed metadata stays inconclusive and is retried by the next read.
-      const context = { repos, defaults };
-      if (repos.length > 0 && defaults.remotes.size > 0) {
+      const context = await sampleStoredDiscoveryContext(cwd, sharedDemand);
+      if (context.repos.length > 0 && context.defaults.remotes.size > 0) {
         if (storedDiscoveryContexts.size >= MAX_STORED_DISCOVERY_CONTEXTS) {
           storedDiscoveryContexts.delete(storedDiscoveryContexts.keys().next().value!);
         }
@@ -423,7 +492,7 @@ function readStoredDiscoveryContext(cwd: string, demand?: PrMetadataDemand): Pro
     } finally {
       if (storedDiscoveryReads.get(cwd) === pending) storedDiscoveryReads.delete(cwd);
     }
-  }));
+  });
   storedDiscoveryReads.set(cwd, pending);
   return pending.read(demand);
 }
