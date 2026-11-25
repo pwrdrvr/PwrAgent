@@ -2864,6 +2864,73 @@ describe("app server ipc", () => {
     expect(service.collectPrPollTargets().some(({ pr }) => pr.number === 1)).toBe(false);
   }, 45_000);
 
+  it.skipIf(process.platform === "win32").each([8, 12])(
+    "bounds owner origin reads across %i ordinary siblings and agrees with Git for a worktree override",
+    async (size) => {
+      const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
+      const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+      const git = await import("../app-server/git-executable");
+      const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
+        await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-remotes-"));
+      const restoreGit = isolateProcessGitEnvironment(root);
+      const runGit = vi.spyOn(git, "runGitCommand");
+      onTestFinished(async () => {
+        runGit.mockRestore();
+        clearGitHubRemoteCache();
+        restoreGit();
+        await rm(root, { recursive: true, force: true });
+      });
+      const clone = path.join(root, "clone");
+      const origin = "https://github.com/fixture/ordinary.git";
+      const override = "https://github.com/fixture/override.git";
+      await git.runGitCommand(root, ["init", "-b", "main", clone]);
+      await git.runGitCommand(clone, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "--allow-empty", "-m", "fixture"]);
+      await git.runGitCommand(clone, ["config", "extensions.worktreeConfig", "true"]);
+      await git.runGitCommand(clone, ["remote", "add", "origin", origin]);
+      const checkouts: string[] = [];
+      for (let index = 0; index <= size; index++) {
+        const checkout = path.join(root, `worktree-${index}`);
+        await git.runGitCommand(clone, ["worktree", "add", "--detach", checkout]);
+        checkouts.push(checkout);
+      }
+      const exceptional = checkouts[size]!;
+      await git.runGitCommand(exceptional, ["config", "--worktree", `url.${override}.insteadOf`, origin]);
+      const rows = await Promise.all(checkouts.map(async (cwd, index) => {
+        const { stdout } = await git.runGitCommand(cwd, ["remote", "get-url", "origin"]);
+        expect(stdout.trim()).toBe(cwd === exceptional ? override : origin);
+        const repo = stdout.trim() === override ? "override" : "ordinary";
+        return {
+          id: `remote-owner-${index}`, source: "codex", title: "Fixture", titleSource: "explicit",
+          linkedDirectories: [{ id: clone, kind: "worktree", label: "Fixture", path: clone, worktreePath: cwd }],
+          prs: [githubPr({ number: index + 1, org: "fixture", repo, explicitlyAttached: true,
+            state: "passing", url: `https://github.com/fixture/${repo}/pull/${index + 1}` })],
+        } satisfies AppServerThreadSummary & { prs: [PrSummary] };
+      }));
+      overlayStoreFixture.stable = getDesktopOverlayStore();
+      getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+      listThreads.mockResolvedValue(rows as never);
+      resolveGitHubRepoForDirectory.mockImplementation((cwd, options) => readOrigin(cwd!, options));
+      registerAppServerIpcHandlers();
+      runGit.mockClear();
+      await startAppServerOwnerNavigation();
+      const originReads = () => runGit.mock.calls.filter(([, , options]) => options?.purpose === "pr-remotes");
+      expect(rows.map(({ id }) => appServerService.readPrimaryGitRepository("codex", id)))
+        .toEqual(rows.map(({ prs }) => `github.com/fixture/${prs[0].repo}`));
+      expect(originReads().filter(([cwd]) => cwd === exceptional)).toHaveLength(1);
+      // The launch budget depends on the number of distinct configurations,
+      // even when the same ordinary configuration appears in more checkouts.
+      expect(originReads().length).toBeLessThanOrEqual(3);
+      const previous = syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length;
+      runGit.mockClear();
+      emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: {} } });
+      await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length).toBeGreaterThan(previous));
+      expect(originReads()).toHaveLength(0);
+    },
+    30_000,
+  );
+
   it("recovers polling and terminal ownership when the stored origin cannot establish the checkout identity", async () => {
     const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");

@@ -76,8 +76,8 @@ changing any of those contracts.
 
 The sibling `gitSubprocesses` summary records spawn attempts in fixed
 two-second buckets. In schema version 2, each bucket's `startsByCaller` counts
-all attempts for `pr-scheduled-prefetch`, `pr-live-branch-lookup`, and
-`pr-stored-attachment-validation`, including attempts that exceed the 32-row
+all attempts for `pr-scheduled-prefetch`, `pr-live-branch-lookup`,
+`pr-stored-attachment-validation`, and `pr-owner-navigation-inventory`, including attempts that exceed the 32-row
 limit. For a caller's overflow count, subtract that caller's retained row
 starts from its aggregate. Shared probes are attributed to the requester that
 created the work. Joining an existing probe or using a cached result adds no

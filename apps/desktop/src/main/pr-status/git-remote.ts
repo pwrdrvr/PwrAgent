@@ -116,6 +116,7 @@ type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
 const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
+const inventoryLookups = new WeakSet<SharedPrMetadataRead<RemoteCacheEntry>>();
 let remoteCacheGeneration = 0;
 let remoteSampleOrder = 0;
 
@@ -136,6 +137,9 @@ export function clearGitHubRemoteCache(): void {
   sshLookups = new WeakMap();
 }
 
+export type InventoryRemoteConfigReader = (cwd: string, demand: PrMetadataDemand) =>
+  Promise<{ configuration?: GitRemoteConfiguration } | undefined>;
+
 export type ResolveGitHubRepoOptions = {
   /** Override the git runner — tests inject canned configured remotes. */
   readRemotes?: (cwd: string) => Promise<GitRemote[]>;
@@ -147,6 +151,8 @@ export type ResolveGitHubRepoOptions = {
   fresh?: boolean;
   /** Confirm an empty config in Git before using it as checkout authority. */
   confirmEmpty?: boolean;
+  /** Batch-only config evidence for owner inventory reads. */
+  inventoryConfig?: InventoryRemoteConfigReader;
 };
 
 /**
@@ -398,7 +404,10 @@ async function readParsedGitRemotes(
   }
 
   const existing = remoteLookups.get(cwd);
-  if (existing && !existing.signal.aborted) {
+  // A selected or fresh reader may need Git's own view of this checkout.
+  // Inventory can still share with other readers at its priority.
+  const needsCheckout = confirmEmpty || (options.demand?.priority?.() ?? 0) >= PR_METADATA_PRIORITY.selected;
+  if (existing && !existing.signal.aborted && !(needsCheckout && inventoryLookups.has(existing))) {
     const observation = await existing.read(options.demand);
     // A checkout-authority read can join a cheaper discovery already in
     // flight. Confirm an ambiguous result once the shared read settles.
@@ -418,6 +427,7 @@ async function readParsedGitRemotes(
       if (remoteLookups.get(cwd) === pending) remoteLookups.delete(cwd);
     }
   });
+  if (options.inventoryConfig) inventoryLookups.add(pending);
   remoteLookups.set(cwd, pending);
   return pending.read(options.demand);
 }
@@ -439,7 +449,7 @@ async function loadParsedGitRemotes(
     demand.signal?.throwIfAborted();
     const raw: Awaited<ReturnType<typeof defaultReadRemotes>> = prefetch?.configuration ?? (options.readRemotes
       ? { remotes: await options.readRemotes(cwd) }
-      : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch));
+      : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch, options.inventoryConfig));
     const sampleOrder = prefetch?.configSampleOrder ?? raw.urlSampleOrder ?? nextRemoteSampleOrder();
     const { names, remotes, unconfirmedEmpty, readWithGitRemote: listedWithGitRemote, hasConditionalIncludes } = raw;
     const prior = prefetch?.previous;
@@ -513,6 +523,7 @@ function resolveSshHostInFlight(host: string, resolve: SshResolver, demand: PrMe
 async function defaultReadRemotes(
   cwd: string, demand: PrMetadataDemand, confirmEmpty: boolean,
   prefetch?: { previous?: RemoteCacheEntry; useGitRemote?: boolean; preferCachedIdentity?: boolean },
+  inventoryConfig?: InventoryRemoteConfigReader,
 ): Promise<{
   names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true;
   hasConditionalIncludes?: true; urlSampleOrder?: number;
@@ -533,9 +544,13 @@ async function defaultReadRemotes(
   if (!prefetch?.useGitRemote && !useNativeList
     && !Object.keys(childEnv).some((key) => key.toUpperCase() === "GIT_CONFIG")) {
     try {
-      const { stdout } = await runPrMetadataGit(cwd,
-        ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS], gitOptions, demand);
-      const configuration = parseGitRemoteConfiguration(stdout);
+      const inventory = confirmEmpty ? undefined : await inventoryConfig?.(cwd, demand);
+      let configuration = inventory?.configuration;
+      if (!inventory) {
+        const { stdout } = await runPrMetadataGit(cwd,
+          ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS], gitOptions, demand);
+        configuration = parseGitRemoteConfiguration(stdout);
+      }
       if (configuration?.names.length) return configuration;
       if (configuration && !confirmEmpty) return { remotes: [], unconfirmedEmpty: true };
     } catch (error) {

@@ -105,7 +105,7 @@ it.skipIf(process.platform === "win32")("launches checkout metadata once for twe
   // One checkout observation is enough. Tracking still comes from Git for each branch.
   const { rows, startsByCaller } = starts.snapshot();
   expect(startsByCaller).toEqual({
-    "pr-scheduled-prefetch": 14, "pr-live-branch-lookup": 0, "pr-stored-attachment-validation": 0,
+    "pr-scheduled-prefetch": 14, "pr-live-branch-lookup": 0, "pr-stored-attachment-validation": 0, "pr-owner-navigation-inventory": 0,
   });
   expect(Object.fromEntries(rows.map((row) => [`${row.purpose}/${row.command}`, row.started]))).toEqual({
     "pr-remotes/config": 1,
@@ -735,7 +735,7 @@ it.skipIf(process.platform === "win32").each(["matching", "nonmatching"])("keeps
   for (const branch of ["topic-0", "main", "topic-1"]) await expectEligible(resolve, cwd, branch, expected(branch));
   const { rows, startsByCaller } = starts.snapshot();
   expect(startsByCaller).toEqual({
-    "pr-scheduled-prefetch": 9, "pr-live-branch-lookup": 0, "pr-stored-attachment-validation": 0,
+    "pr-scheduled-prefetch": 9, "pr-live-branch-lookup": 0, "pr-stored-attachment-validation": 0, "pr-owner-navigation-inventory": 0,
   });
   expect(Object.fromEntries(rows.map((row) => [`${row.purpose}/${row.command}`, row.started]))).toEqual({
     "pr-remotes/remote-list": 3, "pr-discovery/symbolic-ref": 3, "pr-discovery/refs": 3,

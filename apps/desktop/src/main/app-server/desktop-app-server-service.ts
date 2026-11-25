@@ -36,6 +36,8 @@ import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
+import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
+import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 import { StackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
@@ -2843,10 +2845,9 @@ class DesktopAppServerService {
     threads: NavigationSnapshot["threads"],
     options: { replace: boolean; isCurrent?: () => boolean; resolveUnattached?: boolean; inventoryDemand?: PrMetadataDemand },
   ): Promise<void> {
-    const primaryRepoResolutionByPath = new Map<
-      string,
-      Promise<string | undefined>
-    >();
+    const inventoryConfig = options.inventoryDemand && createInventoryRemoteConfigReader();
+    const primaryRepoResolutionByPath = new Map<string, Promise<string | undefined>>();
+    const freshPrimaryRepoResolutionByPath = new Map<string, Promise<string | undefined>>();
     const primaryRepoKeys = await Promise.all(threads.map((thread) => {
       if (!options.inventoryDemand) {
         return thread.prs?.length || options.resolveUnattached
@@ -2863,9 +2864,10 @@ class DesktopAppServerService {
       const unresolved = !stored.key || (live.length > 0
         && !live.some((pr) => this.matchesPrimaryRepository(pr, stored.key)));
       return workspaceChanged || (stored.canProbe && unresolved)
-        ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath, {
-            demand: options.inventoryDemand, ...(workspaceChanged ? { fresh: true } : {}),
-          })
+        ? prGitSubprocessCaller.run("pr-owner-navigation-inventory", () =>
+            resolvePrimaryThreadRepoKey(thread, workspaceChanged ? freshPrimaryRepoResolutionByPath : primaryRepoResolutionByPath, {
+              demand: options.inventoryDemand, ...(workspaceChanged ? { fresh: true } : { inventoryConfig }),
+            }))
         : stored.key;
     }));
     const liveThreadKeys = new Set<string>();
