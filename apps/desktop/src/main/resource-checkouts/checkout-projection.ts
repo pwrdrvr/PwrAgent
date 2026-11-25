@@ -6,6 +6,7 @@ import type {
   ResourceActionGates, ResourceAuthority, ResourceDomain, ResourceHolder, ResourceOwnershipConflict, ResourceRecoveryStatus,
   ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
+import { effectiveQueueOrder } from "@pwragent/shared/contracts/resource-checkouts";
 
 /**
  * The holder an actor names, with the owning instance its key records. Grants
@@ -110,6 +111,7 @@ export function projectCheckoutDomain(
   const held = record.grants.reduce((sum, grant) => sum + grant.units, 0);
   const draining = grants.some((grant) => grant.state === "draining");
   const owned = grants.find((grant) => grant.actor.key === actor.key);
+  const waiting = queue.some((entry) => entry.actor.key === actor.key);
   const unavailable = authority.status !== "reachable";
   const canRecover = machine && !unavailable && !pending && actor.manage && actor.holder.kind === "operator";
   const recoveries = grants.filter((grant) => grant.state === "recovery_required")
@@ -118,9 +120,12 @@ export function projectCheckoutDomain(
   const resolvable = authority.status === "unresolved" && conflict.resolution !== undefined
     && actor.manage && actor.holder.kind === "operator";
   const actions: ResourceActionGates = resolvable ? { resolve_ownership: { allowed: true } } : unavailable || pending ? {} : {
-    request: recovery ? { allowed: false, reason: "fencing_required", detail: "The previous job needs verified cleanup." } : { allowed: true },
+    request: recovery ? { allowed: false, reason: "fencing_required", detail: "The previous job needs verified cleanup." }
+      // The authority allows one queued request per requester and resource.
+      : waiting ? { allowed: false, reason: "policy", detail: "You already have a request in this queue. Cancel it to ask again." }
+      : { allowed: true },
     ...recovery?.actions,
-    ...(queue.some((entry) => entry.actor.key === actor.key) ? { cancel_request: { allowed: true } } : {}),
+    ...(waiting ? { cancel_request: { allowed: true } } : {}),
     ...(owned && owned.state !== "recovery_required" && owned.state !== "draining" ? { release: { allowed: true } } : {}),
     ...(owned && !owned.job?.provider && (owned.state === "granted" || owned.state === "active") ? {
       extend: owned.renewals < MAX_CHECKOUT_RENEWALS && !queue.length && owned.deadlineAt < owned.grantedAt + definition.maxHoldMs
@@ -182,6 +187,7 @@ export function projectCheckoutDomain(
       useScope: machine ? "Local profiles" : "Operator-configured instances",
       manageScope: "Operator", maxHoldMs: definition.maxHoldMs,
       renewalRule: "One renewal while no requester is waiting, within the maximum hold.",
+      queueOrder: effectiveQueueOrder(definition),
       costCeilingLabel: approvedProvider ? "Operator-approved workload only" : "No spending permission",
       finalEffect: machine ? "Release reserved CPU slots" : approvedProvider ? "Stop compute and verify retained assets" : "No provider lifecycle operations",
     },

@@ -117,7 +117,7 @@ export function ResourceWaitCard(props: {
         <dd>
           {describeResourceWaitPlace(place)}
           {place.kind === "queued" ? (
-            <span className={`resource-wait-card__sub${place.hold.reason === "order" && place.hold.fitsNow ? " is-warning" : ""}`}>
+            <span className={`resource-wait-card__sub${place.hold.reason === "order" && place.hold.fitsNow && place.hold.queueOrder === "fifo" ? " is-warning" : ""}`}>
               {describeQueueEntryHold(place.hold, place.position, summary.unit)}
             </span>
           ) : null}

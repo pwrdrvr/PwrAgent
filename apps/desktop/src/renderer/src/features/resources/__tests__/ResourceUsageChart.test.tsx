@@ -19,7 +19,7 @@ describe("ResourceUsageChart", () => {
       sharing: { mode: "counted", capacity: 4, inUse: 2, unitLabel: "slots" },
       usage: { observedSince: NOW - 40_000, points: [{ at: NOW - 40_000, held: 2, waiting: 1 }] },
     }, NOW)!;
-    render(<ResourceUsageChart chart={chart} now={NOW} unitLabel="CPU slot" />);
+    render(<ResourceUsageChart chart={chart} unitLabel="CPU slot" />);
     expect(screen.getByText(/Recording began just now/)).toBeInTheDocument();
 
     const plot = screen.getByTestId("resources-usage-plot");

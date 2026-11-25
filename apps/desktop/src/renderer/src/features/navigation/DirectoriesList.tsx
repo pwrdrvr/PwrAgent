@@ -84,7 +84,6 @@ import {
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
-import { orderStackTray, stackGroupSelectionOrder, stackTrayPrecedesLead, visibleStackTray } from "../stacks/stack-presentation";
 import {
   formatActiveThreadCount,
   formatLocalActiveThreadCount,
@@ -1396,7 +1395,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       // direct children reorder with `useSubthreadReorderDrag`, the same
       // pointer drag RecentsList uses.
       const directChildKeySet = new Set(directChildKeys);
-      const stackTrayKey = visibleStackTray(parent, children);
       // Any row in the tray drags to nest it under another row, a sole
       // child or a grandchild too; only direct children also reorder.
       const groupable = threadSupportsFederationCapability(parent, "thread_grouping");
@@ -1411,14 +1409,14 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
         // `role="list"` there fails `aria-required-children` — list owns only
         // listitem. This is the `<li><ul>...</ul></li>` shape.
         <div className="directory-row__threads-slot" role="listitem">
-          <div className={`subthread-list subthread-list--compact${stackTrayKey ? " subthread-list--stack" : ""}`} role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
+          <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
             {/* The parent's own workers lead its tray. Trailing them after every
                 child read as the last child's workers and buried them under a
                 long child list. */}
             {nativeSubAgentCount > 0 ? (
               <NativeSubAgentsDisclosure compact thread={parent} />
             ) : null}
-            {orderStackTray(trayEntries, stackTrayKey).flatMap((entry) => {
+            {trayEntries.flatMap((entry) => {
               if (entry.kind === "starting") {
                 return [
                   <PendingThreadRow
@@ -1462,7 +1460,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                 linkedDirectoryMode={getDirectoryRowLinkedDirectoryMode(child)}
                 nested
                 nestedDepth={trays.depth(childKey)}
-                stackTrayKey={stackTrayKey}
                 revealSelectedThreadRequest={rowRevealSelectedThreadRequest}
                 selectedThreadKey={props.selectedItemKey === childKey ? childKey : undefined}
                 selected={props.selectedThreadKeys?.has(childKey)}
@@ -1576,8 +1573,12 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       ...(directoryThreadsCollapsed ? [] : unpinnedThreads),
     ].flatMap((thread) => {
       const key = threadSummaryIdentityKey(thread);
-      const children = isSubthreadSectionCollapsed(thread) ? [] : trays.subtree(key);
-      return stackGroupSelectionOrder(thread, children).map(threadSummaryIdentityKey);
+      return [
+        key,
+        ...(isSubthreadSectionCollapsed(thread)
+          ? []
+          : trays.subtree(key).map(threadSummaryIdentityKey)),
+      ];
     });
     rowContextByDirectoryKey.set(directory.key, { directory, selectionOrder });
     const renderPinnedAppendTarget = Boolean(
@@ -1597,7 +1598,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     ): ReactElement => {
       const threadKey = threadSummaryIdentityKey(thread);
       const children = trays.subtree(threadKey);
-      const trayFirst = stackTrayPrecedesLead(thread, children);
       const tray = renderStaticSubthreads(thread);
       const ordinarySubthreadCount = children.length;
       const holdsDraft = holdsSubthreadDraft(threadKey);
@@ -1609,7 +1609,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
       return (
         <Fragment key={`${directory.key}:${threadKey}`}>
-          {trayFirst ? tray : null}
           <ThreadRow
             key={`${directory.key}:${threadKey}`}
             approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -1656,7 +1655,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
             onSetThreadPin={props.onSetThreadPin}
             onUnbindMessagingBinding={props.onUnbindMessagingBinding}
           />
-          {trayFirst ? null : tray}
+          {tray}
         </Fragment>
       );
     };
@@ -1934,7 +1933,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             ordinaryChildCounts.get(threadKey),
                           ) + (holdsDraft ? 1 : 0);
                           const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
-                          const trayFirst = stackTrayPrecedesLead(thread, trays.subtree(threadKey));
                           const tray = renderStaticSubthreads(thread);
 	                      return (
                             <Fragment key={`${directory.key}:${threadKey}`}>
@@ -1947,7 +1945,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                                 />
                               ) : null}
                               {pinnedIndex === startingPinnedIndex ? renderStartingRootThreads("pinned") : null}
-                              {trayFirst ? tray : null}
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -1998,7 +1995,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                           onSetThreadPin={props.onSetThreadPin}
 	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
 	                        />
-                              {trayFirst ? null : tray}
+                              {tray}
                             </Fragment>
 	                      );
                     })}

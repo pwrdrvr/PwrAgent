@@ -23,7 +23,7 @@ import {
   formatExplorationSummary,
   formatSearchCommandActionLabel,
   formatWebSearchLabel,
-  normalizeCommandText,
+  unwrapCommandText,
 } from "@pwragent/shared/command-action-labels";
 import {
   type AppServerSource,
@@ -269,25 +269,22 @@ function formatElapsedMs(elapsedMs: number): string {
   return seconds >= 10 ? `${seconds.toFixed(0)}s` : `${seconds.toFixed(1)}s`;
 }
 
-function readDisplayCommand(command: string | undefined): string | undefined {
-  if (!command) {
-    return undefined;
-  }
-  return normalizeCommandText(command) || undefined;
-}
-
 function buildLiveCommandDetail(
   item: Record<string, unknown>,
   command: string | undefined,
   elapsedMs: number | undefined
 ): AppServerThreadCommandDetail | undefined {
-  const displayCommand = readDisplayCommand(command);
+  if (!command) {
+    return undefined;
+  }
+  const source = readString(item, "commandSource");
+  const displayCommand = source === "tool" ? command : unwrapCommandText(command).trim();
   if (!displayCommand) {
     return undefined;
   }
 
   const output = readCommandOutputText(item);
-  const source = readString(item, "commandSource");
+  const toolName = source === "tool" ? readString(item, "commandToolName") : undefined;
   const exitCode = readExitCode(item);
   const cwd = readString(item, "cwd") ??
     readString(item, "workingDirectory") ??
@@ -295,8 +292,8 @@ function buildLiveCommandDetail(
   return {
     displayCommand,
     ...(source === "tool"
-      ? { source: "tool" as const }
-      : { rawCommand: command }),
+      ? { source: "tool" as const, ...(toolName ? { rawCommand: toolName } : {}) }
+      : { rawCommand: command.trim() }),
     ...(cwd ? { cwd } : {}),
     ...(output ? { output } : {}),
     ...(typeof exitCode === "number" ? { exitCode } : {}),
@@ -345,9 +342,13 @@ function readCommandActionLabel(item: Record<string, unknown>): string | undefin
     const actionPath = readString(record, "path");
     const actionQuery = readString(record, "query");
     const fallbackName = readString(record, "name");
+    const normalizedLabel = readString(record, "label");
+    if (normalizedLabel && (actionType === "read" || actionType === "listFiles")) {
+      return normalizedLabel;
+    }
     if (actionType === "read") {
       if (actionPath) {
-        return `Read ${actionPath.split("/").filter(Boolean).pop() ?? actionPath}`;
+        return `Read ${actionPath.split(/[\\/]/u).filter(Boolean).at(-1) ?? actionPath}`;
       }
       if (fallbackName) {
         return /^(?:read|fetched)\b/i.test(fallbackName)
@@ -778,9 +779,10 @@ export function buildLiveToolDetails(
     return true;
   });
   const elapsedMs = readElapsedMs(item);
+  const executionCommand = item.command;
   const command =
     itemType === "commandexecution"
-      ? readString(item, "command")
+      ? typeof executionCommand === "string" && executionCommand.trim() ? executionCommand : undefined
       : itemType === "functioncall" && toolName === "exec_command"
         ? readToolArgument(item, "cmd") ??
           readToolArgument(item, "command") ??
@@ -819,6 +821,7 @@ export function buildLiveToolDetails(
           ? ` - ${preview}`
           : "",
       ].join(""),
+      ...(itemType === "commandexecution" && typeof item.path === "string" ? { path: item.path } : {}),
       ...(images.length > 0 ? { images } : {}),
       ...(commandDetail ? { command: commandDetail } : {}),
       status,

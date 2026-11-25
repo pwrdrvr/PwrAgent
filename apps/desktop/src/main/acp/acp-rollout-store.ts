@@ -9,6 +9,7 @@ import {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   AcpSessionReplayNormalizer,
+  type AcpReplayKit,
   acpSessionReplayNormalizerOptions,
   isAcpSessionMetadataUpdateKind,
   isAcpUsageUpdateKind,
@@ -102,8 +103,12 @@ export class AcpRolloutStore {
     /** The session's workspace, which edit diffs name files relative to. */
     cwd?: string;
     workspaceAgentSessionId?: string;
+    replayKit?: AcpReplayKit;
   }): AppServerThreadReplay {
-    const options = acpSessionReplayNormalizerOptions(params.backendId, params.cwd);
+    const options = {
+      ...acpSessionReplayNormalizerOptions(params.backendId, params.cwd),
+      replayKit: params.replayKit,
+    };
     const normalizer = new AcpSessionReplayNormalizer({ ...options, workspaceSessionId: params.workspaceAgentSessionId });
     const records = this.readUpdates(params);
     const { current, previous } = acpWorkspaceHistory(records, params.workspaceAgentSessionId);

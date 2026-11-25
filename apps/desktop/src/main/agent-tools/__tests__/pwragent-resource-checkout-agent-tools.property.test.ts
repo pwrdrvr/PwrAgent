@@ -58,6 +58,23 @@ const isQueued = (value: unknown): boolean => {
   return "state" in record ? record.state === "queued" : record.outcome === "queued";
 };
 
+describe("resource checkout tools: machine CPU scope", () => {
+  it("describes machine CPU reservations as advisory during discovery", () => {
+    const tools = buildResourceCheckoutToolDefinitions(async () => null);
+    const tool = tools.find((definition) => definition.name === "resource_checkout_discover");
+    expect(tool?.description).toMatch(/machine CPU reservations are advisory/i);
+  });
+
+  it.each(["resource_checkout_action", "resource_checkout_acquire"])("advertises the machine CPU policy in %s", (name) => {
+    const tools = buildResourceCheckoutToolDefinitions(async () => null);
+    const tool = tools.find((definition) => definition.name === name);
+    expect(tool?.description).toMatch(/substantial workloads or when the operator explicitly requests a reservation/i);
+    expect(tool?.description).toMatch(/start routine dev launches, short debugger or profiler sessions, and lightweight inspection without requesting or waiting for a checkout/i);
+    expect(tool?.description).toMatch(/explicit units on counted resources/i);
+    expect(tool?.description).toMatch(/resource_checkout_discover.*sharing\.capacity.*cap command parallelism at that capacity.*set units to the capped parallel worker count/i);
+  });
+});
+
 describe("resource checkout tools: waiting for a grant", () => {
   it("names wait-with-continuation on exactly the results that leave the request queued", async () => {
     await fc.assert(fc.asyncProperty(statusArb, actionResultArb, keyArb, paddingArb, async (status, result, key, pad) => {

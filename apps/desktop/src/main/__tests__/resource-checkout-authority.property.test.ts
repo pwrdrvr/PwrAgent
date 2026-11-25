@@ -26,6 +26,8 @@ const definition: CheckoutDefinition = {
 };
 const actor: CheckoutActor = { key: "alice", holder: { kind: "operator", label: "Alice" }, manage: true };
 const other: CheckoutActor = { key: "bob", holder: { kind: "operator", label: "Bob" }, manage: true };
+/** A requester of its own: one requester never holds part of a resource while it waits for more. */
+const requester = (key: string): CheckoutActor => ({ key, holder: { kind: "operator", label: key }, manage: true });
 const request = (key: string, overrides?: { resourceId?: string; units?: number; expectedDurationMs?: number }) => ({
   kind: "request" as const, idempotencyKey: key, resourceId, purpose: key, expectedDurationMs: 1_000, ...overrides,
 });
@@ -63,7 +65,7 @@ describe("the persisted resource checkout authority", () => {
       try {
         const { authority } = harness.open();
         authority.perform(actor, request("holder", { units: 1, expectedDurationMs: 100 }));
-        expect(authority.perform(actor, request("head", { units: capacity }))).toMatchObject({ outcome: "queued" });
+        expect(authority.perform(requester("carol"), request("head", { units: capacity }))).toMatchObject({ outcome: "queued" });
         const backfill = authority.perform(other, request("backfill", { units: 1, expectedDurationMs: 50 }));
         if (backfill.outcome !== "granted") throw new Error("Expected a backfill.");
         const job = { id: "managed", executor: "fixture" };
@@ -73,7 +75,7 @@ describe("the persisted resource checkout authority", () => {
           expect(authority.bindJob(other, { resourceId, epoch: definition.epoch, ...backfill }, job)).toBe(false);
         }
         harness.advance(100);
-        expect(authority.status(actor, "head", resourceId)).toMatchObject({ state: "granted" });
+        expect(authority.status(requester("carol"), "head", resourceId)).toMatchObject({ state: "granted" });
       } finally {
         harness.close();
       }
@@ -147,6 +149,22 @@ describe("the persisted resource checkout authority", () => {
       ]));
       expect(view.actions.request).toMatchObject({ allowed: false });
     }), { numRuns: 30 });
+  });
+
+  it("offers Join queue exactly when the authority would take another request from the viewer", () => {
+    fc.assert(fc.property(fc.array(fc.boolean(), { maxLength: 6 }), (viewerEntries) => {
+      const queue = viewerEntries.map((mine, index) => ({
+        actor: mine ? actor : other, id: `q-${index}`, purpose: "work", units: 1, durationMs: 1_000, requestedAt: 1,
+      }));
+      const view = projectCheckoutDomain({ definition, generation: 0, grants: [], queue }, actor, {
+        authorityId: definition.authorityId, kind: "machine_broker", status: "reachable", label: "Host",
+        endpointLabel: "Local", epoch: definition.epoch,
+      });
+      // The authority refuses a second queued request from one requester.
+      const waiting = queue.some((entry) => entry.actor === actor);
+      expect(view.actions.request?.allowed).toBe(!waiting);
+      expect(view.actions.cancel_request?.allowed).toBe(waiting ? true : undefined);
+    }), { numRuns: 40 });
   });
 
   it("preserves exclusive holders and FIFO waiters while upgrading dev's machine pool", async () => {
@@ -347,11 +365,23 @@ describe("the persisted resource checkout authority", () => {
           const key = String(index);
           if (step.command === "request") {
             const result = writer.perform(who, request(key, { units: step.units, expectedDurationMs: step.durationMs }));
-            if (step.units > 0 && step.units <= capacity) {
+            // A requester never holds while it waits: one already waiting is
+            // refused, and one holding is refused unless it starts at once.
+            const holds = held.some((item) => item.actor === who);
+            if (step.units > 0 && step.units <= capacity && !queue.some((item) => item.actor === who)) {
+              const before = { held: [...held], queue: [...queue], generation };
               queue.push({ purpose: key, units: step.units, durationMs: step.durationMs, actor: who });
               wake();
-              expect(result.outcome).toBe(held.some((item) => item.purpose === key) ? "granted" : "queued");
-              requests.push({ key, who, units: step.units, durationMs: step.durationMs, receipt: result });
+              const startedAtOnce = held.some((item) => item.purpose === key);
+              if (holds && !startedAtOnce) {
+                held = before.held;
+                queue.splice(0, queue.length, ...before.queue);
+                generation = before.generation;
+                expect(result).toMatchObject({ outcome: "rejected", reason: "policy" });
+              } else {
+                expect(result.outcome).toBe(startedAtOnce ? "granted" : "queued");
+                requests.push({ key, who, units: step.units, durationMs: step.durationMs, receipt: result });
+              }
             } else {
               expect(result.outcome).toBe("rejected");
             }
@@ -415,7 +445,7 @@ describe("the persisted resource checkout authority", () => {
 
           for (const [index, entry] of trailing.entries()) {
             const units = Math.min(entry.units, capacity);
-            authority.perform(actor, request(`trail-${index}`, { units, expectedDurationMs: entry.durationMs }));
+            authority.perform(requester(`trail-${index}`), request(`trail-${index}`, { units, expectedDurationMs: entry.durationMs }));
             const state = authority.records()[0];
             expect(state.grants.reduce((sum, grant) => sum + grant.units, 0)).toBeLessThanOrEqual(capacity);
           }
@@ -439,8 +469,8 @@ describe("the persisted resource checkout authority", () => {
       const { authority } = harness.open();
       expect(authority.perform(actor, request("g193", { units: 4, expectedDurationMs: 7_200 })).outcome).toBe("granted");
       expect(authority.perform(other, request("head-16", { units: 16, expectedDurationMs: 6_000 })).outcome).toBe("queued");
-      expect(authority.perform(actor, request("short-4", { units: 4, expectedDurationMs: 6_000 })).outcome).toBe("granted");
-      expect(authority.perform(other, request("long-4", { units: 4, expectedDurationMs: 9_000 })).outcome).toBe("queued");
+      expect(authority.perform(requester("carol"), request("short-4", { units: 4, expectedDurationMs: 6_000 })).outcome).toBe("granted");
+      expect(authority.perform(requester("dave"), request("long-4", { units: 4, expectedDurationMs: 9_000 })).outcome).toBe("queued");
       expect(authority.perform(actor, request("spare-2", { units: 2, expectedDurationMs: 9_000 })).outcome).toBe("granted");
       harness.advance(7_200);
       expect(authority.records()[0].grants.map((grant) => grant.purpose)).toEqual(["spare-2", "head-16"]);

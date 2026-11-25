@@ -182,6 +182,16 @@
   --surface-overlay-subtle: color-mix(in srgb, var(--text-primary) 3%, transparent);
   --surface-overlay-faint: color-mix(in srgb, var(--text-primary) 3.5%, transparent);
   --surface-overlay-soft: color-mix(in srgb, var(--text-primary) 4%, transparent);
+  /* Pointer hover on a row, in a list or on a raised panel. Neutral on
+     purpose: the accent fill belongs to the row Enter takes or the row
+     already chosen, and a hovered row must never look like either
+     (UI-THEME.md, "Hover is not a selection"). An overlay rather than
+     `--bg-panel-hover`, because that flat surface is darker than
+     `--bg-panel-elevated` in some themes and vanishes on a popover. 5% is
+     about the most it can take: a hovered row keeps its muted metadata,
+     and at 6% `--text-muted` on it falls to 4.46:1 over Tangerine light's
+     `--bg-panel` (4.47:1 over Tangerine dark's raised panel at 7%). */
+  --surface-overlay-hover: color-mix(in srgb, var(--text-primary) 5%, transparent);
 
   /* Popover backdrops use the panel base at high alpha so they read as
      the same surface as the rest of the panel. */
@@ -4443,7 +4453,8 @@ textarea,
   cursor: pointer;
 }
 
-.log-window__button:hover:not(:disabled) {
+/* A pressed filter keeps its accent under the pointer. */
+.log-window__button:hover:not(:disabled):not([aria-pressed="true"]) {
   border-color: var(--border-strong);
   color: var(--text-primary);
 }
@@ -7070,7 +7081,9 @@ a.button {
 
 .button--ghost:hover,
 .thread-row:hover,
-.lens-switch__button:hover {
+/* Not the active lens: this rule out-ranks `.is-active` on source order and
+   swapped its fill for the hover fill under the pointer. */
+.lens-switch__button:hover:not(.is-active) {
   background: var(--bg-panel-hover);
 }
 
@@ -7204,24 +7217,6 @@ a.button {
 
 .subthread-list--compact {
   margin-left: 14px;
-}
-
-.subthread-list--stack {
-  border-left-color: transparent;
-}
-
-.subthread-list--stack > .thread-row-shell > .thread-row[data-stack-tray-layer]::before {
-  position: absolute;
-  inset-block: -1px;
-  inset-inline-start: -11px;
-  border-inline-start: 1.5px solid color-mix(in srgb, var(--accent) 55%, transparent);
-  content: "";
-  pointer-events: none;
-}
-
-.subthread-list--stack > .thread-row-shell > .thread-row[data-stack-tray-stale]::before {
-  border-inline-start-style: dashed;
-  border-inline-start-color: var(--status-warning);
 }
 
 /* A stack's spine and marks are shared by the PR popover, rollup and rail. */
@@ -7490,6 +7485,28 @@ button.stack-display__thread,
   padding: 8px 10px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+/* Skeleton rows keep the loaded list's height; the status is for screen readers. */
+.stack-display__skeleton {
+  display: inline-block;
+  width: 180px;
+  max-width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--border-subtle);
+  vertical-align: middle;
+}
+
+.stack-display__status .stack-display__skeleton { width: 110px; }
+
+.stack-popover__loading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 .stack-popover__foot {
@@ -8286,6 +8303,7 @@ button.stack-display__thread,
 .thread-row__pin:focus-visible,
 .thread-row__pin-button:focus-visible,
 .thread-row__chip--add-reaction:focus-visible,
+.thread-row__chip--reaction:focus-visible,
 .thread-row__overflow-button:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: -2px;
@@ -8311,7 +8329,6 @@ button.stack-display__thread,
 .thread-row__chip--reaction:focus-visible {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
-  outline: none;
 }
 
 .thread-row__chip--add-reaction:focus-visible {
@@ -14102,6 +14119,18 @@ button.stack-display__thread,
   }
 }
 
+/* The rise is motion the operator asked not to see, and while it fades the
+   card's text is partly transparent: a notice raised mid-scan read 3.88:1
+   in the a11y gate against text that clears 5.2:1 at rest. The to-do deck
+   settles its own copy beside its rule, which comes later in the file. */
+@media (prefers-reduced-motion: reduce) {
+  .codex-config-warning-banner,
+  .app-update-banner,
+  .app-notice-toast {
+    animation: none;
+  }
+}
+
 .thread-view {
   display: flex;
   flex: 1;
@@ -15119,7 +15148,13 @@ button.stack-display__thread,
   padding-left: 4px;
 }
 
-.settings-nav__button:hover,
+/* Hover is a neutral wash. It shared the paint below with the current page,
+   so pointing at another page drew a second current page. */
+.settings-nav__button:hover:not(.is-active):not(:focus-visible) {
+  background: var(--surface-overlay-hover);
+  color: var(--text-primary);
+}
+
 .settings-nav__button:focus-visible,
 .settings-nav__button.is-active {
   border-color: var(--accent-border);
@@ -15223,7 +15258,11 @@ button.stack-display__thread,
   padding-top: 2px;
 }
 
-.settings-nav__subbutton:hover,
+.settings-nav__subbutton:hover:not(.is-active):not(:focus-visible) {
+  border-left-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
 .settings-nav__subbutton:focus-visible,
 .settings-nav__subbutton.is-active {
   border-left-color: var(--accent);
@@ -24013,6 +24052,7 @@ button.stack-display__thread,
 }
 
 .star-map-instance__action[aria-pressed="true"]:hover {
+  border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
 
@@ -26779,10 +26819,18 @@ button.stack-display__thread,
   cursor: pointer;
 }
 
-.compact-composer__mention-option:hover,
+/* `.is-active` is the keyboard cursor, the row Enter takes; the pointer does
+   not move it. Hover is a neutral wash, and the cursor wears the popover
+   highlight plus the inset ring (UI-THEME.md, "Hover is not a selection"). */
+.compact-composer__mention-option:hover:not(.is-active) {
+  background: var(--surface-overlay-hover);
+}
+
 .compact-composer__mention-option.is-active {
   background: var(--accent-soft);
   color: var(--accent-bright);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .compact-composer__mention-title {
@@ -26811,7 +26859,6 @@ button.stack-display__thread,
   display: none;
 }
 
-.compact-composer__mention-option:hover .compact-composer__mention-meta,
 .compact-composer__mention-option.is-active .compact-composer__mention-meta {
   color: var(--text-secondary);
 }
@@ -28863,6 +28910,13 @@ button.stack-display__thread,
   animation: app-update-banner-enter 160ms ease-out;
 }
 
+/* After the rule it settles, which a same-specificity override has to be. */
+@media (prefers-reduced-motion: reduce) {
+  .thread-todo-stack__deck {
+    animation: none;
+  }
+}
+
 .thread-todo-stack__deck[data-depth="1"] {
   margin-bottom: 4px;
 }
@@ -29868,11 +29922,19 @@ button.stack-display__thread,
   text-align: left;
 }
 
-.todo-split__item:hover,
+/* Focus had the hover tint and no ring, and the pointer does not move focus,
+   so the item Enter takes looked like the one under the pointer. Hover is a
+   neutral wash; the focused item keeps the accent and rings inset, as menu
+   rows fill the card. */
+.todo-split__item:hover:not(:focus-visible) {
+  background: var(--surface-overlay-hover);
+}
+
 .todo-split__item:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-bright);
-  outline: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .todo-split__item[aria-disabled="true"] {
@@ -30587,7 +30649,13 @@ button.thread-todos-panel__row-main:is(:hover, :focus-visible)
   cursor: pointer;
 }
 
-.operator-question-form__option:hover:not(:disabled),
+/* Hover is neutral: it shared the chosen answer's accent, so pointing at a
+   second answer drew two chosen answers. */
+.operator-question-form__option:hover:not(:disabled):not(.is-selected) {
+  border-color: var(--border-strong);
+  background: var(--surface-overlay-hover);
+}
+
 .operator-question-form__option.is-selected {
   border-color: var(--accent-border);
   background: var(--accent-soft);
@@ -33046,10 +33114,19 @@ a.transcript-message__messaging-origin:focus-visible {
   cursor: pointer;
 }
 
-.markdown-files-window__file-button:hover,
-.markdown-files-window__file-button--active {
+.markdown-files-window__file-button:hover {
   border-color: var(--border-subtle);
   background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+/* The open file. It wore the hover paint, so a hovered file and the open one
+   were indistinguishable; it takes the row-selection language instead. */
+.markdown-files-window__file-button--active,
+.markdown-files-window__file-button--active:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+  box-shadow: inset 2px 0 0 0 var(--accent);
   color: var(--text-primary);
 }
 
@@ -38015,10 +38092,16 @@ div.composer-error-row__toggle {
   text-align: left;
 }
 
-.transcript-mcp__split-item:hover,
+/* The focused item is the one Enter takes, and the pointer does not move
+   focus: hover is a neutral wash, focus the accent plus the inset ring. */
+.transcript-mcp__split-item:hover:not(:focus-visible) {
+  background: var(--surface-overlay-hover);
+}
+
 .transcript-mcp__split-item:focus-visible {
   background: var(--accent-soft);
-  outline: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .transcript-mcp__split-item-label {
@@ -38589,7 +38672,13 @@ div.composer-error-row__toggle {
   text-align: left;
 }
 
-.transcript-questionnaire__option:hover:not(:disabled),
+/* Hover is neutral: it shared the chosen answer's accent, so pointing at a
+   second answer drew two chosen answers. */
+.transcript-questionnaire__option:hover:not(:disabled):not(.is-selected):not(:focus-visible) {
+  border-color: var(--border-strong);
+  background: var(--surface-overlay-hover);
+}
+
 .transcript-questionnaire__option:focus-visible,
 .transcript-questionnaire__option.is-selected {
   border-color: var(--accent-border);
@@ -41264,7 +41353,11 @@ div.composer-error-row__toggle {
   cursor: pointer;
 }
 
-.automation-agent-picker__tab:hover,
+.automation-agent-picker__tab:hover:not(.is-active):not(:focus-visible) {
+  background: var(--surface-overlay-hover);
+  color: var(--text-primary);
+}
+
 .automation-agent-picker__tab:focus-visible,
 .automation-agent-picker__tab.is-active {
   border-color: var(--accent-border);
@@ -41340,7 +41433,11 @@ div.composer-error-row__toggle {
   white-space: nowrap;
 }
 
-.automation-agent-picker__option:hover,
+/* `aria-selected` is the chosen agent, which the pointer does not change. */
+.automation-agent-picker__option:hover:not([aria-selected="true"]):not(:focus-visible) {
+  background: var(--surface-overlay-hover);
+}
+
 .automation-agent-picker__option:focus-visible,
 .automation-agent-picker__option[aria-selected="true"] {
   background: var(--bg-row-active);
@@ -48761,22 +48858,30 @@ button.composer__subthread-source-parent:hover {
   cursor: pointer;
 }
 
-.project-picker__row:hover:not(:disabled),
+/* Pointer hover is a neutral wash, never the popover highlight below: the
+   accent says "Enter lands here", and a pointer resting on one row while the
+   keyboard cursor sits on another drew two rows in the same paint
+   (UI-THEME.md, "Hover is not a selection"). Each hover excludes its
+   picker's cursor and focus states so a hovered cursor row keeps the accent. */
+.project-picker__row:hover:not(:disabled):not(:focus-visible):not(.is-cursor),
+.branch-picker__option:hover:not(:focus-visible):not(.is-active),
+.reference-picker__row:hover:not(:disabled):not(:focus-visible) {
+  background: var(--surface-overlay-hover);
+}
+
 .project-picker__row:focus-visible:not(:disabled),
 /* The surface picker keeps DOM focus on its search input and tracks the
    keyboard cursor with `aria-activedescendant`, so :focus-visible never
    reaches the row — `.is-cursor` carries the same fill instead. */
 .messaging-surface-picker__list .project-picker__row.is-cursor,
-.branch-picker__option:hover,
 .branch-picker__option:focus-visible,
 .branch-picker__option.is-active,
-.reference-picker__row:hover:not(:disabled),
 .reference-picker__row:focus-visible:not(:disabled) {
   background: var(--accent-soft);
   color: var(--accent-bright);
 }
 
-/* The tint above is under 3:1 and is also the hover paint. A row that holds
+/* The tint above is under 3:1. A row that holds
    DOM focus rings inset. So does the keyboard cursor of a picker that keeps
    focus in its search field and follows the row with
    `aria-activedescendant`, because that row is the one Enter picks. The
@@ -48953,8 +49058,7 @@ button.composer__subthread-source-parent:hover {
   font-variant-numeric: tabular-nums;
 }
 
-.branch-picker__option.is-active .branch-picker__option-time,
-.branch-picker__option:hover .branch-picker__option-time {
+.branch-picker__option.is-active .branch-picker__option-time {
   color: var(--accent-bright);
 }
 
@@ -50131,7 +50235,8 @@ button.composer__subthread-source-parent:hover {
   cursor: pointer;
 }
 
-.thread-handoff-dialog__machine:hover:not(:disabled) {
+/* The chosen machine keeps its accent fill under the pointer. */
+.thread-handoff-dialog__machine:hover:not(:disabled):not([aria-checked="true"]) {
   background: var(--bg-panel-hover);
 }
 
@@ -50698,8 +50803,10 @@ button.composer__subthread-source-parent:hover {
     color 120ms ease;
 }
 
-.composer__toggle:hover:not(:disabled),
-.composer__toggle:focus-visible {
+/* An on toggle keeps its accent border and label under the pointer: this
+   rule out-ranks `.is-active` and made an on toggle look off when hovered. */
+.composer__toggle:hover:not(:disabled):not(.is-active),
+.composer__toggle:focus-visible:not(.is-active) {
   border-color: var(--accent-border);
   color: var(--text-primary);
 }
@@ -51030,24 +51137,36 @@ button.composer__subthread-source-parent:hover {
   text-align: left;
 }
 
-/* Popover highlight, shared with `.project-picker__row`,
-   `.branch-picker__option`, and `.reference-picker__row`. A transient
-   "which row would Enter take" cue is an accent tint, NOT the thread-row
-   selection language (left bar + border + --bg-row-active) — that one
-   marks a persistent selection you navigated to and can leave. Keeping
-   the two apart is what stops the accent from meaning two things.
+/* Pointer hover: a neutral wash, shared with `.project-picker__row`,
+   `.branch-picker__option`, and `.reference-picker__row`. The pointer does
+   not move this popup's keyboard cursor, so with the mouse on `/agents` and
+   the cursor on `/review` both rows used to wear the accent tint and only
+   the pointer said which one Enter takes (UI-THEME.md, "Hover is not a
+   selection").
 
    `:not(:disabled)` matters here and is not decoration. The disabled
    rule further up the file has the same specificity and loses on source
    order, so an unguarded hover would light a disabled row — the remote
-   "Add directory… / Add file…" actions — in full accent and override
-   their muted disabled color. `.reference-picker__row` guards for the
-   same reason. `.is-active` needs no guard: disabled action rows are
-   not in the keyboard index. */
-.composer__autocomplete-option:hover:not(:disabled),
+   "Add directory… / Add file…" actions — and override their muted
+   disabled color. `.reference-picker__row` guards for the same reason.
+   `:not(.is-active)` keeps this higher-specificity rule off the cursor
+   row, which would otherwise lose its accent under the pointer. */
+.composer__autocomplete-option:hover:not(:disabled):not(.is-active) {
+  background: var(--surface-overlay-hover);
+}
+
+/* Popover highlight — the keyboard cursor, the row Enter takes. A transient
+   accent tint, NOT the thread-row selection language (edge + border +
+   --bg-row-active), which marks a persistent selection you navigated to.
+   The inset ring is what an `aria-activedescendant` row takes: the tint is
+   under 3:1, and the ring is the difference from a hovered row.
+   `.is-active` needs no disabled guard: disabled action rows are not in the
+   keyboard index. */
 .composer__autocomplete-option.is-active {
   background: var(--accent-soft);
   color: var(--accent-bright);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 .composer__autocomplete-title {
@@ -51382,10 +51501,11 @@ button.composer__subthread-source-parent:hover {
   font-weight: 500;
 }
 
-/* Follow the row's own hover color instead of pinning a neutral — the
-   row tints to `--accent-bright` like every other option. */
-.composer__autocomplete-option--action:hover .composer__autocomplete-title {
-  color: inherit;
+/* Hovered, an action reads at full strength, like every other option's
+   label. Action rows are not in the keyboard index, so this is their only
+   highlight. */
+.composer__autocomplete-option--action:hover:not(:disabled) .composer__autocomplete-title {
+  color: var(--text-primary);
 }
 
 .composer__review-config {
@@ -51527,7 +51647,12 @@ button.composer__subthread-source-parent:hover {
   text-align: left;
 }
 
-.composer__review-option:hover,
+/* `.is-active` is the chosen review target. Hover only lifts the border, so
+   a hovered target never reads as a second chosen one. */
+.composer__review-option:hover:not(.is-active) {
+  border-color: var(--border-strong);
+}
+
 .composer__review-option.is-active {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
@@ -51732,7 +51857,10 @@ button.composer__subthread-source-parent:hover {
   text-align: left;
 }
 
-.review-commit-picker__option:hover,
+.review-commit-picker__option:hover:not(:focus-visible):not(.is-active) {
+  background: var(--surface-overlay-hover);
+}
+
 .review-commit-picker__option:focus-visible,
 .review-commit-picker__option.is-active {
   background: var(--accent-soft);
@@ -51767,7 +51895,6 @@ button.composer__subthread-source-parent:hover {
   font-variant-numeric: tabular-nums;
 }
 
-.review-commit-picker__option:hover .review-commit-picker__time,
 .review-commit-picker__option:focus-visible .review-commit-picker__time,
 .review-commit-picker__option.is-active .review-commit-picker__time {
   color: var(--accent-bright);
@@ -51814,7 +51941,10 @@ button.composer__subthread-source-parent:hover {
   cursor: pointer;
 }
 
-.composer__review-mode-option:hover,
+.composer__review-mode-option:hover:not(.is-active) {
+  border-color: var(--border-strong);
+}
+
 .composer__review-mode-option.is-active {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
@@ -51995,7 +52125,7 @@ button.composer__subthread-source-parent:hover {
   opacity: 0.48;
 }
 
-.composer__review-after:disabled:hover {
+.composer__review-after:disabled:hover:not([aria-checked="true"]) {
   color: var(--text-secondary);
 }
 
@@ -56487,7 +56617,9 @@ button.composer__subthread-source-parent:hover {
 .federation-status-control__menu-anchor { position: relative; }
 .federation-status-control__menu { position: absolute; top: calc(100% + 4px); right: 0; z-index: 2; display: flex; flex-direction: column; width: 260px; padding: 5px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-panel-elevated); box-shadow: var(--shadow-popover); }
 .federation-status-control__menu-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--text-primary); font: 500 12px/1.3 var(--font-sans, sans-serif); text-align: left; cursor: pointer; }
-.federation-status-control__menu-item:hover:not(:disabled), .federation-status-control__menu-item:focus-visible { background: var(--bg-panel-hover); outline: none; }
+.federation-status-control__menu-item:hover:not(:disabled), .federation-status-control__menu-item:focus-visible { background: var(--surface-overlay-hover); }
+/* The focused item is the one Enter takes; the ring keeps it apart from the hovered one. */
+.federation-status-control__menu-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .federation-status-control__menu-item:disabled { color: var(--text-muted); cursor: default; }
 .federation-status-control__menu-check { color: var(--accent-bright); }
 
@@ -56861,10 +56993,15 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 }
 
 .messaging-surface-picker__list .project-picker__row.is-cursor .messaging-surface-picker__glyph,
-.messaging-surface-picker__list .project-picker__row.is-cursor .messaging-surface-picker__seen,
-.messaging-surface-picker__list .project-picker__row:hover .messaging-surface-picker__glyph,
-.messaging-surface-picker__list .project-picker__row:hover .messaging-surface-picker__seen {
+.messaging-surface-picker__list .project-picker__row.is-cursor .messaging-surface-picker__seen {
   color: var(--accent-bright);
+}
+
+/* A hovered row takes the neutral wash, not the cursor's accent, so its
+   marks lift a step up the neutral ladder instead. */
+.messaging-surface-picker__list .project-picker__row:hover:not(.is-cursor) .messaging-surface-picker__glyph,
+.messaging-surface-picker__list .project-picker__row:hover:not(.is-cursor) .messaging-surface-picker__seen {
+  color: var(--text-secondary);
 }
 
 /* The context is metadata, like the ID beside it, so on a highlighted row
@@ -57905,11 +58042,17 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   line-height: 1.3;
   text-align: left;
 }
-.terminal-menu__item:hover:not(:disabled),
+/* The focused item is the one Enter takes, and the pointer does not move
+   focus: hover is a neutral wash, focus the accent plus the inset ring. */
+.terminal-menu__item:hover:not(:disabled):not(:focus-visible) {
+  background: var(--surface-overlay-hover);
+}
+
 .terminal-menu__item:focus-visible {
   background: var(--accent-soft);
   color: var(--accent-bright);
-  outline: none;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 .terminal-menu__item:disabled { color: var(--text-subtle); cursor: default; }
 .terminal-menu__item.is-danger { color: var(--danger-text); }
@@ -58055,7 +58198,8 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   cursor: pointer;
 }
 
-.review-todo__chip:hover:not(:disabled) {
+/* A pressed chip keeps its accent under the pointer. */
+.review-todo__chip:hover:not(:disabled):not([aria-pressed="true"]) {
   background: var(--bg-panel-hover);
   color: var(--text-primary);
 }

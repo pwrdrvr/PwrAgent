@@ -58,6 +58,7 @@ describe("AcpSessionReplayNormalizer", () => {
             label: "pwragent__list_federation_instances",
             command: expect.objectContaining({
               displayCommand: 'pwragent__list_federation_instances\n{\n  "query": "Fixture",\n  "includeLoad": false\n}',
+              rawCommand: "pwragent__list_federation_instances",
               source: "tool",
             }),
           })],
@@ -595,6 +596,35 @@ describe("AcpSessionReplayNormalizer", () => {
           "I found the thread creation path.\n\n" +
           "**Refining Button Logic**\nI am checking the disabled state.",
       }),
+    ]);
+  });
+
+  it("keeps a wide table intact when ACP splits a bold cell before its closing markers", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const chunks = [
+      "| Shape | Cold | Warm | Per turn | Watch |\n"
+        + "| --- | ---: | ---: | ---: | ---: |\n"
+        + "| Default | 28 | 24 | **12.0",
+      "** | — |\n| Dormant | 26 | 32 | **",
+      "14.0** | — |\n| Fresh | 39 | 42 | **21.0** | — |",
+    ];
+    for (const [index, text] of chunks.entries()) {
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt: 1000 + index,
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
+        },
+      });
+    }
+
+    const replay = normalizer.replay();
+    expect(replay.entries).toMatchObject([
+      { type: "message", phase: "final", text: chunks.join("") },
+    ]);
+    expect(replay.messages).toMatchObject([
+      { role: "assistant", text: chunks.join("") },
     ]);
   });
 
@@ -1572,6 +1602,49 @@ describe("AcpSessionReplayNormalizer", () => {
             },
           }),
         ],
+      }),
+    ]);
+  });
+
+  it.each([false, true])("replays the full title-only script through completion (revised: %s)", (revised) => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const title = "\tif true; then\n  echo ok\nfi";
+    const completedTitle = revised ? "if true; then\n  echo done\nfi" : title;
+    const label = revised ? "if true; then echo done fi" : "if true; then echo ok fi";
+    normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "script",
+        kind: "execute",
+        title,
+        status: "in_progress",
+      },
+    });
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "script",
+        status: "completed",
+        ...(revised ? { title: completedTitle } : {}),
+      },
+    });
+
+    expect(replay.entries).toEqual([
+      expect.objectContaining({
+        summary: label,
+        status: "completed",
+        details: [expect.objectContaining({
+          label,
+          command: expect.objectContaining({
+            displayCommand: completedTitle,
+            source: "tool",
+            rawCommand: undefined,
+          }),
+        })],
       }),
     ]);
   });

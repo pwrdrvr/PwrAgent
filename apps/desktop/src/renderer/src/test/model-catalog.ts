@@ -168,18 +168,24 @@ export function expectedModelDropdown(params: {
   models: readonly BackendModelOption[];
   thread?: { model?: string };
   leading?: string[];
+  /** The menu opens below its trigger, as on a to-do card. */
+  opensDown?: boolean;
 }): { rows: string[]; groups: Array<{ label: string; rows: string[] }>; other: string[] } {
   const menu = buildModelMenu(params);
   const groups = menu.providerGroups.map((group) => ({
     label: group.label,
     rows: group.models.map(labelOf),
   }));
+  // The Other row sits at the end farthest from the trigger: first in a menu
+  // that opens up, last in one that opens down.
+  const otherRow = menu.other.length > 0 ? [modelMenuOtherLabel(params.kind)] : [];
   return {
     rows: [
+      ...(params.opensDown ? [] : otherRow),
       ...(params.leading ?? []),
       ...menu.primary.map(labelOf),
-      ...(menu.other.length > 0 ? [modelMenuOtherLabel(params.kind)] : []),
       ...groups.flatMap((group) => group.rows),
+      ...(params.opensDown ? otherRow : []),
     ],
     groups,
     other: menu.other.map(labelOf),

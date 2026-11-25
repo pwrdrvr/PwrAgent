@@ -93,7 +93,12 @@ export default defineConfig({
   // Manual inspectors and documentation capture workflows have their own
   // explicit config. Collecting always-skipped inspect specs here still makes
   // Playwright assign them to CI shards, which distorts file-level balancing.
-  testIgnore: "**/*.inspect.spec.ts",
+  testIgnore: [
+    "**/*.inspect.spec.ts",
+    // CI's Linux Desktop E2E lanes set this: the `desktop-a11y` job runs
+    // the accessibility audit instead.
+    ...(process.env.PWRAGENT_E2E_SKIP_A11Y === "1" ? ["**/a11y.spec.ts"] : []),
+  ],
   // One bounded Electron launch before the suite. A persistent CI guest can
   // reach a state where no Electron process can start; without this the run
   // spends its whole time budget timing out one test at a time and blames

@@ -1,0 +1,121 @@
+import fc from "fast-check";
+import { describe, expect, it } from "vitest";
+import { commandTitleMatchesInvocation, unwrapCommandText } from "../command-action-labels";
+
+const posixShell = fc.constantFrom("sh", "bash", "zsh", "/bin/sh", "/bin/bash", "/bin/zsh");
+
+describe("unwrapCommandText", () => {
+  it("unwraps paired POSIX -c script quotes and retains incomplete invocations", () => {
+    fc.assert(fc.property(
+      posixShell,
+      fc.array(fc.constantFrom("pwd", "git status", "printf ready"), { minLength: 2 }),
+      fc.constantFrom("\n", "\r\n"),
+      fc.constantFrom('"', "'"),
+      (shell, lines, newline, quote) => {
+        const script = lines.join(`${newline}  `);
+        const wrapper = `${shell} -c `;
+        const quotedScript = `${quote}${script}${quote}`;
+        const mismatchedScript = `${quote}${script}${quote === '"' ? "'" : '"'}`;
+
+        expect(unwrapCommandText(`${wrapper}${quotedScript}`)).toBe(script);
+        expect(unwrapCommandText(`${wrapper}${mismatchedScript}`)).toBe(`${wrapper}${mismatchedScript}`);
+        expect(unwrapCommandText(`${wrapper}${quote}${script}`)).toBe(`${wrapper}${quote}${script}`);
+        expect(unwrapCommandText(quotedScript)).toBe(quotedScript);
+      },
+    ));
+  });
+
+  it("keeps POSIX invocations whose quoted script is followed by arguments", () => {
+    fc.assert(fc.property(
+      posixShell,
+      fc.constantFrom("-c", "-lc"),
+      fc.constantFrom('"', "'"),
+      fc.constantFrom("pwd", "printf ready", "pwd\n  pwd"),
+      fc.array(fc.constantFrom("_", "hello", "'two words'", '"three more words"'), { minLength: 1 }),
+      (shell, option, quote, script, args) => {
+        const command = `${shell} ${option} ${quote}${script}${quote} ${args.join(" ")}`;
+        expect(unwrapCommandText(command)).toBe(command);
+      },
+    ));
+  });
+
+  it("joins adjacent POSIX script fragments and keeps arguments after the word", () => {
+    fc.assert(fc.property(
+      posixShell,
+      fc.constantFrom("-c", "-lc"),
+      fc.array(fc.constantFrom(
+        { encoded: "'first'", text: "first" },
+        { encoded: '" second"', text: " second" },
+        { encoded: '"\\"a b\\""', text: '"a b"' },
+        { encoded: '"\\$value"', text: "$value" },
+        { encoded: "\\'", text: "'" },
+      ), { minLength: 1 }),
+      (shell, option, fragments) => {
+        const word = "'printf '" + fragments.map(({ encoded }) => encoded).join("");
+        const script = "printf " + fragments.map(({ text }) => text).join("");
+        const command = `${shell} ${option} ${word}`;
+        const withArgument = `${command} _ 'hello'`;
+
+        expect(unwrapCommandText(command)).toBe(script);
+        expect(unwrapCommandText(withArgument)).toBe(withArgument);
+      },
+    ));
+  });
+
+  it("keeps the invocation for Bash quoting that the parser cannot decode", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("bash", "/bin/bash"),
+      fc.constantFrom("-c", "-lc"),
+      fc.constantFrom("", "'echo one'", "'echo one'word"),
+      fc.constantFrom("$'\\n'", '$"localized"'),
+      fc.integer({ min: 0, max: 3 }),
+      fc.constantFrom("", "'echo two'", " _ 'arg'"),
+      (shell, option, prefix, quote, continuations, suffix) => {
+        const resumedQuote = quote[0] + "\\\n".repeat(continuations) + quote.slice(1);
+        const command = `${shell} ${option} ${prefix}${resumedQuote}${suffix}`;
+        expect(unwrapCommandText(command)).toBe(command);
+      },
+    ));
+  });
+
+  it("recognizes joined script echoes with or without the outer shell escapes", () => {
+    fc.assert(fc.property(
+      posixShell,
+      fc.constantFrom("-c", "-lc"),
+      fc.constantFrom("printf %s ", "echo "),
+      fc.constantFrom("a b", "hello world"),
+      fc.constantFrom("", " _ 'arg'"),
+      (shell, option, prefix, text, args) => {
+        const escaped = `\\"${text}\\"`;
+        const command = `${shell} ${option} '${prefix}'"${escaped}"${args}`;
+        expect(commandTitleMatchesInvocation(prefix + escaped, command)).toBe(true);
+        expect(commandTitleMatchesInvocation(`${prefix}"${text}"`, command)).toBe(true);
+      },
+    ));
+  });
+
+  it("keeps the POSIX invocation when the c option is uppercase", () => {
+    fc.assert(fc.property(
+      posixShell,
+      fc.constantFrom("-C", "-lC"),
+      fc.constantFrom("./build.sh", "'./build script.sh'", '"./build script.sh"'),
+      (shell, option, file) => {
+        const command = `${shell} ${option} ${file}`;
+        expect(unwrapCommandText(command)).toBe(command);
+      },
+    ));
+  });
+
+  it("keeps the POSIX invocation when its quoted script is blank", () => {
+    fc.assert(fc.property(
+      posixShell,
+      fc.constantFrom("-c", "-lc"),
+      fc.constantFrom('"', "'"),
+      fc.string({ unit: fc.constantFrom(" ", "\t", "\n", "\r") }),
+      (shell, option, quote, whitespace) => {
+        const command = `${shell} ${option} ${quote}${whitespace}${quote}`;
+        expect(unwrapCommandText(command)).toBe(command);
+      },
+    ));
+  });
+});

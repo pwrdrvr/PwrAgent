@@ -36,6 +36,7 @@ describe("acpToolUpdateNotifications", () => {
         item: {
           command: 'pwragent__list_federation_instances\n{\n  "query": "Fixture",\n  "includeLoad": false\n}',
           commandSource: "tool",
+          commandToolName: "pwragent__list_federation_instances",
           toolName: "pwragent__list_federation_instances",
           commandActions: [{ type: "unknown", name: "pwragent__list_federation_instances" }],
         },

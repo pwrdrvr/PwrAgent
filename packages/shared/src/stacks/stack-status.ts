@@ -60,6 +60,13 @@ export type ThreadStackMembership = {
 
 export const MAX_COMPACT_STACK_MEMBERSHIPS = 8;
 
+/**
+ * How long a stack's detail stays current without a new read. The owner
+ * answers a detail read from its newest stack projection for this long, and
+ * a viewer draws its copy for this long without asking.
+ */
+export const STACK_DETAIL_REUSE_MS = 15_000;
+
 export type CompactStackMembership = {
   key: string;
   name: string;

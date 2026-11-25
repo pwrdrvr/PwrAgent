@@ -3,12 +3,9 @@
  * `reduceNormalizedThread`) into PwrAgent's legacy `AppServerThreadReplay`
  * shape — the view-model the renderer + persistence still speak today.
  *
- * This is the bridge Phase B needs to swap the in-tree
- * `AcpSessionReplayNormalizer` for the kit's `AcpSessionNormalizer` without
- * touching the renderer: kit events → `reduceNormalizedThread` → this adapter →
- * the existing `AppServerThreadReplay`. The KTD-P3 parity test asserts the
- * adapted output matches what the in-tree normalizer produces from the same
- * transcript.
+ * Production replay uses this adapter for kit plan updates and shell command
+ * details. The replay host still owns transcript identity and timing. The
+ * KTD-P3 parity tests also run the adapter over complete kit event streams.
  */
 import type {
   NormalizedActivityEntry,
@@ -75,7 +72,7 @@ function activityEntryToReplay(entry: NormalizedActivityEntry): AppServerThreadE
     id: entry.id,
     summary: entry.summary,
     ...(entry.status ? { status: activityStatus(entry.status) } : {}),
-    details: entry.toolCalls.map(toolCallToDetail),
+    details: entry.toolCalls.map(normalizedToolCallToReplayDetail),
   };
 }
 
@@ -88,11 +85,12 @@ function planEntryToReplay(entry: NormalizedPlanEntry): AppServerThreadEntry {
     type: "plan",
     id: entry.id,
     ...(entry.explanation !== undefined ? { explanation: entry.explanation } : {}),
+    ...(entry.markdown !== undefined ? { markdown: entry.markdown } : {}),
     steps,
   };
 }
 
-function toolCallToDetail(tool: NormalizedToolCall): AppServerThreadActivityDetail {
+export function normalizedToolCallToReplayDetail(tool: NormalizedToolCall): AppServerThreadActivityDetail {
   // NOTE: the in-tree normalizer keeps tool status on the ACTIVITY entry, not
   // the detail (detail has no `status`), so we deliberately don't set it here.
   //

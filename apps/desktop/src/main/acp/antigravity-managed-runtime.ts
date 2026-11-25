@@ -8,6 +8,10 @@ import type { ManagedRuntimeProgressReporter } from "../managed-runtime-progress
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { extract } from "tar";
 import { getMainLogger } from "../log.js";
+import {
+  compareAntigravityVersions,
+  type AntigravityReleaseStatus,
+} from "../../shared/antigravity-setup.js";
 import { ANTIGRAVITY_ACP_STRATEGY } from "./acp-local-strategies.js";
 import { AcpStdioJsonRpcTransport } from "./acp-stdio-transport.js";
 import {
@@ -80,6 +84,84 @@ export async function readManagedAntigravityStatus(
   return runtime ? { status: "installed", runtime } : { status: "not-installed" };
 }
 
+export type AntigravityReleaseCheck = AntigravityReleaseStatus;
+
+type ReleaseCheckOptions = RuntimeLocation & {
+  /** Reuse a check answered within this many milliseconds. `0` always asks. */
+  maxAgeMs?: number;
+  signal?: AbortSignal;
+  now?: () => number;
+  fetch?: typeof globalThis.fetch;
+};
+
+const releaseChecks = new Map<string, AntigravityReleaseCheck>();
+const pendingReleaseChecks = new Map<string, Promise<AntigravityReleaseCheck>>();
+
+/** Forget cached release checks. Test seam. */
+export function resetAntigravityReleaseChecks(): void {
+  releaseChecks.clear();
+  pendingReleaseChecks.clear();
+}
+
+/**
+ * Read the version Google's release manifest currently serves, without
+ * downloading or launching anything. The managed runtime runs with the CLI's
+ * own updater disabled, so this is the only way it learns about a release.
+ * A check answered within `maxAgeMs` is reused, and concurrent callers share
+ * one request.
+ */
+export async function checkLatestAntigravityRelease(
+  options: ReleaseCheckOptions = {},
+): Promise<AntigravityReleaseCheck> {
+  if (!supportsManagedInstall(options)) {
+    throw new Error("Managed Antigravity installation requires macOS on Apple Silicon.");
+  }
+  const key = managedRoot(options);
+  const now = options.now ?? Date.now;
+  const cached = releaseChecks.get(key);
+  if (cached && now() - cached.checkedAt < (options.maxAgeMs ?? 0)) return cached;
+  let check = pendingReleaseChecks.get(key);
+  if (!check) {
+    // The shared request runs on its own timeout, not on any one caller's
+    // signal: a caller that gives up must not fail the others joined to it.
+    check = (async () => {
+      const release = await fetchRelease(
+        AbortSignal.timeout(VALIDATION_TIMEOUT_MS),
+        options.fetch ?? globalThis.fetch,
+      );
+      const result = { latestVersion: release.version, checkedAt: now() };
+      releaseChecks.set(key, result);
+      return result;
+    })().finally(() => {
+      pendingReleaseChecks.delete(key);
+    });
+    pendingReleaseChecks.set(key, check);
+  }
+  return await abortable(check, options.signal);
+}
+
+/** Settle with `promise`, or reject as soon as `signal` aborts. */
+async function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return await promise;
+  signal.throwIfAborted();
+  let onAbort: (() => void) | undefined;
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([promise, aborted]);
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+async function fetchRelease(signal: AbortSignal, fetchImpl: typeof globalThis.fetch): Promise<Release> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of fetchBody(MANIFEST_URL, MAX_MANIFEST_BYTES, signal, fetchImpl)) chunks.push(chunk);
+  return parseRelease(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+}
+
 /** Explicitly install or reinstall Google's current release. The active link
  * changes only after checksum, extraction and ACP initialization succeed. */
 export async function installManagedAntigravityRuntime(
@@ -102,22 +184,20 @@ export async function installManagedAntigravityRuntime(
 async function installRelease(root: string, options: InstallOptions): Promise<ManagedAntigravityRuntime> {
   options.progress?.checking();
   const previous = await readActiveAntigravityRuntime(root);
-  const fetchRelease = options.fetch ?? globalThis.fetch;
+  const fetchImpl = options.fetch ?? globalThis.fetch;
   const downloadTimeout = AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS);
   const downloadSignal = options.signal
     ? AbortSignal.any([options.signal, downloadTimeout])
     : downloadTimeout;
-  const manifest = await fetchBody(MANIFEST_URL, MAX_MANIFEST_BYTES, downloadSignal, fetchRelease);
-  const chunks: Buffer[] = [];
-  for await (const chunk of manifest) chunks.push(chunk);
-  const release = parseRelease(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+  const release = await fetchRelease(downloadSignal, fetchImpl);
+  releaseChecks.set(root, { latestVersion: release.version, checkedAt: Date.now() });
 
   await mkdir(root, { recursive: true, mode: 0o700 });
   if (!(await lstat(root)).isDirectory()) throw new Error("Invalid managed Antigravity directory.");
   const staging = await mkdtemp(path.join(root, `.install-${process.pid}-`));
   try {
     const archive = path.join(staging, "release.tar.gz");
-    await downloadArchive(release, archive, downloadSignal, fetchRelease, options.progress);
+    await downloadArchive(release, archive, downloadSignal, fetchImpl, options.progress);
     options.progress?.unpacking(release.version);
     const command = await extractBinary(archive, staging);
     const verify = options.verify ?? verifyRuntime;
@@ -297,11 +377,8 @@ function keepActiveRuntime(
   version: string,
   previousCommand: string | undefined,
 ): boolean {
-  const activeParts = active.version.split(".");
-  for (const [index, part] of version.split(".").entries()) {
-    const difference = BigInt(activeParts[index]) - BigInt(part);
-    if (difference !== 0n) return difference > 0n;
-  }
+  const comparison = compareAntigravityVersions(active.version, version);
+  if (comparison !== 0) return comparison > 0;
   // Google can rebuild a version with a different digest. A concurrent
   // activation wins that tie. An explicit reinstall can still replace it
   // after reading the current active build on the next attempt.

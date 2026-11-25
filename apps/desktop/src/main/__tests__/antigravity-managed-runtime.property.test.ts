@@ -10,8 +10,10 @@ import { describe, expect, it, vi } from "vitest";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
+  checkLatestAntigravityRelease,
   installManagedAntigravityRuntime,
   readManagedAntigravityStatus,
+  resetAntigravityReleaseChecks,
   type ManagedAntigravityRuntime,
 } from "../acp/antigravity-managed-runtime";
 import { pruneAntigravityRuntime, withAntigravityRuntimeLock } from "../acp/antigravity-runtime-retention";
@@ -540,5 +542,66 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
       await symlink(target, path.join(rootDir, "active"));
       expect(await readManagedAntigravityStatus({ ...appleSilicon, rootDir })).toEqual({ status: "not-installed" });
     });
+  });
+});
+
+describe("Antigravity release checks", () => {
+  it("reuses a recent answer, asks again when forced, and shares one request between callers", async () => {
+    resetAntigravityReleaseChecks();
+    await withRuntimeRoot(async (rootDir) => {
+      const fetch = releaseFetch(await makeArchive(rootDir), "1.5.16");
+      let now = 1_000;
+      const options = { ...appleSilicon, rootDir, fetch, now: () => now, maxAgeMs: 60_000 };
+      const [first, second] = await Promise.all([
+        checkLatestAntigravityRelease(options),
+        checkLatestAntigravityRelease(options),
+      ]);
+      expect(first).toEqual({ latestVersion: "1.5.16", checkedAt: 1_000 });
+      expect(second).toEqual(first);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      now += 30_000;
+      await checkLatestAntigravityRelease(options);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await expect(checkLatestAntigravityRelease({ ...options, maxAgeMs: 0 }))
+        .resolves.toEqual({ latestVersion: "1.5.16", checkedAt: 31_000 });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      now += 61_000;
+      await checkLatestAntigravityRelease(options);
+      expect(fetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("rejects a manifest pointing outside Google's archive, and remembers nothing from it", async () => {
+    resetAntigravityReleaseChecks();
+    await withRuntimeRoot(async (rootDir) => {
+      const archive = await makeArchive(rootDir);
+      const options = { ...appleSilicon, rootDir, maxAgeMs: 60_000 };
+      await expect(checkLatestAntigravityRelease({ ...options, fetch: releaseFetch(archive, "1.5.16", "url") }))
+        .rejects.toThrow("Unexpected archive URL");
+      const fetch = releaseFetch(archive, "1.5.16");
+      await expect(checkLatestAntigravityRelease({ ...options, fetch })).resolves.toMatchObject({ latestVersion: "1.5.16" });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("fails only the caller whose signal aborts, not the others sharing its request", async () => {
+    resetAntigravityReleaseChecks();
+    await withRuntimeRoot(async (rootDir) => {
+      const fetch = releaseFetch(await makeArchive(rootDir), "1.5.16");
+      const options = { ...appleSilicon, rootDir, fetch, maxAgeMs: 0 };
+      const leaving = new AbortController();
+      const first = checkLatestAntigravityRelease({ ...options, signal: leaving.signal });
+      const second = checkLatestAntigravityRelease({ ...options, signal: new AbortController().signal });
+      leaving.abort(new Error("window closed"));
+      await expect(first).rejects.toThrow("window closed");
+      await expect(second).resolves.toMatchObject({ latestVersion: "1.5.16" });
+      expect(fetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("keeps unsupported platforms off the manifest", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    await expect(checkLatestAntigravityRelease({ platform: "linux", arch: "x64", fetch })).rejects.toThrow("Apple Silicon");
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

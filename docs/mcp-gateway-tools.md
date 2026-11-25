@@ -19,7 +19,12 @@ current selection on every call. PwrAgent uses this route at session creation
 and reload when both tools are available. Sessions without gateway access,
 including those on contained members, keep their selected native connections.
 The MCP Access panel reports when a session uses tool search and when the
-gateway has connected to each selected server.
+gateway has connected to each selected server. When an oversized-schema
+notice includes a `toolName`, Antigravity can retry `search_mcp_tools` with
+the notice's `connectionId`, its full `toolName` as `query`, and
+`includeLargeSchema: true`. This returns at most one exact definition with
+its usual invocation identity, within a 64,000-byte serialized result.
+Optional server metadata and instructions are included as space permits.
 
 Search returns the original server display name, stable connection ID, tool
 name, exact MCP definition and opaque schema revision. Invoke through
@@ -470,9 +475,14 @@ disconnecting a connection closes its sessions, including invalidating sessions
 that are still opening. Cancellation cannot undo an already completed external
 effect; the gateway never automatically retries side effects.
 
-Search pages have a 24 KB schema budget and never truncate a schema. A single
-oversized definition requires native invocation. Arguments are limited to
-16 KB so the confirmation can display them completely. Catalog reads allow at
+Ordinary search results are capped at 24,000 bytes and always contain whole
+schemas. Antigravity's explicit single-tool lookup can use up to 64,000 bytes.
+An oversized definition on another backend requires native invocation.
+`call_mcp_tool` accepts up to 64,000 serialized bytes on Antigravity and
+16,000 bytes on other backends, including the invocation identity. Both
+Antigravity access modes use the same limits and follow their existing consent
+policy. Size rejection happens before dispatch, and any error after dispatch
+returns through the original call without replay. Catalog reads allow at
 most 20 pages, 2,000 tools and 2 MB per connection. Search scans at most 64
 selected connections, four at a time, with an 8 MB combined catalog budget.
 Unsupported upstream callbacks such as

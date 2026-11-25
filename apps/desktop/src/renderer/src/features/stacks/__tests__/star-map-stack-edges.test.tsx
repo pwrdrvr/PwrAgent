@@ -2,10 +2,9 @@ import { render } from "@testing-library/react";
 import { expect, it } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { compactStackMembership, type StackSummary } from "@pwragent/shared/stacks/stack-status";
-import { visibleStackTray } from "../stack-presentation";
 import { StarMapStackEdges } from "../StarMapStackEdges";
 
-it("renders the same stack tray and Star Map edge from compact rows and older full rows", () => {
+it("renders the same Star Map stack edge from compact rows and older full rows", () => {
   const stack: StackSummary = {
     key: "example-stack", name: "Example stack", repository: "github.com:fixture/project", trunk: "main", inferred: true,
     layers: [
@@ -34,9 +33,7 @@ it("renders the same stack tray and Star Map edge from compact rows and older fu
   </>;
   const view = render(presentation(oldRows));
   const before = view.container.innerHTML;
-  expect(visibleStackTray(oldRows[0]!, oldRows.slice(1))).toBe(stack.key);
   expect(before).toContain('data-state="merged"');
   view.rerender(presentation(compactRows));
   expect(view.container.innerHTML).toBe(before);
-  expect(visibleStackTray(compactRows[0]!, compactRows.slice(1))).toBe(stack.key);
 });

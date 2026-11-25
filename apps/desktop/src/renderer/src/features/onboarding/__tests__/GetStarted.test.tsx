@@ -262,11 +262,29 @@ describe("Get started", () => {
     const codex = agentRow("Codex");
     await waitFor(() => expect(within(codex).getByText("Not installed")).toBeInTheDocument());
     expect(within(codex).queryByText(/install\.sh/)).not.toBeInTheDocument();
-    fireEvent.click(within(codex).getByRole("button", { name: "Install" }));
+    // PwrAgent's own build is the first offer; the terminal commands stay a
+    // click away for anyone who prefers to install Codex themselves.
+    expect(within(codex).getByRole("button", { name: "Install Codex" })).toBeInTheDocument();
+    fireEvent.click(within(codex).getByRole("button", { name: "Install it yourself instead" }));
     expect(within(codex).getByText("curl -fsSL https://chatgpt.com/codex/install.sh | sh")).toBeInTheDocument();
     expect(within(codex).queryByText("brew install --cask codex")).not.toBeInTheDocument();
     fireEvent.click(within(codex).getByRole("button", { name: "Copy npm command" }));
     await waitFor(() => expect(desktopApi.copyText).toHaveBeenCalledWith("npm install -g @openai/codex"));
+  });
+
+  it("installs PwrAgent's Codex build on one click when no Codex is found, then checks again", async () => {
+    const desktopApi = api();
+    const settings = settingsState(false);
+    renderGetStarted({ desktopApi, settings });
+    const codex = agentRow("Codex");
+    await waitFor(() => expect(within(codex).getByText("Not installed")).toBeInTheDocument());
+    expect(within(codex).getByText("PwrAgent can download and verify its own Codex build for you.")).toBeInTheDocument();
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+    const discover = desktopApi.refreshCodexDiscovery as unknown as ReturnType<typeof vi.fn>;
+    const discoveries = discover.mock.calls.length;
+    fireEvent.click(within(codex).getByRole("button", { name: "Install Codex" }));
+    await waitFor(() => expect(settings.writeConfig).toHaveBeenCalledWith({ models: { codex: { managedBuilds: true } } }));
+    await waitFor(() => expect(discover.mock.calls.length).toBeGreaterThan(discoveries));
   });
 
   it("signs in to this computer's Codex only on a click, and can cancel and try again", async () => {

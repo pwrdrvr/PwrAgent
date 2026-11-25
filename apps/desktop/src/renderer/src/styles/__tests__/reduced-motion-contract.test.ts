@@ -338,3 +338,103 @@ describe("paired busy rings under reduced motion", () => {
     expect(empty).toEqual([]);
   });
 });
+
+/**
+ * One-shot entrances that start invisible.
+ *
+ * The infinite-animation gate above leaves enters to case-by-case review, and
+ * one case slipped: the notice toast, update banner, Codex config warning and
+ * to-do deck all rise in through `app-update-banner-enter` (opacity 0 and 8px
+ * down) with no reduced-motion rule. An operator who asked for less motion
+ * still watched every notice slide in. And while the 160ms fade runs, the
+ * card's text is partly transparent: a toast that a background check raised
+ * mid-scan put the a11y gate's axe pass on "GitHub CLI authentication status
+ * check failed" at 3.88:1, text that clears 5.2:1 at rest.
+ *
+ * The rule: a rule that plays a keyframe whose first frame is `opacity: 0`
+ * has a decision under the preference. Either a `reduce` rule settles its
+ * animation by selector, or the keyframe is fade-only by design, which the
+ * stylesheet says by giving its motion frames only under `no-preference`
+ * (the Star Map intake card's `star-map-card-enter`).
+ */
+describe("app.css fade-in entrances under reduced motion", () => {
+  const keyframeName = (atRules: readonly string[]) =>
+    atRules
+      .map((atRule) => atRule.match(/^@keyframes\s+([\w-]+)/)?.[1])
+      .find((name) => name !== undefined);
+  const fadeInKeyframes = new Set(
+    rules
+      .filter(
+        (rule) =>
+          !hasMotionQuery(rule.atRules, "no-preference")
+          && rule.selectors.some((selector) => selector === "from" || selector === "0%")
+          && /(?:^|[;\s])opacity:\s*0(?:\.0+)?\s*;/.test(rule.body),
+      )
+      .map((rule) => keyframeName(rule.atRules))
+      .filter((name): name is string => name !== undefined),
+  );
+  // A keyframe is a fade by design only if its motion lives under
+  // `no-preference` AND the frames left for reduced motion do not move.
+  const movesUnderReduce = new Set(
+    rules
+      .filter(
+        (rule) =>
+          !hasMotionQuery(rule.atRules, "no-preference")
+          && /(?:^|[;\s])(?:transform|translate|scale|rotate):/.test(rule.body),
+      )
+      .map((rule) => keyframeName(rule.atRules))
+      .filter((name): name is string => name !== undefined),
+  );
+  const fadeOnlyByDesign = new Set(
+    rules
+      .filter((rule) => hasMotionQuery(rule.atRules, "no-preference"))
+      .map((rule) => keyframeName(rule.atRules))
+      .filter((name): name is string => name !== undefined && !movesUnderReduce.has(name)),
+  );
+  // Any rule that plays an entrance, including one nested in a width query or
+  // `@supports`. Only motion queries and keyframe frames are not entrances.
+  const entranceRules = rules.filter(
+    (rule) =>
+      !hasMotionQuery(rule.atRules, "reduce")
+      && !hasMotionQuery(rule.atRules, "no-preference")
+      && keyframeName(rule.atRules) === undefined
+      && [...fadeInKeyframes].some((name) =>
+        new RegExp(`(?:^|[;\\s])animation(?:-name)?:[^;]*\\b${name}\\b`).test(rule.body),
+      ),
+  );
+
+  it("finds the entrances it is meant to gate", () => {
+    expect(fadeInKeyframes).toContain("app-update-banner-enter");
+    expect(fadeInKeyframes).toContain("star-map-card-enter");
+    expect(fadeOnlyByDesign).toContain("star-map-card-enter");
+    expect(fadeOnlyByDesign).not.toContain("app-update-banner-enter");
+    // The exemption checks the reduced-motion frames, not just the
+    // `no-preference` copy's existence.
+    expect(movesUnderReduce).toContain("app-update-banner-enter");
+    expect(movesUnderReduce).not.toContain("star-map-card-enter");
+    expect(entranceRules.flatMap((rule) => rule.selectors)).toContain(".app-notice-toast");
+  });
+
+  it("settles every fade-in entrance under the preference", () => {
+    // Settled means a `reduce` rule names the selector AFTER the entrance in
+    // source order. The override is a bare class against a bare class, so one
+    // that comes first loses the cascade and the card still rises in. That is
+    // why the to-do deck carries its own `reduce` block beside its rule.
+    const settlesAfter = (selector: string, entranceIndex: number) =>
+      rules.some(
+        (candidate, index) =>
+          index > entranceIndex
+          && hasMotionQuery(candidate.atRules, "reduce")
+          && candidate.selectors.includes(selector)
+          && /(?:^|[;\s])animation(?:-[a-z-]+)?:/.test(candidate.body),
+      );
+    const undecided = entranceRules.flatMap((rule) => {
+      if ([...fadeOnlyByDesign].some((name) => new RegExp(`\\b${name}\\b`).test(rule.body))) {
+        return [];
+      }
+      const entranceIndex = rules.indexOf(rule);
+      return rule.selectors.filter((selector) => !settlesAfter(selector, entranceIndex));
+    });
+    expect(undecided).toEqual([]);
+  });
+});

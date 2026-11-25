@@ -538,14 +538,16 @@ The palette has held one tangerine since the theme shipped — `--accent` has ne
 
 Both are tangerine; they answer different questions. Picking the wrong one is what made the composer autocompletes look like four unrelated controls.
 
-**Popover highlight — "Enter lands here."** Transient, follows the cursor or arrow keys, gone when the popover closes.
+**Popover highlight — "Enter lands here."** Transient, follows the arrow keys (and the pointer, in pickers whose pointer moves the cursor), gone when the popover closes.
 
 ```css
 background: var(--accent-soft);
 color: var(--accent-bright);
+outline: 2px solid var(--focus-ring);
+outline-offset: -2px;
 ```
 
-Used by `.project-picker__row`, `.branch-picker__option`, `.reference-picker__row`, every `.composer__autocomplete-option`, and the Select's cursor row, `.select-option.is-active`. No bar, no outline.
+Used by the keyboard cursor or focused row of `.project-picker__row`, `.branch-picker__option`, `.reference-picker__row`, `.review-commit-picker__option`, every `.composer__autocomplete-option`, `.compact-composer__mention-option`, and the Select's cursor row, `.select-option.is-active`. No bar. The inset ring is the one an `aria-activedescendant` row takes (see [Focus rings](#focus-rings)).
 
 **Row selection — "this is what you're looking at."** Persistent, survives navigation, coexists with hover.
 
@@ -559,9 +561,19 @@ Used by `.thread-row.is-selected` and its derivatives. Do not lend the edge to a
 
 The edge is PwrGit's selected-row marker. An inset shadow is clipped to the padding box, so it follows the row's corners, takes no layout space, and leaves the left gutter free for the sub-thread and directory chevrons. It carries the state for SC 1.4.11: `--accent` is 8.40:1 against `--bg-row-active` in dark and 4.82:1 in light. A surface that sets its own `box-shadow` for other states, like a Star Map card, draws the same edge on an `inset: 0` pseudo-element instead.
 
-**Consequence for match highlighting:** on a highlighted row the label is already `--accent-bright`, so a color-only "typed run" highlight vanishes on exactly the row being read. Emphasize the match with **weight** (`font-weight: 700`) so it survives both states.
+**Consequence for match highlighting:** on the cursor row the label is already `--accent-bright`, so a color-only "typed run" highlight vanishes on exactly the row being read. Emphasize the match with **weight** (`font-weight: 700`) so it survives both states.
 
 `apps/desktop/src/renderer/src/styles/__tests__/theme-contract.test.tsx` locks all of the above for the autocomplete family. Changing it deliberately means changing the test in the same commit.
+
+### Hover is not a selection
+
+A row under the pointer must never look like the row Enter takes, the current page, or the chosen answer. Without the mouse pointer on screen, a reader should still be able to tell which row is selected. The thread list is the model: a hovered row gets a quiet neutral fill, and the selected row keeps its accent.
+
+- **Hover is a neutral wash.** In a list or on a raised panel, use `background: var(--surface-overlay-hover)`. A quiet label may lift to `--text-primary` (the Settings nav does), but hover never takes an accent color. The wash is 5% so that `--text-muted` metadata on a hovered row still clears 4.5:1 in every theme, on the raised panel and on `--bg-panel`. Use the overlay rather than `--bg-panel-hover`: that flat surface is darker than `--bg-panel-elevated` in some themes and disappears on a popover. A bordered card may lift its border to `--border-strong` instead.
+- **Hover rules exclude the chosen state** (`:hover:not(.is-active)`, `:not([aria-selected="true"])`, `:not(:focus-visible)`). Otherwise a hover selector with higher specificity takes the accent off the chosen row while the pointer is on it.
+- **The accent and the ring belong to the chosen row.** Menus follow the same rule: the pointer does not move focus, so a hovered item takes the wash and the focused item takes the accent and the inset ring (`.terminal-menu__item`, `.todo-split__item`). An older menu that shares one tint between hover and focus is still told apart by the ring, so never set `outline: none` on a `:focus-visible` that shares its paint with `:hover`.
+
+`styles/__tests__/hover-cursor-paint-contract.test.ts` checks this for every rule in `app.css`. A state that marks the chosen row (`.is-active`, `.is-cursor`, `.is-selected`, `[aria-selected]`, `[aria-pressed]`, `[aria-current]`, a `--active` modifier, or `:focus-visible` with the app-wide ring) must paint at least one thing that `:hover` does not paint on the same element.
 
 ## Typography
 

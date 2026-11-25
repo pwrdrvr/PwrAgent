@@ -448,12 +448,13 @@ describe("ResourcesScreen focus", () => {
     expect(within(inspector()).getByRole("heading", { name: "gpu-bench-02" })).toBeInTheDocument();
   });
 
-  it("explains why each queued request has not started", async () => {
+  it("explains why each queued request has not started on a first-in, first-out resource", async () => {
     const base = buildPreviewSnapshot(NOW);
     const snapshot: ResourceCheckoutsSnapshot = {
       ...base,
       resources: base.resources.map((resource) => resource.resourceId !== "res-compute" ? resource : {
         ...resource,
+        policy: { ...resource.policy, queueOrder: "fifo" },
         queue: [...resource.queue, {
           queueEntryId: "q-small", position: 2, requester: { kind: "operator", label: "You" }, purpose: "Lint",
           requestedAt: NOW - 60_000, units: 1, eligibility: { eligible: true }, viewerOwns: true,
@@ -465,8 +466,38 @@ describe("ResourcesScreen focus", () => {
     const holds = within(inspector()).getAllByTestId("resources-queue-hold").map((node) => node.textContent);
     expect(holds).toEqual([
       "Needs 2 CPU slots, 1 free. Starts when 1 more frees up.",
-      "Would fit now (1 of 1 free), but waits for #1: would delay #1.Fits now",
+      "Would fit now (1 of 1 free), but waits for #1: first in, first out.Fits now",
     ]);
+    expect(within(inspector()).getByTestId("resources-queue-order")).toHaveTextContent("First in, first out");
+  });
+
+  it("names a counted resource's default backfill queue and why a request that fits still waits there", async () => {
+    const base = buildPreviewSnapshot(NOW);
+    const snapshot: ResourceCheckoutsSnapshot = {
+      ...base,
+      resources: base.resources.map((resource) => resource.resourceId !== "res-compute" ? resource : {
+        ...resource,
+        // No queue order set: a counted resource backfills.
+        policy: { ...resource.policy, queueOrder: undefined },
+        // Granted this minute, as a backfilled request is. The screen reads the real clock.
+        allocations: resource.allocations.map((allocation, index) => index === 0 ? { ...allocation, grantedAt: Date.now() } : allocation),
+        queue: [...resource.queue, {
+          queueEntryId: "q-small", position: 2, requester: { kind: "operator", label: "You" }, purpose: "Lint",
+          requestedAt: NOW - 60_000, units: 1, eligibility: { eligible: true }, viewerOwns: true,
+        }],
+      }),
+    };
+    await renderScreen(liveSource(snapshot).source);
+    selectRow("studio-m4 compute");
+    expect(within(inspector()).getByTestId("resources-queue-order")).toHaveTextContent("Backfill");
+    // Nothing in the inspector may still claim strict first in, first out.
+    expect(inspector().textContent).not.toMatch(/First in, first out|Later requests wait behind it/);
+    expect(inspector().textContent).toMatch(/Shorter requests that fit without delaying #1 can backfill\./);
+    expect(inspector().textContent).toMatch(/granted just now/);
+    expect(inspector().textContent).not.toMatch(/now ago/);
+    expect(within(inspector()).getAllByTestId("resources-queue-hold")[1]).toHaveTextContent(
+      "Fits now (1 of 1 free), but would still be running when #1 can start. It starts early only if it can't delay #1.",
+    );
   });
 });
 

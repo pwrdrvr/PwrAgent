@@ -163,6 +163,28 @@ export function buildProviderPickerEntries(
 }
 
 /**
+ * The picker's entries split into the main list and its Unavailable
+ * submenu. A Codex model provider goes to the submenu when its last catalog
+ * read failed (a local model server that is not started, or a wrong key) or
+ * when it offers no model. It stays reachable there, in registered order, so
+ * a stopped provider does not look deleted. Backends always stay in the
+ * main list.
+ */
+export function partitionProviderPickerEntries(entries: readonly ProviderPickerEntry[]): {
+  available: ProviderPickerEntry[];
+  unavailable: ProviderPickerEntry[];
+} {
+  const available: ProviderPickerEntry[] = [];
+  const unavailable: ProviderPickerEntry[] = [];
+  for (const entry of entries) {
+    const out = entry.codexModelProviderId
+      && (entry.catalog?.status === "unavailable" || entry.models.length === 0);
+    (out ? unavailable : available).push(entry);
+  }
+  return { available, unavailable };
+}
+
+/**
  * Each Codex model provider's display name in an owner's backend list, by
  * provider id. The owner's catalog state names it first, then a model's
  * `providerLabel`.
@@ -202,15 +224,58 @@ function countModels(count: number): string {
 }
 
 /**
+ * Errors from a catalog read whose endpoint never answered: Node's `fetch`
+ * reports a refused connection or an unknown host as `fetch failed`, and the
+ * catalog's own timeout says the endpoint `did not answer`
+ * (`codex-model-provider-catalog.ts` in the desktop main process).
+ */
+const UNREACHABLE_CATALOG_ERROR =
+  /^fetch failed\b|\bdid not answer\b|\b(?:ECONNREFUSED|ECONNRESET|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT)\b/u;
+
+/**
+ * The provider's endpoint did not answer its last catalog read. For a local
+ * model server that is its ordinary state while it is stopped, so the picker
+ * says it is offline instead of quoting the error. An endpoint that answered
+ * with an error, such as HTTP 401, is misconfigured and keeps its reason.
+ */
+export function codexModelProviderOffline(
+  catalog: CodexModelProviderCatalogState | undefined,
+): boolean {
+  return catalog?.status === "unavailable"
+    && catalog.error !== undefined
+    // An HTTP status means the endpoint answered, whatever its body says.
+    && !/^HTTP \d/u.test(catalog.error)
+    && UNREACHABLE_CATALOG_ERROR.test(catalog.error);
+}
+
+/**
  * The line under a Codex model provider's picker entry, and whether the
- * entry can be chosen. An entry with no model cannot.
+ * entry can be chosen. An entry with no model cannot. An offline provider
+ * reads the same whether or not it lists models; the read's error moves to
+ * the tooltip.
  */
 export function describeCodexModelProviderEntry(entry: ProviderPickerEntry): {
   description: string;
   disabled: boolean;
+  tooltip?: string;
 } {
   const count = entry.models.length;
   const catalog = entry.catalog;
+  if (codexModelProviderOffline(catalog)) {
+    const name = entry.label ?? catalog!.name;
+    const reason = `${name} did not answer (${catalog!.error!.replace(/\.$/u, "")}).`;
+    return count === 0
+      ? {
+        description: "Runs on Codex · offline",
+        disabled: true,
+        tooltip: `${reason} Start it, or list a model in Settings.`,
+      }
+      : {
+        description: `Runs on Codex · ${countModels(count)} · offline`,
+        disabled: false,
+        tooltip: `${reason} Its models listed in Settings are still offered.`,
+      };
+  }
   if (count === 0) {
     return {
       description: catalog?.status === "unavailable" && catalog.error
@@ -235,6 +300,9 @@ export function codexModelProviderCatalogNote(
   catalog: CodexModelProviderCatalogState | undefined,
 ): string | undefined {
   if (!catalog) return undefined;
+  if (codexModelProviderOffline(catalog)) {
+    return `${catalog.name} is offline. Showing the models listed in Settings.`;
+  }
   if (catalog.status === "unavailable") {
     return `Catalog unavailable${catalog.error ? `: ${catalog.error}` : ""}. Showing the models listed in Settings.`;
   }

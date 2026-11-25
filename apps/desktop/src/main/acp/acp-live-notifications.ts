@@ -10,6 +10,7 @@ import {
 import {
   isGenericShellToolTitle,
   readAcpMcpToolName,
+  readAcpProviderTool,
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolDescription,
@@ -18,8 +19,8 @@ import {
   readAcpWebSearch,
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
-import { readAcpFileEdit } from "./acp-file-edit.js";
-import { fileBaseName } from "./acp-file-read.js";
+import { type ReadAcpFileEditOptions, readAcpFileEdit } from "./acp-file-edit.js";
+import { fileBaseName, readAcpFileRead } from "./acp-file-read.js";
 import {
   foldAcpTurnUsage,
   readAcpUsageEnvelope,
@@ -249,7 +250,7 @@ export class AcpLiveToolUpdateResolver {
 
 export function acpToolUpdateNotifications(params: {
   backendId?: string;
-  cwd?: string;
+  cwd?: ReadAcpFileEditOptions["cwd"];
   threadId: string;
   turnId?: string;
   update: Record<string, unknown>;
@@ -473,10 +474,16 @@ function liveItemForAcpToolUpdate(
     };
   }
 
+  const fileRead = readAcpFileRead(update, readAcpProviderTool(update));
   const webFetchUrl = readAcpWebFetchUrl(update);
   const invocation = readAcpToolInvocation(update);
   const command = rawCommand ?? invocation ?? title;
-  const commandActions = acpCommandActions({
+  const commandActions = fileRead ? [{
+    type: fileRead.action,
+    path: fileRead.path,
+    name: title,
+    label: fileRead.label,
+  }] : acpCommandActions({
     kind: webFetchUrl ? "read" : toolKind,
     path,
     semanticTitle: description,
@@ -493,6 +500,8 @@ function liveItemForAcpToolUpdate(
     status,
     command,
     commandSource: rawCommand ? "shell" : "tool",
+    ...(fileRead ? { path: fileRead.path } : {}),
+    ...(!rawCommand && mcpToolName ? { commandToolName: mcpToolName } : {}),
     ...(commandActions.length ? { commandActions } : {}),
     ...(output ? { data: { output } } : {}),
   };
@@ -617,9 +626,14 @@ function readAcpToolPath(
   return (
     readString(update, "path") ??
     readString(rawInput ?? {}, "path") ??
+    readString(rawInput ?? {}, "Path") ??
     readString(rawInput ?? {}, "file") ??
     readString(rawInput ?? {}, "filePath") ??
     readString(rawInput ?? {}, "file_path") ??
+    readString(rawInput ?? {}, "target_file") ??
+    readString(rawInput ?? {}, "target_directory") ??
+    readString(rawInput ?? {}, "DirectoryPath") ??
+    readString(rawInput ?? {}, "directory_path") ??
     readFirstLocationPath(update)
   );
 }
@@ -643,7 +657,7 @@ function mergeAcpLiveToolUpdates(
           ? isGenericAcpToolKind(updateValue)
           : isGenericAcpToolMetadata(updateValue)))
     ) {
-      merged[key] = previousValue;
+      merged[key] = previous[key];
     }
   }
   for (const key of ["_meta", "rawInput", "rawOutput"] as const) {

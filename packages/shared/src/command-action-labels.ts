@@ -101,41 +101,97 @@ function readMeaningfulPathName(value: string | null | undefined): string | unde
 
 const MAX_COMMAND_LABEL_LENGTH = 72;
 
-// Strip a leading shell-interpreter wrapper so we show the command the agent
-// actually ran rather than the interpreter's full path. Handles POSIX login
-// shells (`/bin/sh -lc <cmd>`, `bash -lc <cmd>`) and Windows interpreters
-// (`"C:\...\powershell.exe" -Command <cmd>`, `cmd.exe /c <cmd>`,
-// `bash.exe -lc <cmd>`). The full, unmodified command is preserved separately
-// as `rawCommand` for the expanded details view.
-//
-// The Windows branch matches the interpreter path in two forms: quoted
-// (`"[^"]*…\.exe"`, which permits spaces — e.g. `"C:\Program Files\Git\bin\
-// bash.exe"`) and unquoted (`[^\s"]*…\.exe`, no spaces). A single
-// `[^\s"]*` couldn't span a spaced path inside quotes, so a quoted Git-bash
-// invocation under "Program Files" would otherwise show the full path.
-function stripShellWrapper(command: string): string {
-  return command
-    .trim()
-    .replace(/^(?:\/\S+\/)?(?:ba|z)?sh\s+-lc\s+/i, "")
+function readPosixScriptWord(text: string): { length: number; display: string; echoes: string[] } | undefined {
+  let length = 0;
+  let decodedScript = "";
+  let escapedScript = "";
+  // Adjacent quoted and escaped fragments form one word. Sticky matching
+  // stops at the first separator so a trailing argument never joins it.
+  for (const [fragment, single, double, escaped] of text.matchAll(
+    /'([^']*)'|"((?:[^"\\]|\\[\s\S])*)"|\\([\s\S])|[^\s'"\\;&|<>()]+/gy,
+  )) {
+    const end = length + fragment.length;
+    const literal = single ?? (escaped === "\n" ? "" : escaped);
+    // Bash removes unquoted line continuations before recognizing $'…' or $"…".
+    if (
+      literal === undefined
+      && double === undefined
+      && fragment.endsWith("$")
+      && /^(?:\\\n)*['"]/.test(text.slice(end))
+    ) {
+      return undefined;
+    }
+    const doubleEcho = double?.replace(/\\(["\\$`\n])/g, (_, char: string) =>
+      char === "\n" ? "" : char,
+    );
+    const decoded = literal ?? doubleEcho ?? fragment;
+    // Keep the existing display for a standalone double-quoted script.
+    // Joined fragments use the decoded word that the shell passes to -c.
+    if (double !== undefined && fragment.length === text.length) {
+      return { length: end, display: double, echoes: [decoded, double] };
+    }
+    decodedScript += decoded;
+    escapedScript += literal ?? double ?? fragment;
+    length = end;
+  }
+  // A provider can echo the script with or without its outer shell escapes.
+  return { length, display: decodedScript, echoes: [decodedScript, escapedScript] };
+}
+
+function readCommandLabelText(command: string): { display: string; scriptEchoes?: string[] } {
+  const trimmed = command.trim();
+  const posixWrapper = /^(?:\/\S+\/)?(?:ba|z)?sh\s+(-l?c|-C)\s+/.exec(trimmed);
+  if (posixWrapper) {
+    const tail = trimmed.slice(posixWrapper[0].length);
+    const word = readPosixScriptWord(tail);
+    if (!word) {
+      return { display: trimmed };
+    }
+    let display = trimmed;
+    // Noclobber's script path can be echoed as a title. Keep its flag visible.
+    if (posixWrapper[1] !== "-C") {
+      if (!/^['"]/.test(tail)) {
+        display = tail;
+      } else if (word.length === tail.length && word.display.trim()) {
+        display = word.display;
+      }
+    }
+    return word.length > 0 ? { display, scriptEchoes: word.echoes } : { display };
+  }
+
+  // Quoted Windows executable paths can contain spaces, as in Program Files.
+  const unwrapped = trimmed
     .replace(
       /^(?:"[^"]*(?:powershell|pwsh|cmd|bash)\.exe"|[^\s"]*(?:powershell|pwsh|cmd|bash)\.exe)\s+(?:-Command|-lc|-c|\/d\s+\/s\s+\/c|\/c)\s+/i,
       "",
     )
     .trim();
-}
-
-/**
- * A command on one line, without its shell wrapper or the quotes that wrapper
- * put around the script. A bare command keeps its own quotes: `echo "done"`
- * is not `echo "done`.
- */
-export function normalizeCommandText(command: string): string {
-  const trimmed = command.trim();
-  const unwrapped = stripShellWrapper(trimmed);
-  const script = unwrapped === trimmed
+  const display = unwrapped === trimmed
     ? unwrapped
     : unwrapped.replace(/^(['"])([\s\S]*)\1$/, "$2");
-  return script.replace(/\s+/g, " ").trim();
+  return { display };
+}
+
+/** Unwraps a shell invocation for display while keeping the script's formatting. */
+export function unwrapCommandText(command: string): string {
+  return readCommandLabelText(command).display;
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** A command on one line for display. */
+export function normalizeCommandText(command: string): string {
+  return oneLine(unwrapCommandText(command));
+}
+
+/** Matches an echoed command title without changing which text is displayed. */
+export function commandTitleMatchesInvocation(title: string, command: string): boolean {
+  const candidate = normalizeCommandText(title);
+  const { display, scriptEchoes } = readCommandLabelText(command);
+  return candidate === oneLine(display)
+    || (scriptEchoes?.some((echo) => candidate === oneLine(echo)) ?? false);
 }
 
 /**

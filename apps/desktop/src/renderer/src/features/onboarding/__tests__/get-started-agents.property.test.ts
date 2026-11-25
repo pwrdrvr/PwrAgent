@@ -6,6 +6,7 @@ import {
   canStartWithAgents,
   claudeAgentState,
   codexAgentState,
+  codexInstallOffer,
   getStartedAgentAction,
   type CodexSignInState,
   type GetStartedAgentState,
@@ -118,6 +119,75 @@ describe("Get started agent rules", () => {
         );
         if (!claude.present) {
           expect(state.kind).toBe(claude.loaded ? "not-installed" : "checking");
+        }
+      }),
+    );
+  });
+});
+
+describe("Get started Codex install offer", () => {
+  const arbCodex = fc.record({
+    candidate: fc.constantFrom("none", "working", "unversioned"),
+    pathSource: fc.constantFrom("default", "config", "env"),
+    advisory: fc.constantFrom("none", "homebrew", "pwragent"),
+    managedOn: fc.boolean(),
+    discovering: fc.boolean(),
+    launchFailure: fc.boolean(),
+  });
+
+  function codexSnapshot(
+    codex: typeof arbCodex extends fc.Arbitrary<infer T> ? T : never,
+  ): DesktopSettingsSnapshot {
+    return {
+      models: {
+        codex: {
+          path: { value: "", source: codex.pathSource },
+          managedBuilds: { value: codex.managedOn, source: "config" },
+          ...(codex.advisory === "none"
+            ? {}
+            : {
+                versionAdvisory: {
+                  version: "0.150.0",
+                  minimumVersion: "0.160.0",
+                  command: "/opt/contrived/codex",
+                  installer: codex.advisory,
+                },
+              }),
+          discovery: {
+            candidates: codex.candidate === "none"
+              ? []
+              : [{
+                  command: "/opt/contrived/codex",
+                  executable: true,
+                  selected: true,
+                  ...(codex.candidate === "working" ? { version: "0.150.0" } : {}),
+                }],
+          },
+        },
+      },
+    } as unknown as DesktopSettingsSnapshot;
+  }
+
+  it("offers PwrAgent's Codex for every dead end a new user can hit, and only those", () => {
+    fc.assert(
+      fc.property(arbCodex, (codex) => {
+        const offer = codexInstallOffer({
+          snapshot: codexSnapshot(codex),
+          discovering: codex.discovering,
+          ...(codex.launchFailure ? { launchFailure: { command: "/opt/contrived/codex" } } : {}),
+        });
+        const working = codex.candidate === "working";
+        if (codex.pathSource === "env") {
+          // An environment-forced path is the operator's decision.
+          expect(offer).toBeUndefined();
+        } else if (!working) {
+          expect(offer?.reason).toBe(
+            codex.discovering ? undefined : codex.launchFailure ? "broken" : "missing",
+          );
+        } else {
+          expect(offer?.reason).toBe(
+            codex.advisory === "homebrew" && !codex.managedOn ? "outdated" : undefined,
+          );
         }
       }),
     );

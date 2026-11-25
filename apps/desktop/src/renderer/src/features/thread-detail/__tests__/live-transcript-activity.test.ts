@@ -127,7 +127,7 @@ describe("buildLiveToolDetails", () => {
         label: description,
         status: "completed",
         command: expect.objectContaining({
-          displayCommand: "python3 - <<'PY' print('Grok 4.5') PY",
+          displayCommand: command,
           rawCommand: command,
           output: "Grok 4.5",
         }),
@@ -1058,16 +1058,44 @@ describe("Windows command rendering", () => {
     expect(details[0]?.command?.rawCommand).toContain("powershell.exe");
   });
 
-  it("strips a POSIX login-shell wrapper from the command label", () => {
+  it.each([
+    ["a POSIX login-shell", "/bin/zsh -lc 'git status'"],
+    ["a POSIX non-login shell", '/bin/bash -c "git status"'],
+  ])("strips %s wrapper from the command label", (_shell, command) => {
     const details = buildLiveToolDetails({
       type: "commandExecution",
       id: "cmd-2",
-      command: "/bin/zsh -lc 'git status'",
+      command,
       status: "completed",
     });
 
     expect(details[0]?.label).toBe("git status");
+    expect(details[0]?.command?.displayCommand).toBe("git status");
+    expect(details[0]?.command?.rawCommand).toBe(command);
   });
+
+  it.each(['sh -c ""', '/bin/bash -c ""', "/bin/zsh -lc '  \n  '"])(
+    "keeps completion details for a blank script in %j",
+    (command) => {
+      const [detail] = buildLiveToolDetails({
+        type: "commandExecution",
+        id: "blank-script",
+        command,
+        status: "failed",
+        output: "shell startup warning",
+        exitCode: 1,
+        durationMs: 120,
+      });
+
+      expect(detail?.command).toMatchObject({
+        displayCommand: command,
+        rawCommand: command,
+        output: "shell startup warning",
+        exitCode: 1,
+        durationMs: 120,
+      });
+    },
+  );
 
   it("strips a quoted Git-bash wrapper whose path contains spaces", () => {
     const details = buildLiveToolDetails({

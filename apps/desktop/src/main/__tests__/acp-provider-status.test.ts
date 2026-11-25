@@ -33,11 +33,13 @@ describe("normalizeAntigravityUsageStatus", () => {
             },
           },
         });
-        expect(result?.rateLimits?.map(({ name, limitId, usedPercent, resetAt }) => ({
-          name, limitId, used: Math.round(usedPercent!), resetAt,
+        expect(result?.rateLimits?.map(({ name, limitId, usedPercent, resetAt, windowMinutes }) => ({
+          name, limitId, used: Math.round(usedPercent!), resetAt, windowMinutes,
         }))).toEqual([
-          { name: "Weekly Gemini limit", limitId: "gemini-weekly", used: 100 - geminiRemaining, resetAt: Date.parse(pools[0]!.reset) },
-          { name: "Weekly Claude/GPT limit", limitId: "3p-weekly", used: 100 - claudeRemaining, resetAt: Date.parse(pools[1]!.reset) },
+          { name: "Weekly Gemini limit", limitId: "gemini-weekly", used: 100 - geminiRemaining,
+            resetAt: Date.parse(pools[0]!.reset), windowMinutes: 10_080 },
+          { name: "Weekly Claude/GPT limit", limitId: "3p-weekly", used: 100 - claudeRemaining,
+            resetAt: Date.parse(pools[1]!.reset), windowMinutes: 10_080 },
         ]);
       },
     ));

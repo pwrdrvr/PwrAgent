@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import fc from "fast-check";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import {
   THREAD_TODO_ITEM_TEXT_MAX_LENGTH,
@@ -13,7 +18,15 @@ import {
   normalizeUpdateTodoArgs,
   type PwrAgentThreadTodoHandler,
 } from "../agent-tools/pwragent-thread-todo-agent-tools";
+import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { runGitCommand } from "../app-server/git-executable";
+import * as gitRemote from "../pr-status/git-remote";
+import { GithubPrFetcher } from "../pr-status/github-pr-fetcher";
+import { PullRequestRepositoryAliases } from "../pr-status/pr-repository-aliases";
+import * as appState from "../state/app-state";
+import { SqliteOverlayStore } from "../storage/overlay-store-sqlite";
 import { ThreadTodoError, ThreadTodoService } from "../thread-todos/thread-todo-service";
+import { installThreadTodoRuntime, resetThreadTodoServiceForTests } from "../thread-todos/thread-todo-runtime";
 import { ThreadTodoStore } from "../storage/thread-todo-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
@@ -51,6 +64,53 @@ function createHandler(): PwrAgentThreadTodoHandler {
     list: vi.fn(() => [TODO]),
     resolve: vi.fn(() => ({ ...TODO, status: "done" as const })),
   };
+}
+
+function reviewPr(number: number, repo = "widgets"): PrSummary {
+  return {
+    provider: "github.com", org: "acme", repo, number, state: "passing",
+    url: `https://github.com/acme/${repo}/pull/${number}`,
+  };
+}
+
+async function reviewTodoRuntime(cwd: string, prs: PrSummary[] = [], aliases = new PullRequestRepositoryAliases()) {
+  const db = openInMemoryStateDb();
+  onTestFinished(() => {
+    resetThreadTodoServiceForTests();
+    vi.restoreAllMocks();
+    db.close();
+  });
+  const overlay = new SqliteOverlayStore(db);
+  vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+  vi.spyOn(appState, "getAppOverlayStore").mockReturnValue(overlay);
+  if (prs.length) await overlay.setThreadPullRequests({ ...CONTEXT, prs });
+  let handler: PwrAgentThreadTodoHandler | undefined;
+  const registry = {
+    onEvent: () => () => {},
+    setPwrAgentThreadTodoHandler: (value: PwrAgentThreadTodoHandler) => { handler = value; },
+    resolveThreadWorkspaceCwd: async () => cwd,
+    resolveThreadPrimaryDirectory: async () => undefined,
+    canonicalizeNavigationPullRequests: async (rows: PrSummary[]) => rows.map((row) => aliases.canonicalize(row)),
+  };
+  installThreadTodoRuntime({
+    registry: registry as unknown as DesktopBackendRegistry,
+    broadcast: () => {}, listProjects: async () => [], readDefaultMergeMethod: () => "squash",
+    feed: { loadOwners: async () => [], managedThreadKeys: () => new Set(), onDelta: () => {} },
+  });
+  return {
+    add: (pullRequest: string | number) => tool("add_todo", handler).dispatch({
+      title: "Review the PR", action: { type: "start_review", pullRequest },
+    }, CONTEXT),
+    stored: () => new ThreadTodoStore(db).list({ ...CONTEXT, status: "open" }),
+  };
+}
+
+async function reviewTodoGitCheckout() {
+  const cwd = await mkdtemp(join(tmpdir(), "pwragent-todo-review-"));
+  onTestFinished(() => rm(cwd, { recursive: true, force: true }));
+  const git = (...args: string[]) => runGitCommand(cwd, args);
+  await git("init", "--quiet");
+  return { cwd, git };
 }
 
 describe("normalizePullRequestReference", () => {
@@ -103,6 +163,22 @@ describe("normalizeAddTodoArgs", () => {
         action: { type: "merge_pull_request", pullRequest: "12" },
       },
     });
+  });
+
+  it("retains the PR identity for every valid review URL", () => {
+    fc.assert(fc.property(fc.nat({ max: 1_000_000 }), fc.boolean(), (index, trailingSlash) => {
+      const pullRequest = `https://github.com/acme/widgets/pull/${index + 1}`;
+      expect(normalizeAddTodoArgs({
+        title: "Review the PR",
+        action: { type: "start_review", pullRequest: trailingSlash ? `${pullRequest}/` : pullRequest },
+      })).toMatchObject({ ok: true, value: { action: { type: "start_review", pullRequest } } });
+    }));
+  });
+
+  it("still allows a review card with no PR specified", () => {
+    const action = { type: "start_review" };
+    expect(normalizeAddTodoArgs({ title: "Review the patch", action }))
+      .toMatchObject({ ok: true, value: { action } });
   });
 
   it("keeps a handoff's optional fields and drops blank ones", () => {
@@ -266,6 +342,102 @@ describe("normalizeUpdateTodoArgs", () => {
 });
 
 describe("thread to-do tool dispatch", () => {
+  it.each([
+    { name: "an unattached PR's explicit URL", reference: "https://github.com/acme/widgets/pull/41/", storedNumber: 41 },
+    { name: "an attached PR number", reference: 42, storedNumber: 42 },
+    { name: "a PR number in the checkout's repository", reference: "#43", storedNumber: 43 },
+    { name: "a missing PR number", reference: 44, error: "Could not resolve PR #44" },
+    { name: "an ambiguous PR number", reference: 45, error: "PR #45 matches multiple attached PRs" },
+    { name: "a branch name", reference: "main", error: "must be a PR number or a github.com pull request URL" },
+    { name: "an unsafe PR number", reference: 1e21, error: "must be a PR number or a github.com pull request URL" },
+  ])("resolves or refuses $name before storing a review card", async ({ reference, storedNumber, error }) => {
+    const cwd = "/repo/worktree";
+    const runtime = await reviewTodoRuntime(cwd, [reviewPr(42), reviewPr(45), reviewPr(45, "other")]);
+    const resolveRepo = vi.spyOn(gitRemote, "resolveGitHubRepoForCheckoutAction")
+      .mockResolvedValue({ host: "github.com", owner: "acme", repo: "widgets" });
+    const fetchPr = vi.spyOn(GithubPrFetcher.prototype, "fetchPullRequestByUrl")
+      .mockImplementation(async ({ url }) => url === reviewPr(43).url ? reviewPr(43) : undefined);
+    const result = await runtime.add(reference);
+
+    if (storedNumber !== undefined) {
+      const action = { type: "start_review", pullRequest: reviewPr(storedNumber).url };
+      expect(result).toMatchObject({ ok: true, data: { todo: { action } } });
+      expect(runtime.stored().map((todo) => todo.action)).toEqual([action]);
+    } else {
+      expect(result).toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining(error!) });
+      expect(runtime.stored()).toEqual([]);
+    }
+    if (reference === "#43" || reference === 44) {
+      expect(resolveRepo).toHaveBeenCalledWith(cwd);
+      expect(fetchPr).toHaveBeenCalledWith({ cwd, url: reviewPr(storedNumber ?? 44).url });
+    } else {
+      expect(resolveRepo).not.toHaveBeenCalled();
+      expect(fetchPr).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each([false, true])("stores the picker URL after a repository rename when the current URL is already stored: %s", async (hasCurrentRow) => {
+    const old = reviewPr(42, "old-widgets");
+    const current = reviewPr(42);
+    const aliases = new PullRequestRepositoryAliases();
+    aliases.learn(old.url, current);
+    const runtime = await reviewTodoRuntime("/repo/worktree", hasCurrentRow ? [old, current] : [old], aliases);
+    expect((await runtime.add(42)).ok).toBe(true);
+    expect(runtime.stored().map((todo) => todo.action)).toEqual([
+      { type: "start_review", pullRequest: current.url },
+    ]);
+  });
+
+  it("uses Git's current origin after a cached origin is replaced", async () => {
+    const { cwd, git } = await reviewTodoGitCheckout();
+    const old = reviewPr(42, "old-widgets");
+    const current = reviewPr(42);
+    await git("remote", "add", "origin", "https://github.com/acme/old-widgets.git");
+    await expect(gitRemote.resolveGitHubRepoForDirectory(cwd)).resolves.toMatchObject({ repo: old.repo });
+    await git("remote", "set-url", "origin", "https://github.com/acme/widgets.git");
+    await git("remote", "add", "upstream", "https://github.com/acme/other.git");
+    const runtime = await reviewTodoRuntime(cwd);
+    const fetchPr = vi.spyOn(GithubPrFetcher.prototype, "fetchPullRequestByUrl")
+      .mockImplementation(async ({ url }) => [old, current].find((pr) => pr.url === url));
+
+    expect((await runtime.add(42)).ok).toBe(true);
+    expect(fetchPr).toHaveBeenCalledExactlyOnceWith({ cwd, url: current.url });
+    expect(runtime.stored().map((todo) => todo.action)).toEqual([
+      { type: "start_review", pullRequest: current.url },
+    ]);
+  });
+
+  it.each([
+    { name: "upstream as the only remote", remotes: { upstream: "github.com/acme/widgets" }, resolves: true },
+    { name: "a GitLab origin and two names for one GitHub repo", remotes: {
+      origin: "gitlab.com/acme/widgets", upstream: "github.com/acme/widgets", backup: "github.com/ACME/Widgets",
+    }, resolves: true },
+    { name: "two different GitHub remotes", remotes: {
+      upstream: "github.com/acme/widgets", backup: "github.com/acme/other",
+    }, resolves: false },
+  ])("resolves against Git with $name", async ({ remotes, resolves }) => {
+    const { cwd, git } = await reviewTodoGitCheckout();
+    for (const [name, repo] of Object.entries(remotes)) {
+      await git("remote", "add", name, `https://${repo}.git`);
+    }
+    const runtime = await reviewTodoRuntime(cwd);
+    const pr = reviewPr(42);
+    const fetchPr = vi.spyOn(GithubPrFetcher.prototype, "fetchPullRequestByUrl")
+      .mockImplementation(async ({ url }) => url.toLowerCase() === pr.url ? pr : undefined);
+
+    const result = await runtime.add(42);
+    if (resolves) {
+      expect(result.ok).toBe(true);
+      expect(runtime.stored().map((todo) => todo.action)).toEqual([
+        { type: "start_review", pullRequest: pr.url },
+      ]);
+    } else {
+      expect(result).toMatchObject({ ok: false, code: "invalid_arguments" });
+      expect(fetchPr).not.toHaveBeenCalled();
+      expect(runtime.stored()).toEqual([]);
+    }
+  });
+
   it("updates one of the calling thread's cards", async () => {
     const handler = createHandler();
     const result = await tool("update_todo", handler).dispatch(

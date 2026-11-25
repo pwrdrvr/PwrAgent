@@ -8,12 +8,102 @@ the worst observed setup, build, reporting, and other job overhead (3:14).
 The 20-minute job deadline gives slow runners additional time for retries,
 reporting, and cleanup. Each lane runs one Playwright worker.
 
-Linux and Windows share `77:91:104:133` across four lanes. Those weights were
-fit to 405 tests in 216 groups.
-See the [2026-11-18 timing refresh](desktop-e2e-shard-timing-refresh-2026-11-18.md)
-for native measurements, phase comparisons, source identities and coverage checks.
-The [November 18 fitter input](desktop-e2e-shard-durations.json) includes every test ID
-and platform skip from that refresh.
+Linux Desktop E2E lanes never run `a11y.spec.ts`. They use `86:75:65:107`
+across four lanes, fit to the other 333 tests. A separate job, `desktop-a11y`,
+runs the accessibility audit in two lanes. Windows keeps the audit in its four
+lanes with `59:121:104:112`, fit to all 396 tests. See
+[November 24 allocation](#november-24-allocation).
+The [current fitter input](desktop-e2e-shard-durations.json) includes every test ID,
+platform skip and per-run sample from that fit.
+The previous `77:91:104:133` allocation, which Linux and Windows shared, is
+described in the [2026-11-18 timing refresh](desktop-e2e-shard-timing-refresh-2026-11-18.md),
+with its [November 18 fitter input](https://github.com/pwrdrvr/PwrAgent/blob/eea63a2392e4399cc501e8dbee47dd46111a2a62/docs/desktop-e2e-shard-durations.json).
+
+## November 24 allocation
+
+On main run [45525513730](https://github.com/pwrdrvr/PwrAgent/actions/runs/45525513730)
+attempt 1, Linux lane 1 passed all 78 of its tests, but Playwright took 9.8
+minutes and the step's 10-minute limit killed it. That job's runner was slow:
+each test took a median of about 1.4 times as long as on the other runs. The cause was
+structural. `77:91:104:133` put all 63 `a11y.spec.ts` tests and 15 other tests
+in lane 1, so lane 1 needed about 6.5 minutes on a normal runner. Lanes 2 to 4
+needed 4 to 6 minutes.
+
+The audit now runs in its own job, `desktop-a11y`, on every push and on a pull
+request only when asked (see
+[accessibility audit on PRs](../.github/workflows/README.md#accessibility-audit-on-prs)).
+`a11y.spec.ts` runs in `parallel` mode, so each of its tests is its own shard
+group, and `--shard=K/2` splits its 63 tests 32/31. The Desktop E2E lanes set
+`PWRAGENT_E2E_SKIP_A11Y=1`, which makes `playwright.config.ts` ignore the spec.
+No test is removed, skipped or changed.
+
+### Measurements
+
+The input uses Playwright HTML reports from every Linux and Windows lane of
+three complete main runs. No E2E spec, Playwright configuration or patch
+changed between them:
+
+- [45517722507](https://github.com/pwrdrvr/PwrAgent/actions/runs/45517722507), commit `639472090`.
+- [45520142822](https://github.com/pwrdrvr/PwrAgent/actions/runs/45520142822), commit `1e3fea050`.
+- [45525513730](https://github.com/pwrdrvr/PwrAgent/actions/runs/45525513730) attempt 1, commit `7881915d8`.
+
+The killed Linux lane 1 still wrote a complete report, with 78 of 78 tests
+passing. It is included: its slow runner is the case this allocation must
+survive. Each group's `seconds` is the median of the three samples. The
+per-run sums are in `sampleSeconds`.
+
+Measured "Run desktop replay-backed Electron tests" step times, in minutes:
+
+| Run | Linux lane 1 / 2 / 3 / 4 | Windows lane 1 / 2 / 3 / 4 |
+| --- | --- | --- |
+| 45517722507 | 6:45 / 4:36 / 4:38 / 5:51 | 9:26 / 5:43 / 7:32 / 10:03 |
+| 45520142822 | 7:12 / 5:28 / 6:19 / 4:56 | 6:11 / 5:08 / 7:24 / 6:51 |
+| 45525513730 | 10:05 (killed) / 4:02 / 5:43 / 5:21 | 9:42 / 7:22 / 7:37 / 9:40 |
+
+### Fit
+
+Each split minimizes its platform's longest modeled lane, in seconds:
+
+```sh
+python3 scripts/ci/fit-desktop-e2e-shards.py --platform linux --without a11y.spec.ts --weights 77:91:104:133 --fit
+python3 scripts/ci/fit-desktop-e2e-shards.py --platform windows --weights 77:91:104:133 --fit
+```
+
+| Lanes | Weights | Lane 1 / 2 / 3 / 4, medians | Longest lane |
+| --- | --- | --- | ---: |
+| Linux E2E, before (with a11y) | `77:91:104:133` | 416.1 / 260.2 / 313.0 / 300.9 | 416.1 |
+| Linux E2E (333 tests) | `86:75:65:107` | 232.9 / 218.0 / 231.3 / 231.9 | 232.9 |
+| Linux a11y (63 tests) | `--shard=K/2` | 222 / 154 | 222 |
+| Windows E2E, before | `77:91:104:133` | 520.0 / 318.5 / 412.1 / 539.7 | 539.7 |
+| Windows E2E (396 tests) | `59:121:104:112` | 436.1 / 453.8 / 454.4 / 445.9 | 454.4 |
+
+The accessibility tests that scan all appearances in one launch come first,
+so the first a11y lane carries more of the time. Both lanes stay far inside the
+10-minute step.
+
+Applied to each run's own measurements, in seconds:
+
+| Run | Linux E2E before | Linux E2E after | Linux a11y | Windows before | Windows after |
+| --- | --- | --- | --- | --- | --- |
+| 45517722507 | 389 / 259 / 256 / 331 | 229 / 186 / 212 / 256 | 209 / 143 | 532 / 319 / 415 / 570 | 447 / 453 / 461 / 473 |
+| 45520142822 | 415 / 304 / 349 / 281 | 265 / 246 / 247 / 216 | 221 / 154 | 349 / 286 / 407 / 375 | 293 / 396 / 420 / 308 |
+| 45525513730 | 580 / 226 / 314 / 304 | 218 / 210 / 233 / 232 | 316 / 213 | 551 / 412 / 421 / 547 | 465 / 551 / 462 / 453 |
+
+The slow runner's worst Linux lane would have needed 316 seconds instead of
+580, leaving almost half of the step's budget.
+
+Linux no longer shares Windows' split. The two platforms collect different
+tests, so a Windows-only failure can now also come from a different lane
+assignment. The Windows lanes run only on `main`, with `ci:full` or
+`ci:windows-shutdown-diagnostics`, or for platform-specific changes.
+
+`playwright test --list` reproduces every split: 86/75/65/107 of 333 tests
+ending at `directory-launchpad-workspace.spec.ts`,
+`queue-explicit-identity.spec.ts`, `shared-messaging-profile.spec.ts` and
+`workspace-handoff-flows.spec.ts`; 32/31 accessibility tests; and
+59/121/104/112 of 396 tests ending at `a11y.spec.ts`,
+`html-file-preview.spec.ts`, `settings-rendering-diagnostics.spec.ts` and
+`workspace-handoff-flows.spec.ts`. Each collection lists every test exactly once.
 
 ## November 4 allocation
 

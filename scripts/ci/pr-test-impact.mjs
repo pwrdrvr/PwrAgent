@@ -188,6 +188,19 @@ export async function planE2e(changes, { inventory, affected, testOnly = () => f
   };
 }
 
+// The accessibility audit runs in its own CI job (`desktop-a11y`), never in a
+// Desktop E2E lane. A narrowed plan that selects it leaves it out of the
+// lane's specs and asks that job to run instead.
+export const a11ySpec = "apps/desktop/e2e/a11y.spec.ts";
+
+export function separateA11y(e2e) {
+  if (e2e.mode !== "selected") return { e2e, a11y: false };
+  return {
+    e2e: { ...e2e, selected: e2e.selected.filter(({ file }) => file !== a11ySpec) },
+    a11y: e2e.selected.some(({ file }) => file === a11ySpec),
+  };
+}
+
 export async function planImpact(files, { fallback, unit, e2e }) {
   const reason = fallback ?? wholeSuiteReason(files);
   if (reason) return { unit: full(reason), e2e: full(reason) };

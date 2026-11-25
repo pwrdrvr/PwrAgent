@@ -28,14 +28,19 @@ import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   resolveThreadTodoModelSettings,
   threadTodoPlacementParent,
+  threadTodoProjectIsChoosable,
 } from "@pwragent/shared/contracts/thread-todos";
 import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navigation";
 import { defaultModelOption } from "@pwragent/shared/model-defaults";
+import { normalizePullRequestUrl } from "@pwragent/shared/pull-request-review";
 import { resolveThreadTodoStartAccess } from "@pwragent/shared/thread-todo-access";
 import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
 import { getMainLogger } from "../log.js";
+import { buildPullRequestReferenceUrl } from "../pr-status/forge-reference";
+import { resolveGitHubRepoForCheckoutAction } from "../pr-status/git-remote";
+import { parsePrRefFromUrl } from "../pr-status/github-graphql-client";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher.js";
 import { createThreadTodoStorage } from "../storage/desktop-runtime-storage.js";
 import {
@@ -97,6 +102,38 @@ export function setThreadTodoMergeOfferGate(gate: MergeOfferGate | undefined): v
   mergeOfferGate = gate;
 }
 
+async function resolveReviewPullRequestNumber(
+  registry: Pick<DesktopBackendRegistry, "canonicalizeNavigationPullRequests">,
+  thread: Pick<ThreadTodo, "backend" | "threadId">,
+  cwd: string | undefined,
+  number: number,
+): Promise<string> {
+  const [stored = []] = getDesktopOverlayStore().readNavigationPullRequests([thread]);
+  const prs = stored.length ? await registry.canonicalizeNavigationPullRequests(stored) : [];
+  const attached = new Map<string, string>();
+  for (const pr of prs) {
+    if (typeof pr?.url === "string" && parsePrRefFromUrl(pr.url)?.number === number) {
+      const normalized = normalizePullRequestUrl(pr.url);
+      attached.set(normalized.toLowerCase(), normalized);
+    }
+  }
+  if (attached.size > 1) {
+    throw new ThreadTodoError("invalid_arguments", `PR #${number} matches multiple attached PRs. Pass its full github.com URL.`);
+  }
+  const attachedUrl = attached.values().next().value;
+  if (attachedUrl) return attachedUrl;
+
+  if (cwd && Number.isSafeInteger(number)) {
+    const repo = await resolveGitHubRepoForCheckoutAction(cwd);
+    if (repo) {
+      const url = buildPullRequestReferenceUrl({ provider: repo.host, org: repo.owner, repo: repo.repo, number });
+      const pr = await new GithubPrFetcher().fetchPullRequestByUrl({ cwd, url });
+      if (pr) return pr.url;
+    }
+  }
+  throw new ThreadTodoError("invalid_arguments", `Could not resolve PR #${number} from this thread's attachments or repository. Pass its full github.com URL.`);
+}
+
 export function getThreadTodoService(): ThreadTodoService {
   if (!service) {
     const dependencies = createThreadDependencyStorage();
@@ -143,16 +180,20 @@ export async function listThreadTodoProjectCandidates(): Promise<ThreadTodoProje
 
 /**
  * The operator's pick from a card's project menu. A key the sidebar no
- * longer lists is refused rather than kept as a stale label.
+ * longer lists is refused rather than kept as a stale label, and so is any
+ * pick on a review or merge card, whose project is fixed.
  */
 export async function setThreadTodoProject(
   params: { id: string; projectKey: string | null },
   deps: {
-    todos?: Pick<ThreadTodoService, "update">;
+    todos?: Pick<ThreadTodoService, "get" | "update">;
     listProjects?: () => Promise<ThreadTodoProject[]>;
   } = {},
 ): Promise<ThreadTodo> {
   const todos = deps.todos ?? getThreadTodoService();
+  if (!threadTodoProjectIsChoosable(todos.get(params.id))) {
+    throw new ThreadTodoError("invalid_arguments", "A review or merge card runs in its own thread's project.");
+  }
   if (params.projectKey === null) {
     return todos.update({ id: params.id, targetProject: null });
   }
@@ -629,7 +670,7 @@ export function installThreadTodoRuntime(params: {
       });
     },
     add: async (context, rawInput) => {
-      const input = await settleAddInput(context, rawInput);
+      let input = await settleAddInput(context, rawInput);
       if (input.action?.type === "merge_pull_request" && mergeOfferGate) {
         // A gate that cannot read the PR does not block the card.
         const refusal = await mergeOfferGate(
@@ -645,6 +686,11 @@ export function installThreadTodoRuntime(params: {
           .catch(() => undefined),
         listProjectsForTodo(),
       ]);
+      const action = input.action;
+      if (action?.type === "start_review" && action.pullRequest && /^[1-9]\d*$/.test(action.pullRequest)) {
+        const pullRequest = await resolveReviewPullRequestNumber(registry, context, cwd, Number(action.pullRequest));
+        input = { ...input, action: { ...action, pullRequest } };
+      }
       const targetProject = input.project
         ? matchProject(input.project, projects)
         : undefined;

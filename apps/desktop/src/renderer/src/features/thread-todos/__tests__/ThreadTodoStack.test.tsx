@@ -417,6 +417,19 @@ describe("ThreadTodoStack", () => {
       expect(screen.queryByRole("button", { name: /^To-do project:/ })).toBeNull();
       cleanup();
 
+      // A merge names a pull request in its own thread's repository.
+      for (const sourceProject of [AGENT, undefined]) {
+        renderCard(todo({
+          id: "m",
+          kind: "merge",
+          ...(sourceProject ? { sourceProject } : {}),
+          action: { type: "merge_pull_request", pullRequest: "42" },
+        }), projectMenu);
+        expect(screen.queryByRole("button", { name: /^To-do project:/ })).toBeNull();
+        expect(screen.queryByText("No project")).toBeNull();
+        cleanup();
+      }
+
       renderCard(handoff({ targetProject: SNAP }));
       expect(screen.queryByRole("button", { name: /^To-do project:/ })).toBeNull();
       expect(screen.getByText("For PwrSnap")).toBeTruthy();

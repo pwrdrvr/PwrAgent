@@ -5,7 +5,7 @@ import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { parseGitRemoteConfiguration, type GitRemote, type GitRemoteConfiguration } from "./git-remote-config";
-import { runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
+import { PR_METADATA_PRIORITY, runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
@@ -163,6 +163,20 @@ export async function resolveGitHubRepoForDirectory(
 ): Promise<GitHubRepoRef | undefined> {
   const observation = await readParsedGitRemotes(cwd, options);
   return observation.value.find((remote) => remote.name === "origin")?.repo;
+}
+
+/** Resolve a GitHub.com action target from one current sample of the checkout. */
+export async function resolveGitHubRepoForCheckoutAction(cwd: string): Promise<GitHubRepoRef | undefined> {
+  // Sample independently of discovery, which may already have read the old URLs.
+  const { observation } = await loadParsedGitRemotes(cwd, { fresh: true }, {
+    priority: () => PR_METADATA_PRIORITY.selected,
+  });
+  const origin = observation.value.find((remote) => remote.name === "origin")?.repo;
+  if (origin?.host === "github.com" && !origin.owner.includes("/")) return origin;
+
+  const repos = collectForgeRepositories(observation.value, "github")
+    .filter((repo) => repo.host === "github.com");
+  return repos.length === 1 ? repos[0] : undefined;
 }
 
 /** Keep negative observations until the shared remote cache permits a retry. */

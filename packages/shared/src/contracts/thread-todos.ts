@@ -1048,6 +1048,22 @@ export type ThreadTodosChangedEvent = { at: number; federationTarget?: Federatio
   threadId: ThreadIdentifier;
 } | { backend?: undefined; threadId?: undefined });
 
+/**
+ * Whether the operator can move a card to another project. A review starts
+ * on the card's own thread, and a merge names one pull request in the
+ * thread's own repository: pointing it at another project would run the merge
+ * there, against whatever that repository's pull request of the same number
+ * is. Neither has a project to choose.
+ */
+export function threadTodoProjectIsChoosable(
+  todo: Pick<ThreadTodo, "kind" | "action">,
+): boolean {
+  return todo.kind !== "review"
+    && todo.action?.type !== "start_review"
+    && todo.kind !== "merge"
+    && todo.action?.type !== "merge_pull_request";
+}
+
 export function threadTodoKindForAction(
   action: ThreadTodoAction | undefined,
 ): ThreadTodoKind {

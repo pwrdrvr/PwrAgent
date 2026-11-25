@@ -14,7 +14,7 @@ import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isol
 
 vi.mock("node:fs/promises", async (importOriginal) => {
   const fs = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...fs, lstat: vi.fn(fs.lstat), open: vi.fn(fs.open) };
+  return { ...fs, lstat: vi.fn(fs.lstat), open: vi.fn(fs.open), realpath: vi.fn(fs.realpath) };
 });
 
 beforeEach(() => onTestFinished(isolateProcessGitEnvironment()));
@@ -31,6 +31,19 @@ const git = (cwd: string, ...args: string[]) => runIsolatedGitSync(cwd, args).tr
 function initialize(cwd: string) {
   git(cwd, "init", "-b", "topic");
   git(cwd, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "topic");
+}
+
+async function gitCheckout(cwd: string) {
+  const dirs = git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split(/\r?\n/);
+  const [root, commonDir] = await Promise.all(dirs.map((entry) => realpath(entry)));
+  return { root, commonDir };
+}
+
+function inferredPr(number: number, headRefName: string, baseRefName: string, cwd: string): PrSummary {
+  return {
+    number, provider: "github.com", org: "fixture", repo: "shared", lifecycleState: "open", state: "passing",
+    headRefName, baseRefName, url: `https://github.com/fixture/shared/pull/${number}`, linkedDirectoryPaths: [cwd],
+  };
 }
 
 async function writeCatalog(cwd: string, name: string) {
@@ -798,59 +811,74 @@ describe("stack checkout demand", () => {
     }
   });
 
-  it("reuses verified inventory checkouts until their physical relationship changes", async () => {
-    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-warm-inventory-"));
-    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
-    try {
-      const primary = path.join(sandbox, "primary");
-      const sibling = path.join(sandbox, "sibling");
-      const other = path.join(sandbox, "other");
-      const alias = path.join(sandbox, "alias");
-      const home = path.join(sandbox, "home");
-      await Promise.all([mkdir(primary), mkdir(other), mkdir(home)]);
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("USERPROFILE", home);
-      vi.stubEnv("XDG_CONFIG_HOME", home);
-      initialize(primary);
-      initialize(other);
-      git(primary, "worktree", "add", "-b", "sibling", sibling);
-      await Promise.all([writeCatalog(primary, "primary"), writeCatalog(other, "other")]);
-      await symlink(sibling, alias, "junction");
-      const reader = new StackReader();
-      const checkoutStarts = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
-      const rows = [row(primary, "primary"), row(alias, "alias")];
-      await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.nat({ max: 15 }), { minLength: 2, maxLength: 8 }), async (inventory) => {
-        const subdirectories = await Promise.all(inventory.map(async (index) => {
-          const cwd = path.join(sibling, "fixture-" + index);
-          await mkdir(cwd, { recursive: true });
-          return row(cwd, "fixture-" + index);
+  it("reuses verified inventory checkouts until their physical relationship changes", async ({ signal, onTestFinished }) => {
+    const fixture = (async () => {
+      const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-warm-inventory-"));
+      const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+      try {
+        const primary = path.join(sandbox, "primary");
+        const sibling = path.join(sandbox, "sibling");
+        const other = path.join(sandbox, "other");
+        const alias = path.join(sandbox, "alias");
+        const home = path.join(sandbox, "home");
+        await Promise.all([mkdir(primary), mkdir(other), mkdir(home)]);
+        vi.stubEnv("HOME", home);
+        vi.stubEnv("USERPROFILE", home);
+        vi.stubEnv("XDG_CONFIG_HOME", home);
+        initialize(primary);
+        initialize(other);
+        git(primary, "worktree", "add", "-b", "sibling", sibling);
+        await Promise.all([writeCatalog(primary, "primary"), writeCatalog(other, "other")]);
+        await symlink(sibling, alias, "junction");
+
+        const reader = new StackReader();
+        const aliasRow = row(alias, "alias");
+        const rows = [row(primary, "primary"), aliasRow];
+        const read = (inventory: ReturnType<typeof row>[], directories?: string[]) => {
+          signal.throwIfAborted();
+          return reader.read(inventory, [], directories);
+        };
+        const checkoutStartsSince = (offset: number) => start.mock.calls.slice(offset)
+          .filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
+        const nested = await Promise.all(["one", "two", "three"].map(async (name) => {
+          const cwd = path.join(sibling, name);
+          await mkdir(cwd);
+          return row(cwd, name);
         }));
-        const coldReader = new StackReader();
-        const cold = await coldReader.read([...rows, ...subdirectories], []);
-        start.mockClear();
-        expect(await coldReader.read([...rows, ...subdirectories], [])).toEqual(cold);
-        // Only the registered root needs a live roster seed in a wide scan.
-        // Previously verified subdirectories remain reusable.
-        expect(checkoutStarts()).toEqual(inventory.length >= 3 ? [alias] : []);
-      }), { numRuns: 6 });
-      const scoped = await reader.read([row(alias, "alias")], [], [alias]);
-      expect(scoped.stacks[0]?.repository).toBe("github.com:fixture/primary");
-      await reader.read(rows, []);
-      await rm(alias);
-      await symlink(other, alias, "junction");
-      start.mockClear();
-      const rebound = await reader.read(rows, []);
-      expect(checkoutStarts()).toEqual([alias]);
-      expect(rebound.stacks.find((stack) => stack.repository === "github.com:fixture/other")?.layers[0]?.thread?.key)
-        .toBe("codex:alias");
-      start.mockClear();
-      expect((await reader.read([row(alias, "alias")], [], [alias])).stacks[0]?.repository).toBe("github.com:fixture/other");
-      expect(checkoutStarts()).toEqual([alias]);
-    } finally {
-      vi.unstubAllEnvs();
-      start.mockRestore();
-      await rm(sandbox, { recursive: true, force: true });
-    }
+        // Exercise both sides of the five-checkout roster threshold against
+        // one real fixture. The wide scan does not cache its live roster seed,
+        // so warm the narrow inventory last before retargeting the alias.
+        for (const [count, expected] of [[3, [alias]], [2, []]] as const) {
+          const inventory = [...rows, ...nested.slice(0, count)];
+          const warmed = await read(inventory);
+          expect(warmed.stacks[0]?.repository).toBe("github.com:fixture/primary");
+          const offset = start.mock.calls.length;
+          expect(await read(inventory)).toEqual(warmed);
+          expect(checkoutStartsSince(offset)).toEqual(expected);
+        }
+        expect((await read([aliasRow], [alias])).stacks[0]?.repository).toBe("github.com:fixture/primary");
+
+        signal.throwIfAborted();
+        await rm(alias);
+        await symlink(other, alias, "junction");
+        const reboundOffset = start.mock.calls.length;
+        const rebound = await read(rows);
+        expect(checkoutStartsSince(reboundOffset)).toEqual([alias]);
+        expect(rebound.stacks.find((stack) => stack.repository === "github.com:fixture/other")?.layers[0]?.thread?.key)
+          .toBe("codex:alias");
+        const scopedOffset = start.mock.calls.length;
+        expect((await read([aliasRow], [alias])).stacks[0]?.repository).toBe("github.com:fixture/other");
+        expect(checkoutStartsSince(scopedOffset)).toEqual([alias]);
+      } finally {
+        vi.unstubAllEnvs();
+        start.mockRestore();
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    })();
+    // A deadline may interrupt the test while Git is still running. Drain
+    // this fixture before the next test installs its own Git assertions.
+    onTestFinished(async () => { await Promise.allSettled([fixture]); });
+    await fixture;
   });
 
   it.each(["refs", "objects"])("follows Git discovery when a warmed nested repository loses %s", async (entry) => {
@@ -975,6 +1003,148 @@ describe("stack checkout demand", () => {
       expect((await reader.read(rows, [], undefined, activity)).stacks).toEqual(scoped.stacks);
       expect((await reader.read(rows, [bottomPr, topPr], [other], activity)).stacks).toEqual([]);
     } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps inferred attachments when only the stored PR paths use symlink spellings", async () => {
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-attachment-aliases-"));
+    const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      const seed = path.join(sandbox, "seed");
+      const clone = path.join(sandbox, "clone");
+      const other = path.join(sandbox, "other-clone");
+      const lowerPath = path.join(sandbox, "lower");
+      const upperPath = path.join(sandbox, "upper");
+      const lowerAlias = path.join(sandbox, "lower-alias");
+      const upperAlias = path.join(sandbox, "upper-alias");
+      await mkdir(seed);
+      initialize(seed);
+      git(seed, "branch", "-m", "main");
+      git(sandbox, "clone", seed, clone);
+      git(sandbox, "clone", seed, other);
+      git(clone, "worktree", "add", "-b", "lower", lowerPath);
+      git(clone, "worktree", "add", "-b", "upper", upperPath, "lower");
+      git(other, "switch", "-c", "lower");
+      const [lower, upper, separate, primary] = await Promise.all([lowerPath, upperPath, other, clone].map((cwd) => realpath(cwd)));
+      await symlink(lower, lowerAlias, "junction");
+      await symlink(upper, upperAlias, "junction");
+      const lowerCheckout = await gitCheckout(lower);
+      const upperCheckout = await gitCheckout(upper);
+      const separateCheckout = await gitCheckout(separate);
+      expect(await gitCheckout(lowerAlias)).toEqual(lowerCheckout);
+      expect(await gitCheckout(upperAlias)).toEqual(upperCheckout);
+      expect(lowerCheckout.root).not.toBe(upperCheckout.root);
+      expect(lowerCheckout.commonDir).toBe(upperCheckout.commonDir);
+      expect(separateCheckout.commonDir).not.toBe(lowerCheckout.commonDir);
+
+      const stackRow = (name: string, root: string, number: number, base: string, alias: string) => ({
+        ...row(root, name),
+        linkedDirectories: [{ id: primary, path: primary, worktreePath: root, label: name, kind: "worktree" as const }],
+        prs: [inferredPr(number, name, base, alias)],
+      });
+      const rows = [stackRow("lower", lower, 1, "main", lowerAlias), stackRow("upper", upper, 2, "lower", upperAlias)];
+      const reader = new StackReader();
+      start.mockClear();
+      const { stacks } = await reader.read(rows, [], [lower]);
+      // Git's (worktree root, common dir) pair decides attachment provenance.
+      // Changing only its spelling cannot remove either inferred layer.
+      expect(stacks).toMatchObject([{
+        inferred: true,
+        layers: [
+          { pullRequest: { number: 1 }, thread: { key: "codex:lower" } },
+          { pullRequest: { number: 2 }, thread: { key: "codex:upper" } },
+        ],
+      }]);
+      expect(start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd).sort())
+        .toEqual([lower, upper].sort());
+      const fleet = await reader.read(rows, [], undefined, undefined, new StackReadObservation(), async ({ prs }) => prs);
+      expect(fleet.stacks).toEqual(stacks);
+
+      for (const target of [separate, upper, lower]) {
+        await rm(lowerAlias);
+        await symlink(target, lowerAlias, "junction");
+        const aliasedCheckout = await gitCheckout(lowerAlias);
+        expect(aliasedCheckout).toEqual(await gitCheckout(target));
+        const sameCheckout = aliasedCheckout.root === lowerCheckout.root && aliasedCheckout.commonDir === lowerCheckout.commonDir;
+        expect((await reader.read(rows, [], [lower])).stacks).toEqual(sameCheckout ? stacks : []);
+      }
+    } finally {
+      start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("distinguishes the Git common directories of an alias and a checkout with the same worktree root", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-shared-root-")));
+    const physical = path.join(sandbox, "physical");
+    const other = path.join(sandbox, "other");
+    const upper = path.join(sandbox, "upper");
+    const alias = path.join(sandbox, "alias");
+    try {
+      await mkdir(physical);
+      initialize(physical);
+      git(sandbox, "clone", physical, other);
+      git(other, "worktree", "add", "-b", "upper", upper);
+      git(other, "config", "core.worktree", physical);
+      const owner = await gitCheckout(other);
+      expect(owner.root).toBe(physical);
+      expect((await gitCheckout(upper)).commonDir).toBe(owner.commonDir);
+      const rows = [
+        { ...row(other, "lower"), prs: [inferredPr(1, "topic", "main", alias)] },
+        { ...row(upper, "upper"), prs: [inferredPr(2, "upper", "topic", upper)] },
+      ];
+      const reader = new StackReader();
+      for (const target of [physical, other]) {
+        await symlink(target, alias, "junction");
+        const provenance = await gitCheckout(alias);
+        expect(provenance.root).toBe(owner.root);
+        expect(provenance.commonDir === owner.commonDir).toBe(target === other);
+        const result = await reader.read(rows, [], [other]);
+        expect(result.stacks.map(({ inferred }) => inferred)).toEqual(provenance.commonDir === owner.commonDir ? [true] : []);
+        expect(result.catalogs).toEqual([{ status: "missing" }]);
+        await rm(alias);
+      }
+      expect(await reader.read(rows, [], [other])).toEqual({ stacks: [], catalogs: [{ status: "missing" }] });
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["available", "unavailable"])("keeps stack settlement conservative when alias probing fails and Git is %s", async (availability) => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-alias-probe-")));
+    const lower = path.join(sandbox, "lower");
+    const upper = path.join(sandbox, "upper");
+    const alias = path.join(sandbox, "alias");
+    const real = vi.mocked(realpath).getMockImplementation()!;
+    const runGit = gitExecutable.runGitCommand;
+    const run = vi.spyOn(gitExecutable, "runGitCommand");
+    try {
+      await mkdir(lower);
+      initialize(lower);
+      git(lower, "worktree", "add", "-b", "upper", upper);
+      await symlink(lower, alias, "junction");
+      expect(await gitCheckout(alias)).toEqual(await gitCheckout(lower));
+      const rows = [
+        { ...row(lower, "lower"), prs: [inferredPr(1, "topic", "main", alias)] },
+        { ...row(upper, "upper"), prs: [inferredPr(2, "upper", "topic", upper)] },
+      ];
+      vi.mocked(realpath).mockImplementation((...args) => args[0] === alias
+        ? Promise.reject(Object.assign(new Error("Alias probe unavailable"), { code: "EIO" })) : real(...args));
+      run.mockImplementation((cwd, args, options) => cwd === alias && availability === "unavailable"
+        ? Promise.reject(new Error("Git lookup timed out")) : runGit(cwd, args, options));
+      const { catalogs, stacks } = await new StackReader().read(rows, [], [upper]);
+      expect(run.mock.calls.filter(([cwd, args]) => cwd === alias && args[0] === "rev-parse")).toHaveLength(1);
+      if (availability === "available") {
+        expect(stacks[0]?.layers[1]?.heldBy).toMatchObject({ number: 1 });
+        expect(catalogs).toEqual([{ status: "missing" }]);
+      } else {
+        // The gate must wait when neither the filesystem nor Git can resolve provenance.
+        expect(catalogs).toContainEqual({ status: "unavailable" });
+      }
+    } finally {
+      vi.mocked(realpath).mockImplementation(real);
+      run.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }
   });

@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo } from "react";
 import type { BackendRuntimeBuild, BackendSummary } from "@pwragent/shared/contracts/backend";
+import { usageLimitProviderForBackend } from "@pwragent/shared/contracts/usage-activity";
 import { PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
@@ -11,6 +12,7 @@ import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummarie
 import { claudeProviderStatus } from "../../settings/claude-provider-status";
 import {
   useLocalUsagePace,
+  usagePaceAccountKey,
   usagePaceRefreshKey,
 } from "../../federation-activity/useLocalUsagePace";
 import { RateLimitRow } from "./RateLimitRow";
@@ -34,11 +36,12 @@ export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: Prov
   useEffect(() => {
     window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
   }, []);
-  // Limit history is recorded on Codex turns only, so only Codex gets a pace.
-  const hasCodexLimits = props.backends.some((backend) => backend.kind === "codex" && backend.rateLimits?.length);
+  const chartableBackends = props.backends.filter((backend) => backend.available
+    && usageLimitProviderForBackend(backend.kind) && backend.rateLimits?.some((limit) => limit.usedPercent !== undefined));
   const pace = useLocalUsagePace(
-    hasCodexLimits ? props.desktopApi?.readUsageActivity : undefined,
-    usagePaceRefreshKey(props.backends),
+    chartableBackends.length ? props.desktopApi?.readUsageActivity : undefined,
+    usagePaceRefreshKey(chartableBackends),
+    usagePaceAccountKey(chartableBackends),
   );
   // Reset times are relative to the backends' latest refresh, not each render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -120,7 +123,7 @@ export const ProviderStatusPanel = memo(function ProviderStatusPanel(props: Prov
                       key={`${limit.limitId ?? "limit"}:${limit.name}`}
                       limit={limit}
                       now={now}
-                      pace={backend.kind === "codex" ? pace : undefined}
+                      account={pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "")}
                     />
                   ))}
                 </dl>

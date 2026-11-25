@@ -46,6 +46,7 @@ import {
   threadTodoItemProgress,
   threadTodoOpenItems,
   threadTodoPrerequisites,
+  threadTodoProjectIsChoosable,
   threadTodoSteps,
 } from "@pwragent/shared/contracts/thread-todos";
 import {
@@ -1203,10 +1204,10 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
         now={props.now}
         progress={progress}
         project={(
-          // A review starts on the card's own thread, so it has no project to change.
+          // A review or a merge is fixed to the card's own thread and repository.
           <TodoProjectPicker
             todo={todo}
-            menu={todo.kind === "review" ? undefined : props.projectMenu}
+            menu={threadTodoProjectIsChoosable(todo) ? props.projectMenu : undefined}
             disabled={props.running}
           />
         )}

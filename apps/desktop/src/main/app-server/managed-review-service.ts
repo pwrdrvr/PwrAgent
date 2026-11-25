@@ -63,6 +63,7 @@ import {
 } from "./backend-registry-notifications";
 import { threadOrchestrationFailure } from "./backend-registry-runtime-helpers";
 import type {
+  AgentAntigravityReviewAccess,
   BackendClient,
   ModelSettings,
   PendingReviewStartRecord,
@@ -73,7 +74,7 @@ import { buildCodexTokenMiserDynamicToolSpecs } from "./codex-thread-config";
 import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
-import { buildManagedReviewPrompt } from "./managed-review";
+import { buildManagedReviewPrompt, managedReviewAcpRuntime } from "./managed-review";
 import { prepareClaudeCodeReview, validateClaudeCodeReview } from "./claude-code-review-start";
 import { resolvePullRequestReview, resolvePullRequestSetReview } from "./pull-request-review";
 import type { RegistryContext, RegistryHost } from "./registry-context";
@@ -441,6 +442,7 @@ export class ManagedReviewService {
     params: StartReviewRequest,
     trustedSnapshot = false,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
+    agentAntigravityAccess?: AgentAntigravityReviewAccess,
   ): Promise<StartReviewResponse> {
     this.host().assertThreadOwnership();
     // Retain terminal evidence only for the lifetime of this start request.
@@ -455,7 +457,7 @@ export class ManagedReviewService {
     try {
       const response = params.runMode === "claude-code-review"
         ? await this.startClaudeCodeReview(params)
-        : await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution);
+        : await this.startReviewWithTerminalEvidence(params, terminals, trustedSnapshot, turnAttribution, agentAntigravityAccess);
       autoFix.accepted(response.turnId);
       return response;
     } catch (error) {
@@ -510,6 +512,7 @@ export class ManagedReviewService {
     terminals: object,
     trustedSnapshot: boolean,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
+    agentAntigravityAccess?: AgentAntigravityReviewAccess,
   ): Promise<StartReviewResponse> {
     this.host().assertNotBootstrap("startReview");
     await this.host().assertThreadNotLocked(params.backend, params.threadId);
@@ -739,6 +742,7 @@ export class ManagedReviewService {
 
       result = managedMode
         ? await this.startManagedReviewChild({
+            agentAntigravityAccess,
             turnAttribution,
             backend: reviewBackend,
             cwd,
@@ -902,6 +906,7 @@ export class ManagedReviewService {
   }
 
   private async startManagedReviewChild(params: {
+    agentAntigravityAccess?: AgentAntigravityReviewAccess;
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
     /** Backend that runs the review — the reviewer override when set. */
     backend: AppServerBackendKind;
@@ -922,16 +927,27 @@ export class ManagedReviewService {
       const parentSession = inheritsParentSession
         ? this.context.providers.acp.getSession(params.backend, params.parentThreadId)
         : undefined;
-      const acpRuntime = parentSession?.acpRuntime;
-      const executionMode =
+      const acpRuntime = managedReviewAcpRuntime({
+        backend: params.backend,
+        parentRuntime: parentSession?.acpRuntime,
+        runtimeCapabilities: this.context.providers.acp.getInstalledAgent(params.backend)
+          ?.runtimeCapabilities,
+        requireCallerMode: params.agentAntigravityAccess !== undefined,
+      });
+      const inheritedExecutionMode =
         (inheritsParentSession && params.backend !== "acp:antigravity" ? params.overlay?.executionMode : undefined)
         ?? parentSession?.executionMode
         ?? "default";
+      const agentCanInheritFullAccess = params.agentAntigravityAccess?.fullAccess
+        && parentSession?.antigravityFullAccessConfirmed === true && inheritedExecutionMode === "full-access";
+      const executionMode = params.agentAntigravityAccess && !agentCanInheritFullAccess
+        ? "default" : inheritedExecutionMode;
       const thread = await this.host().startAcpSession({
         backend: params.backend,
         cwd: params.cwd,
         executionMode,
         acpRuntime,
+        requiredAntigravityMode: params.agentAntigravityAccess?.mode,
         // The replay re-selects the parent's model, so it carries the parent's
         // level. The review's level belongs to the review's model, and the
         // turn below applies the two together.
@@ -944,6 +960,7 @@ export class ManagedReviewService {
         input: [{ type: "text", text: buildManagedReviewPrompt(params.target) }],
         model: params.modelSettings.model,
         reasoningEffort: params.modelSettings.reasoningEffort,
+        requiredAntigravityMode: params.agentAntigravityAccess?.mode,
       });
       return {
         threadId: params.parentThreadId,
@@ -1254,6 +1271,7 @@ export class ManagedReviewService {
 
   private scheduleReviewStart(params: {
     agentRequestKey?: string;
+    agentAntigravityAccess?: AgentAntigravityReviewAccess;
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
     invokingTurnId: string;
     request: StartReviewRequest;
@@ -1286,6 +1304,7 @@ export class ManagedReviewService {
     const now = Date.now();
     const pending: PendingReviewStartRecord = {
       ...(params.agentRequestKey ? { agentRequestKey: params.agentRequestKey } : {}),
+      ...(params.agentAntigravityAccess ? { agentAntigravityAccess: params.agentAntigravityAccess } : {}),
       ...(params.turnAttribution ? { turnAttribution: params.turnAttribution } : {}),
       pendingReviewId: `pending-review:${randomUUID()}`,
       backend: params.request.backend,
@@ -1393,7 +1412,7 @@ export class ManagedReviewService {
       this.context.turnState.setReviewAdmission(starting);
       let response: StartReviewResponse;
       try {
-        response = await this.startReview(starting.request, true, starting.turnAttribution);
+        response = await this.startReview(starting.request, true, starting.turnAttribution, starting.agentAntigravityAccess);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         this.context.turnState.setReviewAdmission({
@@ -2132,6 +2151,12 @@ export class ManagedReviewService {
     }
     try {
       const { backend, threadId } = request.context;
+      // Capture access while the requesting turn is live. An operator's
+      // later mode change on the parent cannot grant the queued review Auto.
+      const caller = backend === "acp:antigravity"
+        ? this.context.providers.acp.getSession(backend, threadId) : undefined;
+      const configMode = caller?.acpRuntime?.configValues?.mode;
+      const sessionMode = caller?.acpRuntime?.currentModeId;
       const { target, cwd, runMode: requestedRunMode } = request.args;
       const turn = { backend, threadId, turnId: invokingTurnId };
       const threadKey = buildThreadIdentityKey(backend, threadId);
@@ -2193,6 +2218,13 @@ export class ManagedReviewService {
           `${backend} cannot run reviews, and no other installed provider can run one for this thread.`,
         );
       }
+      if (reviewBackend === "acp:antigravity" && configMode && sessionMode && configMode !== sessionMode) {
+        return threadOrchestrationFailure("forbidden", "The caller's Antigravity session mode could not be confirmed.");
+      }
+      const agentAntigravityAccess = reviewBackend === "acp:antigravity" ? {
+        mode: configMode ?? sessionMode ?? "default",
+        fullAccess: caller?.executionMode === "full-access" && caller.antigravityFullAccessConfirmed === true,
+      } : undefined;
       const reviewBackendDiffers = reviewBackend !== backend;
       if (reviewBackendDiffers && runMode === "codex-sub-agent") {
         return threadOrchestrationFailure(
@@ -2229,6 +2261,7 @@ export class ManagedReviewService {
       if (claimRefusal) return this.agentReviewRefused(claimRefusal);
       const pending = this.scheduleReviewStart({
         agentRequestKey: requestKey,
+        agentAntigravityAccess,
         invokingTurnId,
         turnAttribution: ancestry,
         idempotencyKey,

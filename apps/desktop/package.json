@@ -1,7 +1,7 @@
 {
   "name": "@pwragent/desktop",
   "productName": "PwrAgent",
-  "version": "1.5.0-prerelease.4",
+  "version": "1.5.0-prerelease.5",
   "private": true,
   "description": "Thread-centric coding agent desktop app",
   "homepage": "https://pwragent.ai",
@@ -80,7 +80,7 @@
     "@pwragent/federation": "workspace:*",
     "@pwragent/owner-core": "workspace:*",
     "@pwragent/sqlite-storage": "workspace:*",
-    "@pwrdrvr/agent-acp": "^0.17.0",
+    "@pwrdrvr/agent-acp": "0.17.3",
     "@pwrdrvr/agent-client": "^0.8.3",
     "@pwrdrvr/agent-core": "^0.2.0",
     "@pwrdrvr/agent-transport": "^0.1.9",

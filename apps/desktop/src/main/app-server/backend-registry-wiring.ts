@@ -14,6 +14,7 @@ import { ClaudeBackend } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import { openClaudeSessionReader } from "../claude/claude-session-reader";
 import { PlanLimitStore } from "./plan-limit-store";
+import { usageAccountKey } from "../usage-account-identity";
 import { DEFAULT_CHECKOUT_HIBERNATION_POLICY } from "@pwragent/shared/checkout-hibernation-policy";
 import { DEFAULT_THREAD_ARCHIVE_POLICY } from "@pwragent/shared/thread-archive-policy";
 import { restartGateHolds } from "./restart-continuation-gate";
@@ -1087,6 +1088,13 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   const acpBackend = new AcpBackendAdapter({
     assertOwnerAdmission: () => ports.assertThreadOwnership(),
     planLimits: planLimits,
+    resolveAntigravityUsageAccountKey: () => {
+      try {
+        return usageAccountKey(undefined, resolveUsageAccountGroupsFn()["acp:antigravity"]);
+      } catch {
+        return undefined;
+      }
+    },
     acpAgentStore: options?.acpAgentStore,
     acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: options?.acpSessionStore,

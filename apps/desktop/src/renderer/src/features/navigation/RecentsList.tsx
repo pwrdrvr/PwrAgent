@@ -35,7 +35,6 @@ import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { renderSubthreadPages, subthreadPageResources } from "./SubthreadPagination";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
-import { orderStackTray, stackGroupSelectionOrder, stackTrayPrecedesLead, visibleStackTray } from "../stacks/stack-presentation";
 import { isRenamingRow, type RenamingThreadRow } from "./thread-action-hotkeys";
 import { AttentionReviewReadout, AttentionTurnReadouts, describeAttentionCounts } from "./AttentionSignals";
 import { isThreadActive, isThreadAwaitingReview, isThreadRemoteWork } from "./ThreadRowStatus";
@@ -386,16 +385,15 @@ export function RecentsList(props: RecentsListProps) {
       return null;
     }
 
-    const stackTrayKey = visibleStackTray(parent, children);
     return (
-      <div className={`subthread-list${stackTrayKey ? " subthread-list--stack" : ""}`} role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
+      <div className="subthread-list" role="list" aria-label={`Sub-threads of ${parent.title}`} data-subthread-tray={parentKey}>
         {/* The parent's own workers lead its tray. Trailing them after every
             child read as the last child's workers and buried them under a
             long child list. */}
         {nativeSubAgentCount > 0 ? (
           <NativeSubAgentsDisclosure thread={parent} />
         ) : null}
-        {orderStackTray(trayEntries, stackTrayKey).flatMap((entry) => {
+        {trayEntries.flatMap((entry) => {
           if (entry.kind === "starting") {
             return [
               <PendingThreadRow
@@ -440,7 +438,6 @@ export function RecentsList(props: RecentsListProps) {
               includeLinkedDirectories
               nested
               nestedDepth={trays.depth(childKey)}
-              stackTrayKey={stackTrayKey}
               revealSelectedThreadRequest={props.revealSelectedThreadRequest}
               selectedThreadKey={props.selectedThreadKey === childKey ? childKey : undefined}
               selected={props.selectedThreadKeys?.has(childKey)}
@@ -496,8 +493,14 @@ export function RecentsList(props: RecentsListProps) {
   const pinnedGroupCollapsed = Boolean(props.pinnedGroupCollapsed);
   const selectionOrder = [...(pinnedGroupCollapsed ? [] : pinnedRoots), ...(recentsCollapsed ? [] : topLevelThreads)].flatMap((thread) => {
     const threadKey = threadSummaryIdentityKey(thread);
-    const children = isSubthreadSectionCollapsed(thread) ? [] : trays.subtree(threadKey);
-    return stackGroupSelectionOrder(thread, children).map(threadSummaryIdentityKey);
+    return [
+      threadKey,
+      ...(isSubthreadSectionCollapsed(thread)
+        ? []
+        : trays.subtree(threadKey).map((child) =>
+            threadSummaryIdentityKey(child),
+          )),
+    ];
   });
 
   // One handler for every row rather than a closure per row: a closure per
@@ -579,11 +582,12 @@ export function RecentsList(props: RecentsListProps) {
     const subthreadCount = getSubthreadDisclosureCount(thread, children.length) + (holdsDraft ? 1 : 0);
     const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
     const tray = renderSubthreads(thread);
+    // `.thread-group` carries no role, so the tray would sit straight inside
+    // the `role="list"` below, and a list owns only listitem. The Directories
+    // lens wraps its trays the same way.
     const traySlot = tray ? <div className="thread-group__subthreads-slot" role="listitem">{tray}</div> : null;
-    const trayFirst = stackTrayPrecedesLead(thread, children);
     return (
       <div key={key} className="thread-group">
-        {trayFirst ? traySlot : null}
         <ThreadRow
           {...topLevelRowProps(thread)}
           subthreadCount={subthreadCount}
@@ -601,7 +605,7 @@ export function RecentsList(props: RecentsListProps) {
               : undefined
           }
         />
-        {trayFirst ? null : traySlot}
+        {traySlot}
       </div>
     );
   };

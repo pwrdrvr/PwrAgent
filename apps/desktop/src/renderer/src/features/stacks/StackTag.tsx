@@ -5,7 +5,8 @@ import { getDesktopApi } from "../../lib/desktop-api";
 import { sidebarPrCardBridge, type BridgedHoverCard } from "../../lib/hover-card-bridge";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
-import { StackBody, StackGlyph, StackHeading } from "./StackBody";
+import { StackBody, StackGlyph, StackHeading, StackNode, StackTrunk } from "./StackBody";
+import { prefetchSelectedStacks, readCachedStack, stackOwnerInstanceId } from "./stack-detail-cache";
 import { StackRailContext } from "./stack-presentation";
 import { staleStackSpine } from "./stack-pr-data";
 import { useSelectedStackDetails } from "./useSelectedStackDetails";
@@ -25,8 +26,13 @@ function StackPopover({ thread, pr, member, onOpen, close, focus, body, onResize
 }) {
   const openRail = useContext(StackRailContext);
   const legacy = thread.stacks?.find(({ stack }) => stack.key === member.key)?.stack;
-  const details = useSelectedStackDetails({ thread, desktopApi: getDesktopApi(), enabled: !legacy, allowLegacyLookup: false });
-  const stack = legacy ?? details.stacks?.find(({ key }) => key === member.key);
+  // Any member of this stack that loaded it at the same revision supplies it.
+  // An older copy draws at once while it is read again.
+  const cached = legacy ? undefined : readCachedStack(stackOwnerInstanceId(thread), member);
+  const details = useSelectedStackDetails({ thread, desktopApi: getDesktopApi(), enabled: !legacy && !cached?.fresh, allowLegacyLookup: false });
+  // A settled read is the truth, including one that no longer has this stack.
+  const stack = legacy ?? (details.stacks ? details.stacks.find(({ key }) => key === member.key) : cached?.value);
+  const loading = !stack && !details.error && !details.stacks && Boolean(getDesktopApi()?.getNavigationSelectedDetail);
 
   useLayoutEffect(() => {
     if (!focus) return;
@@ -76,9 +82,9 @@ function StackPopover({ thread, pr, member, onOpen, close, focus, body, onResize
         onOpen(url);
       }} /> : <>
         <StackHeading count={member.count} trunk={member.trunk} inferred={member.inferred} />
-        <div className="stack-popover__state" role="status">
-          {details.error ?? (details.stacks || !getDesktopApi()?.getNavigationSelectedDetail
-            ? "Stack details unavailable" : "Loading stack…")}
+        {loading ? <StackSkeleton member={member} /> : null}
+        <div className={loading ? "stack-popover__loading" : "stack-popover__state"} role="status">
+          {details.error ?? (loading ? "Loading stack…" : "Stack details unavailable")}
         </div>
       </>}
       <div className="stack-popover__foot">
@@ -89,6 +95,30 @@ function StackPopover({ thread, pr, member, onOpen, close, focus, body, onResize
         <span><kbd>↑↓</kbd> move · <kbd>↵</kbd> open PR</span>
       </div>
     </div>
+  );
+}
+
+/** Hold the loaded list's rows in place so the popover does not grow when they arrive. */
+function StackSkeleton({ member }: { member: StackTagProps["member"] }) {
+  const rows = Math.min(member.count, 12);
+  return (
+    <ol className="stack-display__list" reversed aria-hidden="true">
+      {Array.from({ length: rows }, (_, index) => {
+        const position = member.count - index;
+        return (
+          <li key={position} className="stack-display__layer" data-placeholder=""
+            data-current={position === member.position || undefined}>
+            <StackNode />
+            <div className="stack-display__text">
+              <span className="stack-display__title"><span className="stack-display__skeleton" /></span>
+              <span className="stack-display__status"><span className="stack-display__skeleton" /></span>
+            </div>
+            <div className="stack-display__position">{position}/{member.count}</div>
+          </li>
+        );
+      })}
+      {member.trunk ? <StackTrunk trunk={member.trunk} /> : null}
+    </ol>
   );
 }
 
@@ -161,6 +191,10 @@ export function StackTag({ thread, pr, member, onOpen }: StackTagProps) {
         }}
         onMouseEnter={(event) => {
           if (pinned.current) return;
+          // Read during the hover delay so the popover opens with its rows.
+          if (!thread.stacks?.length && !readCachedStack(stackOwnerInstanceId(thread), member)?.fresh) {
+            prefetchSelectedStacks(getDesktopApi()?.getNavigationSelectedDetail, thread);
+          }
           if (sidebarPrCardBridge.enterTrigger(bridge.current)) tooltip.show(event.currentTarget, latest.current);
           else tooltip.showAfterDelay(event.currentTarget, () => latest.current);
         }}

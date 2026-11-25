@@ -1,4 +1,4 @@
-import type { ResourceCheckoutActionRequest, ResourceCheckoutActionResult } from "@pwragent/shared/contracts/resource-checkouts";
+import { effectiveQueueOrder, type ResourceCheckoutActionRequest, type ResourceCheckoutActionResult } from "@pwragent/shared/contracts/resource-checkouts";
 import type {
   CheckoutActor, CheckoutDefinition, CheckoutDomainRecord, CheckoutGrant,
   CheckoutStore, CheckoutWaiter,
@@ -73,7 +73,12 @@ function headReservationWindow(
   return { shadowTime, extraAtShadow: totalAtShadow - needed };
 }
 
-function wake(record: CheckoutDomainRecord, now: number): void {
+/**
+ * Start what the resource's queue order allows. Both orders start requests
+ * from the head while they fit. `backfill` then starts later requests that
+ * fit now and cannot delay the head (EASY backfilling).
+ */
+export function promoteQueue(record: CheckoutDomainRecord, now: number): void {
   const { definition, queue, grants } = record;
   if (grants.some((grant) => grant.state === "recovery_required")) return;
   let available = definition.capacity - grants.reduce((sum, grant) => sum + grant.units, 0);
@@ -90,8 +95,9 @@ function wake(record: CheckoutDomainRecord, now: number): void {
   // guaranteed shadow start time (either they finish by `shadowTime` or fit
   // within spare slots at `shadowTime`). Renewals are refused while any waiter
   // is queued, so backfilled grants cannot extend past `shadowTime`.
+  if (effectiveQueueOrder(definition) !== "backfill") return;
   if (!definition.counted || queue.length <= 1 || available <= 0) return;
-  const reservation = headReservationWindow(grants.filter((grant) => !grant.job), available, queue[0].units);
+  const reservation = headReservationWindow(grants.filter((grant) => !grant.job), available, queue[0]!.units);
   if (!reservation) return;
   const { shadowTime } = reservation;
   let extraAtShadow = reservation.extraAtShadow;
@@ -112,6 +118,28 @@ function wake(record: CheckoutDomainRecord, now: number): void {
       index++;
     }
   }
+}
+
+const wake = promoteQueue;
+
+/** Ends expired grants, then starts what the queue order allows. */
+function settle(record: CheckoutDomainRecord, now: number): void {
+  if (!reconcile(record, now)) wake(record, now);
+}
+
+/**
+ * What a requester holds and could still release, and whether it waits. A
+ * draining grant ends when its executor verifies cleanup, and one in
+ * recovery when an operator does, whatever the requester does, so neither
+ * can leave it holding while it waits.
+ */
+function actorUnits(record: CheckoutDomainRecord, actor: CheckoutActor): { held: number; queued: boolean } {
+  return {
+    held: record.grants
+      .filter((grant) => grant.actor.key === actor.key && grant.state !== "draining" && grant.state !== "recovery_required")
+      .reduce((sum, grant) => sum + grant.units, 0),
+    queued: record.queue.some((entry) => entry.actor.key === actor.key),
+  };
 }
 
 function reconcile(record: CheckoutDomainRecord, now: number): boolean {
@@ -147,9 +175,24 @@ function applyCheckout(
       return rejectCheckout("policy", "The requested duration or units exceed the resource policy.");
     }
     if (record.queue.length >= MAX_QUEUE_LENGTH) return rejectCheckout("policy", "The checkout queue is full.");
+    // No requester may hold part of a resource while it waits for more:
+    // what it holds could be what its own request, or one ahead of it,
+    // needs, and only a deadline would end that wait.
+    const own = actorUnits(record, actor);
+    if (own.queued) {
+      return rejectCheckout("policy", "This requester already has a request queued for this resource. Wait for it, or cancel it before asking again.");
+    }
     const waiter: CheckoutWaiter = {
       id: newId(), actor, purpose: action.purpose, units, durationMs: action.expectedDurationMs, requestedAt: now,
     };
+    if (own.held > 0) {
+      const trial = structuredClone(record);
+      trial.queue.push(waiter);
+      wake(trial, now);
+      if (!trial.grants.some((entry) => entry.id === waiter.id)) {
+        return rejectCheckout("policy", `This requester already holds ${own.held} of this resource and the request can't start now. Release what it holds before queueing for more: a holder that waits can stall the queue until its deadline.`);
+      }
+    }
     record.queue.push(waiter);
     wake(record, now);
     const grant = record.grants.find((entry) => entry.id === waiter.id);
@@ -255,6 +298,8 @@ export class ResourceCheckoutAuthority {
       }
       if (definition.revision > saved.revision) {
         record.definition = definition;
+        // A new queue order can start requests that already wait.
+        settle(record, this.now());
         tx.save(record);
       }
     });

@@ -26,6 +26,8 @@ export type UsageBar = {
 };
 
 export type UsageChart = {
+  /** The moment the chart was drawn to, on the points' clock; ages are measured from it. */
+  now: number;
   bars: UsageBar[];
   /** Counted capacity, or one for an exclusive resource. */
   capacity: number;
@@ -43,6 +45,10 @@ export type UsageChart = {
  * the bucket that holds `now`. The last point holds until `now`: the
  * serving process publishes a new revision whenever a value changes. One
  * pass over points and bars.
+ *
+ * `clock` must be on the serving process's clock, the one that stamped the
+ * points and the snapshot's `observedAt`, not the renderer's `Date.now()`:
+ * after the wall clock steps back, main's clock runs ahead of it.
  */
 export function usageChart(
   resource: Pick<ResourceDomain, "sharing"> & { usage?: ResourceUsageHistory },
@@ -95,7 +101,7 @@ export function usageChart(
   const capacity = resource.sharing.mode === "counted" ? resource.sharing.capacity : 1;
   const scaleMax = Math.max(capacity, ...bars.map((bar) => bar.held + bar.waiting), 1);
   return {
-    bars, capacity, scaleMax, peakHeld, peakWaiting,
+    now, bars, capacity, scaleMax, peakHeld, peakWaiting,
     ...(observedSince > start ? { observedSince } : {}),
   };
 }

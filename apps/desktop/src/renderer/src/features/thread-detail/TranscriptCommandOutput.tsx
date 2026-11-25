@@ -70,10 +70,7 @@ type ThreadToolPresentation = {
 export function isThreadReferenceToolDetail(
   detail: AppServerThreadActivityDetail,
 ): boolean {
-  const identifier = detail.command?.rawCommand
-    ?? detail.command?.displayCommand.split("\n", 1)[0]
-    ?? "";
-  return /(?:^|[/.])(?:read_thread|send_message_to_thread)$/i.test(identifier.trim());
+  return isNamedTool(detail, /(?:^|[/.]|__)(?:read_thread|send_message_to_thread)$/i);
 }
 
 export function TranscriptThreadToolActivity(props: {
@@ -207,10 +204,11 @@ export function TranscriptThreadToolActivity(props: {
 export function isPullRequestWatchToolDetail(
   detail: AppServerThreadActivityDetail,
 ): boolean {
-  const identifier = detail.command?.rawCommand
-    ?? detail.command?.displayCommand.split("\n", 1)[0]
-    ?? "";
-  return /(?:^|[/.]|__)watch_thread_pull_request$/i.test(identifier.trim());
+  return isNamedTool(detail, /(?:^|[/.]|__)watch_thread_pull_request$/i);
+}
+
+function isNamedTool(detail: AppServerThreadActivityDetail, name: RegExp): boolean {
+  return detail.command?.source === "tool" && name.test(detail.command.rawCommand?.trim() ?? "");
 }
 
 /** What a `watch_thread_pull_request` row says, read from the tool's result. */
@@ -386,8 +384,7 @@ function buildThreadToolPresentation(
   if (!command || !isThreadReferenceToolDetail(detail)) {
     return undefined;
   }
-  const identifier = command.rawCommand ?? command.displayCommand.split("\n", 1)[0] ?? "";
-  const tool = identifier.trim().toLowerCase().endsWith("send_message_to_thread")
+  const tool = command.rawCommand?.trim().toLowerCase().endsWith("send_message_to_thread")
     ? "send_message_to_thread"
     : "read_thread";
   const args = parseJsonPayload(command.displayCommand);

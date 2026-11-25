@@ -1,11 +1,33 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { truncateActivityText } from "../live-transcript-activity";
+import { buildLiveToolDetails, truncateActivityText } from "../live-transcript-activity";
 import {
   displayText,
   expectEndCut,
   hasLoneSurrogate,
 } from "../../../../../../../../packages/shared/src/__tests__/display-text-arbitraries";
+
+describe("live tool command display", () => {
+  it("keeps the provider's script lines and indentation in the expanded detail", () => {
+    fc.assert(fc.property(
+      fc.array(fc.constantFrom("  echo ready", "\techo done", "", "  echo 'two  spaces'")),
+      fc.constantFrom("\n", "\r\n"),
+      (body, newline) => {
+        const script = ["if true; then", ...body, "  echo ok", "fi"].join(newline);
+        const [detail] = buildLiveToolDetails({
+          id: "script",
+          type: "commandExecution",
+          status: "completed",
+          command: script,
+          commandSource: "tool",
+        });
+
+        expect(detail?.command?.displayCommand).toBe(script);
+        expect(detail?.label).not.toMatch(/[\r\n]/);
+      },
+    ));
+  });
+});
 
 /**
  * A live activity's prompt or message is collapsed to one line and kept to

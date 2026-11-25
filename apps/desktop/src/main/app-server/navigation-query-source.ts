@@ -29,7 +29,10 @@ import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY, SharedPrMetadataRead } from "../pr-status/pr-metadata-process";
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
-import { compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership, type SelectedStackLayer, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import {
+  compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, STACK_DETAIL_REUSE_MS,
+  type CompactStackMembership, type SelectedStackLayer, type StackSummary,
+} from "@pwragent/shared/stacks/stack-status";
 import { comparePullRequestStack } from "@pwragent/shared/pull-request-rollup";
 import { readNavigationCheckouts } from "../git-info/directory-store";
 
@@ -38,6 +41,58 @@ import { readNavigationCheckouts } from "../git-info/directory-store";
 const indexReads = new NavigationIndexReadPool(1_000, 15_000);
 const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = new StackReader();
+
+/** A stacked index read is stale after this event; its stack inputs may have changed. */
+function stackIndexEventInvalidates(notification: { method: string; params?: unknown }): boolean {
+  return notification.method === "pullRequest/status/updated"
+    || navigationQueryEventRequiresRefresh(notification.method, notification.params);
+}
+
+/** Counts the events that invalidate stacked index reads, per registry. */
+const stackInputEpochs = new WeakMap<DesktopBackendRegistry, { value: number }>();
+
+function stackInputEpoch(registry: DesktopBackendRegistry): { value: number } | undefined {
+  let epoch = stackInputEpochs.get(registry);
+  if (epoch || !registry.onEvent) return epoch;
+  const counter = { value: 0 };
+  // One listener for the registry's lifetime, so no change is missed between
+  // projections. Without events, nothing could say a projection went stale.
+  registry.onEvent((event) => {
+    if (stackIndexEventInvalidates(event.notification)) counter.value += 1;
+  });
+  epoch = counter;
+  stackInputEpochs.set(registry, epoch);
+  return epoch;
+}
+
+type StackProjectionRecord = {
+  stacks: StackSummary[];
+  overlayStore: object;
+  /** The stack input epoch when the projection started reading. */
+  epoch: number;
+  version: string;
+  completedAt: number;
+};
+const latestStackProjections = new WeakMap<DesktopBackendRegistry, StackProjectionRecord>();
+
+function navigationIndexVersion(registry: DesktopBackendRegistry, overlayStore: ReturnType<typeof getDesktopOverlayStore>): string {
+  return `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
+}
+
+/**
+ * The newest projection, while no stack input has changed since it started
+ * and it is younger than STACK_DETAIL_REUSE_MS. The row whose stack is being
+ * expanded came from a projection at least that old, so the detail is never
+ * staler than the row's own tag.
+ */
+function currentStackProjection(registry: DesktopBackendRegistry): StackProjectionRecord | undefined {
+  const record = latestStackProjections.get(registry);
+  const overlayStore = getDesktopOverlayStore();
+  if (!record || record.overlayStore !== overlayStore || record.epoch !== stackInputEpochs.get(registry)?.value
+    || record.version !== navigationIndexVersion(registry, overlayStore)) return undefined;
+  const age = Date.now() - record.completedAt;
+  return age >= 0 && age <= STACK_DETAIL_REUSE_MS ? record : undefined;
+}
 
 export function navigationPullRequestProjection(options: {
   kind: NavigationQueryRequest["query"]["kind"];
@@ -153,8 +208,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   // while startup was checking must not serve a reader after it finishes.
   // The refreshed event invalidates the read too, but a listener that runs
   // before the pool's (owner PR metadata) would join the stale index.
-  const version = `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${
-    registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
+  const version = navigationIndexVersion(registry, overlayStore);
   return reads.read(key, async (signal, checkpoint, previous) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
@@ -165,9 +219,9 @@ export async function loadLocalNavigationQueryIndex(params: {
       // changing SQLite membership or the local provider inventory.
       // A PR status observation changes page chips, not the compact index's
       // attachments. The page reads those statuses from the live registry.
-      if ((params.includeStacks && event.notification.method === "pullRequest/status/updated")
-        || (event.notification.method !== "pullRequest/status/updated"
-        && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))
+      if ((params.includeStacks ? stackIndexEventInvalidates(event.notification)
+        : event.notification.method !== "pullRequest/status/updated"
+          && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))
         || (params.viewer && event.notification.method === "federation/peerStatus/changed")) {
         navigationChanged = true;
         reads.invalidate(key);
@@ -177,9 +231,20 @@ export async function loadLocalNavigationQueryIndex(params: {
     // Eviction/expiry/cancellation aborts the lifetime and releases it.
     signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
     if (params.includeStacks) {
+      // Taken before reading: a change during the read makes its result stale.
+      const epoch = backend === "all" && !params.requireVerifiedDirectories ? stackInputEpoch(registry)?.value : undefined;
       // Share the same membership and viewer projection with stack-free queries.
       const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, signal });
-      return await projectNavigationIndexStacks(local, registry, version, signal, previous);
+      const projected = await projectNavigationIndexStacks(local, registry, version, signal, previous);
+      // Owner and viewer leases project the same native stacks, so either can
+      // answer a later stack detail read. A slower read that started before
+      // a newer one must not replace it.
+      if (epoch !== undefined && !((latestStackProjections.get(registry)?.epoch ?? -1) > epoch)) {
+        latestStackProjections.set(registry, {
+          stacks: projected.stacks ?? [], overlayStore, epoch, version, completedAt: Date.now(),
+        });
+      }
+      return projected;
     }
     if (params.viewer) {
       const local = await loadLocalNavigationQueryIndex({ ...params, viewer: undefined, signal });
@@ -503,6 +568,10 @@ function stackRevision(stack: StackSummary): string {
 }
 
 export async function readNavigationStackLayers(ref: NavigationIdentity, signal?: AbortSignal) {
+  // A sidebar read usually projected these stacks moments ago. Only when no
+  // current projection exists does a detail read observe Git itself.
+  const current = currentStackProjection(getDesktopBackendRegistry());
+  if (current) return projectSelectedStackLayers({ threads: [], directories: [], stacks: current.stacks }, ref);
   const index = await loadLocalNavigationQueryIndex({ callerReason: "selected-stack-detail", includeStacks: true, signal });
   return projectSelectedStackLayers(index, ref);
 }

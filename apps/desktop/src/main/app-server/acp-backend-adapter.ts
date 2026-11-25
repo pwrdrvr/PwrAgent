@@ -72,6 +72,7 @@ import type {
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
 import { isManagedAntigravityCommand, MANAGED_ANTIGRAVITY_ENV } from "../acp/antigravity-managed-runtime";
+import { resolveAntigravityCommandPath } from "../acp/antigravity-runtime-retention";
 import type { DesktopConfigStore } from "../settings/config-store/desktop-config-store";
 import {
   assertProviderDiscoveryPermit,
@@ -120,8 +121,10 @@ import {
   AcpSessionReplayNormalizer,
   acpSessionReplayNormalizerOptions,
   inferAcpReplayTurns,
+  loadAcpReplayKit,
   readAcpContentText,
   shouldSurfaceAcpThoughtsAsMessages,
+  type AcpReplayKit,
 } from "../acp/acp-session-normalizer";
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import {
@@ -131,7 +134,8 @@ import {
 } from "../acp/acp-ephemeral-prompt";
 import {
   recordWithSessionRuntimeCapabilities,
-  shouldProbeAcpCapabilitiesAtStartup,
+  retainedManagedAntigravityCatalog,
+  shouldProbeAcpCapabilitiesAfterRuntimeChange,
   withAntigravityModelCatalog,
 } from "../acp/acp-capability-freshness";
 import {
@@ -356,6 +360,7 @@ export type AcpPromptPayload = {
 
 export type AcpRuntimeCapabilityProbe = (
   agent: AcpInstalledAgentRecord,
+  canProbe: () => boolean,
 ) => Promise<AcpInstalledAgentRecord>;
 
 export type AcpBackendAdapterOptions = {
@@ -374,6 +379,7 @@ export type AcpBackendAdapterOptions = {
   assertOwnerAdmission?: () => void;
   createAcpTransport?: AcpTransportFactory;
   readAntigravityUsage?: typeof readAntigravityUsage;
+  resolveAntigravityUsageAccountKey?: () => string | undefined;
   /**
    * Required so no caller can silently inherit machine-wide discovery.
    * Production passes `createLocalAcpAgentDiscovery(...)`; tests pass a stub.
@@ -387,7 +393,7 @@ export type AcpBackendAdapterOptions = {
   /**
    * Probes one agent's runtime capabilities over ACP and returns its record
    * with the outcome folded in. Startup uses it only for an agent whose runtime
-   * changed (see `shouldProbeAcpCapabilitiesAtStartup`). Defaults to the real
+   * changed (see `shouldProbeAcpCapabilitiesAfterRuntimeChange`). Defaults to the real
    * probe once app state is initialized; `null` disables it.
    */
   probeAcpRuntimeCapabilities?: AcpRuntimeCapabilityProbe | null;
@@ -1236,6 +1242,7 @@ export class AcpBackendAdapter {
     AcpAgentStoreLike,
     "getInstalledAgent" | "listInstalledAgents" | "upsertInstalledAgent"
   >;
+  private replayKit?: AcpReplayKit;
   private readonly acpRolloutStore?: Pick<
     AcpRolloutStore,
     "appendUpdate" | "readReplay" | "readUpdates"
@@ -1299,7 +1306,8 @@ export class AcpBackendAdapter {
   private readonly grokUpdateChecker?: typeof checkGrokCliUpdate;
   private readonly grokUpdateRefreshes = new Map<AcpBackendId, Promise<void>>();
   private readonly runtimeCapabilityProbe?: AcpRuntimeCapabilityProbe;
-  private startupCapabilityProbe?: Promise<void>;
+  private readonly pendingCapabilityProbes = new Map<AcpBackendId, AcpInstalledAgentRecord>();
+  private backgroundCapabilityProbe?: Promise<void>;
   private closed = false;
   private closePromise?: Promise<void>;
   private readonly closeTimeoutMs: number;
@@ -1350,11 +1358,10 @@ export class AcpBackendAdapter {
       ? undefined
       : options.probeAcpRuntimeCapabilities
         ?? (isAppStateInitialized()
-          ? async (agent) =>
-              await refreshAcpRuntimeCapabilities(
-                agent,
-                await ensureAcpRuntimeDiscoveryWorkspace(),
-              )
+          ? async (agent, canProbe) => {
+              const cwd = await ensureAcpRuntimeDiscoveryWorkspace();
+              return canProbe() ? await refreshAcpRuntimeCapabilities(agent, cwd) : agent;
+            }
           : undefined);
     this.acpAgentStore =
       options.acpAgentStore === null
@@ -1412,11 +1419,14 @@ export class AcpBackendAdapter {
       // Backend discovery is also used by launchpad and messaging flows.
       // Merge only cached decoration here; provider quota reads must never delay it.
       const providerStatus = this.providerStatuses.get(agent.backendId);
+      const reading = providerStatus && this.planLimits.snapshot(agent.backendId);
       return providerStatus
         ? {
             ...summary,
             account: providerStatus.account,
-            rateLimits: this.planLimits.limits(agent.backendId),
+            rateLimits: reading?.limits,
+            rateLimitsObservedAt: reading?.observedAt,
+            rateLimitsAccountKey: reading?.account,
           }
         : summary;
     });
@@ -1602,12 +1612,21 @@ export class AcpBackendAdapter {
   ): Promise<void> {
     try {
       // Reads for the current selection run one at a time.
+      const antigravity = backend === "acp:antigravity";
+      const account = antigravity ? this.options.resolveAntigravityUsageAccountKey?.() : undefined;
       let since = this.planLimits.mark(backend);
       const providerStatus = await read();
       if (!providerStatus || this.closed || !isCurrent()) {
         return;
       }
       this.providerStatuses.set(backend, { account: providerStatus.account });
+      // Quota buckets from a previous account must not fill gaps in this read.
+      // This also covers adding or removing an explicit account group.
+      const previous = antigravity ? this.planLimits.snapshot(backend) : undefined;
+      if (previous?.limits.length && previous.account !== account) {
+        this.planLimits.clear(backend);
+        since = this.planLimits.mark(backend);
+      }
       // A new plan changes the allowance and clears the limits; this reading
       // is the first of the new plan's.
       if (this.planLimits.setAccount(backend, { plan: providerStatus.account?.planType })) {
@@ -1615,6 +1634,7 @@ export class AcpBackendAdapter {
       }
       this.planLimits.record(backend, {
         limits: providerStatus.rateLimits ?? [], since, precise: true, dated: true,
+        ...(antigravity ? { account } : {}),
       });
       await this.emit({
         backend,
@@ -1633,8 +1653,8 @@ export class AcpBackendAdapter {
 
   /**
    * The account limits an enabled agent last reported, as a Usage Activity
-   * reading. Grok reports a plan but no account identity, so its readings
-   * stay with the instance that read them.
+   * reading. Grok and Antigravity report no account identity here, so
+   * their readings stay with the instance unless an account group is configured.
    */
   limitObservation(backend: AcpBackendId): UsageLimitObservation | undefined {
     const reading = this.planLimits.snapshot(backend);
@@ -1645,6 +1665,7 @@ export class AcpBackendAdapter {
     return {
       observedAt,
       provider,
+      ...(reading.account !== undefined ? { accountKey: reading.account } : {}),
       planType: reading.plan,
       limits: reading.limits.map((limit) => ({
         name: limit.name, limitId: limit.limitId, usedPercent: limit.usedPercent,
@@ -1960,6 +1981,7 @@ export class AcpBackendAdapter {
     backend: AcpBackendId,
     sessionId: string,
   ): Promise<AppServerThreadReplay> {
+    this.replayKit ??= await loadAcpReplayKit();
     if (backend === "acp:antigravity") {
       return await this.environmentClientLocks.run(JSON.stringify([backend, sessionId]), async () => {
         const session = this.getSession(backend, sessionId);
@@ -2614,6 +2636,7 @@ export class AcpBackendAdapter {
         sessionId: session.sessionId,
         cwd: session.cwd,
         workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(session),
+        replayKit: this.replayKit,
       }) ?? new AcpSessionReplayNormalizer().replay();
     this.logSessionReplaySource({
       backend: session.backendId,
@@ -2688,6 +2711,7 @@ export class AcpBackendAdapter {
           sessionId: session.sessionId,
           cwd: session.cwd,
           workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(session),
+          replayKit: this.replayKit,
         }) ?? new AcpSessionReplayNormalizer().replay();
       if (rolloutReplay.entries.length > 0) {
         this.logSessionReplaySource({
@@ -2736,6 +2760,7 @@ export class AcpBackendAdapter {
         sessionId: session.sessionId,
         cwd: session.cwd,
         workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(session),
+        replayKit: this.replayKit,
       }) ?? new AcpSessionReplayNormalizer().replay();
     if (rolloutReplay.entries.length === 0) {
       this.logSessionReplaySource({
@@ -2774,6 +2799,7 @@ export class AcpBackendAdapter {
         sessionId: params.session.sessionId,
         cwd: params.session.cwd,
         workspaceAgentSessionId: antigravityWorkspaceAgentSessionId(params.session),
+        replayKit: this.replayKit,
       }) ?? new AcpSessionReplayNormalizer().replay();
     if (rolloutReplay.entries.length > 0) {
       this.logSessionReplaySource({
@@ -2974,7 +3000,7 @@ export class AcpBackendAdapter {
             (agent) =>
               discoveredBackendIds.has(agent.backendId)
               && (this.isAcpAgentEnabled?.(agent.registryId) ?? true)
-              && shouldProbeAcpCapabilitiesAtStartup(
+              && shouldProbeAcpCapabilitiesAfterRuntimeChange(
                 agent,
                 recordedBackendIds.has(agent.backendId),
               ),
@@ -2985,85 +3011,97 @@ export class AcpBackendAdapter {
     }
   }
 
-  /**
-   * Refill the capabilities that startup discovery dropped when an agent's
-   * runtime changed. Without them the composer offers no model or effort
-   * picker, and nothing else probes outside Settings and setup. The agents are
-   * already filtered by `shouldProbeAcpCapabilitiesAtStartup`, so this runs at
-   * most once per runtime.
-   */
+  async refreshManagedAntigravityCatalog(command: string): Promise<void> {
+    const agent = this.acpAgentStore?.getInstalledAgent("acp:antigravity");
+    const launch = agent?.launchDescriptor;
+    if (!agent || !launch?.managedAntigravityFallback || !shouldProbeAcpCapabilitiesAfterRuntimeChange(agent, true)) {
+      return;
+    }
+    if (launch.command !== command) {
+      const [selected, installed] = await Promise.all([
+        resolveAntigravityCommandPath(launch.command, { cwd: launch.cwd, env: { ...process.env, ...launch.env } }),
+        resolveAntigravityCommandPath(command),
+      ]);
+      if (!selected || selected !== installed) return;
+    }
+    this.probeChangedRuntimesInBackground([agent]);
+  }
+
   private probeChangedRuntimesInBackground(
     agents: AcpInstalledAgentRecord[],
   ): void {
     const probe = this.runtimeCapabilityProbe;
-    if (
-      !probe
-      || agents.length === 0
-      || this.closed
-      || this.startupCapabilityProbe
-    ) {
-      return;
+    if (!probe || this.closed) return;
+    for (const agent of agents) {
+      this.pendingCapabilityProbes.set(agent.backendId, agent);
     }
+    if (this.backgroundCapabilityProbe || this.pendingCapabilityProbes.size === 0) return;
 
-    // One agent at a time: each probe launches a real agent process while
-    // startup is still refreshing provider threads.
-    const run = (async () => {
-      for (const agent of agents) {
-        if (this.closed) return;
-        const probed = await probe(agent);
-        if (this.closed) return;
-        const current = this.acpAgentStore?.getInstalledAgent(agent.backendId);
-        // A Settings probe or a newer discovery may have written this record
-        // while the probe ran. Only fill a runtime that is still unprobed.
-        if (
-          !current
-          || current.version !== agent.version
-          || acpAgentLaunchIdentity(current) !== acpAgentLaunchIdentity(agent)
-          || !shouldProbeAcpCapabilitiesAtStartup(current, true)
-        ) {
-          continue;
-        }
-        this.acpAgentStore?.upsertInstalledAgent({
-          ...current,
-          ...(probed.runtimeCapabilities
-            ? { runtimeCapabilities: probed.runtimeCapabilities }
-            : {}),
-          ...(probed.lastDiscoveredAt !== undefined
-            ? { lastDiscoveredAt: probed.lastDiscoveredAt }
-            : {}),
-          ...(probed.lastDiscoveryError !== undefined
-            ? { lastDiscoveryError: probed.lastDiscoveryError }
-            : {}),
-          updatedAt: Math.max(current.updatedAt, probed.updatedAt),
-        });
-        acpBackendAdapterLog.info("startup_acp_capability_probe_completed", {
-          backend: agent.backendId,
-          version: agent.version,
-          discovered: probed.runtimeCapabilities !== undefined,
-          ...(probed.lastDiscoveryError
-            ? { error: probed.lastDiscoveryError }
-            : {}),
-        });
-        await this.emit({
-          backend: agent.backendId,
-          notification: {
-            method: "backend/acpRuntimeCapabilities/updated",
-            params: { backend: agent.backendId },
-          },
-        });
+    // Each probe launches an agent process. A managed update can queue the
+    // replacement while a startup probe is still running.
+    this.backgroundCapabilityProbe = (async () => {
+      for (const [backend, agent] of this.pendingCapabilityProbes) {
+        this.pendingCapabilityProbes.delete(backend);
+        await this.probeChangedRuntime(agent, probe);
       }
-    })()
-      .catch((error) => {
-        acpBackendAdapterLog.warn("startup_acp_capability_probe_failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      })
-      .finally(() => {
-        if (this.startupCapabilityProbe === run) {
-          this.startupCapabilityProbe = undefined;
-        }
+    })().finally(() => {
+      this.backgroundCapabilityProbe = undefined;
+      this.probeChangedRuntimesInBackground([]);
+    });
+  }
+
+  private async probeChangedRuntime(
+    agent: AcpInstalledAgentRecord,
+    probe: AcpRuntimeCapabilityProbe,
+  ): Promise<void> {
+    // Settings or a newer runtime can replace the record while discovery runs.
+    const readUnprobedRuntime = () => {
+      const current = this.acpAgentStore?.getInstalledAgent(agent.backendId);
+      return current
+        && !this.closed
+        && (this.isAcpAgentEnabled?.(agent.registryId) ?? true)
+        && this.isRuntimeSelectionCurrent(current)
+        && current.version === agent.version
+        && current.configDependencyFingerprint === agent.configDependencyFingerprint
+        && acpAgentLaunchIdentity(current) === acpAgentLaunchIdentity(agent)
+        && shouldProbeAcpCapabilitiesAfterRuntimeChange(current, true)
+        ? current : undefined;
+    };
+    try {
+      const before = readUnprobedRuntime();
+      if (!before) return;
+      const probed = await probe(before, () => readUnprobedRuntime() !== undefined);
+      const current = readUnprobedRuntime();
+      if (!current || probed === before) return;
+      const useCurrentCapabilities = probed.runtimeCapabilities === before.runtimeCapabilities
+        && !acpDiscoveryActionRequiredMessage(agent.registryId, probed.lastDiscoveryError);
+      this.acpAgentStore?.upsertInstalledAgent({
+        ...current,
+        runtimeCapabilities: useCurrentCapabilities ? current.runtimeCapabilities : probed.runtimeCapabilities,
+        lastDiscoveredAt: probed.lastDiscoveredAt,
+        lastDiscoveryError: probed.lastDiscoveryError,
+        updatedAt: Math.max(current.updatedAt, probed.updatedAt),
       });
-    this.startupCapabilityProbe = run;
+      acpBackendAdapterLog.info("background_acp_capability_probe_completed", {
+        backend: agent.backendId,
+        version: agent.version,
+        discovered: probed.runtimeCapabilities?.status === "discovered",
+        ...(probed.lastDiscoveryError ? { error: probed.lastDiscoveryError } : {}),
+      });
+      await this.emit({
+        backend: agent.backendId,
+        notification: {
+          method: "backend/acpRuntimeCapabilities/updated",
+          params: { backend: agent.backendId },
+        },
+      });
+    } catch (error) {
+      acpBackendAdapterLog.warn("background_acp_capability_probe_failed", {
+        backend: agent.backendId,
+        version: agent.version,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**
@@ -3153,6 +3191,9 @@ export class AcpBackendAdapter {
         && cached?.installStatus === "installed"
         && cached.version === agent.version
         && acpAgentLaunchIdentity(cached) === acpAgentLaunchIdentity(agent);
+      const runtimeCapabilities = sameRuntime
+        ? cached.runtimeCapabilities
+        : retainedManagedAntigravityCatalog(cached, agent);
       return {
         ...agent,
         installedAt: cached?.installedAt ?? agent.installedAt,
@@ -3160,9 +3201,7 @@ export class AcpBackendAdapter {
           sameRuntime && cached
             ? Math.max(agent.updatedAt, cached.updatedAt)
             : agent.updatedAt,
-        ...(sameRuntime && cached?.runtimeCapabilities
-          ? { runtimeCapabilities: cached.runtimeCapabilities }
-          : {}),
+        ...(runtimeCapabilities ? { runtimeCapabilities } : {}),
         ...(sameRuntime && cached?.lastDiscoveredAt !== undefined
           ? { lastDiscoveredAt: cached.lastDiscoveredAt }
           : {}),
@@ -3230,7 +3269,7 @@ export class AcpBackendAdapter {
     this.providerStatusRefreshAttempts.clear();
     this.providerStatusRefreshes.clear();
     this.grokUpdateRefreshes.clear();
-    this.startupCapabilityProbe = undefined;
+    this.pendingCapabilityProbes.clear();
     this.liveTurnUsage.clear();
     this.liveContextWindows.clear();
     this.localAgentSnapshot = [];
@@ -3567,38 +3606,28 @@ export class AcpBackendAdapter {
               turnId,
               update,
             });
+        const buildToolNotifications = (toolUpdate: Record<string, unknown>) =>
+          acpToolUpdateNotifications({
+            backendId: agent.backendId,
+            cwd: () => this.getSession(agent.backendId, sessionId)?.cwd,
+            threadId: sessionId,
+            turnId,
+            update: toolUpdate,
+          }).filter((notification) =>
+            this.shouldEmitLiveToolNotification(agent.backendId, notification),
+          );
         const toolNotifications = resolvedToolUpdate
-          ? acpToolUpdateNotifications({
-              backendId: agent.backendId,
-              cwd: agent.backendId === "acp:antigravity" && resolvedToolUpdate.kind === "edit"
-                ? this.getSession(agent.backendId, sessionId)?.cwd
-                : undefined,
-              threadId: sessionId,
-              turnId,
-              update: resolvedToolUpdate,
-            }).filter((notification) =>
-              this.shouldEmitLiveToolNotification(agent.backendId, notification),
-            )
+          ? buildToolNotifications(resolvedToolUpdate)
           : [];
         const deferredTerminalToolNotifications =
-          promptSettledTurnFinished && turnId && !fromSessionLoad
+          promptSettledTurnFinished && turnId
             ? this.liveToolUpdateResolver
                 .drainDeferredTerminalUpdates({
                   backendId: agent.backendId,
                   threadId: sessionId,
                   turnId,
                 })
-                .flatMap((deferredUpdate) =>
-                  acpToolUpdateNotifications({
-                    backendId: agent.backendId,
-                    threadId: sessionId,
-                    turnId,
-                    update: deferredUpdate,
-                  }),
-                )
-                .filter((notification) =>
-                  this.shouldEmitLiveToolNotification(agent.backendId, notification),
-                )
+                .flatMap(buildToolNotifications)
             : [];
         if (title) {
           await this.emit({
@@ -3879,7 +3908,9 @@ export class AcpBackendAdapter {
         // catalog over the newly selected installation. Its session state is
         // still authoritative for that thread.
         if (agent.registryId !== "antigravity"
-          || current.launchDescriptor?.command === agent.launchDescriptor?.command) {
+          || (current.version === agent.version
+            && current.launchDescriptor?.command === agent.launchDescriptor?.command
+            && this.isRuntimeSelectionCurrent(current))) {
           this.acpAgentStore?.upsertInstalledAgent(
             recordWithSessionRuntimeCapabilities(current, runtimeCapabilities, now),
           );

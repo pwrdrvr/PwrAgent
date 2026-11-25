@@ -1,9 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as acpKit from "@pwrdrvr/agent-acp";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
+import { loadAcpReplayKit } from "../acp/acp-session-normalizer";
 import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
+
+vi.mock(import("@pwrdrvr/agent-acp"), async (importOriginal) => {
+  const kit = await importOriginal();
+  return { ...kit, toolCallFromUpdate: vi.fn(kit.toolCallFromUpdate) };
+});
 
 describe("AcpRolloutStore", () => {
   let tempDir: string;
@@ -59,6 +66,94 @@ describe("AcpRolloutStore", () => {
       expect.objectContaining({ role: "user", text: "hello" }),
       expect.objectContaining({ role: "assistant", text: "Hi" }),
     ]);
+  });
+
+  it("replays kit plans and command headings without losing persisted host events", async () => {
+    const params = { backendId: "acp:gemini" as const, sessionId: "phase-b-fixture" };
+    const store = new AcpRolloutStore(tempDir);
+    const command = String.raw`bash -c 'printf %s '"\"a b\""`;
+    const plan = {
+      sessionUpdate: "plan",
+      planId: "fixture-plan",
+      explanation: "Verify the sample",
+      markdown: "- [x] Print the sample",
+      steps: [{ content: "Print the sample", status: "completed" }],
+    };
+    const updates = [
+      { kind: "pwragent_user_prompt", turnId: "fixture-turn", prompt: "Check the sample" },
+      plan,
+      { sessionUpdate: "tool_call", toolCallId: "fixture-tool", kind: "execute", title: "Bash", command },
+      { sessionUpdate: "tool_call_update", toolCallId: "fixture-tool", status: "completed", output: "a b", exitCode: 0 },
+      {
+        kind: "pwragent_steered_user_prompt",
+        turnId: "fixture-turn",
+        messageId: "fixture-steer",
+        prompt: "Also check the fixture",
+      },
+      { kind: "pwragent_turn_failed", turnId: "fixture-turn", error: "Sample failure" },
+    ];
+    updates.forEach((update, index) => {
+      store.appendUpdate({ ...params, receivedAt: 1_000 + index, update });
+    });
+    store.flushAll();
+
+    const applyKit = vi.spyOn(acpKit.AcpSessionNormalizer.prototype, "apply");
+    const normalizeKitTool = vi.mocked(acpKit.toolCallFromUpdate);
+    normalizeKitTool.mockClear();
+    try {
+      const reopened = new AcpRolloutStore(tempDir);
+      const records = reopened.readUpdates(params);
+      const replay = reopened.readReplay({ ...params, replayKit: await loadAcpReplayKit() });
+      expect(applyKit).toHaveBeenCalledWith(plan, {
+        threadId: params.sessionId,
+        turnId: "fixture-turn",
+      });
+      expect(normalizeKitTool).toHaveBeenCalledWith({
+        kind: "execute",
+        title: "Bash",
+        command,
+      }, "tool_call", params.sessionId);
+      expect(reopened.readUpdates(params)).toEqual(records);
+      expect(replay.messages).toMatchObject([
+        { id: "user:fixture-turn", role: "user", text: "Check the sample", createdAt: 1_000 },
+        { id: "fixture-steer", role: "user", text: "Also check the fixture", createdAt: 1_004 },
+      ]);
+      expect(replay.entries).toMatchObject([
+        { type: "message", id: "user:fixture-turn" },
+        {
+          type: "plan",
+          id: "fixture-plan",
+          explanation: "Verify the sample",
+          markdown: "- [x] Print the sample",
+          steps: [{ step: "Print the sample", status: "completed" }],
+          createdAt: 1_001,
+          turn: { id: "fixture-turn", status: "failed" },
+        },
+        {
+          type: "activity",
+          id: "fixture-tool",
+          summary: 'printf %s "a b"',
+          status: "completed",
+          createdAt: 1_002,
+          details: [{
+            id: "fixture-tool:detail",
+            label: 'printf %s "a b"',
+            command: { rawCommand: command, displayCommand: command, output: "a b", exitCode: 0 },
+          }],
+        },
+        { type: "message", id: "fixture-steer" },
+        {
+          type: "activity",
+          id: "turn-failed:fixture-turn",
+          status: "failed",
+          createdAt: 1_005,
+          details: [{ label: "Sample failure" }],
+        },
+      ]);
+      expect(replay.threadStatus).toBe("idle");
+    } finally {
+      applyKit.mockRestore();
+    }
   });
 
   it("names a restored edit's diff relative to the session's workspace", () => {
