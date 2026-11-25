@@ -2931,10 +2931,11 @@ describe("app server ipc", () => {
     30_000,
   );
 
-  it.skipIf(process.platform === "win32").each(["repointed", "removed"] as const)(
-    "publishes the fresh polling authority when origin was %s during inventory",
+  it.skipIf(process.platform === "win32").each(["repointed", "removed", "page-first", "page-last"] as const)(
+    "publishes the newest conclusive origin during a %s inventory race",
     async (change) => {
       const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
+      const { PR_METADATA_PRIORITY } = await import("../pr-status/pr-metadata-process");
       const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
       const git = await import("../app-server/git-executable");
       const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
@@ -2969,36 +2970,64 @@ describe("app server ipc", () => {
       resolveGitHubRepoForDirectory.mockImplementation((checkout, options) => readOrigin(checkout!, options));
       registerAppServerIpcHandlers();
 
-      const sampled = Promise.withResolvers<void>();
+      const pageReadsFirst = change === "page-first" || change === "page-last";
+      const inventoryReached = Promise.withResolvers<void>();
+      const pageSampled = Promise.withResolvers<void>();
+      const releasePage = Promise.withResolvers<void>();
       const release = Promise.withResolvers<void>();
       const reads = vi.spyOn(git, "runGitCommand").mockImplementation(async (path, args, options) => {
-        const result = await runGit(path, args, options);
-        if (path === cwd && options?.purpose === "pr-remotes" && args.includes("--show-origin")) {
-          sampled.resolve();
+        const readingConfig = path === cwd && options?.purpose === "pr-remotes" && args[0] === "config";
+        const samplingInventory = readingConfig && args.includes("--show-origin");
+        if (samplingInventory && pageReadsFirst) {
+          inventoryReached.resolve();
           await release.promise;
+        }
+        const result = await runGit(path, args, options);
+        if (samplingInventory && !pageReadsFirst) {
+          inventoryReached.resolve();
+          await release.promise;
+        }
+        if (readingConfig && !samplingInventory && change === "page-last") {
+          pageSampled.resolve();
+          await releasePage.promise;
         }
         return result;
       });
       onTestFinished(() => { reads.mockRestore(); });
       const owner = startAppServerOwnerNavigation();
+      let pageRead: ReturnType<typeof readOrigin> | undefined;
       try {
-        await Promise.race([sampled.promise, owner.then(() => { throw new Error("Inventory did not read the checkout"); })]);
-        await runGit(cwd, change === "repointed"
-          ? ["remote", "set-url", "origin", "https://github.com/fixture/repointed.git"]
-          : ["remote", "remove", "origin"]);
-        const service = appServerService as unknown as {
-          readPrimaryAttachedPrs(params: typeof ref): Promise<{ primaryRepoKey?: string }>;
-        };
-        const expected = change === "repointed" ? "github.com/fixture/repointed" : undefined;
-        expect((await service.readPrimaryAttachedPrs(ref)).primaryRepoKey).toBe(expected);
+        await Promise.race([inventoryReached.promise, owner.then(() => { throw new Error("Inventory did not read the checkout"); })]);
+        if (pageReadsFirst) {
+          pageRead = readOrigin(cwd, { demand: { priority: () => PR_METADATA_PRIORITY.page } });
+          if (change === "page-last") {
+            await Promise.race([pageSampled.promise, pageRead.then(() => { throw new Error("Page did not sample Git"); })]);
+          } else {
+            expect((await pageRead)?.repo).toBe("original");
+          }
+        }
+        await runGit(cwd, change === "removed"
+          ? ["remote", "remove", "origin"]
+          : ["remote", "set-url", "origin", "https://github.com/fixture/repointed.git"]);
+        const expected = change === "removed" ? undefined : "github.com/fixture/repointed";
+        if (!pageReadsFirst) {
+          const service = appServerService as unknown as {
+            readPrimaryAttachedPrs(params: typeof ref): Promise<{ primaryRepoKey?: string }>;
+          };
+          expect((await service.readPrimaryAttachedPrs(ref)).primaryRepoKey).toBe(expected);
+        }
         release.resolve();
         await owner;
+        releasePage.resolve();
+        await pageRead;
+        expect((await readOrigin(cwd))?.repo).toBe(change === "removed" ? undefined : "repointed");
         expect(appServerService.readPrimaryGitRepository(ref.backend, ref.threadId)).toBe(expected);
         expect(syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0].threads)
-          .toEqual([{ ...ref, prKeys: change === "repointed" ? [buildPullRequestStatusKey(prs[1]!)] : [] }]);
+          .toEqual([{ ...ref, prKeys: change === "removed" ? [] : [buildPullRequestStatusKey(prs[1]!)] }]);
       } finally {
         release.resolve();
-        await owner;
+        releasePage.resolve();
+        await Promise.allSettled([owner, pageRead]);
       }
     },
   );

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { bundledGitLfsExecutable } from "../bundled-git";
-import { isGitConfigNoMatch, parseForgeRemote, REMOTE_CONFIG_KEYS, type InventoryRemoteConfigReader } from "./git-remote";
+import { isGitConfigNoMatch, nextRemoteSampleOrder, parseForgeRemote, REMOTE_CONFIG_KEYS, type InventoryRemoteConfigReader } from "./git-remote";
 import type { GitRemoteConfiguration } from "./git-remote-config";
 import { parsePrConfigWithOrigins, readPrConfigInputs } from "./pr-config-observation";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
@@ -43,29 +43,35 @@ function shareableConfig(parsed: ReturnType<typeof parsePrConfigWithOrigins>, co
 }
 
 type LinkedCheckout = NonNullable<Awaited<ReturnType<typeof observeLinkedPrCheckout>>>;
-type ConfigSample = { configuration?: GitRemoteConfiguration };
+type ConfigSample = { configuration?: GitRemoteConfiguration; sampleOrder: number };
 
 /** A seed is a normal per-checkout read. Its positive config can stand in
  * for a sibling only while both checkout and config witnesses still hold. */
 async function sampleConfig(cwd: string, checkout: LinkedCheckout, inputs: NonNullable<ReturnType<typeof currentInputs>>, demand: PrMetadataDemand) {
   const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs(cwd));
-  const read = (reader: PrMetadataDemand) => runPrMetadataGit(cwd,
-    ["config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", CONFIG_KEYS],
-    { env: inputs.env, purpose: "pr-remotes", maxBuffer: 64 * 1024, timeout: 2_000, beforeSpawn: () => {
-      if (!inputsUnchanged()) throw new Error("Git config inputs changed");
-    } }, reader);
+  const read = async (reader: PrMetadataDemand) => {
+    let sampleOrder: number | undefined;
+    const result = await runPrMetadataGit(cwd,
+      ["config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", CONFIG_KEYS],
+      { env: inputs.env, purpose: "pr-remotes", maxBuffer: 64 * 1024, timeout: 2_000, beforeSpawn: () => {
+        if (!inputsUnchanged()) throw new Error("Git config inputs changed");
+        sampleOrder = nextRemoteSampleOrder();
+      } }, reader);
+    return { ...result, sampleOrder: sampleOrder ?? nextRemoteSampleOrder() };
+  };
   try {
     const roots = await observePrCheckoutConfigFiles(cwd, inputs.paths, demand);
     const result = await read(demand);
     const parsed = parsePrConfigWithOrigins(checkout.directory, result.stdout);
     if (!parsed) return undefined;
-    const exact: ConfigSample = { configuration: parsed.configuration };
+    const exact: ConfigSample = { configuration: parsed.configuration, sampleOrder: result.sampleOrder };
     const sources = shareableConfig(parsed, checkout.commonDir);
     if (!roots || roots.gitDir !== checkout.gitDir || result.stderr || !sources) return { exact };
     const includes = [...sources.includes].filter((file) => !roots.paths.has(file));
     const trackedPaths = new Set([...roots.paths, ...includes]);
     if ([...sources.origins].some((file) => !trackedPaths.has(file))) return { exact };
-    let watched = includes.length ? undefined : Promise.resolve<typeof roots | undefined>(roots);
+    let watched = includes.length ? undefined
+      : Promise.resolve<{ files: typeof roots; sampleOrder: number } | undefined>({ files: roots, sampleOrder: result.sampleOrder });
     // Only a sibling needs the second Git read. Watch the discovered includes
     // before confirming the seed's config with Git again.
     const confirmIncludes = async (reader: PrMetadataDemand) => {
@@ -73,22 +79,22 @@ async function sampleConfig(cwd: string, checkout: LinkedCheckout, inputs: NonNu
         const files = await observePrCheckoutConfigFiles(cwd, [...inputs.paths, ...includes], reader);
         if (!files || files.gitDir !== checkout.gitDir) return undefined;
         const confirmed = await read(reader);
-        return !confirmed.stderr && confirmed.stdout === result.stdout ? files : undefined;
+        return !confirmed.stderr && confirmed.stdout === result.stdout ? { files, sampleOrder: confirmed.sampleOrder } : undefined;
       } catch {
         if (reader.signal?.aborted) watched = undefined;
         return undefined;
       }
     };
     const unchanged = async (reader: PrMetadataDemand) => {
-      const files = await (watched ??= confirmIncludes(reader));
-      if (!files) return false;
-      const [seed, config] = await Promise.all([checkout.unchanged(reader), files.unchanged(reader)]);
-      return seed && config && inputsUnchanged();
+      const witness = await (watched ??= confirmIncludes(reader));
+      if (!witness) return undefined;
+      const [seed, config] = await Promise.all([checkout.unchanged(reader), witness.files.unchanged(reader)]);
+      return seed && config && inputsUnchanged() ? witness.sampleOrder : undefined;
     };
     return { exact, unchanged };
   } catch (error) {
     demand.signal?.throwIfAborted();
-    if (isGitConfigNoMatch(error)) return { exact: { configuration: { names: [], remotes: [] } } };
+    if (isGitConfigNoMatch(error)) return { exact: { configuration: { names: [], remotes: [] }, sampleOrder: nextRemoteSampleOrder() } };
     return undefined;
   }
 }
@@ -98,7 +104,7 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
   const groups = new Map<string, {
     seed: string;
     sample: SharedPrMetadataRead<Awaited<ReturnType<typeof sampleConfig>>>;
-    checking?: { startedAfterObservation: number; result: SharedPrMetadataRead<boolean | undefined> };
+    checking?: { startedAfterObservation: number; result: SharedPrMetadataRead<number | undefined> };
   }>();
   let checkoutObservations = 0;
   const pendingCheckouts = new Set<Promise<unknown>>();
@@ -149,6 +155,7 @@ export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader
       };
       checking = current.checking = next;
     }
-    return await checking.result.read(demand) && await checkout.unchanged() ? sample.exact : undefined;
+    const sampleOrder = await checking.result.read(demand);
+    return sampleOrder !== undefined && await checkout.unchanged() ? { ...sample.exact, sampleOrder } : undefined;
   };
 }

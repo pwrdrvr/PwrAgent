@@ -116,11 +116,11 @@ type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
 const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
-const inventoryLookups = new WeakSet<SharedPrMetadataRead<RemoteCacheEntry>>();
+const inventoryLookups = new Map<string, SharedPrMetadataRead<RemoteCacheEntry>>();
 let remoteCacheGeneration = 0;
 let remoteSampleOrder = 0;
 
-function nextRemoteSampleOrder(): number {
+export function nextRemoteSampleOrder(): number {
   return ++remoteSampleOrder;
 }
 
@@ -134,11 +134,12 @@ export function clearGitHubRemoteCache(): void {
   remoteCache.clear();
   // Existing callers may finish, but cannot publish into the new cache.
   remoteLookups.clear();
+  inventoryLookups.clear();
   sshLookups = new WeakMap();
 }
 
 export type InventoryRemoteConfigReader = (cwd: string, demand: PrMetadataDemand) =>
-  Promise<{ configuration?: GitRemoteConfiguration } | undefined>;
+  Promise<{ configuration?: GitRemoteConfiguration; sampleOrder?: number } | undefined>;
 
 export type ResolveGitHubRepoOptions = {
   /** Override the git runner — tests inject canned configured remotes. */
@@ -194,11 +195,15 @@ export function readObservedGitOrigin(cwd: string): {
 } | undefined {
   const observation = remoteCache.get(cwd);
   if (!observation) return undefined;
+  return { ...observedOrigin(observation), retryAt: observation.fetchedAt + REMOTE_CACHE_TTL_MS, sampleOrder: observation.sampleOrder };
+}
+
+function observedOrigin(observation: ParsedRemoteObservation) {
   const origin = observation.value.find((remote) => remote.name === "origin");
   // A listed origin with a failed get-url read is inconclusive. A confirmed
   // remote list without origin establishes absence, even if the list is empty.
   const conclusive = Boolean(origin || (observation.names && !observation.names.includes("origin")));
-  return { repo: origin?.repo, conclusive, retryAt: observation.fetchedAt + REMOTE_CACHE_TTL_MS, sampleOrder: observation.sampleOrder };
+  return { repo: origin?.repo, conclusive };
 }
 
 /**
@@ -322,7 +327,9 @@ export function createScheduledPrefetchRemoteReader(cwd: string) {
       ? async () => {
         if (options.verifyPublication && !await options.verifyPublication()) return;
         if (remoteCacheGeneration === cacheGeneration && isCurrentRemoteObservation(snapshot)
-          && !isCurrentRemoteObservation(remoteCache.get(cwd)) && !remoteLookups.has(cwd)) remoteCache.set(cwd, snapshot);
+          && !isCurrentRemoteObservation(remoteCache.get(cwd)) && !remoteLookups.has(cwd) && !inventoryLookups.has(cwd)) {
+          remoteCache.set(cwd, snapshot);
+        }
       }
       : undefined;
     return {
@@ -404,11 +411,12 @@ async function readParsedGitRemotes(
     return cached;
   }
 
-  const existing = remoteLookups.get(cwd);
   // Only inventory can wait for an inventory batch. Another reader may
   // acquire page or selected demand later through attachment validation.
-  const mayShareInventory = !confirmEmpty && options.inventoryConfig !== undefined;
-  if (existing && !existing.signal.aborted && (mayShareInventory || !inventoryLookups.has(existing))) {
+  const lookups = !confirmEmpty && options.inventoryConfig ? inventoryLookups : remoteLookups;
+  const checkoutRead = remoteLookups.get(cwd);
+  const existing = checkoutRead && !checkoutRead.signal.aborted ? checkoutRead : lookups.get(cwd);
+  if (existing && !existing.signal.aborted) {
     const observation = await existing.read(options.demand);
     // A checkout-authority read can join a cheaper discovery already in
     // flight. Confirm an ambiguous result once the shared read settles.
@@ -422,14 +430,24 @@ async function readParsedGitRemotes(
       const { observation: loaded } = await loadParsedGitRemotes(cwd, options, demand);
       demand.signal?.throwIfAborted();
       const observation = { ...loaded, fetchedAt: now() };
-      if (remoteLookups.get(cwd) === pending) remoteCache.set(cwd, observation);
+      if (lookups.get(cwd) === pending) {
+        const current = remoteCache.get(cwd);
+        // Both reads can complete independently. Reconcile only a competing
+        // publication, keeping the ordinary TTL and retry rules on each lane.
+        if (current && current !== cached) {
+          const { conclusive } = observedOrigin(observation);
+          const currentConclusive = observedOrigin(current).conclusive;
+          if ((currentConclusive && !conclusive)
+            || (currentConclusive === conclusive && current.sampleOrder > observation.sampleOrder)) return current;
+        }
+        remoteCache.set(cwd, observation);
+      }
       return observation;
     } finally {
-      if (remoteLookups.get(cwd) === pending) remoteLookups.delete(cwd);
+      if (lookups.get(cwd) === pending) lookups.delete(cwd);
     }
   });
-  if (mayShareInventory) inventoryLookups.add(pending);
-  remoteLookups.set(cwd, pending);
+  lookups.set(cwd, pending);
   return pending.read(options.demand);
 }
 
@@ -451,7 +469,7 @@ async function loadParsedGitRemotes(
     const raw: Awaited<ReturnType<typeof defaultReadRemotes>> = prefetch?.configuration ?? (options.readRemotes
       ? { remotes: await options.readRemotes(cwd) }
       : await defaultReadRemotes(cwd, demand, Boolean(options.confirmEmpty || options.fresh), prefetch, options.inventoryConfig));
-    const sampleOrder = prefetch?.configSampleOrder ?? raw.urlSampleOrder ?? nextRemoteSampleOrder();
+    const sampleOrder = prefetch?.configSampleOrder ?? raw.configSampleOrder ?? raw.urlSampleOrder ?? nextRemoteSampleOrder();
     const { names, remotes, unconfirmedEmpty, readWithGitRemote: listedWithGitRemote, hasConditionalIncludes } = raw;
     const prior = prefetch?.previous;
     // Listing names against a live identity does not verify that identity's URLs.
@@ -527,7 +545,7 @@ async function defaultReadRemotes(
   inventoryConfig?: InventoryRemoteConfigReader,
 ): Promise<{
   names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true;
-  hasConditionalIncludes?: true; urlSampleOrder?: number;
+  hasConditionalIncludes?: true; configSampleOrder?: number; urlSampleOrder?: number;
 }> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const gitOptions = {
@@ -544,27 +562,32 @@ async function defaultReadRemotes(
     && isCurrentRemoteObservation(previous) && hasAllRemoteUrls(previous));
   if (!prefetch?.useGitRemote && !useNativeList
     && !Object.keys(childEnv).some((key) => key.toUpperCase() === "GIT_CONFIG")) {
+    let configSampleOrder: number | undefined;
     try {
       const inventory = confirmEmpty ? undefined : await inventoryConfig?.(cwd, demand);
       let configuration = inventory?.configuration;
+      configSampleOrder = inventory?.sampleOrder;
       if (!inventory) {
         const { stdout } = await runPrMetadataGit(cwd,
-          ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS], gitOptions, demand);
+          ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS],
+          { ...gitOptions, beforeSpawn: () => { configSampleOrder = nextRemoteSampleOrder(); } }, demand);
         configuration = parseGitRemoteConfiguration(stdout);
       }
-      if (configuration?.names.length) return configuration;
-      if (configuration && !confirmEmpty) return { remotes: [], unconfirmedEmpty: true };
+      if (configuration?.names.length) return { ...configuration, configSampleOrder };
+      if (configuration && !confirmEmpty) return { remotes: [], unconfirmedEmpty: true, configSampleOrder };
     } catch (error) {
       demand.signal?.throwIfAborted();
       if (!confirmEmpty && isGitConfigNoMatch(error)) {
-        return { remotes: [], unconfirmedEmpty: true };
+        return { remotes: [], unconfirmedEmpty: true, configSampleOrder };
       }
     }
   }
 
   // An empty config is enough to skip discovery. It takes Git's remote
   // command to distinguish a checkout without an origin from an unavailable one.
-  const { stdout } = await runPrMetadataGit(cwd, ["remote"], gitOptions, demand);
+  let listSampleOrder: number | undefined;
+  const { stdout } = await runPrMetadataGit(cwd, ["remote"],
+    { ...gitOptions, beforeSpawn: () => { listSampleOrder = nextRemoteSampleOrder(); } }, demand);
   const names = uniqueNonEmptyLines(stdout);
   // Name agreement is enough for an existing live entry or previously read
   // native URLs. Batch-only config must get URLs before it can warm the cache.
@@ -576,7 +599,7 @@ async function defaultReadRemotes(
   }
   // A native URL read spans several commands. Order it from the remote list
   // so an overlapping owner sample can supersede this mixed observation.
-  const urlSampleOrder = nextRemoteSampleOrder();
+  const urlSampleOrder = listSampleOrder ?? nextRemoteSampleOrder();
   const entries = await Promise.all(
     names.map(async (name): Promise<GitRemote[]> => {
       try {
