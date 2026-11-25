@@ -9,6 +9,7 @@ import {
   isThreadTodoMergeMethod,
   type ThreadTodoMergeMethod,
 } from "@pwragent/shared/contracts/thread-todos";
+import { MAX_GITHUB_STACK_OPEN_BELOW } from "@pwragent/shared/stacks/stack-status";
 import { parsePullRequestReferenceUrl } from "./forge-reference";
 
 export type ThreadPullRequestMergeResult = { summary: string } & (
@@ -39,6 +40,8 @@ export type ThreadPullRequestMergeDeps = {
     pullRequest: string;
     method: ThreadTodoMergeMethod;
     assertCanMerge: (url: string) => void;
+    /** The open lower layers of the PR's GitHub stack the operator chose to merge with it. */
+    mergeOpenLayersBelow?: number[];
   }, thread: ThreadPullRequestMergeTarget) => Promise<ThreadPullRequestMergeResult>;
   /** A queued PR still needs a provider observation for its queue status. */
   refresh: (thread: ThreadPullRequestMergeTarget) => Promise<unknown>;
@@ -73,6 +76,17 @@ function pullRequestIdentity(url: string): string | undefined {
   return [reference.kind, reference.provider, reference.org.toLowerCase(), reference.repo.toLowerCase(), reference.number].join("\u0000");
 }
 
+/** The renderer's list of lower stack layers to merge too: distinct PR numbers, or nothing. */
+function readMergeOpenLayersBelow(value: unknown): number[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > MAX_GITHUB_STACK_OPEN_BELOW
+    || !value.every((number) => typeof number === "number" && Number.isSafeInteger(number) && number > 0)
+    || new Set(value).size !== value.length) {
+    throw new Error("Choose the stack layers to merge again.");
+  }
+  return value.length ? [...value as number[]] : undefined;
+}
+
 export async function readThreadPullRequestMerge(
   deps: ThreadPullRequestMergeDeps,
   request: unknown,
@@ -99,8 +113,9 @@ export async function mergeThreadPullRequest(
   request: unknown,
 ): Promise<MergeThreadPullRequestResponse> {
   const thread = readTarget(request);
-  const { url, method, rememberMethod } = (request ?? {}) as Partial<MergeThreadPullRequestRequest>;
+  const { url, method, rememberMethod, mergeOpenLayersBelow } = (request ?? {}) as Partial<MergeThreadPullRequestRequest>;
   if (!isThreadTodoMergeMethod(method)) throw new Error("Choose squash, rebase or merge.");
+  const layersBelow = readMergeOpenLayersBelow(mergeOpenLayersBelow);
   const reference = typeof url === "string" ? parsePullRequestReferenceUrl(url) : undefined;
   const identity = typeof url === "string" ? pullRequestIdentity(url) : undefined;
   if (!reference || !identity) throw new Error("That is not a pull request URL.");
@@ -115,6 +130,11 @@ export async function mergeThreadPullRequest(
     throw new Error(`${neverMergeProject} never merges its pull requests. Change it from the project menu: Forge Automation.`);
   }
   deps.assertNotHeld(thread, attached);
+  // GitHub lands the chosen layers below with this one, so a wait that holds
+  // any of them holds this merge too.
+  for (const layer of layersBelow ?? []) {
+    deps.assertNotHeld(thread, `https://${reference.provider}/${reference.org}/${reference.repo}/pull/${layer}`);
+  }
   // Remembered before the merge runs, as a to-do card's pick is: it is the
   // operator's preference whether or not this merge succeeds.
   if (rememberMethod === true) {
@@ -125,6 +145,7 @@ export async function mergeThreadPullRequest(
     pullRequest: attached,
     method,
     assertCanMerge: (target) => deps.assertNotHeld(thread, target),
+    ...(layersBelow ? { mergeOpenLayersBelow: layersBelow } : {}),
   }, thread);
   if (merged.queued) void deps.refresh(thread).catch((error: unknown) => deps.onRefreshFailed?.(error));
   return {

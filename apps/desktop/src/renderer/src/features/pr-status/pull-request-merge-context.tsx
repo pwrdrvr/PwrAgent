@@ -24,6 +24,8 @@ export type PullRequestMergeService = {
     pr: PrSummary;
     method: ThreadTodoMergeMethod;
     rememberMethod: boolean;
+    /** The open lower layers of the PR's GitHub stack the operator chose to merge with it. */
+    mergeOpenLayersBelow?: number[];
   }) => Promise<boolean>;
 };
 
@@ -61,12 +63,16 @@ export function PullRequestMergeProvider(props: {
   children: ReactNode;
 }) {
   const { desktopApi, showNotice } = props;
-  const merge = useCallback<PullRequestMergeService["merge"]>(async ({ thread, pr, method, rememberMethod }) => {
+  const merge = useCallback<PullRequestMergeService["merge"]>(async ({ thread, pr, method, rememberMethod, mergeOpenLayersBelow }) => {
     const label = `#${pr.number}`;
     const context = `${pr.org}/${pr.repo}${pr.title ? ` · ${pr.title}` : ""}`;
     try {
       if (!desktopApi?.mergeThreadPullRequest) throw new Error("Merging is not available in this window.");
-      const result = await desktopApi.mergeThreadPullRequest({ ...thread, url: pr.url, method, rememberMethod });
+      const result = await desktopApi.mergeThreadPullRequest({
+        ...thread, url: pr.url, method, rememberMethod,
+        // A peer's owner takes no choice of lower layers; only a local merge sends one.
+        ...(mergeOpenLayersBelow?.length && thread.federationTarget?.scope !== "remote" ? { mergeOpenLayersBelow } : {}),
+      });
       showNotice({
         id: `pr-card-merge:${pr.url}`,
         tone: "success",

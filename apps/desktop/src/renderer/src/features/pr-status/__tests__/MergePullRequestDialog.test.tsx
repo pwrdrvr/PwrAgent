@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { MergePullRequestDialog } from "../MergePullRequestDialog";
 import type { PullRequestMergeService } from "../pull-request-merge-context";
@@ -20,7 +21,13 @@ const PR: PrSummary = {
   allowedMergeMethods: ["squash", "merge"],
 };
 
-function renderDialog(held = false) {
+/** #11 is the top of a GitHub stack whose two lower layers are still open. */
+const STACKED: CompactStackMembership = {
+  key: "stack:github.com:acme/orbit:main", name: "Orbit", inferred: false, position: 3, count: 3,
+  number: 11, health: "in_sync", trunk: "main", githubStack: 4402, openBelow: [9, 10],
+};
+
+function renderDialog(held = false, options: { stack?: CompactStackMembership; remote?: boolean } = {}) {
   const merge = vi.fn<PullRequestMergeService["merge"]>(async () => true);
   const onClose = vi.fn();
   const desktopApi = {
@@ -38,8 +45,11 @@ function renderDialog(held = false) {
   render(
     <MergePullRequestDialog
       pr={PR}
-      thread={THREAD}
+      thread={options.remote
+        ? { ...THREAD, federationTarget: { scope: "remote", instanceId: "peer-a" } } as never
+        : THREAD}
       service={{ api: desktopApi as unknown as DesktopApi, merge }}
+      {...(options.stack ? { stack: options.stack } : {})}
       onClose={onClose}
     />,
   );
@@ -77,6 +87,39 @@ describe("MergePullRequestDialog", () => {
       await user.click(screen.getByRole("button", { name: "Squash merge" }));
     });
     expect(merge).toHaveBeenCalledWith(expect.objectContaining({ method: "squash", rememberMethod: false }));
+  });
+
+  it("says a GitHub stack's merge lands the open layers below, and sends that choice", async () => {
+    const user = userEvent.setup();
+    const { merge } = renderDialog(false, { stack: STACKED });
+    expect(await screen.findByRole("dialog", { name: "Squash merge 3 PRs from its GitHub stack into main?" }))
+      .toBeInTheDocument();
+    expect(screen.getByText("#9 and #10 below #11 in its GitHub stack are still open. GitHub merges them first, then #11."))
+      .toBeInTheDocument();
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "Squash merge 3 PRs" }));
+    });
+    expect(merge).toHaveBeenCalledWith(expect.objectContaining({ method: "squash", mergeOpenLayersBelow: [9, 10] }));
+  });
+
+  it("asks a peer's thread to merge the open layers below first, with nothing to confirm", async () => {
+    const { merge } = renderDialog(false, { stack: STACKED, remote: true });
+    expect(await screen.findByText("#9 and #10 below #11 in its GitHub stack are still open. Merge them first."))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /merge/i })).toBeNull();
+    expect(merge).not.toHaveBeenCalled();
+  });
+
+  it("merges one PR when no layer below it is open", async () => {
+    const user = userEvent.setup();
+    const { merge } = renderDialog(false, { stack: { ...STACKED, openBelow: undefined } as CompactStackMembership });
+    await screen.findByRole("dialog", { name: "Squash merge #11 into main?" });
+    expect(screen.queryByText(/in its GitHub stack/)).toBeNull();
+    await act(async () => {
+      await user.click(screen.getByRole("button", { name: "Squash merge" }));
+    });
+    expect(merge.mock.calls[0]![0]).not.toHaveProperty("mergeOpenLayersBelow");
   });
 
   it("offers only Close while a wait holds the merge", async () => {

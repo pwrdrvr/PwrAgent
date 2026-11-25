@@ -14,6 +14,7 @@ import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
 import { PR_METADATA_PRIORITY, runPrMetadataFileProbe, runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { createStoredAttachmentObservation, type PrAttachmentDemand } from "../pr-status/pr-detection";
 import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-info/stack-checkout-store";
+import { githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } from "./github-forge-stacks";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 
@@ -738,9 +739,8 @@ async function projectClone(
   const observed = new Map<string, PrSummary>();
   if (!repositories.size) return { stacks, worktrees: [], observed };
   const plans = [...repositories].sort().flatMap((repository) => {
-    const catalogStacks = catalog?.repository.toLowerCase() === repository ? catalog.stacks : [];
+    const localStacks = catalog?.repository.toLowerCase() === repository ? catalog.stacks : [];
     const prs = clonePrs(threads, knownPrs, repository);
-    const catalogBranches = new Set(catalogStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
     const bindings: StackThread[] = threads.map(({ row, paths }) => ({
       key: buildThreadIdentityKey(row.source, row.id),
       title: row.title,
@@ -748,10 +748,19 @@ async function projectClone(
       attached: (row.prs ?? []).filter((pr) => prRepository(pr) === repository).map((pr) => pr.number),
     }));
     const attached = new Set(bindings.flatMap((thread) => thread.attached));
+    // A stack that exists on GitHub and holds one of this clone's PRs, unless
+    // a local catalog already records it.
+    const localBranches = new Set(localStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
+    const forgeStacks = githubForgeStacksIn(repository).filter((stack) => stack.layers.some((layer) => attached.has(layer.number))
+      && !localStacks.some((local) => local.number === stack.number)
+      && !stack.layers.some((layer) => localBranches.has(layer.branch)));
+    const forgeNumbers = new Map(forgeStacks.map((stack) => [stack.number, stack] as const));
+    const catalogStacks = [...localStacks, ...forgeStacks.map(githubForgeStackCatalog)];
+    const catalogBranches = new Set(catalogStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
     // Infer from this clone's attachments. The registry is repository-wide and
     // can include PRs observed through a different clone.
     const inferred = inferPullRequestStacks(prs.filter((pr) => attached.has(pr.number) && sameRepositoryHead(pr)), catalogBranches);
-    return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, prs, bindings, inferred }] : [];
+    return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, forgeNumbers, prs, bindings, inferred }] : [];
   });
   if (!plans.length) return { stacks, worktrees: [], observed };
   const [worktreeOutput, refOutput, graphScope] = await Promise.all([
@@ -764,19 +773,37 @@ async function projectClone(
   const refs = parseRefs(refOutput);
   const cloneKey = createHash("sha256").update(clone.commonDir).digest("hex").slice(0, 24);
   const busy = Boolean(catalog?.stacks.length) && await stackJournalInFlight(clone.commonDir);
-  for (const { repository, catalogStacks, prs, bindings, inferred } of plans) {
+  for (const { repository, catalogStacks, forgeNumbers, prs, bindings, inferred } of plans) {
     for (const pr of prs) observed.set(prIdentity(pr), pr);
     const prefix = `${cloneKey}:${repository}`;
     for (const stack of catalogStacks) {
       if (!stack.branches.length) continue;
       const name = stack.branches[0]!.branch;
-      const layers = await projectCatalogLayers({ stack, refs, prs, worktrees, threads: bindings, graph });
+      const forgeStack = stack.number !== undefined ? forgeNumbers.get(stack.number) : undefined;
+      const forge = forgeStack !== undefined;
+      const projected = await projectCatalogLayers({ stack, refs, prs, worktrees, threads: bindings, graph });
+      // Only GitHub records this stack: no fork point is known for its layers,
+      // so it claims no local restack or sync state. A layer no thread polls
+      // takes its state from GitHub's member list.
+      const layers = forgeStack
+        ? projected.map((layer, index) => {
+          const member = forgeStack.layers[index];
+          const lifecycleState = layer.pullRequest?.lifecycleState
+            ?? (member ? member.open ? "open" as const : member.merged ? "merged" as const : "closed" as const : undefined);
+          return {
+            ...layer,
+            ...(layer.health === "parent_merged" || layer.health === "needs_restack" ? { health: "unknown" as const } : {}),
+            ...(layer.pullRequest && lifecycleState ? { pullRequest: { ...layer.pullRequest, lifecycleState } } : {}),
+          };
+        })
+        : projected;
       const identity = stack.id ?? name;
       const key = `${prefix}:catalog:${identity}`;
       stacks.push({
         key: key.length <= 512 ? key : createHash("sha256").update(key).digest("hex"),
         name, repository, inferred: false, trunk: stack.trunk.branch,
-        layers: busy ? layers.map((layer) => ({ ...layer, health: "held" })) : layers,
+        ...(stack.number !== undefined ? { githubStack: stack.number } : {}),
+        layers: busy && !forge ? layers.map((layer) => ({ ...layer, health: "held" })) : layers,
       });
     }
     for (const chain of inferred) {
@@ -823,6 +850,12 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
     }
   }
   const eligible = new Set<string>();
+  // A PR in a GitHub stack whose members are known projects that stack.
+  for (const pr of [...attached, ...knownPrs]) {
+    if (pr.githubStack && attachedIds.has(prIdentity(pr)) && readGithubForgeStack(prRepository(pr), pr.githubStack.number)) {
+      eligible.add(prIdentity(pr));
+    }
+  }
   for (const [key, parents] of byHead) {
     const children = byBase.get(key);
     if (!children || (parents.size === 1 && children.size === 1 && children.has(parents.values().next().value!))) continue;

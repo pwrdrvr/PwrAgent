@@ -565,6 +565,9 @@ export type PrLifecycleState = "open" | "merged" | "closed";
 export type PrReviewState = "draft" | "ready_for_review";
 export type PrMergeState = "mergeable" | "conflicting" | "unknown";
 /** A way to land a PR. `ThreadTodoMergeMethod` is the same set. */
+/** A layer of one of GitHub's own stacks: `number` names the stack, `position` counts from 1 at its bottom. */
+export type PrGithubStack = { number: number; position: number; size: number };
+
 export type PrMergeMethod = "squash" | "rebase" | "merge";
 
 /**
@@ -676,6 +679,13 @@ export type PrSummary = {
    * before it existed: treat absence as "not known", never as "none".
    */
   allowedMergeMethods?: PrMergeMethod[];
+  /**
+   * The PR's layer in one of GitHub's own stacks, read with the status poll.
+   * GitHub keeps a layer in its stack after the layers below it merge and it
+   * retargets to trunk, and merges it only through its asynchronous merge.
+   * Absent when the PR is in no stack, and from older builds, peers and GitLab.
+   */
+  githubStack?: PrGithubStack;
   /** Head commit observed with this status snapshot. */
   headSha?: string;
   /** Direct destination for the first failed CI check in this snapshot. */
@@ -3510,6 +3520,14 @@ export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {
   method: PrMergeMethod;
   /** The pick came from the method list, so it becomes the project's. */
   rememberMethod?: boolean;
+  /**
+   * The PR is in a GitHub stack whose layers below it are still open, and the
+   * operator chose to merge those layers with it: their numbers, as the card
+   * listed them. GitHub's asynchronous merge lands every open layer below the
+   * one merged, so main refuses when any other lower layer is open. Local
+   * merges only: a peer's merge request does not carry it.
+   */
+  mergeOpenLayersBelow?: number[];
 };
 
 export type MergeThreadPullRequestResponse = {

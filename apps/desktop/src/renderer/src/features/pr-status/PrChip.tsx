@@ -151,6 +151,7 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
         <PrCardActions
           pr={pr}
           merge={merge}
+          {...(stack ? { stack } : {})}
           onDismiss={hideTooltip}
           onDetach={onDetach ? () => {
             // The detach warning returns focus to the chip, which outlives the card.
@@ -206,6 +207,8 @@ export const PrChip = memo(function PrChip(props: PrChipProps) {
     stack?.heldBy?.number,
     stack?.heldBy?.branch,
     stack?.heldBy?.reason,
+    stack?.githubStack,
+    stack?.openBelow?.join(","),
     props.branchDrift?.baseBranch,
     props.branchDrift?.behind,
     props.branchDrift?.ahead,

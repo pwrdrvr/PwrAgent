@@ -1,4 +1,5 @@
 import type { PrSummary, ThreadPullRequestMergeTarget } from "@pwragent/shared/contracts/navigation";
+import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
 import { copyText } from "../../lib/copy-text";
 import { PrCardMergeControl } from "./PrCardMergeControl";
 import type { PullRequestMergeService } from "./pull-request-merge-context";
@@ -10,6 +11,8 @@ export function PrCardActions(props: {
   onDismiss: () => void;
   onDetach?: () => void;
   merge?: PrCardMerge;
+  /** The PR's stack membership: a GitHub stack's merge can land layers below it. */
+  stack?: CompactStackMembership;
   onLayoutChange: () => void;
 }) {
   const { pr, onDismiss, onDetach, merge } = props;
@@ -46,6 +49,7 @@ export function PrCardActions(props: {
       pr={pr}
       thread={merge.thread}
       service={merge.service}
+      {...(props.stack ? { stack: props.stack } : {})}
       trailing={buttons}
       onLayoutChange={props.onLayoutChange}
     />
