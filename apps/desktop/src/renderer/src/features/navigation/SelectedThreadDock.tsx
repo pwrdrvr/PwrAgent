@@ -7,10 +7,11 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
+import { flushSync } from "react-dom";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { ArrowUpIcon, FolderIcon } from "../../icons";
 import { ThreadRowStatus, type ThreadRowStatusKind } from "./ThreadRowStatus";
-import { centerSidebarThreadRow, sidebarLaneOf } from "./reveal-selected-thread-row";
+import { centerSidebarThreadRow } from "./reveal-selected-thread-row";
 import {
   selectedThreadDockPlacement,
   stuckBandTop,
@@ -33,7 +34,10 @@ const STICKY_DIVIDER = ".directory-row__thread-divider";
 const STICKY_REACH_PX = 160;
 const DRAGGING = ".is-pointer-dragging, .is-folding-directories";
 const STICKY_MEMBERS = `${STICKY_HEADER}, ${STICKY_DIVIDER}`;
-const TARGET_MEMBERS = ".thread-row-shell, .thread-row, .directory-row";
+const TARGET_MEMBERS = ".thread-row-shell, .thread-row, .directory-row, .directory-row__header";
+const DOCK_MEMBERS = ".selected-thread-dock, .selected-thread-dock-band";
+const LANE = ".sidebar-list--dense, .directory-groups";
+const LANE_CONTENT = ".thread-row-shell > .thread-row, .directory-row__header";
 // The top dock's band: the card, 6px of plate above it and 6px below.
 const DOCK_PLATE_PX = 6;
 // The card's height before it has been drawn once: two lines at the default
@@ -120,13 +124,6 @@ function threadRows(region: HTMLElement, threadKey: string): HTMLElement[] {
   )];
 }
 
-// The scrolling lane, found without a row to start from.
-function laneOf(region: HTMLElement): HTMLElement | undefined {
-  const first = region.querySelector<HTMLElement>(".thread-row-shell > .thread-row")
-    ?? region.querySelector<HTMLElement>(".directory-row__header");
-  return first ? sidebarLaneOf(first) : undefined;
-}
-
 type Holders = Pick<SelectedThreadDockProps, "ancestorThreadKeys" | "directoryKeys">;
 
 /**
@@ -161,9 +158,9 @@ function speaksForThread(holder: Element): boolean {
 type DockElements = {
   dragging?: boolean;
   rows?: HTMLElement[];
-  lane?: HTMLElement;
+  hasContent?: boolean;
   holders?: HTMLElement[];
-  sticky?: { lane: HTMLElement; headers: Element[]; dividers: Element[] };
+  sticky?: { headers: Element[]; dividers: Element[] };
 };
 
 /**
@@ -172,19 +169,20 @@ type DockElements = {
  */
 function measure(
   region: HTMLElement,
+  lane: HTMLElement,
   threadKey: string,
   holders: Holders,
   elements: DockElements,
   reserve: number,
 ): { state: DockState; row: HTMLElement | undefined } | undefined {
   // A drag reads the list's edges for auto-scroll and drop targets.
-  elements.dragging ??= region.querySelector(DRAGGING) !== null;
+  elements.dragging ??= lane.matches(DRAGGING) || lane.querySelector(DRAGGING) !== null;
   if (elements.dragging) {
     return undefined;
   }
-  const candidates = elements.rows ??= threadRows(region, threadKey);
-  const lane = elements.lane ??= candidates[0] ? sidebarLaneOf(candidates[0]) : laneOf(region);
-  if (!lane) {
+  const candidates = elements.rows ??= threadRows(lane, threadKey);
+  elements.hasContent ??= candidates.length > 0 || lane.querySelector(LANE_CONTENT) !== null;
+  if (!elements.hasContent) {
     return undefined;
   }
   const view = lane.getBoundingClientRect();
@@ -202,7 +200,7 @@ function measure(
       extents.push(extent);
     }
   }
-  const held = rows.length === 0 ? elements.holders ??= holdersOf(region, holders) : [];
+  const held = rows.length === 0 ? elements.holders ??= holdersOf(lane, holders) : [];
   for (const holder of held) {
     extents.push(extentOf(holder));
   }
@@ -216,9 +214,8 @@ function measure(
     && !(view.height > STICKY_REACH_PX && extents.every((extent) => extent.bottom <= listTop))) {
     // Resolve sticky boxes without the reserve they acquire from the dock.
     // Otherwise a row at the very start could stay covered forever.
-    if (elements.sticky?.lane !== lane) {
+    if (!elements.sticky) {
       elements.sticky = {
-        lane,
         headers: [...lane.querySelectorAll(STICKY_HEADER)],
         dividers: [...lane.querySelectorAll(STICKY_DIVIDER)],
       };
@@ -262,40 +259,45 @@ function measure(
 }
 
 /**
- * Own the element cache and the one pending scroll/mutation/resize frame
- * together. A React commit can consume that work before the frame fires.
+ * React can commit several child pages before the browser presents a frame.
+ * Keep their geometry work with scrolling, once per frame. A changed lane
+ * establishes a new baseline synchronously, as does a changed selection.
  */
 function observeDockLayout(
   region: HTMLElement,
   cardRef: RefObject<HTMLButtonElement | null>,
-  sync: (elements: DockElements) => void,
+  sync: (lane: HTMLElement | undefined, elements: DockElements, inFrame: boolean) => void,
+  cardMounted: () => void,
 ) {
-  const elements: DockElements = {};
-  let observedLane: HTMLElement | undefined;
+  let elements: DockElements = {};
+  let lane: HTMLElement | undefined;
   let observedCard: HTMLButtonElement | null;
-  let measured = false;
+  let initialized = false;
   let frame = 0;
   const containsMatch = (node: Element, selector: string): boolean =>
     node.matches(selector) || node.querySelector(selector) !== null;
   const forgetTargets = (): void => {
     elements.rows = undefined;
-    elements.lane = undefined;
     elements.holders = undefined;
+    elements.hasContent = undefined;
   };
   const noteMutations = (records: MutationRecord[]): boolean => {
     let changed = false;
     for (const record of records) {
+      if ((record.target instanceof Element ? record.target : record.target.parentElement)?.closest(DOCK_MEMBERS)) {
+        continue;
+      }
       if (record.type === "childList") {
         for (const node of [...record.addedNodes, ...record.removedNodes]) {
           if (node instanceof Element) {
-            if (node.matches(".selected-thread-dock, .selected-thread-dock-band")) continue;
+            if (node.matches(DOCK_MEMBERS)) continue;
             if (elements.sticky && containsMatch(node, STICKY_MEMBERS)) elements.sticky = undefined;
             if (elements.rows && containsMatch(node, TARGET_MEMBERS)) forgetTargets();
             if (elements.dragging || containsMatch(node, DRAGGING)) elements.dragging = undefined;
           }
           changed = true;
         }
-      } else if (record.target !== region && record.target !== cardRef.current) {
+      } else if (record.target !== region) {
         if (record.attributeName === "data-thread-key" || record.attributeName === "data-directory-key") {
           forgetTargets();
         } else if (record.attributeName === "class" && record.target instanceof Element
@@ -307,26 +309,38 @@ function observeDockLayout(
     }
     return changed;
   };
-  const refresh = (force = false): void => {
-    const queued = frame !== 0;
+  const cancelFrame = (): void => {
     if (frame !== 0) {
       window.cancelAnimationFrame(frame);
       frame = 0;
     }
-    // Layout effects run before the mutation observer's delivery.
-    const changed = !mutation || noteMutations(mutation.takeRecords());
-    if (measured && !force && !queued && !changed && observedCard === cardRef.current) return;
-    measured = true;
-    sync(mutation ? elements : {});
-    if (resize && observedLane !== elements.lane) {
-      if (observedLane) resize.unobserve(observedLane);
-      observedLane = elements.lane;
-      if (observedLane) resize.observe(observedLane);
+  };
+  const refresh = (inFrame = false): void => {
+    // Each lens renders one lane directly inside the region. Identify it
+    // without probing the computed overflow of a newly mounted row's ancestors.
+    const nextLane = Array.from(region.children).find((child): child is HTMLElement =>
+      child instanceof HTMLElement && child.matches(LANE));
+    const replaced = !initialized || lane !== nextLane;
+    if (replaced) {
+      cancelFrame();
+      mutation?.takeRecords();
+      if (lane) resize?.unobserve(lane);
+      lane = nextLane;
+      elements = {};
+      if (lane) resize?.observe(lane);
+      initialized = true;
+    }
+    if (replaced || !mutation || inFrame) {
+      if (inFrame && mutation) noteMutations(mutation.takeRecords());
+      sync(lane, mutation ? elements : {}, inFrame);
     }
     if (observedCard !== cardRef.current) {
       if (observedCard) resize?.unobserve(observedCard);
       observedCard = cardRef.current;
-      if (observedCard) resize?.observe(observedCard);
+      if (observedCard) {
+        resize?.observe(observedCard);
+        cardMounted();
+      }
     }
   };
   const schedule = (): void => {
@@ -350,13 +364,15 @@ function observeDockLayout(
   });
   mutation?.observe(document.documentElement, { attributes: true, attributeFilter: ["data-density"] });
   document.fonts?.addEventListener("loadingdone", schedule);
-  // Scroll events do not bubble; the lane inside the region scrolls.
-  region.addEventListener("scroll", schedule, { capture: true, passive: true });
+  const onScroll = (event: Event): void => {
+    if (event.target === lane) schedule();
+  };
+  region.addEventListener("scroll", onScroll, { capture: true, passive: true });
   return {
     refresh,
     dispose() {
-      if (frame !== 0) window.cancelAnimationFrame(frame);
-      region.removeEventListener("scroll", schedule, { capture: true });
+      cancelFrame();
+      region.removeEventListener("scroll", onScroll, { capture: true });
       resize?.disconnect();
       mutation?.disconnect();
       document.fonts?.removeEventListener("loadingdone", schedule);
@@ -410,7 +426,7 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   // to that row when it arrives, as it does for a row the dock scrolls to.
   const focusOnArrivalRef = useRef<string | undefined>(undefined);
 
-  const sync = useCallback((elements?: DockElements): void => {
+  const updateReserve = useCallback((edge: DockEdge | undefined): void => {
     const region = regionRef.current;
     const reserved = reservedRegionRef.current;
     const reserveBefore = region ? topDockReserve(region) : 0;
@@ -419,14 +435,7 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       reserved.style.removeProperty(RESERVE_PROPERTY);
       reservedRegionRef.current = undefined;
     }
-    const measured = region && threadKey && elements
-      ? measure(region, threadKey, {
-        ancestorThreadKeys: ancestorsKey ? ancestorsKey.split("\n") : [],
-        directoryKeys: directoriesKey ? directoriesKey.split("\n") : [],
-      }, elements, reserveBefore)
-      : undefined;
-    rowRef.current = measured?.row;
-    const reserve = measured?.state.edge === "top"
+    const reserve = edge === "top"
       ? (cardRef.current?.offsetHeight || DOCK_HEIGHT_GUESS_PX) + 2 * DOCK_PLATE_PX
       : 0;
     if (region && reserve > 0) {
@@ -442,6 +451,18 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
     if (region && topDockReserve(region) !== reserveBefore) {
       region.dispatchEvent(new Event(TOP_DOCK_RESERVE_CHANGE_EVENT));
     }
+  }, [regionRef]);
+
+  const sync = useCallback((lane?: HTMLElement, elements?: DockElements, inFrame = false): void => {
+    const region = regionRef.current;
+    const measured = region && lane && threadKey && elements
+      ? measure(region, lane, threadKey, {
+        ancestorThreadKeys: ancestorsKey ? ancestorsKey.split("\n") : [],
+        directoryKeys: directoriesKey ? directoriesKey.split("\n") : [],
+      }, elements, topDockReserve(region))
+      : undefined;
+    rowRef.current = measured?.row;
+    updateReserve(measured?.state.edge);
     if (focusOnArrivalRef.current !== undefined) {
       const arrived = region && focusOnArrivalRef.current === threadKey && !measured
         ? elements?.rows?.[0]
@@ -458,10 +479,14 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
     // same state still schedules a render, and this runs on every scroll
     // frame and every list mutation.
     if (!sameDock(dockRef.current, measured?.state)) {
-      dockRef.current = measured?.state;
-      setDock(measured?.state);
+      const next = measured?.state;
+      dockRef.current = next;
+      // When geometry changes the edge, publish the card in this frame.
+      // Ordinary scroll and child-page measurements schedule no React work.
+      if (inFrame) flushSync(() => setDock(next));
+      else setDock(next);
     }
-  }, [ancestorsKey, directoriesKey, regionRef, threadKey]);
+  }, [ancestorsKey, directoriesKey, regionRef, threadKey, updateReserve]);
 
   const layoutRef = useRef<({
     region: HTMLElement;
@@ -474,15 +499,17 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
     if (layout?.region !== region || layout?.sync !== sync) {
       layout?.dispose();
       layoutRef.current = region && threadKey
-        ? { region, sync, ...observeDockLayout(region, cardRef, sync) }
+        ? { region, sync, ...observeDockLayout(region, cardRef, sync, () => {
+          if (dockRef.current?.edge === "top") updateReserve("top");
+        }) }
         : undefined;
     }
     if (layoutRef.current) layoutRef.current.refresh();
     else sync();
   };
 
-  // Consume pending DOM changes before paint. Data-only commits with no
-  // sidebar mutations, size changes or scroll do not need a layout read.
+  // Keep synchronous geometry for a new selection or lane. The observer
+  // batches updates to the live lane with the next scroll frame.
   useLayoutEffect(refreshLayout);
   useEffect(() => {
     // On mount the enclosing host ref can attach after our layout effect.

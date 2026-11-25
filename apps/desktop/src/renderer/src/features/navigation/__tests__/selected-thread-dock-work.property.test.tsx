@@ -39,6 +39,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
     handledRevealRequestRef: { current: 0 },
   };
   let offset = 0;
+  let arrivedChildren = 0;
   const work = { row: 0, sticky: 0, selectors: 0, reserveLifts: 0 };
   const viewportBox = (top: number, height: number) => box(top * zoom, height * zoom);
   const originalRect = Element.prototype.getBoundingClientRect;
@@ -61,9 +62,15 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
     if (this.matches(".directory-row__thread-divider-origin")) return viewportBox(top + 90, 0);
     if (this.matches(".thread-row") && this.parentElement?.getAttribute("data-thread-key") === selectedKey) {
       work.row++;
-      return viewportBox(top + ROW_TOP, ROW_HEIGHT);
+      return viewportBox(top + ROW_TOP + arrivedChildren * 36, ROW_HEIGHT);
     }
     return originalRect.call(this);
+  });
+  let laneStyleReads = 0;
+  const nativeStyle = window.getComputedStyle;
+  const style = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+    if (new Error().stack?.includes("sidebarLaneOf")) laneStyleReads++;
+    return nativeStyle(element, pseudo);
   });
   const queryAll = Element.prototype.querySelectorAll;
   const selectors = vi.spyOn(Element.prototype, "querySelectorAll").mockImplementation(function (this: Element, query) {
@@ -89,7 +96,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
   });
   const cancel = vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => { frames.delete(id); });
 
-  function Fixture({ metadata }: { metadata: number }) {
+  function Fixture({ metadata, children = 0 }: { metadata: number; children?: number }) {
     const regionRef = useRef<HTMLDivElement>(null);
     const updated = threads.map((thread, index) => index === 0
       ? { ...thread, title: `Metadata ${metadata}` }
@@ -97,12 +104,17 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
     const updatedDirectories = directories.map((directory, index) => index === directoryCount - 1
       ? { ...directory, gitStatus: { currentBranch: `branch-${metadata}` } }
       : directory);
+    const parent = threads[0]!;
+    const arrived = Array.from({ length: children }, (_, index) => ({
+      ...parent, pinnedRank: undefined, id: `child-${index}`, title: `Child ${index}`,
+      parentThreadId: parent.id, parentThreadBackend: parent.source,
+    }));
     return (
       <div className="sidebar__scroll-region" ref={regionRef}>
         <FixtureDirectoriesList
           directories={updatedDirectories}
           directoryDisclosure={disclosure}
-          threads={updated}
+          threads={[...updated, ...arrived]}
           selectedItemKey={selectedKey}
           onOpenLaunchpad={asyncNoop}
           onOpenThreadContextMenu={noop}
@@ -138,6 +150,10 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
     frames.clear();
     act(() => pending.forEach((callback) => callback(0)));
   }
+  async function settle() {
+    await act(async () => {});
+    flush();
+  }
   function queueScroll(nextOffset: number) {
     offset = nextOffset;
     lane.scrollTop = nextOffset;
@@ -157,6 +173,14 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
       flush();
     },
     update: (value: number) => view.rerender(<Fixture metadata={value} />),
+    queueScroll,
+    flush,
+    settle,
+    styleReads: () => laneStyleReads,
+    updatePage(children: number) {
+      arrivedChildren = children;
+      view.rerender(<Fixture metadata={0} children={children} />);
+    },
     reset: () => Object.assign(work, { row: 0, sticky: 0, selectors: 0, reserveLifts: 0 }),
     work,
     cleanup() {
@@ -169,13 +193,14 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
       selectors.mockRestore();
       singleSelectors.mockRestore();
       reserve.mockRestore();
+      style.mockRestore();
       dividerStyle.remove();
       expect(pendingAfterUnmount).toBe(0);
     },
   };
 }
 
-function expectStableTop(
+async function expectStableTop(
   fixture: ReturnType<typeof mountDock>,
   offset: number,
   metadata: number,
@@ -185,35 +210,36 @@ function expectStableTop(
   expect(fixture.edge()).toBe("top");
   fixture.reset();
   fixture.update(metadata);
+  await fixture.settle();
   expect(fixture.edge()).toBe("top");
   expect(fixture.work).toEqual({ row: expectedRowReads, sticky: 0, selectors: 0, reserveLifts: 0 });
 }
 
-it.each([12, 24])("keeps work constant as unrelated metadata commits over %i directories", (count) => {
+it.each([12, 24])("keeps work constant as unrelated metadata commits over %i directories", async (count) => {
   const fixture = mountDock(count);
   try {
-    expectStableTop(fixture, 700, 1);
+    await expectStableTop(fixture, 700, 1);
   } finally {
     fixture.cleanup();
   }
 });
 
-it("keeps the same work budget for generated offscreen positions and metadata", () => {
+it("keeps the same work budget for generated offscreen positions and metadata", async () => {
   const fixture = mountDock(4);
   try {
-    fc.assert(fc.property(fc.integer({ min: 180, max: 5000 }), fc.integer(), (offset, metadata) => {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 180, max: 5000 }), fc.integer(), async (offset, metadata) => {
       // Start each sample from known metadata. A changed DOM needs one row
       // read, while repeating the same commit leaves the DOM untouched.
       fixture.update(0);
-      expectStableTop(fixture, offset, metadata, metadata === 0 ? 0 : 1);
-      expectStableTop(fixture, offset, metadata, 0);
+      await expectStableTop(fixture, offset, metadata, metadata === 0 ? 0 : 1);
+      await expectStableTop(fixture, offset, metadata, 0);
     }), { numRuns: 25, examples: [[180, 0], [180, 6]] });
   } finally {
     fixture.cleanup();
   }
 });
 
-it.each([12, 24])("matches the sticky band through scroll frames and metadata commits over %i directories", (count) => {
+it.each([12, 24])("matches the sticky band through scroll frames and metadata commits over %i directories", async (count) => {
   const fixture = mountDock(count, 1);
   try {
     // Project 2's row starts at y=700. At offset 569 it still shows
@@ -227,6 +253,7 @@ it.each([12, 24])("matches the sticky band through scroll frames and metadata co
       expect(fixture.edge(), `after scrolling to ${offset}`).toBe(expected);
       fixture.reset();
       fixture.update(offset + 1);
+      await fixture.settle();
       expect(fixture.edge(), `after a commit at ${offset}`).toBe(expected);
       expect(fixture.work.row).toBe(1);
       expect(fixture.work.selectors).toBe(0);
@@ -299,6 +326,32 @@ it("performs no geometry reads on commits that leave the sidebar DOM unchanged",
       for (let index = 0; index < commits; index += 1) fixture.update(0);
       expect(fixture.work).toEqual({ row: 0, sticky: 0, selectors: 0, reserveLifts: 0 });
     }), { numRuns: 6 });
+  } finally {
+    fixture.cleanup();
+  }
+});
+
+it("coalesces child-page commits and a queued scroll while measuring the final row position", () => {
+  const fixture = mountDock(4);
+  try {
+    fc.assert(fc.property(fc.integer({ min: 195, max: 245 }), fc.integer({ min: 2, max: 8 }), (offset, children) => {
+      fixture.updatePage(0);
+      fixture.move(700);
+      expect(fixture.edge()).toBe("top");
+      fixture.reset();
+      const styleReads = fixture.styleReads();
+      fixture.queueScroll(offset);
+      for (let arrived = 1; arrived <= children; arrived++) fixture.updatePage(arrived);
+      expect(fixture.work.row).toBe(0);
+      fixture.flush();
+      // The child page is above the selected row. The last commit shifts it
+      // by the full page height, and the stuck header and divider end at 152.
+      const rowTop = VIEW_TOP + ROW_TOP + children * 36 - offset;
+      const shown = rowTop + ROW_HEIGHT - Math.max(152, rowTop);
+      expect(fixture.edge()).toBe(shown >= 39 ? undefined : "top");
+      expect(fixture.work.row).toBe(1);
+      expect(fixture.styleReads()).toBe(styleReads);
+    }), { numRuns: 20, examples: [[210, 4], [210, 2]] });
   } finally {
     fixture.cleanup();
   }
