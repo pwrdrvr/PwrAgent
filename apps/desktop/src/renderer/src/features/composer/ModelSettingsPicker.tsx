@@ -22,6 +22,7 @@ import {
   effortStopAtPointer,
   effortStopForKey,
   effortStopLabelled,
+  heldPanelOffset,
   modelSettingsSummary,
   placeModelSettingsPanel,
   type ModelSettingsPanelPlacement,
@@ -132,6 +133,8 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
   const [open, setOpen] = useState(false);
   const [placement, setPlacement] = useState<ModelSettingsPanelPlacement>();
   const [abovePlacement, setAbovePlacement] = useState<{ offset: number; maxHeight: number }>();
+  // The pill's left edge when the panel opened; cleared when it closes.
+  const anchorLeftRef = useRef<number>(undefined);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -191,11 +194,17 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
         : next);
       return;
     }
-    // Above the composer: anchored to the pill like every composer menu,
-    // shifted left only as far as it takes to stay inside the window.
-    const panelWidth = panel.offsetWidth || width;
-    const overflow = trigger.left + panelWidth - (window.innerWidth - 8);
-    const offset = overflow > 0 ? -Math.min(overflow, Math.max(0, trigger.left - 8)) : 0;
+    // Above the composer: it opens over the pill like every composer menu,
+    // then stays put while it is open. A pick can change the chips before
+    // the pill (the access mode, the work mode), and a panel that followed
+    // the pill would slide under the pointer choosing in it.
+    anchorLeftRef.current ??= trigger.left;
+    const offset = heldPanelOffset({
+      anchor: anchorLeftRef.current,
+      triggerLeft: trigger.left,
+      width: panel.offsetWidth || width,
+      viewportWidth: window.innerWidth,
+    });
     const maxHeight = Math.max(160, trigger.top - 16);
     setAbovePlacement((current) => current && current.offset === offset && current.maxHeight === maxHeight
       ? current
@@ -204,6 +213,7 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
 
   useLayoutEffect(() => {
     if (open) place();
+    else anchorLeftRef.current = undefined;
   });
   useLayoutEffect(() => {
     if (!open) return undefined;

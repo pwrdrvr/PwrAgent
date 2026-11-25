@@ -131,3 +131,47 @@ describe("ModelSettingsPicker while disabled", () => {
     expect(screen.getByRole("slider", { name: "Effort" }).getAttribute("aria-valuetext")).toBe("xhigh");
   });
 });
+
+/**
+ * Above the composer the panel opens over its pill, then stays put. A pick
+ * can widen or narrow the chips before the pill (a provider with another
+ * access mode), and a panel that followed the pill slid sideways under the
+ * pointer choosing in it.
+ */
+describe("ModelSettingsPicker composer panel position", () => {
+  it("holds the panel where it opened while the pill moves under it", async () => {
+    let pillLeft = 300;
+    const picker = (label: string) => (
+      <ModelSettingsPicker
+        model={{
+          value: "opus", label, kind: "claude",
+          models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+          onChange: () => undefined,
+        }}
+      />
+    );
+    const { rerender } = render(picker("Opus 5.5"));
+    const pill = screen.getByRole("button", { name: /^Model settings/ });
+    vi.spyOn(pill, "getBoundingClientRect").mockImplementation(() => ({
+      left: pillLeft, right: pillLeft + 120, top: 600, bottom: 624, width: 120, height: 24,
+      x: pillLeft, y: 600, toJSON: () => undefined,
+    }));
+    await act(async () => { fireEvent.click(pill); });
+    const panel = screen.getByRole("dialog", { name: "Model settings" });
+    const panelLeft = () => pillLeft + Number.parseFloat(panel.style.left || "0");
+    expect(panelLeft()).toBe(300);
+
+    for (const [left, label] of [[420, "Sonnet 5.5"], [180, "Opus 5.5"], [300, "Sonnet 5.5"]] as const) {
+      pillLeft = left;
+      await act(async () => { rerender(picker(label)); });
+      expect(panelLeft()).toBe(300);
+    }
+
+    // Closed and opened again, it opens over the pill where the pill is now.
+    pillLeft = 420;
+    await act(async () => { fireEvent.click(pill); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await act(async () => { fireEvent.click(pill); });
+    expect(pillLeft + Number.parseFloat(screen.getByRole("dialog").style.left || "0")).toBe(420);
+  });
+});

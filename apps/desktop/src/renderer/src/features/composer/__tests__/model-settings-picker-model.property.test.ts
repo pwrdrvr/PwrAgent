@@ -6,6 +6,7 @@ import {
   effortStopAtPointer,
   effortStopForKey,
   effortStopLabelled,
+  heldPanelOffset,
   modelSettingsSummary,
   placeModelSettingsPanel,
   splitEffortChoices,
@@ -149,6 +150,31 @@ describe("model settings picker rules", () => {
       label: "Model for the new thread", provider: "Codex", model: "GPT-6.1-Sol", effort: "xhigh", speed: "ultrafast",
     })).toBe("Model for the new thread: Codex, GPT-6.1-Sol, xhigh effort, Ultrafast");
     expect(modelSettingsSummary({ label: "Helper model", model: "" })).toBe("Helper model");
+  });
+
+  it("holds the composer panel where it opened wherever the pill moves, inside the window", () => {
+    fc.assert(fc.property(
+      fc.integer({ min: 360, max: 2400 }),
+      fc.integer({ min: 200, max: 520 }),
+      fc.integer({ min: 0, max: 2400 }),
+      fc.integer({ min: -200, max: 2600 }),
+      fc.integer({ min: -200, max: 2600 }),
+      (viewportWidth, width, anchor, triggerLeft, otherTriggerLeft) => {
+        const at = (left: number) => left + heldPanelOffset({ anchor, triggerLeft: left, width, viewportWidth });
+        // Where the panel sits depends on where it opened, never on where
+        // the pill has moved since.
+        expect(at(triggerLeft)).toBe(at(otherTriggerLeft));
+        const left = at(triggerLeft);
+        if (anchor >= 8 && anchor + width <= viewportWidth - 8) {
+          expect(left).toBe(anchor);
+        } else if (width + 16 <= viewportWidth) {
+          expect(left).toBeGreaterThanOrEqual(Math.min(anchor, 8));
+          expect(left + width).toBeLessThanOrEqual(Math.max(viewportWidth - 8, anchor + width));
+          // Past the right edge it moves in only as far as it must.
+          if (anchor + width > viewportWidth - 8 && anchor >= 8) expect(left).toBe(Math.max(8, viewportWidth - 8 - width));
+        }
+      },
+    ));
   });
 
   it("keeps a portalled panel inside the window, beside its trigger, never over it", () => {

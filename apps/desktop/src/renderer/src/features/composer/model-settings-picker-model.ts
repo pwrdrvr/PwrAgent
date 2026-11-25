@@ -117,6 +117,27 @@ export type ModelSettingsPanelPlacement = {
 };
 
 /**
+ * The left edge, from the trigger's, of the panel opened above the composer.
+ * It holds where it opened (`anchor`, the trigger's left then) while the
+ * chips before the trigger change width under it, and moves only as far as
+ * it takes to stay `padding` inside the window.
+ */
+export function heldPanelOffset(params: {
+  anchor: number;
+  triggerLeft: number;
+  width: number;
+  viewportWidth: number;
+  padding?: number;
+}): number {
+  const padding = params.padding ?? 8;
+  const left = Math.max(
+    Math.min(params.anchor, padding),
+    Math.min(params.anchor, params.viewportWidth - padding - params.width),
+  );
+  return left - params.triggerLeft;
+}
+
+/**
  * Where a portalled panel goes: under the trigger when it prefers below and
  * fits (or has more room there), otherwise above. It stays `padding` inside
  * the window on every side, and `maxHeight` is the room on the chosen side,
