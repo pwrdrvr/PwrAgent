@@ -997,7 +997,7 @@ it("deduplicates OpenAI account daily token history across federated owners, pre
   // Deduplicated across Local + Build Outpost: 1M + 2M = 3M (NOT 6M, and NOT 3.25M adding PwrAgent's 250K!).
   expect(trend).toHaveTextContent("deduplicated across Build Outpost, Local");
   expect(trend).toHaveTextContent("3M tokens across 2 reported days");
-  expect(trend).toHaveTextContent("PwrAgent measured (included above) 250K");
+  expect(trend).toHaveTextContent("PwrAgent measured this period (included above) 250K");
   expect(trend).toHaveTextContent("Not a quota percentage and not added to PwrAgent's per-thread ledger below");
   expect(trend).toHaveTextContent("today is not yet reported by OpenAI");
   expect(trend).toHaveTextContent("1 omitted day shown as gaps, not zero");
@@ -1033,4 +1033,51 @@ it("shows auth-required status cleanly when Codex uses API-key or signed-out aut
   render(<UsageActivity desktopApi={{ readUsageActivity }} />);
   const trend = await screen.findByRole("region", { name: "Account daily token trend" });
   expect(trend).toHaveTextContent("requires a ChatGPT/Codex account sign-in");
+});
+
+it("asks a peer that failed the first read for account token history again, not mistaking it for an older peer", async () => {
+  const now = new Date(2026, 10, 24, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const resetAt = now + 4 * 24 * HOUR;
+  const reading = (at: number, usedPercent: number): UsageLimitObservation => ({ observedAt: at, accountKey: "acct", planType: "plus",
+    limits: [{ name: "Weekly limit", windowKey: "secondary", usedPercent, resetAt, windowMinutes: 10_080 }] });
+  let peerCalls = 0;
+  const readUsageActivity = vi.fn(async (request) => {
+    if (request.federationTarget?.instanceId === "flaky-peer") {
+      peerCalls += 1;
+      if (peerCalls === 1) throw new Error("peer timed out");
+      // A current peer answers the flag with an explicit (possibly empty) list.
+      return { rows: [], readAt: now, rateLimits: [], truncated: false,
+        ...request.includeAccountTokenUsage ? { accountTokenUsage: [] } : {} };
+    }
+    return { rows: [], readAt: now, rateLimits: [], truncated: false,
+      limitObservation: reading(now - 10 * 60_000, 7),
+      limitHistory: [reading(now - 4 * HOUR, 62), reading(now - 2.5 * HOUR, 1), reading(now - 10 * 60_000, 7)],
+      accountTokenUsage: [{ provider: "openai", accountKey: "acct", observedAt: now, status: "available" as const,
+        dailyUsageBuckets: [{ startDate: "2026-11-23", tokens: 1_000 }] }] };
+  });
+  render(<UsageActivity desktopApi={{
+    readUsageActivity,
+    readFederationActivity: peers([{ id: "flaky-peer", label: "Flaky Mac", status: "connected" }]),
+  }} />);
+  const trend = await screen.findByRole("region", { name: "Account daily token trend" });
+  await waitFor(() => expect(peerCalls).toBe(2));
+  await waitFor(() => expect(trend).toHaveTextContent("1K tokens across 1 reported day"));
+  const peerReads = readUsageActivity.mock.calls.map(([request]) => request)
+    .filter((request) => request.federationTarget?.instanceId === "flaky-peer");
+  expect(peerReads.at(-1)).toEqual(expect.objectContaining({ includeAccountTokenUsage: true }));
+  expect(trend).not.toHaveTextContent("Flaky Mac did not report");
+});
+
+it("labels the chart's peak by its range and the provider's all-time peak separately", async () => {
+  const now = Date.UTC(2026, 10, 24, 18, 0, 0);
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: now, rateLimits: [], truncated: false,
+    accountTokenUsage: [{ provider: "openai", accountKey: "acct", observedAt: now, status: "available" as const,
+      dailyUsageBuckets: [{ startDate: "2026-11-23", tokens: 2_000_000 }],
+      summary: { peakDailyTokens: 9_000_000 } }] }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  const trend = await screen.findByRole("region", { name: "Account daily token trend" });
+  await waitFor(() => expect(trend).toHaveTextContent("Peak day 2M"));
+  expect(trend).toHaveTextContent("All-time peak 9M");
 });

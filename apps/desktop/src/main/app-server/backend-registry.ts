@@ -7980,13 +7980,19 @@ export class DesktopBackendRegistry {
       || (codexSummary && !this.codexBackendSummary && codexSummary.discoveryPending
         && !this.readCodexProvider().provider?.validation.error),
     );
+    let usageAccountGroup: string | undefined;
+    if (includeAccountTokenUsage) {
+      // A Settings failure leaves the series owner-scoped; it must not fail
+      // the ledger read this response carries.
+      try { usageAccountGroup = this.resolveUsageAccountGroupsFn().codex; } catch { /* Owner-scoped. */ }
+    }
     const accountTokenUsagePromise = includeAccountTokenUsage && !this.closed
       ? readCodexAccountTokenUsage({
           client: this.codexClient,
           openAiProviderEnabled: (!policy || policy.enabledBackends.includes("codex")) && this.codexOpenAiProviderEnabled,
           codexAvailable,
           cachedAccount: this.codexBackendSummary?.account,
-          usageAccountGroup: this.resolveUsageAccountGroupsFn().codex,
+          usageAccountGroup,
         })
       : Promise.resolve(undefined);
     const [activity, codexAccountTokenUsage] = await Promise.all([

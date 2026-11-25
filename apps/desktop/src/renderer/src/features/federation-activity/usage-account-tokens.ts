@@ -1,4 +1,5 @@
 import {
+  MAX_ACCOUNT_TOKEN_USAGE_BUCKETS,
   isValidUtcDateString,
   parseAccountTokenUsageObservation,
   type AccountTokenUsageDailyBucket,
@@ -256,12 +257,11 @@ export function buildAccountTokenTrendView(params: {
   const latestReported = buckets.at(-1)!.startDate;
   const includesToday = latestReported >= todayUtc;
 
-  const spanStart = range === "all"
-    ? firstReported
-    : (() => {
-        const candidate = addUtcDays(latestReported, -(RANGE_DAYS[range] - 1));
-        return candidate > firstReported ? candidate : firstReported;
-      })();
+  // Bucket count is capped but calendar span is not: one ancient date would
+  // otherwise chart a bar per day back to it, so "all" is bounded too.
+  const spanDays = range === "all" ? MAX_ACCOUNT_TOKEN_USAGE_BUCKETS : RANGE_DAYS[range];
+  const earliest = addUtcDays(latestReported, -(spanDays - 1));
+  const spanStart = earliest > firstReported ? earliest : firstReported;
 
   // Aggregate PwrAgent's deduplicated measured turns for THIS account only,
   // bucketed by UTC completion day so the operator can inspect the measured

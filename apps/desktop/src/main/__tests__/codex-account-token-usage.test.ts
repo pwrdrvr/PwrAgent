@@ -222,6 +222,45 @@ describe("readCodexAccountTokenUsage", () => {
     expect(unsupported?.status).toBe("unsupported");
   });
 
+  it("classifies Codex unknown-variant rejections as unsupported and never reads \"design in\" as a sign-in", () => {
+    // Codex App Server rejects a method it does not know with a serde
+    // unknown-variant error, not JSON-RPC -32601.
+    expect(classifyAccountTokenUsageError(new Error(
+      "unknown variant `account/usage/read`, expected one of `account/read`, `account/rateLimits/read`",
+    ))).toBe("unsupported");
+    expect(classifyAccountTokenUsageError(new Error("account/usage/read is not supported yet"))).toBe("unsupported");
+    expect(classifyAccountTokenUsageError(new Error("request failed during design in progress"))).toBe("unavailable");
+    expect(classifyAccountTokenUsageError(new Error("Please sign in to ChatGPT"))).toBe("auth_required");
+  });
+
+  it("bounds the account read and the usage read by one shared timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const readAccountUsage = vi.fn(() => new Promise<never>(() => {}));
+      const pending = readCodexAccountTokenUsage({
+        client: {
+          readAccount: () => new Promise((resolve) => {
+            setTimeout(() => resolve({ type: "chatgpt" as const, accountId: "slow" }), 900);
+          }),
+          readAccountUsage,
+        } as never,
+        openAiProviderEnabled: true,
+        codexAvailable: true,
+        now: () => 1_000,
+        timeoutMs: 1_000,
+      });
+      let settled: Awaited<typeof pending> | "pending" = "pending";
+      void pending.then((value) => { settled = value; });
+      await vi.advanceTimersByTimeAsync(900);
+      expect(readAccountUsage).toHaveBeenCalledTimes(1);
+      // The budget is spent at 1,000 ms total, not 900 ms + another full 1,000 ms.
+      await vi.advanceTimersByTimeAsync(150);
+      expect(settled).toMatchObject({ status: "unavailable" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns undefined when OpenAI Codex provider is disabled (e.g. Outpost with openai provider off)", async () => {
     const readAccountUsage = vi.fn();
     const result = await readCodexAccountTokenUsage({
@@ -331,6 +370,36 @@ describe("DesktopBackendRegistry and Federation readUsageActivity account token 
     const response = await registry.readUsageActivity({ ...window, includeAccountTokenUsage: true });
     expect(response.accountTokenUsage).toEqual([]);
     expect(readAccountUsage).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ledger read alive when the Settings account-group read throws", async () => {
+    const throwingRegistry = createDesktopBackendRegistry({
+      codexClient: {
+        close: async () => {},
+        getInitializeResult: async () => ({ methods: [] }),
+        listThreads: async () => [],
+        onNotification: () => () => {},
+        onPendingRequest: () => () => {},
+        readAccount,
+        readAccountUsage,
+      } as never,
+      overlayStore: store,
+      threadTitleGenerationService: null,
+      resolveUsageAccountGroups: () => { throw new Error("config.toml unreadable"); },
+    });
+    (throwingRegistry as unknown as { codexBackendSummary?: { kind: "codex"; label: string; available: boolean } })
+      .codexBackendSummary = { kind: "codex", label: "Codex", available: true };
+    try {
+      const response = await throwingRegistry.readUsageActivity({ ...window, includeAccountTokenUsage: true });
+      expect(response.accountTokenUsage).toEqual([
+        expect.objectContaining({
+          accountKey: usageAccountKey({ type: "chatgpt", accountId: "shared-acct" }),
+          status: "available",
+        }),
+      ]);
+    } finally {
+      await throwingRegistry.close();
+    }
   });
 
   it("relays includeAccountTokenUsage and accountTokenUsage across Federation to Outposts and remote peers", async () => {

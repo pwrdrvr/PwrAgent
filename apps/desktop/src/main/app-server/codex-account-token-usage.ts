@@ -14,12 +14,12 @@ const DEFAULT_ACCOUNT_USAGE_TIMEOUT_MS = 8_000;
 export function classifyAccountTokenUsageError(error: unknown): AccountTokenUsageUnavailableReason {
   const message = error instanceof Error ? error.message : String(error ?? "");
   if (
-    /authentication required|auth required|unauthenticated|login required|chatgpt.*required|sign in/i.test(message)
+    /authentication required|auth required|unauthenticated|login required|chatgpt.*required|\bsign in\b/i.test(message)
   ) {
     return "auth_required";
   }
   if (
-    /-32601|method not found|unknown method|not implemented|unsupported/i.test(message)
+    /-32601|method not found|unknown method|unknown variant|not supported|not implemented|unsupported/i.test(message)
   ) {
     return "unsupported";
   }
@@ -60,14 +60,17 @@ export async function readCodexAccountTokenUsage(params: {
     return undefined;
   }
   const now = params.now ?? Date.now;
-  const timeoutMs = params.timeoutMs ?? DEFAULT_ACCOUNT_USAGE_TIMEOUT_MS;
+  // One budget covers both reads: Usage Activity waits on this call, so a slow
+  // App Server must not stack a second full timeout after the account read.
+  const deadline = Date.now() + (params.timeoutMs ?? DEFAULT_ACCOUNT_USAGE_TIMEOUT_MS);
+  const remainingMs = () => Math.max(0, deadline - Date.now());
 
   let account = params.client.readAccount ? undefined : params.cachedAccount;
   if (params.client.readAccount && !params.client.isAuthenticationRequired?.()) {
     try {
       account = await withTimeout(
         withCodexRequestActivity({ countsAsActivity: false }, () => params.client.readAccount!()),
-        timeoutMs,
+        remainingMs(),
       );
     } catch {
       // Never reuse a cached account identity after a failed account read:
@@ -96,7 +99,7 @@ export async function readCodexAccountTokenUsage(params: {
   try {
     const raw = await withTimeout(
       withCodexRequestActivity({ countsAsActivity: false }, () => params.client.readAccountUsage!()),
-      timeoutMs,
+      remainingMs(),
     );
     const parsed = parseAccountTokenUsagePayload(raw);
     if (!parsed) {

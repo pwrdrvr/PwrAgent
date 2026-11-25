@@ -158,13 +158,16 @@ export function UsageAccountTokenTrend({
     </p> : view ? <>
       <div className="usage-account-tokens__metrics">
         <span><strong>{usageCount(view.rangeTotalTokens)}</strong> tokens across {view.reportedDays} reported {view.reportedDays === 1 ? "day" : "days"}</span>
-        <span>Peak day <strong>{usageCount(summary?.peakDailyTokens ?? view.rangePeakTokens)}</strong></span>
+        <span>Peak day <strong>{usageCount(view.rangePeakTokens)}</strong></span>
+        {summary?.peakDailyTokens !== undefined && summary.peakDailyTokens > view.rangePeakTokens
+          ? <span>All-time peak <strong>{usageCount(summary.peakDailyTokens)}</strong></span>
+          : null}
         {summary?.lifetimeTokens !== undefined ? <span>Lifetime <strong>{usageCount(summary.lifetimeTokens)}</strong></span> : null}
         {summary?.currentStreakDays !== undefined
           ? <span>Streak <strong>{summary.currentStreakDays}d</strong>{summary.longestStreakDays !== undefined && summary.longestStreakDays > summary.currentStreakDays ? ` (best ${summary.longestStreakDays}d)` : ""}</span>
           : null}
         {view.rangeMeasuredTokens > 0
-          ? <span className="usage-account-tokens__subset">PwrAgent measured (included above) <strong>{usageCount(view.rangeMeasuredTokens)}</strong></span>
+          ? <span className="usage-account-tokens__subset">PwrAgent measured this period (included above) <strong>{usageCount(view.rangeMeasuredTokens)}</strong></span>
           : null}
       </div>
 

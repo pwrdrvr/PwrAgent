@@ -278,7 +278,8 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   const scopedTokenAccounts = (accounts: AccountTokenAccount[]) => accountFilter
     ? accounts.filter((account) => accountTokenUsageAccountKey(account) === accountFilter) : accounts;
 
-  const readAll = async (targets: Source[], start: number, end: number, includeAccountTokenUsage = false) => {
+  const readAll = async (targets: Source[], start: number, end: number,
+    includeAccountTokenUsage: (source: Source) => boolean = () => false) => {
     const results: SourceResult[] = [];
     // At most four reads in flight. Each owner enforces a 5,000-row bound.
     for (let offset = 0; offset < targets.length; offset += 4) {
@@ -288,7 +289,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
             ...source,
             data: await desktopApi!.readUsageActivity!({
               from: start, to: end, federationTarget: source.target,
-              ...(includeAccountTokenUsage ? { includeAccountTokenUsage: true } : {}),
+              ...(includeAccountTokenUsage(source) ? { includeAccountTokenUsage: true } : {}),
             }),
           };
         } catch (cause) { return { ...source, error: String(cause) }; }
@@ -330,10 +331,13 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     if (!sameQuery) {
       setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setBucket(undefined); setFacet(undefined);
     }
-    let results = await readAll(enabledSources, start, end, true);
+    let results = await readAll(enabledSources, start, end, () => true);
     if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
-    const initialTokenUsageBySource = new Map(results.map((source) => [sourceId(source.target), source.data?.accountTokenUsage]));
+    // Only owners that answered: one that failed the first read asks again below,
+    // so a retried answer is never mistaken for an older peer's.
+    const initialTokenUsageBySource = new Map(results.filter((source) => source.data)
+      .map((source) => [sourceId(source.target), source.data!.accountTokenUsage]));
     const resolved = limitStart(preset, focusAccount(scopedLimits(accounts), focusKey, focusProvider));
     if (resolved !== undefined && resolved < end) {
       const bounded = Math.max(resolved, end - MAX_WINDOW);
@@ -343,7 +347,8 @@ export function UsageActivity({ desktopApi, initialProvider }: {
         // helper rollups and bars fit the window instead of straddling its start.
         // Account-wide daily token history is period-independent, so reuse the
         // first pass rather than polling `account/usage/read` a second time.
-        results = (await readAll(enabledSources, bounded, end, false)).map((source) => {
+        results = (await readAll(enabledSources, bounded, end,
+          (source) => !initialTokenUsageBySource.has(sourceId(source.target)))).map((source) => {
           const accountTokenUsage = source.data?.accountTokenUsage ?? initialTokenUsageBySource.get(sourceId(source.target));
           return source.data && accountTokenUsage ? { ...source, data: { ...source.data, accountTokenUsage } } : source;
         });

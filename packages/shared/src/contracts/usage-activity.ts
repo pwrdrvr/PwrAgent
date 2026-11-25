@@ -215,7 +215,8 @@ const finite = (value: unknown) => typeof value === "number" && Number.isFinite(
 const nonNegativeFinite = (value: unknown) =>
   typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 const UTC_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-const MAX_ACCOUNT_TOKEN_USAGE_BUCKETS = 4_000;
+/** Most UTC days an account-token series keeps, and the widest span a viewer charts. */
+export const MAX_ACCOUNT_TOKEN_USAGE_BUCKETS = 4_000;
 
 /** Whether `value` is a real calendar date in `YYYY-MM-DD` (UTC). */
 export function isValidUtcDateString(value: unknown): value is string {

@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import type {
-  AccountTokenUsageDailyBucket,
-  AccountTokenUsageObservation,
+import {
+  MAX_ACCOUNT_TOKEN_USAGE_BUCKETS,
+  type AccountTokenUsageDailyBucket,
+  type AccountTokenUsageObservation,
 } from "@pwragent/shared/contracts/usage-activity";
 import {
   addUtcDays,
@@ -372,5 +373,37 @@ describe("account-wide daily token trend properties and oracles", () => {
         expect(nextDayView.days[0].date).toBe(latestDate);
       },
     ));
+  });
+});
+
+describe("buildAccountTokenTrendView calendar span bound", () => {
+  it("never charts more calendar days than the bucket cap, however old the first bucket", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1_000, max: 9_999 }).map((year) => `${year}-01-01`),
+        fc.constantFrom("14d" as const, "30d" as const, "90d" as const, "all" as const),
+        (firstDate, range) => {
+          fc.pre(firstDate < "2026-11-23");
+          const [account] = buildAccountTokenAccounts([{
+            owner: "Local",
+            target: { scope: "local" },
+            observations: [{
+              provider: "openai",
+              accountKey: "acct",
+              observedAt: 1,
+              status: "available",
+              dailyUsageBuckets: [
+                { startDate: firstDate, tokens: 1 },
+                { startDate: "2026-11-23", tokens: 2 },
+              ],
+            }],
+          }]);
+          const view = buildAccountTokenTrendView({ account, range, now: Date.UTC(2026, 10, 24) });
+          expect(view.days.length).toBeLessThanOrEqual(MAX_ACCOUNT_TOKEN_USAGE_BUCKETS);
+          expect(view.latestDate).toBe("2026-11-23");
+        },
+      ),
+      { numRuns: 25 },
+    );
   });
 });
