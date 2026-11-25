@@ -446,7 +446,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   }));
   const service = initializeDesktopAppServerService();
   ownerSubscriptions.add(installGithubMergeStackTransport({
-    requestGithub: (...args) => service.getForgeCiClient().requestGithub(...args),
+    requestGithubForOperatorMergePreflight: (...args) => service.getForgeCiClient().requestGithubForOperatorMergePreflight(...args),
   }));
   const scheduledActions = initializeScheduledThreadActionService(registry, (todo) =>
     getThreadTodoService().resolveStartedReview(todo),

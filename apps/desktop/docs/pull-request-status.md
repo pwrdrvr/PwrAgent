@@ -3,6 +3,16 @@
 Moved from [apps/desktop/AGENTS.md](../AGENTS.md), which keeps a summary and
 says when to read this document. Relative links were updated for this location.
 
+## GitHub merge preflight budget
+
+When the operator runs a merge from a PR card or a to-do card, its stack checks
+use an owner-local reserve of 20 requests that refills at 20 requests per minute.
+When the reserve is empty, the preflight can also spend from the shared PR
+request budget. The owner selects this route when it executes the operator's merge.
+Polling, automated merge offers and agent forge tools keep using the shared
+budget, including agent tool calls that require an approval. Both routes honor
+the forge client's provider cooldown and concurrency limit.
+
 ## Pull-Request Status Source of Truth
 
 There are two stores holding PR data, and they answer **different
