@@ -84,7 +84,7 @@ import {
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
-import { orderStackTray, stackGroupSelectionOrder, stackTrayPrecedesLead, visibleStackTray } from "../stacks/stack-presentation";
+import { orderStackTray, stackGroupSelectionOrder, visibleStackTray } from "../stacks/stack-presentation";
 import {
   formatActiveThreadCount,
   formatLocalActiveThreadCount,
@@ -1597,7 +1597,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     ): ReactElement => {
       const threadKey = threadSummaryIdentityKey(thread);
       const children = trays.subtree(threadKey);
-      const trayFirst = stackTrayPrecedesLead(thread, children);
       const tray = renderStaticSubthreads(thread);
       const ordinarySubthreadCount = children.length;
       const holdsDraft = holdsSubthreadDraft(threadKey);
@@ -1609,7 +1608,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
       return (
         <Fragment key={`${directory.key}:${threadKey}`}>
-          {trayFirst ? tray : null}
           <ThreadRow
             key={`${directory.key}:${threadKey}`}
             approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -1656,7 +1654,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
             onSetThreadPin={props.onSetThreadPin}
             onUnbindMessagingBinding={props.onUnbindMessagingBinding}
           />
-          {trayFirst ? null : tray}
+          {tray}
         </Fragment>
       );
     };
@@ -1934,7 +1932,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                             ordinaryChildCounts.get(threadKey),
                           ) + (holdsDraft ? 1 : 0);
                           const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
-                          const trayFirst = stackTrayPrecedesLead(thread, trays.subtree(threadKey));
                           const tray = renderStaticSubthreads(thread);
 	                      return (
                             <Fragment key={`${directory.key}:${threadKey}`}>
@@ -1947,7 +1944,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                                 />
                               ) : null}
                               {pinnedIndex === startingPinnedIndex ? renderStartingRootThreads("pinned") : null}
-                              {trayFirst ? tray : null}
 	                        <ThreadRow
 	                          key={`${directory.key}:${threadKey}`}
                           approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -1998,7 +1994,7 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
                           onSetThreadPin={props.onSetThreadPin}
 	                          onUnbindMessagingBinding={props.onUnbindMessagingBinding}
 	                        />
-                              {trayFirst ? null : tray}
+                              {tray}
                             </Fragment>
 	                      );
                     })}

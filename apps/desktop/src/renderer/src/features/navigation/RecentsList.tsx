@@ -35,7 +35,7 @@ import { KeepAtTopSlot } from "./KeepAtTopSlot";
 import { SidebarShowMore } from "./SidebarShowMore";
 import { renderSubthreadPages, subthreadPageResources } from "./SubthreadPagination";
 import { ThreadRow, type ThreadRowRef } from "./ThreadRow";
-import { orderStackTray, stackGroupSelectionOrder, stackTrayPrecedesLead, visibleStackTray } from "../stacks/stack-presentation";
+import { orderStackTray, stackGroupSelectionOrder, visibleStackTray } from "../stacks/stack-presentation";
 import { isRenamingRow, type RenamingThreadRow } from "./thread-action-hotkeys";
 import { AttentionReviewReadout, AttentionTurnReadouts, describeAttentionCounts } from "./AttentionSignals";
 import { isThreadActive, isThreadAwaitingReview, isThreadRemoteWork } from "./ThreadRowStatus";
@@ -580,10 +580,8 @@ export function RecentsList(props: RecentsListProps) {
     const subthreadsCollapsed = isSubthreadSectionCollapsed(thread) && !holdsDraft;
     const tray = renderSubthreads(thread);
     const traySlot = tray ? <div className="thread-group__subthreads-slot" role="listitem">{tray}</div> : null;
-    const trayFirst = stackTrayPrecedesLead(thread, children);
     return (
       <div key={key} className="thread-group">
-        {trayFirst ? traySlot : null}
         <ThreadRow
           {...topLevelRowProps(thread)}
           subthreadCount={subthreadCount}
@@ -601,7 +599,7 @@ export function RecentsList(props: RecentsListProps) {
               : undefined
           }
         />
-        {trayFirst ? null : traySlot}
+        {traySlot}
       </div>
     );
   };

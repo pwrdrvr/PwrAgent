@@ -34,11 +34,12 @@ it("keeps each stack sibling's descendants and pending row together in display a
   const aChild = thread("a-child", { parentThreadId: "a" });
   const bChild = thread("b-child", { parentThreadId: "b" });
   const starting = { kind: "starting" as const, creation: subthreadDraft({ parentThreadKey: "codex:a" }), depth: 2 };
-  const threads = [a, aChild, b, bChild];
+  const threads = [b, bChild, a, aChild];
   const rows = threads.map((thread) => ({ kind: "thread" as const, thread }));
+  // The tray follows its lead, so layers read downward from it in layer order.
   expect(orderStackTray([...rows.slice(0, 2), starting, ...rows.slice(2)], key))
-    .toEqual([rows[2], rows[3], rows[0], rows[1], starting]);
-  expect(stackGroupSelectionOrder(root, threads)).toEqual([b, bChild, a, aChild, root]);
+    .toEqual([rows[2], starting, rows[3], rows[0], rows[1]]);
+  expect(stackGroupSelectionOrder(root, threads)).toEqual([root, a, aChild, b, bChild]);
 });
 
 const PROJECT_PATH = "/Users/fixture-user/pwrdrvr/PwrSnap";

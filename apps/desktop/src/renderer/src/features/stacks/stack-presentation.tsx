@@ -18,7 +18,11 @@ function positionIn(stackKey: string, thread: NavigationThreadSummary) {
   return readCompactStackMemberships(thread).find(({ key }) => key === stackKey)?.position ?? 0;
 }
 
-/** Order stack siblings within each tray while carrying each sibling's subtree. */
+/**
+ * Order stack siblings within each tray while carrying each sibling's subtree.
+ * The tray follows its lead row like every other tray, so layers read
+ * downward from the lead: the layer just above it first.
+ */
 export function orderStackTray(tray: StartingTrayEntry[], stackKey: string | undefined): StartingTrayEntry[] {
   if (!stackKey) return tray;
   const threads = new Map(tray.flatMap((entry) => entry.kind === "thread"
@@ -36,7 +40,7 @@ export function orderStackTray(tray: StartingTrayEntry[], stackKey: string | und
   const ordered: StartingTrayEntry[] = [];
   const append = (parent: string | undefined) => {
     const siblings = children.get(parent) ?? [];
-    const layers = siblings.filter((entry) => position(entry)).sort((a, b) => position(b) - position(a));
+    const layers = siblings.filter((entry) => position(entry)).sort((a, b) => position(a) - position(b));
     let index = 0;
     for (const sibling of siblings) {
       const entry = position(sibling) ? layers[index++]! : sibling;
@@ -48,16 +52,11 @@ export function orderStackTray(tray: StartingTrayEntry[], stackKey: string | und
   return ordered.length === tray.length ? ordered : tray;
 }
 
-export function stackTrayPrecedesLead(parent: NavigationThreadSummary, children: readonly NavigationThreadSummary[]): boolean {
-  const key = visibleStackTray(parent, children);
-  return Boolean(key && positionIn(key, parent) === 1);
-}
-
 /** Keyboard ranges follow the same order as the rendered stack tray. */
 export function stackGroupSelectionOrder(parent: NavigationThreadSummary, children: readonly NavigationThreadSummary[]) {
   const key = visibleStackTray(parent, children);
   if (!key) return [parent, ...children];
   const ordered = orderStackTray(children.map((thread) => ({ kind: "thread", thread })), key)
     .flatMap((entry) => entry.kind === "thread" ? [entry.thread] : []);
-  return positionIn(key, parent) === 1 ? [...ordered, parent] : [parent, ...ordered];
+  return [parent, ...ordered];
 }
