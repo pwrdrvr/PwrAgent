@@ -32,11 +32,11 @@ test("E2E identifies first unexpected outcomes and matches retry results by ID",
 
 test("aggregation preserves missing slices, attempts, and distinct diagnostic samples", () => {
   const expected = expectedSlices(3);
-  assert.equal(expected.length, 37);
+  assert.equal(expected.length, 38);
   const slice = createSlice({ kind: "e2e", platform: "windows", lane: 1, sample: 2, first: null, retries: [] });
   const report = aggregateSlices({ slices: [slice], samples: 3, runId: "123", attempt: "2" });
   assert.equal(report.slices.length, 1);
-  assert.equal(report.missingSlices.length, 36);
+  assert.equal(report.missingSlices.length, 37);
   assert.equal(report.slices.find((s) => s.key === slice.key).first.available, false);
   assert.equal(report.attempt, 2);
   assert.throws(() => aggregateSlices({ slices: [slice, slice], samples: 3 }), /duplicate/i);
@@ -114,12 +114,12 @@ test("retry inventory, PR unit plans, and full test shards match their workflow 
   }
   assert.match(workflow, /sample: \$\{\{ fromJSON\(contains\(github\.event\.pull_request\.labels\.\*\.name, 'ci:windows-shutdown-diagnostics'\) && '\[1, 2, 3\]' \|\| '\[1\]'\) \}\}/);
   // Linux leaves the accessibility audit to its own job; Windows keeps it in
-  // its lanes. Each platform's four-lane weights must cover its full matrix.
+  // its lanes. Each platform's weights must cover its full matrix.
   const linuxSection = workflow.split("\n  desktop-e2e:\n")[1]?.split(/\n {2}[a-z][a-z0-9-]*:\n/)[0];
   const linuxWeights = linuxSection?.match(/export PWTEST_SHARD_WEIGHTS="([\d:]+)"/)?.[1];
   const windowsSection = workflow.split("\n  windows-e2e:\n")[1]?.split(/\n {2}[a-z][a-z0-9-]*:\n/)[0];
   const windowsWeights = windowsSection?.match(/PWTEST_SHARD_WEIGHTS: "([\d:]+)"/)?.[1];
-  assert.equal(linuxWeights?.split(":").length, 4, "Linux E2E weights must cover four lanes");
+  assert.equal(linuxWeights?.split(":").length, 5, "Linux E2E weights must cover five lanes");
   assert.equal(windowsWeights?.split(":").length, 4, "Windows E2E weights must cover four lanes");
   assert.match(linuxSection, /export PWRAGENT_E2E_SKIP_A11Y=1\n/, "Linux E2E lanes must leave a11y to its own job");
   const a11ySection = workflow.split("\n  desktop-a11y:\n")[1]?.split(/\n {2}[a-z][a-z0-9-]*:\n/)[0];
@@ -149,14 +149,14 @@ test("the CLI produces a consolidated report including incomplete and absent sli
       const aggregate = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1" }, encoding: "utf8" });
       assert.equal(aggregate.status, 0, aggregate.stderr);
       const result = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(result.expectedSlices, 29);
-      assert.equal(result.missingSlices.length, 28);
+      assert.equal(result.expectedSlices, 30);
+      assert.equal(result.missingSlices.length, 29);
       const skipped = spawnSync(process.execPath, [script, "aggregate"], { cwd, env: { ...env, FLAKE_SAMPLES: "1", GITHUB_RUN_ATTEMPT: "1", FLAKE_NOT_RUN: "unit-macos,e2e-macos,e2e-windows" }, encoding: "utf8" });
       assert.equal(skipped.status, 0, skipped.stderr);
       assert.match(skipped.stdout, /Not run in this workflow run: unit-macos, e2e-macos, e2e-windows\./);
       const pr = JSON.parse(readFileSync(join(cwd, ".local/ci/flake-report/flake-report.json")));
-      assert.equal(pr.expectedSlices, 16);
-      assert.equal(pr.missingSlices.length, 15);
+      assert.equal(pr.expectedSlices, 17);
+      assert.equal(pr.missingSlices.length, 16);
       assert.equal(result.slices[0].first.complete, false);
       assert.equal(result.slices[0].failures[0].retry, "unknown");
     }
