@@ -3812,7 +3812,7 @@ class DesktopAppServerService {
     this.forgeCiClient ??= new ForgeCiClient({
       gitlab: this.getPrFetcher().gitlab,
       enabled: (provider) => getDesktopSettingsService().isForgeEnabled(provider),
-      takeToken: () => this.takePrPollingToken("Agent CI read"),
+      takeToken: (source) => this.takePrPollingToken(source === "operator_merge_preflight" ? "Operator merge preflight" : "Agent CI read"),
     });
     return this.forgeCiClient;
   }

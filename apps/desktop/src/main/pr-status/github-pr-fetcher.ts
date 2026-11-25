@@ -217,9 +217,9 @@ function collectAnsweredPullRequests<R>(params: {
 
 export type GhAuthStatus = GhStatus;
 
-// The card and federation merge runners share the owner runtime's forge
-// budget. The standalone fetcher still supports gh-backed reads in tests.
-let stackTransport: Pick<ForgeCiClient, "requestGithub"> | undefined;
+// The owner selects the operator budget for merge-card stack checks. The
+// standalone fetcher still supports gh-backed reads in tests.
+let stackTransport: Pick<ForgeCiClient, "requestGithubForOperatorMergePreflight"> | undefined;
 
 export function installGithubMergeStackTransport(transport: NonNullable<typeof stackTransport>): () => void {
   stackTransport = transport;
@@ -533,7 +533,7 @@ export class GithubPrFetcher {
     throw new Error(`${failed}: ${firstLine}${mergeScopeHint(firstLine)}`, { cause: error });
   }
 
-  /** A GitHub REST read for the merge's stack checks: the shared forge client when installed, else gh. */
+  /** A GitHub REST read for an operator's merge stack checks, through the owner transport when installed. */
   private githubGet(
     reference: PullRequestReferenceIdentity,
     run: (args: string[]) => Promise<{ stdout: string }>,
@@ -542,7 +542,7 @@ export class GithubPrFetcher {
     const repository = { provider: "github" as const, host: reference.provider, owner: reference.org, repo: reference.repo };
     const transport = stackTransport;
     return async (route) => {
-      if (transport) return await transport.requestGithub(repository, { path: endpoint + route });
+      if (transport) return await transport.requestGithubForOperatorMergePreflight(repository, { path: endpoint + route });
       const response = await run(["api", "--hostname", reference.provider, endpoint + route]);
       return JSON.parse(response.stdout);
     };
@@ -559,7 +559,9 @@ export class GithubPrFetcher {
     const transport = stackTransport;
     return await checkGithubStackMerge(repository, reference.number, catalogs, this.githubGet(reference, run), async (query, variables) => {
       if (transport) {
-        return (await transport.requestGithub(repository, { graphql: true, path: "", body: { query, variables } }) as { data?: unknown }).data;
+        return (await transport.requestGithubForOperatorMergePreflight(repository, {
+          graphql: true, path: "", body: { query, variables },
+        }) as { data?: unknown }).data;
       }
       try {
         const response = await run(["api", "graphql", "--hostname", reference.provider, "-f", `query=${query}`,

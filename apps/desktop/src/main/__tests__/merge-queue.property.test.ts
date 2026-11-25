@@ -397,12 +397,12 @@ describe("merge_pull_request and merge queues", () => {
   });
 
   it("uses the owning forge transport to block a historical parent on both checkout-less merge routes", async () => {
-    const requests: string[] = [];
     const writes: string[] = [];
     const parentSha = "b".repeat(40);
+    const takeToken = vi.fn(() => true);
     const ci = new ForgeCiClient({
       githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true,
-      takeToken: () => { requests.push("admitted"); return true; },
+      takeToken,
       fetch: (async (input: string | URL | Request, init?: RequestInit) => {
         const url = new URL(String(input));
         const query: string | undefined = init?.body ? JSON.parse(String(init.body)).query : undefined;
@@ -433,7 +433,8 @@ describe("merge_pull_request and merge queues", () => {
         .rejects.toMatchObject({ code: "stack_parent_open", message: expect.stringContaining("#6") });
       await expect(gh.mergePullRequest({ pullRequest: "https://github.com/fixture/project/pull/7", method: "squash", checkStackOrder: true }))
         .rejects.toMatchObject({ code: "stack_parent_open", message: expect.stringContaining("#6") });
-      expect(requests).toHaveLength(8);
+      expect(takeToken).toHaveBeenCalledTimes(4);
+      expect(takeToken.mock.lastCall).toEqual(["shared"]);
       expect(writes).toEqual([]);
     } finally {
       uninstall();
