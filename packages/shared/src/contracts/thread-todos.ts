@@ -1108,10 +1108,26 @@ export function isRemoteThreadTodoId(id: string): boolean {
  * owner holds, which `target` could never find.
  */
 export function ownerLocalThreadTodoId(id: string, target: Pick<FederationRemoteTarget, "instanceId">): string {
+  const remote = parseRemoteThreadTodoId(id);
+  if (!remote) return id;
+  if (remote.instanceId !== target.instanceId) throw new Error("To-do owner does not match its target.");
+  return remote.id;
+}
+
+/**
+ * The owner and owner-local id inside a viewer's remote id, or undefined for
+ * an id without the `remote-todo:` prefix. Throws for a prefixed id that
+ * `remoteThreadTodoId` could not have produced.
+ */
+export function parseRemoteThreadTodoId(id: string): { instanceId: string; id: string } | undefined {
+  if (!id.startsWith("remote-todo:")) return undefined;
   const match = REMOTE_THREAD_TODO_ID.exec(id);
-  if (!match) return id;
-  if (decodeURIComponent(match[1]!) !== target.instanceId) throw new Error("To-do owner does not match its target.");
-  return decodeURIComponent(match[2]!);
+  if (!match) throw new Error("Invalid remote to-do id.");
+  try {
+    return { instanceId: decodeURIComponent(match[1]!), id: decodeURIComponent(match[2]!) };
+  } catch {
+    throw new Error("Invalid remote to-do id.");
+  }
 }
 
 /** The same owner-qualified key navigation uses for mounted threads. */

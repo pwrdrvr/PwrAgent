@@ -145,23 +145,44 @@ it("keeps the queued card set, and skips the render, when a queue edit leaves it
 it("says a peer's card has a queued review when the owner reports the review", () => {
   fc.assert(
     fc.property(
-      fc.string({ minLength: 1, maxLength: 12 }),
-      fc.string({ minLength: 1, maxLength: 24 }),
+      fc.string({ minLength: 1, maxLength: 12, unit: "binary" }),
+      fc.string({ minLength: 1, maxLength: 24, unit: "binary" }),
       (owner, ownerCardId) => {
         const target = { scope: "remote" as const, instanceId: owner };
         const { result: storeHook } = renderHook(() => useComposerDraftStore());
         const store = storeHook.current;
         const { result: queued } = renderHook(() => useQueuedReviewTodoIds(store));
+        const viewerId = remoteThreadTodoId(target, ownerCardId);
         act(() => syncScheduledActionProjections(
           store,
-          [reviewAction("action-0", { threadId: "thread-a", todoId: ownerCardId, status: "queued" })],
+          [
+            reviewAction("action-0", { threadId: "thread-a", todoId: ownerCardId, status: "queued" }),
+            // An older viewer stored its own id for the card; it already names it.
+            reviewAction("action-1", { threadId: "thread-b", todoId: viewerId, status: "queued" }),
+          ],
           new Set(),
           target,
         ));
 
-        expect([...queued.current]).toEqual([remoteThreadTodoId(target, ownerCardId)]);
+        expect([...queued.current]).toEqual([viewerId]);
       },
     ),
+    { numRuns: 40 },
+  );
+});
+
+it("reads back a queued card id that holds any character", () => {
+  fc.assert(
+    fc.property(fc.uniqueArray(fc.string({ minLength: 1, maxLength: 16, unit: "binary" }), { minLength: 1, maxLength: 4 }), (ids) => {
+      const { result: storeHook } = renderHook(() => useComposerDraftStore());
+      const store = storeHook.current;
+      const { result: queued } = renderHook(() => useQueuedReviewTodoIds(store));
+      act(() => syncScheduledActionProjections(
+        store,
+        ids.map((id, index) => reviewAction(`action-${index}`, { threadId: "thread-a", todoId: id, status: "queued" })),
+      ));
+      expect([...queued.current].sort()).toEqual([...ids].sort());
+    }),
     { numRuns: 40 },
   );
 });

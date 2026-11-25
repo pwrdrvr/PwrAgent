@@ -5,7 +5,6 @@ import type {
 } from "../composer/useComposerDraftStore";
 
 const EMPTY: ReadonlySet<string> = new Set();
-const KEY_SEPARATOR = "\n";
 
 /**
  * The review cards whose review is waiting in a thread's queue. A card
@@ -28,8 +27,9 @@ export function queuedReviewTodoIds(
 /**
  * `queuedReviewTodoIds` across every queue the store holds, kept current.
  * Every queue edit in any thread notifies, so the snapshot is the sorted ids
- * as one string: React skips the render, and the set keeps its identity,
- * unless the ids themselves change.
+ * as one JSON string: React skips the render, and the set keeps its
+ * identity, unless the ids themselves change. Ids are opaque, so no
+ * separator character is safe to join them with.
  */
 export function useQueuedReviewTodoIds(store: ComposerDraftStore | undefined): ReadonlySet<string> {
   const subscribe = useCallback(
@@ -37,10 +37,13 @@ export function useQueuedReviewTodoIds(store: ComposerDraftStore | undefined): R
     [store],
   );
   const getKey = useCallback(() => {
-    if (!store) return "";
+    if (!store) return "[]";
     const ids = queuedReviewTodoIds(store.getQueuedScopeKeys().map((scopeKey) => store.getQueuedTurns(scopeKey)));
-    return [...ids].sort().join(KEY_SEPARATOR);
+    return JSON.stringify([...ids].sort());
   }, [store]);
   const key = useSyncExternalStore(subscribe, getKey);
-  return useMemo(() => (key ? new Set(key.split(KEY_SEPARATOR)) : EMPTY), [key]);
+  return useMemo(() => {
+    const ids = JSON.parse(key) as string[];
+    return ids.length ? new Set(ids) : EMPTY;
+  }, [key]);
 }

@@ -12,6 +12,7 @@ import type {
 } from "@pwragent/shared/contracts/thread-todos";
 import { normalizeThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import {
+  parseRemoteThreadTodoId,
   remoteThreadTodoId as sharedRemoteThreadTodoId,
   resolveThreadTodoMergeMethod,
 } from "@pwragent/shared/contracts/thread-todos";
@@ -111,13 +112,11 @@ export class FederatedThreadTodoService {
     const explicitlyLocal = operation === "listDispatchEnvironments" && explicitTarget?.scope === "local";
     let target = explicitTarget?.scope === "remote" ? explicitTarget : undefined;
     delete request.federationTarget;
-    if (typeof request.id === "string" && request.id.startsWith("remote-todo:")) {
-      const match = /^remote-todo:([^:]+):(.+)$/.exec(request.id);
-      if (!match) throw new Error("Invalid remote to-do id.");
-      const owner = decodeURIComponent(match[1]!);
-      if (target && target.instanceId !== owner) throw new Error("To-do owner does not match its target.");
-      target = { scope: "remote", instanceId: owner };
-      request.id = decodeURIComponent(match[2]!);
+    const addressed = typeof request.id === "string" ? parseRemoteThreadTodoId(request.id) : undefined;
+    if (addressed) {
+      if (target && target.instanceId !== addressed.instanceId) throw new Error("To-do owner does not match its target.");
+      target = { scope: "remote", instanceId: addressed.instanceId };
+      request.id = addressed.id;
     }
     target ??= explicitlyLocal ? undefined : windowTarget;
     if (target) {
