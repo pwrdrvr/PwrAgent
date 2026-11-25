@@ -10,6 +10,7 @@ import {
 import {
   isGenericShellToolTitle,
   readAcpMcpToolName,
+  readAcpProviderTool,
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolDescription,
@@ -19,7 +20,7 @@ import {
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 import { type ReadAcpFileEditOptions, readAcpFileEdit } from "./acp-file-edit.js";
-import { fileBaseName } from "./acp-file-read.js";
+import { fileBaseName, readAcpFileRead } from "./acp-file-read.js";
 import {
   foldAcpTurnUsage,
   readAcpUsageEnvelope,
@@ -473,10 +474,16 @@ function liveItemForAcpToolUpdate(
     };
   }
 
+  const fileRead = readAcpFileRead(update, readAcpProviderTool(update));
   const webFetchUrl = readAcpWebFetchUrl(update);
   const invocation = readAcpToolInvocation(update);
   const command = rawCommand ?? invocation ?? title;
-  const commandActions = acpCommandActions({
+  const commandActions = fileRead ? [{
+    type: fileRead.action,
+    path: fileRead.path,
+    name: title,
+    label: fileRead.label,
+  }] : acpCommandActions({
     kind: webFetchUrl ? "read" : toolKind,
     path,
     semanticTitle: description,
@@ -493,6 +500,7 @@ function liveItemForAcpToolUpdate(
     status,
     command,
     commandSource: rawCommand ? "shell" : "tool",
+    ...(fileRead ? { path: fileRead.path } : {}),
     ...(!rawCommand && mcpToolName ? { commandToolName: mcpToolName } : {}),
     ...(commandActions.length ? { commandActions } : {}),
     ...(output ? { data: { output } } : {}),

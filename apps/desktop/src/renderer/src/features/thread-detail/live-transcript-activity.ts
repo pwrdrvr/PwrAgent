@@ -342,6 +342,10 @@ function readCommandActionLabel(item: Record<string, unknown>): string | undefin
     const actionPath = readString(record, "path");
     const actionQuery = readString(record, "query");
     const fallbackName = readString(record, "name");
+    const normalizedLabel = readString(record, "label");
+    if (normalizedLabel && (actionType === "read" || actionType === "listFiles")) {
+      return normalizedLabel;
+    }
     if (actionType === "read") {
       if (actionPath) {
         return `Read ${actionPath.split(/[\\/]/u).filter(Boolean).at(-1) ?? actionPath}`;
@@ -817,6 +821,7 @@ export function buildLiveToolDetails(
           ? ` - ${preview}`
           : "",
       ].join(""),
+      ...(itemType === "commandexecution" && typeof item.path === "string" ? { path: item.path } : {}),
       ...(images.length > 0 ? { images } : {}),
       ...(commandDetail ? { command: commandDetail } : {}),
       status,

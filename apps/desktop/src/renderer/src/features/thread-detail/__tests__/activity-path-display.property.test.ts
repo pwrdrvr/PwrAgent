@@ -5,8 +5,8 @@ import { formatActivityText } from "../activity-path-display";
 
 const segment = fc.stringMatching(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,12}$/u);
 
-function detailFor(path: string): AppServerThreadActivityEntry["details"] {
-  return [{ id: "detail-1", kind: "read", label: `File ${path}`, path }];
+function detailFor(path: string, label = `File ${path}`): AppServerThreadActivityEntry["details"] {
+  return [{ id: "detail-1", kind: "read", label, path }];
 }
 
 describe("formatActivityText", () => {
@@ -16,18 +16,23 @@ describe("formatActivityText", () => {
     const slashless = fullPath.slice(1);
 
     expect(
-      formatActivityText(`File ${slashless}`, detailFor(fullPath), [root]),
+      formatActivityText(`File ${slashless}`, detailFor(fullPath, `File ${slashless}`), [root]),
     ).toBe("File docs/local-cpu-checkout.md");
   });
 
-  it("relativizes a Windows path when the label uses opposite separators", () => {
-    const root = "C:\\Users\\dev\\.pwragent\\worktrees\\ab12\\PwrAgnt";
-    const fullPath = `${root}\\docs\\local-cpu-checkout.md`;
-    const forwardSlashPath = fullPath.replace(/\\/g, "/");
+  it("relativizes a Windows path when the label mixes separators", () => {
+    const root = "C:\\work\\repo";
+    const fullPath = `${root}\\src\\main.ts`;
 
     expect(
-      formatActivityText(`File ${forwardSlashPath}`, detailFor(fullPath), [root]),
-    ).toBe("File docs\\local-cpu-checkout.md");
+      formatActivityText("File C:/work/repo\\src/main.ts", detailFor(fullPath), [root]),
+    ).toBe("File src\\main.ts");
+  });
+
+  it("preserves a literal search query that matches the slashless location", () => {
+    const label = 'Searched "repo/src/main.ts"';
+    expect(formatActivityText(label, detailFor("/repo/src/main.ts", label), ["/repo"]))
+      .toBe(label);
   });
 
   it("does not rewrite a single-segment root name inside ordinary prose", () => {
@@ -41,23 +46,36 @@ describe("formatActivityText", () => {
       workspace: fc.array(segment, { minLength: 1, maxLength: 5 }),
       relative: fc.array(segment, { minLength: 1, maxLength: 4 }),
       stripLeadingSlash: fc.boolean(),
-      prefix: fc.constantFrom("File ", "Read `", "Read "),
-      suffix: fc.constantFrom("", "`", " (lines 1-20)"),
+      prefix: fc.constantFrom("File ", "Dir "),
     });
 
     fc.assert(
-      fc.property(scenario, ({ workspace, relative, stripLeadingSlash, prefix, suffix }) => {
+      fc.property(scenario, ({ workspace, relative, stripLeadingSlash, prefix }) => {
         const root = `/${workspace.join("/")}`;
         const rel = relative.join("/");
         const fullPath = `${root}/${rel}`;
         const labelPath = stripLeadingSlash ? fullPath.slice(1) : fullPath;
-        const label = `${prefix}${labelPath}${suffix}`;
+        const label = `${prefix}${labelPath}`;
 
-        expect(formatActivityText(label, detailFor(fullPath), [root]))
-          .toBe(`${prefix}${rel}${suffix}`);
+        expect(formatActivityText(label, detailFor(fullPath, label), [root]))
+          .toBe(`${prefix}${rel}`);
       }),
       { numRuns: 300 },
     );
+  });
+
+  it("property: a search query preserves slashless text regardless of its location", () => {
+    fc.assert(fc.property(
+      fc.array(segment, { minLength: 1, maxLength: 4 }),
+      fc.array(segment, { minLength: 1, maxLength: 4 }),
+      fc.constantFrom("", "File ", "Read ", "Dir "),
+      (workspace, relative, queryPrefix) => {
+        const root = `/${workspace.join("/")}`;
+        const path = `${root}/${relative.join("/")}`;
+        const label = `Searched "${queryPrefix}${path.slice(1)}"`;
+        expect(formatActivityText(label, detailFor(path, label), [root])).toBe(label);
+      },
+    ));
   });
 
   it("property: paths outside linked directories or with no linked directories are not rewritten", () => {
@@ -95,19 +113,20 @@ describe("formatActivityText", () => {
       drive: fc.constantFrom("C", "D"),
       workspace: fc.array(segment, { minLength: 1, maxLength: 4 }),
       relative: fc.array(segment, { minLength: 1, maxLength: 3 }),
-      detailUsesForwardSlash: fc.boolean(),
-      labelUsesForwardSlash: fc.boolean(),
+      detailSeparators: fc.array(fc.constantFrom("/", "\\"), { minLength: 7, maxLength: 7 }),
+      labelSeparators: fc.array(fc.constantFrom("/", "\\"), { minLength: 7, maxLength: 7 }),
     });
 
     fc.assert(
       fc.property(
         scenario,
-        ({ drive, workspace, relative, detailUsesForwardSlash, labelUsesForwardSlash }) => {
+        ({ drive, workspace, relative, detailSeparators, labelSeparators }) => {
           const root = `${drive}:\\${workspace.join("\\")}`;
           const rel = relative.join("\\");
-          const nativeFull = `${root}\\${rel}`;
-          const detailPath = detailUsesForwardSlash ? nativeFull.replace(/\\/g, "/") : nativeFull;
-          const labelPath = labelUsesForwardSlash ? nativeFull.replace(/\\/g, "/") : nativeFull;
+          const spellPath = (separators: string[]) => `${drive}:${[...workspace, ...relative]
+            .map((part, index) => `${separators[index]}${part}`).join("")}`;
+          const detailPath = spellPath(detailSeparators);
+          const labelPath = spellPath(labelSeparators);
 
           expect(formatActivityText(`File ${labelPath}`, detailFor(detailPath), [root]))
             .toBe(`File ${rel}`);

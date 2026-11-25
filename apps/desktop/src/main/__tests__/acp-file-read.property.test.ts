@@ -4,8 +4,10 @@ import type { AppServerThreadActivityEntry } from "@pwragent/shared/contracts/no
 import {
   buildLiveToolDetails,
   getNotificationItem,
+  mergeActivityDetails,
+  summarizeLiveActivity,
 } from "../../renderer/src/features/thread-detail/live-transcript-activity";
-import { acpToolUpdateNotifications } from "../acp/acp-live-notifications";
+import { AcpLiveToolUpdateResolver, acpToolUpdateNotifications } from "../acp/acp-live-notifications";
 import {
   AcpSessionReplayNormalizer,
   acpSessionReplayNormalizerOptions,
@@ -31,6 +33,37 @@ function replay(
     normalizer.apply({ sessionId, receivedAt: 1_000 + index, update });
   });
   return normalizer;
+}
+
+function liveDetails(backendId: string, frames: Record<string, unknown>[]) {
+  const resolver = new AcpLiveToolUpdateResolver();
+  const context = { backendId, threadId: sessionId, turnId: "turn-1" };
+  let details: AppServerThreadActivityEntry["details"] = [];
+  for (const update of frames) {
+    const resolved = resolver.resolve({ ...context, update });
+    if (!resolved) {
+      continue;
+    }
+    for (const notification of acpToolUpdateNotifications({ ...context, update: resolved })) {
+      const item = getNotificationItem(notification.params);
+      if (item) {
+        details = mergeActivityDetails(details, buildLiveToolDetails(item));
+      }
+    }
+  }
+  return details;
+}
+
+function expectLiveAndReplayLabels(backendId: string, frames: Record<string, unknown>[]): void {
+  const [activity] = activities(replay(backendId, frames));
+  const details = liveDetails(backendId, frames);
+  expect(details).toHaveLength(1);
+  expect(details[0]).toMatchObject({
+    kind: activity?.details[0]?.kind,
+    label: activity?.details[0]?.label,
+    path: activity?.details[0]?.path,
+  });
+  expect(summarizeLiveActivity(details)).toBe(activity?.summary);
 }
 
 /** Antigravity ACP `read_file` frames: title omits leading `/`, Path/locations keep it. */
@@ -67,9 +100,9 @@ function antigravityReadFileFrames(params: {
 
 describe("ACP file read and listing normalization", () => {
   it("keeps a late Grok line range after a location-only start and sparse completion", () => {
-    expectLateReadRange("acp:grok", "/repo/file.ts", "file.ts", {
+    expectLateReadRange("acp:grok", "/repo/file.ts", "file.ts", [{
       target_file: "/repo/file.ts", offset: 2, limit: 1,
-    }, 2, 2);
+    }], 2, 2);
   });
 
   it("keeps late read ranges in both labels after sparse updates", () => {
@@ -79,13 +112,17 @@ describe("ACP file read and listing normalization", () => {
       fc.integer({ min: 1, max: 2_000 }),
       fc.integer({ min: 1, max: 500 }),
       fc.boolean(),
-      (backendId, fileName, start, limit, includePath) => {
-        const path = `/repo/${fileName}`;
+      fc.boolean(),
+      fc.boolean(),
+      (backendId, fileName, start, limit, includePath, windows, splitBounds) => {
+        const path = windows ? `C:\\repo\\${fileName}` : `/repo/${fileName}`;
         const end = start + limit - 1;
-        const rawInput = backendId === "acp:grok"
-          ? { offset: start, limit, ...(includePath ? { target_file: path } : {}) }
-          : { StartLine: start, EndLine: end, ...(includePath ? { Path: path } : {}) };
-        expectLateReadRange(backendId, path, fileName, rawInput, start, end);
+        const from = backendId === "acp:grok"
+          ? { offset: start, ...(includePath ? { target_file: path } : {}) }
+          : { StartLine: start, ...(includePath ? { Path: path } : {}) };
+        const to = backendId === "acp:grok" ? { limit } : { EndLine: end };
+        const inputs = splitBounds ? [from, to] : [{ ...from, ...to }];
+        expectLateReadRange(backendId, path, fileName, inputs, start, end);
       },
     ));
   });
@@ -140,30 +177,59 @@ describe("ACP file read and listing normalization", () => {
 
   it("names generic ACP list_dir calls by their directory name", () => {
     const target = "/Users/dev/.pwragent/worktrees/ab12/PwrAgnt/apps/desktop";
-    const [activity] = activities(
-      replay("acp:antigravity", [
-        {
-          sessionUpdate: "tool_call",
-          toolCallId: "call-list-1",
-          name: "list_dir",
-          kind: "read",
-          status: "in_progress",
-          title: `Dir ${target.slice(1)}`,
-          rawInput: { Path: target },
-        },
-        {
-          sessionUpdate: "tool_call_update",
-          toolCallId: "call-list-1",
-          status: "completed",
-        },
-      ]),
-    );
+    const frames = [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-list-1",
+        name: "list_dir",
+        kind: "read",
+        status: "in_progress",
+        title: `Dir ${target.slice(1)}`,
+        rawInput: { Path: target },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-list-1",
+        status: "completed",
+      },
+    ];
+    const [activity] = activities(replay("acp:antigravity", frames));
 
     expect(activity).toMatchObject({
       summary: "Listed desktop",
       status: "completed",
       details: [{ kind: "read", label: "Listed desktop", path: target }],
     });
+    expectLiveAndReplayLabels("acp:antigravity", frames);
+    const listing = liveDetails("acp:antigravity", frames);
+    expect(summarizeLiveActivity([
+      ...listing,
+      { id: "other-read", kind: "read", label: "Read example.ts", path: "/repo/example.ts" },
+    ])).toBe("Explored 1 file, 1 list");
+  });
+
+  it("keeps live and replay directory labels aligned when input arrives after locations", () => {
+    fc.assert(fc.property(
+      fc.constantFrom("acp:grok", "acp:antigravity"),
+      fc.constantFrom("/repo/", "C:\\repo\\"),
+      fc.stringMatching(/^[a-z]{1,12}$/u),
+      (backendId, root, dirName) => {
+        const toolCallId = "call-late-list";
+        const opening = backendId === "acp:grok"
+          ? { _meta: { "x.ai/tool": { name: "list_dir", kind: "list" } } }
+          : { name: "list_dir" };
+        const path = `${root}${dirName}`;
+        const rawInput = backendId === "acp:grok" ? { target_directory: path } : { Path: path };
+        expectLiveAndReplayLabels(backendId, [
+          {
+            sessionUpdate: "tool_call", toolCallId, kind: "read", status: "in_progress",
+            locations: [{ path: `${root}pending` }], title: "List directory", ...opening,
+          },
+          { sessionUpdate: "tool_call_update", toolCallId, rawInput },
+          { sessionUpdate: "tool_call_update", toolCallId, status: "completed" },
+        ]);
+      },
+    ));
   });
 
   it.each([
@@ -207,27 +273,28 @@ describe("ACP file read and listing normalization", () => {
     backendId: string,
     path: string,
     fileName: string,
-    rawInput: Record<string, unknown>,
+    inputs: Record<string, unknown>[],
     start: number,
     end: number,
   ): void {
     const toolCallId = "late-range-read";
     const label = `Read ${fileName} (lines ${start}-${end})`;
-    const normalizer = replay(backendId, [
+    const frames = [
       {
         sessionUpdate: "tool_call", toolCallId, name: "read_file", title: "read_file",
         kind: "read", status: "in_progress", locations: [{ path }],
       },
-      { sessionUpdate: "tool_call_update", toolCallId, rawInput },
+      ...inputs.map((rawInput) => ({ sessionUpdate: "tool_call_update", toolCallId, rawInput })),
       // A repeated location with no input must preserve the richer metadata too.
       { sessionUpdate: "tool_call_update", toolCallId, locations: [{ path }] },
       { sessionUpdate: "tool_call_update", toolCallId, status: "completed" },
-    ]);
-    expect(activities(normalizer)).toMatchObject([{
+    ];
+    expect(activities(replay(backendId, frames))).toMatchObject([{
       summary: label,
       status: "completed",
       details: [{ kind: "read", label, path }],
     }]);
+    expectLiveAndReplayLabels(backendId, frames);
   }
 
   it("property: ACP read_file calls across backends always name the file and preserve the full path", () => {

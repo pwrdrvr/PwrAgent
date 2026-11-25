@@ -17,9 +17,19 @@ import {
  * `target_file` can also be an http(s) URL, which Grok fetches.
  */
 export type AcpFileRead = {
+  action: "read" | "listFiles";
   path: string;
   label: string;
-  range?: string;
+  inputPath?: string;
+  bounds?: AcpReadBounds;
+};
+
+type AcpReadBounds = {
+  pages?: string;
+  offset?: number;
+  limit?: number;
+  startLine?: number;
+  endLine?: number;
 };
 
 export function readAcpFileRead(
@@ -33,10 +43,7 @@ export function readAcpFileRead(
   }
   const rawInput = asRecord(record.rawInput);
   if (toolName === "list_dir") {
-    if (previous) {
-      return previous;
-    }
-    const path =
+    const inputPath =
       (rawInput
         ? readString(rawInput, "target_directory")
           ?? readString(rawInput, "DirectoryPath")
@@ -44,13 +51,16 @@ export function readAcpFileRead(
           ?? readString(rawInput, "Path")
           ?? readString(rawInput, "path")
         : undefined)
-      ?? readFirstLocationPath(record);
-    return path ? { path, label: `Listed ${targetName(path)}` } : undefined;
+      ?? previous?.inputPath;
+    const path = inputPath ?? readFirstLocationPath(record) ?? previous?.path;
+    return path
+      ? { action: "listFiles", path, inputPath, label: `Listed ${targetName(path)}` }
+      : undefined;
   }
   if (toolName !== "read_file") {
     return undefined;
   }
-  const path =
+  const inputPath =
     (rawInput
       ? readString(rawInput, "target_file")
         ?? readString(rawInput, "file_path")
@@ -58,26 +68,42 @@ export function readAcpFileRead(
         ?? readString(rawInput, "Path")
         ?? readString(rawInput, "path")
       : undefined)
-    ?? previous?.path
-    ?? readFirstLocationPath(record);
+    ?? previous?.inputPath;
+  const path = inputPath ?? readFirstLocationPath(record) ?? previous?.path;
   if (!path) {
     return undefined;
   }
-  const range = (rawInput ? readRange(rawInput) : undefined) ?? previous?.range;
+  const bounds = rawInput ? readBounds(rawInput, previous?.bounds) : previous?.bounds;
+  const range = bounds && formatRange(bounds);
   return {
+    action: "read",
     path,
-    range,
+    inputPath,
+    bounds,
     label: `Read ${targetName(path)}${range ? ` (${range})` : ""}`,
   };
 }
 
-function readRange(rawInput: Record<string, unknown>): string | undefined {
-  const pages = readString(rawInput, "pages");
+function readBounds(rawInput: Record<string, unknown>, previous?: AcpReadBounds): AcpReadBounds {
+  return {
+    pages: readString(rawInput, "pages") ?? previous?.pages,
+    offset: readPositiveInteger(rawInput, "offset") ?? previous?.offset,
+    limit: readPositiveInteger(rawInput, "limit") ?? previous?.limit,
+    startLine: readPositiveInteger(rawInput, "StartLine")
+      ?? readPositiveInteger(rawInput, "start_line")
+      ?? readPositiveInteger(rawInput, "startLine")
+      ?? previous?.startLine,
+    endLine: readPositiveInteger(rawInput, "EndLine")
+      ?? readPositiveInteger(rawInput, "end_line")
+      ?? readPositiveInteger(rawInput, "endLine")
+      ?? previous?.endLine,
+  };
+}
+
+function formatRange({ pages, offset, limit, startLine, endLine }: AcpReadBounds): string | undefined {
   if (pages) {
     return /^\d+$/u.test(pages) ? `page ${pages}` : `pages ${pages}`;
   }
-  const offset = readPositiveInteger(rawInput, "offset");
-  const limit = readPositiveInteger(rawInput, "limit");
   if (limit !== undefined) {
     const from = offset ?? 1;
     return `lines ${from}-${from + limit - 1}`;
@@ -85,14 +111,6 @@ function readRange(rawInput: Record<string, unknown>): string | undefined {
   if (offset !== undefined && offset > 1) {
     return `from line ${offset}`;
   }
-  const startLine =
-    readPositiveInteger(rawInput, "StartLine")
-    ?? readPositiveInteger(rawInput, "start_line")
-    ?? readPositiveInteger(rawInput, "startLine");
-  const endLine =
-    readPositiveInteger(rawInput, "EndLine")
-    ?? readPositiveInteger(rawInput, "end_line")
-    ?? readPositiveInteger(rawInput, "endLine");
   if (endLine !== undefined) {
     const from = startLine ?? 1;
     if (endLine >= from) {

@@ -28,44 +28,42 @@ export function formatActivityText(
   if (pathDetails.length === 0) {
     return text;
   }
-  const candidateMap = new Map<string, string>();
+  const candidateMap = new Map<string, { matchPath: string; displayPath: string; windows: boolean }>();
+  let windowsText: string | undefined;
   for (const detail of pathDetails) {
     const absolutePath = detail.path;
     const displayPath = formatPathRelativeToDirectories(absolutePath, directoryPaths);
-    if (!candidateMap.has(absolutePath)) {
-      candidateMap.set(absolutePath, displayPath);
-    }
-    if (absolutePath.startsWith("/") && displayPath !== absolutePath) {
+    const windows = isWindowsFilesystemPath(absolutePath);
+    if (!windows && absolutePath.startsWith("/") && displayPath !== absolutePath) {
       const withoutLeadingSlash = absolutePath.replace(/^\/+/, "");
+      // Only these provider titles identify the whole operand as a path.
+      // Anywhere else the same characters may be literal query or command text.
       if (
-        withoutLeadingSlash.includes("/")
-        && withoutLeadingSlash !== displayPath
-        && !candidateMap.has(withoutLeadingSlash)
+        detail.kind === "read" && detail.label === text
+        && (text === `File ${withoutLeadingSlash}` || text === `Dir ${withoutLeadingSlash}`)
+        && withoutLeadingSlash.includes("/")
       ) {
-        candidateMap.set(withoutLeadingSlash, displayPath);
+        return `${text.slice(0, text.length - withoutLeadingSlash.length)}${displayPath}`;
       }
     }
-    if (isWindowsFilesystemPath(absolutePath)) {
-      for (const variant of [
-        absolutePath.replace(/\\/g, "/"),
-        absolutePath.replace(/\//g, "\\"),
-      ]) {
-        if (variant !== absolutePath && !candidateMap.has(variant)) {
-          candidateMap.set(variant, displayPath);
-        }
-      }
+    if (!candidateMap.has(absolutePath)) {
+      const matchPath = windows ? absolutePath.replace(/\\/g, "/") : absolutePath;
+      candidateMap.set(absolutePath, { matchPath, displayPath, windows });
+    }
+    if (windows) {
+      windowsText ??= text.replace(/\\/g, "/");
     }
   }
-  const paths = [...candidateMap.entries()]
-    .map(([matchPath, displayPath]) => ({ matchPath, displayPath }))
+  const paths = [...candidateMap.values()]
     .sort((left, right) => right.matchPath.length - left.matchPath.length);
+  const windowsMatchText = windowsText ?? text;
   let displayText = "";
   let cursor = 0;
 
   while (cursor < text.length) {
     const matchingPath = paths.find(
       (path) =>
-        text.startsWith(path.matchPath, cursor)
+        (path.windows ? windowsMatchText : text).startsWith(path.matchPath, cursor)
         && hasPathTextBoundaries(text, cursor, path.matchPath.length),
     );
     if (matchingPath) {
