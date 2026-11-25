@@ -1,12 +1,12 @@
-import { buildThreadMarkdownLink } from "@pwragent/shared/contracts/thread-link";
+import { buildThreadMarkdownLink, parseThreadUrl, type ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { useEffect, useState } from "react";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { readLegacyComposerThreadRow } from "../../lib/thread-link-rows";
+import { readThreadInfoRow } from "../../lib/thread-link-rows";
 import { formatHashReferenceThreadLabel } from "../../lib/hash-references";
 import {
-  resolveThreadHref,
+  useThreadLinks,
   useLiveThreadLink,
   type ResolvedThreadLink,
   type ThreadLinkContextValue,
@@ -19,12 +19,26 @@ type MarkdownNode = {
   children?: MarkdownNode[];
 };
 
-type ComposerThreadReference = {
+type ComposerThreadDestination = { link: ResolvedThreadLink; ref: ThreadLinkRef };
+
+type ComposerThreadReference = ComposerThreadDestination & {
   start: number;
   end: number;
-  link: ResolvedThreadLink;
   fallbackLabel: string;
 };
+
+export function resolveComposerThreadHref(
+  href: string,
+  links: ThreadLinkContextValue | undefined,
+): ComposerThreadDestination | undefined {
+  const ref = parseThreadUrl(href);
+  const link = ref && links?.resolve(ref);
+  if (!ref || !link) return undefined;
+  // Metadata may normalize the viewer's explicit owner away. It must not
+  // replace that identity with a peer or supply a different message anchor.
+  if (ref.instanceId && link.instanceId && ref.instanceId !== link.instanceId) return undefined;
+  return { link, ref };
+}
 
 export function readComposerThreadReference(
   node: MarkdownNode,
@@ -34,8 +48,8 @@ export function readComposerThreadReference(
   const start = node.position?.start.offset;
   const end = node.position?.end.offset;
   if (node.type !== "link" || !node.url || start === undefined || end === undefined) return undefined;
-  const link = resolveThreadHref(node.url, links);
-  if (!link) return undefined;
+  const destination = resolveComposerThreadHref(node.url, links);
+  if (!destination) return undefined;
 
   // Keep the copied name while the owner is off-page or hasn't named the
   // thread yet. The link's label never participates in identity resolution.
@@ -43,7 +57,7 @@ export function readComposerThreadReference(
   const fallback = text[start] === "[" && labelEnd > start && labelEnd < end
     ? text.slice(start + 1, labelEnd).replace(/\\([\\[\]])/g, "$1")
     : "";
-  return { start, end, link, fallbackLabel: fallback };
+  return { ...destination, start, end, fallbackLabel: fallback };
 }
 
 export function findComposerThreadReferences(
@@ -64,9 +78,10 @@ export function findComposerThreadReferences(
       if (start === undefined || end === undefined) return;
       for (const match of text.slice(start, end).matchAll(/(?<![\w/\\])pwragent:\/\/thread\/[^\s()<>[\]"'`]+/gi)) {
         const href = match[0].replace(/[.,;!]+$/, "");
-        const link = resolveThreadHref(href, links);
-        if (link) references.push({ start: start + match.index, end: start + match.index + href.length,
-          link, fallbackLabel: "" });
+        const destination = resolveComposerThreadHref(href, links);
+        if (destination) references.push({
+          ...destination, start: start + match.index, end: start + match.index + href.length, fallbackLabel: "",
+        });
       }
       return;
     }
@@ -85,57 +100,80 @@ export function composerThreadLabel(link: ResolvedThreadLink, fallback?: string)
   });
 }
 
-function readLegacyComposerLink(link: ResolvedThreadLink): Promise<ResolvedThreadLink | undefined> | undefined {
+function cachedPeerOwner(link: ResolvedThreadLink, links: ThreadLinkContextValue) {
+  const matches = links.readLoadedThreads?.().filter((row) => row.id === link.threadId
+    && row.source === link.backend && row.federation?.ref.target.scope === "remote");
+  const target = matches?.length === 1 ? matches[0]?.federation?.ref.target : undefined;
+  return target?.scope === "remote" ? target.instanceId : undefined;
+}
+
+function recoverComposerThreadOwner(
+  { link, ref }: ComposerThreadDestination,
+  links: ThreadLinkContextValue,
+): Promise<ResolvedThreadLink | undefined> | undefined {
   const api = getDesktopApi();
-  if (link.instanceId || link.inThreadList || link.title || !api?.jumpSearchRemoteThreads
-    || readRendererFederationTarget()) return undefined;
-  return readLegacyComposerThreadRow(api, link).then((row) => {
-    const target = row?.federation?.ref.target;
-    if (!row || target?.scope !== "remote") return undefined;
-    return {
-      ...link,
-      instanceId: target.instanceId,
-      instanceLabel: row.federation?.instanceLabel,
-      title: row.title,
-      titleSource: row.titleSource,
-      gitBranch: row.gitBranch,
-      linkedDirectories: row.linkedDirectories,
-    };
+  if (ref.instanceId || ref.profile || link.instanceId || !api?.getNavigationQueryPage
+    || readRendererFederationTarget() || !cachedPeerOwner(link, links)) return undefined;
+  const local = links.getSnapshot(link);
+  if (local.inThreadList || local.title) return undefined;
+
+  // An old copy can use a peer row the viewer already holds, after the local
+  // owner confirms a miss. Draft text never drives a federation-wide search.
+  return readThreadInfoRow(api, link, undefined).then((row) => {
+    const current = links.getSnapshot(link);
+    if (row || current.inThreadList || current.title) return undefined;
+    const instanceId = cachedPeerOwner(link, links);
+    return instanceId ? links.resolve({ ...ref, backend: link.backend, instanceId }) : undefined;
   }).catch(() => undefined);
 }
 
-export function useComposerThreadReference(link: ResolvedThreadLink): ResolvedThreadLink {
-  const liveLink = useLiveThreadLink(link);
-  const [legacy, setLegacy] = useState<{ source: ResolvedThreadLink; link: ResolvedThreadLink }>();
+export function useComposerThreadReference(
+  link: ResolvedThreadLink,
+  ref: ThreadLinkRef,
+): ResolvedThreadLink {
+  const links = useThreadLinks();
+  const [recovered, setRecovered] = useState<{
+    source: ResolvedThreadLink;
+    context: ThreadLinkContextValue;
+    link: ResolvedThreadLink;
+  }>();
   useEffect(() => {
+    if (!links) return;
     let current = true;
-    void readLegacyComposerLink(liveLink)?.then((result) => {
-      if (current && result) setLegacy({ source: liveLink, link: result });
+    void recoverComposerThreadOwner({ link, ref }, links)?.then((result) => {
+      if (current && result) setRecovered({ source: link, context: links, link: result });
     });
     return () => { current = false; };
-  }, [liveLink]);
-  return legacy?.source === liveLink ? legacy.link : liveLink;
+  }, [link, links, ref]);
+  return useLiveThreadLink(
+    recovered?.source === link && recovered.context === links ? recovered.link : link,
+  );
 }
 
 export function resolveComposerThreadDestinations(
   text: string,
   links: ThreadLinkContextValue | undefined,
 ): string | Promise<string> {
+  if (!links) return text;
   const references = findComposerThreadReferences(text, links);
-  const reads = references.map(({ link }) => readLegacyComposerLink(link));
-  if (!reads.some(Boolean)) return text;
-  return Promise.all(reads).then((resolved) => {
+  const reads = references.map((reference) => recoverComposerThreadOwner(reference, links));
+  const rewrite = (resolved: (ResolvedThreadLink | undefined)[]): string => {
     let output = "";
     let cursor = 0;
-    references.forEach(({ start, end, link }, index) => {
-      const target = resolved[index];
-      if (!target) return;
-      // The local row may have appeared while the peer read was outstanding.
-      const local = links?.resolve({ backend: link.backend, threadId: link.threadId });
-      if (local?.inThreadList || local?.title) return;
-      output += text.slice(cursor, start) + buildThreadMarkdownLink({ ...target, title: composerThreadLabel(target) });
+    references.forEach(({ start, end, link, ref, fallbackLabel }, index) => {
+      const recovered = resolved[index];
+      const target = links.getSnapshot(recovered ?? link);
+      const title = composerThreadLabel(target, fallbackLabel);
+      if (!recovered && (!target.title || title === fallbackLabel)) return;
+      output += text.slice(cursor, start) + buildThreadMarkdownLink({
+        ...ref,
+        backend: target.backend,
+        instanceId: ref.instanceId ?? target.instanceId,
+        title,
+      });
       cursor = end;
     });
     return output + text.slice(cursor);
-  });
+  };
+  return reads.some(Boolean) ? Promise.all(reads).then(rewrite) : rewrite([]);
 }

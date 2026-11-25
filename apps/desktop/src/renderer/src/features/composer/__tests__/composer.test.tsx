@@ -25871,7 +25871,7 @@ describe("Composer", () => {
     });
   });
 
-  it.each(["local", "legacy peer"] as const)(
+  it.each(["local", "cached peer", "explicit local", "off-page peer"] as const)(
     "hydrates an off-page pasted Antigravity link and uses its title in the queued preview (%s)",
     async (location) => {
       const thread: NavigationThreadSummary = {
@@ -25879,21 +25879,22 @@ describe("Composer", () => {
         linkedDirectories: [], inbox: { inInbox: false },
       };
       const instanceId = "peer-laptop";
+      const localInstanceId = "local-viewer";
+      const cachedPeer = location === "cached peer";
       const id = "519fbd00-aa00-7100-8100-019fbbbead52";
       const target: NavigationThreadSummary = {
         ...thread, id, source: "acp:antigravity", title: "Review the launch checklist",
-        ...(location === "legacy peer" ? {
+        ...(location !== "local" ? {
           federation: {
             ref: buildFederatedThreadRef({ backend: "acp:antigravity", instanceId, threadId: id }),
             instanceLabel: "Laptop", peerStatus: "connected", capabilities: [],
           },
         } : {}),
       };
-      const href = `pwragent://thread/${id}?backend=acp:antigravity`;
-      const jumpSearchRemoteThreads = vi.fn(async () => ({
-        results: location === "legacy peer" ? [target] : [],
-      }));
-      const startTurn = vi.fn(async () => ({
+      const bare = `pwragent://thread/${id}?backend=acp:antigravity`;
+      const href = location === "explicit local" ? `${bare}&instanceId=${localInstanceId}` : bare;
+      const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [target] }));
+      const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
         backend: "codex" as const, threadId: thread.id, turnId: "sent", disposition: "queued" as const,
         queueEntryId: "new-queued-entry",
       }));
@@ -25919,12 +25920,14 @@ describe("Composer", () => {
         imageAttachments: [], fileAttachments: [],
       }]);
       try {
-        render(
-          <ThreadLinkProvider onShowThread={() => undefined} threads={[thread]}>
+        const view = (title: string) => (
+          <ThreadLinkProvider localInstanceId={localInstanceId} onShowThread={() => undefined}
+            threads={cachedPeer || location === "explicit local" ? [thread, { ...target, title }] : [thread]}>
             <Composer activeTurnId="active" desktopApi={desktopApi} disabled={false}
               draftStore={draftStore} skills={[]} thread={thread} />
-          </ThreadLinkProvider>,
+          </ThreadLinkProvider>
         );
+        const { rerender } = render(view(target.title));
         const input = screen.getByRole("textbox", { name: "Reply" });
         const paste = (text: string) => fireEvent.paste(input, {
           clipboardData: {
@@ -25934,18 +25937,33 @@ describe("Composer", () => {
         });
         paste(href);
         expect(input.querySelector("[data-mention-kind=thread]")).toHaveAttribute("data-skill-path", href);
-        expect(await within(input).findByText(`#${target.title}`)).toBeInTheDocument();
+        const hasTitle = location === "local" || cachedPeer;
+        let title = hasTitle ? target.title : id;
+        expect(await within(input).findByText(`#${title}`)).toBeInTheDocument();
         expect(screen.getByLabelText("Queued message").querySelector(".composer__queued-text"))
-          .toHaveTextContent(`#${target.title} - check this`);
-        paste(`See [copied name](${href}) and keep \`${href}\` literal.`);
+          .toHaveTextContent(`#${title} - check this`);
+        if (cachedPeer) {
+          title = "Renamed on the owning peer";
+          rerender(view(title));
+          expect(await within(input).findByText(`#${title}`)).toBeInTheDocument();
+          expect(screen.getByLabelText("Queued message")).toHaveTextContent(title);
+        }
+        paste(`- See [Fix \`lint\` crash](${href})
+- Keep \`${href}\` literal.`);
         expect(input.querySelectorAll("[data-mention-kind=thread]")).toHaveLength(2);
+        expect(input.querySelector("li")).toHaveTextContent(/^See #/);
         expect(input).toHaveTextContent(href);
+        expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
         await clickButton("Queue");
-        const expectedHref = location === "legacy peer" ? `${href}&instanceId=${instanceId}` : href;
+        const expectedHref = cachedPeer ? `${href}&instanceId=${instanceId}` : href;
         await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
-          input: [{ type: "text", text: expect.stringContaining(`](${expectedHref})`) }],
+          input: [{ type: "text", text: expect.stringContaining(`[${title}](${expectedHref})`) }],
         })));
-        expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(location === "legacy peer" ? 1 : 0);
+        expect(startTurn.mock.calls[0]?.[0]?.input[0]).toMatchObject({
+          type: "text",
+          text: expect.stringContaining(`See [${hasTitle ? title : "Fix \`lint\` crash"}](${expectedHref})`),
+        });
+        expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
       } finally {
         vi.unstubAllGlobals();
       }

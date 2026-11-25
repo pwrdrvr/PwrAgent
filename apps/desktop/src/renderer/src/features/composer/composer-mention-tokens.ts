@@ -6,6 +6,7 @@ import {
   buildThreadMarkdownLink,
   buildThreadUrl,
   parseThreadUrl,
+  type ThreadLinkRef,
 } from "@pwragent/shared/contracts/thread-link";
 import { findSharedSkillNames, isSharedSkillName } from "@pwragent/shared/skill-origin";
 import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation";
@@ -163,12 +164,12 @@ export function createComposerThreadToken(
   thread: ResolvedThreadLink,
   index: number,
   fallbackLabel?: string,
+  destination: ThreadLinkRef = thread,
 ): ComposerSkillToken {
   const path = buildThreadUrl({
+    ...destination,
     backend: thread.backend,
-    ...(thread.instanceId ? { instanceId: thread.instanceId } : {}),
-    threadId: thread.threadId,
-    ...(thread.messageId ? { messageId: thread.messageId } : {}),
+    instanceId: destination.instanceId ?? thread.instanceId,
   });
   return {
     kind: "thread",

@@ -1,9 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ThreadLinkProvider } from "../../../lib/thread-links";
+import type { ReactNode } from "react";
+import { ThreadLinkProvider, useThreadLinks } from "../../../lib/thread-links";
 import { ThreadChip, threadCopyTargets } from "../ThreadChip";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 import { AppNoticeToast } from "../../notifications/AppNoticeToast";
@@ -71,6 +72,26 @@ function renderWithLinks(
 }
 
 describe("thread links in transcript markdown", () => {
+  it("keeps an unanchored link separate from a mounted off-page message link", () => {
+    const { result } = renderHook(useThreadLinks, {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <ThreadLinkProvider onShowThread={() => undefined} threads={[]}>
+          {children}
+        </ThreadLinkProvider>
+      ),
+    });
+    const links = result.current!;
+    const thread = { backend: "codex" as const, threadId: CHILD_THREAD_ID };
+    const anchored = links.resolve({ ...thread, messageId: "message-before-load" })!;
+    const unsubscribe = links.subscribe(anchored, () => undefined);
+    try {
+      expect(links.resolve(thread)?.messageId).toBeUndefined();
+      expect(links.resolve({ ...thread, messageId: "other-message" })?.messageId).toBe("other-message");
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("replaces partial text selection with thread-specific copy actions", () => {
     renderWithLinks(
       `Created [the handoff](pwragent://thread/${CHILD_THREAD_ID}?backend=codex)`,

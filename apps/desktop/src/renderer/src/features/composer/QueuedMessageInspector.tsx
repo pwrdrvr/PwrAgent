@@ -1,5 +1,6 @@
 import { type MouseEvent as ReactMouseEvent, type ReactNode, useId, useMemo, useState } from "react";
 import type { ReadQueuedTurnResponse } from "@pwragent/shared/contracts/agent";
+import type { ThreadLinkRef } from "@pwragent/shared/contracts/thread-link";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { GripVerticalIcon, PauseIcon } from "../../icons";
@@ -12,8 +13,8 @@ import { useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links"
 import { composerThreadLabel, findComposerThreadReferences, useComposerThreadReference } from "./composer-thread-references";
 import { TurnInputContent } from "../thread-detail/TurnInputContent";
 
-function QueuedThreadName(props: { link: ResolvedThreadLink; fallbackLabel: string }) {
-  const label = composerThreadLabel(useComposerThreadReference(props.link), props.fallbackLabel);
+function QueuedThreadName(props: { link: ResolvedThreadLink; destination: ThreadLinkRef; fallbackLabel: string }) {
+  const label = composerThreadLabel(useComposerThreadReference(props.link, props.destination), props.fallbackLabel);
   return <span>#{label.replace(/^#/, "")}</span>;
 }
 
@@ -23,11 +24,11 @@ export function QueuedThreadReferencePreview({ text }: { text: string }) {
   let cursor = 0;
   return (
     <>
-      {references.map(({ start, end, link, fallbackLabel }) => {
+      {references.map(({ start, end, link, ref, fallbackLabel }) => {
         const prefix = text.slice(cursor, start);
         cursor = end;
         return (
-          <span key={start}>{prefix}<QueuedThreadName link={link} fallbackLabel={fallbackLabel} /></span>
+          <span key={start}>{prefix}<QueuedThreadName link={link} destination={ref} fallbackLabel={fallbackLabel} /></span>
         );
       })}
       {text.slice(cursor)}

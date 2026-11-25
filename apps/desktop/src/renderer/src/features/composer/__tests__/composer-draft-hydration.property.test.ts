@@ -13,16 +13,18 @@ function expectReference(
   messageId: string | undefined,
   copiedTitle: string,
 ): void {
-  const thread = { backend, threadId, instanceId, title: "Owner title" };
+  const thread = { backend, threadId, title: "Owner title" };
   const links: ThreadLinkContextValue = {
-    resolve: (ref) => ({ ...thread, messageId: ref.messageId }),
+    // A local owner can normalize itself away and a mounted metadata row can
+    // carry an earlier link's anchor. The source URL still owns both fields.
+    resolve: () => ({ ...thread, messageId: "cached-message" }),
     openRemoteViewer: () => undefined,
     show: () => undefined,
     getSnapshot: (link) => link,
     subscribe: () => () => undefined,
     hoverTarget: new ThreadLinkHoverStore(),
   };
-  const reference = { backend, threadId, instanceId, messageId, profile: undefined };
+  const reference = { backend, threadId, instanceId, messageId, profile: "fixture-profile" };
   const link = buildThreadMarkdownLink({ ...reference, title: copiedTitle });
   const draft = `See ${link} and keep \`\`${link}\`\` verbatim.`;
   const restored = hydrateComposerDraft(draft, [], links, undefined);
@@ -34,8 +36,8 @@ function expectReference(
     .toBe(draft.replace(link, buildThreadMarkdownLink({ ...reference, title: thread.title })));
 }
 
-it("restores the owner's name without losing a message anchor", () => {
-  expectReference("codex", "example-thread", undefined, "message-1", "Old title");
+it("keeps a local-qualified thread link unanchored when metadata came from a message link", () => {
+  expectReference("codex", "example-thread", "local-viewer", undefined, "Old title");
 });
 
 it("round-trips pasted thread references by owner, backend and message", () => {
