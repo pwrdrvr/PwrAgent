@@ -4,6 +4,7 @@ import type {
   ScheduledThreadActionStatus,
 } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+import { remoteThreadTodoId } from "@pwragent/shared/contracts/thread-todos";
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import { useComposerDraftStore } from "../../composer/useComposerDraftStore";
@@ -136,4 +137,31 @@ it("keeps the queued card set, and skips the render, when a queue edit leaves it
 
   expect(renders).toBe(rendersAfterQueue);
   expect(result.current).toBe(queued);
+});
+
+// The owner stores its own card id on the queued review; a viewer names a
+// peer's card `remote-todo:<owner>:<id>`. Whatever either id holds, the card
+// the viewer shows must read the review as queued.
+it("says a peer's card has a queued review when the owner reports the review", () => {
+  fc.assert(
+    fc.property(
+      fc.string({ minLength: 1, maxLength: 12 }),
+      fc.string({ minLength: 1, maxLength: 24 }),
+      (owner, ownerCardId) => {
+        const target = { scope: "remote" as const, instanceId: owner };
+        const { result: storeHook } = renderHook(() => useComposerDraftStore());
+        const store = storeHook.current;
+        const { result: queued } = renderHook(() => useQueuedReviewTodoIds(store));
+        act(() => syncScheduledActionProjections(
+          store,
+          [reviewAction("action-0", { threadId: "thread-a", todoId: ownerCardId, status: "queued" })],
+          new Set(),
+          target,
+        ));
+
+        expect([...queued.current]).toEqual([remoteThreadTodoId(target, ownerCardId)]);
+      },
+    ),
+    { numRuns: 40 },
+  );
 });

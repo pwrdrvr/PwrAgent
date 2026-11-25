@@ -3,6 +3,7 @@ import { observeLaunchpadScheduledAction } from "../features/composer/launchpad-
 import { useEffect, useReducer } from "react";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { ScheduledThreadAction } from "@pwragent/shared/contracts/scheduled-thread-actions";
+import { isRemoteThreadTodoId, remoteThreadTodoId } from "@pwragent/shared/contracts/thread-todos";
 import type { ComposerDraftStore } from "../features/composer/useComposerDraftStore";
 import type { DesktopApi } from "./desktop-api";
 import { federationTargetsEqual } from "./federated-thread-events";
@@ -290,7 +291,7 @@ export function syncScheduledActionProjections(
       scopedActions.map((action) => [action.id, action]),
     );
     const projectionsById = new Map(
-      scopedActions.map((action) => [action.id, projectionFromAction(action)]),
+      scopedActions.map((action) => [action.id, projectionFromAction(action, target)]),
     );
     const scheduledQueueEntryIds = new Set(
       scopedActions
@@ -332,12 +333,12 @@ export function syncScheduledActionProjections(
           ? right.updatedAt - left.updatedAt
           : left.scheduledFor - right.scheduledFor;
       })
-      .map(projectionFromAction);
+      .map((action) => projectionFromAction(action, target));
     const scheduled = scopedActions
       .filter(
         (action) => action.status !== "held" && !placedActions.has(action.id),
       )
-      .map(projectionFromAction);
+      .map((action) => projectionFromAction(action, target));
     store.setQueuedTurns(
       scopeKey,
       [...newHeld, ...reconciledCurrent, ...scheduled],
@@ -377,7 +378,7 @@ export function applyScheduledActionProjection(
           : withoutAction.length;
     store.setQueuedTurns(scopeKey, [
       ...withoutAction.slice(0, insertionIndex),
-      projectionFromAction(action),
+      projectionFromAction(action, target),
       ...withoutAction.slice(insertionIndex),
     ]);
   } else {
@@ -385,7 +386,16 @@ export function applyScheduledActionProjection(
   }
 }
 
-function projectionFromAction(action: ScheduledThreadAction) {
+/**
+ * The id this window shows the owner's card under. The owner stores its own
+ * id; a peer's cards are named `remote-todo:<owner>:<id>` here. An id that is
+ * already a viewer id came from an older viewer and is kept as it is.
+ */
+function viewerTodoId(id: string, target: FederationTarget): string {
+  return target.scope === "remote" && !isRemoteThreadTodoId(id) ? remoteThreadTodoId(target, id) : id;
+}
+
+function projectionFromAction(action: ScheduledThreadAction, target: FederationTarget) {
   return {
     id: `scheduled-projection:${action.id}`,
     ...(action.status === "failed"
@@ -395,7 +405,7 @@ function projectionFromAction(action: ScheduledThreadAction) {
             action.errorMessage ?? "The scheduled action could not be dispatched.",
         }
       : { scheduledActionId: action.id }),
-    ...(action.review?.todo ? { reviewTodoId: action.review.todo.id } : {}),
+    ...(action.review?.todo ? { reviewTodoId: viewerTodoId(action.review.todo.id, target) } : {}),
     ...(action.status === "scheduled"
       ? { scheduledSendAt: action.scheduledFor }
       : {}),
