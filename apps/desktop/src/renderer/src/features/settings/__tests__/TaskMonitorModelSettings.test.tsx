@@ -1,10 +1,14 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { DesktopTaskMonitorModelChoice } from "@pwragent/shared/helper-models";
-import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
-import { selectSections } from "../../../test/model-catalog";
+import {
+  chooseModelSettingsOption,
+  modelSettingsOptionNames,
+  modelSettingsPill,
+  openModelSettings,
+} from "../../../test/model-settings";
 import { TaskMonitorModelSettings } from "../TaskMonitorModelSettings";
 
 // Only the fields the row reads.
@@ -49,7 +53,9 @@ function renderRow(choices: Choices, backends: BackendSummary[] = [codex, claude
   return onSave;
 }
 
-const trigger = () => screen.getByRole("combobox", { name: "Task monitors" });
+const LABEL = "Task monitors";
+const trigger = () => modelSettingsPill(LABEL);
+const choose = (name: string) => chooseModelSettingsOption("Model", name, LABEL);
 
 describe("TaskMonitorModelSettings", () => {
   it("puts the catalog's older models under Other models, as the composer does", () => {
@@ -65,25 +71,25 @@ describe("TaskMonitorModelSettings", () => {
       },
     } as BackendSummary]);
 
-    expect(selectSections(trigger())).toEqual([
-      {
-        labels: [
-          "Automatic (Haiku)",
-          "Helper model (GPT-6-Luna)",
-          "Opus",
-          "Sonnet",
-          "Haiku",
-        ],
-      },
-      { group: "Other models", labels: ["Opus 4.1"] },
+    expect(modelSettingsOptionNames("Model", LABEL)).toEqual([
+      "Automatic (Haiku)",
+      "Helper model (GPT-6-Luna)",
+      "Opus",
+      "Sonnet",
+      "Haiku",
     ]);
+    const panel = openModelSettings(LABEL);
+    fireEvent.click(within(panel).getByRole("button", { name: "Other Models" }));
+    const other = within(panel).getByRole("listbox", { name: "Model: Other Models" });
+    expect(within(other).getAllByRole("option").map((option) => option.textContent))
+      .toEqual(["Opus 4.1"]);
   });
 
   it("names the lightweight model Automatic runs and the model the Helper model runs", () => {
     renderRow({});
 
     expect(trigger()).toHaveTextContent("Automatic (Haiku)");
-    expect(selectOptionLabels(trigger())).toEqual([
+    expect(modelSettingsOptionNames("Model", LABEL)).toEqual([
       "Automatic (Haiku)",
       "Helper model (GPT-6-Luna)",
       "Opus",
@@ -98,7 +104,7 @@ describe("TaskMonitorModelSettings", () => {
       launchpadOptions: { models: [{ id: "opus", label: "Opus" }] },
     } as unknown as BackendSummary]);
 
-    expect(trigger()).toHaveTextContent(/^Automatic$/);
+    expect(trigger().querySelector(".model-settings__pill-model")).toHaveTextContent(/^Automatic$/);
   });
 
   it("saves the Helper model choice and keeps every other provider's", () => {
@@ -108,7 +114,7 @@ describe("TaskMonitorModelSettings", () => {
     };
     const onSave = renderRow({ "acp:gemini": gemini });
 
-    chooseSelectOption(trigger(), "Helper model (GPT-6-Luna)");
+    choose("Helper model (GPT-6-Luna)");
     expect(onSave).toHaveBeenLastCalledWith({
       "acp:gemini": gemini,
       claude: { source: "helper" },
@@ -118,7 +124,7 @@ describe("TaskMonitorModelSettings", () => {
   it("saves a provider model", () => {
     const onSave = renderRow({});
 
-    chooseSelectOption(trigger(), "Sonnet");
+    choose("Sonnet");
     expect(onSave).toHaveBeenLastCalledWith({
       claude: { source: "provider", model: "sonnet" },
     });
@@ -129,8 +135,8 @@ describe("TaskMonitorModelSettings", () => {
       claude: { source: "provider", model: "sonnet", reasoningEffort: "high" },
     });
 
-    expect(trigger()).toHaveTextContent(/^Sonnet$/);
-    chooseSelectOption(trigger(), "Opus");
+    expect(trigger().querySelector(".model-settings__pill-model")).toHaveTextContent(/^Sonnet$/);
+    choose("Opus");
     expect(onSave).toHaveBeenLastCalledWith({
       claude: { source: "provider", model: "opus" },
     });
@@ -144,7 +150,7 @@ describe("TaskMonitorModelSettings", () => {
     });
 
     expect(trigger()).toHaveTextContent("Helper model (GPT-6-Luna)");
-    chooseSelectOption(trigger(), "Automatic (Haiku)");
+    choose("Automatic (Haiku)");
     expect(onSave).toHaveBeenLastCalledWith({ "acp:gemini": gemini });
   });
 

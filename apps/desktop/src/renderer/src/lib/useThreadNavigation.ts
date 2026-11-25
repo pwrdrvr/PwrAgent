@@ -1,4 +1,5 @@
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
+import { newThreadModelSettingsRecent } from "./model-settings-recents";
 import { useLockedArchiveWorktreeNotice } from "./useLockedArchiveWorktreeNotice";
 import { lockChangedBeforeHandoffNotice } from "./locked-worktree-notice";
 import { BackgroundArchiveCleanupReport, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS } from "./background-archive-cleanup-report";
@@ -8682,6 +8683,13 @@ export function useThreadNavigation(
           }));
         }
         materialized = true;
+        // The next new-thread panel offers these settings under Recent. The
+        // owner keeps the list, since its catalog has to run them.
+        void desktopApi.recordModelSettingsRecent?.({
+          ...(federationTarget ? { federationTarget } : {}),
+          scope: "composer",
+          recent: newThreadModelSettingsRecent(launchpad),
+        })?.catch(() => undefined);
         const landing = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
         if (landing) {
           pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, {

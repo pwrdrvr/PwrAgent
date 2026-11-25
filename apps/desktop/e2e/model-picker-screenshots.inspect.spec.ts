@@ -153,15 +153,26 @@ test("captures the model pickers this change touched", async () => {
       await dismissNotices();
       // Model, access and tools sit under the collapsed Advanced settings row.
       await page.getByText(/^Advanced settings/).click();
+      // Provider, model and reasoning chips before the model pill, one pill
+      // after: the spec runs on both.
       const provider = page.getByRole("button", { name: /^Automation model provider/ });
-      await provider.scrollIntoViewIfNeeded();
-      await provider.click();
-      await page.getByRole("option", { name: /OpenAI|Codex/ }).first().click();
       const chip = page.getByRole("button", { name: /^Automation model(?::|$)/ });
-      await chip.click();
-      const list = page.getByRole("listbox", { name: /^Automation model(?! provider)/ }).first();
-      await expect(list).toBeVisible();
-      await captureRegion(page, "automation-model.png", [provider, chip, list]);
+      await chip.scrollIntoViewIfNeeded();
+      if (await provider.count()) {
+        await provider.click();
+        await page.getByRole("option", { name: /OpenAI|Codex/ }).first().click();
+        await chip.click();
+        const list = page.getByRole("listbox", { name: /^Automation model(?! provider)/ }).first();
+        await expect(list).toBeVisible();
+        await captureRegion(page, "automation-model.png", [provider, chip, list]);
+      } else {
+        await chip.click();
+        const panel = page.getByRole("dialog", { name: "Automation model" });
+        await panel.getByRole("listbox", { name: "Provider" })
+          .getByRole("option", { name: /OpenAI|Codex/ }).first().click();
+        await expect(panel).toBeVisible();
+        await captureRegion(page, "automation-model.png", [chip, panel]);
+      }
     }, async () => {
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: /Exit Automations/ }).click({ timeout: 5_000 });

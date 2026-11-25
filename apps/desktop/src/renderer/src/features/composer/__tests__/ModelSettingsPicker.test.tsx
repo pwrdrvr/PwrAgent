@@ -1,6 +1,7 @@
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ModelSettingsPicker } from "../ModelSettingsPicker";
+import { ModelSettingsPicker, ModelSettingsQuickList } from "../ModelSettingsPicker";
 
 afterEach(() => {
   cleanup();
@@ -215,5 +216,80 @@ describe("ModelSettingsPicker composer panel position", () => {
     expect(placed(panel).foot).toBe(504);
     await move({ toolbarTop: 556 }, "Opus 5.5");
     expect(placed(panel).foot).toBe(504);
+  });
+});
+
+/**
+ * A new thread can start on any provider, so its panel opens on the whole
+ * settings recent threads started with, behind a Recent tab at the top of
+ * the provider rail. Any provider row, the chosen one's included, opens
+ * that provider's editor.
+ */
+describe("ModelSettingsPicker Recent tab", () => {
+  function renderWithRecents(startOpen: boolean) {
+    const onPickRecent = vi.fn();
+    const onProvider = vi.fn();
+    render(
+      <ModelSettingsPicker
+        provider={{
+          label: "Claude",
+          showInPill: true,
+          choices: {
+            options: [{ value: "codex", label: "OpenAI" }, { value: "claude", label: "Claude" }],
+            value: "claude",
+            onChange: onProvider,
+          },
+        }}
+        model={{
+          value: "opus", label: "Opus 5.5", kind: "claude",
+          models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+          onChange: () => undefined,
+        }}
+        recents={{
+          startOpen,
+          content: (close) => (
+            <ModelSettingsQuickList
+              label="Recent settings"
+              sections={[{ rows: [{
+                key: "r", provider: "OpenAI", model: "GPT-6.1-Sol", effort: "high", effortStops: ["low", "high"],
+                speed: "ultrafast", selected: false,
+                onPick: () => { onPickRecent(); close(); },
+              }] }]}
+            />
+          ),
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Model settings/ }));
+    return { panel: screen.getByRole("dialog", { name: "Model settings" }), onPickRecent, onProvider };
+  }
+
+  it("opens on Recent, and a provider row, the chosen one too, opens its editor", () => {
+    const { panel } = renderWithRecents(true);
+    const recent = within(panel).getByRole("button", { name: "Recent" });
+    expect(recent).toHaveAttribute("aria-pressed", "true");
+    expect(within(panel).getByRole("option", { name: "OpenAI, GPT-6.1-Sol, high effort, Ultrafast" })).toBeTruthy();
+    expect(within(panel).queryByRole("listbox", { name: "Model" })).toBeNull();
+
+    fireEvent.click(within(panel).getByRole("option", { name: "Claude" }));
+    expect(within(panel).getByRole("listbox", { name: "Model" })).toBeTruthy();
+    expect(recent).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(recent);
+    expect(within(panel).queryByRole("listbox", { name: "Model" })).toBeNull();
+  });
+
+  it("picks a whole recent setting in one click and closes", () => {
+    const { panel, onPickRecent, onProvider } = renderWithRecents(true);
+    fireEvent.click(within(panel).getByRole("option", { name: /^OpenAI, GPT-6.1-Sol/ }));
+    expect(onPickRecent).toHaveBeenCalledTimes(1);
+    expect(onProvider).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens on the editor when the host does not ask for Recent", () => {
+    const { panel } = renderWithRecents(false);
+    expect(within(panel).getByRole("button", { name: "Recent" })).toHaveAttribute("aria-pressed", "false");
+    expect(within(panel).getByRole("listbox", { name: "Model" })).toBeTruthy();
   });
 });

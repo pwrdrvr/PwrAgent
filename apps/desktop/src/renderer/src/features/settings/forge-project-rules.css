@@ -375,10 +375,6 @@
   font-weight: 600;
 }
 
-.forge-rules__model-list {
-  font-family: var(--font-mono);
-}
-
 .forge-rules__sr {
   position: absolute;
   width: 1px;
