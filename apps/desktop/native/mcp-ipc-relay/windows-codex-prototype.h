@@ -5,7 +5,6 @@
 #include <io.h>
 #include <stdint.h>
 #include <sddl.h>
-#pragma comment(lib, "Kernelbase.lib")
 
 #define CODEX_PROTOTYPE_PREFIX L"\\\\.\\pipe\\pwa-codex-prototype-"
 #define CODEX_PIN_LIMIT 256
@@ -17,8 +16,11 @@ typedef struct {
   BOOL initial_breakpoint;
 } CodexDebugPin;
 
+typedef BOOL (WINAPI *CodexCompareObjects)(HANDLE, HANDLE);
+
 typedef struct {
   HANDLE pipe, stop, bridge_input, bridge_output;
+  CodexCompareObjects compare_objects;
   DWORD root_pid;
   SRWLOCK pin_lock;
   CodexDebugPin pins[CODEX_PIN_LIMIT];
@@ -101,7 +103,7 @@ static BOOL codex_pid_pinned(CodexPrototype *server, DWORD pid, HANDLE process) 
   AcquireSRWLockShared(&server->pin_lock);
   for (size_t i = 0; i < _countof(server->pins); i++) {
     const CodexDebugPin *pin = server->pins + i;
-    if (pin->process && pin->pid == pid && CompareObjectHandles(pin->process, process)) {
+    if (pin->process && pin->pid == pid && server->compare_objects(pin->process, process)) {
       match = TRUE;
       break;
     }
@@ -219,6 +221,13 @@ static DWORD codex_exception_status(CodexPrototype *server, const DEBUG_EVENT *e
 
 static int codex_windows_supervisor(const wchar_t *pipe, const wchar_t *executable, wchar_t *command_line) {
   CodexPrototype server = {0};
+  /* Some SDK distributions declare this API but omit Kernelbase.lib.
+   * Resolve the documented OS export. Its absence cannot relax admission.
+   */
+  HMODULE kernel = GetModuleHandleW(L"Kernelbase.dll");
+  FARPROC compare = kernel ? GetProcAddress(kernel, "CompareObjectHandles") : NULL;
+  if (!compare) fail("Windows process object comparison is unavailable");
+  memcpy(&server.compare_objects, &compare, sizeof(server.compare_objects));
   InitializeSRWLock(&server.pin_lock);
   server.pipe = codex_protected_pipe(pipe);
   server.stop = CreateEventW(NULL, TRUE, FALSE, NULL);
