@@ -15,13 +15,24 @@ export const CODEX_SPEED_DESCRIPTIONS: Record<CodexSpeed, string> = {
   ultrafast: "The fastest tier this model offers",
 };
 
-/** Split a catalog's effort list into the bar's stops and its default entry. */
+/** The effort levels providers name, least to most. */
+const EFFORT_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/**
+ * Split a catalog's effort list into the bar's stops and its default entry.
+ * The bar always rises left to right, so known levels are put in that order:
+ * Grok lists its levels most-first. A list with a level this table does not
+ * know keeps the catalog's order, which is the only order it has.
+ */
 export function splitEffortChoices(efforts: readonly string[]): {
   stops: string[];
   hasModelDefault: boolean;
 } {
-  const stops = efforts.filter((effort) => effort !== MODEL_DEFAULT_EFFORT);
-  return { stops, hasModelDefault: stops.length !== efforts.length };
+  const listed = efforts.filter((effort) => effort !== MODEL_DEFAULT_EFFORT);
+  const stops = listed.every((effort) => EFFORT_LEVELS.includes(effort))
+    ? [...listed].sort((left, right) => EFFORT_LEVELS.indexOf(left) - EFFORT_LEVELS.indexOf(right))
+    : listed;
+  return { stops, hasModelDefault: listed.length !== efforts.length };
 }
 
 /**

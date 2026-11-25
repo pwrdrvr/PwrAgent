@@ -11828,7 +11828,15 @@ function useComposerController(props: ComposerProps) {
         | "codexEnvironmentExecutionTarget"
         | "codexEnvironmentActionId"
       >
-    >
+    >,
+    options?: {
+      /**
+       * The change came from the open model panel, where the next choice
+       * is often the model or effort. Leave focus there: sending it to
+       * the prompt moves focus out of the panel, which closes it.
+       */
+      keepFocus?: boolean;
+    },
   ): void => {
     if (!props.launchpad || !props.onUpdateLaunchpad) {
       return;
@@ -11849,6 +11857,7 @@ function useComposerController(props: ComposerProps) {
         stickySettingsChanged: true,
       },
     );
+    if (options?.keepFocus) return;
     window.setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
@@ -15835,7 +15844,7 @@ function useComposerController(props: ComposerProps) {
                     ? remembered?.serviceTier
                     : undefined,
                 } : {}),
-              });
+              }, { keepFocus: true });
     };
     const onModelChange = (value: string): void => {
               const model = value;
@@ -15866,7 +15875,7 @@ function useComposerController(props: ComposerProps) {
                       ? props.launchpad.serviceTier
                       : undefined,
                   } : {}),
-                });
+                }, { keepFocus: true });
                 return;
               }
               if (nextSupportsReasoning) {
@@ -15899,7 +15908,7 @@ function useComposerController(props: ComposerProps) {
       patch: Partial<Pick<NavigationThreadSummary, "reasoningEffort" | "serviceTier" | "fastMode">>,
     ): void => {
       if (props.launchpad) {
-        handleLaunchpadPatch(patch);
+        handleLaunchpadPatch(patch, { keepFocus: true });
         return;
       }
       handleThreadModelSettingsPatch(patch);
@@ -15968,7 +15977,7 @@ function useComposerController(props: ComposerProps) {
               profileReasoningOptions.length > 0
                 ? profileReasoningEffort
                 : undefined,
-          }),
+          }, { keepFocus: true }),
         },
       } : {}),
       ...(modelMenuFootnote ? { footnote: modelMenuFootnote } : {}),

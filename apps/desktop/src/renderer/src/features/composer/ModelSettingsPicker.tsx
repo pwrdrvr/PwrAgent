@@ -131,6 +131,8 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+  // Set by a Tab keydown inside the panel, read by the blur it causes.
+  const tabbedRef = useRef(false);
   const panelId = useId();
   const onOpenChange = props.onOpenChange;
   const rail = props.provider?.choices;
@@ -269,11 +271,18 @@ export function ModelSettingsPicker(props: ModelSettingsPickerProps) {
       role="dialog"
       style={panelStyle}
       onBlur={(event) => {
-        // Focus that leaves both the panel and its pill closes the panel.
+        // Tabbing out of both the panel and its pill closes the panel. Only
+        // the keyboard does: the host moving focus in code (a composer
+        // sending it to the prompt after a change) must not close the panel
+        // the operator is still choosing in. A click outside closes it on
+        // pointerdown instead.
+        const tabbed = tabbedRef.current;
+        tabbedRef.current = false;
         const next = event.relatedTarget as Node | null;
-        if (next && !panelRef.current?.contains(next) && !wrapperRef.current?.contains(next)) close();
+        if (tabbed && next && !panelRef.current?.contains(next) && !wrapperRef.current?.contains(next)) close();
       }}
       onKeyDown={(event) => {
+        tabbedRef.current = event.key === "Tab";
         if (event.key !== "Tab" || !portalled) return;
         // A portalled panel is not beside its pill in the DOM. Tab past
         // either end goes back to the pill and closes the panel, so focus

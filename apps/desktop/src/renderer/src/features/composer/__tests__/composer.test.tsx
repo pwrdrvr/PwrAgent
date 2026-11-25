@@ -6769,6 +6769,63 @@ describe("Composer", () => {
     expect(onUpdateLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ model: "owner-plain", reasoningEffort: undefined, serviceTier: undefined }));
   });
 
+  it("keeps the model panel open on a provider pick and lists that provider's models", async () => {
+    function Draft() {
+      const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>({
+        directoryKey: "directory:/repo/atlas", directoryKind: "directory", directoryLabel: "atlas",
+        directoryPath: "/repo/atlas", backend: "acp:grok", model: "grok-4.7", reasoningEffort: "high",
+        executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+      });
+      return <Composer backends={[
+        { ...backendSummary("acp:grok", { models: [
+          { id: "grok-4.7", label: "Grok 4.7", supportsReasoning: true, reasoningEfforts: ["xhigh", "high", "medium", "low"] },
+        ] }), label: "Grok" },
+        { ...backendSummary("claude", { models: [
+          { id: "opus", label: "Opus 5.5", current: true, supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+          { id: "sonnet", label: "Sonnet 5.5", supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+        ] }), label: "Claude" },
+      ]} launchpad={launchpad}
+        onUpdateLaunchpad={async (_key, patch) => {
+          setLaunchpad((current) => applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(current, patch));
+        }} skills={[]} />;
+    }
+    render(<Draft />);
+    const panel = openModelSettings();
+    const claude = within(within(panel).getByRole("listbox", { name: "Provider" })).getByRole("option", { name: "Claude" });
+    claude.focus();
+    await act(async () => {
+      fireEvent.click(claude);
+      // The old dropdowns closed on a pick and sent focus to the prompt a
+      // tick later. Focus leaving the panel closes it, so let that tick run.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-model", "opus"));
+    // Picking a provider is one step of choosing a model, not the last one.
+    const open = screen.getByRole("dialog", { name: "Model settings" });
+    expect(open.contains(document.activeElement)).toBe(true);
+    expect(modelSettingsPill()).toHaveAttribute("aria-expanded", "true");
+    expect(modelSettingsOptionNames("Model")).toEqual(["Opus 5.5", "Sonnet 5.5"]);
+    expect(within(within(open).getByRole("listbox", { name: "Provider" })).getByRole("option", { name: "Claude" }))
+      .toHaveAttribute("aria-selected", "true");
+    // So do a model and an effort.
+    const sonnet = within(within(open).getByRole("listbox", { name: "Model" })).getByRole("option", { name: "Sonnet 5.5" });
+    sonnet.focus();
+    await act(async () => {
+      fireEvent.click(sonnet);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-model", "sonnet"));
+    expect(open.contains(document.activeElement)).toBe(true);
+    const slider = within(open).getByRole("slider", { name: "Effort" });
+    slider.focus();
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: "End" });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-effort", "high"));
+    expect(document.activeElement).toBe(slider);
+  });
+
   it("shows OpenAI model and reasoning defaults without a Default option", () => {
     render(
       <Composer

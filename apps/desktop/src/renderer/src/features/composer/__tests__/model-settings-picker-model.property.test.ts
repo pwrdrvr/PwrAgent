@@ -19,15 +19,30 @@ const FORWARD = new Set(["ArrowRight", "ArrowUp", "PageUp"]);
  * tests pinned only at a few points. These state them for every input.
  */
 describe("model settings picker rules", () => {
-  it("splits the model default out of an effort list and keeps every level in order", () => {
+  it("splits the model default out of an effort list and orders known levels least to most", () => {
+    const levels = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
     fc.assert(fc.property(
-      fc.array(fc.constantFrom("low", "medium", "high", "xhigh", "max", MODEL_DEFAULT_EFFORT), { maxLength: 8 }),
-      (efforts) => {
-        const { stops, hasModelDefault } = splitEffortChoices(efforts);
-        expect(stops).toEqual(efforts.filter((effort) => effort !== MODEL_DEFAULT_EFFORT));
-        expect(hasModelDefault).toBe(efforts.includes(MODEL_DEFAULT_EFFORT));
+      fc.uniqueArray(fc.constantFrom(...levels, MODEL_DEFAULT_EFFORT), { maxLength: 8 })
+        .chain((known) => fc.tuple(fc.constant(known), fc.shuffledSubarray(known, { minLength: known.length }))),
+      fc.boolean(),
+      ([, efforts], withUnknown) => {
+        const listed = withUnknown ? [...efforts, "turbo"] : efforts;
+        const { stops, hasModelDefault } = splitEffortChoices(listed);
+        const levelsListed = listed.filter((effort) => effort !== MODEL_DEFAULT_EFFORT);
+        expect(hasModelDefault).toBe(listed.includes(MODEL_DEFAULT_EFFORT));
+        // Every level stays and nothing is added.
+        expect([...stops].sort()).toEqual([...levelsListed].sort());
+        if (withUnknown) {
+          // A level the table does not know: the catalog's order stands.
+          expect(stops).toEqual(levelsListed);
+        } else {
+          // The bar rises left to right, whatever order the catalog used.
+          expect(stops).toEqual(levels.filter((level) => levelsListed.includes(level)));
+        }
       },
     ));
+    // Grok lists its levels most-first.
+    expect(splitEffortChoices(["xhigh", "high", "medium", "low"]).stops).toEqual(["low", "medium", "high", "xhigh"]);
   });
 
   it("maps a pointer to the segment under it, holding the end stop past either end", () => {
