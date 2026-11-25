@@ -1,8 +1,8 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -38,9 +38,26 @@ vi.mock("../codex-app-server/stdio-transport", async () => ({
 }));
 
 const execute = promisify(execFile);
+const git = async (cwd: string, args: string[]) => (await execute("git", ["-C", cwd, ...args])).stdout;
 const registries: DesktopBackendRegistry[] = [];
 const databases: StateDb[] = [];
 const roots: string[] = [];
+let seedRepo: string;
+
+beforeAll(async () => {
+  seedRepo = await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-seed-"));
+  await git(seedRepo, ["init", "--template=", "-b", "main"]);
+  await git(seedRepo, ["config", "core.autocrlf", "false"]);
+  await git(seedRepo, ["config", "core.eol", "lf"]);
+  await writeFile(path.join(seedRepo, "file.txt"), "original\n");
+  await git(seedRepo, ["add", "file.txt"]);
+  await git(seedRepo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-m", "fixture"]);
+});
+
+afterAll(async () => {
+  if (seedRepo) await rm(seedRepo, { recursive: true, force: true });
+});
+
 afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(registries.splice(0).map((registry) => registry.close()));
@@ -65,14 +82,9 @@ async function createFixture(managed: boolean | "claude" = false) {
     vi.stubEnv("CODEX_HOME", codexHome);
     await mkdir(path.dirname(worktree), { recursive: true });
   }
-  await mkdir(repo);
-  const git = async (cwd: string, args: string[]) => (await execute("git", ["-C", cwd, ...args])).stdout;
-  await git(repo, ["init", "-b", "main"]);
-  await git(repo, ["config", "core.autocrlf", "false"]);
-  await git(repo, ["config", "core.eol", "lf"]);
-  await writeFile(path.join(repo, "file.txt"), "original\n");
-  await git(repo, ["add", "file.txt"]);
-  await git(repo, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "-c", "commit.gpgsign=false", "commit", "-m", "fixture"]);
+  // Copy the primary checkout, including its refs and objects. Git creates
+  // the linked worktree here so its ownership records point at this fixture.
+  await cp(seedRepo, repo, { recursive: true });
   await git(repo, ["worktree", "add", "-b", "owned", worktree]);
   const directory = { id: "owned", kind: "worktree" as const, label: "repo", path: repo, worktreePath: worktree };
   const { dbPath, tempDir } = createTempStateDb("pwragent-archive-restart-db-");
