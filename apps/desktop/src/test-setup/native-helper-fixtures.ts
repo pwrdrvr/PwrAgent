@@ -8,7 +8,7 @@ const desktop = fileURLToPath(new URL("../..", import.meta.url));
 const consumers = {
   maintenanceCargo: "maintenance-cargo-output.property.test.ts",
   maintenanceAllocation: "maintenance-disk-usage.property.test.ts",
-  mcpIpc: "mcp-ipc-http.test.ts",
+  mcpIpc: ["mcp-ipc-http.test.ts", "codex-agent-tool-ipc.property.test.ts"],
   markerProbe: "thread-dependency-marker-probe.property.test.ts",
   stackEngine: ["stack-engine-ports.test.ts", "stack-provisioning.property.test.ts", "stack-recovery.property.test.ts"],
   windowsGitJobLauncher: ["windows-git-job-launcher.test.ts", "navigation-stack-git-reuse.property.test.ts"],
