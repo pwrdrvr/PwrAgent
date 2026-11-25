@@ -12323,6 +12323,7 @@ function useComposerController(props: ComposerProps) {
     turnSendActionsVisible,
     turnBackendLabel,
     steerUnavailableReason,
+    interruptOffered,
     interruptUnavailableReason,
     pendingSteerReason,
     launchpadWorkspaceOptions,
@@ -12852,8 +12853,10 @@ function useComposerController(props: ComposerProps) {
       submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
     const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
     // Mid-turn the send menu also names how this message can meet the running
-    // turn. Steer and Interrupt stay listed where the provider or model cannot
-    // do them, dimmed with the reason, so the menu explains the gap.
+    // turn. Steer stays listed where the provider or model cannot do it,
+    // dimmed with the reason, so the menu explains the gap. Interrupt is
+    // listed only for a provider that can cut in at all; where it can but
+    // not right now, it is dimmed with the reason instead.
     const turnSendActionsVisible =
       submitButtonLabel === "Queue"
       && Boolean(activeTurnId)
@@ -12868,11 +12871,12 @@ function useComposerController(props: ComposerProps) {
       : backend?.capabilities.steerTurn
         ? `${selectedModelOption?.label ?? selectedModelOption?.id ?? "This model"} can't take messages mid-turn`
         : `${turnBackendLabel} can't take messages mid-turn`;
-    const interruptUnavailableReason = supportsInterruptSteer
-      ? undefined
-      : !backendsDescribeThreadOwner && supportsSteering
-        ? "Open this instance's window to interrupt"
-        : `${turnBackendLabel} can't cut in mid-response`;
+    const interruptOffered = backend?.capabilities.interruptSteerTurn === true;
+    // Interrupt rides the steer path, so whatever blocks Steer blocks it too.
+    const interruptUnavailableReason = steerUnavailableReason
+      ?? (backendsDescribeThreadOwner
+        ? undefined
+        : "Open this instance's window to interrupt");
     // One steer at a time: a second would be dropped while the first waits.
     const pendingSteerReason = pendingSteer
       ? "Another message is already steering in"
@@ -13925,6 +13929,7 @@ function useComposerController(props: ComposerProps) {
       turnSendActionsVisible,
       turnBackendLabel,
       steerUnavailableReason,
+      interruptOffered,
       interruptUnavailableReason,
       pendingSteerReason,
       launchpadWorkspaceOptions,
@@ -17055,19 +17060,21 @@ function useComposerController(props: ComposerProps) {
                         void submitTurn("steer", { restoreComposerFocus: true });
                       }}
                     />
-                    <ComposerSendMenuItem
-                      description={
-                        interruptUnavailableReason
-                        ?? pendingSteerReason
-                        ?? "Cut off the current response and send now"
-                      }
-                      disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
-                      label="Interrupt"
-                      onSelect={() => {
-                        setScheduleMenuOpen(false);
-                        void submitTurn("interrupt", { restoreComposerFocus: true });
-                      }}
-                    />
+                    {interruptOffered ? (
+                      <ComposerSendMenuItem
+                        description={
+                          interruptUnavailableReason
+                          ?? pendingSteerReason
+                          ?? "Cut off the current response and send now"
+                        }
+                        disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
+                        label="Interrupt"
+                        onSelect={() => {
+                          setScheduleMenuOpen(false);
+                          void submitTurn("interrupt", { restoreComposerFocus: true });
+                        }}
+                      />
+                    ) : null}
                     <div
                       className="composer__schedule-menu-separator"
                       role="separator"
