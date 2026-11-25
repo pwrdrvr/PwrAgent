@@ -20,19 +20,18 @@ export function StackGlyph(props: ComponentProps<"svg">) {
   );
 }
 
-export function StackHeading({ count, trunk, inferred, grouped }: {
+export function StackHeading({ count, trunk, inferred }: {
   count: number;
   trunk?: string;
   inferred: boolean;
-  grouped?: boolean;
 }) {
   return (
     <div className="stack-display__head">
       <span className="stack-display__caption"><StackGlyph /> Stack</span>
       <span className="stack-display__summary" title={trunk}>
-        {grouped ? `· ${count}` : `${count} PRs`}{trunk ? ` into ${trunk}` : ""}
+        {`${count} PRs`}{trunk ? ` into ${trunk}` : ""}
       </span>
-      {!grouped ? <span className="stack-display__source">{inferred ? "from PR bases" : "gh stack"}</span> : null}
+      <span className="stack-display__source">{inferred ? "from PR bases" : "gh stack"}</span>
     </div>
   );
 }

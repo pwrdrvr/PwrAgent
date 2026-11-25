@@ -33,8 +33,8 @@ import { MAX_COMPACT_STACK_MEMBERSHIPS, type CompactStackMembership } from "@pwr
 import { sidebarPrCardBridge } from "../../lib/hover-card-bridge";
 import { getDesktopApi } from "../../lib/desktop-api";
 import { useSelectedStackDetails } from "../stacks/useSelectedStackDetails";
-import { StackHeading, StackLayerMeta, StackNode, StackTrunk } from "../stacks/StackBody";
-import { groupStackRollup, knownPrStatus, stackHealthLabel, stackLayerReadiness, stackMembershipForPr, staleStackSpine } from "../stacks/stack-pr-data";
+import { StackLayerMeta } from "../stacks/StackBody";
+import { knownPrStatus, orderStackRollup, stackHealthLabel, stackLayerReadiness, stackMembershipForPr } from "../stacks/stack-pr-data";
 import { PrChip } from "./PrChip";
 import { PrCardActions } from "./PrCardActions";
 import { PrStatusCard } from "./PrStatusCard";
@@ -163,17 +163,15 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
   const rollup = resolvePrRollup(props.prs)!;
   const listRollup = listPrs === props.prs ? rollup : resolvePrRollup(listPrs);
   const stackPreview = props.stackThread?.stackMemberships;
-  const needStackDetails = open && Boolean(stackPreview && (stackPreview.length >= MAX_COMPACT_STACK_MEMBERSHIPS
-    || stackPreview.some(({ count, trunk }) => count > 1 && !trunk)));
+  // The compact preview is capped, so a full one may omit attached layers.
+  const needStackDetails = open && Boolean(stackPreview && stackPreview.length >= MAX_COMPACT_STACK_MEMBERSHIPS);
   const stackDetails = useSelectedStackDetails({
     thread: needStackDetails ? props.stackThread : undefined,
     desktopApi: needStackDetails ? getDesktopApi() : undefined,
     allowLegacyLookup: false,
   });
-  const entries = open ? groupStackRollup(listRollup?.ordered ?? [], props.stackThread, stackDetails.stacks) : [];
-  const ordered = entries.flatMap((entry) => "stack" in entry ? entry.rows.map(({ pr }) => pr) : [entry]);
-  const orderIndices = new Map(ordered.map((pr, index) => [pr.url, index]));
-  const groupCount = entries.length;
+  const rows = open ? orderStackRollup(listRollup?.ordered ?? [], props.stackThread, stackDetails.stacks) : [];
+  const ordered = rows.map(({ pr }) => pr);
   const held = props.heldPrUrls && new Set(props.heldPrUrls.split("\n"));
   const visiblePreview = held ? props.prs.filter((pr) => !held.has(pr.url)) : props.prs;
   const signalPrs = held ? listPrs.filter((pr) => !held.has(pr.url)) : listPrs;
@@ -409,7 +407,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       && current.chipSide === next.chipSide
         ? current
         : next);
-  }, [open, groupCount, ordered.length, incomplete]);
+  }, [open, ordered.length, incomplete]);
 
   // An outside press or a scroll of the chip's ancestors closes it: the
   // popover is fixed to where the chip was. Sibling panes (including the
@@ -619,7 +617,8 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         : `${stackTime} · ${status}`;
     const health = member && stackHealthLabel(member);
     const accessibleStatus = member
-      ? [stackLayerReadiness(pr, knownPrStatus(status), health), health].filter(Boolean).join(" · ")
+      ? [`stack layer ${member.position} of ${member.count}`, stackLayerReadiness(pr, knownPrStatus(status), health), health]
+        .filter(Boolean).join(" · ")
       : status;
     const rowPresentation = isHeld ? undefined : resolvePrChipPresentation(pr);
     const rowWaitingForCi = !isHeld && Boolean(watchFor(pr)?.ci);
@@ -631,9 +630,8 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
       // The card and the PR menu cover the row's chip too.
       <li
         key={pr.url}
-        className={["pr-rollup-popover__item", member ? "stack-display__layer" : "", menuTargetUrl === pr.url ? "is-menu-target" : ""].filter(Boolean).join(" ")}
+        className={["pr-rollup-popover__item", menuTargetUrl === pr.url ? "is-menu-target" : ""].filter(Boolean).join(" ")}
         data-position={member?.position}
-        data-stale={member && staleStackSpine(member.health) || undefined}
         onMouseEnter={(event) => {
           if (!menuTargetUrl) {
             enterRow(pr, event.currentTarget, { x: event.clientX, y: event.clientY });
@@ -645,7 +643,6 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
         }}
         onContextMenu={(event) => openRowContextMenu(event, pr)}
       >
-        {member ? <StackNode pr={pr} /> : null}
         <button
           type="button"
           className="pr-rollup-popover__row"
@@ -694,10 +691,10 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
           ].join(" ")}
           onClick={openRow}
         >
-          {member ? null : <span
+          <span
             className="pr-chip__dot"
             ref={rowPresentation?.hasFailingChecksStillRunning ? statusPulseRef : undefined}
-          />}
+          />
           <span className="pr-chip__label">{label}</span>
           {rowWaitingForCi ? (
             <span className="pr-chip__watch">
@@ -859,15 +856,7 @@ function MultiPrRollupChip(props: PrRollupChipProps) {
                 hideRowCard();
               }}
             >
-              {entries.map((entry) => "stack" in entry ? (
-                <li key={entry.stack.key} className="pr-rollup-popover__stack">
-                  <StackHeading count={entry.stack.count} trunk={entry.trunk} inferred={entry.stack.inferred} grouped />
-                  <ol className="stack-display__list" reversed>
-                    {entry.rows.map(({ pr, member }) => renderRow(pr, orderIndices.get(pr.url)!, member))}
-                    <StackTrunk trunk={entry.trunk} />
-                  </ol>
-                </li>
-              ) : renderRow(entry, orderIndices.get(entry.url)!))}
+              {rows.map(({ pr, member }, index) => renderRow(pr, index, member))}
             </ul>
             {props.onDetachAll && !incomplete && ordered.length ? (
               <div className="pr-rollup-popover__foot">

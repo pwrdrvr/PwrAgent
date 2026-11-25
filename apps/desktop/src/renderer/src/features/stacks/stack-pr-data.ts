@@ -60,65 +60,50 @@ export function stackLayerReadiness(pr: PrSummary | undefined, status: string | 
   return pr && prPhaseLabel(pr) === "draft" ? "draft" : undefined;
 }
 
-export type StackRollupGroup = {
-  stack: CompactStackMembership;
-  trunk: string;
-  rows: { pr: PrSummary; member: CompactStackMembership }[];
-};
+export type StackRollupRow = { pr: PrSummary; member?: CompactStackMembership };
 
-export function groupStackRollup(
+/**
+ * The rollup's rows in one flat list. A stacked PR keeps the row every other
+ * PR has and says where it sits (`2/4`), so a thread holding part of a stack,
+ * or several stacks beside loose PRs, reads as one list. A stack's attached
+ * PRs run together, top first, from where its first one falls in the
+ * rollup's order; every other PR keeps that order.
+ */
+export function orderStackRollup(
   ordered: readonly PrSummary[],
   thread: NavigationThreadSummary | undefined,
   details?: readonly StackSummary[],
-): Array<PrSummary | StackRollupGroup> {
-  if (!thread) return [...ordered];
+): StackRollupRow[] {
+  if (!thread) return ordered.map((pr) => ({ pr }));
   const memberships = new Map<string, CompactStackMembership>();
   for (const member of readCompactStackMemberships(thread)) {
     const identity = `${member.repository}#${member.number}`;
     if (!memberships.has(identity)) memberships.set(identity, member);
   }
-  if (details) {
-    const attached = new Set(ordered.map((pr) => `${stackRepository(pr)}#${pr.number}`));
-    for (const stack of details) {
-      const hasOpenPr = stack.layers.some((layer) => layer.pullRequest?.lifecycleState === "open");
-      for (const [index, layer] of stack.layers.entries()) {
-        const identity = `${stack.repository}#${layer.pullRequest?.number}`;
-        if (!attached.has(identity)) continue;
-        const compact = memberships.get(identity);
-        if (!compact || (compact.key === stack.key && !compact.trunk)) {
-          memberships.set(identity, compactStackMembership(stack, index + 1, hasOpenPr)!);
-        }
-      }
+  // The compact preview is capped; the owner's stacks place the rest.
+  for (const stack of details ?? []) {
+    const hasOpenPr = stack.layers.some((layer) => layer.pullRequest?.lifecycleState === "open");
+    for (const [index, layer] of stack.layers.entries()) {
+      const identity = `${stack.repository}#${layer.pullRequest?.number}`;
+      if (!memberships.has(identity)) memberships.set(identity, compactStackMembership(stack, index + 1, hasOpenPr)!);
     }
   }
-  const trunks = new Map<string, string>();
+  const runs = new Map<string, StackRollupRow[]>();
+  const slots: StackRollupRow[][] = [];
   for (const pr of ordered) {
     const member = memberships.get(`${stackRepository(pr)}#${pr.number}`);
-    // The lowest attached PR supplies a trunk for compact rows from older peers.
-    const trunk = member?.trunk ?? (member?.position === 1 ? pr.baseRefName : undefined);
-    if (member && trunk) trunks.set(member.key, trunk);
-  }
-  const groups = new Map<string, StackRollupGroup>();
-  const list: Array<PrSummary | StackRollupGroup> = [];
-  for (const pr of ordered) {
-    const member = memberships.get(`${stackRepository(pr)}#${pr.number}`);
-    const trunk = member && trunks.get(member.key);
-    if (!member || !trunk || member.count < 2) {
-      list.push(pr);
+    if (!member || member.count < 2) {
+      slots.push([{ pr }]);
       continue;
     }
-    // The input is open-first, newest-first, so the first attached member
-    // sets the group's slot even when its bottom layer has since merged.
-    let group = groups.get(member.key);
-    if (!group) {
-      group = { stack: member, trunk, rows: [] };
-      groups.set(member.key, group);
-      list.push(group);
+    let run = runs.get(member.key);
+    if (!run) {
+      run = [];
+      runs.set(member.key, run);
+      slots.push(run);
     }
-    group.rows.push({ pr, member });
+    run.push({ pr, member });
   }
-  for (const group of groups.values()) {
-    group.rows.sort((a, b) => b.member.position - a.member.position);
-  }
-  return list;
+  for (const run of runs.values()) run.sort((a, b) => b.member!.position - a.member!.position);
+  return slots.flat();
 }

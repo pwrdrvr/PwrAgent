@@ -70,10 +70,12 @@ it("draws the stack top first and keeps actionable status in the metadata on all
       fireEvent.click(rollupTrigger);
       const rollup = screen.getByRole("group", { name: /^Pull requests for/ });
       const rail = view.container.querySelector(".stack-rail-card")!;
-      const expected = Array.from({ length: height }, (_, index) => String(height - index)).concat("main");
+      const positions = Array.from({ length: height }, (_, index) => String(height - index));
       for (const surface of [popover, rollup, rail]) {
-        const list = surface.querySelector(".stack-display__list")!;
-        expect(Array.from(list.children, (row) => row.getAttribute("data-position") ?? row.textContent)).toEqual(expected);
+        // The rollup lists rows only; the stack's own surfaces end at the trunk.
+        const list = surface.querySelector(".stack-display__list, .pr-rollup-popover__list")!;
+        expect(Array.from(list.children, (row) => row.getAttribute("data-position") ?? row.textContent))
+          .toEqual(surface === rollup ? positions : [...positions, "main"]);
         const meta = [...list.querySelectorAll(".stack-display__status, .pr-rollup-popover__status")];
         expect(meta).toHaveLength(height);
         for (const line of meta) expect(line.textContent?.trim()).not.toMatch(/^·/);
@@ -150,7 +152,7 @@ it("matches the current PR after an earlier stack layer is removed", () => {
   expect(within(popover).getByText("This PR").closest("li")?.textContent).toContain("#11");
 });
 
-it("draws the bottom PR's base as the trunk for older compact rows", () => {
+it("places older compact rows with no trunk in the rollup by position", () => {
   const { prs, thread } = fixture(2, false);
   render(<PrRollupChip stackThread={{
     ...thread, stacks: undefined,
@@ -158,5 +160,6 @@ it("draws the bottom PR's base as the trunk for older compact rows", () => {
   }} prs={prs} threadTitle={thread.title} repoPrefixedUrls="" onOpen={vi.fn()} />);
   fireEvent.click(screen.getByRole("button", { name: /^2 pull requests/ }));
   const rollup = screen.getByRole("group", { name: /^Pull requests for/ });
-  expect(rollup.querySelector(".stack-display__trunk")?.textContent).toBe("main");
+  expect([...rollup.querySelectorAll(".pr-rollup-popover__status")].map((line) => line.textContent?.split(" · ")[0]))
+    .toEqual(["2/2", "1/2"]);
 });

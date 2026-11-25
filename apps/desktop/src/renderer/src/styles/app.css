@@ -1767,7 +1767,7 @@
 
 /* The rows' chips sit on the side nearest the chip that opened the list,
    so the ✕ is a short move from where the pointer came in. */
-.pr-rollup-popover--chips-left .pr-rollup-popover__item:not(.stack-display__layer) {
+.pr-rollup-popover--chips-left .pr-rollup-popover__item {
   flex-direction: row-reverse;
   padding-right: 0;
   padding-left: 8px;
@@ -1801,7 +1801,7 @@
   cursor: pointer;
 }
 
-.pr-rollup-popover--chips-left .pr-rollup-popover__item:not(.stack-display__layer) .pr-rollup-popover__row {
+.pr-rollup-popover--chips-left .pr-rollup-popover__row {
   padding: 6px 8px 6px 0;
 }
 
@@ -1815,33 +1815,6 @@
   height: 20px;
   flex: none;
   margin-top: 5px;
-}
-
-.pr-rollup-popover__stack {
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-panel-elevated);
-}
-
-.pr-rollup-popover__stack .stack-display__head {
-  padding: 6px 8px 3px;
-}
-
-.pr-rollup-popover__stack .pr-rollup-popover__item {
-  display: grid;
-  padding: 0 4px;
-}
-
-.pr-rollup-popover__stack .stack-display__node {
-  margin-top: 10px;
-}
-
-.pr-rollup-popover__stack .stack-display__trunk .stack-display__node {
-  margin-top: 5px;
-}
-
-.pr-rollup-popover__stack .pr-rollup-popover__row {
-  padding-inline-start: 0;
 }
 
 .pr-rollup-popover__title {
