@@ -1,8 +1,8 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -168,11 +168,55 @@ const ON: DesktopCheckoutHibernationPolicy = {
   enabled: true, idleDays: 7, maxSnapshotMb: 5, removeRebuildableOutput: true, restoreOn: "send",
 };
 
-async function git(cwd: string, args: string[]): Promise<string> {
-  fixtureOwner.check();
+async function runGit(cwd: string, args: string[]): Promise<string> {
   return (await execute("git", ["-C", cwd, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
     "-c", "commit.gpgsign=false", "-c", "protocol.file.allow=always", ...args])).stdout;
 }
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  fixtureOwner.check();
+  return await runGit(cwd, args);
+}
+
+async function createRepoSeed(repo: string, environment: boolean) {
+  await mkdir(repo);
+  await runGit(repo, ["init", "--template=", "-b", "main"]);
+  await runGit(repo, ["config", "core.autocrlf", "false"]);
+  await writeFile(path.join(repo, "file.txt"), "original\n");
+  await writeFile(path.join(repo, ".gitignore"), "node_modules/\n.env.local\n");
+  if (environment) {
+    await mkdir(path.join(repo, ".codex", "environments"), { recursive: true });
+    await writeFile(path.join(repo, ".codex", "environments", "env.toml"), 'version = 1\nname = "Env"\n[setup]\nscript = "install"\n');
+  }
+  await runGit(repo, ["add", "-A"]);
+  await runGit(repo, ["commit", "-m", "fixture"]);
+}
+
+function ownRepoSeeds(
+  createSeed = createRepoSeed,
+  removeRoot = (root: string) => rm(root, { recursive: true, force: true }),
+) {
+  let root: string;
+  let initialization: Promise<void> | undefined;
+  return {
+    get root() { return root; },
+    initialize: () => initialization ??= (async () => {
+      root = await mkdtemp(path.join(os.tmpdir(), "pwragent-hibernate-seed-"));
+      await createSeed(path.join(root, "plain"), false);
+      await createSeed(path.join(root, "environment"), true);
+    })(),
+    close: async () => {
+      // Vitest can stop awaiting the setup hook while Git still uses the root.
+      // Setup reports its own failure. Teardown joins it before removing files.
+      await initialization?.catch(() => {});
+      if (root) await removeRoot(root);
+    },
+  };
+}
+
+const repoSeeds = ownRepoSeeds();
+beforeAll(repoSeeds.initialize);
+afterAll(repoSeeds.close);
 
 async function createFixture(options: { environment?: boolean; worktreeRoot?: ".pwragent" | ".codex" } = {}) {
   const scope = fixtureOwner;
@@ -181,17 +225,9 @@ async function createFixture(options: { environment?: boolean; worktreeRoot?: ".
   roots.push(root);
   const repo = path.join(root, "repo");
   const worktree = path.join(root, options.worktreeRoot ?? ".pwragent", "worktrees", "id", "repo");
-  await mkdir(repo);
-  await git(repo, ["init", "-b", "main"]);
-  await git(repo, ["config", "core.autocrlf", "false"]);
-  await writeFile(path.join(repo, "file.txt"), "original\n");
-  await writeFile(path.join(repo, ".gitignore"), "node_modules/\n.env.local\n");
-  if (options.environment) {
-    await mkdir(path.join(repo, ".codex", "environments"), { recursive: true });
-    await writeFile(path.join(repo, ".codex", "environments", "env.toml"), 'version = 1\nname = "Env"\n[setup]\nscript = "install"\n');
-  }
-  await git(repo, ["add", "-A"]);
-  await git(repo, ["commit", "-m", "fixture"]);
+  // Copy refs, objects and index before Git writes the linked-worktree metadata.
+  // Each case owns its primary checkout and its linked worktree.
+  await cp(path.join(repoSeeds.root, options.environment ? "environment" : "plain"), repo, { recursive: true });
   await mkdir(path.dirname(worktree), { recursive: true });
   await git(repo, ["worktree", "add", "-b", "owned", worktree]);
   const directory = { id: "owned", kind: "worktree" as const, label: "repo", path: repo, worktreePath: worktree };
@@ -1797,6 +1833,34 @@ describe("Thread maintenance's hibernate step", () => {
   }));
 });
 
+
+// A hook timeout ends Vitest's wait. Use a gate to control the still-running
+// setup while observing when teardown admits directory removal.
+it.each([false, true])("seed teardown joins initialization before removing its root (setup rejects: %s)", async (rejectSetup) => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const refusal = new Error("controlled seed setup failure");
+  const seeds = ownRepoSeeds(async (_repo, environment) => {
+    if (environment) return;
+    entered.resolve();
+    await release.promise;
+    order.push("seed settled");
+    if (rejectSetup) throw refusal;
+  }, async root => {
+    order.push("root removed");
+    await rm(root, { recursive: true, force: true });
+  });
+  const setup = seeds.initialize().catch((error: unknown) => error);
+  await entered.promise;
+  const closing = seeds.close();
+  release.resolve();
+  const outcome = await setup;
+  await closing;
+  expect(outcome).toBe(rejectSetup ? refusal : undefined);
+  expect(order).toEqual(["seed settled", "root removed"]);
+  expect(await exists(seeds.root)).toBe(false);
+});
 
 // A deadline is unnecessary: gate an admitted body, request the real fixture
 // teardown, then observe native Git, its file, and its SQLite owner directly.
