@@ -108,7 +108,7 @@ jobs:
               return;
             }
             core.setOutput("blacksmith_trial", String(
-              context.payload.pull_request.head.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`
+              context.payload.pull_request.head?.repo?.full_name === `${context.repo.owner}/${context.repo.repo}`
               && labels.some((label) => label.name === "ci:blacksmith"),
             ));
             if (labels.some((label) => label.name === "ci:full")) {
