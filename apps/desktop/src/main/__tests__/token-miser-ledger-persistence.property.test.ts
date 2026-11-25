@@ -406,8 +406,14 @@ describe("Token Miser pricing projection", () => {
   it.each([
     { scenario: "no repairable rows", repairable: Array<boolean>(12).fill(false) },
     { scenario: "multiple repair passes", repairable: Array<boolean>(32).fill(true) },
-    { scenario: "no progress after two passes", repairable: [...Array<boolean>(20).fill(true), ...Array<boolean>(10).fill(false)] },
-    { scenario: "repairable rows beyond the first barrier", repairable: [...Array<boolean>(10).fill(false), ...Array<boolean>(28).fill(true)] },
+    { scenario: "older repairs blocked by the first batch", repairable: [...Array<boolean>(20).fill(true), ...Array<boolean>(10).fill(false)] },
+    { scenario: "newer repairs followed by unrepairable history", repairable: [...Array<boolean>(10).fill(false), ...Array<boolean>(28).fill(true)] },
+    {
+      // The scan is newest first. It repairs the last ten entries, then
+      // encounters a full batch with no progress before it can reach gate-0.
+      scenario: "older repairs blocked after a successful batch",
+      repairable: [...Array<boolean>(12).fill(true), ...Array<boolean>(11).fill(false), ...Array<boolean>(10).fill(true)],
+    },
     { scenario: "alternating repairs with timestamp ties", repairable: Array.from({ length: 38 }, (_, index) => index % 2 === 0) },
   ])("matches the whole-ledger repricing fixed point with $scenario", ownLedgerTest(async ({ repairable }) => {
     await runRepricingCase(repairable);
