@@ -12,7 +12,11 @@ import {
 import { type ThreadSearchFilters, type ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
 import type { ThreadSearchProjectionSearchRequest, ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import type { StateDb } from "./state-db";
-import { buildThreadSearchFtsQuery } from "./thread-search-fts-query";
+import {
+  buildPartialThreadSearchFtsQuery,
+  buildThreadSearchFtsQuery,
+  buildTypoThreadSearchFtsQuery,
+} from "./thread-search-fts-query";
 
 type ThreadSearchDocumentRow = {
   identity_key: string;
@@ -309,10 +313,10 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         .map((row) => this.rowToResult(row as ThreadSearchDocumentRow, 0, null));
     }
 
-    // MATCH/ranking must have one cursor for the whole result set. Driving
+    // Each MATCH/ranking pass must have one cursor for the whole result set. Driving
     // FTS by inventory rowid restarts its corpus statistics for every identity.
     // Membership stays in WHERE, before ranking and LIMIT.
-    return this.db
+    const ranked = this.db
       .prepare(
         `SELECT d.*,
                 bm25(thread_search_fts) AS rank_value,
@@ -322,24 +326,42 @@ export class ThreadSearchStore implements ThreadSearchStorage {
           WHERE thread_search_fts MATCH @query`
           + (request.identityKeys ? " AND d.identity_key IN (SELECT value FROM json_each(@identityKeys))" : "")
           + backendClause + archivedClause + filterWhere.sql + `
-          ORDER BY rank_value ASC, COALESCE(d.updated_at, d.created_at, 0) DESC
+          ORDER BY rank_value ASC, COALESCE(d.updated_at, d.created_at, 0) DESC, thread_search_fts.rowid ASC
           LIMIT @limit`,
       )
-      .all({
+    const runMatch = (query: string, limit: number): ThreadSearchFtsRow[] =>
+      ranked.all({
         backend: request.backend,
         ...filterWhere.params,
-        limit: request.limit,
-        query: ftsQuery,
-      })
-      .map((row) => {
-        const ftsRow = row as ThreadSearchFtsRow;
-        return this.rowToResult(
-          ftsRow,
-          typeof ftsRow.rank_value === "number" ? -ftsRow.rank_value : 0,
-          ftsRow.snippet_text,
-          request.query,
-        );
-      });
+        limit,
+        query,
+      }) as ThreadSearchFtsRow[];
+    const toResult = (row: ThreadSearchFtsRow, band: number): ThreadSearchResult => {
+      const bm25 = -(row.rank_value ?? 0);
+      // A monotonic BM25 score within each band survives the service's merge
+      // by score. No amount of term frequency crosses a relevance boundary.
+      return this.rowToResult(row, band + bm25 / (1 + bm25), row.snippet_text, request.query);
+    };
+    const exact = runMatch(ftsQuery, request.limit);
+    const results = exact.map((row) => toResult(row, 2));
+    if (results.length >= request.limit) return results;
+
+    const correctedQuery = exact.length === 0 ? buildTypoThreadSearchFtsQuery(request.query) : undefined;
+    const corrected = correctedQuery ? runMatch(correctedQuery, request.limit) : [];
+    results.push(...corrected.map((row) => toResult(row, 1)));
+    if (results.length >= request.limit) return results;
+
+    const partialQuery = buildPartialThreadSearchFtsQuery(request.query);
+    if (partialQuery) {
+      const correctedKeys = new Set(corrected.map((row) => row.identity_key));
+      // Corrected results can also match an uncorrected term. Overfetch by
+      // at most the size of that band to fill the page after deduplication.
+      const partial = runMatch(partialQuery, request.limit - exact.length)
+        .filter((row) => !correctedKeys.has(row.identity_key))
+        .slice(0, request.limit - results.length);
+      results.push(...partial.map((row) => toResult(row, 0)));
+    }
+    return results;
   }
 
   private rowToResult(

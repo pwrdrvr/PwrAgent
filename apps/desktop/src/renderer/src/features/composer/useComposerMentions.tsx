@@ -140,6 +140,7 @@ export type ComposerMentions = {
   inputRef: RefObject<ComposerInputHandle | null>;
   /** `aria-controls` for the editor while a popover is open. */
   listboxId?: string;
+  onReferenceSelectionChange?: () => void;
   /** Hover for the draft's `$skill` chips; pass both to the editor. */
   onSkillChipPointerEnter: (
     skill: AppServerSkillSummary,
@@ -227,6 +228,7 @@ export function useComposerMentions(params: {
   }));
   const { draft, skillTokens } = content;
   const [activeIndex, setActiveIndex] = useState(0);
+  const [, setReferenceSelectionRevision] = useState(0);
   const [dismissedKey, setDismissedKey] = useState<string | undefined>(
     undefined,
   );
@@ -267,8 +269,13 @@ export function useComposerMentions(params: {
   );
   const skillTrigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
-  const directoryTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
-  const rawHashTrigger = findHashReferenceTrigger(draft, selectionStart);
+  const referenceTriggers = inputRef.current?.getReferenceTriggers();
+  const directoryTrigger = referenceTriggers
+    ? referenceTriggers["@"]
+    : findDirectoryReferenceTrigger(draft, selectionStart);
+  const rawHashTrigger = referenceTriggers
+    ? referenceTriggers["#"]
+    : findHashReferenceTrigger(draft, selectionStart);
   const hashTrigger =
     rawHashTrigger
     && !coldHashAnchors.has(hashReferenceAnchorKey(rawHashTrigger.query))
@@ -572,8 +579,10 @@ export function useComposerMentions(params: {
       setActiveIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      const currentInput = inputRef.current;
+      if (currentInput?.value !== nextDraft) return;
+      currentInput.focus();
+      currentInput.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -607,8 +616,10 @@ export function useComposerMentions(params: {
       setActiveIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      const currentInput = inputRef.current;
+      if (currentInput?.value !== nextDraft) return;
+      currentInput.focus();
+      currentInput.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -630,23 +641,21 @@ export function useComposerMentions(params: {
     if (kind === "directories" && directoryTrigger) {
       const directory = directoryOptions[index] ?? directoryOptions[0];
       if (directory?.path) {
-        insertToken(directoryTrigger, (at) =>
-          createComposerAtReferenceToken(directory, at),
-        );
+        inputRef.current?.replaceReference("@", [createComposerAtReferenceToken(directory, 0)]);
       }
       return;
     }
     if (kind === "hash" && hashTrigger) {
       const option = hashOptions[index] ?? hashOptions[0];
       if (!option) return;
-      insertToken(hashTrigger, (at) =>
+      inputRef.current?.replaceReference("#", [
         option.kind === "thread"
           ? createComposerThreadToken(
               resolveThreadSummaryReference(option.thread),
-              at,
+              0,
             )
-          : createComposerPullRequestToken(option.pullRequest, at),
-      );
+          : createComposerPullRequestToken(option.pullRequest, 0),
+      ]);
     }
   };
 
@@ -937,6 +946,9 @@ export function useComposerMentions(params: {
     handleKeyDown,
     inputRef,
     listboxId: open ? listboxId : undefined,
+    onReferenceSelectionChange: sources
+      ? () => setReferenceSelectionRevision((revision) => revision + 1)
+      : undefined,
     onSkillChipPointerEnter: skillOriginCard.hoverAnchor,
     onSkillChipPointerLeave: skillOriginCard.leaveAnchor,
     open,

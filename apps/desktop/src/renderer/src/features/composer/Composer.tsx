@@ -6163,7 +6163,11 @@ function useComposerController(props: ComposerProps) {
   };
   const trigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
-  const directoryRefTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
+  const [, setReferenceSelectionRevision] = useState(0);
+  const referenceTriggers = inputRef.current?.getReferenceTriggers();
+  const directoryRefTrigger = referenceTriggers
+    ? referenceTriggers["@"]
+    : findDirectoryReferenceTrigger(draft, selectionStart);
   // `#` is the one trigger whose query spans spaces — thread titles have
   // spaces in them — so unlike `@` and `$` nothing retires it. Left alone,
   // a `#` anywhere in a sentence keeps the picker armed and the federated
@@ -6172,7 +6176,9 @@ function useComposerController(props: ComposerProps) {
   const [coldHashAnchors, setColdHashAnchors] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const rawHashReferenceTrigger = findHashReferenceTrigger(draft, selectionStart);
+  const rawHashReferenceTrigger = referenceTriggers
+    ? referenceTriggers["#"]
+    : findHashReferenceTrigger(draft, selectionStart);
   const rawHashReferenceQuery = rawHashReferenceTrigger?.query;
   const hashReferenceTrigger =
     rawHashReferenceTrigger
@@ -10869,75 +10875,9 @@ function useComposerController(props: ComposerProps) {
       shortLabel?: string;
     },
   ): void => {
-    if (!inputRef.current) {
-      return;
-    }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    // Prefer replacing the `@` trigger the popover opened from; when the
-    // reference arrives without one (the "+"-menu picker, or the trigger
-    // vanished while an OS dialog was open) fall back to a zero-width
-    // "trigger" at the current caret so the chip still lands in place.
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-    if (!directory.path) {
-      return;
-    }
-
-    // Mint a durable mention token (the `@label` chip) instead of
-    // splicing path text — mirrors applySkill. The chip is zero-width in
-    // the plain draft; serializeDraftWithSkillTokens splices the markdown
-    // link back in for the outgoing text and launchpad prompt. Like
-    // applySkill, always leave one space after the chip and park the
-    // caret after it.
-    const before = draft.slice(0, refTrigger.start);
-    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${nextAfter}`;
-    const tokenIndex = before.length;
-    const nextSelection = tokenIndex + 1;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      createComposerAtReferenceToken(directory, tokenIndex),
-    ];
-
-    // Same protected-update dance as applySkill: the editability sync in
-    // ComposerTiptapInput re-emits the editor's (still pre-insert) content
-    // through onChange before the external-value sync applies the new
-    // draft. The pending-programmatic guard in handleComposerChange
-    // swallows that stale replay so the two sides can't ping-pong.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    if (!directory.path) return;
+    inputRef.current?.replaceReference("@", [createComposerAtReferenceToken(directory, 0)]);
+    setActiveDirectoryRefIndex(0);
   };
 
   const applyThreadReference = (thread: ResolvedThreadLink): void => {
@@ -10950,56 +10890,8 @@ function useComposerController(props: ComposerProps) {
   const applyHashReference = (
     createToken: (index: number) => ComposerSkillToken,
   ): void => {
-    if (!inputRef.current) {
-      return;
-    }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const referenceTrigger =
-      findHashReferenceTrigger(draft, selectionStart)
-      ?? findHashReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-    const before = draft.slice(0, referenceTrigger.start);
-    const after = draft.slice(Math.max(referenceTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${nextAfter}`;
-    const tokenIndex = before.length;
-    const nextSelection = tokenIndex + 1;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      createToken(tokenIndex),
-    ];
-
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveHashReferenceIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    inputRef.current?.replaceReference("#", [createToken(0)]);
+    setActiveHashReferenceIndex(0);
   };
 
   /**
@@ -11017,118 +10909,19 @@ function useComposerController(props: ComposerProps) {
     applyDirectoryReference(picked);
   };
 
-  /**
-   * Mint file-reference chips at the `@` trigger (or the caret when no
-   * trigger survives) — the multi-token sibling of
-   * `applyDirectoryReference`. The plain draft gets n-1 separator spaces
-   * plus the guaranteed post-chip space, placing the n zero-width tokens
-   * at consecutive indexes so the serialized draft reads
-   * `chip␠chip␠…chip␠after` with exactly one space after every chip.
-   */
   /** Drop the `@query` an autocomplete pick would have replaced. */
   const removeReferenceTrigger = (): void => {
-    if (!inputRef.current) {
-      return;
-    }
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length);
-    if (!refTrigger) {
-      return;
-    }
-    const before = draft.slice(0, refTrigger.start);
-    const nextDraft = `${before}${draft.slice(refTrigger.end)}`;
-    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
-      currentDraft: draft,
-      nextDraft,
-      skillTokens,
-    });
-    // The same protected update as applyFileReferences below.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(before.length, before.length);
-    });
+    inputRef.current?.replaceReference("@", []);
+    setActiveDirectoryRefIndex(0);
   };
 
   const applyFileReferences = (paths: string[]): void => {
-    if (!inputRef.current || paths.length === 0) {
-      return;
-    }
+    if (!inputRef.current || paths.length === 0) return;
 
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-
-    const before = draft.slice(0, refTrigger.start);
-    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${" ".repeat(paths.length - 1)}${nextAfter}`;
-    const nextSelection = before.length + paths.length;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      ...paths.map((path, index) =>
-        createComposerFileToken(
-          { label: fileLabelFromPath(path), path },
-          before.length + index,
-        ),
-      ),
-    ];
-
-    // Same protected-update dance as applySkill / applyDirectoryReference:
-    // the editability sync in ComposerTiptapInput re-emits the editor's
-    // (still pre-insert) content through onChange before the
-    // external-value sync applies the new draft. The pending-programmatic
-    // guard in handleComposerChange swallows that stale replay so the two
-    // sides can't ping-pong.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    inputRef.current.replaceReference("@", paths.map((path) =>
+      createComposerFileToken({ label: fileLabelFromPath(path), path }, 0),
+    ));
+    setActiveDirectoryRefIndex(0);
 
     // Feed the reference picker's Files tab — fire-and-forget.
     void props.desktopApi
@@ -11159,75 +10952,14 @@ function useComposerController(props: ComposerProps) {
     applyFileReferences(result.paths);
   };
 
-  /**
-   * Mint directory-reference chips for a batch of picked directories —
-   * the multi-token sibling of `applyDirectoryReference`, sharing
-   * `applyFileReferences`' token layout (n-1 separator spaces plus the
-   * guaranteed post-chip space). Needed because the single-directory
-   * helper can't be called twice in one tick: each call captures the
-   * pre-insert draft, so the second insert would clobber the first.
-   */
   const applyDirectoryReferenceChips = (
     directories: { label: string; path: string }[],
   ): void => {
-    if (!inputRef.current || directories.length === 0) {
-      return;
-    }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-
-    const before = draft.slice(0, refTrigger.start);
-    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${" ".repeat(directories.length - 1)}${nextAfter}`;
-    const nextSelection = before.length + directories.length;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      ...directories.map((directory, index) =>
-        createComposerDirectoryToken(directory, before.length + index),
-      ),
-    ];
-
-    // Same protected-update dance as applySkill / applyDirectoryReference:
-    // the editability sync in ComposerTiptapInput re-emits the editor's
-    // (still pre-insert) content through onChange before the
-    // external-value sync applies the new draft. The pending-programmatic
-    // guard in handleComposerChange swallows that stale replay so the two
-    // sides can't ping-pong.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    if (directories.length === 0) return;
+    inputRef.current?.replaceReference("@", directories.map((directory) =>
+      createComposerDirectoryToken(directory, 0),
+    ));
+    setActiveDirectoryRefIndex(0);
   };
 
   /**
@@ -17667,6 +17399,7 @@ function useComposerController(props: ComposerProps) {
               value={draft}
               onChange={handleComposerChange}
               onPaste={handlePaste}
+              onReferenceSelectionChange={() => setReferenceSelectionRevision((revision) => revision + 1)}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
               onClick={handleComposerClick}
