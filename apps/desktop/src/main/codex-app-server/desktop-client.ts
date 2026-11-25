@@ -1,3 +1,4 @@
+import { bindCodexAgentToolRuntime } from "../agent-tools/codex-agent-tool-ipc";
 import { getOwnerHostServices } from "../owner-host";
 import {
   CodexAppServerClient as OwnerCodexAppServerClient,
@@ -31,6 +32,7 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
     let spawnEnv = options.env ?? process.env;
     const computerUse = runtimePolicy ? undefined
       : getOwnerHostServices().createComputerUseRuntime?.(() => spawnEnv);
+    let appServerTransport: StdioJsonRpcTransport;
     super({ ...options, ...(runtimePolicy ? { helperExecutionPolicy: { approvalPolicy: "never" as const, sandbox: "read-only" as const } } : {}) }, {
       createTransport: (callbacks) => {
         const transport = new StdioJsonRpcTransport({
@@ -59,10 +61,15 @@ export class CodexAppServerClient extends OwnerCodexAppServerClient {
         // the only layer this adds.
         transport.send = (message) => StdioJsonRpcTransport.prototype.send.call(transport,
           agentTools(sandbox(options.portableDiscovery ? portableThreadRequest(message) : message)));
+        appServerTransport = transport;
         return transport;
       },
       clientInfo: { name: "pwragent-desktop", title: "PwrAgent" },
-      ...(computerUse ? { prepareThreadRequest: (input) => computerUse.prepare(input) } : {}),
+      prepareThreadRequest: async (input) => {
+        const params = computerUse ? await computerUse.prepare(input) : input.params;
+        await bindCodexAgentToolRuntime(params, () => appServerTransport.ownedProcess());
+        return params;
+      },
       logger: getMainLogger("pwragent:codex-client"),
       rpcLogger: getMainLogger("pwragent:json-rpc"),
       listingDiagnostics,

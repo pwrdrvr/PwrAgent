@@ -12555,11 +12555,17 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("passes thread-local MCP config and redacts MCP bearer headers from observers", async () => {
+  it("passes thread-local MCP config and redacts MCP credentials from observers", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const observedMessages: string[] = [];
     const config = {
       mcp_servers: {
+        pwragent_apps: {
+          enabled: true,
+          command: "/tmp/relay",
+          args: ["--fixture"],
+          env: { PWRAGENT_CODEX_MCP_GRANT: "pwragent-stdio-fixture-secret" },
+        },
         pwragent_pdf: {
           enabled: true,
           http_headers: {
@@ -12609,7 +12615,8 @@ describe("CodexAppServerClient", () => {
     });
     expect(threadFork).toMatchObject({ config });
     expect(observedMessages.join("\n")).not.toContain("pwragent-pdf-secret");
-    expect(observedMessages.join("\n")).toContain("[redacted]");
+    expect(observedMessages.join("\n")).not.toContain("pwragent-stdio-fixture-secret");
+    expect(observedMessages.join("\n")).toContain('"PWRAGENT_CODEX_MCP_GRANT":"[redacted]"');
 
     await client.close();
   });

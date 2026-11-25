@@ -31,6 +31,7 @@ export const mcpSharedStdio = sdkModule(() => import("@modelcontextprotocol/sdk/
 export const mcpServer = sdkModule(() => import("@modelcontextprotocol/sdk/server/index.js"));
 /** A linked transport pair, for a server PwrAgent hosts in this process. */
 export const mcpInMemory = sdkModule(() => import("@modelcontextprotocol/sdk/inMemory.js"));
+export const mcpServerStdio = sdkModule(() => import("@modelcontextprotocol/sdk/server/stdio.js"));
 export const mcpServerStreamableHttp = sdkModule(() => import("@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js"));
 
 /**

@@ -12,19 +12,18 @@ it("uses the creation-time transport for each new Codex thread regardless of lat
     });
     const overlayStore = createOverlayStoreMock();
     const bindThread = vi.fn();
-    const registerClient = vi.fn(async (context: { threadId?: string }) => ({
+    const registerCodexClient = vi.fn(async (context: { threadId?: string }) => ({
       server: {
-        name: "pwragent",
-        type: "http" as const,
-        url: context.threadId ? "http://127.0.0.1:9002/mcp" : "http://127.0.0.1:9001/mcp",
-        headers: [],
+        command: "/bin/relay",
+        args: ["--codex-stdio", "/tmp/owner.sock"] as [string, string],
+        env: { PWRAGENT_CODEX_MCP_GRANT: context.threadId ? "bound" : "new" },
       },
       bindThread,
     }));
     const registry = createDesktopBackendRegistry({
       codexClient: client,
       overlayStore,
-      agentToolMcpServer: { registerClient, close: vi.fn(async () => {}) },
+      agentToolMcpServer: { registerCodexClient, registerClient: vi.fn(), close: vi.fn(async () => {}) },
       resolveCodexAgentToolsMcp: () => enabled,
       createScratchProjectDirectory: async () => "/tmp/pwragent-codex-mcp",
     });
@@ -35,7 +34,8 @@ it("uses the creation-time transport for each new Codex thread regardless of lat
       expect(overlay?.codexAgentToolsMcp === true).toBe(enabledAtCreation);
       expect(Boolean(client.lastStartThreadParams?.dynamicTools)).toBe(!enabledAtCreation);
       expect(initialServers).toEqual(enabledAtCreation ? {
-        pwragent_apps: { enabled: true, required: true, url: "http://127.0.0.1:9001/mcp", http_headers: {} },
+        pwragent_apps: { enabled: true, required: true, command: "/bin/relay",
+          args: ["--codex-stdio", "/tmp/owner.sock"], env: { PWRAGENT_CODEX_MCP_GRANT: "new" } },
       } : undefined);
       expect(bindThread.mock.calls).toEqual(enabledAtCreation ? [[threadId]] : []);
 
@@ -43,10 +43,11 @@ it("uses the creation-time transport for each new Codex thread regardless of lat
       await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Hello" }] });
       const turnServers = client.lastStartTurnParams?.config?.mcp_servers;
       expect(turnServers).toEqual(enabledAtCreation ? {
-        pwragent_apps: { enabled: true, required: true, url: "http://127.0.0.1:9002/mcp", http_headers: {} },
+        pwragent_apps: { enabled: true, required: true, command: "/bin/relay",
+          args: ["--codex-stdio", "/tmp/owner.sock"], env: { PWRAGENT_CODEX_MCP_GRANT: "bound" } },
       } : undefined);
       expect(Boolean(client.lastStartTurnParams?.dynamicTools)).toBe(!enabledAtCreation);
-      expect(registerClient.mock.calls.map(([context]) => context.threadId))
+      expect(registerCodexClient.mock.calls.map(([context]) => context.threadId))
         .toEqual(enabledAtCreation ? [undefined, threadId] : []);
     } finally {
       await registry.close();
