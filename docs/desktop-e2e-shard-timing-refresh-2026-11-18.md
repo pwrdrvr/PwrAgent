@@ -46,7 +46,7 @@ replaced by the one-test retry report. The compact first-attempt report retains
 completion and IDs but no durations. The new complete Windows collection avoids
 treating that one-test HTML report as an entire lane.
 
-The [November 18 input](desktop-e2e-shard-durations-2026-11-18.json) records each group's IDs,
+The [November 18 input](https://github.com/pwrdrvr/PwrAgent/blob/eea63a2392e4399cc501e8dbee47dd46111a2a62/docs/desktop-e2e-shard-durations.json) records each group's IDs,
 count, seconds and successful sample count per platform. A file's attempt durations
 are summed before taking the median across available complete samples. Each
 accessibility test is a separate group. The source collections cover all 405 IDs;
@@ -86,8 +86,8 @@ The existing exhaustive fitter keeps its objective: minimize the sum of the
 three platforms' longest modeled lanes, using only measured current inputs.
 
 ```sh
-python3 scripts/ci/fit-desktop-e2e-shards.py --data docs/desktop-e2e-shard-durations-2026-11-18.json --weights 83:82:67:88 --fit
-python3 scripts/ci/fit-desktop-e2e-shards.py --data docs/desktop-e2e-shard-durations-2026-11-18.json --weights 77:91:104:133
+python3 scripts/ci/fit-desktop-e2e-shards.py --data <(git show eea63a239:docs/desktop-e2e-shard-durations.json) --weights 83:82:67:88 --fit
+python3 scripts/ci/fit-desktop-e2e-shards.py --data <(git show eea63a239:docs/desktop-e2e-shard-durations.json) --weights 77:91:104:133
 ```
 
 | Platform | Old modeled lanes, seconds | Fitted modeled lanes, seconds |

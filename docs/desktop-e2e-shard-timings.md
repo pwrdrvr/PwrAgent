@@ -17,7 +17,7 @@ The [current fitter input](desktop-e2e-shard-durations.json) includes every test
 platform skip and per-run sample from that fit.
 The previous `77:91:104:133` allocation is described in the
 [2026-11-18 timing refresh](desktop-e2e-shard-timing-refresh-2026-11-18.md),
-with its [November 18 fitter input](desktop-e2e-shard-durations-2026-11-18.json).
+with its [November 18 fitter input](https://github.com/pwrdrvr/PwrAgent/blob/eea63a2392e4399cc501e8dbee47dd46111a2a62/docs/desktop-e2e-shard-durations.json).
 
 ## November 24 allocation
 
