@@ -138,12 +138,16 @@ describe("GitLab MR routing and status", () => {
       parseForgePrRefFromUrl("https://github.com/team/project/pull/17")!,
       parseForgePrRefFromUrl(mr.web_url)!,
     ];
-    expect(await fetcher.fetchPullRequests(refs, { reconnect: true, requestTokenTaken: true })).toHaveLength(1);
+    const takeFirstRequestToken = vi.fn(() => true);
+    const defer = vi.fn();
+    expect(await fetcher.fetchPullRequests(refs, { reconnect: true, gitlabPoll: { takeFirstRequestToken, defer } })).toEqual([]);
     expect(graphqlClient.fetchPullRequestsAfterReconnect).toHaveBeenCalledWith([refs[0]]);
     expect(graphqlClient.fetchPullRequests).not.toHaveBeenCalled();
     expect(run).toHaveBeenCalledOnce();
-    // The paid MR read takes no token. The merge trains setting read asks for
-    // one, is refused, and leaves the MR read standing.
+    // The first request uses scheduler admission. The setting read needs
+    // another token, and the background scheduler retries the deferred MR.
+    expect(takeFirstRequestToken).toHaveBeenCalledOnce();
+    expect(defer).toHaveBeenCalledWith(17);
     expect(tryTakeRequestToken).toHaveBeenCalledOnce();
     expect(await fetcher.fetchPullRequests([refs[1]!])).toEqual([]);
     expect(tryTakeRequestToken).toHaveBeenCalledTimes(2);
@@ -345,8 +349,10 @@ describe("review regressions", () => {
       ? { id: "synthetic", parent_ids: ["target", "new-head"] }
       : { ...mr, head_pipeline: { status: "success", sha: "synthetic", ref: "refs/merge-requests/17/merge" } }));
     const fetcher = new GitLabPrFetcher({ discover: async () => discovery, run, tryTakeRequestToken });
-    expect(await fetcher.fetchByRef(ref, true)).toMatchObject({ checkState: "passing" });
+    const takeFirstRequestToken = vi.fn(() => true);
+    expect(await fetcher.pollProject([ref], { takeFirstRequestToken, defer: vi.fn() })).toMatchObject([{ checkState: "passing" }]);
     // The commit verification and the merge trains setting each take a token.
+    expect(takeFirstRequestToken).toHaveBeenCalledOnce();
     expect(run).toHaveBeenCalledTimes(3);
     expect(tryTakeRequestToken).toHaveBeenCalledTimes(2);
   });

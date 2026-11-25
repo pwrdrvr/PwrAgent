@@ -6371,8 +6371,7 @@ class DesktopAppServerService {
       getFocusedThreadKeys: () => this.prPollingFocus.union(),
       isWindowVisible: () =>
         getOwnerHostServices().ui.isWindowVisible(),
-      // Admission pays for one GitHub batch or one GitLab MR read.
-      // Additional GitLab REST reads consume their own shared token.
+      // GitLab takes this token when its first request actually starts.
       onPollUnavailable: (targets, failed) => {
         for (const target of targets) this.prActivity.record({
           category: "check", source: "background poll", threadKeys: target.threadKeys, prKeys: [target.prKey],
@@ -6381,10 +6380,10 @@ class DesktopAppServerService {
         });
       },
       tryTakeToken: (targets = []) => this.takePrPollingToken("background poll", targets.map((t) => t.prKey), targets.flatMap((t) => t.threadKeys)),
-      fetchPullRequests: async (refs) =>
-        await this.fetchForgePullRequests(refs, false, true),
-      fetchPullRequestsAfterReconnect: async (refs) =>
-        await this.fetchForgePullRequests(refs, true, true),
+      fetchPullRequests: async (refs, gitlabPoll) =>
+        await this.fetchForgePullRequests(refs, { gitlabPoll }),
+      fetchPullRequestsAfterReconnect: async (refs, gitlabPoll) =>
+        await this.fetchForgePullRequests(refs, { reconnect: true, gitlabPoll }),
       getObservationTimestamp: () => this.nextPrObservationTimestamp(),
       onTargetsHandled: (keys) => this.transcriptPrSubscriptions.markHandled(keys),
       applyResults: async (prs, fetchedAt) => {
@@ -7296,8 +7295,8 @@ class DesktopAppServerService {
     return new Set(refreshed.map((pr) => getPrStatusKey(pr)));
   }
 
-  private async fetchForgePullRequests(refs: ForgePrRef[], reconnect = false, requestTokenTaken = false): Promise<PrSummary[]> {
-    const prs = await this.getPrFetcher().fetchPullRequests(refs, { reconnect, requestTokenTaken });
+  private async fetchForgePullRequests(refs: ForgePrRef[], options?: Parameters<ForgePrFetcher["fetchPullRequests"]>[1]): Promise<PrSummary[]> {
+    const prs = await this.getPrFetcher().fetchPullRequests(refs, options);
     this.learnPolledPullRequestRepositories(refs, prs);
     return prs;
   }
