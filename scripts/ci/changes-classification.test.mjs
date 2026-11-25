@@ -253,24 +253,30 @@ it("accepts a skipped lane in the Desktop E2E gate only when the classifier or t
       }
     }
   }
-  // One shell runs every case in its own subshell. A process per case made
-  // 1,024 spawns, which took 8.6s on a GitHub-hosted macOS runner. The
-  // program arrives on stdin: as one `-c` argument it exceeds Linux's
-  // 128 KiB argument limit and Windows' command-line limit.
+  // One shell runs every case, without a subshell per case. A process per
+  // case made 1,024 spawns, which took 8.6s on a GitHub-hosted macOS runner;
+  // a subshell per case took 15.3s on Windows, where Git Bash emulates fork.
+  // The step's one `exit` becomes `return`, so each case returns its status
+  // to the driver. The program arrives on stdin: as one `-c` argument it
+  // exceeds Linux's 128 KiB argument limit and Windows' command-line limit.
+  const exits = script.match(/\bexit\b/g) ?? [];
+  expect(exits, "the gate ends with its only exit").toHaveLength(1);
+  expect(script.trimEnd().endsWith('exit "$status"')).toBe(true);
+  const gateFunction = `gate() {\n${script.trimEnd().replace(/exit "\$status"$/, 'return "$status"')}\n}`;
   const runCase = ({ linux, a11y, requested, macos, full, lanes }, output) => [
-    "(",
-    `  export LINUX_E2E_RESULT='${linux}' A11Y_RESULT='${a11y}' A11Y_REQUESTED='${requested}'`,
-    `  export MACOS_E2E_RESULT='${macos}' FULL_PLATFORMS='${full}'`,
-    lanes === undefined ? "  unset E2E_LANES" : `  export E2E_LANES='${lanes}'`,
-    "  gate",
-    `) < /dev/null${output}`,
+    `export LINUX_E2E_RESULT='${linux}' A11Y_RESULT='${a11y}' A11Y_REQUESTED='${requested}'`,
+    `export MACOS_E2E_RESULT='${macos}' FULL_PLATFORMS='${full}'`,
+    lanes === undefined ? "unset E2E_LANES" : `export E2E_LANES='${lanes}'`,
+    // `||` keeps a failing status from ending the driver under the step's
+    // `set -e`.
+    `code=0; gate < /dev/null${output} || code=$?`,
   ].join("\n");
   const runShell = (driver) => spawnSync("bash", ["-s"], {
-    input: `gate() {\n${script}\n}\n${driver}\n`,
+    input: `${gateFunction}\n${driver}\n`,
     env: { PATH: process.env.PATH, GITHUB_STEP_SUMMARY: "/dev/null" },
     encoding: "utf8",
   });
-  const run = runShell(cases.map((testCase, index) => `${runCase(testCase, " > /dev/null 2>&1")}; echo "${index} $?"`)
+  const run = runShell(cases.map((testCase, index) => `${runCase(testCase, " > /dev/null 2>&1")}\necho "${index} $code"`)
     .join("\n"));
   expect(run.status, `${run.error ?? ""}${run.stderr}`).toBe(0);
   const statuses = new Map(run.stdout.trim().split("\n").map((line) => line.split(" ").map(Number)));
