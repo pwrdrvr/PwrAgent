@@ -184,14 +184,14 @@ export class StackReadObservation {
   private backgroundTtlRevalidations = 0;
   private readonly reservedTtlRevalidations = new Set<string>();
 
-  constructor(readonly demand: PrMetadataDemand = {}) {
+  constructor(readonly demand: PrMetadataDemand = {}, purpose: "read" | "recovery" = "read") {
     // A selected request can promote the explicit checkout without putting
     // its speculative inventory work ahead of other selected reads.
     this.inventoryDemand = {
       signal: demand.signal,
       priority: () => Math.min(demand.priority?.() ?? PR_METADATA_PRIORITY.background, PR_METADATA_PRIORITY.page),
     };
-    this.hints = createStackCheckoutHints(this.inventoryDemand);
+    this.hints = createStackCheckoutHints(this.inventoryDemand, purpose);
   }
 
   reserveBackgroundTtlRevalidation(cwd: string, limit: number): boolean {
