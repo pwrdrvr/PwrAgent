@@ -12,6 +12,7 @@ type Api = Pick<DesktopApi, "getNavigationQueryPage" | "getNavigationSelectedDet
 export type ThreadLinkRow = (NavigationRow | NavigationThreadSummary) & { archiveIdentity?: "present" | "archived" };
 type Entry = { expiresAt: number; promise: Promise<ThreadLinkRow | undefined> };
 const caches = new WeakMap<Api, Map<string, Entry>>();
+const legacyComposerCaches = new WeakMap<Api, Map<string, Entry>>();
 const detailCaches = new WeakMap<Api, Map<string, Entry>>();
 const MAX_ROWS = 256;
 const MISSING_TTL_MS = 15_000;
@@ -141,6 +142,32 @@ export function readThreadLinkRow(
       }
       throw error;
     }
+  });
+}
+
+/**
+ * Older sidebar copies omitted the peer owner. Only a completed local miss
+ * followed by one exact peer match can repair that old URL.
+ */
+export function readLegacyComposerThreadRow(
+  api: Api & Pick<DesktopApi, "jumpSearchRemoteThreads">,
+  target: Target,
+): Promise<ThreadLinkRow | undefined> {
+  const search = api.jumpSearchRemoteThreads;
+  if (!api.getNavigationQueryPage || !search || target.instanceId) return Promise.resolve(undefined);
+  return cacheRow(legacyComposerCaches, api, rowKey(target, undefined), async () => {
+    const local = api.getNavigationSelectedDetail
+      ? await readThreadInfoRow(api, target, undefined)
+      : await readThreadLinkRow(api, target, undefined);
+    if (local) return undefined;
+    const limit = 50;
+    const response = await search({ query: target.threadId, limit });
+    if (response.incomplete || response.results.length >= limit) return undefined;
+    const matches = response.results.filter((row) => row.id === target.threadId
+      && row.source === target.backend && row.federation?.ref.target.scope === "remote");
+    const owner = matches.length === 1 ? matches[0]?.federation?.ref.target : undefined;
+    if (owner?.scope !== "remote") return undefined;
+    return readThreadLinkRow(api, target, owner);
   });
 }
 

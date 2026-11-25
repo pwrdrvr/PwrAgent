@@ -83,6 +83,7 @@ import {
   isFederationViewerWindow,
   readRendererFederationLabel,
   readRendererFederationTarget,
+  resolveThreadOwnerFederationTarget,
 } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { countArchiveGroup } from "./archive-group-counts";
@@ -845,6 +846,11 @@ function SidebarContent(props: SidebarProps) {
     : undefined;
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
+  const copyableThreadUrl = (thread: NavigationThreadSummary): string => buildThreadUrl({
+    backend: thread.source,
+    threadId: thread.id,
+    instanceId: resolveThreadOwnerFederationTarget(thread, federationTarget?.instanceId)?.instanceId,
+  });
   const openThreadMaintenance = useContext(ThreadMaintenanceLauncherContext);
   const dependencyIndicators = useThreadDependencyIndicatorsContext();
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -2851,8 +2857,7 @@ function SidebarContent(props: SidebarProps) {
         }
         break;
       case "threads.copy_link":
-        void copyText(uniqueContextMenuValues(threads.map((candidate) =>
-          buildThreadUrl({ backend: candidate.source, threadId: candidate.id }))).join("\n"));
+        void copyText(uniqueContextMenuValues(threads.map(copyableThreadUrl)).join("\n"));
         break;
     }
     if (handled) event.preventDefault();
@@ -3419,12 +3424,7 @@ function SidebarContent(props: SidebarProps) {
       bulkCanMarkRead,
   );
   const bulkThreadLinks = uniqueContextMenuValues(
-    contextMenuThreads.map((thread) =>
-      buildThreadUrl({
-        backend: thread.source,
-        threadId: thread.id,
-      }),
-    ),
+    contextMenuThreads.map(copyableThreadUrl),
   );
   const bulkThreadIds = uniqueContextMenuValues(
     contextMenuThreads.map((thread) => thread.id),
@@ -4673,12 +4673,7 @@ function SidebarContent(props: SidebarProps) {
                         role="menuitem"
                         type="button"
                         onClick={() =>
-                          copyFromContextMenu(
-                            buildThreadUrl({
-                              backend: contextMenu.thread.source,
-                              threadId: contextMenu.thread.id,
-                            }),
-                          )
+                          copyFromContextMenu(copyableThreadUrl(contextMenu.thread))
                         }
                         aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.copy_link")}
                       >

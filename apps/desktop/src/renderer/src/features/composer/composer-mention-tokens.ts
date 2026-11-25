@@ -12,7 +12,7 @@ import { isRemoteFederationTarget } from "@pwragent/shared/contracts/federation"
 import { resolvePullRequestIdentity } from "@pwragent/shared/contracts/navigation";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { buildInstanceReferenceMarkdown } from "../../lib/instance-references";
-import { formatHashReferenceThreadLabel } from "../../lib/hash-references";
+import { composerThreadLabel } from "./composer-thread-references";
 import { buildSkillMentionMarkdown } from "../../lib/skill-mentions";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import {
@@ -162,23 +162,17 @@ export function createComposerFileToken(
 export function createComposerThreadToken(
   thread: ResolvedThreadLink,
   index: number,
+  fallbackLabel?: string,
 ): ComposerSkillToken {
   const path = buildThreadUrl({
     backend: thread.backend,
     ...(thread.instanceId ? { instanceId: thread.instanceId } : {}),
     threadId: thread.threadId,
+    ...(thread.messageId ? { messageId: thread.messageId } : {}),
   });
   return {
     kind: "thread",
-    // Every thread chip is minted here — picker, pasted url, and the draft
-    // rehydrate that rebuilds tokens from the live thread summary rather
-    // than from the saved link text. Formatting at the choke point is what
-    // makes the clamp survive a restore, and it makes the round trip
-    // converge: `format` of an already-formatted title is itself.
-    name: formatHashReferenceThreadLabel({
-      id: thread.threadId,
-      title: thread.title,
-    }),
+    name: composerThreadLabel(thread, fallbackLabel),
     path,
     id: `${path}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     index,

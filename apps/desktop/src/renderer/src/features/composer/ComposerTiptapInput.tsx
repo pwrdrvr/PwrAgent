@@ -18,7 +18,7 @@ import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-up
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
-import { Plugin, PluginKey } from "prosemirror-state";
+import { Plugin, PluginKey, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import {
   EditorContent,
@@ -47,6 +47,9 @@ import {
 import { buildInstanceReferenceMarkdown } from "../../lib/instance-references";
 import { findHashReferenceTrigger } from "../../lib/hash-references";
 import { parsePullRequestUrl } from "../../lib/pull-request-links";
+import { resolveThreadHref, resolveThreadIdText, useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
+import { composerThreadLabel, findComposerThreadReferences, useComposerThreadReference } from "./composer-thread-references";
+import { createComposerThreadToken } from "./composer-mention-tokens";
 import { useComposerPullRequestHover } from "./useComposerPullRequestHover";
 import { tildifyPath } from "../../lib/tildify-path";
 import { getDesktopApi } from "../../lib/desktop-api";
@@ -2028,14 +2031,14 @@ function pastePlainTextIntoActiveBlock(
     const structuredHtmlContent = parseClipboardHtmlStructuredContent(event);
     if (structuredHtmlContent.length > 0) {
       event.preventDefault();
-      return editor.commands.insertContent(structuredHtmlContent, {
+      return editor.chain().setMeta("paste", true).insertContent(structuredHtmlContent, {
         updateSelection: true,
-      });
+      }).run();
     }
     event.preventDefault();
-    return editor.commands.insertContent(splitTextContent(text), {
+    return editor.chain().setMeta("paste", true).insertContent(splitTextContent(text), {
       updateSelection: true,
-    });
+    }).run();
   }
 
   return false;
@@ -2095,9 +2098,9 @@ function pastePlainMarkdownText(
   }
 
   event.preventDefault();
-  return editor.commands.insertContent(markdownContent, {
+  return editor.chain().setMeta("paste", true).insertContent(markdownContent, {
     updateSelection: true,
-  });
+  }).run();
 }
 
 function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
@@ -2854,11 +2857,72 @@ function acceptInlineCompletion(
   return true;
 }
 
+function pastedThreadReferenceRange(transactions: readonly Transaction[]): { from: number; to: number } | undefined {
+  let from = Infinity;
+  let to = -Infinity;
+  for (const transaction of transactions) {
+    for (const map of transaction.mapping.maps) {
+      from = map.map(from, -1);
+      to = map.map(to, 1);
+      if (transaction.getMeta("paste")) {
+        map.forEach((_oldFrom, _oldTo, insertedFrom, insertedTo) => {
+          from = Math.min(from, insertedFrom);
+          to = Math.max(to, insertedTo);
+        });
+      }
+    }
+  }
+  return from < to ? { from, to } : undefined;
+}
+
+function ComposerThreadChipTitle(props: { editor: TiptapEditor; path: string; link: ResolvedThreadLink }) {
+  const { editor, path } = props;
+  const link = useComposerThreadReference(props.link);
+  useLayoutEffect(() => {
+    const update = () => {
+      for (const chip of editor.view.dom.querySelectorAll<HTMLElement>("[data-thread-chip]")) {
+        if (chip.dataset.skillPath !== path) continue;
+        const name = composerThreadLabel(link, chip.dataset.label);
+        if (chip.dataset.skillName !== name) chip.dataset.skillName = name;
+        if (chip.dataset.resolvedInstanceId !== link.instanceId) {
+          if (link.instanceId) chip.dataset.resolvedInstanceId = link.instanceId;
+          else delete chip.dataset.resolvedInstanceId;
+        }
+        const tooltip = `${name}\n${path}`;
+        if (chip.dataset.tooltip !== tooltip) chip.dataset.tooltip = tooltip;
+        const label = chip.querySelector(".thread-chip__label");
+        const text = `#${name.replace(/^#/, "")}`;
+        if (label && label.textContent !== text) label.textContent = text;
+      }
+    };
+    // Titles are view metadata. Keep them out of the draft and undo history.
+    update();
+    const onTransaction: Parameters<typeof editor.on<"transaction">>[1] = ({ transaction }) => {
+      if (transaction.docChanged) update();
+    };
+    editor.on("transaction", onTransaction);
+    return () => { editor.off("transaction", onTransaction); };
+  }, [editor, path, link]);
+  return null;
+}
+
 export const ComposerTiptapInput = forwardRef<
   ComposerInputHandle,
   ComposerTiptapInputProps
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
+  const threadLinks = useThreadLinks();
+  const threadLinksRef = useRef(threadLinks);
+  threadLinksRef.current = threadLinks;
+  const threadPaths = JSON.stringify([...new Set(props.skillTokens
+    .flatMap((token) => token.kind === "thread" && token.path ? [token.path] : []))]);
+  const resolvedThreadChips = useMemo(() => {
+    const paths = JSON.parse(threadPaths) as string[];
+    return paths.flatMap((path) => {
+      const link = resolveThreadHref(path, threadLinks);
+      return link ? [{ path, link }] : [];
+    });
+  }, [threadLinks, threadPaths]);
   const editorRef = useRef<TiptapEditor | null>(null);
   const [threadContextMenu, setThreadContextMenu] =
     useState<ComposerThreadContextMenuState>();
@@ -2884,6 +2948,33 @@ export const ComposerTiptapInput = forwardRef<
       ...(props.markdownConversion ? [FlexibleCodeBlockInputRules] : []),
       IgnoreUnderlineShortcut,
       SkillMention,
+      Extension.create({
+        name: "composerThreadReferencePaste",
+        addProseMirrorPlugins() {
+          return [new Plugin({
+            appendTransaction(transactions, _oldState, state) {
+              const links = threadLinksRef.current;
+              if (!links || !transactions.some((transaction) => transaction.getMeta("paste"))) return null;
+              const range = pastedThreadReferenceRange(transactions);
+              if (!range) return null;
+              const transaction = state.tr;
+              state.doc.nodesBetween(range.from, range.to, (node, pos) => {
+                if (node.type.spec.code) return false;
+                if (!node.isText || !node.text || node.marks.some((mark) => mark.type.spec.code)) return;
+                for (const reference of findComposerThreadReferences(node.text, links)) {
+                  const from = pos + reference.start;
+                  const to = pos + reference.end;
+                  if (from < range.from || to > range.to) continue;
+                  const token = createComposerThreadToken(reference.link, 0, reference.fallbackLabel);
+                  transaction.replaceWith(transaction.mapping.map(from), transaction.mapping.map(to),
+                    state.schema.nodes.mention.create(getSkillMentionAttrs(token), null, node.marks));
+                }
+              });
+              return transaction.docChanged ? transaction : null;
+            },
+          })];
+        },
+      }),
       Extension.create({
         name: "composerCommandChip",
         addProseMirrorPlugins() {
@@ -3281,11 +3372,31 @@ export const ComposerTiptapInput = forwardRef<
             event.preventDefault();
             return true;
           }
+          const currentEditor = editorRef.current;
+          const links = threadLinksRef.current;
+          if (currentEditor && links && !selectionIsInsideNode(currentEditor, "codeBlock")
+            && !currentEditor.isActive("code")) {
+            const text = event.clipboardData?.getData?.("text/plain").trim() ?? "";
+            const reference = findComposerThreadReferences(text, links)[0];
+            const standalone = !/\s/.test(text)
+              ? resolveThreadHref(text, links) ?? resolveThreadIdText(text, links)
+              : undefined;
+            const thread = standalone ?? (reference?.start === 0 && reference.end === text.length
+              ? reference.link
+              : undefined);
+            if (thread && insertMentionTokenAtSelection({
+              editor: currentEditor,
+              readMode: propsRef.current.markdownConversion ? "markdown" : "text",
+              token: createComposerThreadToken(thread, 0, reference?.fallbackLabel),
+            })) {
+              event.preventDefault();
+              return true;
+            }
+          }
           propsRef.current.onPaste?.(event as unknown as ClipboardEvent<HTMLDivElement>);
           if (event.defaultPrevented) {
             return true;
           }
-          const currentEditor = editorRef.current;
           if (!currentEditor || !propsRef.current.markdownConversion) {
             return false;
           }
@@ -3868,6 +3979,9 @@ export const ComposerTiptapInput = forwardRef<
           return;
         }
 
+        if (target.dataset.resolvedInstanceId) {
+          link.instanceId = target.dataset.resolvedInstanceId;
+        }
         event.preventDefault();
         event.stopPropagation();
         window.getSelection()?.removeAllRanges();
@@ -3957,6 +4071,9 @@ export const ComposerTiptapInput = forwardRef<
         }
       }}
     >
+      {editor && resolvedThreadChips.map(({ link, path }) => (
+        <ComposerThreadChipTitle key={path} editor={editor} path={path} link={link} />
+      ))}
       <EditorContent editor={editor} />
       {pullRequestTooltip}
       {threadContextMenu ? (

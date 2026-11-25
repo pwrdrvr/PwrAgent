@@ -1,4 +1,5 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { readComposerThreadReference } from "./composer-thread-references";
 import { findSharedSkillNames, isSharedSkillName } from "@pwragent/shared/skill-origin";
 import { type AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseInstanceReferenceUrl } from "../../lib/instance-references";
@@ -12,6 +13,7 @@ import { createComposerAtReferenceToken, createComposerDirectoryToken, createCom
 
 type MarkdownNode = {
   type: string;
+  url?: string;
   position?: { start: { offset?: number }; end: { offset?: number } };
   children?: MarkdownNode[];
 };
@@ -125,6 +127,13 @@ export function hydrateComposerDraft(
   // CommonMark handles inline, fenced, indented, and nested code consistently.
   const visit = (node: MarkdownNode): void => {
     if (node.type === "link") {
+      const reference = readComposerThreadReference(node, canonicalDraft, threadLinks);
+      if (reference) {
+        hydrateReferences(canonicalDraft.slice(cursor, reference.start));
+        skillTokens.push(createComposerThreadToken(reference.link, draft.length, reference.fallbackLabel));
+        cursor = reference.end;
+        return;
+      }
       const start = node.position?.start.offset;
       const end = node.position?.end.offset;
       // Inline code in an explicit link's label belongs to that reference.
