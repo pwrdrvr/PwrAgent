@@ -1,6 +1,6 @@
+import { resolveMainEntryPath } from "./runtime-resources";
 import { getOwnerHostServices } from "./owner-host";
 import type { StorageMaintenanceWorker } from "./storage-maintenance-host";
-import { join } from "node:path";
 import type { StorageMaintenanceStorage } from "@pwragent/owner-core/storage-maintenance-storage";
 import { findLiveProfileRuntimeMarkers, resolveActiveProfileName, resolveActiveProfilePath } from "./profile";
 import { storageHistoryPolicy, storageMaintenanceDue, type StorageThreadIdentity } from "@pwragent/owner-core/storage-maintenance-storage";
@@ -112,7 +112,7 @@ export async function runStartupStorageMaintenance(options: {
         publish({ phase: "deferred", message: "Another PwrAgent instance is using this profile. Storage optimization will wait." });
         finish(); return;
       }
-      worker = getOwnerHostServices().storageMaintenance.forkWorker(join(__dirname, "storage-maintenance-worker.js"));
+      worker = getOwnerHostServices().storageMaintenance.forkWorker(resolveMainEntryPath("storage-maintenance-worker.js", __dirname));
       ownershipTimer = setInterval(() => {
         if (worker && otherInstances()) {
           stopping = true;

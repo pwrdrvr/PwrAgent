@@ -500,3 +500,45 @@ it("does not coalesce viewer mounts with the otherwise identical owner inventory
   pool.release("owner");
   pool.release("viewer");
 });
+
+it("logs a diagnostic warning when a navigation read is slow or hits navigation_busy", async () => {
+  vi.useFakeTimers();
+  const warnings: Array<{ message: string; fields: Record<string, unknown> }> = [];
+  const pool = new NavigationQueryPool({
+    slowReadThresholdMs: 2_000,
+    onDiagnosticWarning: (message, fields) => warnings.push({ message, fields }),
+  });
+  try {
+    let finish!: (value: NavigationQueryPage) => void;
+    const slowRead = pool.read({
+      consumerId: "slow-view",
+      request,
+      load: () => new Promise((resolve) => { finish = resolve; }),
+    });
+    await vi.advanceTimersByTimeAsync(2_500);
+    finish(page);
+    await slowRead;
+    expect(warnings).toContainEqual(expect.objectContaining({
+      message: "slow navigation query",
+      fields: expect.objectContaining({ kind: "query", queryKind: "lens", consumer: "main-sidebar" }),
+    }));
+
+    warnings.length = 0;
+    const deadlineRead = pool.read({
+      consumerId: "timeout-view",
+      request: { ...request, deadlineAt: Date.now() + 500 },
+      load: () => new Promise(() => undefined),
+    });
+    const settled = deadlineRead.catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(await settled).toMatchObject({ code: "navigation_busy" });
+    expect(warnings).toContainEqual(expect.objectContaining({
+      message: "navigation query busy",
+      fields: expect.objectContaining({ kind: "query", queryKind: "lens", consumer: "main-sidebar" }),
+    }));
+  } finally {
+    pool.release("slow-view");
+    pool.release("timeout-view");
+    vi.useRealTimers();
+  }
+});

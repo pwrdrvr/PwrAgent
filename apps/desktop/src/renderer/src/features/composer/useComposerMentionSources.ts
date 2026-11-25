@@ -12,6 +12,7 @@ import {
 
 const NAVIGATION_STALE_MS = 10_000;
 const MAX_CACHED_QUERIES = 8;
+const SLOW_MENTION_QUERY_MS = 1_500;
 
 type NavigationPopulation = {
   directories: readonly NavigationDirectoryRow[];
@@ -77,6 +78,7 @@ export function useComposerMentionSources(params: {
     ownerKey: string;
     population: NavigationPopulation;
     loading: boolean;
+    settledDirectoryQuery?: string;
     settledQuery?: string;
   }>({ ownerKey, population: EMPTY_POPULATION, loading: false });
   const loadingRef = useRef(false);
@@ -110,7 +112,13 @@ export function useComposerMentionSources(params: {
     const cached = cache.get(cacheKey);
     if (cached && cached.revision === revision
       && Date.now() - cached.fetchedAt < NAVIGATION_STALE_MS) {
-      setState({ ownerKey, population: cached.population, loading: false, settledQuery: demand });
+      setState({
+        ownerKey,
+        population: cached.population,
+        loading: false,
+        settledDirectoryQuery: demand,
+        settledQuery: demand,
+      });
       return;
     }
     let cancelled = false;
@@ -122,39 +130,153 @@ export function useComposerMentionSources(params: {
     }));
     const directoryConsumer = `${consumerId}:directories`;
     const threadConsumer = `${consumerId}:threads`;
-    void Promise.all([
-      desktopApi.getNavigationQueryPage({
-        protocol: 2,
-        consumer: "mentions",
-        federationTarget,
-        query: { kind: "directory-index", match: "mention", filter: demand },
-        pageSize: 10,
-      }, directoryConsumer),
-      // In the main window the # picker combines local threads with a
-      // separate peer search, so scoping this page to the directory owner
-      // would remove local references. A remote viewer runs no peer search
-      // (`useFederatedThreadSearch`); its threads are the peer's it fronts.
-      desktopApi.getNavigationQueryPage({
-        protocol: 2,
-        consumer: "mentions",
-        ...(viewerTarget ? { federationTarget: viewerTarget } : {}),
-        query: demand ? { kind: "search", text: demand } : { kind: "lens", lens: "inbox" },
-        pageSize: 10,
-      }, threadConsumer),
-    ]).then(([directories, threads]) => {
+    const startedAt = performance.now();
+    const isRemoteDirectoryOwner = federationTarget?.scope === "remote";
+    let directoriesDone = false;
+    let threadsDone = false;
+    let directoriesSucceeded = false;
+    let threadsSucceeded = false;
+    let resolvedDirectories: readonly NavigationDirectoryRow[] = [];
+    let resolvedOwnerRanked = false;
+    let resolvedThreads: readonly NavigationRow[] = [];
+
+    const logMentionQuery = (
+      kind: "directories" | "threads",
+      outcome: "slow" | "failed",
+      error?: unknown,
+    ): void => {
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (outcome === "slow" && elapsedMs < SLOW_MENTION_QUERY_MS) return;
+      void desktopApi.logRendererDiagnostic?.({
+        level: "warn",
+        message: outcome === "failed"
+          ? "composer mention navigation query failed"
+          : "composer mention navigation query slow",
+        details: {
+          kind,
+          elapsedMs,
+          remote: kind === "directories" ? isRemoteDirectoryOwner : Boolean(viewerTarget),
+          ...(outcome === "failed"
+            ? { errorName: error instanceof Error ? error.name : "Error" }
+            : {}),
+        },
+      });
+    };
+
+    const finishIfDone = (): void => {
+      if (!directoriesDone || !threadsDone) return;
+      loadingRef.current = false;
+      if (directoriesSucceeded && threadsSucceeded) {
+        const population: NavigationPopulation = {
+          directories: resolvedDirectories,
+          ownerRankedDirectories: resolvedOwnerRanked,
+          threads: resolvedThreads,
+        };
+        cache.set(cacheKey, { population, revision, fetchedAt: Date.now() });
+        while (cache.size > MAX_CACHED_QUERIES) cache.delete(cache.keys().next().value!);
+      }
+    };
+
+    void desktopApi.getNavigationQueryPage({
+      protocol: 2,
+      consumer: "mentions",
+      federationTarget,
+      query: { kind: "directory-index", match: "mention", filter: demand },
+      pageSize: 10,
+    }, directoryConsumer).then((directories) => {
       if (cancelled) return;
-      const population: NavigationPopulation = {
-        directories: directories.directories ?? [],
-        ownerRankedDirectories: directories.directoryMatch === "mention",
-        threads: threads.entries.map((entry) => entry.row),
-      };
-      cache.set(cacheKey, { population, revision, fetchedAt: Date.now() });
-      while (cache.size > MAX_CACHED_QUERIES) cache.delete(cache.keys().next().value!);
-      setState({ ownerKey, population, loading: false, settledQuery: demand });
-    }).catch(() => {
-      if (!cancelled) setState({ ownerKey, population: EMPTY_POPULATION, loading: false, settledQuery: demand });
-    }).finally(() => {
-      if (!cancelled) loadingRef.current = false;
+      logMentionQuery("directories", "slow");
+      directoriesDone = true;
+      directoriesSucceeded = true;
+      resolvedDirectories = directories.directories ?? [];
+      resolvedOwnerRanked = directories.directoryMatch === "mention";
+      const allDone = threadsDone;
+      setState((current) => ({
+        ownerKey,
+        population: {
+          directories: resolvedDirectories,
+          ownerRankedDirectories: resolvedOwnerRanked,
+          threads: current.ownerKey === ownerKey ? current.population.threads : [],
+        },
+        loading: !allDone,
+        settledDirectoryQuery: demand,
+        ...(allDone ? { settledQuery: demand } : {}),
+      }));
+      finishIfDone();
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      logMentionQuery("directories", "failed", error);
+      directoriesDone = true;
+      const allDone = threadsDone;
+      setState((current) => ({
+        ownerKey,
+        population: isRemoteDirectoryOwner
+          ? EMPTY_POPULATION
+          : {
+              directories: [],
+              ownerRankedDirectories: false,
+              threads: current.ownerKey === ownerKey ? current.population.threads : [],
+            },
+        loading: !allDone,
+        settledDirectoryQuery: demand,
+        ...(allDone ? { settledQuery: demand } : {}),
+      }));
+      finishIfDone();
+    });
+
+    // In the main window the # picker combines local threads with a
+    // separate peer search, so scoping this page to the directory owner
+    // would remove local references. A remote viewer runs no peer search
+    // (`useFederatedThreadSearch`); its threads are the peer's it fronts.
+    void desktopApi.getNavigationQueryPage({
+      protocol: 2,
+      consumer: "mentions",
+      ...(viewerTarget ? { federationTarget: viewerTarget } : {}),
+      query: demand ? { kind: "search", text: demand } : { kind: "lens", lens: "inbox" },
+      pageSize: 10,
+    }, threadConsumer).then((threads) => {
+      if (cancelled) return;
+      logMentionQuery("threads", "slow");
+      threadsDone = true;
+      threadsSucceeded = true;
+      resolvedThreads = threads.entries.map((entry) => entry.row);
+      const allDone = directoriesDone;
+      const clearForOfflineRemote = isRemoteDirectoryOwner && directoriesDone && !directoriesSucceeded;
+      setState((current) => ({
+        ownerKey,
+        population: clearForOfflineRemote
+          ? EMPTY_POPULATION
+          : {
+              directories: current.ownerKey === ownerKey ? current.population.directories : [],
+              ownerRankedDirectories: current.ownerKey === ownerKey ? current.population.ownerRankedDirectories : false,
+              threads: resolvedThreads,
+            },
+        loading: !allDone,
+        ...(current.ownerKey === ownerKey && current.settledDirectoryQuery !== undefined
+          ? { settledDirectoryQuery: current.settledDirectoryQuery }
+          : {}),
+        ...(allDone ? { settledQuery: demand } : {}),
+      }));
+      finishIfDone();
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      logMentionQuery("threads", "failed", error);
+      threadsDone = true;
+      const allDone = directoriesDone;
+      setState((current) => ({
+        ownerKey,
+        population: {
+          directories: current.ownerKey === ownerKey ? current.population.directories : [],
+          ownerRankedDirectories: current.ownerKey === ownerKey ? current.population.ownerRankedDirectories : false,
+          threads: [],
+        },
+        loading: !allDone,
+        ...(current.ownerKey === ownerKey && current.settledDirectoryQuery !== undefined
+          ? { settledDirectoryQuery: current.settledDirectoryQuery }
+          : {}),
+        ...(allDone ? { settledQuery: demand } : {}),
+      }));
+      finishIfDone();
     });
     return () => {
       cancelled = true;
@@ -166,10 +288,21 @@ export function useComposerMentionSources(params: {
 
   // Effects run after render: never expose the old owner's rows in that gap.
   const visibleState = state.ownerKey === ownerKey ? state
-    : { population: EMPTY_POPULATION, loading: demand !== undefined, settledQuery: undefined };
+    : {
+        population: EMPTY_POPULATION,
+        loading: demand !== undefined,
+        settledDirectoryQuery: undefined,
+        settledQuery: undefined,
+      };
   const { directories, ownerRankedDirectories, threads } = visibleState.population;
   return {
-    directories, threads, instances, ensureLoaded, release, loading: visibleState.loading, settledQuery: visibleState.settledQuery,
-    ownerRankedDirectoryQuery: ownerRankedDirectories ? visibleState.settledQuery : undefined,
+    directories,
+    threads,
+    instances,
+    ensureLoaded,
+    release,
+    loading: visibleState.loading,
+    settledQuery: visibleState.settledQuery,
+    ownerRankedDirectoryQuery: ownerRankedDirectories ? visibleState.settledDirectoryQuery : undefined,
   };
 }

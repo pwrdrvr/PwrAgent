@@ -36,7 +36,7 @@ import { GitlabPrToolClient } from "../pr-status/gitlab-pr-tool-client";
 import type { ForgePrToolArgs, ForgePrToolOperation } from "../pr-status/forge-pr-tool-contract";
 import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "../pr-status/forge-tool-contract";
 import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
-import { StackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
+import { getDesktopStackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
 import { assertGithubStackMergeAllowed, githubStackRepository, isObservedStackParent } from "../stacks/stack-merge-guard";
@@ -1235,7 +1235,7 @@ class DesktopAppServerService {
   >();
   private readonly prStatusRegistry = new Map<string, PrStatusRegistryEntry>();
   private readonly prCardMerges = new Map<string, { transition?: PrStatusTransition }>();
-  private readonly stackReader = new StackReader();
+  private readonly stackReader = getDesktopStackReader();
   private readonly stackPublishAttempts = new Map<string,
     { signature: string; retryAfter?: number } | { declinedHead: string }
   >();
@@ -2090,7 +2090,7 @@ class DesktopAppServerService {
         const index = await loadLocalNavigationQueryIndex({
           backend: request.backend,
           callerReason: "renderer-navigation-query",
-          includeStacks: navigationQueryShowsStacks(request.query),
+          includeStacks: navigationQueryShowsStacks(request.query, request.consumer),
           signal: rpcOptions?.signal,
           ...(summaries ? { viewer: { source: summaries, project: async (local: NavigationQueryIndex) => {
             const pins = await loadViewerNavigationPins(getDesktopOverlayStore(), summaries);

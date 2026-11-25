@@ -7798,7 +7798,7 @@ function localBackendOperations(): FederationBackendOperations {
             loadIndex: async () => {
               await awaitStartupProviderCoverage({ query: request.query, deadlineAt, signal });
               return loadLocalNavigationQueryIndex({ backend: request.backend,
-                callerReason: "federation-navigation-query", includeStacks: navigationQueryShowsStacks(request.query), signal });
+                callerReason: "federation-navigation-query", includeStacks: navigationQueryShowsStacks(request.query, request.consumer), signal });
             },
             request, scopeKey,
           }),

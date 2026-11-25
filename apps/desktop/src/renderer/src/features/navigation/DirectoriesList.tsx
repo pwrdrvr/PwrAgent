@@ -1,4 +1,5 @@
 import { threadRowInstanceKey } from "./thread-row-instance";
+import { getDesktopApi } from "../../lib/desktop-api";
 import type { NavigationPresentationOrder } from "./navigation-presentation-order";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
@@ -815,12 +816,52 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     },
     [pagedNavigation, visibleDirectories],
   );
+  // A ProjectIndex jump only needs the section header and initial pages for
+  // projects at or above the target so scrollTop lands accurately. Background
+  // refreshes of already-loaded directories or loads below the target must
+  // never freeze the jump.
+  const jumpPagesInFlight = useMemo(
+    () => {
+      const request = props.projectReveal;
+      if (!request?.jump || !pagedNavigation) {
+        return false;
+      }
+      if (!pagedNavigation.presentationReady) {
+        return true;
+      }
+      const targetIndex = directorySelectionOrder.indexOf(request.key);
+      const blockingKeys = targetIndex === -1
+        ? directorySelectionOrder
+        : directorySelectionOrder.slice(0, targetIndex + 1);
+      return blockingKeys.some((key) => {
+        const unpinned = pagedNavigation.resources.get(`directory:${key}`);
+        const pinned = pagedNavigation.resources.get(`directory-pins:${key}`);
+        return Boolean(unpinned?.loading && !unpinned.state.page)
+          || Boolean(pinned?.loading && !pinned.state.page);
+      });
+    },
+    [directorySelectionOrder, pagedNavigation, props.projectReveal],
+  );
+  const jumpTimingRef = useRef<{
+    request: ProjectRevealRequest;
+    startedAt: number;
+    waitedForPresentationReady: boolean;
+    waitedForPages: boolean;
+  } | undefined>(undefined);
   useEffect(() => {
     const request = props.projectReveal;
     if (!request || handledProjectReveal.current === request
       || (!request.jump && props.selectedItemKey !== (
         request.selectedThreadKey ?? buildLaunchpadSelectionKey(request.key)
       ))) return;
+    if (request.jump && jumpTimingRef.current?.request !== request) {
+      jumpTimingRef.current = {
+        request,
+        startedAt: performance.now(),
+        waitedForPresentationReady: false,
+        waitedForPages: false,
+      };
+    }
     const header = projectHeaders.current.get(request.key);
     if (!header) return;
     if (expandedByKey[request.key] !== true) {
@@ -829,7 +870,16 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
     }
     // Loaded threads provide the scroll extent below the header and can
     // shift it when another expanded directory above finishes loading.
-    if (revealPagesInFlight) return;
+    if (request.jump ? jumpPagesInFlight : revealPagesInFlight) {
+      if (request.jump && jumpTimingRef.current?.request === request) {
+        if (pagedNavigation && !pagedNavigation.presentationReady) {
+          jumpTimingRef.current.waitedForPresentationReady = true;
+        } else {
+          jumpTimingRef.current.waitedForPages = true;
+        }
+      }
+      return;
+    }
     const frame = requestAnimationFrame(() => {
       // The header is sticky: its visual top may already be at the viewport
       // edge while the project's threads are scrolled out above it. Reveal the
@@ -850,12 +900,32 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
           ?.scrollIntoView?.({ block: "nearest" });
         setFlashedProjectKey(request.key);
       }
-      if (request.jump) setFlashedProjectKey(request.key);
+      if (request.jump) {
+        setFlashedProjectKey(request.key);
+        const timing = jumpTimingRef.current;
+        if (timing?.request === request) {
+          const elapsedMs = Math.round(performance.now() - timing.startedAt);
+          if (elapsedMs >= 1_000) {
+            void getDesktopApi()
+              ?.logRendererDiagnostic?.({
+                level: "warn",
+                message: "project index jump delayed",
+                details: {
+                  elapsedMs,
+                  waitedForPresentationReady: timing.waitedForPresentationReady,
+                  waitedForPages: timing.waitedForPages,
+                },
+              })
+              ?.catch(() => undefined);
+          }
+          jumpTimingRef.current = undefined;
+        }
+      }
       handledProjectReveal.current = request;
       props.onProjectRevealComplete?.();
     });
     return () => cancelAnimationFrame(frame);
-  }, [props.projectReveal, props.onProjectRevealComplete, props.selectedItemKey, visibleDirectories, expandedByKey, setExpandedByKey, revealPagesInFlight, landJump]);
+  }, [props.projectReveal, props.onProjectRevealComplete, props.selectedItemKey, visibleDirectories, expandedByKey, setExpandedByKey, jumpPagesInFlight, pagedNavigation, revealPagesInFlight, landJump]);
 
   // Released monotonically: once the rows have been handed a request it is
   // never taken back. ThreadRow re-runs its scroll on EVERY change of the

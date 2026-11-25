@@ -1,4 +1,4 @@
-import { runtimeResourcesPath } from "../runtime-resources";
+import { resolveMainEntryPath, runtimeResourcesPath } from "../runtime-resources";
 import { externalLinks as shell } from "../owner-host";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -868,7 +868,7 @@ export class McpConnectionGatewayService {
     this.readGatewaySelection = options.readGatewaySelection
       ?? (async (context) => desktopMcpConnectionSelectionStorage.readSelection(context));
     this.bridgeEntryPath =
-      options.bridgeEntryPath ?? join(__dirname, "mcp-connection-bridge.js");
+      options.bridgeEntryPath ?? resolveMainEntryPath("mcp-connection-bridge.js", __dirname);
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
     this.openExternal = options.openExternal ?? ((url) => shell.openExternal(url));
     this.sandboxer = options.sandboxer

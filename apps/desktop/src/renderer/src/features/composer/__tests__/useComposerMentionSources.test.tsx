@@ -189,4 +189,29 @@ describe("bounded composer mention sources", () => {
     }
   });
 
+  it("publishes @ directory candidates as soon as directory-index resolves, even while the thread query is pending or fails", async () => {
+    let rejectThreads!: (error: Error) => void;
+    const logRendererDiagnostic = vi.fn(async () => undefined);
+    const desktopApi: DesktopApi = {
+      logRendererDiagnostic,
+      getNavigationQueryPage: (request) => request.query.kind === "directory-index"
+        ? Promise.resolve(ownerPage(request))
+        : new Promise((_resolve, reject) => { rejectThreads = reject; }),
+    };
+    const { result } = renderHook(() => useComposerMentionSources({ desktopApi }));
+    act(() => result.current.ensureLoaded("microapps"));
+    // @ project references must appear immediately without waiting for the # thread query.
+    await waitFor(() => expect(result.current.directories.map((row) => row.path)).toEqual(["/local/microapps"]));
+    expect(result.current.ownerRankedDirectoryQuery).toBe("microapps");
+
+    await act(async () => rejectThreads(new Error("Navigation admission deadline expired.")));
+    // A failed thread search must not erase already-resolved @ directories, and must log a diagnostic warning.
+    expect(result.current.directories.map((row) => row.path)).toEqual(["/local/microapps"]);
+    expect(result.current.loading).toBe(false);
+    expect(logRendererDiagnostic).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      message: "composer mention navigation query failed",
+    }));
+  });
+
 });

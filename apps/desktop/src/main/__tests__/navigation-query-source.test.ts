@@ -46,7 +46,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () 
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
-import { loadLocalNavigationQueryIndex, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
+import { loadLocalNavigationQueryIndex, navigationQueryShowsStacks, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
 import { StackReader } from "../stacks/stack-reader";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
 import { runGitCommand } from "../app-server/git-executable";
@@ -1250,4 +1250,21 @@ it("observes a retired Git stack before starting a new viewer lease", async () =
       clock.mockRestore();
     }
   });
+});
+
+it("never requests stack projection for composer mention queries", () => {
+  const queries: NavigationQueryRequest["query"][] = [
+    { kind: "lens", lens: "inbox" },
+    { kind: "lens", lens: "attention" },
+    { kind: "directory", directoryKey: "directory:/repo" },
+    { kind: "children", parent: { backend: "codex", threadId: "t1" } },
+    { kind: "exact", identities: [{ backend: "codex", threadId: "t1" }] },
+    { kind: "search", text: "microapps" },
+    { kind: "star-map", filters: {} },
+    { kind: "directory-index" },
+    { kind: "group-members", roots: [{ backend: "codex", threadId: "t1" }] },
+  ];
+  for (const query of queries) {
+    expect((navigationQueryShowsStacks as (q: NavigationQueryRequest["query"], c?: NavigationQueryRequest["consumer"]) => boolean)(query, "mentions")).toBe(false);
+  }
 });

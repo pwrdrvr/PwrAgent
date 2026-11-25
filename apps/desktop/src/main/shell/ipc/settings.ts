@@ -3,6 +3,7 @@ import { addAbortListener } from "node:events";
 import { join } from "node:path";
 import { codexAuthState } from "../../codex-auth-state";
 import { claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable } from "../../claude/claude-executable";
+import { resolveMainEntryPath } from "../../runtime-resources";
 import { openClaudeSessionReader } from "../../claude/claude-session-reader";
 import { getOwnerHostServices } from "../../owner-host";
 import { registerReceivingFolderIpc } from "./receiving-folder";
@@ -1308,7 +1309,7 @@ async function discoverRecentProjectsForOnboarding(
       // Use the worker even when CLAUDE_CONFIG_DIR matches, so a cancelled
       // or timed-out discovery can stop reading immediately.
       const reader = openClaudeSessionReader(env, {
-        workerPath: join(__dirname, "claude-session-reader-worker.js"),
+        workerPath: resolveMainEntryPath("claude-session-reader-worker.js", __dirname),
       });
       using _abort = addAbortListener(claudeSignal, () => reader.close());
       try {

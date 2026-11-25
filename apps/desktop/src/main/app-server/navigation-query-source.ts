@@ -28,7 +28,7 @@ import {
 import { getMainLogger } from "../log";
 import { withCodexRequestActivity } from "../codex-app-server/request-activity";
 import { PR_METADATA_PRIORITY, SharedPrMetadataRead } from "../pr-status/pr-metadata-process";
-import { StackReader, StackReadObservation } from "../stacks/stack-reader";
+import { getDesktopStackReader, StackReadObservation } from "../stacks/stack-reader";
 import {
   compactStackMembership, MAX_COMPACT_STACK_MEMBERSHIPS, STACK_DETAIL_REUSE_MS,
   type CompactStackMembership, type SelectedStackLayer, type StackSummary,
@@ -40,7 +40,7 @@ import { readNavigationCheckouts } from "../git-info/directory-store";
 // window and the provider/filesystem validation on its expiry still apply.
 const indexReads = new NavigationIndexReadPool(1_000, 15_000);
 const actionIndexReads = new NavigationIndexReadPool();
-const stackReader = new StackReader();
+const stackReader = getDesktopStackReader();
 
 /** A stacked index read is stale after this event; its stack inputs may have changed. */
 function stackIndexEventInvalidates(notification: { method: string; params?: unknown }): boolean {
@@ -112,7 +112,11 @@ export function navigationPullRequestProjection(options: {
     },
   };
 }
-export function navigationQueryShowsStacks(query: NavigationQueryRequest["query"]): boolean {
+export function navigationQueryShowsStacks(
+  query: NavigationQueryRequest["query"],
+  consumer?: NavigationQueryRequest["consumer"],
+): boolean {
+  if (consumer === "mentions") return false;
   return query.kind === "lens" || query.kind === "directory" || query.kind === "children"
     || query.kind === "exact" || query.kind === "search" || query.kind === "star-map";
 }
