@@ -130,6 +130,48 @@ export function reservePlainTooltipRequest(): number {
 
 export type TooltipPoint = { x: number; y: number };
 
+/**
+ * Where the pointer last was, and what it was over, from the document's own
+ * mouse events. A trigger shows its card from `mouseenter`, before the hook
+ * listens to anything, so the hook cannot learn this from its own listeners;
+ * one set of passive capture listeners per document serves every enterable
+ * card, installed when the first one mounts. Cleared when the pointer leaves
+ * the window.
+ */
+let lastPointer: { point: TooltipPoint; over: EventTarget | null } | null = null;
+let pointerTrackingInstalled = false;
+
+function installPointerTracking(): void {
+  if (pointerTrackingInstalled || typeof document === "undefined") return;
+  pointerTrackingInstalled = true;
+  const record = (event: MouseEvent): void => {
+    lastPointer = { point: { x: event.clientX, y: event.clientY }, over: event.target };
+  };
+  const options = { capture: true, passive: true };
+  document.addEventListener("mousemove", record, options);
+  document.addEventListener("mouseover", record, options);
+  document.addEventListener("mouseout", (event) => {
+    if (event.relatedTarget === null) lastPointer = null;
+  }, options);
+}
+
+/**
+ * Whether the pointer still rests on `target` where it is laid out now: it was
+ * last over the target, and the target's current box still contains that
+ * point. A target that moved out from under a stationary pointer no longer
+ * has it, whatever hover event the browser has yet to send.
+ */
+function pointerRestsOn(target: HTMLElement): boolean {
+  if (!lastPointer || !(lastPointer.over instanceof Node) || !target.contains(lastPointer.over)) {
+    return false;
+  }
+  const { x, y } = lastPointer.point;
+  const box = target.getBoundingClientRect();
+  return box.width > 0 && box.height > 0
+    && x >= box.left && x < box.left + box.width
+    && y >= box.top && y < box.top + box.height;
+}
+
 type TooltipState = {
   content: ReactNode;
   horizontalBounds?: {
@@ -499,6 +541,12 @@ export function useViewportTooltip(options: {
   const pointerFrameRef = useRef<number | null>(null);
   const [delayPending, setDelayPending] = useState(false);
 
+  // A boolean dependency: callers pass `interactive` as an inline object.
+  const enterable = interactive !== undefined;
+  useEffect(() => {
+    if (enterable) installPointerTracking();
+  }, [enterable]);
+
   useEffect(() => {
     getHorizontalBoundsRef.current = getHorizontalBounds;
   }, [getHorizontalBounds]);
@@ -555,15 +603,6 @@ export function useViewportTooltip(options: {
     return pointerInCardRef.current
       || (card !== null && card.contains(document.activeElement));
   }, []);
-
-  /** The anchor moved or went away: close, unless the card holds the operator. */
-  const loseAnchor = useCallback((): void => {
-    if (cardHoldsOperator()) {
-      anchorLostWhileHeldRef.current = true;
-      return;
-    }
-    hide();
-  }, [cardHoldsOperator, hide]);
 
   /** Take the window's one plain-tooltip slot, hiding whoever held it. */
   const claimPlainTooltipSlot = useCallback((reservedRequest: number | undefined): void => {
@@ -631,6 +670,60 @@ export function useViewportTooltip(options: {
     },
     [],
   );
+
+  /**
+   * Whether an enterable card's trigger still holds the operator: keyboard
+   * focus is on it, or the pointer rests on it where it now sits. The card is
+   * still about that trigger, so it follows it rather than closing — a
+   * keyboard user reading a chip's card loses nothing to a reflow above it.
+   */
+  const triggerHoldsOperator = useCallback((target: HTMLElement): boolean => {
+    if (!interactiveRef.current || !target.isConnected) return false;
+    return target.contains(document.activeElement) || pointerRestsOn(target);
+  }, []);
+
+  /**
+   * Re-anchor to where the trigger sits now. The new rectangle is the
+   * baseline the observers compare against, and the placement pass reads the
+   * state's copy; the old position stays until it re-measures, so the card
+   * moves rather than blinking.
+   */
+  const followAnchor = useCallback((target: HTMLElement): void => {
+    const rect = target.getBoundingClientRect();
+    targetRectRef.current = toTargetRect(rect);
+    const horizontalBounds = getHorizontalBoundsRef.current?.(target);
+    pointerBoundsRef.current = horizontalBounds;
+    setState((current) =>
+      current
+        ? {
+            ...current,
+            horizontalBounds,
+            targetTop: rect.top,
+            targetBottom: rect.bottom,
+            targetLeft: rect.left,
+            targetRight: rect.left + rect.width,
+          }
+        : current,
+    );
+    scheduleAnchorSettle(target);
+  }, [scheduleAnchorSettle]);
+
+  /**
+   * The anchor moved or went away: close, unless the card holds the operator
+   * (it stays put) or its trigger does (it follows the trigger).
+   */
+  const loseAnchor = useCallback((): void => {
+    if (cardHoldsOperator()) {
+      anchorLostWhileHeldRef.current = true;
+      return;
+    }
+    const target = targetRef.current;
+    if (target && triggerHoldsOperator(target)) {
+      followAnchor(target);
+      return;
+    }
+    hide();
+  }, [cardHoldsOperator, followAnchor, hide, triggerHoldsOperator]);
 
   const rememberTarget = useCallback((target: HTMLElement): DOMRect | undefined => {
     if (!target.isConnected) {
@@ -774,6 +867,9 @@ export function useViewportTooltip(options: {
       return;
     }
     claimPlainTooltipSlot(reservedRequest);
+    // Showing again (focus landing on the chip of a held card) measures the
+    // anchor afresh, so the card points at it again.
+    anchorLostWhileHeldRef.current = false;
     const horizontalBounds = getHorizontalBounds?.(target);
     pointerRef.current = null;
     pointerBoundsRef.current = horizontalBounds;

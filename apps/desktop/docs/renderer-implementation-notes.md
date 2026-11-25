@@ -84,7 +84,16 @@ says when to read this document. Relative links were updated for this location.
     (a row above gains a Scheduled chip, scroll anchoring compensates), and
     closing on that pulled the card out from under a pointer resting on
     Squash merge. Letting go of a card whose anchor moved closes it at once.
-    `PrChip.held-card.model.test.tsx` states the rule.
+  - **A card read from its trigger follows the trigger.** While keyboard
+    focus is on an enterable card's trigger, or the pointer still rests on
+    the trigger where it now sits, the same moves re-anchor the card to the
+    trigger's new rectangle instead of closing it. "Rests on" is geometric:
+    the pointer was last over the trigger, by one window-level listener in
+    `useViewportTooltip`, and the trigger's new box still contains that
+    point. A trigger that moved out from under a stationary pointer has lost
+    it. Any other card closes on a move, as a plain tooltip does; plain
+    tooltips never follow. `PrChip.held-card.model.test.tsx` states both
+    rules.
   - **A card with content worth hearing needs `aria-describedby`.** Point the
     trigger at the hook's `tooltipId` while `visible`; nothing else references
     the portal, so an unwired card is sighted-only. Do not solve this by
