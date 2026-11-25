@@ -57621,6 +57621,35 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-band__cost { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-left: 20px; border-left: 1px solid var(--border-subtle); }
 .usage-band__note { grid-column: 1 / -1; margin: 0; color: var(--text-muted); font-size: 10px; }
 
+/* Account-wide daily token trend (provider-reported, never added to PwrAgent ledger) */
+.usage-account-tokens { flex: none; min-width: 0; padding: 12px 18px 10px; border-bottom: 1px solid var(--border-subtle); }
+.usage-account-tokens__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--text-muted); font-size: 10px; }
+.usage-account-tokens__scope { color: var(--text-secondary); }
+.usage-account-tokens__spacer { flex: 1; }
+.usage-account-tokens__accounts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
+.usage-account-tokens__accounts .usage-account__name[aria-pressed="true"] { color: var(--text-primary); box-shadow: inset 2px 0 var(--accent); }
+.usage-account-tokens__status { margin: 8px 0 0; color: var(--text-secondary); font-size: 11px; }
+.usage-account-tokens__status strong { color: var(--text-primary); font-weight: 600; }
+.usage-account-tokens__metrics { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; color: var(--text-muted); font-size: 11px; }
+.usage-account-tokens__metrics strong { color: var(--text-primary); font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-account-tokens__subset { color: var(--text-secondary); }
+.usage-account-tokens__frame { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; margin-top: 8px; }
+.usage-account-tokens__axis-y { display: flex; flex-direction: column; justify-content: space-between; height: 72px; color: var(--text-muted); font: 9px var(--font-mono); text-align: right; }
+.usage-account-tokens__plot { display: flex; align-items: flex-end; gap: 2px; height: 72px; min-width: 0; border-bottom: 1px solid var(--border-subtle); }
+.usage-account-tokens__bar { display: flex; align-items: flex-end; flex: 1 1 0; height: 100%; min-width: 0; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; }
+.usage-account-tokens__bar:hover, .usage-account-tokens__bar:focus-visible { background: var(--bg-panel-hover); }
+.usage-account-tokens__bar.is-selected { border-bottom-color: var(--accent); background: var(--bg-row-active); }
+.usage-account-tokens__fill { display: block; width: 100%; min-height: 2px; border-radius: 1px 1px 0 0; background: var(--usage-series-1); opacity: 0.82; }
+.usage-account-tokens__bar:hover .usage-account-tokens__fill, .usage-account-tokens__bar:focus-visible .usage-account-tokens__fill, .usage-account-tokens__bar.is-selected .usage-account-tokens__fill { opacity: 1; }
+.usage-account-tokens__gap { display: block; width: 100%; height: 0; border-top: 1px dashed var(--border-strong); opacity: 0.65; }
+.usage-account-tokens__axis { padding: 4px 0 0 52px; color: var(--text-muted); font: 9px var(--font-mono); }
+.usage-account-tokens__ticks { position: relative; height: 12px; }
+.usage-account-tokens__ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.usage-account-tokens__ticks span.is-start { transform: none; }
+.usage-account-tokens__ticks span.is-end { transform: translateX(-100%); }
+.usage-account-tokens__readout { min-height: 15px; margin: 6px 0 0; color: var(--text-secondary); font: 10px var(--font-mono); }
+.usage-account-tokens__note { margin: 2px 0 0; color: var(--text-muted); font-size: 10px; }
+
 /* Timeline */
 .usage-timeline { flex: none; min-width: 0; margin: 0; padding: 14px 18px 8px; border-bottom: 1px solid var(--border-subtle); }
 .usage-timeline__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; color: var(--text-muted); font-size: 10px; }

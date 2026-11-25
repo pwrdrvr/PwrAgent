@@ -112,6 +112,7 @@ import {
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
+import { readCodexAccountTokenUsage } from "./codex-account-token-usage";
 import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
 
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
@@ -7985,7 +7986,33 @@ export class DesktopBackendRegistry {
 
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
-    const activity = await this.overlayStore.readUsageActivity(request);
+    const includeAccountTokenUsage = request.includeAccountTokenUsage === true;
+    const policy = getOwnerHostServices().runtimePolicy;
+    const codexSummary = includeAccountTokenUsage && !this.closed ? this.readCodexBackendSummary() : undefined;
+    const codexAvailable = Boolean(
+      codexSummary?.available
+      || (codexSummary && !this.codexBackendSummary && codexSummary.discoveryPending
+        && !this.readCodexProvider().provider?.validation.error),
+    );
+    let usageAccountGroup: string | undefined;
+    if (includeAccountTokenUsage) {
+      // A Settings failure leaves the series owner-scoped; it must not fail
+      // the ledger read this response carries.
+      try { usageAccountGroup = this.resolveUsageAccountGroupsFn().codex; } catch { /* Owner-scoped. */ }
+    }
+    const accountTokenUsagePromise = includeAccountTokenUsage && !this.closed
+      ? readCodexAccountTokenUsage({
+          client: this.codexClient,
+          openAiProviderEnabled: (!policy || policy.enabledBackends.includes("codex")) && this.codexOpenAiProviderEnabled,
+          codexAvailable,
+          cachedAccount: this.codexBackendSummary?.account,
+          usageAccountGroup,
+        })
+      : Promise.resolve(undefined);
+    const [activity, codexAccountTokenUsage] = await Promise.all([
+      this.overlayStore.readUsageActivity(request),
+      accountTokenUsagePromise,
+    ]);
     const codex = this.codexLimitObservation();
     return { ...activity,
       // Navigation indexing can lag a live thread or rename. The information
@@ -8009,7 +8036,10 @@ export class DesktopBackendRegistry {
       ],
       providerLimitHistory: activity.limitHistory.filter((reading) => !isCodexLimitObservation(reading)),
       analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
-        backend === "codex" || hasAcpStructuredHelper(backend)) };
+        backend === "codex" || hasAcpStructuredHelper(backend)),
+      ...(includeAccountTokenUsage
+        ? { accountTokenUsage: codexAccountTokenUsage ? [codexAccountTokenUsage] : [] }
+        : {}) };
   }
 
   /**

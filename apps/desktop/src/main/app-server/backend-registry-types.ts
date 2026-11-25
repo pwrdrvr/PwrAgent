@@ -449,6 +449,7 @@ export type BackendClient = {
   }): Promise<CodexAppServerRecycleOutcome | void>;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
+  readAccountUsage?(): Promise<unknown>;
   interruptTurn(params: {
     threadId: string;
     turnId: string;

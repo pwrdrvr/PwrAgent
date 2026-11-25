@@ -9,11 +9,13 @@ import { type DesktopHelperModelSettings } from "@pwragent/shared/helper-models"
 import { formatFederationPeerDisplayLabelParts, type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { UsageTimeline, type UsageChartForecast, type UsageChartMember } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
+import { UsageAccountTokenTrend } from "./UsageAccountTokenTrend";
 import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,
   type AnalysisModelChoice, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
 import { USAGE_CUSTOM_RANGE_DEBOUNCE_MS, USAGE_SERIES, usageBucketLabel, usageCompletionBuckets, usageDimensionValue, type UsageDimension, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
 import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries, type LimitAccount, type LimitSeries } from "./usage-limits";
+import { accountTokenUsageAccountKey, buildAccountTokenAccounts, type AccountTokenAccount } from "./usage-account-tokens";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { summarizeUsageActivity, type OwnedUsageRow, type UsageGroup } from "./usage-activity-summary";
@@ -42,7 +44,7 @@ type Preset = "reset" | "five" | "today" | "day" | "week" | "month" | "custom";
 type SourceResult = Source & { data?: ReadUsageActivityResponse; error?: string };
 type Snapshot = {
   queryKey: string; from: number; to: number; preset: Preset; readAt: number;
-  rows: OwnedUsageRow[]; sources: SourceResult[]; accounts: LimitAccount[];
+  rows: OwnedUsageRow[]; sources: SourceResult[]; accounts: LimitAccount[]; tokenAccounts: AccountTokenAccount[];
 };
 
 const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
@@ -203,7 +205,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   }, [desktopApi]);
 
   const allSummary = useMemo(() => snapshot ? summarizeUsageActivity(snapshot.rows, snapshot.from, snapshot.to) : undefined, [snapshot]);
-  const usageAccounts = useMemo(() => buildUsageAccounts(allSummary?.rows ?? [], snapshot?.accounts ?? [], accountNames),
+  const usageAccounts = useMemo(() => buildUsageAccounts(allSummary?.rows ?? [], snapshot?.accounts ?? [], accountNames, snapshot?.tokenAccounts ?? []),
     [allSummary, snapshot, accountNames]);
   const selectedAccount = usageAccounts.find((account) => account.key === accountFilter) ?? rememberedAccount;
   // A selected historical account may have no usage in the next period. Keep
@@ -273,14 +275,24 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     preset === "custom" ? [from, to] : null, limitPreset ? [focusKey ?? null, accountFilter, focusProvider] : null]);
   const scopedLimits = (accounts: LimitAccount[]) => accountFilter
     ? accounts.filter((account) => limitUsageAccountKey(account) === accountFilter) : accounts;
+  const scopedTokenAccounts = (accounts: AccountTokenAccount[]) => accountFilter
+    ? accounts.filter((account) => accountTokenUsageAccountKey(account) === accountFilter) : accounts;
 
-  const readAll = async (targets: Source[], start: number, end: number) => {
+  const readAll = async (targets: Source[], start: number, end: number,
+    includeAccountTokenUsage: (source: Source) => boolean = () => false) => {
     const results: SourceResult[] = [];
     // At most four reads in flight. Each owner enforces a 5,000-row bound.
     for (let offset = 0; offset < targets.length; offset += 4) {
       results.push(...await Promise.all(targets.slice(offset, offset + 4).map(async (source) => {
-        try { return { ...source, data: await desktopApi!.readUsageActivity!({ from: start, to: end, federationTarget: source.target }) }; }
-        catch (cause) { return { ...source, error: String(cause) }; }
+        try {
+          return {
+            ...source,
+            data: await desktopApi!.readUsageActivity!({
+              from: start, to: end, federationTarget: source.target,
+              ...(includeAccountTokenUsage(source) ? { includeAccountTokenUsage: true } : {}),
+            }),
+          };
+        } catch (cause) { return { ...source, error: String(cause) }; }
       })));
     }
     return results;
@@ -289,6 +301,9 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     // An older owner reports Codex alone, in the single-reading fields.
     owner: source.label, target: source.target, current: source.data!.limitObservations ?? source.data!.limitObservation,
     history: [...source.data!.limitHistory ?? [], ...source.data!.providerLimitHistory ?? []],
+  })));
+  const tokenAccountsOf = (results: SourceResult[]) => buildAccountTokenAccounts(results.filter((source) => source.data).map((source) => ({
+    owner: source.label, target: source.target, observations: source.data!.accountTokenUsage,
   })));
 
   const refresh = async () => {
@@ -316,9 +331,13 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     if (!sameQuery) {
       setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setBucket(undefined); setFacet(undefined);
     }
-    let results = await readAll(enabledSources, start, end);
+    let results = await readAll(enabledSources, start, end, () => true);
     if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
+    // Only owners that answered: one that failed the first read asks again below,
+    // so a retried answer is never mistaken for an older peer's.
+    const initialTokenUsageBySource = new Map(results.filter((source) => source.data)
+      .map((source) => [sourceId(source.target), source.data!.accountTokenUsage]));
     const resolved = limitStart(preset, focusAccount(scopedLimits(accounts), focusKey, focusProvider));
     if (resolved !== undefined && resolved < end) {
       const bounded = Math.max(resolved, end - MAX_WINDOW);
@@ -326,13 +345,20 @@ export function UsageActivity({ desktopApi, initialProvider }: {
         // Read once more over the window itself: from its start when it began
         // earlier than what was read, and when it began later, so the owners'
         // helper rollups and bars fit the window instead of straddling its start.
-        results = await readAll(enabledSources, bounded, end);
+        // Account-wide daily token history is period-independent, so reuse the
+        // first pass rather than polling `account/usage/read` a second time.
+        results = (await readAll(enabledSources, bounded, end,
+          (source) => !initialTokenUsageBySource.has(sourceId(source.target)))).map((source) => {
+          const accountTokenUsage = source.data?.accountTokenUsage ?? initialTokenUsageBySource.get(sourceId(source.target));
+          return source.data && accountTokenUsage ? { ...source, data: { ...source.data, accountTokenUsage } } : source;
+        });
         if (!mounted.current || seq !== readSeq.current) return;
         accounts = accountsOf(results);
       }
       start = bounded;
     }
-    setSnapshot({ queryKey, from: start, to: end, preset, readAt: Date.now(), sources: results, accounts,
+    const tokenAccounts = tokenAccountsOf(results);
+    setSnapshot({ queryKey, from: start, to: end, preset, readAt: Date.now(), sources: results, accounts, tokenAccounts,
       // A narrowed window drops turns that finished before it began; they are
       // outside the window, not intervals that straddle its start.
       rows: results.flatMap((source) => (source.data?.rows ?? [])
@@ -434,6 +460,12 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     capped.length ? `${nameList(capped)} returned only the newest 5,000 rows; choose a shorter period for the rest` : "",
   ].filter(Boolean);
   const limitAccounts = scopedLimits(snapshot?.accounts ?? []);
+  const tokenAccounts = scopedTokenAccounts(snapshot?.tokenAccounts ?? []);
+  const legacyTokenOwners = tokenAccounts.length > 0
+    ? (snapshot?.sources ?? [])
+      .filter((source) => source.data && source.data.accountTokenUsage === undefined)
+      .map((source) => source.label)
+    : [];
   const focus = snapshot ? focusAccount(limitAccounts, focusKey, focusProvider) : undefined;
   // An account without a 5-hour limit reads the last 5 hours, and the line is
   // its longest limit, resets and all: the window is not that limit's.
@@ -615,6 +647,9 @@ export function UsageActivity({ desktopApi, initialProvider }: {
         accountLabel={(limit) => { const key = limitUsageAccountKey(limit); return key ? accountLabels.get(key) : undefined; }}
         cost={available ? total : undefined} threads={summary.groups.length} turns={summary.contained}
         cacheShare={cacheShare} uncached={totals.uncached} output={totals.output} />
+      <UsageAccountTokenTrend accounts={tokenAccounts} focusKey={focusKey ?? focus?.key} onFocus={setFocusKey}
+        accountLabel={(account) => { const key = accountTokenUsageAccountKey(account); return key ? accountLabels.get(key) : undefined; }}
+        measuredRows={included} now={snapshot.readAt} legacyOwnerLabels={legacyTokenOwners} />
       {buckets ? <UsageTimeline buckets={buckets} selected={bucket} onSelect={setBucket}
         dimension={shownDimension} onDimension={(next) => { setDimension(next); setFacet(undefined); }}
         dimensions={["thread", "model", "provider", ...multipleAccounts ? ["account" as const] : [], ...instances > 1 ? ["instance" as const] : []]}

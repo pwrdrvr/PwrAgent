@@ -926,3 +926,158 @@ it("names each instance toggle by its short name, with the full name as its tool
   const local = within(instances).getByRole("button", { name: "Harold-MBP-M5-Max" });
   expect(local).toHaveTextContent("M5 Max");
 });
+
+it("deduplicates OpenAI account daily token history across federated owners, preserves omitted gaps, and keeps ledger detail separate", async () => {
+  const now = Date.UTC(2026, 10, 24, 18, 0, 0);
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const sharedAccountKey = "acct-pro-shared";
+  const measuredAt = Date.UTC(2026, 10, 23, 15, 0, 0);
+  const turn = usageFixture({
+    usageLineId: "openai-turn-1",
+    threadId: "thread-openai",
+    turnId: "turn-openai",
+    provider: "openai",
+    createdAt: measuredAt - 60_000,
+    startedAt: measuredAt - 60_000,
+    completedAt: measuredAt,
+    uncachedInputTokens: 200_000,
+    cachedInputTokens: 0,
+    outputTokens: 50_000,
+    totalTokens: 250_000,
+    totalCostMicros: 1_500_000,
+  });
+  const sharedBuckets = [
+    { startDate: "2026-11-21", tokens: 1_000_000 },
+    // 2026-11-22 intentionally omitted by provider — must render as gap, not zero.
+    { startDate: "2026-11-23", tokens: 2_000_000 },
+  ];
+  const readUsageActivity = vi.fn(async (request) => {
+    const id = request.federationTarget?.instanceId;
+    if (id === "legacy-peer") {
+      // Older PwrAgent omits accountTokenUsage completely.
+      return { rows: [], readAt: now, rateLimits: [], truncated: false };
+    }
+    if (id === "proxy-outpost") {
+      // New Outpost with OpenAI disabled returns an explicit empty array.
+      return { rows: [], readAt: now, rateLimits: [], truncated: false, accountTokenUsage: [] };
+    }
+    return {
+      rows: id === "outpost" ? [{ ...turn, accountKey: sharedAccountKey }] : [{ ...turn, accountKey: sharedAccountKey }],
+      readAt: now,
+      rateLimits: [],
+      truncated: false,
+      accountTokenUsage: [{
+        provider: "openai",
+        accountKey: sharedAccountKey,
+        planType: "pro",
+        observedAt: id === "outpost" ? now - 5_000 : now,
+        status: "available" as const,
+        dailyUsageBuckets: sharedBuckets,
+        summary: {
+          lifetimeTokens: 10_000_000,
+          peakDailyTokens: 2_000_000,
+          currentStreakDays: 12,
+          longestStreakDays: 20,
+        },
+      }],
+    };
+  });
+
+  render(<UsageActivity desktopApi={{
+    readUsageActivity,
+    readFederationActivity: peers([
+      { id: "outpost", label: "Build Outpost", status: "connected" },
+      { id: "proxy-outpost", label: "Proxy Outpost", status: "connected" },
+      { id: "legacy-peer", label: "Legacy Mac", status: "connected" },
+    ]),
+  }} />);
+
+  const trend = await screen.findByRole("region", { name: "Account daily token trend" });
+  expect(readUsageActivity).toHaveBeenCalledWith(expect.objectContaining({ includeAccountTokenUsage: true }));
+  // Deduplicated across Local + Build Outpost: 1M + 2M = 3M (NOT 6M, and NOT 3.25M adding PwrAgent's 250K!).
+  expect(trend).toHaveTextContent("deduplicated across Build Outpost, Local");
+  expect(trend).toHaveTextContent("3M tokens across 2 reported days");
+  expect(trend).toHaveTextContent("PwrAgent measured this period (included above) 250K");
+  expect(trend).toHaveTextContent("Not a quota percentage and not added to PwrAgent's per-thread ledger below");
+  expect(trend).toHaveTextContent("today is not yet reported by OpenAI");
+  expect(trend).toHaveTextContent("1 omitted day shown as gaps, not zero");
+  // Legacy Mac omitted accountTokenUsage -> noted as older peer; Proxy Outpost returned [] -> NOT flagged.
+  expect(trend).toHaveTextContent("Legacy Mac did not report account-wide token history");
+  expect(trend).not.toHaveTextContent("Proxy Outpost did not report");
+
+  // Omitted date renders as a gap button with an explicit omitted label (never 0 tokens).
+  const omittedBar = within(trend).getByRole("button", { name: /Nov 22, 2026 \(UTC\): Not reported by OpenAI \(omitted, not zero\)/ });
+  fireEvent.click(omittedBar);
+  expect(trend).toHaveTextContent("Omitted by OpenAI (no bucket reported, not zero)");
+
+  // PwrAgent's measured per-thread API-equivalent ledger remains intact below.
+  expect(screen.getByRole("button", { name: "Inspect Fixture thread" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Limits and cost" })).toHaveTextContent("$1.50");
+});
+
+it("shows auth-required status cleanly when Codex uses API-key or signed-out auth", async () => {
+  const now = Date.UTC(2026, 10, 24, 18, 0, 0);
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const readUsageActivity = vi.fn(async () => ({
+    rows: [],
+    readAt: now,
+    rateLimits: [],
+    truncated: false,
+    accountTokenUsage: [{
+      provider: "openai",
+      observedAt: now,
+      status: "auth_required" as const,
+    }],
+  }));
+
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  const trend = await screen.findByRole("region", { name: "Account daily token trend" });
+  expect(trend).toHaveTextContent("requires a ChatGPT/Codex account sign-in");
+});
+
+it("asks a peer that failed the first read for account token history again, not mistaking it for an older peer", async () => {
+  const now = new Date(2026, 10, 24, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const resetAt = now + 4 * 24 * HOUR;
+  const reading = (at: number, usedPercent: number): UsageLimitObservation => ({ observedAt: at, accountKey: "acct", planType: "plus",
+    limits: [{ name: "Weekly limit", windowKey: "secondary", usedPercent, resetAt, windowMinutes: 10_080 }] });
+  let peerCalls = 0;
+  const readUsageActivity = vi.fn(async (request) => {
+    if (request.federationTarget?.instanceId === "flaky-peer") {
+      peerCalls += 1;
+      if (peerCalls === 1) throw new Error("peer timed out");
+      // A current peer answers the flag with an explicit (possibly empty) list.
+      return { rows: [], readAt: now, rateLimits: [], truncated: false,
+        ...request.includeAccountTokenUsage ? { accountTokenUsage: [] } : {} };
+    }
+    return { rows: [], readAt: now, rateLimits: [], truncated: false,
+      limitObservation: reading(now - 10 * 60_000, 7),
+      limitHistory: [reading(now - 4 * HOUR, 62), reading(now - 2.5 * HOUR, 1), reading(now - 10 * 60_000, 7)],
+      accountTokenUsage: [{ provider: "openai", accountKey: "acct", observedAt: now, status: "available" as const,
+        dailyUsageBuckets: [{ startDate: "2026-11-23", tokens: 1_000 }] }] };
+  });
+  render(<UsageActivity desktopApi={{
+    readUsageActivity,
+    readFederationActivity: peers([{ id: "flaky-peer", label: "Flaky Mac", status: "connected" }]),
+  }} />);
+  const trend = await screen.findByRole("region", { name: "Account daily token trend" });
+  await waitFor(() => expect(peerCalls).toBe(2));
+  await waitFor(() => expect(trend).toHaveTextContent("1K tokens across 1 reported day"));
+  const peerReads = readUsageActivity.mock.calls.map(([request]) => request)
+    .filter((request) => request.federationTarget?.instanceId === "flaky-peer");
+  expect(peerReads.at(-1)).toEqual(expect.objectContaining({ includeAccountTokenUsage: true }));
+  expect(trend).not.toHaveTextContent("Flaky Mac did not report");
+});
+
+it("labels the chart's peak by its range and the provider's all-time peak separately", async () => {
+  const now = Date.UTC(2026, 10, 24, 18, 0, 0);
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: now, rateLimits: [], truncated: false,
+    accountTokenUsage: [{ provider: "openai", accountKey: "acct", observedAt: now, status: "available" as const,
+      dailyUsageBuckets: [{ startDate: "2026-11-23", tokens: 2_000_000 }],
+      summary: { peakDailyTokens: 9_000_000 } }] }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  const trend = await screen.findByRole("region", { name: "Account daily token trend" });
+  await waitFor(() => expect(trend).toHaveTextContent("Peak day 2M"));
+  expect(trend).toHaveTextContent("All-time peak 9M");
+});
