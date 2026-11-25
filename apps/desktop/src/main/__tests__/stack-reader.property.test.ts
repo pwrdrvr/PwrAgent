@@ -56,7 +56,12 @@ async function writeCatalog(cwd: string, name: string) {
 }
 
 describe("stack checkout demand", () => {
-  it.each(["attached", "detached"])("reuses Git's registered inventory for %s sibling checkouts", async (kind) => {
+  it.each([
+    { kind: "attached", worktreeConfig: false },
+    { kind: "detached", worktreeConfig: false },
+    { kind: "attached", worktreeConfig: true },
+    { kind: "detached", worktreeConfig: true },
+  ])("reuses Git's registered inventory for $kind checkouts with worktree config $worktreeConfig", async ({ kind, worktreeConfig }) => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-worktree-inventory-")));
     const primary = path.join(sandbox, "primary");
     try {
@@ -67,6 +72,7 @@ describe("stack checkout demand", () => {
       vi.stubEnv("XDG_CONFIG_HOME", home);
       initialize(primary);
       git(primary, "branch", "main");
+      if (worktreeConfig) git(primary, "config", "extensions.worktreeConfig", "true");
       await writeCatalog(primary, "registered");
       const worktrees = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
         const branch = `sibling-${index}`;
@@ -103,6 +109,72 @@ describe("stack checkout demand", () => {
       expect(git(sibling, "symbolic-ref", "--short", "HEAD")).toBe("topic");
       expect(await read()).toBe("codex:sibling-0");
     } finally {
+      vi.unstubAllEnvs();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a mixed roster live when one worktree gains or loses its own config", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-mixed-roster-")));
+    const primary = path.join(sandbox, "primary");
+    const topic = path.join(sandbox, "topic");
+    const alias = path.join(sandbox, "topic-alias");
+    const provenance = path.join(sandbox, "pr-provenance");
+    const home = path.join(sandbox, "home");
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      await Promise.all([mkdir(primary), mkdir(home)]);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", home);
+      initialize(primary);
+      git(primary, "checkout", "-b", "main");
+      git(primary, "config", "extensions.worktreeConfig", "true");
+      git(primary, "worktree", "add", topic, "topic");
+      await Promise.all([symlink(topic, alias, "junction"), symlink(topic, provenance, "junction")]);
+      await writeCatalog(topic, "mixed");
+      const config = path.join(git(topic, "rev-parse", "--absolute-git-dir"), "config.worktree");
+      const sisters = Array.from({ length: 6 }, (_, index) => {
+        const branch = `sister-${index}`;
+        const cwd = path.join(sandbox, branch);
+        git(primary, "worktree", "add", "-b", branch, cwd);
+        return row(cwd, branch);
+      });
+      const attached: PrSummary = { ...inferredPr(9, "topic", "main", provenance), explicitlyAttached: true };
+      const rows = [{ ...row(alias, "topic"), prs: [attached] }, ...sisters];
+      const reader = new StackReader();
+      const read = async () => {
+        starts.mockClear();
+        return (await reader.read(rows, [])).stacks[0]?.layers[0];
+      };
+      const measured = () => starts.mock.calls.filter(([, [verb], purpose]) => purpose === "stack-checkout" && verb === "rev-parse");
+      expect((await read())?.thread?.key).toBe("codex:topic");
+      expect(measured()).toHaveLength(1);
+      await writeFile(config, "[user]\n\tname = Worktree Fixture\n");
+      expect((await read())?.thread?.key).toBe("codex:topic");
+      expect(measured().map(([cwd]) => cwd)).toEqual(expect.arrayContaining([alias, provenance]));
+      expect(measured()).toHaveLength(3);
+      await writeFile(config, "[broken config");
+      const observation = new StackReadObservation({ priority: () => PR_METADATA_PRIORITY.selected });
+      expect(await observation.checkoutLookup(alias)).toBe("unavailable");
+      expect((await read())?.role).toBe("unbound");
+      expect(measured().map(([cwd]) => cwd)).toEqual(expect.arrayContaining([alias]));
+      expect(measured()).toHaveLength(2);
+      await rm(config);
+      expect((await read())?.thread?.key).toBe("codex:topic");
+      expect(measured()).toHaveLength(1);
+
+      let validations = 0;
+      const changed = await reader.read(rows, [], undefined, undefined, new StackReadObservation(), async ({ prs }) => {
+        if (++validations === 1) await writeFile(config, "[user]\n\tname = Changed Worktree Fixture\n");
+        return prs;
+      });
+      expect(changed.stacks[0]?.layers[0]?.thread?.key).toBe("codex:topic");
+      // An exact Git rediscovery can still report the same root and clone.
+      // The first roster's evidence must be discarded and admission retried.
+      expect(validations).toBe(2);
+    } finally {
+      starts.mockRestore();
       vi.unstubAllEnvs();
       await rm(sandbox, { recursive: true, force: true });
     }
@@ -207,6 +279,73 @@ describe("stack checkout demand", () => {
         run.mockRestore();
       }
     } finally {
+      vi.unstubAllEnvs();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["relative XDG", "relative HOME", "changed onbranch include"])("agrees with Git under %s without attachment validation", async (scenario) => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-config-oracle-")));
+    const primary = path.join(root, "primary");
+    const topic = path.join(root, "00-topic");
+    const home = path.join(root, "home");
+    const xdg = path.join(root, "xdg");
+    const rosterRead = Promise.withResolvers<void>();
+    onTestFinished(() => { rosterRead.resolve(); });
+    try {
+      await Promise.all([mkdir(primary), mkdir(home), mkdir(xdg)]);
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", xdg);
+      initialize(primary);
+      git(primary, "checkout", "-b", "main");
+      git(primary, "config", "extensions.worktreeConfig", "true");
+      git(primary, "worktree", "add", topic, "topic");
+      await writeCatalog(topic, "config-oracle");
+      const rows = [row(topic, "topic"), ...Array.from({ length: 5 }, (_, index) => {
+        const branch = `sibling-${index}`;
+        const cwd = path.join(root, branch);
+        git(primary, "worktree", "add", "-b", branch, cwd);
+        return row(cwd, branch);
+      })];
+      const observation = new StackReadObservation();
+      const identity = observation.hints.checkoutIdentity;
+      observation.hints.checkoutIdentity = async (cwd) => {
+        if (cwd === topic) await rosterRead.promise;
+        return await identity(cwd);
+      };
+      const command = gitExecutable.runGitCommand;
+      const run = vi.spyOn(gitExecutable, "runGitCommand");
+      onTestFinished(() => { run.mockRestore(); });
+      if (scenario === "changed onbranch include") {
+        await writeFile(path.join(home, "invalid-config"), "[invalid config\n");
+        let edited = false;
+        run.mockImplementation(async (...args) => {
+          const result = await command(...args);
+          if (!edited && args[1][0] === "worktree" && args[2]?.purpose === "stack-checkout") {
+            edited = true;
+            await writeFile(path.join(home, ".gitconfig"), '[includeIf "onbranch:topic"]\n\tpath = invalid-config\n');
+            rosterRead.resolve();
+          }
+          return result;
+        });
+      } else {
+        run.mockImplementation(async (...args) => {
+          if (args[0] !== topic && args[1][0] === "rev-parse") rosterRead.resolve();
+          return await command(...args);
+        });
+        const config = scenario === "relative HOME" ? path.join("relative", ".gitconfig") : path.join("relative", "git", "config");
+        vi.stubEnv(scenario === "relative HOME" ? "HOME" : "XDG_CONFIG_HOME", "relative");
+        await mkdir(path.join(topic, path.dirname(config)), { recursive: true });
+        await writeFile(path.join(topic, config), "[invalid config\n");
+      }
+      const result = await new StackReader().read(rows, [], undefined, undefined, observation);
+      const args = ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"];
+      const topicDiscovered = await command(topic, args).then(() => true, () => false);
+      await expect(command(rows[1]!.linkedDirectories[0]!.path, args)).resolves.toBeDefined();
+      expect(result.stacks[0]?.layers[0]?.thread?.key).toBe(topicDiscovered ? "codex:topic" : undefined);
+    } finally {
+      rosterRead.resolve();
       vi.unstubAllEnvs();
       await rm(root, { recursive: true, force: true });
     }

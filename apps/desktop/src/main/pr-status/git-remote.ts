@@ -248,6 +248,12 @@ export async function observeForgeRepositoriesForDirectory(
   };
 }
 
+/** An observation with its own lifetime samples Git without joining or updating per-path caches. */
+export async function sampleForgeRepositoriesForDirectory(cwd: string, demand: PrMetadataDemand = {}) {
+  const { observation } = await loadParsedGitRemotes(cwd, { fresh: true }, demand);
+  return { repos: collectForgeRepositories(observation.value), refreshedRemoteNames: observation.names };
+}
+
 /** Sample current Git config while reusing completed identity resolution for matching URLs. */
 export function createScheduledPrefetchRemoteReader(cwd: string) {
   let previous: RemoteCacheEntry | undefined;

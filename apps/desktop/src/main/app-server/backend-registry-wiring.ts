@@ -12,6 +12,7 @@ import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-g
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
+import { resolveMainEntryPath } from "../runtime-resources";
 import { openClaudeSessionReader } from "../claude/claude-session-reader";
 import { PlanLimitStore } from "./plan-limit-store";
 import { usageAccountKey } from "../usage-account-identity";
@@ -889,7 +890,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
       stateDir: tokenMiserStateDir,
       profileName: resolveActiveProfileName(),
       executablePath: process.execPath,
-      hookEntryPath: path.join(__dirname, "token-miser-hook.js"),
+      hookEntryPath: resolveMainEntryPath("token-miser-hook.js", __dirname),
     });
   }
   const acpWorktreeRepositoryResolver =
@@ -1050,7 +1051,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     // A chunk's __dirname is its own folder; this module is bundled into
     // the main entry, beside the worker.
     openSessionReader: (env) => openClaudeSessionReader(env, {
-      workerPath: path.join(__dirname, "claude-session-reader-worker.js"),
+      workerPath: resolveMainEntryPath("claude-session-reader-worker.js", __dirname),
     }),
     emit: async (event) => { await ports.emit(event); },
     onFollowUpTurnStarted: (turn) => { context.turnState.rememberTurnInputSource({ ...turn, backend: "claude" }, "agent"); },

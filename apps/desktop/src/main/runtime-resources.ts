@@ -50,3 +50,19 @@ export function runtimeResourcesPath(moduleUrl = import.meta.url): string | unde
 export function isDevelopmentRuntime(): boolean {
   return process.defaultApp === true || readNodeRuntimeMetadata()?.isPackaged === false;
 }
+
+/**
+ * Resolve a sibling main-process entry script (such as `mcp-connection-bridge.js`
+ * or a worker entry) even when Rolldown code-splits the caller into `out/main/chunks/`.
+ */
+export function resolveMainEntryPath(
+  entryFileName: string,
+  fromDirectory = __dirname,
+): string {
+  const direct = path.join(fromDirectory, entryFileName);
+  if (existsSync(direct)) return direct;
+  if (path.basename(fromDirectory) === "chunks") {
+    return path.join(path.dirname(fromDirectory), entryFileName);
+  }
+  return direct;
+}
