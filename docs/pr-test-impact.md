@@ -79,6 +79,12 @@ resolution, and a changed importer is in the diff. Deletion selects the full
 suite when another file can now answer the same import (`name.js` beside a
 deleted `name.ts`, an `index` file, or a `__mocks__` entry).
 
+A full Linux run on a pull request leaves `a11y.spec.ts` out unless the
+`ci:a11y` or `ci:full` label is present, the PR changes that spec, or the
+cross-platform jobs run; see
+[accessibility audit on PRs](../.github/workflows/README.md#accessibility-audit-on-prs).
+A narrowed plan runs every spec it selects, including that one.
+
 The full suite runs for:
 
 - dependency metadata, package-manager configuration, patches, CI, and test

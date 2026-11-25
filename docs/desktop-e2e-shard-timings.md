@@ -8,8 +8,10 @@ the worst observed setup, build, reporting, and other job overhead (3:14).
 The 20-minute job deadline gives slow runners additional time for retries,
 reporting, and cleanup. Each lane runs one Playwright worker.
 
-Linux and Windows share `55:114:112:115` across four lanes, so a Windows-only
-failure is never an artifact of a different lane split. Those weights were fit
+Linux and Windows share `55:114:112:115` across four lanes whenever both run
+the accessibility audit, so a Windows-only failure is never an artifact of a
+different lane split. A pull request that leaves the audit to `main` runs Linux
+alone with `86:75:65:107`; see [without the accessibility audit](#without-the-accessibility-audit). Those weights were fit
 to 396 tests in 209 groups; see [November 24 allocation](#november-24-allocation).
 The [current fitter input](desktop-e2e-shard-durations.json) includes every test ID,
 platform skip and per-run sample from that fit.
@@ -92,6 +94,30 @@ per lane, or 459 seconds at 1.4 times.
 Optimizing for Linux alone (`48:110:102:136`) would bring the Linux maximum to
 330.8 seconds, but it would raise Windows' maximum to 573.5. Optimizing the
 old sum-of-maxima objective (`58:121:105:112`) would leave Linux at 358.7.
+
+### Without the accessibility audit
+
+Pull requests without `ci:a11y`, `ci:full`, a change to `a11y.spec.ts`, or the
+cross-platform jobs set `PWRAGENT_E2E_SKIP_A11Y=1`. `playwright.config.ts` then
+ignores `a11y.spec.ts` and collects 333 tests. Windows Desktop E2E does not run
+on those PRs, so this split is fit to Linux alone:
+
+```sh
+python3 scripts/ci/fit-desktop-e2e-shards.py --platform linux --without a11y.spec.ts --weights 55:114:112:115 --fit
+```
+
+| Allocation | Linux lane 1 / 2 / 3 / 4, medians | Longest lane |
+| --- | --- | ---: |
+| `55:114:112:115` (counts 50/98/89/96) | 149.7 / 263.3 / 285.7 / 215.3 | 285.7 |
+| `86:75:65:107` | 232.9 / 218.0 / 231.3 / 231.9 | 232.9 |
+
+`playwright test --list --shard=K/4` reproduces both splits on the 396-test and
+333-test collections: 55/114/112/115 ending at `a11y.spec.ts`,
+`federation-services.spec.ts`, `sandboxer-hosted-setup.spec.ts` and
+`workspace-handoff-flows.spec.ts`, and 86/75/65/107 ending at
+`directory-launchpad-workspace.spec.ts`, `queue-explicit-identity.spec.ts`,
+`shared-messaging-profile.spec.ts` and `workspace-handoff-flows.spec.ts`. Every
+test appears exactly once.
 
 ## November 4 allocation
 

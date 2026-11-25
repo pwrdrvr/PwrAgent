@@ -49,6 +49,12 @@ jobs:
       # README in this directory for the measurements). Every push, and every
       # case this script cannot decide, runs them.
       full_platforms: ${{ steps.classify.outputs.full_platforms }}
+      # `true` keeps `a11y.spec.ts` in the Desktop E2E lanes. A pull request
+      # runs the accessibility audit only with `ci:full` or `ci:a11y`, when it
+      # changes `a11y.spec.ts`, or wherever `full_platforms` is `true`. Every
+      # push runs it. A narrowed test plan runs the specs it selects either
+      # way.
+      a11y: ${{ steps.classify.outputs.a11y }}
     steps:
       # Docs-only PRs skip Lint, so the instruction-size guard runs here,
       # where every PR and push passes through.
@@ -76,6 +82,7 @@ jobs:
               core.setOutput("code_impacting", "true");
               core.setOutput("docs_only", "false");
               core.setOutput("full_platforms", "true");
+              core.setOutput("a11y", "true");
               core.notice(`Running full CI: ${reason}`);
             };
 
@@ -159,6 +166,10 @@ jobs:
               return;
             }
             core.setOutput("full_platforms", "false");
+            const a11yFile = files.find((file) =>
+              pathsOf(file).includes("apps/desktop/e2e/a11y.spec.ts"));
+            const a11y = labels.some((label) => label.name === "ci:a11y") || a11yFile !== undefined;
+            core.setOutput("a11y", String(a11y));
 
             const codeImpactingFile = files.find((file) =>
               pathsOf(file).some((path) => !isNonProductPath(path)));
@@ -179,7 +190,11 @@ jobs:
                     + "No platform-specific path changed, so the macOS unit tests, macOS Desktop E2E "
                     + "and Windows Desktop E2E run on `main`; "
                     + "to run them here, add the `ci:full` label, then push or use **Re-run all jobs** "
-                    + "(\"Re-run failed jobs\" does not rerun this classifier).",
+                    + "(\"Re-run failed jobs\" does not rerun this classifier). "
+                    + (a11y
+                      ? "The accessibility audit runs here."
+                      : "The accessibility audit (`a11y.spec.ts`) also runs on `main`; "
+                        + "to run it here, add the `ci:a11y` label, then push or use **Re-run all jobs**."),
               )
               .write();
 
@@ -820,6 +835,11 @@ jobs:
       # parallel groups; workers remain at 1. Include platform-skipped tests
       # in the allocation even though their execution cost is negligible.
       #
+      # With the accessibility audit, lanes use 55:114:112:115. Pull requests
+      # without it (see the `a11y` classifier output) use 86:75:65:107, fit
+      # to Linux alone over the other 333 tests, since Windows E2E does not
+      # run there.
+      #
       # Fit 55:114:112:115 to the 396 collected tests on Linux and Windows.
       # The input includes every platform skip and 209 complete groups from
       # three main runs. Lane 1 holds only the first 55 a11y tests; the rest
@@ -877,6 +897,12 @@ jobs:
         timeout-minutes: 10
         env:
           E2E_MODE: ${{ needs.pr-test-impact-plan.outputs.e2e_mode }}
+          RUN_A11Y: ${{ needs.changes.outputs.a11y }}
+          # Lane sizes by test count; see the strategy comment above. Windows
+          # uses the first set, so the two platforms split alike whenever
+          # both run the audit.
+          E2E_WEIGHTS_WITH_A11Y: "55:114:112:115"
+          E2E_WEIGHTS_WITHOUT_A11Y: "86:75:65:107"
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
           PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
         # Wide-layout specs request 1440px windows. Keep the virtual desktop
@@ -889,8 +915,13 @@ jobs:
             mapfile -t tests < <(node scripts/ci/run-pr-test-impact.mjs e2e-files)
             [[ ${#tests[@]} -gt 0 ]]
           else
-            # Lane sizes by test count; see the strategy comment above.
-            export PWTEST_SHARD_WEIGHTS="55:114:112:115"
+            # Only an explicit `false` leaves the audit out.
+            if [[ "$RUN_A11Y" == "false" ]]; then
+              export PWRAGENT_E2E_SKIP_A11Y=1
+              export PWTEST_SHARD_WEIGHTS="$E2E_WEIGHTS_WITHOUT_A11Y"
+            else
+              export PWTEST_SHARD_WEIGHTS="$E2E_WEIGHTS_WITH_A11Y"
+            fi
             tests=(--shard=${{ matrix.lane }}/4)
           fi
           xvfb-run --auto-servernum \

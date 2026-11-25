@@ -8,8 +8,13 @@ says when to read this document. Relative links were updated for this location.
 The renderer is audited against WCAG 2.0 / 2.1 / 2.2 Level AA via
 `apps/desktop/e2e/a11y.spec.ts`, which launches Electron under the
 existing replay-fixture harness and runs `@axe-core/playwright`'s
-`AxeBuilder` against each surface. CI picks it up automatically through
-`pnpm run test:desktop-e2e` — no separate workflow.
+`AxeBuilder` against each surface. CI runs it inside the Desktop E2E lanes
+(`pnpm run test:desktop-e2e`) on every push to `main`. A pull request runs it
+only with the `ci:a11y` or `ci:full` label, when it changes `a11y.spec.ts`, or
+when the cross-platform jobs run; see
+[accessibility audit on PRs](../../.github/workflows/README.md#accessibility-audit-on-prs).
+When you change an audited surface, a dialog, a menu, or theme tokens, add
+`ci:a11y` or run the gate locally rather than leave a failure to `main`.
 
 Things to know when extending the audit:
 

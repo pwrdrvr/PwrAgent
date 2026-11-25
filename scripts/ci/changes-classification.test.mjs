@@ -38,12 +38,13 @@ async function classify(files, {
       return files;
     } },
   );
-  for (const name of ["code_impacting", "docs_only", "full_platforms"]) {
+  for (const name of ["code_impacting", "docs_only", "full_platforms", "a11y"]) {
     expect(outputs[name], `${name} output`).toMatch(/^(true|false)$/);
   }
   return {
     fullCi: outputs.code_impacting === "true",
     fullPlatforms: outputs.full_platforms === "true",
+    a11y: outputs.a11y === "true",
     lookupCalls,
   };
 }
@@ -90,7 +91,7 @@ it("fails closed for missing or incomplete provider data", async () => {
 
 it("always runs full CI for non-PR events without a changed-file lookup", async () => {
   for (const event of ["push", "workflow_dispatch"]) {
-    expect(await classify([], { event })).toEqual({ fullCi: true, fullPlatforms: true, lookupCalls: 0 });
+    expect(await classify([], { event })).toEqual({ fullCi: true, fullPlatforms: true, a11y: true, lookupCalls: 0 });
   }
 });
 
@@ -165,6 +166,44 @@ it("runs the cross-platform suite on PRs only with ci:full or when a lookup is u
         expect(result.fullPlatforms, name).toBe(labelled || untrusted || platform);
         expect(result.fullCi, name).toBe(product || labelled || untrusted);
         if (result.fullPlatforms) expect(result.fullCi, name).toBe(true);
+      }
+    }
+  }
+});
+
+// Policy model for the accessibility audit: a PR runs `a11y.spec.ts` only with
+// `ci:full` or `ci:a11y`, when it adds, edits, removes or renames that spec,
+// wherever it runs the cross-platform suite, or when a lookup the script
+// cannot trust fails. Every other event runs it.
+it("runs the accessibility audit on PRs only when labelled, when the spec changes, or with the cross-platform suite", async () => {
+  const spec = "apps/desktop/e2e/a11y.spec.ts";
+  const labelSets = [[], ["ci:a11y"], ["ci:full"], ["ci:a11y", "dependencies"], ["CI:A11Y"], ["ci:a11y-ish"], ["ci:windows-package"]];
+  const fileSets = [
+    [{ filename: "apps/desktop/src/renderer/src/styles/app.css" }],
+    [{ filename: spec }],
+    [{ filename: spec, status: "removed" }],
+    [{ filename: "apps/desktop/e2e/a11y-surfaces.spec.ts", previous_filename: spec, status: "renamed" }],
+    [{ filename: spec, previous_filename: "apps/desktop/e2e/old-a11y.spec.ts", status: "renamed" }],
+    [{ filename: "apps/desktop/e2e/thread-view.spec.ts" }, { filename: spec }],
+    [{ filename: "apps/desktop/e2e/a11y.spec.ts-notes.md" }],
+    [{ filename: "apps/desktop/e2e/fixtures/a11y.spec.ts" }],
+    [{ filename: "pnpm-lock.yaml" }],
+    [{ filename: "docs/operator.md" }],
+  ];
+  for (const labels of labelSets) {
+    for (const files of fileSets) {
+      const changesSpec = files.some((file) => file.filename === spec || file.previous_filename === spec);
+      for (const failure of ["none", "labels", "files", "count"]) {
+        const result = await classify(files, {
+          labels,
+          labelError: failure === "labels" ? new Error("labels unavailable") : undefined,
+          lookupError: failure === "files" ? new Error("files unavailable") : undefined,
+          reportedCount: failure === "count" ? files.length + 1 : files.length,
+        });
+        const name = `${labels.join("+") || "no labels"}, ${files.map((f) => f.filename).join("+")}, failure=${failure}`;
+        const expected = labels.includes("ci:a11y") || labels.includes("ci:full") || changesSpec
+          || failure !== "none" || result.fullPlatforms;
+        expect(result.a11y, name).toBe(expected);
       }
     }
   }

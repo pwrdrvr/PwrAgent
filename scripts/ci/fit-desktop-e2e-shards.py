@@ -71,6 +71,8 @@ def main():
     parser.add_argument("--weights", default="9:12:12:14")
     parser.add_argument("--fit", action="store_true")
     parser.add_argument("--budgets", help="per-platform test seconds available in each lane, colon-separated in data order")
+    parser.add_argument("--platform", help="model and fit only this platform from the data")
+    parser.add_argument("--without", action="append", default=[], help="model a collection that ignores this spec file; repeatable")
     args = parser.parse_args()
     try:
         weights = [int(weight) for weight in args.weights.split(":")]
@@ -87,6 +89,16 @@ def main():
         for group in groups
     ):
         parser.error("data requires ordered nonempty groups with nonnegative durations for each platform")
+    if args.platform:
+        if args.platform not in platforms:
+            parser.error(f"--platform must be one of {', '.join(platforms)}")
+        index = platforms.index(args.platform)
+        platforms = [args.platform]
+        groups = [{**group, "seconds": [group["seconds"][index]]} for group in groups]
+    unknown = set(args.without) - {group["spec"] for group in groups}
+    if unknown:
+        parser.error(f"--without names specs absent from the data: {', '.join(sorted(unknown))}")
+    groups = [group for group in groups if group["spec"] not in args.without]
     budgets = None
     if args.budgets:
         try:
