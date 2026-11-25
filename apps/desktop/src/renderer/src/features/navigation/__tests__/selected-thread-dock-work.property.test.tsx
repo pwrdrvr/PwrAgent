@@ -69,7 +69,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
   let laneStyleReads = 0;
   const nativeStyle = window.getComputedStyle;
   const style = vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
-    if (new Error().stack?.includes("sidebarLaneOf")) laneStyleReads++;
+    if (element.matches(".thread-row-shell, .sidebar-list--dense")) laneStyleReads++;
     return nativeStyle(element, pseudo);
   });
   const queryAll = Element.prototype.querySelectorAll;
@@ -180,6 +180,7 @@ function mountDock(directoryCount: number, selectedDirectory = 0, zoom = 1) {
     updatePage(children: number) {
       arrivedChildren = children;
       view.rerender(<Fixture metadata={0} children={children} />);
+      expect(lane.querySelectorAll('.thread-row-shell[data-thread-key^="codex:child-"]')).toHaveLength(children);
     },
     reset: () => Object.assign(work, { row: 0, sticky: 0, selectors: 0, reserveLifts: 0 }),
     work,
