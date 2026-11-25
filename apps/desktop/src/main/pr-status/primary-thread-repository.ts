@@ -24,6 +24,7 @@ export function primaryCheckoutKey(thread: ThreadWorkspace): string {
 export function readStoredPrimaryThreadRepository(thread: ThreadWorkspace): {
   key?: string;
   canProbe: boolean;
+  conclusiveSampleOrder?: number;
 } {
   const { path, origin } = primaryCheckout(thread);
   const observation = path ? readObservedGitOrigin(path) : undefined;
@@ -31,6 +32,7 @@ export function readStoredPrimaryThreadRepository(thread: ThreadWorkspace): {
   return {
     key: repo && buildPrRepositoryKey(repo.host, repo.owner, repo.repo),
     canProbe: Boolean(path && !observation?.conclusive && (observation?.retryAt ?? 0) <= Date.now()),
+    conclusiveSampleOrder: observation?.conclusive ? observation.sampleOrder : undefined,
   };
 }
 

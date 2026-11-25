@@ -2931,6 +2931,78 @@ describe("app server ipc", () => {
     30_000,
   );
 
+  it.skipIf(process.platform === "win32").each(["repointed", "removed"] as const)(
+    "publishes the fresh polling authority when origin was %s during inventory",
+    async (change) => {
+      const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
+      const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+      const git = await import("../app-server/git-executable");
+      const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
+        await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-origin-race-"));
+      const restoreGit = isolateProcessGitEnvironment(root);
+      onTestFinished(async () => {
+        restoreGit();
+        clearGitHubRemoteCache();
+        await rm(root, { recursive: true, force: true });
+      });
+      const runGit = git.runGitCommand;
+      const clone = path.join(root, "clone");
+      const cwd = path.join(root, "checkout");
+      await runGit(root, ["init", "-b", "main", clone]);
+      await runGit(clone, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "--allow-empty", "-m", "fixture"]);
+      await runGit(clone, ["remote", "add", "origin", "https://github.com/fixture/original.git"]);
+      await runGit(clone, ["worktree", "add", "--detach", cwd]);
+      const prs = ["original", "repointed"].map((repo, index) => githubPr({
+        number: index + 1, org: "fixture", repo, explicitlyAttached: true, state: "passing",
+        url: `https://github.com/fixture/${repo}/pull/${index + 1}`,
+      }));
+      const ref = { backend: "codex" as const, threadId: "origin-race" };
+      const row = { id: ref.threadId, source: ref.backend, title: "Fixture", titleSource: "explicit",
+        linkedDirectories: [{ id: clone, kind: "worktree", label: "Fixture", path: clone, worktreePath: cwd }], prs };
+      overlayStoreFixture.stable = getDesktopOverlayStore();
+      getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+      listThreads.mockResolvedValue([row] as never);
+      getCachedThreadSummary.mockReturnValue(row as never);
+      getThreadOverlayState.mockResolvedValue({ ...ref, executionMode: "default", prs, extraLinkedDirectories: [] });
+      resolveGitHubRepoForDirectory.mockImplementation((checkout, options) => readOrigin(checkout!, options));
+      registerAppServerIpcHandlers();
+
+      const sampled = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const reads = vi.spyOn(git, "runGitCommand").mockImplementation(async (path, args, options) => {
+        const result = await runGit(path, args, options);
+        if (path === cwd && options?.purpose === "pr-remotes" && args.includes("--show-origin")) {
+          sampled.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+      onTestFinished(() => { reads.mockRestore(); });
+      const owner = startAppServerOwnerNavigation();
+      try {
+        await Promise.race([sampled.promise, owner.then(() => { throw new Error("Inventory did not read the checkout"); })]);
+        await runGit(cwd, change === "repointed"
+          ? ["remote", "set-url", "origin", "https://github.com/fixture/repointed.git"]
+          : ["remote", "remove", "origin"]);
+        const service = appServerService as unknown as {
+          readPrimaryAttachedPrs(params: typeof ref): Promise<{ primaryRepoKey?: string }>;
+        };
+        const expected = change === "repointed" ? "github.com/fixture/repointed" : undefined;
+        expect((await service.readPrimaryAttachedPrs(ref)).primaryRepoKey).toBe(expected);
+        release.resolve();
+        await owner;
+        expect(appServerService.readPrimaryGitRepository(ref.backend, ref.threadId)).toBe(expected);
+        expect(syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0].threads)
+          .toEqual([{ ...ref, prKeys: change === "repointed" ? [buildPullRequestStatusKey(prs[1]!)] : [] }]);
+      } finally {
+        release.resolve();
+        await owner;
+      }
+    },
+  );
+
   it("recovers polling and terminal ownership when the stored origin cannot establish the checkout identity", async () => {
     const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");

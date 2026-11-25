@@ -2848,14 +2848,17 @@ class DesktopAppServerService {
     const inventoryConfig = options.inventoryDemand && createInventoryRemoteConfigReader();
     const primaryRepoResolutionByPath = new Map<string, Promise<string | undefined>>();
     const freshPrimaryRepoResolutionByPath = new Map<string, Promise<string | undefined>>();
-    const primaryRepoKeys = await Promise.all(threads.map((thread) => {
+    const storedRepositories = options.inventoryDemand
+      ? threads.map((thread) => thread.prs?.length ? readStoredPrimaryThreadRepository(thread) : undefined)
+      : undefined;
+    const primaryRepoKeys = await Promise.all(threads.map((thread, index) => {
       if (!options.inventoryDemand) {
         return thread.prs?.length || options.resolveUnattached
           ? resolvePrimaryThreadRepoKey(thread, primaryRepoResolutionByPath)
           : undefined;
       }
-      if (!thread.prs?.length) return undefined;
-      const stored = readStoredPrimaryThreadRepository(thread);
+      const stored = storedRepositories?.[index];
+      if (!stored || !thread.prs?.length) return undefined;
       const previous = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(thread.source, thread.id));
       const workspaceChanged = previous?.workspace && primaryCheckoutKey(previous.workspace) !== primaryCheckoutKey(thread);
       const live = thread.prs.filter((pr) => !isTerminalPullRequest(pr));
@@ -2876,7 +2879,12 @@ class DesktopAppServerService {
       if (options.isCurrent && !options.isCurrent()) return;
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       liveThreadKeys.add(threadKey);
-      const primaryRepoKey = primaryRepoKeys[index];
+      const stored = storedRepositories?.[index];
+      const current = stored && readStoredPrimaryThreadRepository(thread);
+      // A checkout read can supersede inventory while the rest of the batch
+      // is still running. A new conclusive absence also replaces an old key.
+      const primaryRepoKey = current?.conclusiveSampleOrder !== undefined
+        && current.conclusiveSampleOrder > (stored?.conclusiveSampleOrder ?? 0) ? current.key : primaryRepoKeys[index];
       this.setThreadPrAttachment(threadKey, {
         backend: thread.source,
         workspace: { gitOriginUrl: thread.gitOriginUrl, linkedDirectories: thread.linkedDirectories },
@@ -3661,7 +3669,7 @@ class DesktopAppServerService {
         const canonical = this.applyCanonicalPrStatuses(index.threads);
         const complete = !index.coverage || index.coverage.state === "complete";
         await this.rememberThreadPrAttachments(canonical.threads, {
-          replace: complete, isCurrent, inventoryDemand: { signal: abort.signal, priority: () => PR_METADATA_PRIORITY.page },
+          replace: complete, isCurrent, inventoryDemand: { signal: abort.signal, priority: () => PR_METADATA_PRIORITY.background },
         });
         if (!isCurrent()) continue;
         const ownerThreads = this.applyPrimaryGitRepositories(canonical.threads);

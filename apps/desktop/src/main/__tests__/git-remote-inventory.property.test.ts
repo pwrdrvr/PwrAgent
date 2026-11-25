@@ -155,7 +155,7 @@ it.skipIf(process.platform === "win32")("reaudits shared config for a checkout o
   }
 });
 
-it.skipIf(process.platform === "win32")("lets page reads share owner work and sends selected demand directly to its checkout", async () => {
+it.skipIf(process.platform === "win32")("keeps a bounded page independent of an unfinished owner read", async () => {
   const { checkouts: [cwd] } = await ordinaryWorktrees();
   const queued = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
@@ -174,22 +174,22 @@ it.skipIf(process.platform === "win32")("lets page reads share owner work and se
     throw new Error("The owner completed before it requested the seed config");
   })]);
   const inventoryConfig = createInventoryRemoteConfigReader();
-  const demand = { priority: () => PR_METADATA_PRIORITY.page };
   const owner = prGitSubprocessCaller.run("pr-owner-navigation-inventory", () =>
-    resolveGitHubRepoForDirectory(cwd, { inventoryConfig, demand }));
+    resolveGitHubRepoForDirectory(cwd, { inventoryConfig, demand: { priority: () => PR_METADATA_PRIORITY.background } }));
   const reads = [owner];
   try {
     await reached(owner);
+    // Other inventory callers can join. A page must have its own path to Git
+    // while inventory is still waiting for its proof.
+    reads.push(resolveGitHubRepoForDirectory(cwd, { inventoryConfig }));
     const page = prGitSubprocessCaller.run("pr-stored-attachment-validation", () =>
-      resolveGitHubRepoForDirectory(cwd, { demand }));
+      resolveGitHubRepoForDirectory(cwd, { demand: { priority: () => PR_METADATA_PRIORITY.page } }));
     reads.push(page);
-    const selected = resolveGitHubRepoForDirectory(cwd, { demand: { priority: () => PR_METADATA_PRIORITY.selected } });
-    reads.push(selected);
-    await expect(selected).resolves.toEqual(parseForgeRemote(origin));
-    expect(callers).toEqual([undefined]);
+    await vi.waitFor(() => expect(callers).toEqual(["pr-stored-attachment-validation"]));
+    await expect(page).resolves.toEqual(parseForgeRemote(origin));
     release.resolve();
     await expect(Promise.all(reads)).resolves.toEqual(reads.map(() => parseForgeRemote(origin)));
-    expect(callers).toEqual([undefined, "pr-owner-navigation-inventory"]);
+    expect(callers).toEqual(["pr-stored-attachment-validation", "pr-owner-navigation-inventory"]);
   } finally {
     release.resolve();
     await Promise.allSettled(reads);

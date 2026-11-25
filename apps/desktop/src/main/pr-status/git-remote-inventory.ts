@@ -10,7 +10,6 @@ import { observeLinkedPrCheckout, observePrCheckoutConfigFiles } from "./pr-remo
 const CONFIG_KEYS = `${REMOTE_CONFIG_KEYS}|^include\\.|^core\\.(bare|worktree|repositoryformatversion)$|^extensions\\.`;
 
 function currentInputs(cwd: string) {
-  if (process.platform === "win32") return undefined;
   try {
     const inputs = readPrConfigInputs(cwd);
     if (!inputs || inputs === "native-only" || inputs.nativeOnly || Object.keys(inputs.env).some((key) =>
@@ -94,7 +93,8 @@ async function sampleConfig(cwd: string, checkout: LinkedCheckout, inputs: NonNu
   }
 }
 
-export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader {
+export function createInventoryRemoteConfigReader(): InventoryRemoteConfigReader | undefined {
+  if (process.platform === "win32") return undefined;
   const groups = new Map<string, {
     seed: string;
     sample: SharedPrMetadataRead<Awaited<ReturnType<typeof sampleConfig>>>;

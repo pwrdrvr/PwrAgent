@@ -190,6 +190,7 @@ export function readObservedGitOrigin(cwd: string): {
   repo?: GitHubRepoRef;
   conclusive: boolean;
   retryAt: number;
+  sampleOrder: number;
 } | undefined {
   const observation = remoteCache.get(cwd);
   if (!observation) return undefined;
@@ -197,7 +198,7 @@ export function readObservedGitOrigin(cwd: string): {
   // A listed origin with a failed get-url read is inconclusive. A confirmed
   // remote list without origin establishes absence, even if the list is empty.
   const conclusive = Boolean(origin || (observation.names && !observation.names.includes("origin")));
-  return { repo: origin?.repo, conclusive, retryAt: observation.fetchedAt + REMOTE_CACHE_TTL_MS };
+  return { repo: origin?.repo, conclusive, retryAt: observation.fetchedAt + REMOTE_CACHE_TTL_MS, sampleOrder: observation.sampleOrder };
 }
 
 /**
@@ -404,10 +405,10 @@ async function readParsedGitRemotes(
   }
 
   const existing = remoteLookups.get(cwd);
-  // A selected or fresh reader may need Git's own view of this checkout.
-  // Inventory can still share with other readers at its priority.
-  const needsCheckout = confirmEmpty || (options.demand?.priority?.() ?? 0) >= PR_METADATA_PRIORITY.selected;
-  if (existing && !existing.signal.aborted && !(needsCheckout && inventoryLookups.has(existing))) {
+  // Only inventory can wait for an inventory batch. Another reader may
+  // acquire page or selected demand later through attachment validation.
+  const mayShareInventory = !confirmEmpty && options.inventoryConfig !== undefined;
+  if (existing && !existing.signal.aborted && (mayShareInventory || !inventoryLookups.has(existing))) {
     const observation = await existing.read(options.demand);
     // A checkout-authority read can join a cheaper discovery already in
     // flight. Confirm an ambiguous result once the shared read settles.
@@ -427,7 +428,7 @@ async function readParsedGitRemotes(
       if (remoteLookups.get(cwd) === pending) remoteLookups.delete(cwd);
     }
   });
-  if (options.inventoryConfig) inventoryLookups.add(pending);
+  if (mayShareInventory) inventoryLookups.add(pending);
   remoteLookups.set(cwd, pending);
   return pending.read(options.demand);
 }
