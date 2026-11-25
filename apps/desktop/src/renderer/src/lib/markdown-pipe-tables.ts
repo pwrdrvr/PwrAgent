@@ -110,7 +110,8 @@ export function inferPipeTables(markdown: string): string {
 
 function inferablePipeRow(line: string): PipeRow | undefined {
   if (
-    /^(?: {4}|\s*\t)/.test(line)
+    !line.includes("|")
+    || /^(?: {4}|\s*\t)/.test(line)
     || /^\s*(?:>|#|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$))/.test(line)
   ) {
     return undefined;
@@ -139,60 +140,71 @@ function isDelimiterRow(line: string): boolean {
   );
 }
 
+const BACKSLASH = 0x5c;
+const BACKTICK = 0x60;
+const PIPE = 0x7c;
+
 // Splits a line on unescaped pipes the way a GFM table row would. Returns
 // undefined when the line has no separating pipe, or when a code span holds a
 // pipe (GFM still splits there, so the cells would not match the author's).
+//
+// One pass over the line: a code span's closing run comes from a table of
+// backtick runs built once per line, and each cell is a slice between two
+// separators, so a long line costs time in proportion to its length.
 function splitPipeRow(line: string): PipeRow | undefined {
   const trimmed = line.trim();
-  const cells: string[] = [];
-  let cell = "";
-  let pipes = 0;
-  let index = 0;
+  if (!trimmed.includes("|")) {
+    return undefined;
+  }
 
+  const separators: number[] = [];
+  let runsByLength: Map<number, number[]> | undefined;
+  let index = 0;
   while (index < trimmed.length) {
-    const character = trimmed[index] ?? "";
-    if (character === "\\" && index + 1 < trimmed.length) {
-      cell += trimmed.slice(index, index + 2);
+    const code = trimmed.charCodeAt(index);
+    if (code === BACKSLASH && index + 1 < trimmed.length) {
       index += 2;
       continue;
     }
 
-    if (character === "`") {
-      const run = /^`+/.exec(trimmed.slice(index))?.[0] ?? "`";
-      const close = findClosingBacktickRun(trimmed, index + run.length, run.length);
-      if (close === -1) {
-        cell += run;
-        index += run.length;
+    if (code === BACKTICK) {
+      let runEnd = index + 1;
+      while (runEnd < trimmed.length && trimmed.charCodeAt(runEnd) === BACKTICK) {
+        runEnd += 1;
+      }
+      runsByLength ??= backtickRunsByLength(trimmed);
+      const close = firstAtOrAfter(runsByLength.get(runEnd - index), runEnd);
+      if (close === undefined) {
+        index = runEnd;
         continue;
       }
-      const span = trimmed.slice(index, close + run.length);
-      if (span.includes("|")) {
+      if (trimmed.slice(runEnd, close).includes("|")) {
         return undefined;
       }
-      cell += span;
-      index = close + run.length;
+      index = close + (runEnd - index);
       continue;
     }
 
-    if (character === "|") {
-      cells.push(cell);
-      cell = "";
-      pipes += 1;
-      index += 1;
-      continue;
+    if (code === PIPE) {
+      separators.push(index);
     }
-
-    cell += character;
     index += 1;
   }
-  cells.push(cell);
 
-  if (pipes === 0) {
+  if (separators.length === 0) {
     return undefined;
   }
 
-  const leadingPipe = trimmed.startsWith("|");
-  const trailingPipe = pipes > (leadingPipe ? 1 : 0) && cell === "" && trimmed.endsWith("|");
+  const leadingPipe = separators[0] === 0;
+  const trailingPipe = separators.length > (leadingPipe ? 1 : 0)
+    && separators[separators.length - 1] === trimmed.length - 1;
+  const cells: string[] = [];
+  let cellStart = 0;
+  for (const separator of separators) {
+    cells.push(trimmed.slice(cellStart, separator).trim());
+    cellStart = separator + 1;
+  }
+  cells.push(trimmed.slice(cellStart).trim());
   if (leadingPipe) {
     cells.shift();
   }
@@ -200,24 +212,43 @@ function splitPipeRow(line: string): PipeRow | undefined {
     cells.pop();
   }
 
-  return {
-    cells: cells.map((value) => value.trim()),
-    outerPipe: leadingPipe || trailingPipe,
-  };
+  return { cells, outerPipe: leadingPipe || trailingPipe };
 }
 
-function findClosingBacktickRun(text: string, from: number, length: number): number {
-  let index = from;
-  while (index < text.length) {
-    const run = /^`+/.exec(text.slice(index))?.[0];
-    if (!run) {
-      index += 1;
-      continue;
+// Start offsets of every maximal backtick run, grouped by run length and in
+// ascending order. A code span closes at the next run of exactly its length.
+function backtickRunsByLength(text: string): Map<number, number[]> {
+  const runs = new Map<number, number[]>();
+  let index = text.indexOf("`");
+  while (index !== -1) {
+    let end = index + 1;
+    while (end < text.length && text.charCodeAt(end) === BACKTICK) {
+      end += 1;
     }
-    if (run.length === length) {
-      return index;
+    const starts = runs.get(end - index);
+    if (starts) {
+      starts.push(index);
+    } else {
+      runs.set(end - index, [index]);
     }
-    index += run.length;
+    index = text.indexOf("`", end);
   }
-  return -1;
+  return runs;
+}
+
+function firstAtOrAfter(starts: number[] | undefined, position: number): number | undefined {
+  if (!starts) {
+    return undefined;
+  }
+  let low = 0;
+  let high = starts.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if ((starts[middle] ?? 0) < position) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return starts[low];
 }
