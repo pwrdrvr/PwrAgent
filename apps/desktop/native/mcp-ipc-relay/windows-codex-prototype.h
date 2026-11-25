@@ -5,6 +5,7 @@
 #include <io.h>
 #include <stdint.h>
 #include <sddl.h>
+#pragma comment(lib, "Kernelbase.lib")
 
 #define CODEX_PROTOTYPE_PREFIX L"\\\\.\\pipe\\pwa-codex-prototype-"
 #define CODEX_PIN_LIMIT 256
@@ -89,7 +90,7 @@ static void codex_untrack(CodexPrototype *server, DWORD pid) {
     CodexDebugPin *pin = server->pins + i;
     if (pin->process && (pin->pid == pid || !pid)) {
       CloseHandle(pin->process);
-      *pin = (CodexDebugPin){0};
+      ZeroMemory(pin, sizeof(*pin));
     }
   }
   ReleaseSRWLockExclusive(&server->pin_lock);
@@ -258,7 +259,8 @@ static int codex_windows_supervisor(const wchar_t *pipe, const wchar_t *executab
   while (WaitForSingleObject(server.stop, 0) == WAIT_TIMEOUT) {
     DEBUG_EVENT event;
     if (!WaitForDebugEvent(&event, 100)) {
-      if (GetLastError() == ERROR_SEM_TIMEOUT) continue;
+      DWORD error = GetLastError();
+      if (error == ERROR_SEM_TIMEOUT || error == ERROR_TIMEOUT || error == WAIT_TIMEOUT) continue;
       fail("lost Windows process creation evidence");
     }
     DWORD disposition = DBG_CONTINUE;

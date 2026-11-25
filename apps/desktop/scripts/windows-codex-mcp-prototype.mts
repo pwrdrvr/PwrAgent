@@ -30,9 +30,11 @@ function windowsArgument(value: string): string {
 
 function launch(supervisor: string, pipe: string, executable: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) {
   const commandLine = [executable, ...args].map(windowsArgument).join(" ");
-  return spawn(supervisor, ["--codex-windows-supervisor", pipe, executable, commandLine], {
-    cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "inherit", "pipe", "pipe"],
+  const runtime = spawn(supervisor, ["--codex-windows-supervisor", pipe, executable, commandLine], {
+    cwd, env, windowsHide: true, stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
   });
+  runtime.stderr?.pipe(process.stderr, { end: false });
+  return runtime;
 }
 
 function bridge(runtime: ChildProcess): Duplex {
@@ -84,6 +86,12 @@ function fixtureOwner(runtime: ChildProcess, channel: Duplex, helper: string, en
     setActive: (threadId?: string) => { activeThread = threadId; },
     dispatches: () => dispatches,
     accept: async () => {
+      if (channel.readableLength === 0) {
+        await Promise.race([
+          once(channel, "readable"),
+          once(channel, "close").then(() => { throw new Error("prototype closed before admission"); }),
+        ]);
+      }
       const token = await readRegistrationPreface(channel);
       assert(token && grants.has(token), "admitted relay must present a scoped registration");
       await acceptConnection(channel, token,
