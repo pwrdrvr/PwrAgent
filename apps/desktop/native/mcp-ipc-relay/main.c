@@ -11,7 +11,11 @@
 #include <string.h>
 
 #ifdef _WIN32
+#ifdef PWRAGENT_TEST_WINDOWS_CODEX
+#define _WIN32_WINNT 0x0A00
+#else
 #define _WIN32_WINNT 0x0602
+#endif
 #include <windows.h>
 #include <aclapi.h>
 #include <wchar.h>
@@ -126,7 +130,15 @@ static DWORD WINAPI copy_bytes(void *arg) {
   ExitProcess(0);
 }
 
+#ifdef PWRAGENT_TEST_WINDOWS_CODEX
+#include "windows-codex-prototype.h"
+#endif
+
 int wmain(int argc, wchar_t **argv) {
+#ifdef PWRAGENT_TEST_WINDOWS_CODEX
+  if (argc == 5 && !wcscmp(argv[1], L"--codex-windows-supervisor"))
+    return codex_windows_supervisor(argv[2], argv[3], argv[4]);
+#endif
   if (argc == 4 && !wcscmp(argv[1], L"--local-file-marker")) return local_file_marker(argv[2], argv[3]);
   if (argc == 3 && !wcscmp(argv[1], L"--maintenance-lock")) return file_lock(argv[2], 0);
   if (argc == 3 && !wcscmp(argv[1], L"--stack-lock")) return file_lock(argv[2], 1);

@@ -1,0 +1,54 @@
+name: Windows Codex MCP prototype
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/windows-codex-mcp-prototype.yml'
+      - 'apps/desktop/native/mcp-ipc-relay/**'
+      - 'apps/desktop/scripts/*windows-codex-mcp-prototype.*'
+      - 'apps/desktop/src/main/agent-tools/codex-agent-tool-ipc.ts'
+      - 'apps/desktop/src/main/agent-tools/agent-tool-mcp-server.ts'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-codex-mcp-prototype-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-oracle:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        with:
+          node-version: "^24.22.1"
+          working-directory: .
+          cache-electron: "true"
+
+      - name: Download pinned Windows Codex
+        shell: pwsh
+        run: |
+          $asset = 'codex-npm-win32-x64-0.169.0.tgz'
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          $root = Join-Path $env:RUNNER_TEMP 'windows-codex-0.169.0'
+          curl.exe --fail --location --silent --show-error --output $archive "https://github.com/openai/codex/releases/download/rust-v0.169.0/$asset"
+          if ($LASTEXITCODE -ne 0) { throw 'Codex release download failed' }
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne 'c48d07b46034d2b0a6c091227993c50e19c389680169244d0dcbb96c4ebc429f') {
+            throw 'Unexpected Codex release hash'
+          }
+          New-Item -ItemType Directory -Force $root | Out-Null
+          tar.exe -xzf $archive -C $root
+          if ($LASTEXITCODE -ne 0) { throw 'Codex release extraction failed' }
+          $codex = @(Get-ChildItem $root -Recurse -Filter codex.exe)
+          if ($codex.Count -ne 1) { throw 'Expected exactly one native codex.exe in the release' }
+          "PWRAGENT_WINDOWS_PROTOTYPE_CODEX=$($codex[0].FullName)" >> $env:GITHUB_ENV
+
+      - name: Verify protected pipe admission with synthetic and real Codex
+        shell: pwsh
+        run: node apps/desktop/scripts/run-windows-codex-mcp-prototype.mjs $env:PWRAGENT_WINDOWS_PROTOTYPE_CODEX
