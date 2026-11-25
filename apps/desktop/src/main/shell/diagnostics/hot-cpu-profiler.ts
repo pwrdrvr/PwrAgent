@@ -134,6 +134,7 @@ export class HotCpuProfiler {
   private captureSamplePromise: Promise<void> | null = null;
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private lastProfileAtMs: number | null = null;
+  private lastCapWarningAtMs: number | null = null;
   private previousMetric?: {
     pid: number;
     creationTime: number;
@@ -413,6 +414,34 @@ export class HotCpuProfiler {
           matches,
           pid,
         });
+      } else if (
+        revision === this.ruleRevision
+        && matches.length > 0
+        && !this.stopped
+        && !this.hasActiveProfile
+        && this.profileCount >= this.config.maxProfiles
+      ) {
+        const lastNoticeAt = Math.max(
+          this.lastProfileAtMs ?? Number.NEGATIVE_INFINITY,
+          this.lastCapWarningAtMs ?? Number.NEGATIVE_INFINITY,
+        );
+        if (capturedAtMs - lastNoticeAt >= this.config.cooldownMs) {
+          this.lastCapWarningAtMs = capturedAtMs;
+          const detail = {
+            target: this.session.target ?? "renderer",
+            pid,
+            cpuPercent: cpuUsage.cpuPercent,
+            matchedRules: matches.map((rule) => rule.id),
+            profileCount: this.profileCount,
+            maxProfiles: this.config.maxProfiles,
+          };
+          this.logger.warn("[pwragent:hot-cpu] hot CPU detected after profile cap reached", detail);
+          await this.session.appendEvent({
+            capturedAt,
+            type: "profile-cap-warning",
+            detail,
+          });
+        }
       } else if (!this.stopped && this.profileCount < this.config.maxProfiles) {
         await this.maintainRecording(capturedAtMs);
       }

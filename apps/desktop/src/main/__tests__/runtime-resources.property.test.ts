@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import fc from "fast-check";
 import { afterAll, expect, it } from "vitest";
-import { readNodeRuntimeMetadata, runtimeResourcesPath } from "../runtime-resources";
+import { readNodeRuntimeMetadata, resolveMainEntryPath, runtimeResourcesPath } from "../runtime-resources";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "node-runtime-resources-"));
 afterAll(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -23,4 +23,33 @@ it("resolves versions, resources and packaged state from the same layout for eac
     expect(readNodeRuntimeMetadata(url)).toEqual({ version: "1.2.3", appRoot: app, resourcesPath: path.join(app, "resources"), isPackaged: packaged });
     expect(runtimeResourcesPath(url)).toBe(path.join(app, "resources"));
   }));
+});
+
+it("resolves sibling main entry files from out/main even when the caller is code-split into out/main/chunks", () => {
+  let layoutId = 0;
+  fc.assert(fc.property(
+    fc.boolean(),
+    fc.constantFrom(
+      "mcp-connection-bridge.js",
+      "storage-maintenance-worker.js",
+      "claude-session-reader-worker.js",
+      "token-miser-hook.js",
+    ),
+    (inChunks, entryFileName) => {
+      const outMain = path.join(root, `main-entry-${layoutId++}`, "out/main");
+      const callerDir = inChunks ? path.join(outMain, "chunks") : outMain;
+      fs.mkdirSync(callerDir, { recursive: true });
+      const expected = path.join(outMain, entryFileName);
+      fs.writeFileSync(expected, "");
+      expect(resolveMainEntryPath(entryFileName, callerDir)).toBe(expected);
+    },
+  ));
+
+  const gatewaySource = fs.readFileSync(
+    path.resolve(import.meta.dirname, "../mcp-connections/mcp-connection-gateway-service.ts"),
+    "utf8",
+  );
+  // A direct join(__dirname, "mcp-connection-bridge.js") breaks whenever
+  // Rolldown emits McpConnectionGatewayService inside out/main/chunks/.
+  expect(gatewaySource).not.toContain('join(__dirname, "mcp-connection-bridge.js")');
 });
