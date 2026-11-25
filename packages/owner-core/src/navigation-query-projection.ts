@@ -771,6 +771,7 @@ function projectNavigationRow(params: {
     ...(thread.prAutoDispatchPending
       ? { prAutoDispatchPending: thread.prAutoDispatchPending }
       : {}),
+    ...(thread.prAutoDispatchActive ? { prAutoDispatchActive: true as const } : {}),
     ...(prCiWatches.items ? { prCiWatches: prCiWatches.items } : {}),
     ...(thread.scheduledStart ? { scheduledStart: thread.scheduledStart } : {}),
     ...(params.homeProject ? { homeProject: params.homeProject } : {}),

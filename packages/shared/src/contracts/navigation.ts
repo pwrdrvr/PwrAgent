@@ -187,6 +187,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   prAutoDispatchEnabled?: boolean;
   /** Durable, cancellable PR repair waiting for its main-process send time. */
   prAutoDispatchPending?: ThreadPrAutoDispatchPending;
+  /**
+   * A navigation row's Auto-fix marker: a repair is pending or being tried
+   * (claimed for dispatch, before its submission returns). It drives the
+   * row's Scheduled chip; only `prAutoDispatchPending` is cancellable.
+   */
+  prAutoDispatchActive?: true;
   /** Last provider model-migration revision acknowledged by this thread. */
   modelMigrationRevision?: string;
   /** Last explicit model/reasoning change made outside a migration. */
@@ -710,6 +716,17 @@ export type PrSummary = {
 export type ThreadPrAutoDispatchEventKind =
   | "ci-failure"
   | "merge-conflict";
+
+/**
+ * Whether a thread's row shows Auto-fix as Scheduled: a repair is pending or
+ * being tried. Rows from owners that predate the marker carry only the
+ * pending repair, and a pendingUpdated patch sets both.
+ */
+export function isThreadPrAutoDispatchScheduled(
+  thread: Pick<NavigationThreadSummary, "prAutoDispatchActive" | "prAutoDispatchPending">,
+): boolean {
+  return thread.prAutoDispatchActive === true || thread.prAutoDispatchPending !== undefined;
+}
 
 export type ThreadPrAutoDispatchPending = {
   fingerprint: string;
@@ -2442,11 +2459,10 @@ export type NavigationRow = {
   queuedExecutionMode?: ThreadExecutionMode;
   queuedNativeMode?: string;
   prAutoDispatchEnabled?: boolean;
-  /**
-   * The thread's Auto-fix repair while it is pending or being tried, so the
-   * row's Scheduled chip survives a page refresh. Absent from older owners.
-   */
+  /** The thread's pending, cancellable Auto-fix repair. Absent from older owners. */
   prAutoDispatchPending?: ThreadPrAutoDispatchPending;
+  /** An Auto-fix repair is pending or being tried. Absent from older owners. */
+  prAutoDispatchActive?: true;
   /** The owner's active CI watches; absent from an owner that predates them. */
   prCiWatches?: import("./thread-pr-watches").ThreadPrCiWatchMark[];
   scheduledStart?: ThreadScheduledStart;
