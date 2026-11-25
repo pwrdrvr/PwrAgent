@@ -18,12 +18,36 @@ import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-inf
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 
 const CATALOG_BYTES = 1024 * 1024;
+const MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS = 16;
+const MAX_INVENTORY_CHECKOUTS = 2_048;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 type CatalogObservation = { catalog: CatalogRead; version?: string };
 
 function catalogVersion(info: BigIntStats): string {
   return [info.dev, info.ino, info.mode, info.size, info.mtimeNs, info.ctimeNs].join(":");
+}
+
+async function statVersion(target: string): Promise<string> {
+  try {
+    return catalogVersion(await lstat(target, { bigint: true }));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "missing" : `err:${code ?? "unknown"}`;
+  }
+}
+
+async function unavailableCheckoutVersion(
+  cwd: string,
+  installedGitVersion: string | undefined,
+  demand: PrMetadataDemand,
+): Promise<string | undefined> {
+  return await runPrMetadataFileProbe(async (signal) => {
+    const cwdState = await statVersion(cwd);
+    signal.throwIfAborted();
+    const dotGitState = cwdState === "missing" ? "missing" : await statVersion(path.join(cwd, ".git"));
+    return JSON.stringify(["unavailable", cwdState, dotGitState, installedGitVersion ?? "bundled"]);
+  }, demand);
 }
 
 async function readCatalogFile(catalogPath: string): Promise<CatalogObservation | undefined> {
@@ -156,6 +180,8 @@ export class StackReadObservation {
   // roster and identity cannot vouch for that new Git result.
   private readonly rosterByCheckout = new WeakMap<Checkout, RosterMember>();
   private readonly checkoutWitnesses = new WeakMap<Checkout, string>();
+  private backgroundTtlRevalidations = 0;
+  private readonly reservedTtlRevalidations = new Set<string>();
 
   constructor(readonly demand: PrMetadataDemand = {}) {
     // A selected request can promote the explicit checkout without putting
@@ -165,6 +191,20 @@ export class StackReadObservation {
       priority: () => Math.min(demand.priority?.() ?? PR_METADATA_PRIORITY.background, PR_METADATA_PRIORITY.page),
     };
     this.hints = createStackCheckoutHints(this.inventoryDemand);
+  }
+
+  reserveBackgroundTtlRevalidation(cwd: string, limit: number): boolean {
+    if (this.backgroundTtlRevalidations + this.reservedTtlRevalidations.size >= limit) return false;
+    this.reservedTtlRevalidations.add(cwd);
+    return true;
+  }
+
+  /** Cap synchronous TTL revalidations in one background navigation pass. */
+  claimBackgroundTtlRevalidation(cwd: string, limit: number): boolean {
+    if (!this.reservedTtlRevalidations.delete(cwd)
+      && this.backgroundTtlRevalidations + this.reservedTtlRevalidations.size >= limit) return false;
+    this.backgroundTtlRevalidations += 1;
+    return true;
   }
 
   checkoutLookup(cwd: string, demand = this.demand): Promise<CheckoutLookup> {
@@ -795,13 +835,17 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
 export class StackReader {
   private readonly pendingInventoryCheckouts = new Map<string, SharedPrMetadataRead<InventoryCheckoutResult>>();
   private readonly inventoryCheckouts = new Map<string, {
-    version: string; checkout: Checkout | undefined; expiresAt: number;
+    version: string; checkout: CheckoutLookup; expiresAt: number;
   }>();
+  private readonly deferredTtlRevalidations = new Set<string>();
 
   /** Lives as long as this reader, so every projection it makes shares the answers. */
   private readonly commitGraph = new CommitGraphMemo();
 
-  constructor(private readonly now: () => number = () => performance.now()) {}
+  constructor(
+    private readonly now: () => number = () => performance.now(),
+    private readonly backgroundTtlRevalidationBudget = MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS,
+  ) {}
 
   async preflightCatalogs(directories: readonly string[], observation: StackReadObservation): Promise<CatalogRead[]> {
     if ((observation.demand.priority?.() ?? PR_METADATA_PRIORITY.background) !== PR_METADATA_PRIORITY.background
@@ -834,15 +878,41 @@ export class StackReader {
     return await pending.read(demand);
   }
 
+  private claimBackgroundTtlRevalidation(cwd: string, observation: StackReadObservation): boolean {
+    if (observation.claimBackgroundTtlRevalidation(cwd, this.backgroundTtlRevalidationBudget)) {
+      this.deferredTtlRevalidations.delete(cwd);
+      return true;
+    }
+    this.deferredTtlRevalidations.add(cwd);
+    if (this.deferredTtlRevalidations.size > MAX_INVENTORY_CHECKOUTS) {
+      this.deferredTtlRevalidations.delete(this.deferredTtlRevalidations.values().next().value!);
+    }
+    return false;
+  }
+
   private async readInventoryCheckout(
-    cwd: string, observation: StackReadObservation, candidates: readonly string[], useWorktreeInventory = false,
+    cwd: string,
+    observation: StackReadObservation,
+    candidates: readonly string[],
+    useWorktreeInventory = false,
+    options: { allowUnavailableCache?: boolean; budgetTtlRevalidation?: boolean; hasHints?: boolean } = {},
   ): Promise<CheckoutLookup> {
     const { hints, inventoryDemand } = observation;
-    const ready = useWorktreeInventory ? observation.readyWorktreeInventory(candidates[0]!) : undefined;
-    const identity = candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
+    const hasHints = options.hasHints !== false;
+    const allowUnavailableCache = options.allowUnavailableCache === true;
+    const budgetTtlRevalidation = options.budgetTtlRevalidation === true;
+    const ready = hasHints && useWorktreeInventory ? observation.readyWorktreeInventory(candidates[0]!) : undefined;
+    const identity = hasHints && candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
     const before = identity && candidates.includes(identity.commonDir) ? identity : undefined;
-    const checkRegistration = useWorktreeInventory && before?.registeredWorktree;
-    const version = before?.version ?? (!candidates.length ? hints.installedGitVersion : undefined);
+    const checkRegistration = hasHints && useWorktreeInventory && before?.registeredWorktree;
+    // If hints find a repository but cannot verify its checkout, the .git
+    // marker alone cannot witness changes such as edits to config.worktree.
+    const version = before?.version
+      ?? (candidates.length ? undefined
+        : hasHints ? hints.installedGitVersion
+        : allowUnavailableCache
+          ? await unavailableCheckoutVersion(cwd, hints.installedGitVersion, inventoryDemand)
+          : undefined);
     const key = (!hints.requiresGitDiscovery ? before?.physicalDirectory : undefined) ?? cwd;
     const recordWitness = (checkout: CheckoutLookup, corroborated: boolean) => {
       if (before && checkout && checkout !== "unavailable" && corroborated) {
@@ -851,18 +921,33 @@ export class StackReader {
       return checkout;
     };
     const cached = this.inventoryCheckouts.get(key);
-    if (!checkRegistration && version && cached?.version === version && cached.expiresAt > this.now()) {
-      return recordWitness(cached.checkout && { ...cached.checkout, cwd }, true);
+    if (
+      !checkRegistration
+      && version
+      && cached?.version === version
+      && (cached.checkout !== "unavailable" || allowUnavailableCache)
+    ) {
+      const fresh = cached.expiresAt > this.now();
+      if (fresh || (budgetTtlRevalidation && !this.claimBackgroundTtlRevalidation(cwd, observation))) {
+        return cached.checkout === "unavailable"
+          ? "unavailable"
+          : recordWitness(cached.checkout && { ...cached.checkout, cwd }, true);
+      }
     }
-    this.inventoryCheckouts.delete(key);
+    if (!cached || cached.version !== version) {
+      this.inventoryCheckouts.delete(key);
+    }
 
-    const remember = (checkout: Checkout | undefined) => {
+    const remember = (checkout: CheckoutLookup) => {
       // Roster admission depends on effective config that can change between
       // observations, including protected config outside this repository.
       if (!version || checkRegistration) return;
-      const expiresAt = hints.installedGitVersion ? this.now() + 30_000 : Infinity;
+      if (checkout === "unavailable" && !allowUnavailableCache) return;
+      const expiresAt = checkout === "unavailable" || hints.installedGitVersion ? this.now() + 30_000 : Infinity;
+      this.deferredTtlRevalidations.delete(cwd);
+      this.inventoryCheckouts.delete(key);
       this.inventoryCheckouts.set(key, { version, checkout, expiresAt });
-      if (this.inventoryCheckouts.size > 2_048) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
+      if (this.inventoryCheckouts.size > MAX_INVENTORY_CHECKOUTS) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
     };
     if (checkRegistration) {
       const checkout = await observation.registeredCheckout(cwd, before, ready);
@@ -874,9 +959,18 @@ export class StackReader {
 
     const read = async (demand: PrMetadataDemand, locate: () => Promise<CheckoutLookup>, currentHints = hints) => {
       const checkout = await locate();
-      if (checkout === "unavailable") return { cwd, checkout, corroborated: false };
+      if (checkout === "unavailable") {
+        if (allowUnavailableCache && version) {
+          const stillSame = before
+            ? (await currentHints.checkoutIdentity(cwd))?.version === version
+            : (await unavailableCheckoutVersion(cwd, currentHints.installedGitVersion, demand)) === version;
+          demand.signal?.throwIfAborted();
+          if (stillSame) remember("unavailable");
+        }
+        return { cwd, checkout, corroborated: false };
+      }
       const corroborated = before ? checkout?.root === before.root && checkout.commonDir === before.commonDir
-        && (await currentHints.checkoutIdentity(cwd))?.version === version : !checkout;
+        && (await currentHints.checkoutIdentity(cwd))?.version === version : hasHints && !checkout;
       demand.signal?.throwIfAborted();
       if (corroborated) remember(checkout);
       return { cwd, checkout, corroborated };
@@ -930,14 +1024,31 @@ export class StackReader {
     const hinted = new Set<string>();
     const located = new Map<string, Checkout>();
     const unavailablePaths = new Set<string>();
+    const backgroundNavigation = !directories
+      && (demand.priority?.() ?? PR_METADATA_PRIORITY.background) === PR_METADATA_PRIORITY.background;
+    if (backgroundNavigation && this.deferredTtlRevalidations.size) {
+      const currentPaths = new Set(paths);
+      // Reserve slots before the concurrent probes so faster checkouts cannot
+      // take them again after another TTL window elapses.
+      for (const cwd of this.deferredTtlRevalidations) {
+        if (!currentPaths.has(cwd)) continue;
+        if (!observation.reserveBackgroundTtlRevalidation(cwd, this.backgroundTtlRevalidationBudget)) break;
+        this.deferredTtlRevalidations.delete(cwd);
+      }
+    }
     const scan = new IterableMapper(paths, async (cwd) => {
       const found = anchorPaths.has(cwd) ? undefined : await hints.possibleCommonDirs(cwd);
       if (found && !hints.requiresGitDiscovery) {
         if (found.length) hinted.add(cwd);
         return [cwd, found] as const;
       }
-      const checkout = found && hints.installedGitVersion
-        ? await this.readInventoryCheckout(cwd, observation, found) : await observation.checkoutLookup(cwd, inventoryDemand);
+      const checkout = (found && hints.installedGitVersion) || (backgroundNavigation && !anchorPaths.has(cwd))
+        ? await this.readInventoryCheckout(cwd, observation, found ?? [], false, {
+            allowUnavailableCache: backgroundNavigation,
+            budgetTtlRevalidation: backgroundNavigation,
+            hasHints: found !== undefined,
+          })
+        : await observation.checkoutLookup(cwd, inventoryDemand);
       if (checkout === "unavailable") {
         unavailablePaths.add(cwd);
         return [cwd, found ?? []] as const;
@@ -991,7 +1102,12 @@ export class StackReader {
       // A seed, config read and roster must save work even when the clone
       // has a primary checkout alongside its linked worktrees.
       const useWorktreeInventory = candidates.length === 1 && (checkoutCounts.get(candidates[0]!) ?? 0) >= 5;
-      const checkout = hinted.has(cwd) ? await this.readInventoryCheckout(cwd, observation, candidates, useWorktreeInventory) : located.get(cwd);
+      const checkout = hinted.has(cwd)
+        ? await this.readInventoryCheckout(cwd, observation, candidates, useWorktreeInventory, {
+            allowUnavailableCache: backgroundNavigation,
+            budgetTtlRevalidation: backgroundNavigation,
+          })
+        : located.get(cwd);
       if (checkout === "unavailable") {
         unavailablePaths.add(cwd);
         return { checkout: undefined };
@@ -1182,6 +1298,13 @@ export class StackReader {
       return { ...stack, layers: layers.map((layer, index) => ({ ...layer, ...gates[index] })) };
     }), catalogs: [...results.map(({ catalog }) => catalog), ...unavailable] };
   }
+}
+
+let desktopStackReader: StackReader | undefined;
+
+/** Share inventory checkout and commit-graph caches across navigation and PR services. */
+export function getDesktopStackReader(): StackReader {
+  return desktopStackReader ??= new StackReader();
 }
 
 export function stackMemberships(stacks: readonly StackSummary[]): Map<string, ThreadStackMembership[]> {
