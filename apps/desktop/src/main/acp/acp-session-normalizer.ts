@@ -1018,10 +1018,16 @@ export class AcpSessionReplayNormalizer {
     createdAt: number,
     toolCallId: string | undefined,
   ): void {
-    const name = this.fileEditOptions.antigravity ? readString(update.update, "name") : undefined;
-    const declared = name === "write_file" || name === "edit_file"
-      ? { name, kind: "edit" }
-      : readAcpProviderTool(update.update);
+    const rawName = readString(update.update, "name");
+    const declared =
+      readAcpProviderTool(update.update)
+      ?? (rawName === "read_file"
+        ? { name: rawName, kind: "read" }
+        : rawName === "list_dir"
+          ? { name: rawName, kind: "list" }
+          : this.fileEditOptions.antigravity && (rawName === "write_file" || rawName === "edit_file")
+            ? { name: rawName, kind: "edit" }
+            : undefined);
     if (toolCallId && declared) {
       this.providerTools.set(toolCallId, {
         ...this.providerTools.get(toolCallId),
@@ -1031,9 +1037,9 @@ export class AcpSessionReplayNormalizer {
     const providerTool = toolCallId
       ? this.providerTools.get(toolCallId)
       : declared;
-    const fileRead =
-      (toolCallId ? this.fileReads.get(toolCallId) : undefined)
-      ?? readAcpFileRead(update.update, providerTool);
+    const previousFileRead = toolCallId ? this.fileReads.get(toolCallId) : undefined;
+    const fileRead = readAcpFileRead(update.update, providerTool, previousFileRead)
+      ?? previousFileRead;
     if (toolCallId && fileRead) {
       this.fileReads.set(toolCallId, fileRead);
     }
@@ -1055,12 +1061,14 @@ export class AcpSessionReplayNormalizer {
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
         : undefined,
+      fileRead?.label,
     );
   }
 
   private upsertActivity(
     activity: AppServerThreadActivityEntry,
     isPlaceholderLabel?: (label: string) => boolean,
+    preferredLabel?: string,
   ): void {
     const activityWithTurn = this.withCurrentTurn(activity);
     const index = this.typedEntryIndexes.get(`activity:${activityWithTurn.id}`);
@@ -1072,6 +1080,7 @@ export class AcpSessionReplayNormalizer {
       this.entries[index] as AppServerThreadActivityEntry,
       activityWithTurn,
       isPlaceholderLabel,
+      preferredLabel,
     );
   }
 
@@ -2086,6 +2095,7 @@ function mergeActivity(
   existing: AppServerThreadActivityEntry,
   incoming: AppServerThreadActivityEntry,
   isPlaceholderLabel: (label: string) => boolean = () => false,
+  preferredLabel?: string,
 ): AppServerThreadActivityEntry {
   const status = incoming.status ?? existing.status;
   const fileEditGainedPath = incoming.details[0]?.kind === "write"
@@ -2095,6 +2105,7 @@ function mergeActivity(
     existing.details,
     incoming.details,
     isPlaceholderLabel,
+    preferredLabel,
   )
     .map((detail) => ({
       ...detail,
@@ -2105,7 +2116,7 @@ function mergeActivity(
     ...existing,
     createdAt: existing.createdAt ?? incoming.createdAt,
     summary: settledSearchLabel(
-      fileEditGainedPath || updatedScript
+      fileEditGainedPath || updatedScript || incoming.summary === preferredLabel
         ? incoming.summary
         : preferSpecificLabel(existing.summary, incoming.summary, isPlaceholderLabel),
       status,
@@ -2131,6 +2142,7 @@ function mergeActivityEntryDetails(
   existing: AppServerThreadActivityEntry["details"],
   incoming: AppServerThreadActivityEntry["details"],
   isPlaceholderLabel: (label: string) => boolean,
+  preferredLabel?: string,
 ): AppServerThreadActivityEntry["details"] {
   const merged = [...existing];
   for (const incomingDetail of incoming) {
@@ -2160,11 +2172,9 @@ function mergeActivityEntryDetails(
         && !isWeakLabel(existingDetail.label, isPlaceholderLabel)
           ? existingDetail.kind
           : incomingDetail.kind,
-      label: updatedScript ? incomingDetail.label : preferSpecificLabel(
-        existingDetail.label,
-        incomingDetail.label,
-        isPlaceholderLabel,
-      ),
+      label: updatedScript || incomingDetail.label === preferredLabel
+        ? incomingDetail.label
+        : preferSpecificLabel(existingDetail.label, incomingDetail.label, isPlaceholderLabel),
       path: incomingDetail.path ?? existingDetail.path,
       command:
         existingCommand || incomingCommand

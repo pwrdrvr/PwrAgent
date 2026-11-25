@@ -3590,38 +3590,28 @@ export class AcpBackendAdapter {
               turnId,
               update,
             });
+        const buildToolNotifications = (toolUpdate: Record<string, unknown>) =>
+          acpToolUpdateNotifications({
+            backendId: agent.backendId,
+            cwd: () => this.getSession(agent.backendId, sessionId)?.cwd,
+            threadId: sessionId,
+            turnId,
+            update: toolUpdate,
+          }).filter((notification) =>
+            this.shouldEmitLiveToolNotification(agent.backendId, notification),
+          );
         const toolNotifications = resolvedToolUpdate
-          ? acpToolUpdateNotifications({
-              backendId: agent.backendId,
-              cwd: agent.backendId === "acp:antigravity" && resolvedToolUpdate.kind === "edit"
-                ? this.getSession(agent.backendId, sessionId)?.cwd
-                : undefined,
-              threadId: sessionId,
-              turnId,
-              update: resolvedToolUpdate,
-            }).filter((notification) =>
-              this.shouldEmitLiveToolNotification(agent.backendId, notification),
-            )
+          ? buildToolNotifications(resolvedToolUpdate)
           : [];
         const deferredTerminalToolNotifications =
-          promptSettledTurnFinished && turnId && !fromSessionLoad
+          promptSettledTurnFinished && turnId
             ? this.liveToolUpdateResolver
                 .drainDeferredTerminalUpdates({
                   backendId: agent.backendId,
                   threadId: sessionId,
                   turnId,
                 })
-                .flatMap((deferredUpdate) =>
-                  acpToolUpdateNotifications({
-                    backendId: agent.backendId,
-                    threadId: sessionId,
-                    turnId,
-                    update: deferredUpdate,
-                  }),
-                )
-                .filter((notification) =>
-                  this.shouldEmitLiveToolNotification(agent.backendId, notification),
-                )
+                .flatMap(buildToolNotifications)
             : [];
         if (title) {
           await this.emit({
