@@ -213,79 +213,77 @@ it("preserves global registration/mode order and commits before notifying turn w
   }));
 });
 
-it("routes registry admission and all module readers through the same activity owner", async () => {
-  await fc.assert(fc.asyncProperty(
-    fc.array(fc.constantFrom("reservation", "registration", "mode", "provider", "compact", "review"), { minLength: 1, maxLength: 8, size: "max" }),
-    fc.constantFrom<ThreadExecutionMode>("default", "auto", "full-access"),
-    async (sources, mode) => {
-      const databases: StateDb[] = [];
-      const registry = registryWithInMemoryStore(databases);
-      const state = registryModules(registry).turnState;
-      try {
-        for (const [index, source] of sources.entries()) {
-          const threadId = `thread-${index % 2}`, turnId = `turn-${index}`;
-          const identity = { backend: "codex" as const, threadId };
-          const key = `codex:${threadId}:${turnId}`, modeKey = `${threadId}:${turnId}`;
-          const reservation = source === "reservation" ? state.reserveStart(threadId, "revert") : undefined;
-          if (source === "registration") state.registerTurn(key);
-          if (source === "mode") state.acceptExecution(modeKey, mode);
-          if (source === "provider") state.seedStatus(threadId, "active");
-          if (source === "compact") {
-            const operation: CodexRetryableCompaction = { kind: "compact", params: identity, turnId };
-            state.assignRetry(threadId, operation);
-            state.releaseRetryReceipt(operation);
-          }
-          const review: ReviewSubAgentRecord = {
-            backend: "claude", parentBackend: "codex", parentThreadId: threadId,
-            reviewThreadId: `review-${index}`, turnId, createdAt: index, displayText: "Fixture review", task: "Review", mode: "managed",
-          };
-          if (source === "review") state.activateReview(review);
-          // Registration alone has a different legacy projection from busy
-          // admission. All other sources independently own busy admission.
-          expect(registry.isThreadTurnOccupied(identity)).toBe(source !== "registration");
-          expect(registry.constructionPorts().threadHasActiveTurn(threadId, "codex")).toBe(source !== "registration");
-          expect(registry.isThreadTurnOccupied({ ...identity, threadId: "unrelated" })).toBe(false);
-          if (reservation) state.releaseStart(threadId, reservation);
-          state.unregisterTurn(key);
-          state.forgetExecution(modeKey);
-          state.seedStatus(threadId, "idle");
-          state.forgetRetry(threadId);
-          state.finishReview(`claude:${review.reviewThreadId}:${turnId}`);
-          expect(registry.isThreadTurnOccupied(identity)).toBe(false);
-        }
-      } finally {
-        await registry.close();
-        for (const db of databases) db.close();
-      }
-    },
-  ), { numRuns: 25 });
-});
-
-it("settles only the accepted compactions owned by an exited process", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), async scoped => {
+it.each<ThreadExecutionMode>(["default", "auto", "full-access"])(
+  "routes registry admission and all module readers through the same activity owner in %s mode",
+  async (mode) => {
+    // Every source is exercised on a thread that was also checked earlier.
+    // Each source owns admission independently and retires before the next starts.
+    const sources = ["reservation", "registration", "mode", "provider", "compact", "review"] as const;
     const databases: StateDb[] = [];
     const registry = registryWithInMemoryStore(databases);
-    const { turnState, codexRuntimeSupervisor } = registryModules(registry);
-    const operations: CodexRetryableCompaction[] = [];
+    const state = registryModules(registry).turnState;
     try {
-      for (const threadId of ["a", "b"]) {
-        const operation: CodexRetryableCompaction = { kind: "compact", params: { backend: "codex", threadId }, turnId: `pending:compact:${threadId}` };
-        turnState.assignRetry(threadId, operation);
-        operations.push(operation);
+      for (const [index, source] of [...sources, ...sources.toReversed()].entries()) {
+        const threadId = `thread-${index % 2}`, turnId = `turn-${index}`;
+        const identity = { backend: "codex" as const, threadId };
+        const key = `codex:${threadId}:${turnId}`, modeKey = `${threadId}:${turnId}`;
+        const reservation = source === "reservation" ? state.reserveStart(threadId, "revert") : undefined;
+        if (source === "registration") state.registerTurn(key);
+        if (source === "mode") state.acceptExecution(modeKey, mode);
+        if (source === "provider") state.seedStatus(threadId, "active");
+        if (source === "compact") {
+          const operation: CodexRetryableCompaction = { kind: "compact", params: identity, turnId };
+          state.assignRetry(threadId, operation);
+          state.releaseRetryReceipt(operation);
+        }
+        const review: ReviewSubAgentRecord = {
+          backend: "claude", parentBackend: "codex", parentThreadId: threadId,
+          reviewThreadId: `review-${index}`, turnId, createdAt: index, displayText: "Fixture review", task: "Review", mode: "managed",
+        };
+        if (source === "review") state.activateReview(review);
+        // Registration alone has a different legacy projection from busy
+        // admission. All other sources independently own busy admission.
+        expect(registry.isThreadTurnOccupied(identity)).toBe(source !== "registration");
+        expect(registry.constructionPorts().threadHasActiveTurn(threadId, "codex")).toBe(source !== "registration");
+        expect(registry.isThreadTurnOccupied({ ...identity, threadId: "unrelated" })).toBe(false);
+        if (reservation) state.releaseStart(threadId, reservation);
+        state.unregisterTurn(key);
+        state.forgetExecution(modeKey);
+        state.seedStatus(threadId, "idle");
+        state.forgetRetry(threadId);
+        state.finishReview(`claude:${review.reviewThreadId}:${turnId}`);
+        expect(registry.isThreadTurnOccupied(identity)).toBe(false);
       }
-      await codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit(scoped ? new Set(["a"]) : undefined);
-      expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: "a" })).toBe(false);
-      expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: "b" })).toBe(scoped);
-      expect(turnState.retryReceipt(operations[0]!).terminalObserved).toBe(true);
-      turnState.releaseRetryReceipt(operations[0]!);
-      expect(turnState.codex("a").operations).toEqual([]);
-      turnState.forgetRetry("b");
-      turnState.releaseRetryReceipt(operations[1]!);
     } finally {
       await registry.close();
       for (const db of databases) db.close();
     }
-  }), { numRuns: 8 });
+  },
+);
+
+it.each([true, false])("settles only the accepted compactions owned by an exited process (scoped=%s)", async (scoped) => {
+  const databases: StateDb[] = [];
+  const registry = registryWithInMemoryStore(databases);
+  const { turnState, codexRuntimeSupervisor } = registryModules(registry);
+  const operations: CodexRetryableCompaction[] = [];
+  try {
+    for (const threadId of ["a", "b"]) {
+      const operation: CodexRetryableCompaction = { kind: "compact", params: { backend: "codex", threadId }, turnId: `pending:compact:${threadId}` };
+      turnState.assignRetry(threadId, operation);
+      operations.push(operation);
+    }
+    await codexRuntimeSupervisor.handleCodexAppServerUnexpectedExit(scoped ? new Set(["a"]) : undefined);
+    expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: "a" })).toBe(false);
+    expect(registry.isThreadTurnOccupied({ backend: "codex", threadId: "b" })).toBe(scoped);
+    expect(turnState.retryReceipt(operations[0]!).terminalObserved).toBe(true);
+    turnState.releaseRetryReceipt(operations[0]!);
+    expect(turnState.codex("a").operations).toEqual([]);
+    turnState.forgetRetry("b");
+    turnState.releaseRetryReceipt(operations[1]!);
+  } finally {
+    await registry.close();
+    for (const db of databases) db.close();
+  }
 });
 
 it("retires legacy activity fields and makes registry busy admission read the union", () => {
@@ -301,7 +299,7 @@ it("retires legacy activity fields and makes registry busy admission read the un
   let readsUnion = false;
   for (const name of readdirSync(directory).filter(name => name.endsWith(".ts"))) {
     const url = new URL(name, directory);
-    const file = ts.createSourceFile(fileURLToPath(url), readFileSync(url, "utf8"), ts.ScriptTarget.Latest, true);
+    const file = ts.createSourceFile(fileURLToPath(url), readFileSync(url, "utf8"), ts.ScriptTarget.Latest);
     const visit = (node: ts.Node): void => {
       if (ts.isIdentifier(node) && retired.has(node.text)) mentions.push(`${name}:${node.text}`);
       if (name === "backend-registry.ts" && ts.isMethodDeclaration(node) && node.name.getText(file) === "threadHasActiveTurn") {

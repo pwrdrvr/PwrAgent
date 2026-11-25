@@ -289,21 +289,25 @@ describe("resource view model", () => {
     }));
   });
 
-  it("offers an immediate counted grant even when another operator is queued", () => {
+  it("offers an immediate counted grant from a busy pool with one slot free", () => {
     const authority: ResourceAuthority = {
       authorityId: AUTHORITY_ID, kind: "machine_broker", label: "Broker", endpointLabel: "socket", epoch: 1, status: "reachable",
     };
     const resource: ResourceDomain = {
       ...publishedResource,
-      condition: "available",
+      condition: "busy",
       authorityId: AUTHORITY_ID,
       ownershipConflict: null,
       recovery: null,
       sharing: { mode: "counted", capacity: 2, inUse: 1, unitLabel: "slots" },
-      allocations: [],
+      allocations: [{
+        allocationId: "held-1", state: "active", holder: { kind: "operator", label: "Builder" },
+        taskLabel: "Compile", executorLabel: "No managed job", grantedAt: 0, deadlineAt: 60_000,
+        renewalsUsed: 0, renewalsAllowed: 0, generation: 1, authorityEpoch: 1, units: 1, lastKnown: false, viewerOwns: false,
+      }],
       queue: [{
         queueEntryId: "entry-1", position: 1, requester: { kind: "operator", label: "Peer" }, purpose: "Build",
-        requestedAt: 0, eligibility: { eligible: true }, viewerOwns: false,
+        requestedAt: 0, units: 2, eligibility: { eligible: true }, viewerOwns: false,
       }],
       actions: { request: { allowed: true } },
     };
