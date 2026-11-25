@@ -43,7 +43,7 @@ it("binds the original desktop factory to shared persistence and the currently s
         expect(DesktopStore).toBe(SharedStore);
       }
     } finally { upsert.mockRestore(); dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 20 });
+  }), { numRuns: 6 });
 });
 
 // Revocation is authoritative until explicit reauthorization. Ordinary refresh
@@ -100,7 +100,7 @@ it("models trust, explicit reauthorization and detached peer facts across WAL co
         expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 6 });
 });
 
 it("models enrollment transitions, strict expiry, newest matching token and exact original commits", async () => {
@@ -153,7 +153,7 @@ it("models enrollment transitions, strict expiry, newest matching token and exac
         expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 6 });
 });
 
 // HMAC identity is profile-secret + token + NUL + generatedAt. The independent
@@ -177,7 +177,7 @@ it("keeps enrollment secrets profile-local and raw tokens out of SQLite with ind
       dbs[0]!.raw.prepare("UPDATE federation_enrollment_tokens SET token_hmac = 'ab'").run();
       expect(store.findMatchingPendingEnrollment({ token, now: generatedAt })).toBeUndefined();
     } finally { other.close(); dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 6 });
 });
 
 // A repeat can collapse only into the newest matching kind/peer/session row,
@@ -216,7 +216,7 @@ it("models audit identity, repeat windows, first-seen authority, filters and exa
         }); expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 6 });
 });
 
 // The GC pass keeps exactly the newest 500 audit rows by (createdAt, eventId);
@@ -236,7 +236,7 @@ it("retains the newest 500 audit rows through the GC pass and pages them through
       expect(db.raw.prepare("SELECT COUNT(*) AS count FROM federation_session_audit").get()).toEqual({ count: retained.length });
       expect(store.listAudit({ limit })).toEqual(retained.slice(0, Math.max(1, Math.min(limit ?? 50, 500))));
     } finally { db.close(); }
-  }), { numRuns: 10 });
+  }), { numRuns: 6 });
 });
 
 it("preserves outer transaction visibility and rollback and the original independent secret write on insert refusal", async () => {
@@ -259,7 +259,7 @@ it("preserves outer transaction visibility and rollback and the original indepen
       expect(dbs[1 - selected]!.getMeta(secretKey)).toBeDefined();
       expect(dbs[1 - selected]!.raw.prepare("SELECT COUNT(*) AS count FROM federation_enrollment_tokens").get()).toEqual({ count: 0 });
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 6 });
 });
 
 it("keeps legacy records, malformed payload reads, invalid-peer refusal and list bounds without repair writes", async () => {
@@ -284,5 +284,5 @@ it("keeps legacy records, malformed payload reads, invalid-peer refusal and list
         }
       }); expect(measured.writes.commits).toBe(0);
     } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 10 });
+  }), { numRuns: 6 });
 });

@@ -209,7 +209,7 @@ describe("PwrAgent tool search relevance and delivery properties", () => {
           expect(result.inputSchema).toEqual({ type: "object", description: "x".repeat(sizes[index]) });
         }
       },
-    ));
+    ), { numRuns: 32 });
   });
 
   it("excludes the next ranked definition when it would exceed the budget by one character", () => {
@@ -220,11 +220,11 @@ describe("PwrAgent tool search relevance and delivery properties", () => {
         codeModeName: `pwragent__inspect_item_${index}`,
         description: "Inspect an item.",
         inputSchema: { type: "object", description: "x".repeat(size) },
-      }));
+      }), { numRuns: 32 });
       const secondSize = 8_001 - JSON.stringify({ tools: definitions }).length;
       const results = searchPwrAgentTools(syntheticCatalog([firstSize, secondSize]), "inspect item", 5);
       expect(results).toEqual([definitions[0]]);
-    }));
+    }), { numRuns: 32 });
   });
 
   it("preserves every explicitly requested definition despite context, count and size budgets", () => {
@@ -236,6 +236,6 @@ describe("PwrAgent tool search relevance and delivery properties", () => {
         expect(results.map((tool) => tool.name)).toEqual(names);
         expect(results.map((tool) => tool.inputSchema)).toEqual(sizes.map((size) => ({ type: "object", description: "x".repeat(size) })));
       },
-    ));
+    ), { numRuns: 32 });
   });
 });

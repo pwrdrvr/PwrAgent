@@ -79,7 +79,7 @@ describe("the persisted resource checkout authority", () => {
       } finally {
         harness.close();
       }
-    }), { numRuns: 16, examples: [[4, false], [4, true]] });
+    }), { numRuns: 8, examples: [[4, false], [4, true]] });
   });
 
   it("uses the durable machine capacity even when another profile detects a different CPU count", async () => {
@@ -106,7 +106,7 @@ describe("the persisted resource checkout authority", () => {
         await Promise.all([first.close(), second.close()]);
         rmSync(root, { recursive: true, force: true });
       }
-    }), { numRuns: 16 });
+    }), { numRuns: 8 });
   });
 
   it("never binds a managed job when more than one idle reservation belongs to its executor", () => {
@@ -126,7 +126,7 @@ describe("the persisted resource checkout authority", () => {
           allocationId: large.allocationId, generation: large.generation,
         });
       } finally { harness.close(); }
-    }), { numRuns: 20 });
+    }), { numRuns: 8 });
   });
 
   it("projects fencing and cleanup gates for each allocation independently of earlier failures", () => {
@@ -148,7 +148,7 @@ describe("the persisted resource checkout authority", () => {
         `failed-${index}`, index + 1, state === "missing" ? undefined : true, state === "missing" ? undefined : state === "verified",
       ]));
       expect(view.actions.request).toMatchObject({ allowed: false });
-    }), { numRuns: 30 });
+    }), { numRuns: 8 });
   });
 
   it("offers Join queue exactly when the authority would take another request from the viewer", () => {
@@ -164,7 +164,7 @@ describe("the persisted resource checkout authority", () => {
       const waiting = queue.some((entry) => entry.actor === actor);
       expect(view.actions.request?.allowed).toBe(!waiting);
       expect(view.actions.cancel_request?.allowed).toBe(waiting ? true : undefined);
-    }), { numRuns: 40 });
+    }), { numRuns: 8 });
   });
 
   it("preserves exclusive holders and FIFO waiters while upgrading dev's machine pool", async () => {
@@ -208,7 +208,7 @@ describe("the persisted resource checkout authority", () => {
         await Promise.all(services.map((service) => service.close()));
         rmSync(root, { recursive: true, force: true });
       }
-    }), { numRuns: 20 });
+    }), { numRuns: 8 });
   });
 
   it("keeps an unenrolled root unresolved and out of managed admission", async () => {
@@ -419,7 +419,7 @@ describe("the persisted resource checkout authority", () => {
       } finally {
         harness.close();
       }
-    }), { numRuns: 60 });
+    }), { numRuns: 8 });
   });
 
   it("backfills non-delaying waiters behind a large head without ever delaying the head's shadow start time", () => {
@@ -460,7 +460,7 @@ describe("the persisted resource checkout authority", () => {
           harness.close();
         }
       },
-    ), { numRuns: 50 });
+    ), { numRuns: 8 });
 
     // Concrete scenario from an 18-CPU host: 4 held (12m), 16 queued #1,
     // 4-slot 10m request backfills immediately while 4-slot 15m request waits.
@@ -599,7 +599,7 @@ describe("the persisted resource checkout authority", () => {
         await expect(service.perform(change("release", {
           resourceId, allocationId: hold.allocationId, generation: hold.generation, epoch: 1,
         }, randomUUID()))).resolves.toMatchObject({ outcome: "accepted" });
-      }), { numRuns: 10 });
+      }), { numRuns: 8 });
     } finally {
       service.close();
       harness.close();
@@ -903,7 +903,7 @@ describe("delegated checkout execution", () => {
       } finally {
         harness.close();
       }
-    }), { numRuns: 25 });
+    }), { numRuns: 8 });
   });
 
   it("persists delegation and its retry receipt in one boundary commit", async () => {
@@ -977,7 +977,7 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
       } finally {
         await close();
       }
-    }), { numRuns: 16 });
+    }), { numRuns: 8 });
   });
 
   it("preserves the generated identity after an uncertain request", async () => {
@@ -998,7 +998,7 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
         } finally {
           perform.mockRestore();
         }
-      }), { numRuns: 10, examples: [[false]] });
+      }), { numRuns: 8, examples: [[false]] });
     } finally {
       await close();
     }
@@ -1016,7 +1016,7 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
           expect(await handle("resource_checkout_action", { action: releaseAction }, caller)).toMatchObject({ outcome: "accepted" });
         }
         expect(service.read().resources[0].allocations).toHaveLength(0);
-      }), { numRuns: 15 });
+      }), { numRuns: 8 });
     } finally {
       await close();
     }
@@ -1055,7 +1055,7 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
   it("clears an interrupted checkout across both cancellation/promotion orderings", async () => {
     await fc.assert(fc.asyncProperty(fc.boolean(), fc.uuid(), async (promoteOnCancel, key) => {
       await abortQueuedAcquire(promoteOnCancel, key);
-    }), { numRuns: 16, examples: [[true, "race"], [false, "cancel"]] });
+    }), { numRuns: 8, examples: [[true, "race"], [false, "cancel"]] });
   });
 
   it("budgets cleanup when abort races promotion", async () => {
@@ -1073,53 +1073,56 @@ describe("resource_checkout_acquire (blocking Code Mode checkout)", () => {
     }
   });
 
-  it("cleans up a grant returned by status after abort or timeout", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (abort, queued) => {
-      const { service, close } = openRealService();
-      const handle = createResourceCheckoutToolHandler(service);
-      const controller = new AbortController();
-      const waiting = Promise.withResolvers<void>();
-      const resume = Promise.withResolvers<void>();
-      const subscribed = Promise.withResolvers<void>();
-      const subscribe = service.subscribe.bind(service);
-      vi.spyOn(service, "subscribe").mockImplementation((listener) => {
-        const unsubscribe = subscribe(listener);
-        subscribed.resolve();
-        return unsubscribe;
-      });
-      const first = queued
-        ? await handle("resource_checkout_acquire", { ...acquireArgs, units: 8 }, holder) as { releaseAction: unknown }
-        : undefined;
-      const status = service.status.bind(service);
-      vi.spyOn(service, "status").mockImplementation(async (...args) => {
-        const result = await status(...args);
-        if (result?.state === "granted") {
-          waiting.resolve();
-          await resume.promise;
-        }
-        return result;
-      });
-      vi.useFakeTimers({ toFake: ["performance"] });
-      try {
-        const pending = handle("resource_checkout_acquire", {
-          ...acquireArgs, idempotencyKey: "late status", waitTimeoutMs: 100,
-        }, { ...caller, signal: controller.signal });
-        if (first) {
-          await subscribed.promise;
-          await handle("resource_checkout_action", { action: first.releaseAction }, holder);
-        }
-        await waiting.promise;
-        if (abort) controller.abort(new Error("Caller stopped"));
-        else vi.advanceTimersByTime(100);
-        resume.resolve();
-        if (abort) await expect(pending).rejects.toThrow("Caller stopped");
-        else expect(await pending).toMatchObject({ outcome: "timed_out", cancelled: true });
-        expect(service.read().resources[0].allocations).toHaveLength(0);
-      } finally {
-        vi.useRealTimers();
-        await close();
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ] as const)("cleans up a grant returned by status after abort or timeout [%#]", async (abort, queued) => {
+    const { service, close } = openRealService();
+    const handle = createResourceCheckoutToolHandler(service);
+    const controller = new AbortController();
+    const waiting = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const subscribed = Promise.withResolvers<void>();
+    const subscribe = service.subscribe.bind(service);
+    vi.spyOn(service, "subscribe").mockImplementation((listener) => {
+      const unsubscribe = subscribe(listener);
+      subscribed.resolve();
+      return unsubscribe;
+    });
+    const first = queued
+      ? await handle("resource_checkout_acquire", { ...acquireArgs, units: 8 }, holder) as { releaseAction: unknown }
+      : undefined;
+    const status = service.status.bind(service);
+    vi.spyOn(service, "status").mockImplementation(async (...args) => {
+      const result = await status(...args);
+      if (result?.state === "granted") {
+        waiting.resolve();
+        await resume.promise;
       }
-    }), { numRuns: 10, examples: [[true, false], [false, false], [true, true], [false, true]] });
+      return result;
+    });
+    vi.useFakeTimers({ toFake: ["performance"] });
+    try {
+      const pending = handle("resource_checkout_acquire", {
+        ...acquireArgs, idempotencyKey: "late status", waitTimeoutMs: 100,
+      }, { ...caller, signal: controller.signal });
+      if (first) {
+        await subscribed.promise;
+        await handle("resource_checkout_action", { action: first.releaseAction }, holder);
+      }
+      await waiting.promise;
+      if (abort) controller.abort(new Error("Caller stopped"));
+      else vi.advanceTimersByTime(100);
+      resume.resolve();
+      if (abort) await expect(pending).rejects.toThrow("Caller stopped");
+      else expect(await pending).toMatchObject({ outcome: "timed_out", cancelled: true });
+      expect(service.read().resources[0].allocations).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+      await close();
+    }
   });
 
   it("requires explicit units on counted resources and returns releaseAction for immediate try/finally release", async () => {

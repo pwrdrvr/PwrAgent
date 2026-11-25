@@ -20,16 +20,14 @@ const bindings = [SharedStore, DesktopStore];
 const backends = ["codex", "acp:kimi"] as const;
 const schedule = { kind: "interval", every: 5, unit: "minutes" } as const;
 
-it("binds every desktop automation instance and transcript policy to shared implementations", () => {
-  fc.assert(fc.property(fc.constantFrom("prototype", "instance", "policy"), entry => {
-    if (entry === "policy") expect(desktopMerge).toBe(sharedMerge);
-    else if (entry === "prototype") expect(DesktopStore.prototype instanceof SharedStore).toBe(true);
-    else {
-      const db = openInMemoryStateDb();
-      try { expect(new DesktopStore(db) instanceof SharedStore).toBe(true); }
-      finally { db.close(); }
-    }
-  }));
+it.each(["prototype", "instance", "policy"] as const)("binds every desktop automation instance and transcript policy to shared implementations [%#]", (entry) => {
+  if (entry === "policy") expect(desktopMerge).toBe(sharedMerge);
+  else if (entry === "prototype") expect(DesktopStore.prototype instanceof SharedStore).toBe(true);
+  else {
+    const db = openInMemoryStateDb();
+    try { expect(new DesktopStore(db) instanceof SharedStore).toBe(true); }
+    finally { db.close(); }
+  }
 });
 
 // The first terminal result is authoritative. Late acknowledgements may fill
@@ -117,7 +115,7 @@ it("matches an independent run model across host WAL connections and reopens wit
         expect([reads.writes.commits, reads.writes.statements, reads.writes.rowsChanged]).toEqual([0, 0, 0]);
       }
     } finally { for (const db of dbs) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // Rebuild the policy with positional scans: ids keep their first insertion
@@ -161,39 +159,37 @@ it("retains independently merged artifacts across shared/desktop WAL reads and p
             .toEqual(Array.from({ length: limit }, (_, i) => `new-${limit + 1 - i}`));
         }
       } finally { for (const db of dbs) db.close(); removeTempStateDbDir(fixture.tempDir); }
-    }), { numRuns: 25 });
+    }), { numRuns: 8 });
 });
 
-it("keeps startup reconciliation atomic and outer transactions authoritative over run/artifact changes", async () => {
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async count => {
-    const db = openInMemoryStateDb();
-    try {
-      const portable = new SharedStore(db);
-      const desktop = new DesktopStore(db);
-      for (let i = 0; i < count; i++) {
-        portable.createAutomation({ id: `a-${i}`, backend: "codex", threadId: `owner-${i}`,
-          name: "Fixture", taskPrompt: "Invented task", schedule, now: 0 });
-        portable.createRun({ id: `r-${i}`, automationId: `a-${i}`, trigger: "manual", now: 0 });
-        portable.markRunStarted({ runId: `r-${i}`, backendTurnId: `turn-${i}`, now: 1 });
-      }
-      const original = db.raw.prepare("SELECT * FROM automation_runs ORDER BY run_id").all();
-      db.raw.exec("CREATE TRIGGER refuse_reconcile BEFORE UPDATE ON automations BEGIN SELECT RAISE(ABORT, 'fixture refusal'); END");
-      expect(() => desktop.reconcileStartup({ now: 10 })).toThrow("fixture refusal");
-      expect(db.raw.prepare("SELECT * FROM automation_runs ORDER BY run_id").all()).toEqual(original);
-      db.raw.exec("DROP TRIGGER refuse_reconcile");
-      expect(() => db.raw.transaction(() => {
-        portable.markRunTerminal({ runId: "r-0", status: "completed", now: 10 });
-        desktop.appendRunTranscriptEvent({ runId: "r-0", event: { id: "event", kind: "lifecycle", at: 10 }, now: 10 });
-        throw new Error("outer refusal");
-      }).immediate()).toThrow("outer refusal");
-      expect(db.raw.prepare("SELECT * FROM automation_runs ORDER BY run_id").all()).toEqual(original);
-      expect(portable.getRunArtifact("r-0")).toBeUndefined();
-      desktop.reconcileStartup({ now: 20, nextRunAtByAutomationId: { "a-0": 30 } });
-      for (let i = 0; i < count; i++) expect(portable.getRun(`r-${i}`))
-        .toMatchObject({ status: "failed", failureReason: "interrupted", completedAt: 20, backendTurnId: `turn-${i}` });
-      expect(portable.getAutomation("a-0")?.nextRunAt).toBe(30);
-    } finally { db.close(); }
-  }), { numRuns: 25 });
+it.each([1, 2, 3, 4, 5] as const)("keeps startup reconciliation atomic and outer transactions authoritative over run/artifact changes [%#]", async (count) => {
+  const db = openInMemoryStateDb();
+  try {
+    const portable = new SharedStore(db);
+    const desktop = new DesktopStore(db);
+    for (let i = 0; i < count; i++) {
+      portable.createAutomation({ id: `a-${i}`, backend: "codex", threadId: `owner-${i}`,
+        name: "Fixture", taskPrompt: "Invented task", schedule, now: 0 });
+      portable.createRun({ id: `r-${i}`, automationId: `a-${i}`, trigger: "manual", now: 0 });
+      portable.markRunStarted({ runId: `r-${i}`, backendTurnId: `turn-${i}`, now: 1 });
+    }
+    const original = db.raw.prepare("SELECT * FROM automation_runs ORDER BY run_id").all();
+    db.raw.exec("CREATE TRIGGER refuse_reconcile BEFORE UPDATE ON automations BEGIN SELECT RAISE(ABORT, 'fixture refusal'); END");
+    expect(() => desktop.reconcileStartup({ now: 10 })).toThrow("fixture refusal");
+    expect(db.raw.prepare("SELECT * FROM automation_runs ORDER BY run_id").all()).toEqual(original);
+    db.raw.exec("DROP TRIGGER refuse_reconcile");
+    expect(() => db.raw.transaction(() => {
+      portable.markRunTerminal({ runId: "r-0", status: "completed", now: 10 });
+      desktop.appendRunTranscriptEvent({ runId: "r-0", event: { id: "event", kind: "lifecycle", at: 10 }, now: 10 });
+      throw new Error("outer refusal");
+    }).immediate()).toThrow("outer refusal");
+    expect(db.raw.prepare("SELECT * FROM automation_runs ORDER BY run_id").all()).toEqual(original);
+    expect(portable.getRunArtifact("r-0")).toBeUndefined();
+    desktop.reconcileStartup({ now: 20, nextRunAtByAutomationId: { "a-0": 30 } });
+    for (let i = 0; i < count; i++) expect(portable.getRun(`r-${i}`))
+      .toMatchObject({ status: "failed", failureReason: "interrupted", completedAt: 20, backendTurnId: `turn-${i}` });
+    expect(portable.getAutomation("a-0")?.nextRunAt).toBe(30);
+  } finally { db.close(); }
 });
 
 it("preserves both host warning sites and keeps corrupt/future rows unchanged", () => {

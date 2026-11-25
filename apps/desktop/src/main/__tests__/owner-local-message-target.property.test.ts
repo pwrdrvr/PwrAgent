@@ -1,5 +1,4 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
@@ -130,22 +129,18 @@ function installTodos(fixture: Fixture): PwrAgentThreadTodoHandler {
   return (fixture.registry as unknown as Internals).threadTodoHandler;
 }
 
-const instanceId = fc.uuid().map((id) => `pwr_${id}`);
-
-/** An owner, its enrolled peers, and how a target names one of the machines. */
-const scenario = fc
-  .tuple(instanceId, fc.uniqueArray(instanceId, { minLength: 1, maxLength: 3 }))
-  .filter(([local, peers]) => !peers.includes(local))
-  .chain(([localInstanceId, peers]) => fc.record({
-    localInstanceId: fc.constant(localInstanceId),
-    peers: fc.constant(peers),
-    named: fc.oneof(
-      fc.constant(undefined),
-      fc.constant(localInstanceId),
-      fc.constant(` ${localInstanceId} `),
-      fc.constantFrom(...peers),
-    ),
-  }));
+const localInstanceId = "pwr_490f7727-674e-43d9-b9ee-be8387f39819";
+const peers = [
+  "pwr_7703791e-24d5-4d2d-bcb4-0580916c124d",
+  "pwr_c555dacf-7385-4bf2-b9f1-8f4f233e9cf1",
+];
+const scenarios = [
+  { caseName: "no owner named", named: undefined },
+  { caseName: "the viewer explicitly names the local owner", named: localInstanceId },
+  { caseName: "the local owner with whitespace", named: ` ${localInstanceId} ` },
+  { caseName: "the first enrolled peer", named: peers[0]! },
+  { caseName: "the second enrolled peer", named: peers[1]! },
+];
 
 /** The oracle: where a send must go, decided only by identity. */
 function expectedRoute(local: string, named: string | undefined): "local" | string {
@@ -163,116 +158,110 @@ function messageTarget(named: string | undefined): ThreadTodoMessageTarget {
 describe("owner-local to-do message targets", () => {
   // Rule: a target naming the owner's own instance is the owner's local
   // thread. Only a different, enrolled instance is a federated send.
-  it("routes a card's send by the destination's owner, never to this instance as a peer", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        await fixture.registry.sendThreadTodoMessage({
-          sourceBackend: "codex", sourceThreadId: "sender", target: messageTarget(named),
-          prompt: "Pick up the shutdown evidence", todo: { id: "todo", title: "Send evidence" },
-        });
-        const route = expectedRoute(localInstanceId, named);
-        expect(fixture.remoteSends).toEqual(route === "local" ? [] : [route]);
-        expect(fixture.submit).toHaveBeenCalledTimes(route === "local" ? 1 : 0);
-        expect(fixture.remoteSends).not.toContain(localInstanceId);
-      })), { numRuns: 40 });
+  it.each(scenarios)("routes a card's send by the destination's owner, never to this instance as a peer ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      await fixture.registry.sendThreadTodoMessage({
+        sourceBackend: "codex", sourceThreadId: "sender", target: messageTarget(named),
+        prompt: "Pick up the shutdown evidence", todo: { id: "todo", title: "Send evidence" },
+      });
+      const route = expectedRoute(localInstanceId, named);
+      expect(fixture.remoteSends).toEqual(route === "local" ? [] : [route]);
+      expect(fixture.submit).toHaveBeenCalledTimes(route === "local" ? 1 : 0);
+      expect(fixture.remoteSends).not.toContain(localInstanceId);
+    });
   });
 
   // The reported path end to end: the viewer's runAction carries the M2
   // thread as an M2-named messageTarget, and the owner runs the card.
-  it("completes a viewer's Send request to a thread the card's owner owns", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        const handler = installTodos(fixture);
-        const { todo } = await handler.add({ backend: "codex", threadId: "sender" }, {
-          title: "Hand off the evidence",
-          action: { type: "start_thread", prompt: "Pick up the shutdown evidence" },
-        });
-        const ran = await getThreadTodoService().runAction(todo.id, { messageTarget: messageTarget(named) });
-        expect(ran).toMatchObject({ id: todo.id, status: "done" });
-        expect(ran.error).toBeUndefined();
-        const route = expectedRoute(localInstanceId, named);
-        expect(fixture.remoteSends).toEqual(route === "local" ? [] : [route]);
-        expect(fixture.submit).toHaveBeenCalledTimes(route === "local" ? 1 : 0);
-      })), { numRuns: 25 });
+  it.each(scenarios)("completes a viewer's Send request to a thread the card's owner owns ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      const handler = installTodos(fixture);
+      const { todo } = await handler.add({ backend: "codex", threadId: "sender" }, {
+        title: "Hand off the evidence",
+        action: { type: "start_thread", prompt: "Pick up the shutdown evidence" },
+      });
+      const ran = await getThreadTodoService().runAction(todo.id, { messageTarget: messageTarget(named) });
+      expect(ran).toMatchObject({ id: todo.id, status: "done" });
+      expect(ran.error).toBeUndefined();
+      const route = expectedRoute(localInstanceId, named);
+      expect(fixture.remoteSends).toEqual(route === "local" ? [] : [route]);
+      expect(fixture.submit).toHaveBeenCalledTimes(route === "local" ? 1 : 0);
+    });
   });
 
-  it("raises a card naming this owner's thread as this owner's own", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        const located = await fixture.registry.locateThreadTodoMessageTarget(
-          { backend: "codex", threadId: "sender" }, messageTarget(named),
-        );
-        const route = expectedRoute(localInstanceId, named);
-        if (route === "local") {
-          expect(located).not.toHaveProperty("instanceId");
-          expect(located).not.toHaveProperty("instanceLabel");
-        } else {
-          expect(located.instanceId).toBe(route);
-        }
-        expect(located).toMatchObject({ backend: "codex", threadId: "target" });
-      })), { numRuns: 25 });
+  it.each(scenarios)("raises a card naming this owner's thread as this owner's own ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      const located = await fixture.registry.locateThreadTodoMessageTarget(
+        { backend: "codex", threadId: "sender" }, messageTarget(named),
+      );
+      const route = expectedRoute(localInstanceId, named);
+      if (route === "local") {
+        expect(located).not.toHaveProperty("instanceId");
+        expect(located).not.toHaveProperty("instanceLabel");
+      } else {
+        expect(located.instanceId).toBe(route);
+      }
+      expect(located).toMatchObject({ backend: "codex", threadId: "target" });
+    });
   });
 
   // Rule: a card raised for a thread named by this instance is not
   // re-addressed to a peer that happens to report the same thread id.
-  it("never re-addresses a card that names this instance to a peer", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        const located = await fixture.registry.locateThreadTodoMessageTarget(
-          { backend: "codex", threadId: "sender" }, { ...messageTarget(named), threadId: "elsewhere" },
-        );
-        const route = expectedRoute(localInstanceId, named);
-        if (route === "local" && named) {
-          expect(located).not.toHaveProperty("instanceId");
-          expect(fixture.remoteReads).toEqual([]);
-        } else if (route === "local") {
-          expect(fixture.remoteReads).toEqual(["discover"]);
-        } else {
-          expect(located.instanceId).toBe(route);
-        }
-      })), { numRuns: 25 });
+  it.each(scenarios)("never re-addresses a card that names this instance to a peer ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      const located = await fixture.registry.locateThreadTodoMessageTarget(
+        { backend: "codex", threadId: "sender" }, { ...messageTarget(named), threadId: "elsewhere" },
+      );
+      const route = expectedRoute(localInstanceId, named);
+      if (route === "local" && named) {
+        expect(located).not.toHaveProperty("instanceId");
+        expect(fixture.remoteReads).toEqual([]);
+      } else if (route === "local") {
+        expect(fixture.remoteReads).toEqual(["discover"]);
+      } else {
+        expect(located.instanceId).toBe(route);
+      }
+    });
   });
 
-  it("points a card naming its own thread by this owner's id at Do it here", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        const sent = fixture.registry.sendThreadTodoMessage({
-          sourceBackend: "codex", sourceThreadId: "sender",
-          target: { ...messageTarget(named), threadId: "sender" },
-          prompt: "Pick up the shutdown evidence", todo: { id: "todo", title: "Send evidence" },
-        });
-        if (expectedRoute(localInstanceId, named) === "local") {
-          // Without an instance the card's own guard says Do it here first;
-          // this layer keeps its own refusal for that case.
-          await expect(sent).rejects.toThrow(named ? /Do it here/ : /another thread/);
-          expect(fixture.remoteSends).toEqual([]);
-        } else {
-          await sent;
-        }
-        expect(fixture.submit).not.toHaveBeenCalled();
-      })), { numRuns: 25 });
+  it.each(scenarios)("points a card naming its own thread by this owner's id at Do it here ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      const sent = fixture.registry.sendThreadTodoMessage({
+        sourceBackend: "codex", sourceThreadId: "sender",
+        target: { ...messageTarget(named), threadId: "sender" },
+        prompt: "Pick up the shutdown evidence", todo: { id: "todo", title: "Send evidence" },
+      });
+      if (expectedRoute(localInstanceId, named) === "local") {
+        // Without an instance the card's own guard says Do it here first;
+        // this layer keeps its own refusal for that case.
+        await expect(sent).rejects.toThrow(named ? /Do it here/ : /another thread/);
+        expect(fixture.remoteSends).toEqual([]);
+      } else {
+        await sent;
+      }
+      expect(fixture.submit).not.toHaveBeenCalled();
+    });
   });
 
   // Rule: naming this instance means this instance only. A thread it does
   // not own is missing here, not discovered on some peer instead.
-  it("never widens a send that names this instance to a peer", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        const route = expectedRoute(localInstanceId, named);
-        const sent = fixture.registry.sendThreadTodoMessage({
-          sourceBackend: "codex", sourceThreadId: "sender",
-          target: { ...messageTarget(named), threadId: "elsewhere" },
-          prompt: "Pick up the shutdown evidence", todo: { id: "todo", title: "Send evidence" },
-        });
-        if (route === "local" && named) {
-          await expect(sent).rejects.toThrow(/not found/i);
-          expect(fixture.remoteSends).toEqual([]);
-        } else {
-          await sent;
-          expect(fixture.remoteSends).toEqual([route === "local" ? "discover" : route]);
-        }
-        expect(fixture.submit).not.toHaveBeenCalled();
-      })), { numRuns: 25 });
+  it.each(scenarios)("never widens a send that names this instance to a peer ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      const route = expectedRoute(localInstanceId, named);
+      const sent = fixture.registry.sendThreadTodoMessage({
+        sourceBackend: "codex", sourceThreadId: "sender",
+        target: { ...messageTarget(named), threadId: "elsewhere" },
+        prompt: "Pick up the shutdown evidence", todo: { id: "todo", title: "Send evidence" },
+      });
+      if (route === "local" && named) {
+        await expect(sent).rejects.toThrow(/not found/i);
+        expect(fixture.remoteSends).toEqual([]);
+      } else {
+        await sent;
+        expect(fixture.remoteSends).toEqual([route === "local" ? "discover" : route]);
+      }
+      expect(fixture.submit).not.toHaveBeenCalled();
+    });
   });
 
   it("steers this owner's own thread on the local route when the agent names this owner", async () => {
@@ -306,65 +295,61 @@ describe("owner-local thread inspection targets", () => {
 
   // Rule: get_thread_status reads this owner's own thread locally when the
   // agent names this owner, and asks only the named peer otherwise.
-  it("reads a thread's status from the instance the agent names", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        const response = await inspect(fixture.registry, {
-          operation: "get_thread_status", context,
-          args: { backend: "codex", threadId: "target", ...(named ? { instanceId: named } : {}) },
-        });
-        const route = expectedRoute(localInstanceId, named);
-        expect(response).toMatchObject({ ok: true, data: { thread: {
-          title: route === "local" ? "M2 destination" : "Peer thread",
-        } } });
-        expect(fixture.remoteReads).toEqual(route === "local" ? [] : [route]);
-      })), { numRuns: 25 });
+  it.each(scenarios)("reads a thread's status from the instance the agent names ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      const response = await inspect(fixture.registry, {
+        operation: "get_thread_status", context,
+        args: { backend: "codex", threadId: "target", ...(named ? { instanceId: named } : {}) },
+      });
+      const route = expectedRoute(localInstanceId, named);
+      expect(response).toMatchObject({ ok: true, data: { thread: {
+        title: route === "local" ? "M2 destination" : "Peer thread",
+      } } });
+      expect(fixture.remoteReads).toEqual(route === "local" ? [] : [route]);
+    });
   });
 
-  it("reports a thread missing here when the agent names this instance", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        const response = await inspect(fixture.registry, {
-          operation: "get_thread_status", context,
-          args: { backend: "codex", threadId: "elsewhere", ...(named ? { instanceId: named } : {}) },
-        });
-        const route = expectedRoute(localInstanceId, named);
-        if (route === "local" && named) {
-          expect(response.ok).toBe(false);
-          expect(fixture.remoteReads).toEqual([]);
-        } else {
-          expect(response).toMatchObject({ ok: true, data: { thread: { title: "Peer thread" } } });
-          expect(fixture.remoteReads).toEqual([route === "local" ? "discover" : route]);
-        }
-      })), { numRuns: 25 });
+  it.each(scenarios)("reports a thread missing here when the agent names this instance ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      const response = await inspect(fixture.registry, {
+        operation: "get_thread_status", context,
+        args: { backend: "codex", threadId: "elsewhere", ...(named ? { instanceId: named } : {}) },
+      });
+      const route = expectedRoute(localInstanceId, named);
+      if (route === "local" && named) {
+        expect(response.ok).toBe(false);
+        expect(fixture.remoteReads).toEqual([]);
+      } else {
+        expect(response).toMatchObject({ ok: true, data: { thread: { title: "Peer thread" } } });
+        expect(fixture.remoteReads).toEqual([route === "local" ? "discover" : route]);
+      }
+    });
   });
 
   // Rule: mutate_thread changes this owner's own thread here. A dry run
   // never reaches federation for a thread this owner holds.
-  it("mutates this owner's own thread locally when the agent names this owner", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        await inspect(fixture.registry, {
-          operation: "mutate_thread", context,
-          args: { backend: "codex", threadId: "target", title: "Renamed", dryRun: true,
-            ...(named ? { instanceId: named } : {}) },
-        });
-        const route = expectedRoute(localInstanceId, named);
-        expect(fixture.remoteReads).toEqual(route === "local" ? [] : [route]);
-      })), { numRuns: 25 });
+  it.each(scenarios)("mutates this owner's own thread locally when the agent names this owner ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      await inspect(fixture.registry, {
+        operation: "mutate_thread", context,
+        args: { backend: "codex", threadId: "target", title: "Renamed", dryRun: true,
+          ...(named ? { instanceId: named } : {}) },
+      });
+      const route = expectedRoute(localInstanceId, named);
+      expect(fixture.remoteReads).toEqual(route === "local" ? [] : [route]);
+    });
   });
 
   // Rule: a search scoped to this instance searches this instance only.
-  it("scopes a search to the instance the agent names", async () => {
-    await fc.assert(fc.asyncProperty(scenario, async ({ localInstanceId, peers, named }) =>
-      withOwner({ localInstanceId, peers }, async (fixture) => {
-        const response = await inspect(fixture.registry, {
-          operation: "search_threads", context,
-          args: { query: "M2 destination", ...(named ? { instanceId: named } : {}) },
-        });
-        expect(response.ok).toBe(true);
-        const route = expectedRoute(localInstanceId, named);
-        expect(fixture.remoteReads).toEqual(!named ? ["discover"] : route === "local" ? [] : [route]);
-      })), { numRuns: 25 });
+  it.each(scenarios)("scopes a search to the instance the agent names ($caseName)", async ({ named }) => {
+    await withOwner({ localInstanceId, peers }, async (fixture) => {
+      const response = await inspect(fixture.registry, {
+        operation: "search_threads", context,
+        args: { query: "M2 destination", ...(named ? { instanceId: named } : {}) },
+      });
+      expect(response.ok).toBe(true);
+      const route = expectedRoute(localInstanceId, named);
+      expect(fixture.remoteReads).toEqual(!named ? ["discover"] : route === "local" ? [] : [route]);
+    });
   });
 });

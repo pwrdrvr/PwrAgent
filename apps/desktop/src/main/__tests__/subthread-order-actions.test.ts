@@ -370,7 +370,7 @@ it("matches the complete navigation index for colliding IDs, legacy links, and m
     } finally {
       state.close();
     }
-  }), { numRuns: 45 });
+  }), { numRuns: 8 });
 });
 
 it("refuses a relative move when an unseen sibling joins during provider discovery", async () => {

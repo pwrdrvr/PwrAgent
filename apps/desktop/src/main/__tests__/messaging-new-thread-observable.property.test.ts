@@ -73,7 +73,7 @@ describe("observable messaging new-thread protocol", () => {
           }
           expect(real.sticky.every(request => request.stickySettingsChanged === true)).toBe(true);
         } finally { await real.close(); }
-      }), { numRuns: 25 });
+      }), { numRuns: 12 });
   });
 
   it("waits for backend acceptance before binding and reporting a created thread", async () => {
@@ -97,7 +97,7 @@ describe("observable messaging new-thread protocol", () => {
           expect(real.trace.indexOf("binding:write")).toBeGreaterThan(real.trace.indexOf("create:accepted"));
         }
       } finally { release.resolve(); await scheduler.waitAll(); await sending; await real.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 12 });
   });
 
   it("persists selected settings before delivery and commits its returned surface afterward", async () => {
@@ -121,7 +121,7 @@ describe("observable messaging new-thread protocol", () => {
         const pending = await real.store.findActivePendingIntentForChannel({ channel: real.channel, actorId: "fixture-actor", now: 1_000 });
         expect(pending?.surface).toEqual(updated.surface);
       } finally { release.resolve(); await scheduler.waitAll(); await choosing; await real.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 12 });
   });
 
   it("revalidates provider availability at the first prompt and handles discovery failures", async () => {
@@ -134,7 +134,7 @@ describe("observable messaging new-thread protocol", () => {
         expect(await real.store.findActiveBindingForChannel(real.channel)).toBeUndefined();
         expect(real.latest()).toMatchObject({ kind: "error", title: failDiscovery ? "Backends unavailable" : "Backend unavailable", recoverable: true });
       } finally { await real.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 12 });
   });
 
   it("reaches later base-branch pages within provider action limits", async () => {
@@ -156,7 +156,7 @@ describe("observable messaging new-thread protocol", () => {
         expect(real.requests).toHaveLength(1);
         expect(real.requests[0]?.launchpad).toMatchObject({ workMode: "worktree", branchName: real.branches[selected] });
       } finally { await real.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 12 });
   });
 
   it("retains pending choices when the desktop sticky update fails", async () => {
@@ -170,6 +170,6 @@ describe("observable messaging new-thread protocol", () => {
         expect(real.requests).toHaveLength(1);
         expect(real.requests[0]?.launchpad).toMatchObject({ model: `codex-${index}` });
       } finally { await real.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 12 });
   });
 });

@@ -22,6 +22,7 @@ import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "re
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   type NavigationDirectorySummary,
+  type NavigationQueryRequest,
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
   type PrSummary,
@@ -14063,12 +14064,20 @@ describe("Composer", () => {
       expect(screen.getByText("Steering now")).toBeInTheDocument();
     });
 
-    it("explains an Interrupt the provider cannot do", async () => {
+    // Every steer × interrupt capability pair. Interrupt is listed exactly
+    // when the provider can cut in; listed but blocked, it carries the reason
+    // Steer gives, since an interrupt is delivered as a steer.
+    it.each([
+      { steerTurn: true, interruptSteerTurn: true },
+      { steerTurn: true, interruptSteerTurn: false },
+      { steerTurn: false, interruptSteerTurn: true },
+      { steerTurn: false, interruptSteerTurn: false },
+    ])("lists Interrupt only for a provider that can cut in (%o)", (capabilities) => {
       const steerTurn = vi.fn();
       render(
         <Composer
           activeTurnId="turn-1"
-          backends={[capableBackend("codex", { steerTurn: true })]}
+          backends={[capableBackend("codex", capabilities)]}
           desktopApi={{ startTurn: vi.fn(), steerTurn }}
           disabled={false}
           skills={[]}
@@ -14081,10 +14090,24 @@ describe("Composer", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: "Send options" }));
 
-      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      const interrupt = screen.queryByRole("menuitem", { name: /^Interrupt/ });
+      if (!capabilities.interruptSteerTurn) {
+        expect(interrupt).not.toBeInTheDocument();
+        expect(screen.queryByText(/can't cut in/)).not.toBeInTheDocument();
+        // Steer and Queue are still offered in their places.
+        expect(screen.getByRole("menuitem", { name: /^Steer/ })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: /^Queue/ })).toBeInTheDocument();
+        return;
+      }
+      expect(interrupt).toBeInTheDocument();
+      if (capabilities.steerTurn) {
+        expect(interrupt).not.toHaveAttribute("aria-disabled");
+        expect(interrupt).toHaveTextContent("Cut off the current response and send now");
+        return;
+      }
       expect(interrupt).toHaveAttribute("aria-disabled", "true");
-      expect(interrupt).toHaveTextContent("codex can't cut in mid-response");
-      fireEvent.click(interrupt);
+      expect(interrupt).toHaveTextContent("can't take messages mid-turn");
+      fireEvent.click(screen.getByRole("menuitem", { name: /^Interrupt/ }));
       expect(steerTurn).not.toHaveBeenCalled();
       // A refused pick keeps the menu open on its explanation.
       expect(screen.getByRole("menu")).toBeInTheDocument();
@@ -14113,6 +14136,73 @@ describe("Composer", () => {
       expect(
         screen.getByRole("menuitem", { name: /^Queue/ }),
       ).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("blames the model, not the provider, when only the model cannot steer", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[{
+            ...capableBackend("codex", { steerTurn: true, interruptSteerTurn: true }),
+            launchpadOptions: {
+              models: [{
+                id: "model-1",
+                label: "Model One",
+                current: true,
+                supportsSteering: false,
+              }],
+            },
+          }]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("codex")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Model One can't take messages mid-turn");
+      expect(screen.queryByText(/can't cut in/)).not.toBeInTheDocument();
+    });
+
+    it("points a peer thread to its owner's window even when this instance cannot interrupt", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          // The local summary lacks Interrupt; the peer that owns the
+          // thread may have it, and this window cannot tell.
+          backends={[capableBackend("claude", { steerTurn: true })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            ...runningThread("claude"),
+            federation: {
+              ref: {
+                backend: "claude",
+                target: { scope: "remote", instanceId: "peer-1" },
+                threadId: "thread-1",
+              },
+              instanceLabel: "Studio",
+            },
+          }}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Open this instance's window to interrupt");
     });
 
     it("dims Interrupt on a pinned peer thread whose owner it cannot see", () => {
@@ -25869,6 +25959,105 @@ describe("Composer", () => {
       });
     });
   });
+
+  it.each(["local", "cached peer", "explicit local", "off-page peer"] as const)(
+    "hydrates an off-page pasted Antigravity link and uses its title in the queued preview (%s)",
+    async (location) => {
+      const thread: NavigationThreadSummary = {
+        id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false },
+      };
+      const instanceId = "peer-laptop";
+      const localInstanceId = "local-viewer";
+      const cachedPeer = location === "cached peer";
+      const id = "519fbd00-aa00-7100-8100-019fbbbead52";
+      const target: NavigationThreadSummary = {
+        ...thread, id, source: "acp:antigravity", title: "Review the launch checklist",
+        ...(location !== "local" ? {
+          federation: {
+            ref: buildFederatedThreadRef({ backend: "acp:antigravity", instanceId, threadId: id }),
+            instanceLabel: "Laptop", peerStatus: "connected", capabilities: [],
+          },
+        } : {}),
+      };
+      const bare = `pwragent://thread/${id}?backend=acp:antigravity`;
+      const href = location === "explicit local" ? `${bare}&instanceId=${localInstanceId}` : bare;
+      const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [target] }));
+      const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
+        backend: "codex" as const, threadId: thread.id, turnId: "sent", disposition: "queued" as const,
+        queueEntryId: "new-queued-entry",
+      }));
+      const desktopApi = {
+        onAgentEvent: () => () => undefined,
+        getNavigationQueryPage: vi.fn(async (request: NavigationQueryRequest) => {
+          const owner = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined;
+          const query = owner && request.query.kind === "exact"
+            ? { ...request.query, identities: request.query.identities.map((identity) => ({ ...identity, ownerInstanceId: owner })) }
+            : request.query;
+          return navigationQueryFixture({ ...request, query }, {
+            threads: location === "local" || owner ? [thread, target] : [thread],
+          });
+        }),
+        jumpSearchRemoteThreads,
+        startTurn,
+      } satisfies Pick<DesktopApi, "onAgentEvent" | "getNavigationQueryPage" | "jumpSearchRemoteThreads" | "startTurn">;
+      vi.stubGlobal("pwragent", desktopApi);
+      const draftStore = createComposerDraftStore();
+      const scope = buildThreadComposerScopeKey("codex", thread.id);
+      draftStore.setQueuedTurns(scope, [{
+        id: "queued", text: `[${id}](${href}) - check this`,
+        imageAttachments: [], fileAttachments: [],
+      }]);
+      try {
+        const view = (title: string) => (
+          <ThreadLinkProvider localInstanceId={localInstanceId} onShowThread={() => undefined}
+            threads={cachedPeer || location === "explicit local" ? [thread, { ...target, title }] : [thread]}>
+            <Composer activeTurnId="active" desktopApi={desktopApi} disabled={false}
+              draftStore={draftStore} skills={[]} thread={thread} />
+          </ThreadLinkProvider>
+        );
+        const { rerender } = render(view(target.title));
+        const input = screen.getByRole("textbox", { name: "Reply" });
+        const paste = (text: string) => fireEvent.paste(input, {
+          clipboardData: {
+            files: [], items: [], types: ["text/plain"],
+            getData: (type: string) => type === "text/plain" ? text : "",
+          },
+        });
+        paste(href);
+        expect(input.querySelector("[data-mention-kind=thread]")).toHaveAttribute("data-skill-path", href);
+        const hasTitle = location === "local" || cachedPeer;
+        let title = hasTitle ? target.title : id;
+        expect(await within(input).findByText(`#${title}`)).toBeInTheDocument();
+        expect(screen.getByLabelText("Queued message").querySelector(".composer__queued-text"))
+          .toHaveTextContent(`#${title} - check this`);
+        if (cachedPeer) {
+          title = "Renamed on the owning peer";
+          rerender(view(title));
+          expect(await within(input).findByText(`#${title}`)).toBeInTheDocument();
+          expect(screen.getByLabelText("Queued message")).toHaveTextContent(title);
+        }
+        paste(`- See [Fix \`lint\` crash](${href})
+- Keep \`${href}\` literal.`);
+        expect(input.querySelectorAll("[data-mention-kind=thread]")).toHaveLength(2);
+        expect(input.querySelector("li")).toHaveTextContent(/^See #/);
+        expect(input).toHaveTextContent(href);
+        expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+        await clickButton("Queue");
+        const expectedHref = cachedPeer ? `${href}&instanceId=${instanceId}` : href;
+        await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+          input: [{ type: "text", text: expect.stringContaining(`[${title}](${expectedHref})`) }],
+        })));
+        expect(startTurn.mock.calls[0]?.[0]?.input[0]).toMatchObject({
+          type: "text",
+          text: expect.stringContaining(`See [${hasTitle ? title : "Fix \`lint\` crash"}](${expectedHref})`),
+        });
+        expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("uses a live thread name when pasting an in-progress thread id", async () => {
     const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";

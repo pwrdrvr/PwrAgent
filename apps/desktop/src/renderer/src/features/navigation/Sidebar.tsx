@@ -7,6 +7,8 @@ import {
   type ThreadWorktreeAvailability,
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
+import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
+import { stackMembershipForPr } from "../stacks/stack-pr-data";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { PINNED_GROUP_RESOURCE_ID, lensHasPinnedGroup } from "../../lib/navigation-window-demand";
@@ -83,6 +85,7 @@ import {
   isFederationViewerWindow,
   readRendererFederationLabel,
   readRendererFederationTarget,
+  resolveThreadOwnerFederationTarget,
 } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { countArchiveGroup } from "./archive-group-counts";
@@ -845,6 +848,11 @@ function SidebarContent(props: SidebarProps) {
     : undefined;
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
+  const copyableThreadUrl = (thread: NavigationThreadSummary): string => buildThreadUrl({
+    backend: thread.source,
+    threadId: thread.id,
+    instanceId: resolveThreadOwnerFederationTarget(thread, federationTarget?.instanceId)?.instanceId,
+  });
   const openThreadMaintenance = useContext(ThreadMaintenanceLauncherContext);
   const dependencyIndicators = useThreadDependencyIndicatorsContext();
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -994,7 +1002,7 @@ function SidebarContent(props: SidebarProps) {
   >();
   const pullRequestMerge = usePullRequestMergeService();
   const [mergingPullRequest, setMergingPullRequest] = useState<
-    { thread: ThreadPullRequestMergeTarget; pr: PrSummary } | undefined
+    { thread: ThreadPullRequestMergeTarget; pr: PrSummary; stack?: CompactStackMembership } | undefined
   >();
   const [renamingRow, setRenamingRow] = useState<RenamingThreadRow>();
   // Another lens unmounts the field without a commit; forget the edit, or it
@@ -2851,8 +2859,7 @@ function SidebarContent(props: SidebarProps) {
         }
         break;
       case "threads.copy_link":
-        void copyText(uniqueContextMenuValues(threads.map((candidate) =>
-          buildThreadUrl({ backend: candidate.source, threadId: candidate.id }))).join("\n"));
+        void copyText(uniqueContextMenuValues(threads.map(copyableThreadUrl)).join("\n"));
         break;
     }
     if (handled) event.preventDefault();
@@ -3419,12 +3426,7 @@ function SidebarContent(props: SidebarProps) {
       bulkCanMarkRead,
   );
   const bulkThreadLinks = uniqueContextMenuValues(
-    contextMenuThreads.map((thread) =>
-      buildThreadUrl({
-        backend: thread.source,
-        threadId: thread.id,
-      }),
-    ),
+    contextMenuThreads.map(copyableThreadUrl),
   );
   const bulkThreadIds = uniqueContextMenuValues(
     contextMenuThreads.map((thread) => thread.id),
@@ -4627,7 +4629,10 @@ function SidebarContent(props: SidebarProps) {
                               role="menuitem"
                               type="button"
                               onClick={() => {
-                                setMergingPullRequest({ thread: contextMenuMergeTarget, pr: contextMenuPullRequest });
+                                const stack = stackMembershipForPr(contextMenu.thread, contextMenuPullRequest);
+                                setMergingPullRequest({
+                                  thread: contextMenuMergeTarget, pr: contextMenuPullRequest, ...(stack ? { stack } : {}),
+                                });
                                 setContextMenu(undefined);
                               }}
                             >
@@ -4673,12 +4678,7 @@ function SidebarContent(props: SidebarProps) {
                         role="menuitem"
                         type="button"
                         onClick={() =>
-                          copyFromContextMenu(
-                            buildThreadUrl({
-                              backend: contextMenu.thread.source,
-                              threadId: contextMenu.thread.id,
-                            }),
-                          )
+                          copyFromContextMenu(copyableThreadUrl(contextMenu.thread))
                         }
                         aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.copy_link")}
                       >
@@ -4744,6 +4744,7 @@ function SidebarContent(props: SidebarProps) {
           <MergePullRequestDialog
             pr={mergingPullRequest.pr}
             thread={mergingPullRequest.thread}
+            {...(mergingPullRequest.stack ? { stack: mergingPullRequest.stack } : {})}
             service={pullRequestMerge}
             returnFocus={contextMenuOpenerRef}
             onClose={() => setMergingPullRequest(undefined)}

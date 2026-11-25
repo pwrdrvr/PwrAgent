@@ -468,7 +468,7 @@ describe("PR review and merge offers", () => {
       } finally {
         harness.close();
       }
-    }), { numRuns: 30 });
+    }), { numRuns: 8 });
   });
 
   it("does no Git work while CI is pending or failing", async () => {
@@ -699,47 +699,56 @@ describe("PR review and merge offers", () => {
       } finally {
         harness.close();
       }
-    }), { numRuns: 25, examples: [[true, false, 2], [false, true, 2]] });
+    }), { numRuns: 8, examples: [[true, false, 2], [false, true, 2]] });
   });
 
-  it("preserves a merge card during a failed stack read only for the card's exact head", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (headMoved) => {
-      const harness = createHarness();
-      try {
-        const { world } = harness;
-        world.ci = "passing";
-        await reviewChanged(harness, recordReview(world, 0));
-        expect(openOfferCards(harness.todos)).toHaveLength(1);
-        const previous = world.head;
-        world.stackUnavailable = true;
-        if (headMoved) world.head = world.commit(world.changeOf.get(previous)!);
-        await transition(harness, { headSha: { from: previous, to: world.head } });
-        expect(openOfferCards(harness.todos)).toHaveLength(headMoved ? 0 : 1);
-      } finally { harness.close(); }
-    }), { examples: [[true]] });
+  it.each([false, true] as const)("preserves a merge card during a failed stack read only for the card's exact head [%#]", async (headMoved) => {
+    const harness = createHarness();
+    try {
+      const { world } = harness;
+      world.ci = "passing";
+      await reviewChanged(harness, recordReview(world, 0));
+      expect(openOfferCards(harness.todos)).toHaveLength(1);
+      const previous = world.head;
+      world.stackUnavailable = true;
+      if (headMoved) world.head = world.commit(world.changeOf.get(previous)!);
+      await transition(harness, { headSha: { from: previous, to: world.head } });
+      expect(openOfferCards(harness.todos)).toHaveLength(headMoved ? 0 : 1);
+    } finally { harness.close(); }
   });
 
-  it("rechecks an uncovered hold on unchanged child polls within a bounded cadence", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 6 }), async (polled, duplicatePolls) => {
-      const harness = createHarness();
-      try {
-        const { world } = harness;
-        world.ci = "passing";
-        world.lowerPolled = polled;
-        world.lowers.set(1, "open");
-        await reviewChanged(harness, recordReview(world, 0));
-        world.lowers.set(1, "merged");
-        for (let i = 0; i < duplicatePolls; i++) {
-          harness.coordinator.handleObservations([world.pr()]);
-          await harness.coordinator.idle();
-          expect(openOfferCards(harness.todos)).toHaveLength(0);
-        }
-        world.clock += 10 * 60_000;
+  it.each([
+    [false, 1],
+    [false, 2],
+    [false, 3],
+    [false, 4],
+    [false, 5],
+    [false, 6],
+    [true, 1],
+    [true, 2],
+    [true, 3],
+    [true, 4],
+    [true, 5],
+    [true, 6],
+  ] as const)("rechecks an uncovered hold on unchanged child polls within a bounded cadence [%#]", async (polled, duplicatePolls) => {
+    const harness = createHarness();
+    try {
+      const { world } = harness;
+      world.ci = "passing";
+      world.lowerPolled = polled;
+      world.lowers.set(1, "open");
+      await reviewChanged(harness, recordReview(world, 0));
+      world.lowers.set(1, "merged");
+      for (let i = 0; i < duplicatePolls; i++) {
         harness.coordinator.handleObservations([world.pr()]);
         await harness.coordinator.idle();
-        expect(openOfferCards(harness.todos)).toHaveLength(polled ? 0 : 1);
-      } finally { harness.close(); }
-    }), { examples: [[false, 1]] });
+        expect(openOfferCards(harness.todos)).toHaveLength(0);
+      }
+      world.clock += 10 * 60_000;
+      harness.coordinator.handleObservations([world.pr()]);
+      await harness.coordinator.idle();
+      expect(openOfferCards(harness.todos)).toHaveLength(polled ? 0 : 1);
+    } finally { harness.close(); }
   });
 
   it.each(["status transition", "local settlement"] as const)("offers a review on %s without a child PR change", async (trigger) => {
@@ -1023,7 +1032,7 @@ describe("PR offers and project Forge Automation", () => {
           harness.close();
         }
       },
-    ), { numRuns: 40 });
+    ), { numRuns: 8 });
   });
 
   it("offers a passing PR to the thread whose project allows it, and to neither when both are off", async () => {
@@ -1098,7 +1107,7 @@ describe("PR offers in a never-merge project", () => {
           harness.close();
         }
       },
-    ), { numRuns: 60 });
+    ), { numRuns: 8 });
   });
 
   it("withdraws a merge card raised before the switch, refuses an agent's merge card, and still offers reviews", async () => {

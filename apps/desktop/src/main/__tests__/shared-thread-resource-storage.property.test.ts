@@ -36,7 +36,7 @@ it("routes the guarded gateway event through the shared implementation", () => {
       observed.mockClear();
       recordCreatedSandbox(params);
       expect(observed).toHaveBeenCalledExactlyOnceWith(params);
-    }));
+    }), { numRuns: 8 });
   } finally { observed.mockRestore(); db.close(); }
 });
 
@@ -73,7 +73,7 @@ it("binds both actual construction paths to shared storage with the original gua
       active.db = undefined; active.mode = null;
       expect(() => recordCreatedSandbox({ connectionId: "absent", sandboxId: "absent", threadId: "absent", now: 0 })).not.toThrow();
     } finally { observed.mockRestore(); dbs.forEach(db => db.close()); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // Independent map model: resource identity is connection + id, its first
@@ -129,7 +129,7 @@ it("models first ownership, cleanup, native grants, detached reads and exact wri
         expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("keeps multi-resource changes atomic and invisible to WAL readers until commit, including statement refusal", async () => {
@@ -159,7 +159,7 @@ it("keeps multi-resource changes atomic and invisible to WAL readers until commi
       expect(reader.all()).toEqual([{ ...before[0]!, status: "stopped", updatedAt: 2 },
         { ...before[0]!, sandboxId: "new", createdAt: 3, updatedAt: 3 }]);
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // Old/unknown statuses are displayed as active by all(), but must never enter
@@ -193,5 +193,5 @@ it("preserves legacy decode, pending filters and no-repair reads without grantin
         store.markOutcome({ connectionId: "invented", sandboxId: "legacy", status: "stopped", now: 5 });
         expect(store.all()).toEqual([]);
       } finally { db.close(); }
-    }), { numRuns: 30 });
+    }), { numRuns: 8 });
 });

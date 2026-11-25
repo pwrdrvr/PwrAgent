@@ -10,7 +10,7 @@ import {
   type OperatorFocusSnapshot,
   type OperatorFocusView,
 } from "@pwragent/shared/contracts/star-map-tools";
-import type { NativeVoiceApi } from "../../../../shared/native-voice";
+import type { NativeVoiceApi, NativeVoiceStopCause } from "../../../../shared/native-voice";
 import { CloseIcon, CopyIcon, MicIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -57,10 +57,15 @@ let pendingOpen: Promise<void> | undefined;
  * voice is left to its own controls: the shortcut must not silently end a
  * conversation the operator started somewhere else.
  */
-export function toggleDirectorVoice(api: NativeVoiceApi, controller: NativeVoiceController): Promise<void> {
+export function toggleDirectorVoice(
+  api: NativeVoiceApi,
+  controller: NativeVoiceController,
+  /** The control used, logged if this ends the session. */
+  cause?: NativeVoiceStopCause,
+): Promise<void> {
   const view = controller.getView();
   if (isVoiceActive(view)) {
-    return view.mode === "director" && view.status !== "stopping" ? controller.stop() : Promise.resolve();
+    return view.mode === "director" && view.status !== "stopping" ? controller.stop(cause) : Promise.resolve();
   }
   if (pendingOpen) return pendingOpen;
   pendingOpen = (async () => {
@@ -126,7 +131,7 @@ export function DirectorVoiceComposerToggle({ api, hint }: { api: NativeVoiceApi
         ? "Voice is on in a thread. End it to start director voice."
         : live ? "End director voice" : hint}
       onClick={() => {
-        if (!blocked) void toggleDirectorVoice(api, controller);
+        if (!blocked) void toggleDirectorVoice(api, controller, "composer-mic");
       }}
     >
       <MicIcon size={15} aria-hidden="true" />
@@ -154,7 +159,7 @@ export function DirectorVoiceButton({ api }: { api: NativeVoiceApi }) {
         onBlur={tooltip.hide}
         onClick={() => {
           tooltip.hide();
-          if (!elsewhere) void toggleDirectorVoice(api, controller);
+          if (!elsewhere) void toggleDirectorVoice(api, controller, "masthead-mic");
         }}
         onFocus={(event) => tooltip.show(event.currentTarget, content)}
         onMouseEnter={(event) => tooltip.show(event.currentTarget, content)}
@@ -174,7 +179,7 @@ export function useDirectorVoiceShortcut(api: NativeVoiceApi | undefined): void 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.repeat || !isDirectorVoiceShortcut(event)) return;
       event.preventDefault();
-      void toggleDirectorVoice(api, getWindowNativeVoiceController(api));
+      void toggleDirectorVoice(api, getWindowNativeVoiceController(api), "shortcut");
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -462,10 +467,10 @@ export function DirectorVoicePanel(props: DirectorVoicePanelProps) {
           return;
         }
         closing.current = true;
-        if (view.status !== "stopping") void controller.stop();
+        if (view.status !== "stopping") void controller.stop("close-button");
       }}
       onEnd={() => {
-        if (view.status !== "stopping") void controller.stop();
+        if (view.status !== "stopping") void controller.stop("end-button");
       }}
       threadId={shown.view.threadId}
       view={shown.endedAt === undefined ? shown.view : { ...shown.view, status: "idle", muted: false }}

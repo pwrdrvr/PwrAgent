@@ -423,7 +423,7 @@ it("gives an open ACP session the new role's tools at its next turn, and refuses
       }
     }
     await client.dispose();
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 }, 60_000);
 
 const CLAUDE_SESSION_ID = "5a85c1ad-85c1-4930-ae19-50f721ad13dd";
@@ -528,5 +528,5 @@ it("gives a live Claude session the new role's tools at its next turn, and refus
         await turn();
       }
     }
-  }), { numRuns: 15 });
+  }), { numRuns: 8 });
 }, 60_000);

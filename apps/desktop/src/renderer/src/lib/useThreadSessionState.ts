@@ -3990,6 +3990,11 @@ function messageEchoesOptimisticEntry(
   if (sentTurnId && message.turn?.id && message.turn.id !== sentTurnId) {
     return false;
   }
+  // A bound send opened its turn, and a steer only joins one, even when the
+  // operator steers with the prompt's own words.
+  if (sentTurnId && isSteeredMessage(message)) {
+    return false;
+  }
   return (
     messageTextMatchesEntry(message, entry)
     || (message.role === entry.role && messageEchoesSentTurn(message, entry))
@@ -4033,11 +4038,26 @@ function readSentTurnId(entry: AppServerThreadMessageEntry): string | undefined 
 }
 
 /**
+ * A user message the owner accepted into a turn that was already running.
+ * Renderer-local: copied from the live item's `steered` flag onto the
+ * owner's copy so echo matching can tell it from the message that opened
+ * the turn.
+ */
+type SteeredMessageMarker = { steered?: true };
+
+function isSteeredMessage(message: AppServerThreadMessage): boolean {
+  return (message as AppServerThreadMessage & SteeredMessageMarker).steered === true;
+}
+
+/**
  * Text is not the identity of a sent message. The send path may rewrite it
  * before the owner records it: a federation viewer names itself on every bare
  * thread link (`qualifyThreadLinks`). The turn the send started survives
- * that, and only the sent message opens it. A steer is never bound, so a
- * later user message in the same turn cannot claim the pending copy.
+ * that, and only the sent message opens it. A steer is never bound, so its
+ * own pending copy cannot claim a later message. A steered owner copy is in
+ * the sent turn too, but it did not open it, so it cannot claim the send's
+ * pending copy either: ACP backends publish no live item for the prompt, so
+ * that copy is still waiting when the first steer lands.
  */
 function messageEchoesSentTurn(
   message: AppServerThreadMessage & { turn?: AppServerThreadTurnMetadata },
@@ -4049,6 +4069,7 @@ function messageEchoesSentTurn(
     && message.role === "user"
     && message.id !== entry.id
     && !message.id.startsWith("optimistic-")
+    && !isSteeredMessage(message)
     && message.turn?.id === sentTurnId
   );
 }
@@ -4679,6 +4700,7 @@ function userMessageEntryFromItem(params: {
     ...(content.parts ? { parts: content.parts } : {}),
     ...(origin ? { origin } : {}),
     ...(turn ? { turn } : {}),
+    ...(record.steered === true ? { steered: true } satisfies SteeredMessageMarker : {}),
     createdAt:
       normalizeNotificationTimestamp(record.createdAt) ??
       normalizeNotificationTimestamp(record.created_at) ??

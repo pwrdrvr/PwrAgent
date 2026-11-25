@@ -37,6 +37,7 @@ const VARIANTS: Variants = {
   mergeState: ["mergeable", "conflicting"],
   mergeQueue: [undefined, { kind: "merge_queue", state: "removed", removedAt: 1_700_000_100_000 }],
   allowedMergeMethods: [undefined, ["squash"]],
+  githubStack: [undefined, { number: 4402, position: 2, size: 2 }],
   headSha: ["9f2c41e", "1b7d03a"],
   failedCheckUrl: { notCompared: "it changes only with the checks or the head, which are compared" },
   commitShas: [undefined, ["9f2c41e"]],

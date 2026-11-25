@@ -55,6 +55,7 @@ import {
   reviewWorkspacePullRequests,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import { resolveComposerThreadDestinations } from "./composer-thread-references";
 import { contextWindowMoonFace } from "./context-window-moon";
 import { useContextMoonStyle } from "../../lib/context-moon-preferences";
 import {
@@ -85,6 +86,7 @@ import {
 } from "./launchpad-composer-scope";
 import {
   QueuedMessageInspector,
+  QueuedThreadReferencePreview,
   QueuedRowGrip,
   QueuedRowIconButton,
   QueuedRowPausedLabel,
@@ -292,10 +294,7 @@ import {
   usePullRequestLinks,
 } from "../../lib/pull-request-links";
 import {
-  resolveThreadHref,
-  resolveThreadIdText,
   useThreadLinks,
-  type ResolvedThreadLink,
 } from "../../lib/thread-links";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -8651,14 +8650,15 @@ function useComposerController(props: ComposerProps) {
     );
     const build = (
       resolvedInspection: ComposerReferenceInspection,
+      resolvedText: string,
     ): ComposerTurnPayload => {
-      const turnSkills = listMentionedSkills(textDraft, props.skills).filter(({ name }) => !hiddenSkills.has(name));
+      const turnSkills = listMentionedSkills(resolvedText, props.skills).filter(({ name }) => !hiddenSkills.has(name));
       // File-reference pills ride the outgoing text as `[@label](~/path)`
       // markdown appended after the typed draft — part of BOTH the display
       // text and the text input item, so the agent and the transcript see
       // the same message.
       const displayText = appendFileReferenceMarkdown(
-        hydrateSkillLabelsWithMarkdown(textDraft.trim(), turnSkills),
+        hydrateSkillLabelsWithMarkdown(resolvedText.trim(), turnSkills),
         fileRefs,
       );
       const imageParts = attachments.map((attachment, index) => ({
@@ -8682,7 +8682,11 @@ function useComposerController(props: ComposerProps) {
 
       return { displayText, imageParts, input };
     };
-    return isPromiseLike(inspection) ? inspection.then(build) : build(inspection);
+    const resolvedText = resolveComposerThreadDestinations(textDraft, threadLinks);
+    if (isPromiseLike(inspection) || isPromiseLike(resolvedText)) {
+      return Promise.all([inspection, resolvedText]).then(([files, text]) => build(files, text));
+    }
+    return build(inspection, resolvedText);
   };
 
   const buildQueuedTurnPayload = (
@@ -10880,13 +10884,6 @@ function useComposerController(props: ComposerProps) {
     setActiveDirectoryRefIndex(0);
   };
 
-  const applyThreadReference = (thread: ResolvedThreadLink): void => {
-    if (!inputRef.current) {
-      return;
-    }
-    inputRef.current.insertMentionToken(createComposerThreadToken(thread, 0));
-  };
-
   const applyHashReference = (
     createToken: (index: number) => ComposerSkillToken,
   ): void => {
@@ -11292,15 +11289,6 @@ function useComposerController(props: ComposerProps) {
     const pastedText = typeof event.clipboardData.getData === "function"
       ? event.clipboardData.getData("text/plain").trim()
       : "";
-    const pastedThread =
-      resolveThreadHref(pastedText, threadLinks)
-      ?? resolveThreadIdText(pastedText, threadLinks);
-    if (pastedThread) {
-      event.preventDefault();
-      setSendError(undefined);
-      applyThreadReference(pastedThread);
-      return;
-    }
     if (mayContainLinearPastedImages(pastedText)) {
       // The text pastes as usual; its images follow once they download.
       void attachLinearPastedImages(pastedText);
@@ -12060,6 +12048,7 @@ function useComposerController(props: ComposerProps) {
     turnSendActionsVisible,
     turnBackendLabel,
     steerUnavailableReason,
+    interruptOffered,
     interruptUnavailableReason,
     pendingSteerReason,
     launchpadWorkspaceOptions,
@@ -12589,8 +12578,12 @@ function useComposerController(props: ComposerProps) {
       submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
     const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
     // Mid-turn the send menu also names how this message can meet the running
-    // turn. Steer and Interrupt stay listed where the provider or model cannot
-    // do them, dimmed with the reason, so the menu explains the gap.
+    // turn. Steer stays listed where the provider or model cannot do it,
+    // dimmed with the reason, so the menu explains the gap. Interrupt is
+    // listed only for a provider that can cut in at all; where it can but
+    // not right now, it is dimmed with the reason instead. A peer's thread
+    // keeps it: this window cannot see that owner's capabilities, so it
+    // points to the owner's window rather than ruling Interrupt out.
     const turnSendActionsVisible =
       submitButtonLabel === "Queue"
       && Boolean(activeTurnId)
@@ -12605,11 +12598,13 @@ function useComposerController(props: ComposerProps) {
       : backend?.capabilities.steerTurn
         ? `${selectedModelOption?.label ?? selectedModelOption?.id ?? "This model"} can't take messages mid-turn`
         : `${turnBackendLabel} can't take messages mid-turn`;
-    const interruptUnavailableReason = supportsInterruptSteer
-      ? undefined
-      : !backendsDescribeThreadOwner && supportsSteering
-        ? "Open this instance's window to interrupt"
-        : `${turnBackendLabel} can't cut in mid-response`;
+    const interruptOffered = !backendsDescribeThreadOwner
+      || backend?.capabilities.interruptSteerTurn === true;
+    // Interrupt rides the steer path, so whatever blocks Steer blocks it too.
+    const interruptUnavailableReason = steerUnavailableReason
+      ?? (backendsDescribeThreadOwner
+        ? undefined
+        : "Open this instance's window to interrupt");
     // One steer at a time: a second would be dropped while the first waits.
     const pendingSteerReason = pendingSteer
       ? "Another message is already steering in"
@@ -13662,6 +13657,7 @@ function useComposerController(props: ComposerProps) {
       turnSendActionsVisible,
       turnBackendLabel,
       steerUnavailableReason,
+      interruptOffered,
       interruptUnavailableReason,
       pendingSteerReason,
       launchpadWorkspaceOptions,
@@ -13827,7 +13823,7 @@ function useComposerController(props: ComposerProps) {
                     : "Pending steer"}
             </span>
             <span className="composer__queued-text">
-              {formatDraftPreview(pendingSteer)}
+              <QueuedThreadReferencePreview text={formatDraftPreview(pendingSteer)} />
             </span>
           </div>
           <QueuedImageAttachments
@@ -14275,7 +14271,7 @@ function useComposerController(props: ComposerProps) {
                   queued.title ? "" : "composer__queued-text--raw",
                 ].filter(Boolean).join(" ")}
               >
-                {queuedTitle}
+                {queued.title ?? <QueuedThreadReferencePreview text={queuedTitle} />}
               </span>
             </QueuedMessageInspector>
           </div>
@@ -16792,19 +16788,21 @@ function useComposerController(props: ComposerProps) {
                         void submitTurn("steer", { restoreComposerFocus: true });
                       }}
                     />
-                    <ComposerSendMenuItem
-                      description={
-                        interruptUnavailableReason
-                        ?? pendingSteerReason
-                        ?? "Cut off the current response and send now"
-                      }
-                      disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
-                      label="Interrupt"
-                      onSelect={() => {
-                        setScheduleMenuOpen(false);
-                        void submitTurn("interrupt", { restoreComposerFocus: true });
-                      }}
-                    />
+                    {interruptOffered ? (
+                      <ComposerSendMenuItem
+                        description={
+                          interruptUnavailableReason
+                          ?? pendingSteerReason
+                          ?? "Cut off the current response and send now"
+                        }
+                        disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
+                        label="Interrupt"
+                        onSelect={() => {
+                          setScheduleMenuOpen(false);
+                          void submitTurn("interrupt", { restoreComposerFocus: true });
+                        }}
+                      />
+                    ) : null}
                     <div
                       className="composer__schedule-menu-separator"
                       role="separator"

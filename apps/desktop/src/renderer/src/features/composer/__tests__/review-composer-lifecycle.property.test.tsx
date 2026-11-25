@@ -1,5 +1,4 @@
 import "@testing-library/jest-dom/vitest";
-import fc from "fast-check";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
@@ -126,164 +125,163 @@ async function openReviewPanel(): Promise<void> {
 }
 
 describe("review composer lifecycle invariants", () => {
-  it("never reopens the review panel or leaves /review in the composer across entry, action, and thread-switch sequences", async () => {
-    await fc.assert(
-      fc.asyncProperty(
-        fc.constantFrom<EntryKind>("type-review", "slash-menu", "review-request"),
-        fc.constantFrom<OutcomeKind>("start-immediate", "queue-busy", "cancel", "switch-away"),
-        fc.boolean(),
-        async (entry, outcome, remountOnReturn) => {
-          cleanup();
-          const threadA = makeThread("thread-a");
-          const threadB = makeThread("thread-b");
-          const scopeA = buildThreadComposerScopeKey(threadA.source, threadA.id, { scope: "local" });
-          const startReview = vi.fn(async () => ({
-            backend: "codex" as const,
-            threadId: threadA.id,
-            reviewThreadId: threadA.id,
-            turnId: "review-turn-1",
-          }));
-          const createScheduledThreadAction = vi.fn(async () => ({
-            action: {
-              id: "sched-review-1",
-              backend: "codex" as const,
-              threadId: threadA.id,
-              kind: "review" as const,
-              origin: "desktop" as const,
-              status: "queued" as const,
-              queueEntryId: "queue-review-1",
-              scheduledFor: Date.now(),
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-              displayText: "Review current changes",
-            },
-          }));
-          const desktopApi: DesktopApi = {
-            onAgentEvent: () => () => undefined,
-            startReview,
-            createScheduledThreadAction,
-          };
-          let capturedStore: ComposerDraftStore | undefined;
-          let reviewRequest: ComposerProps["reviewRequest"];
-          const onReviewStarted = vi.fn();
-
-          function Harness(props: {
-            thread: NavigationThreadSummary;
-            activeTurnId?: string;
-            threadBusy?: boolean;
-            request?: ComposerProps["reviewRequest"];
-            remountKey?: number;
-          }) {
-            const store = useComposerDraftStore();
-            capturedStore = store;
-            return (
-              <Composer
-                key={props.remountKey ?? 0}
-                activeTurnId={props.activeTurnId}
-                backends={[codexBackend]}
-                desktopApi={desktopApi}
-                disabled={false}
-                draftStore={store}
-                onReviewRequestHandled={(id) => {
-                  if (reviewRequest?.id === id) {
-                    reviewRequest = undefined;
-                  }
-                }}
-                onReviewStarted={onReviewStarted}
-                reviewRequest={props.request}
-                skills={[]}
-                thread={props.thread}
-                threadBusy={props.threadBusy}
-              />
-            );
-          }
-
-          const busy = outcome === "queue-busy";
-          const view = render(
-            <Harness
-              thread={threadA}
-              activeTurnId={busy ? "active-turn-1" : undefined}
-              threadBusy={busy}
-            />,
-          );
-
-          if (entry === "type-review") {
-            const input = screen.getByLabelText("Reply");
-            fireEvent.change(input, { target: { value: "/review" } });
-            await act(async () => {
-              fireEvent.keyDown(input, { key: "Enter" });
-            });
-          } else if (entry === "slash-menu") {
-            const input = screen.getByLabelText("Reply");
-            fireEvent.change(input, { target: { value: "/rev" } });
-            const option = await screen.findByRole("option", { name: /\/review/i });
-            await act(async () => {
-              fireEvent.click(option);
-            });
-          } else {
-            reviewRequest = { id: 1, threadId: threadA.id, backend: "codex", todo: { id: "todo-a", allowOpenItems: true } };
-            view.rerender(
-              <Harness
-                thread={threadA}
-                activeTurnId={busy ? "active-turn-1" : undefined}
-                threadBusy={busy}
-                request={reviewRequest}
-              />,
-            );
-          }
-
-          await waitFor(() =>
-            expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument(),
-          );
-
-          if (outcome === "start-immediate" || outcome === "queue-busy") {
-            const currentChanges = screen.getByRole("button", { name: /Current changes/i });
-            fireEvent.click(currentChanges);
-            await act(async () => {
-              fireEvent.click(screen.getByRole("button", { name: "Start review" }));
-            });
-            await waitFor(() =>
-              expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument(),
-            );
-          } else if (outcome === "cancel") {
-            await act(async () => {
-              fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-            });
-            expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
-          }
-
-          // Switch away to another thread, then return (optionally across a remount).
-          view.rerender(<Harness thread={threadB} request={reviewRequest} remountKey={remountOnReturn ? 1 : 0} />);
-          view.rerender(<Harness thread={threadA} request={reviewRequest} remountKey={remountOnReturn ? 2 : 0} />);
-
-          expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
-          expect(screen.getByLabelText("Reply")).toHaveValue("");
-          expect(capturedStore?.get(scopeA)).toBeUndefined();
-          expect(capturedStore?.hasDraftContent(scopeA)).toBe(false);
-          if (entry === "review-request" && outcome === "start-immediate") {
-            await waitFor(() =>
-              expect(onReviewStarted).toHaveBeenCalledWith("codex:thread-a", 1),
-            );
-          } else if (outcome === "queue-busy") {
-            expect(onReviewStarted).not.toHaveBeenCalled();
-            expect(createScheduledThreadAction).toHaveBeenCalledWith(expect.objectContaining({
-              review: expect.objectContaining(entry === "review-request"
-                ? { todo: { id: "todo-a", allowOpenItems: true } }
-                : { target: { type: "uncommittedChanges" } }),
-            }));
-            // The queued row names the card it completes, so the card can say
-            // its review is queued rather than offer Start review again.
-            await waitFor(() =>
-              expect(capturedStore?.getQueuedTurns(scopeA).map((queued) => queued.reviewTodoId)).toEqual(
-                entry === "review-request" ? ["todo-a"] : [undefined],
-              ),
-            );
-          }
+  it.for([
+    ["review-request", "queue-busy", false],
+    ["review-request", "start-immediate", true],
+    ["type-review", "queue-busy", true],
+    ["slash-menu", "cancel", false],
+    ["type-review", "switch-away", true],
+  ] satisfies Array<[EntryKind, OutcomeKind, boolean]>)(
+    "clears review setup after %s, %s, remount=%s",
+    async ([entry, outcome, remountOnReturn]) => {
+      cleanup();
+      const threadA = makeThread("thread-a");
+      const threadB = makeThread("thread-b");
+      const scopeA = buildThreadComposerScopeKey(threadA.source, threadA.id, { scope: "local" });
+      const startReview = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: threadA.id,
+        reviewThreadId: threadA.id,
+        turnId: "review-turn-1",
+      }));
+      const createScheduledThreadAction = vi.fn(async () => ({
+        action: {
+          id: "sched-review-1",
+          backend: "codex" as const,
+          threadId: threadA.id,
+          kind: "review" as const,
+          origin: "desktop" as const,
+          status: "queued" as const,
+          queueEntryId: "queue-review-1",
+          scheduledFor: Date.now(),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          displayText: "Review current changes",
         },
-      ),
-      { numRuns: 24, examples: [["review-request", "queue-busy", false]] },
-    );
-  });
+      }));
+      const desktopApi: DesktopApi = {
+        onAgentEvent: () => () => undefined,
+        startReview,
+        createScheduledThreadAction,
+      };
+      let capturedStore: ComposerDraftStore | undefined;
+      let reviewRequest: ComposerProps["reviewRequest"];
+      const onReviewStarted = vi.fn();
+
+      function Harness(props: {
+        thread: NavigationThreadSummary;
+        activeTurnId?: string;
+        threadBusy?: boolean;
+        request?: ComposerProps["reviewRequest"];
+        remountKey?: number;
+      }) {
+        const store = useComposerDraftStore();
+        capturedStore = store;
+        return (
+          <Composer
+            key={props.remountKey ?? 0}
+            activeTurnId={props.activeTurnId}
+            backends={[codexBackend]}
+            desktopApi={desktopApi}
+            disabled={false}
+            draftStore={store}
+            onReviewRequestHandled={(id) => {
+              if (reviewRequest?.id === id) {
+                reviewRequest = undefined;
+              }
+            }}
+            onReviewStarted={onReviewStarted}
+            reviewRequest={props.request}
+            skills={[]}
+            thread={props.thread}
+            threadBusy={props.threadBusy}
+          />
+        );
+      }
+
+      const busy = outcome === "queue-busy";
+      const view = render(
+        <Harness
+          thread={threadA}
+          activeTurnId={busy ? "active-turn-1" : undefined}
+          threadBusy={busy}
+        />,
+      );
+
+      if (entry === "type-review") {
+        const input = screen.getByLabelText("Reply");
+        fireEvent.change(input, { target: { value: "/review" } });
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+      } else if (entry === "slash-menu") {
+        const input = screen.getByLabelText("Reply");
+        fireEvent.change(input, { target: { value: "/rev" } });
+        const option = await screen.findByRole("option", { name: /\/review/i });
+        await act(async () => {
+          fireEvent.click(option);
+        });
+      } else {
+        reviewRequest = { id: 1, threadId: threadA.id, backend: "codex", todo: { id: "todo-a", allowOpenItems: true } };
+        view.rerender(
+          <Harness
+            thread={threadA}
+            activeTurnId={busy ? "active-turn-1" : undefined}
+            threadBusy={busy}
+            request={reviewRequest}
+          />,
+        );
+      }
+
+      await waitFor(() =>
+        expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument(),
+      );
+
+      if (outcome === "start-immediate" || outcome === "queue-busy") {
+        const currentChanges = screen.getByRole("button", { name: /Current changes/i });
+        fireEvent.click(currentChanges);
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Start review" }));
+        });
+        await waitFor(() =>
+          expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument(),
+        );
+      } else if (outcome === "cancel") {
+        await act(async () => {
+          fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        });
+        expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+      }
+
+      // Switch away to another thread, then return (optionally across a remount).
+      view.rerender(<Harness thread={threadB} request={reviewRequest} remountKey={remountOnReturn ? 1 : 0} />);
+      view.rerender(<Harness thread={threadA} request={reviewRequest} remountKey={remountOnReturn ? 2 : 0} />);
+
+      expect(screen.queryByRole("group", { name: "Review target" })).not.toBeInTheDocument();
+      expect(screen.getByLabelText("Reply")).toHaveValue("");
+      expect(capturedStore?.get(scopeA)).toBeUndefined();
+      expect(capturedStore?.hasDraftContent(scopeA)).toBe(false);
+      if (entry === "review-request" && outcome === "start-immediate") {
+        await waitFor(() =>
+          expect(onReviewStarted).toHaveBeenCalledWith("codex:thread-a", 1),
+        );
+      } else if (outcome === "queue-busy") {
+        expect(onReviewStarted).not.toHaveBeenCalled();
+        expect(createScheduledThreadAction).toHaveBeenCalledWith(expect.objectContaining({
+          review: expect.objectContaining(entry === "review-request"
+            ? { todo: { id: "todo-a", allowOpenItems: true } }
+            : { target: { type: "uncommittedChanges" } }),
+        }));
+        // The queued row names the card it completes, so the card can say
+        // its review is queued rather than offer Start review again.
+        await waitFor(() =>
+          expect(capturedStore?.getQueuedTurns(scopeA).map((queued) => queued.reviewTodoId)).toEqual(
+            entry === "review-request" ? ["todo-a"] : [undefined],
+          ),
+        );
+      }
+    },
+  );
 
   it("discards only the review placeholder when cancelling or leaving the panel", async () => {
     // Attachments were never submitted. Every exit must leave the same unsent

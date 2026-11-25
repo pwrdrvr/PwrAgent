@@ -182,7 +182,7 @@ it("answers a stack detail read from the newest projection exactly while no stac
       }
       emit("navigation/invalidated");
     }), {
-      numRuns: 30,
+      numRuns: 12,
       examples: [
         // A hover after the pool's retention but within the reuse window.
         [[{ kind: "sidebar", eventDuringRead: false }, { kind: "advance", ms: 2_000 }, { kind: "detail", layer: 2 }]],

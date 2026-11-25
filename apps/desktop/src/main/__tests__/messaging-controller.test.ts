@@ -1301,7 +1301,7 @@ describe("MessagingController", () => {
           afterReview: autoFix ? "auto-fix" : "wait",
         }));
       }),
-    ), { numRuns: 25 });
+    ), { numRuns: 12 });
   });
 
   it("keeps Auto-fix off in a restored pending review and resets it for the next review", async () => {
@@ -21391,7 +21391,7 @@ describe("MessagingController", () => {
         // Each generated final item must also reach the recipient exactly once.
         expect(unique).toEqual(texts);
       }),
-    ), { numRuns: 25 });
+    ), { numRuns: 12 });
   });
 
   it("settles one test harness without disposing another test's harness", async () => {

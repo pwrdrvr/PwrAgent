@@ -747,12 +747,7 @@ export type ThreadGitWorkingState = {
   baseAheadCommitCount?: number;
   /** True when `baseBranch` has commits after `baseCommit`. */
   isBehindBase?: boolean;
-  /**
-   * The `upstream` remote's default branch (`upstream/main`), when the
-   * checkout has one and `baseBranch` was found on another remote: a fork's
-   * own `main` only moves when the operator syncs it, so this is the count
-   * that says how stale the branch is.
-   */
+  /** The matching branch on the fork parent's remote, when it differs from the selected base ref. */
   upstreamBranch?: string;
   /** Commits on `upstreamBranch` that HEAD does not have. */
   upstreamBehindCommitCount?: number;
@@ -2589,6 +2584,12 @@ export type AppServerNotification =
           type: string;
           text?: string;
           origin?: AppServerThreadMessageOrigin;
+          /**
+           * A `userMessage` the owner accepted into a turn that was already
+           * running. It joins that turn rather than opening it, so it never
+           * stands in for the message that started the turn.
+           */
+          steered?: boolean;
           review?: string;
           command?: string;
           commandAction?: AppServerCommandAction;

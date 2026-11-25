@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { GitReadCache } from "../git-info/read-cache";
 import { parseGitRemoteConfiguration, type GitRemote, type GitRemoteConfiguration } from "./git-remote-config";
 import { PR_METADATA_PRIORITY, runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
@@ -405,6 +406,31 @@ function collectForgeRepositories(remotes: ParsedGitRemote[], kind?: ForgeKind):
 /** Unclassified hosts require explicit product evidence from the caller. */
 export async function readForgeRepositoryRemotes(cwd: string): Promise<GitHubRepoRef[]> {
   return (await readParsedGitRemotes(cwd, {})).value.flatMap(({ repo }) => repo ? [repo] : []);
+}
+
+const fetchRemoteSshHosts = new GitReadCache<string | undefined>({ ttlMs: REMOTE_CACHE_TTL_MS, maxEntries: 512 });
+
+/** The effective fetch URLs (or bare names) from an existing `git remote --verbose` observation. */
+export function parseGitFetchRemotes(output: string): GitRemote[] {
+  return output.split(/\r?\n/).flatMap((line) => {
+    const match = /^([^\t]+)\t(?:(.+) \(fetch\)(?: \[[^\r\n]*\])?)?$/.exec(line);
+    return match ? [{ name: match[1]!, url: match[2] ?? "" }] : [];
+  });
+}
+
+export function readGitHubFetchRemotes(remotes: GitRemote[]): Array<{ name: string; repo: GitHubRepoRef }> {
+  return remotes.flatMap(({ name, url }) => {
+    const repo = parseGitHubRemote(url);
+    if (!repo) return [];
+    if (repo.host === "github.com") return [{ name, repo }];
+    const host = readSshHost(url);
+    if (!host || !/^[\w][\w.-]*$/.test(host) || forgeKindForRemoteHost(repo.host)) return [];
+    const hostname = repo.host === "ssh.github.com" ? repo.host
+      : fetchRemoteSshHosts.readInBackground(host, () => resolveSshHostInFlight(host, defaultResolveSshHostname, {}))
+        ?.toLowerCase();
+    return hostname === "github.com" || hostname === "ssh.github.com"
+      ? [{ name, repo: { ...repo, host: "github.com" } }] : [];
+  });
 }
 
 async function readParsedGitRemotes(

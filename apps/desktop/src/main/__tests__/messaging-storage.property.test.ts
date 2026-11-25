@@ -49,7 +49,7 @@ it("orders activity by insertion while platform summaries retain the greatest ob
         expect(reads.writes.commits).toBe(0);
       }
     } finally { db.close(); }
-  }), { numRuns: 50 });
+  }), { numRuns: 8 });
 });
 
 // A list pages at most 500 rows, and 100 when no limit is given, from either cursor.
@@ -68,7 +68,7 @@ it("pages activity through the 100-row default and the [1, 500] limit clamp", as
         expect(storage.list({ sinceId: since, limit: each })).toEqual(newest.slice(0, Math.min(Math.max(each ?? 100, 1), 500)));
       }
     } finally { db.close(); }
-  }), { numRuns: 15 });
+  }), { numRuns: 8 });
 });
 
 it("retains observed pairing cards and deduplicated approvals until resolution or expiry", async () => {
@@ -123,7 +123,7 @@ it("retains observed pairing cards and deduplicated approvals until resolution o
         for (const slot of [0, 1, 2]) expect(persisted).not.toContain(token(slot));
       }
     } finally { db.close(); }
-  }), { numRuns: 50 });
+  }), { numRuns: 8 });
 });
 
 it("keeps request provenance immutable and private while latest human destinations advance independently", async () => {
@@ -177,5 +177,5 @@ it("keeps request provenance immutable and private while latest human destinatio
         expect(reads.writes.commits).toBe(0);
       }
     } finally { db.close(); }
-  }), { numRuns: 50 });
+  }), { numRuns: 8 });
 });

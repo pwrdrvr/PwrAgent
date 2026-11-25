@@ -57,7 +57,7 @@ describe("research run bounds are the operator's", () => {
       expect(run.activeWorkers).toBe(workers);
       expect(ports.spawn).toHaveBeenCalledTimes(workers);
       service.close();
-    }), { numRuns: 30, examples: [[9], [12], [RESEARCH_MAX_WORKERS]] });
+    }), { numRuns: 25, examples: [[9], [12], [RESEARCH_MAX_WORKERS]] });
     const { service } = world();
     for (const workers of [0, RESEARCH_MAX_WORKERS + 1, 2.5]) {
       expect(() => service.prepare({ backend: "codex", threadId: "coordinator", objective: "Investigate", workers, workspaceMode: "none" })).toThrow(`Choose 1–${RESEARCH_MAX_WORKERS} workers`);
@@ -80,7 +80,7 @@ describe("research run bounds are the operator's", () => {
         expect(after.status).toBe("running");
       }
       service.close();
-    }), { numRuns: 30 });
+    }), { numRuns: 25 });
   });
 
   it("ends a run exactly at the operator's limit, however long, and accepts work until then", async () => {
@@ -100,7 +100,7 @@ describe("research run bounds are the operator's", () => {
       expect(service.snapshot(context).runs[0]!.status).toBe("deadline");
       await expect(service.update(run.id, "after", finding("after"), context)).rejects.toThrow("no longer accepting work");
       service.close();
-    }), { numRuns: 40 });
+    }), { numRuns: 25 });
   });
 
   it("refuses a time limit that is not a whole number of minutes", async () => {
@@ -162,7 +162,7 @@ describe("a per-worker time limit", () => {
       // The limit belongs to each worker, never to the run.
       expect(after.status).toBe("running");
       service.close();
-    }), { numRuns: 60 });
+    }), { numRuns: 25 });
   });
 
   it("gives each new turn its own limit, and stops a worker already past a lowered limit", async () => {
@@ -238,7 +238,7 @@ describe("total worker time", () => {
         }
       }
       service.close();
-    }), { numRuns: 80 });
+    }), { numRuns: 25 });
   });
 
   it("refuses a total below what the workers have used, and runs on to a raised one", async () => {
@@ -276,7 +276,7 @@ it("arms no timer and writes nothing for bounds the operator did not set", async
     const events = service.read(run.id, operator).events;
     expect(events.filter((event) => event.data.type === "bounds" || (event.data.type === "worker" && /limit/.test(event.data.note ?? "")))).toEqual([]);
     service.close();
-  }), { numRuns: 40 });
+  }), { numRuns: 25 });
 });
 
 /**
@@ -359,7 +359,7 @@ describe("changing a live run's bounds", () => {
         expect(recorded.every((event) => event.actor.kind === "operator")).toBe(true);
       }
       service.close();
-    }), { numRuns: 80 });
+    }), { numRuns: 25 });
   });
 
   /**

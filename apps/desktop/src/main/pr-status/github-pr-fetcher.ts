@@ -2,7 +2,16 @@ import { parsePullRequestReferenceUrl, type PullRequestReferenceIdentity } from 
 import { readStackClones } from "../stacks/stack-reader";
 import type { ForgeCiClient } from "./forge-ci-client";
 import { ForgeReadError } from "./forge-tool-contract";
-import { assertGithubStackMergeAllowed, assertStackMergeBaseUnchanged } from "../stacks/stack-merge-guard";
+import {
+  assertGithubNativeStackMergeAllowed,
+  assertStackMergeBaseUnchanged,
+  checkGithubStackMerge,
+  githubStackLayersAboveNote,
+  type GithubNativeStack,
+  type GithubStackMergeCheck,
+} from "../stacks/stack-merge-guard";
+import type { GithubStackPull } from "../stacks/github-stack-evidence";
+import { GITHUB_ASYNC_MERGE_REQUIRED, runGithubAsyncMerge } from "./github-async-merge";
 import { describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
 import {
   GITHUB_MERGE_QUEUE_GATE_QUERY,
@@ -51,6 +60,12 @@ type GithubMergeOptions = {
   thread?: ThreadPullRequestMergeTarget;
   assertCanMerge?: (url: string) => void;
   checkStackOrder?: boolean;
+  /**
+   * The open lower layers of the PR's GitHub stack that the operator saw and
+   * chose to merge with it. GitHub's asynchronous merge lands them all; any
+   * other open lower layer refuses the merge.
+   */
+  mergeOpenLayersBelow?: readonly number[];
 };
 
 type GithubThreadMergeObserver = (
@@ -350,11 +365,11 @@ export class GithubPrFetcher {
     params: GithubMergeOptions,
     run: (args: string[], timeout?: number) => Promise<{ stdout: string; stderr?: string }>,
   ): Promise<ThreadPullRequestMergeResult> {
-    let checkedBase: string | undefined;
+    let checked: GithubStackMergeCheck | undefined;
     let mergeTarget = params.pullRequest;
     if (params.checkStackOrder) {
       try {
-        checkedBase = await this.checkStackOrder(reference, params.cwd, run);
+        checked = await this.checkStackOrder(reference, params, run);
       } catch (error) {
         if (!(error instanceof ForgeReadError) || error.code !== "pull_request_redirected") throw error;
         const result = await run(["pr", "view", reference.url, "--json", "url", "--jq", ".url"]);
@@ -364,10 +379,14 @@ export class GithubPrFetcher {
         params.assertCanMerge?.(canonical.url);
         reference = canonical;
         mergeTarget = canonical.url;
-        checkedBase = await this.checkStackOrder(reference, params.cwd, run);
+        checked = await this.checkStackOrder(reference, params, run);
       }
     }
+    const checkedBase = checked?.base;
     const label = `#${reference.number}`;
+    // GitHub's own stacks merge only through its asynchronous merge, which
+    // also takes a required merge queue.
+    if (checked?.nativeStack) return await this.mergeAsynchronously(reference, params, run, checked.headSha, checked.nativeStack);
     // A repository never seen with a queue merges exactly as before.
     const queueRepository = isMergeQueueRepository(reference.provider, reference.org, reference.repo);
     if (queueRepository) {
@@ -380,39 +399,29 @@ export class GithubPrFetcher {
     } catch (error) {
       const err = error as { stderr?: string; message?: string; killed?: boolean };
       const detail = err.stderr?.trim() || err.message || String(error);
+      // A stack GitHub keeps, unseen by the order check (which a caller may
+      // skip): still never land the layers below with this one.
+      if (GITHUB_ASYNC_MERGE_REQUIRED.test(detail)) {
+        const get = this.githubGet(reference, run);
+        const pull = await get(`/pulls/${reference.number}`) as GithubStackPull;
+        // The order check passed at one base; a stack GitHub formed since may have retargeted it.
+        if (checkedBase !== undefined) assertStackMergeBaseUnchanged(checkedBase, pull?.base?.ref);
+        // Learned from the refusal: read the whole stack, so the decision and
+        // the result account for every pull request in it.
+        const stack = await assertGithubNativeStackMergeAllowed(reference.number, pull, get, undefined, {
+          readLayers: true,
+          repository: { provider: "github", host: reference.provider, owner: reference.org, repo: reference.repo },
+          ...(params.mergeOpenLayersBelow ? { mergeOpenLayersBelow: params.mergeOpenLayersBelow } : {}),
+        });
+        return await this.mergeAsynchronously(reference, params, run, pull?.head?.sha, stack);
+      }
       // Refused for want of the queue: learn the repository and queue it.
       if (!queueRepository && mentionsMergeQueue(detail)) {
         noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
         const queued = await this.mergeThroughQueue(reference, label, run, checkedBase);
         if (queued) return queued;
       }
-      const firstLine = withoutHtmlBody(detail.split("\n")[0]);
-      const serverError = ghServerErrorStatus(firstLine);
-      // A gateway error or a killed gh can follow a merge GitHub accepted,
-      // and the merge can land moments later: read what happened.
-      const unsettled = serverError
-        ? `GitHub returned ${serverError} while merging ${label}`
-        : err.killed ? `gh pr merge did not finish ${label} within 60 seconds` : undefined;
-      if (unsettled) {
-        // One read through the client PR status polls with; no other route.
-        const ref = parsePrRefFromUrl(reference.url);
-        // The client retries with backoff, so bound the read: a degraded
-        // GitHub must not hold the card after the merge already failed.
-        const state = ref
-          ? await withinDeadline(this.graphqlClient.fetchPullRequests([ref]), UNSETTLED_MERGE_READ_MS)
-            .then((prs) => prs?.[0]?.lifecycleState, (readError: unknown) => {
-              fetcherLog.warn("could not read a pull request's state after an unsettled merge", {
-                pullRequest: reference.url, error: readError instanceof Error ? readError.message : String(readError),
-              });
-              return undefined;
-            })
-          : undefined;
-        if (state === "merged") return mergedResult(reference.url, params);
-        throw new Error(state
-          ? `${unsettled}, and it had not merged when checked. Retry the merge: one that has since landed reports as already merged.`
-          : `${unsettled}, and its state could not be checked. Retry the merge: one that went through reports as already merged.`, { cause: error });
-      }
-      throw new Error(`gh pr merge failed: ${firstLine}${mergeScopeHint(firstLine)}`, { cause: error });
+      return await this.reportFailedMerge(reference, params, error, "gh pr merge failed", `gh pr merge did not finish ${label} within 60 seconds`);
     }
     // `gh pr merge` adds a PR to a required queue itself, and says so rather
     // than merging: report that, not a merge.
@@ -431,20 +440,124 @@ export class GithubPrFetcher {
     return mergedResult(reference.url, params);
   }
 
-  private async checkStackOrder(
+  /**
+   * Merge through GitHub's asynchronous merge with the operator's gh, waiting
+   * up to a minute for GitHub to settle it.
+   */
+  private async mergeAsynchronously(
     reference: PullRequestReferenceIdentity,
-    cwd: string | undefined,
+    params: GithubMergeOptions,
+    run: (args: string[], timeout?: number) => Promise<{ stdout: string; stderr?: string }>,
+    sha: string | undefined,
+    stack: GithubNativeStack | undefined,
+  ): Promise<ThreadPullRequestMergeResult> {
+    const label = `#${reference.number}`;
+    const endpoint = `repos/${encodeURIComponent(reference.org)}/${encodeURIComponent(reference.repo)}`;
+    let outcome: Awaited<ReturnType<typeof runGithubAsyncMerge>>;
+    try {
+      outcome = await runGithubAsyncMerge({
+        number: reference.number, method: params.method, ...(sha ? { sha } : {}),
+        request: async (method, route, body) => {
+          const fields = Object.entries(body ?? {}).flatMap(([name, value]) => ["-f", `${name}=${value}`]);
+          const response = await run(["api", "--hostname", reference.provider, "-X", method, endpoint + route, ...fields], 30_000);
+          return JSON.parse(response.stdout);
+        },
+        isAlreadyRequested: (error) => /\(HTTP 409\)/.test(ghErrorDetail(error)),
+      });
+    } catch (error) {
+      if (error instanceof ForgeReadError) throw new Error(error.message, { cause: error });
+      return await this.reportFailedMerge(reference, params, error, "GitHub refused the merge", `GitHub did not answer the merge of ${label} within 30 seconds`);
+    }
+    if (outcome.status === "merged") {
+      if (stack?.mergesWith?.length) {
+        // GitHub landed the open layers below with it, bottom first.
+        const landed = [...stack.mergesWith, reference.number].map((number) => `#${number}`);
+        return {
+          mergedUrl: reference.url,
+          summary: `${MERGE_METHOD_RESULTS[params.method]} ${landed.length} PRs in a GitHub stack: ${landed.join(", ")}`
+            + (githubStackLayersAboveNote(reference.number, stack) ? `. ${githubStackLayersAboveNote(reference.number, stack)}` : ""),
+        };
+      }
+      const merged = mergedResult(reference.url, params);
+      const above = githubStackLayersAboveNote(reference.number, stack);
+      return above ? { ...merged, summary: `${merged.summary}. ${above}` } : merged;
+    }
+    if (outcome.status === "enqueued") {
+      noteMergeQueueRepository(reference.provider, reference.org, reference.repo);
+      return { queued: true, summary: `Sent ${label} to the merge queue: it merges once the queue's checks pass` };
+    }
+    return { queued: true, summary: outcome.alreadyRequested
+      ? `GitHub is already merging ${label}`
+      : `GitHub accepted the merge of ${label} and is still running it` };
+  }
+
+  /**
+   * Report a merge gh could not finish. A gateway error or a killed gh can
+   * follow a merge GitHub accepted, and the merge can land moments later:
+   * read what happened before saying it failed.
+   */
+  private async reportFailedMerge(
+    reference: PullRequestReferenceIdentity,
+    params: GithubMergeOptions,
+    error: unknown,
+    failed: string,
+    killed: string,
+  ): Promise<ThreadPullRequestMergeResult> {
+    const label = `#${reference.number}`;
+    const err = error as { stderr?: string; message?: string; killed?: boolean };
+    const detail = err.stderr?.trim() || err.message || String(error);
+    const firstLine = withoutHtmlBody(detail.split("\n")[0]);
+    const serverError = ghServerErrorStatus(firstLine);
+    const unsettled = serverError
+      ? `GitHub returned ${serverError} while merging ${label}`
+      : err.killed ? killed : undefined;
+    if (unsettled) {
+      // One read through the client PR status polls with; no other route.
+      const ref = parsePrRefFromUrl(reference.url);
+      // The client retries with backoff, so bound the read: a degraded
+      // GitHub must not hold the card after the merge already failed.
+      const state = ref
+        ? await withinDeadline(this.graphqlClient.fetchPullRequests([ref]), UNSETTLED_MERGE_READ_MS)
+          .then((prs) => prs?.[0]?.lifecycleState, (readError: unknown) => {
+            fetcherLog.warn("could not read a pull request's state after an unsettled merge", {
+              pullRequest: reference.url, error: readError instanceof Error ? readError.message : String(readError),
+            });
+            return undefined;
+          })
+        : undefined;
+      if (state === "merged") return mergedResult(reference.url, params);
+      throw new Error(state
+        ? `${unsettled}, and it had not merged when checked. Retry the merge: one that has since landed reports as already merged.`
+        : `${unsettled}, and its state could not be checked. Retry the merge: one that went through reports as already merged.`, { cause: error });
+    }
+    throw new Error(`${failed}: ${firstLine}${mergeScopeHint(firstLine)}`, { cause: error });
+  }
+
+  /** A GitHub REST read for the merge's stack checks: the shared forge client when installed, else gh. */
+  private githubGet(
+    reference: PullRequestReferenceIdentity,
     run: (args: string[]) => Promise<{ stdout: string }>,
-  ): Promise<string> {
-    const catalogs = cwd ? (await readStackClones([cwd])).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : []) : [];
+  ): (route: string) => Promise<unknown> {
     const endpoint = `repos/${encodeURIComponent(reference.org)}/${encodeURIComponent(reference.repo)}`;
     const repository = { provider: "github" as const, host: reference.provider, owner: reference.org, repo: reference.repo };
     const transport = stackTransport;
-    return await assertGithubStackMergeAllowed(repository, reference.number, catalogs, async (route) => {
+    return async (route) => {
       if (transport) return await transport.requestGithub(repository, { path: endpoint + route });
       const response = await run(["api", "--hostname", reference.provider, endpoint + route]);
       return JSON.parse(response.stdout);
-    }, async (query, variables) => {
+    };
+  }
+
+  private async checkStackOrder(
+    reference: PullRequestReferenceIdentity,
+    params: GithubMergeOptions,
+    run: (args: string[]) => Promise<{ stdout: string }>,
+  ): Promise<GithubStackMergeCheck> {
+    const cwd = params.cwd;
+    const catalogs = cwd ? (await readStackClones([cwd])).flatMap(({ catalog }) => catalog.status === "ok" ? [catalog.catalog] : []) : [];
+    const repository = { provider: "github" as const, host: reference.provider, owner: reference.org, repo: reference.repo };
+    const transport = stackTransport;
+    return await checkGithubStackMerge(repository, reference.number, catalogs, this.githubGet(reference, run), async (query, variables) => {
       if (transport) {
         return (await transport.requestGithub(repository, { graphql: true, path: "", body: { query, variables } }) as { data?: unknown }).data;
       }
@@ -457,7 +570,7 @@ export class GithubPrFetcher {
       } catch (error) {
         throw new Error(ghFailureLine(ghErrorDetail(error)), { cause: error });
       }
-    });
+    }, undefined, params.mergeOpenLayersBelow ? { mergeOpenLayersBelow: params.mergeOpenLayersBelow } : {});
   }
 
   /**

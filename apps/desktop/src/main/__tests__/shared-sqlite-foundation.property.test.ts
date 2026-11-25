@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import fc from "fast-check";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { CURRENT_STATE_DB_USER_VERSION as SHARED_STATE_DB_USER_VERSION, StateDb as SharedStateDb } from "@pwragent/sqlite-storage/state-db";
 import { StateDb as DesktopStateDb } from "../storage/state-db";
 import { StateDb, CURRENT_STATE_DB_USER_VERSION } from "../state/state-db";
@@ -173,71 +172,83 @@ const upgrades = [
   { version: CURRENT_STATE_DB_USER_VERSION, sql: "DROP INDEX idx_pr_status_watches_retry; DROP INDEX idx_pr_status_watches_history" },
 ] as const;
 
-describe.each(upgrades)("shared profile upgrade from v$version: $sql", ({ version, sql }) => {
-  it("converges through arbitrary desktop/portable reopen order without losing metadata or adding steady-state writes", async () => {
-    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-    await fc.assert(fc.asyncProperty(
-      fc.array(fc.integer({ min: 0, max: hosts.length - 1 }), { minLength: 2, maxLength: 5 }),
-      fc.record({ title: fc.string(), pinnedRank: fc.string(), seenAt: fc.nat(),
-        parent: fc.record({ backend: fc.constantFrom("codex", "claude"), threadId: fc.string() }) }),
-      async (openers, metadata) => {
-        const { dbPath, tempDir } = createTempStateDb("shared-sqlite-upgrade-");
-        let db: StateDb | undefined;
-        try {
-          db = openFreshStateDb(dbPath, { profileName: "fixture" });
-          const initialSchema = schemaDefinition(db);
-          const payload = JSON.stringify(metadata);
-          db.raw.prepare("INSERT INTO threads(thread_id, last_seen_at, payload) VALUES (?, ?, ?)")
-            .run("fixture-thread", metadata.seenAt, payload);
-          db.setSecret("fixture", Buffer.from(metadata.title));
-          db.raw.exec(sql);
-          db.raw.pragma(`user_version = ${version}`);
-          db.close(); db = undefined;
-          for (const [index, opener] of openers.entries()) {
-            const reopened = await measureSqliteWrites(() => hosts[opener]!.open(dbPath));
-            db = reopened.result;
-            if (index > 0) expect(reopened.writes.commits).toBe(0);
-            const reads = await measureSqliteWrites(() => {
-              expect(schemaDefinition(db!)).toEqual(initialSchema);
-              expect(db!.getMeta("profile_name")).toBe("fixture");
-              expect(db!.getSecret("fixture")).toEqual(Buffer.from(metadata.title));
-              expect(db!.raw.prepare("SELECT payload, last_seen_at FROM threads WHERE thread_id = ?").get("fixture-thread"))
-                .toEqual({ payload, last_seen_at: metadata.seenAt });
-            });
-            expect(reads.writes.commits).toBe(0);
-            db.close(); db = undefined;
-          }
-        } finally { db?.close(); removeTempStateDbDir(tempDir); }
-      },
-    ), { numRuns: 8 });
-  });
+it.each(upgrades)("upgrades v$version ($sql) and reopens without losing metadata or adding writes", async ({ version, sql }) => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const { dbPath, tempDir } = createTempStateDb("shared-sqlite-upgrade-");
+  const metadata = [
+    { id: "empty-thread", seenAt: 0, title: "", pinnedRank: "", parent: { backend: "codex", threadId: "" } },
+    { id: "fixture-thread", seenAt: 2_147_483_648, title: "親スレッド's\0 title", pinnedRank: "a1",
+      parent: { backend: "claude", threadId: "thread-😀" } },
+  ].map(({ id, seenAt, ...payload }) => ({ id, seenAt, payload: JSON.stringify(payload), secret: Buffer.from(payload.title) }));
+  let db: StateDb | undefined;
+  try {
+    db = StateDb.open(dbPath, { profileName: "fixture" });
+    const initialSchema = schemaDefinition(db);
+    const insert = db.raw.prepare("INSERT INTO threads(thread_id, last_seen_at, payload) VALUES (?, ?, ?)");
+    for (const { id, seenAt, payload, secret } of metadata) {
+      insert.run(id, seenAt, payload);
+      db.setSecret(id, secret);
+    }
+    db.raw.exec(sql);
+    db.raw.pragma(`user_version = ${version}`);
+    db.close();
+    db = undefined;
+    // All three imports are the same class, as asserted above. Open each
+    // migrated shape through every public binding and check steady-state writes.
+    for (const [index, host] of hosts.entries()) {
+      const reopened = await measureSqliteWrites(() => host.open(dbPath));
+      db = reopened.result;
+      if (index > 0) expect(reopened.writes.commits).toBe(0);
+      const reads = await measureSqliteWrites(() => {
+        expect(schemaDefinition(db!)).toEqual(initialSchema);
+        expect(db!.getMeta("profile_name")).toBe("fixture");
+        const read = db!.raw.prepare("SELECT payload, last_seen_at FROM threads WHERE thread_id = ?");
+        for (const { id, seenAt, payload, secret } of metadata) {
+          expect(db!.getSecret(id)).toEqual(secret);
+          expect(read.get(id)).toEqual({ payload, last_seen_at: seenAt });
+        }
+      });
+      expect(reads.writes.commits).toBe(0);
+      db.close();
+      db = undefined;
+    }
+  } finally {
+    db?.close();
+    removeTempStateDbDir(tempDir);
+  }
 });
 
-it("retains SQLite transaction variants, rollback and cross-connection visibility through both bindings", async () => {
+it.each([
+  { variant: "default", value: "" },
+  { variant: "deferred", value: "owner's metadata" },
+  { variant: "immediate", value: "候補😀" },
+  { variant: "exclusive", value: "x".repeat(4096) },
+] as const)("makes $variant commits visible to every binding and rolls back refusals", async ({ variant, value }) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  await fc.assert(fc.asyncProperty(fc.array(fc.record({
-    host: fc.integer({ min: 0, max: hosts.length - 1 }),
-    variant: fc.constantFrom("default", "deferred", "immediate", "exclusive"),
-    rollback: fc.boolean(), value: fc.string(),
-  }), { minLength: 1, maxLength: 12 }), async (commands) => {
-    const { dbPath, tempDir } = createTempStateDb("shared-sqlite-transactions-");
-    const connections = hosts.map(host => host.open(dbPath));
-    let expected: string | undefined;
-    try {
-      for (const command of commands) {
-        const db = connections[command.host]!;
-        const writes = await measureSqliteWrites(() => {
-          const transaction = db.raw.transaction(() => {
-            db.setMeta("fixture-value", command.value);
-            if (command.rollback) throw new Error("fixture rollback");
-          });
-          if (command.rollback) expect(() => transaction[command.variant]()).toThrow("fixture rollback");
-          else transaction[command.variant]();
-        });
-        expect(writes.writes.commits).toBe(command.rollback ? 0 : 1);
-        if (!command.rollback) expected = command.value;
-        for (const connection of connections) expect(connection.getMeta("fixture-value")).toBe(expected);
-      }
-    } finally { for (const db of connections) db.close(); removeTempStateDbDir(tempDir); }
-  }), { numRuns: 12 });
+  const { dbPath, tempDir } = createTempStateDb("shared-sqlite-transactions-");
+  const connections: StateDb[] = [];
+  try {
+    for (const host of hosts) connections.push(host.open(dbPath));
+    let previous: string | undefined;
+    for (const [index, writer] of connections.entries()) {
+      const next = index === 0 ? value : `${value}:${index}`;
+      const refuse = writer.raw.transaction(() => {
+        writer.setMeta("fixture-value", next);
+        throw new Error("fixture rollback");
+      });
+      const rolledBack = await measureSqliteWrites(() =>
+        expect(() => refuse[variant]()).toThrow("fixture rollback"));
+      expect(rolledBack.writes.commits).toBe(0);
+      for (const reader of connections) expect(reader.getMeta("fixture-value")).toBe(previous);
+
+      const commit = writer.raw.transaction(() => writer.setMeta("fixture-value", next));
+      const committed = await measureSqliteWrites(() => commit[variant]());
+      expect(committed.writes.commits).toBe(1);
+      for (const reader of connections) expect(reader.getMeta("fixture-value")).toBe(next);
+      previous = next;
+    }
+  } finally {
+    for (const db of connections) db.close();
+    removeTempStateDbDir(tempDir);
+  }
 });

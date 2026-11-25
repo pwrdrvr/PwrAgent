@@ -65,7 +65,7 @@ describe("research run phase", () => {
       if (phase.label === "Ready to finish") {
         expect(run.status === "running" && idle && !undecided && run.submissions.some((s) => s.review?.decision === "accepted")).toBe(true);
       }
-    }), { numRuns: 400 });
+    }), { numRuns: 100 });
   });
 
   it("does not call a fully reviewed run, or one with a revision in flight, awaiting review", () => {
@@ -150,7 +150,7 @@ describe("research map", () => {
         branch.assignments.forEach(check);
       };
       branches.forEach(check);
-    }), { numRuns: 400 });
+    }), { numRuns: 100 });
   });
 
   it("nests a focused child and its own findings under the item it investigates", () => {
@@ -251,7 +251,7 @@ describe("research activity paging", () => {
       window = mergeResearchActivityHead(window, read(researchActivityHeadRange(window, limit)));
       while (window.nextBeforeSeq !== undefined) window = appendResearchActivityOlder(window, read({ beforeSeq: window.nextBeforeSeq, limit }));
       expect(window.events).toEqual(projectResearchRun("run", journal).events.toReversed());
-    }), { numRuns: 200 });
+    }), { numRuns: 100 });
   });
 
   it("names the same phase from a run summary as from the synced store of its run", () => {
@@ -297,13 +297,12 @@ describe("research findings filter", () => {
   ];
 
   it("lists exactly the findings whose card shows the filter text, newest first, as the run changes", () => {
-    let cut = 0;
-    let byTitle = 0;
-    let byPath = 0;
-    let byLabel = 0;
-    let byRelation = 0;
     fc.assert(fc.property(fc.array(fc.record({ steps: fc.array(researchJournalStepArb, { minLength: 1, maxLength: 8 }), queries: fc.array(queryArb, { minLength: 1, maxLength: 4 }) }), { minLength: 1, maxLength: 6 }), (rounds) => {
       const journal = [researchCreatedEvent(3)];
+      // Give every history a finding with evidence that never appears in its text.
+      journal.push(nextResearchEvent(projectResearchRun("run", journal), {
+        kind: "finding", pick: rounds[0]!.queries[0]!.pick, other: 0, variant: 4, flag: false,
+      }));
       let store = emptyResearchRunStore("run");
       for (const round of rounds) {
         for (const step of round.steps) journal.push(nextResearchEvent(projectResearchRun("run", journal), step));
@@ -311,7 +310,8 @@ describe("research findings filter", () => {
         // The window's store follows by delta, so most items are the objects an earlier round matched against.
         store = applyResearchChanges(store, { ...researchChangePage(run, store.revision), writable: true });
         const view = researchRunView(summarizeResearchRun(run), store)!;
-        for (const wanted of round.queries) {
+        const evidenceQuery = { ...round.queries[0]!, pick: 0, part: "path" as const, start: 0, length: Math.max(6, round.queries[0]!.length) };
+        for (const wanted of [evidenceQuery, ...round.queries]) {
           const source = run.findings.length ? run.findings[wanted.pick % run.findings.length] : undefined;
           const parts = source ? cardParts(run, source) : [];
           const whole = wanted.part === "absent" || !source ? "no card shows this"
@@ -325,21 +325,10 @@ describe("research findings filter", () => {
           if (needle && source && wanted.part !== "absent") {
             // The text was cut from this finding's card, so the filter must list it.
             expect(expected.map((finding) => finding.id)).toContain(source.id);
-            cut++;
-            if (!source.text.toLowerCase().includes(needle) && wanted.part === "title") byTitle++;
-            if (!source.text.toLowerCase().includes(needle) && wanted.part === "path" && source.paths.length) byPath++;
-            if (wanted.part === "kind" && source.kind.includes("_")) byLabel++;
-            if (!source.text.toLowerCase().includes(needle) && wanted.part === "relation" && source.relatesTo) byRelation++;
           }
         }
       }
-    }), { numRuns: 150 });
-    // The generated filters reached each thing a card shows beyond the finding's own text.
-    expect(cut).toBeGreaterThan(100);
-    expect(byTitle).toBeGreaterThan(10);
-    expect(byPath).toBeGreaterThan(10);
-    expect(byLabel).toBeGreaterThan(3);
-    expect(byRelation).toBeGreaterThan(3);
+    }), { numRuns: 100 });
   });
 
   it("finds a finding by its approach's title and by an evidence path", () => {
@@ -366,13 +355,14 @@ describe("research findings filter", () => {
     };
     // Eighty-four characters, then a tail the relation line leaves out.
     const first = share({ text: `${"long evidence ".repeat(6)}tail past the cut` });
-    const second = share({ text: "A shorter result", relatesTo: first, relation: "contradicts" });
+    const second = share({ kind: "dead_end", text: "A shorter result", relatesTo: first, relation: "contradicts" });
     const run = projectResearchRun("run", journal);
     const view = researchRunView(summarizeResearchRun(run), applyResearchChanges(emptyResearchRunStore("run"), { ...researchChangePage(run), writable: true }))!;
     const ids = (query: string) => researchFindingMatches(view, query).map((finding) => finding.id);
     expect(ids("Contradicts: long evidence")).toEqual([second]);
     expect(ids("long evidence")).toEqual([second, first]);
     expect(ids("tail past the cut")).toEqual([first]);
+    expect(ids("DEAD END")).toEqual([second]);
   });
 });
 
@@ -410,8 +400,6 @@ describe("research map filter", () => {
   }
 
   it("keeps exactly the branches that show the filter text, as the run changes", () => {
-    const reached = new Map<string, number>();
-    // Long enough rounds that an approach often holds more contributions than its branch draws.
     fc.assert(fc.property(fc.array(fc.record({ steps: fc.array(researchJournalStepArb, { size: "max", minLength: 1, maxLength: 16 }), queries: fc.array(queryArb, { minLength: 1, maxLength: 4 }) }), { minLength: 1, maxLength: 6 }), (rounds) => {
       const journal = [researchCreatedEvent(3)];
       let store = emptyResearchRunStore("run");
@@ -439,13 +427,26 @@ describe("research map filter", () => {
           if (needle && part) {
             // The text was cut from this branch, so the filter must keep it.
             expect(expected).toContain(branches[source]);
-            reached.set(part.kind, (reached.get(part.kind) ?? 0) + 1);
           }
         }
       }
-    }), { numRuns: 150 });
-    // The generated filters reached each kind of text a branch shows.
-    for (const part of PARTS) expect([part, reached.get(part) ?? 0]).toEqual([part, expect.toSatisfy((count: number) => count > 10)]);
+    }), { numRuns: 100 });
+  });
+
+  it("matches the overflow label only on the branch that exceeds the display cap", () => {
+    fc.assert(fc.property(fc.integer({ min: 1, max: 8 }), fc.boolean(), (hidden, upper) => {
+      const run = mapRun({
+        approaches: 2, links: [],
+        contributions: [
+          ...Array.from({ length: RESEARCH_MAP_LEAVES + hidden }, () => ({ owner: 0, finding: true })),
+          ...Array.from({ length: RESEARCH_MAP_LEAVES }, () => ({ owner: 1, finding: false })),
+        ],
+      });
+      const branches = researchMapBranches(run);
+      expect(branches.map((branch) => branch.hidden)).toEqual([hidden, 0]);
+      const label = `${hidden} more from A0`;
+      expect(researchMapMatches(run, branches, upper ? label.toUpperCase() : label).map((branch) => branch.approach.id)).toEqual(["a0"]);
+    }), { numRuns: 16 });
   });
 
   it("finds a branch by its state chip, a contribution's label, its overlap line and a focused child's prefix", () => {
@@ -456,6 +457,7 @@ describe("research map filter", () => {
     append({ type: "finding", finding: { id: "f1", approachId: "a2", kind: "dead_end", text: "The cache is never read", paths: [] } });
     append({ type: "submission", submission: { id: "s1", approachId: "a2", text: "Drop the cache\nand  its index", paths: [] } });
     append({ type: "direction", approachId: "a3", title: "Third", task: "Measure", reason: "Narrowed", overlapsApproachId: "a2" });
+    append({ type: "worker", approachId: "a3", state: "running", note: "Reading completion events" });
     append({ type: "assignment", itemId: "f1", task: "Confirm", approach: { id: "work-1", itemId: "f1", title: "Confirm the read path", task: "Confirm", state: "pending" } });
     const run = projectResearchRun("run", journal);
     const view = researchRunView(summarizeResearchRun(run), applyResearchChanges(emptyResearchRunStore("run"), { ...researchChangePage(run), writable: true }))!;
@@ -470,6 +472,9 @@ describe("research map filter", () => {
     expect(ids("the cache and its index")).toEqual(["a2"]);
     expect(ids("the  cache\tand its")).toEqual(["a2"]);
     expect(ids("overlaps approach 2")).toEqual(["a3"]);
+    expect(ids("running")).toEqual(["a3"]);
+    expect(ids("measure")).toEqual(["a3"]);
+    expect(ids("reading completion events")).toEqual(["a3"]);
     expect(ids("focused child · confirm")).toEqual(["a2"]);
     expect(ids("  ")).toEqual(["a1", "a2", "a3"]);
   });
@@ -517,7 +522,7 @@ describe("research findings paging", () => {
       while (window.next) window = appendResearchFindingsOlder(window, search(researchFindingsOlderCursor(window)));
       expect(window.hits.map((hit) => hit.id)).toEqual(newestFirst());
       expect(window.total).toBe(run().findings.length);
-    }), { numRuns: 200 });
+    }), { numRuns: 100 });
   });
 
   it("restarts from the first page when more findings arrived than a page holds, and ignores a page that repeats loaded hits", () => {

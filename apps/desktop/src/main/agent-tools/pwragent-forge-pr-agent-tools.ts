@@ -41,7 +41,7 @@ export type ForgePrToolPreflightResult = Omit<ForgePrToolPreparedCall, "mergeMet
 const SCOPE = "Works on GitHub and GitLab, in this thread's repository, with the operator's gh or glab sign-in.";
 const ASKS = "The operator's Settings → Git policy may ask them first, or refuse.";
 const descriptions: Record<ForgePrToolOperation, string> = {
-  list_stacks: "Read PR stacks in this thread's linked checkouts. Lists catalog and inferred stacks, bottom-first branch order, PRs, layer health and associated threads.",
+  list_stacks: "Read PR stacks in this thread's linked checkouts. Lists catalog, GitHub and inferred stacks, bottom-first branch order, PRs, layer health and associated threads. githubStack is the stack's number on GitHub: merging a layer there also merges every open layer below it.",
   plan_stack_operation: "Forecast a local restack, sync, add_branch, adopt or remove. Returns a plan ID, replay proof or conflicts, dirty overlaps and affected threads.",
   apply_stack_operation: "Apply a local stack plan. Waits for affected threads to finish their turns. Use manage_stack_operation with the returned operation ID.",
   publish_stack_layer: `Advance one tracked PR layer. Syncs it after its parent merges, or restacks it after lower layers settle, then publishes it with an exact lease. ${ASKS}`,

@@ -37,6 +37,7 @@ import { initializeDesktopSettingsService } from "./settings/desktop-settings-si
 import { initializeDesktopBackendRegistry } from "./app-server/backend-registry";
 import { getDesktopAppServerService, initializeDesktopAppServerService, startAppServerOwnerNavigation } from "./app-server/desktop-app-server-service";
 import { setGithubThreadMergeObserver } from "./pr-status/github-pr-fetcher";
+import { createGitHubRepositoryParentLookup } from "./pr-status/github-repository-parent";
 import { initializeDesktopFederationRuntime } from "./federation/federation-runtime";
 import { initializeDesktopMessagingRuntime } from "./messaging/messaging-runtime";
 import { reconcileAppUpdateRestart, subscribeAgentUpdateNotices } from "./messaging/agent-update-notices";
@@ -433,9 +434,13 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   const federationLease = initializeRuntimeFederationLeaseCoordinator();
   const messagingLease = initializeRuntimeMessagingLeaseCoordinator();
   const mcpGateway = initializeMcpConnectionGatewayService();
+  const resolveGitHubRepositoryParent = createGitHubRepositoryParentLookup((...args) =>
+    getDesktopAppServerService().getForgeCiClient().requestGithub(...args));
   const registry = initializeDesktopBackendRegistry(() => createDesktopBackendRegistry({
     ownerAdmission: new ProfileThreadOwnerAdmission(() => leaseManager),
     configStore: config,
+    resolveGitHubRepositoryParent: (fork) => settings.isForgeEnabled("github")
+      ? resolveGitHubRepositoryParent(fork) : undefined,
     useMachineAcpDiscovery: !host.runtimePolicy || host.runtimePolicy.enabledBackends.some(isAcpBackendId),
     useMachineClaudeDiscovery: !host.runtimePolicy || host.runtimePolicy.enabledBackends.includes("claude"),
   }));

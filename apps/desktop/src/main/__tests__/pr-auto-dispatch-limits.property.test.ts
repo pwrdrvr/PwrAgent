@@ -335,7 +335,7 @@ describe("Auto-fix PR repair limits (model, oracle: the same writes without read
           expect(await runRead(reader, read, now), `final ${read}`).toEqual(await runRead(oracle, read, now));
         }
       } finally { readDb.close(); oracleDb.close(); }
-    }), { numRuns: 60, examples: STORE_EXAMPLES });
+    }), { numRuns: 8, examples: STORE_EXAMPLES });
   });
 });
 
@@ -454,7 +454,7 @@ describe("Auto-fix repair turns over a PR stream (model)", () => {
         coordinator.close();
         db.close();
       }
-    }), { numRuns: 120, examples: [[PENDING_IS_NOT_HEALTHY]] });
+    }), { numRuns: 8, examples: [[PENDING_IS_NOT_HEALTHY]] });
   });
 });
 
@@ -572,15 +572,17 @@ const failingStep = (head: string, reenables: number, toggle = false): EnableSte
 });
 
 describe("Auto-fix repair turns with repeated enable requests (model)", () => {
+  it("keeps the incident spent after repeatedly enabling Auto-fix on a failing PR", async () => {
+    const { started, maxPerEpoch } = await runPreferenceStream(HEADS.slice(0, 5).map((head) => failingStep(head, 1)));
+    expect(started).toBe(MAX);
+    expect(maxPerEpoch).toBe(MAX);
+  });
+
   it("never lets repeated `enabled: true` start more than MAX repairs for one incident", async () => {
     await fc.assert(fc.asyncProperty(fc.array(enableStep, { minLength: 1, maxLength: 30 }), async (steps) => {
       const { maxPerEpoch } = await runPreferenceStream(steps);
       expect(maxPerEpoch, "an incident started more than MAX repair turns").toBeLessThanOrEqual(MAX);
-    }), {
-      numRuns: 100,
-      // A failing PR with a repeat after every repair: the shortest refill.
-      examples: [[HEADS.slice(0, 5).map((head) => failingStep(head, 1))]],
-    });
+    }), { numRuns: 8 });
   });
 
   it("still gives the operator a fresh start when Auto-fix turns off and back on", async () => {

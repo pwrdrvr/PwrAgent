@@ -73,6 +73,15 @@ export class GitReadCache<T> {
     return this.pending.get(key) ?? this.readCompleted(key);
   }
 
+  /** Serve the last observation immediately and coalesce any refresh in the background. */
+  readInBackground(key: string, load: () => Promise<T>): T | undefined {
+    const cached = this.entries.get(key);
+    if (!cached || cached.expiresAt <= this.now()) {
+      void this.read(key, load).catch(() => {});
+    }
+    return cached?.failed === false ? cached.value : undefined;
+  }
+
   /** Publish a prepared observation with its original lifetime. */
   prime(key: string, value: T, observedAt: number): void {
     const now = this.now();

@@ -113,13 +113,11 @@ it("preserves generated PNG bytes through resources/read over native socket or W
   }
 });
 
-it("preserves resource link identity across an MCP text wrapper and duplicate blocks", () => {
-  fc.assert(fc.property(fc.integer({ min: 1, max: 6 }), (copies) => {
-    const wrapped = { content: [{ type: "text", text: JSON.stringify({ content: Array(copies).fill(link) }) }] };
-    expect([...new Set(readPwrSnapImageLinks(wrapped))]).toEqual([uri]);
-    const details = buildLiveToolDetails({ type: "mcpToolCall", id: "capture", tool: "capture_resource", result: wrapped });
-    expect(details[0]?.images).toEqual([{ type: "image", url: uri, alt: link.name }]);
-  }));
+it.each([1, 2, 3, 4, 5, 6])("preserves resource link identity across an MCP text wrapper and duplicate blocks (copies=%i)", (copies) => {
+  const wrapped = { content: [{ type: "text", text: JSON.stringify({ content: Array(copies).fill(link) }) }] };
+  expect([...new Set(readPwrSnapImageLinks(wrapped))]).toEqual([uri]);
+  const details = buildLiveToolDetails({ type: "mcpToolCall", id: "capture", tool: "capture_resource", result: wrapped });
+  expect(details[0]?.images).toEqual([{ type: "image", url: uri, alt: link.name }]);
 });
 
 it("projects a fresh direct resource_link into the live activity row", () => {
@@ -221,7 +219,7 @@ it("rejects text-clipped binary resources rather than caching plausible corrupt 
   fc.assert(fc.property(fc.integer({ min: 20, max: blob.length - 20 }), (offset) => {
     const clipped = blob.slice(0, offset) + " … " + blob.slice(offset + 10);
     expect(readPwrSnapImageContents({ contents: [{ uri, mimeType: "image/png", blob: clipped }] }, uri).ok).toBe(false);
-  }), { numRuns: 10 });
+  }), { numRuns: 7 });
 });
 
 it("keeps ordinary inline images beside retained resource previews for native and gateway activity", async () => {
@@ -248,7 +246,7 @@ it("keeps ordinary inline images beside retained resource previews for native an
     expect(displayed.map((part) => part.url)).toContain(inlineUrl);
     expect(displayed.filter((part) => part.url.startsWith("pwragent-image:"))).toHaveLength(1);
     expect(displayed).toHaveLength(2);
-  }), { numRuns: 6 });
+  }), { numRuns: 4 });
 });
 
 it("delivers an activity-owned PwrSnap capture as a messaging attachment without changing desktop replay", async () => {

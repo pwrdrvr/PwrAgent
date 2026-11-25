@@ -98,19 +98,47 @@ describe("persistent GitHub release budget", () => {
   });
 
   it("persists rate-limit reset across endpoints, profiles, and manual checks", async () => {
-    const resetAt = Date.now() + 60 * 60_000;
+    const successfulAt = Date.now();
+    await read(APP, { manual: true });
+    vi.setSystemTime(successfulAt + RELEASE_FIRST_CHECK_DELAY_MS);
+    const resetAt = Date.now() + 60_000;
     network.mockResolvedValueOnce(new Response("limited", { status: 403, headers: {
       "x-ratelimit-remaining": "0", "x-ratelimit-reset": String(resetAt / 1_000),
     } }));
     expect((await read(APP, { manual: true })).status).toBe(403);
+    vi.setSystemTime(resetAt - 1);
+    await expect(read(APP, { manual: true })).rejects.toMatchObject({ reason: "rate-limit", retryAt: resetAt });
     await expect(read(GIT, { manual: true })).rejects.toMatchObject({ reason: "rate-limit", retryAt: resetAt });
     await expect(read(SNAP)).rejects.toMatchObject({ reason: "rate-limit", retryAt: resetAt });
     expect(() => reserveAppReleaseCheck(true, options())).toThrow(ReleaseCheckDeferredError);
-    expect(network).toHaveBeenCalledTimes(1);
-    vi.setSystemTime(resetAt);
-    await read(GIT);
     expect(network).toHaveBeenCalledTimes(2);
+    vi.setSystemTime(resetAt);
+    await expect(read(APP)).resolves.toMatchObject({ observedAt: successfulAt });
+    await expect(read(APP, { manual: true })).resolves.toMatchObject({ observedAt: resetAt });
+    await read(GIT);
+    expect(network).toHaveBeenCalledTimes(4);
   });
+
+  it.each([
+    { failedAtMinute: 11, eligibleAtMinute: 60 },
+    { failedAtMinute: 58, eligibleAtMinute: 63 },
+  ])("resumes automatic requests at minute $eligibleAtMinute after a manual failure at minute $failedAtMinute",
+    async ({ failedAtMinute, eligibleAtMinute }) => {
+      const successfulAt = Date.now();
+      await read(APP, { manual: true });
+      vi.setSystemTime(successfulAt + failedAtMinute * 60_000);
+      network.mockResolvedValueOnce(new Response("unavailable", { status: 503 }));
+      expect((await read(APP, { manual: true })).status).toBe(503);
+
+      const eligibleAt = successfulAt + eligibleAtMinute * 60_000;
+      vi.setSystemTime(eligibleAt - 1);
+      await expect(read(APP)).resolves.toMatchObject({ observedAt: successfulAt });
+      expect(network).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(eligibleAt);
+      await expect(read(APP)).resolves.toMatchObject({ observedAt: eligibleAt });
+      expect(network).toHaveBeenCalledTimes(3);
+    });
 
   it("persists exponential failure backoff and honors Retry-After", async () => {
     await defer(read());

@@ -6,7 +6,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useCallback, useState, type FormEvent } from "react";
 import type { NativeVoiceApi, NativeVoiceCapability } from "../../../../../shared/native-voice";
 import { NativeVoiceBar, NativeVoiceToggle, threadVoiceTarget, useNativeVoiceNotices } from "../NativeVoice";
-import { DirectorVoiceButton, DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice } from "../DirectorVoice";
+import {
+  DirectorVoiceButton, DirectorVoiceComposerToggle, DirectorVoicePanel, operatorFocusFor, toggleDirectorVoice, useDirectorVoiceShortcut,
+} from "../DirectorVoice";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { AppNoticeToast, type AppNoticeToastNotice } from "../../notifications/AppNoticeToast";
 import { getWindowNativeVoiceController, MUTED_IDLE_END_MS, MUTED_STALL_END_MS, type NativeVoiceController } from "../native-voice-controller";
@@ -236,11 +238,15 @@ it("sends voice text by click and Enter without submitting or changing the codin
   const input = await openTranscript();
   expect(document.querySelectorAll("form")).toHaveLength(1);
   fireEvent.change(input, { target: { value: "Sample voice message" } });
-  fireEvent.click(screen.getByRole("button", { name: "Send to voice" }));
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send to voice" })); });
   fireEvent.change(input, { target: { value: "Another voice message" } });
-  expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(false);
-  expect(fireEvent.keyDown(input, { key: "Enter", isComposing: true })).toBe(false);
+  await act(async () => {
+    expect(fireEvent.keyDown(input, { key: "Enter" })).toBe(false);
+    expect(fireEvent.keyDown(input, { key: "Enter", isComposing: true })).toBe(false);
+  });
   expect(f.api.sendNativeVoiceText).toHaveBeenCalledTimes(2);
+  // Codex reports transcripts only for speech; the typed lines are the operator's.
+  expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("You: Sample voice messageYou: Another voice message");
   expect(submitCoding).not.toHaveBeenCalled();
   expect(codingKeys).not.toHaveBeenCalled();
   expect(screen.getByRole("textbox", { name: "Coding draft" })).toHaveValue("Sample unsent coding task");
@@ -269,8 +275,8 @@ it("retains a failed stop across unmount and exposes retry on a non-Codex compos
   expect(f.capture).toHaveBeenCalledOnce();
   fireEvent.click(screen.getByRole("button", { name: "End voice" }));
   await waitFor(() => expect(screen.queryByRole("button", { name: "End voice" })).not.toBeInTheDocument());
-  expect(f.api.stopNativeVoice).toHaveBeenNthCalledWith(1, { sessionId });
-  expect(f.api.stopNativeVoice).toHaveBeenNthCalledWith(2, { sessionId });
+  expect(f.api.stopNativeVoice).toHaveBeenNthCalledWith(1, { sessionId, cause: "thread-left" });
+  expect(f.api.stopNativeVoice).toHaveBeenNthCalledWith(2, { sessionId, cause: "end-button" });
   expect(f.owner.hasSession()).toBe(false);
   next.rerender(<Composer api={nextApi} threadId="sample-next-thread" />);
   fireEvent.click(screen.getByRole("button", { name: "Voice" }));
@@ -313,8 +319,71 @@ it("keeps director voice through navigation and shows what its tools did", async
 
   // Closing a live panel ends the session too.
   fireEvent.click(screen.getByRole("button", { name: "Close director voice" }));
-  await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledOnce());
+  await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenCalledExactlyOnceWith({ sessionId, cause: "close-button" }));
   await waitFor(() => expect(directorPanel()).toBeNull());
+});
+
+// Muted so the room's music stays out, the operator pasted a link eight
+// times: Codex reports transcripts only for speech, so none of it showed.
+it("shows a typed director message in the transcript, and keeps a failed one in the field with voice still on", async () => {
+  const f = voiceFixture();
+  render(<DirectorVoicePanel api={f.api} />);
+  await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+  await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+  fireEvent.click(screen.getByRole("button", { name: "Mute microphone" }));
+  const input = screen.getByRole("textbox", { name: "Message director" });
+  fireEvent.change(input, { target: { value: "https://example.com/sample/actions/runs/1" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); });
+  expect(screen.getByRole("log", { name: "Voice transcript" })).toHaveTextContent("You: https://example.com/sample/actions/runs/1");
+  expect(input).toHaveValue("");
+
+  vi.mocked(f.api.sendNativeVoiceText).mockRejectedValueOnce(new Error("Error invoking remote method 'native-voice:text': Error: Request timed out."));
+  fireEvent.change(input, { target: { value: "Sample second link" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); });
+  expect(screen.getByRole("alert")).toHaveTextContent("Not sent: Request timed out.");
+  expect(input).toHaveValue("Sample second link");
+  expect(input).toHaveAccessibleDescription("Not sent: Request timed out.");
+  expect(screen.getByRole("log", { name: "Voice transcript" })).not.toHaveTextContent("Sample second link");
+  expect(f.owner.getView().status).toBe("listening");
+  expect(f.api.stopNativeVoice).not.toHaveBeenCalled();
+
+  // Two quick sends that both fail: neither message is lost.
+  let rejectFirst!: (error: Error) => void;
+  vi.mocked(f.api.sendNativeVoiceText)
+    .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
+    .mockRejectedValueOnce(new Error("Request timed out."));
+  fireEvent.change(input, { target: { value: "Sample third link" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  fireEvent.change(input, { target: { value: "Sample fourth link" } });
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Send" })); });
+  await act(async () => { rejectFirst(new Error("Request timed out.")); });
+  expect(input).toHaveValue("Sample fourth link Sample third link");
+  await act(async () => { await f.owner.stop(); });
+});
+
+it("tells main which control ended director voice", async () => {
+  const f = voiceFixture();
+  function Shortcut() {
+    useDirectorVoiceShortcut(f.api);
+    return null;
+  }
+  render(<><DirectorVoiceButton api={f.api} /><DirectorVoicePanel api={f.api} /><Shortcut /></>);
+  const sessions: string[] = [];
+  for (const [end, cause] of [
+    [() => fireEvent.click(screen.getByRole("button", { name: "Director voice" })), "masthead-mic"],
+    [() => fireEvent.click(within(directorPanel()!).getByRole("button", { name: "End director voice" })), "end-button"],
+    [() => fireEvent.keyDown(window, { code: "Space", key: " ", shiftKey: true, metaKey: true }), "shortcut"],
+  ] as const) {
+    if (directorPanel()) fireEvent.click(within(directorPanel()!).getByRole("button", { name: "Close director voice" }));
+    await act(async () => { await toggleDirectorVoice(f.api, f.owner); });
+    await waitFor(() => expect(f.owner.getView().status).toBe("listening"));
+    const sessionId = vi.mocked(f.api.startNativeVoice).mock.calls.at(-1)![0].sessionId;
+    sessions.push(sessionId);
+    end();
+    await waitFor(() => expect(f.api.stopNativeVoice).toHaveBeenLastCalledWith({ sessionId, cause }));
+    await waitFor(() => expect(f.owner.getView().status).toBe("idle"));
+  }
+  expect(new Set(sessions).size).toBe(3);
 });
 
 // Ask, mute, listen: the session ends after the reply, and the operator
@@ -341,7 +410,7 @@ it("keeps the director transcript after a muted session ends, until closed or st
     vi.useRealTimers();
   }
   await waitFor(() => expect(f.owner.getView().status).toBe("idle"));
-  expect(f.api.stopNativeVoice).toHaveBeenCalledOnce();
+  expect(f.api.stopNativeVoice).toHaveBeenCalledExactlyOnceWith({ sessionId, cause: "muted-idle" });
 
   const panel = directorPanel();
   expect(panel).toHaveTextContent("Ended after the reply");
