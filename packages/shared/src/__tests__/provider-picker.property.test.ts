@@ -37,7 +37,14 @@ const UNREACHABLE_ERRORS = [
   "getaddrinfo ENOTFOUND flint.local",
 ];
 /** Reads the endpoint answered with an error: a misconfigured provider. */
-const ANSWERED_ERRORS = ["HTTP 401", "HTTP 503: model is loading", "The response was larger than 8 MiB."];
+const ANSWERED_ERRORS = [
+  "HTTP 401",
+  "HTTP 503: model is loading",
+  // A gateway's body can quote a network failure; the gateway still answered.
+  "HTTP 502: upstream did not answer",
+  "HTTP 504: connect ECONNREFUSED 10.0.0.4:8000",
+  "The response was larger than 8 MiB.",
+];
 
 const provider = fc.record({
   id: fc.constantFrom(...PROVIDER_IDS),

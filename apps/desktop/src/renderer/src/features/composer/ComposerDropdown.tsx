@@ -230,7 +230,8 @@ export function ComposerDropdown(props: {
 
   // The flyout is first placed from an estimate of 40px rows, but a row
   // with a description line is taller. Once it is laid out, place it again
-  // from its real height.
+  // from its real height, and again whenever its rows change while open
+  // (a provider's catalog state can arrive then).
   useLayoutEffect(() => {
     if (!open || !showingOther) return;
     const row = otherButtonRef.current?.getBoundingClientRect();
@@ -238,12 +239,14 @@ export function ComposerDropdown(props: {
     if (!row || !height) return;
     const top = otherMenuTop(row, height);
     setOtherMenuPosition((current) => (Math.abs(current.top - top) < 0.5 ? current : { ...current, top }));
-  }, [open, showingOther, otherOptions.length, otherMenuTop]);
+  }, [open, showingOther, props.otherOptions, otherMenuTop]);
 
   useEffect(() => {
     if (!open || !props.triggerRole) return;
     const selected = ref.current?.querySelector<HTMLButtonElement>('[role="option"][aria-selected="true"]');
-    const first = ref.current?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled):not([aria-haspopup])');
+    // The first real choice, or the Other row when every real choice is off.
+    const first = ref.current?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled):not([aria-haspopup])')
+      ?? ref.current?.querySelector<HTMLButtonElement>('[role="option"]:not(:disabled)');
     (selected ?? first)?.focus();
   }, [open, props.triggerRole, ref]);
 
@@ -361,12 +364,13 @@ export function ComposerDropdown(props: {
 
   const listContent = (
     <>
-      {otherFirst ? otherRow : null}
       {groups.length > 0 && props.optionsLabel && props.options.length > 0 ? (
         <div aria-hidden="true" className="composer-dropdown__group-label">
           <span>{props.optionsLabel}</span>
         </div>
       ) : null}
+      {/* Under the options' title: its older models belong to that section. */}
+      {otherFirst ? otherRow : null}
       {renderOptions(props.options, listboxId, false)}
       {groups.map((group, groupIndex) => (
         <div

@@ -243,6 +243,8 @@ export function codexModelProviderOffline(
 ): boolean {
   return catalog?.status === "unavailable"
     && catalog.error !== undefined
+    // An HTTP status means the endpoint answered, whatever its body says.
+    && !/^HTTP \d/u.test(catalog.error)
     && UNREACHABLE_CATALOG_ERROR.test(catalog.error);
 }
 

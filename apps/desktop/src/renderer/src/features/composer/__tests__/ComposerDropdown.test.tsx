@@ -309,6 +309,75 @@ describe("ComposerDropdown menu action", () => {
     fireEvent.click(screen.getByRole("option", { name: "Unavailable" }));
     expect(screen.getByRole("listbox", { name: "Provider: Unavailable" })).toHaveStyle({ top: "408px" });
   });
+
+  it("keeps the Other row under the options' title when provider groups follow", () => {
+    render(
+      <ComposerDropdown
+        ariaLabel="Model"
+        groups={[{ label: "PrismML Bonsai (local)", options: [{ value: "@bonsai/b", label: "Bonsai-27B" }] }]}
+        onChange={vi.fn()}
+        options={[{ value: "gpt-6.1-sol", label: "GPT-6.1-Sol" }]}
+        optionsLabel="OpenAI"
+        otherOptions={[{ value: "gpt-5.6-sol", label: "GPT-5.6-Sol" }]}
+        value="gpt-6.1-sol"
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Model(?::|$)/ }));
+    const title = screen.getAllByText("OpenAI").find((node) =>
+      node.closest(".composer-dropdown__group-label"))!;
+    const other = screen.getByRole("option", { name: "Other" });
+    expect(title.compareDocumentPosition(other) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(composerOptionLabels()).toEqual(["Other", "GPT-6.1-Sol", "Bonsai-27B"]);
+  });
+
+  it("focuses the Other row on open when every other choice is off", () => {
+    render(
+      <ComposerDropdown
+        ariaLabel="To-do model"
+        onChange={vi.fn()}
+        options={[{ value: "gpt-6.1-sol", label: "GPT-6.1-Sol", disabled: true }]}
+        otherOptions={[{ value: "gpt-5.6-sol", label: "GPT-5.6-Sol" }]}
+        triggerRole="menuitem"
+        value="none"
+      />,
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: /^To-do model/ }));
+    expect(screen.getByRole("option", { name: "Other" })).toHaveFocus();
+  });
+
+  it("places an open flyout again when its rows change height", () => {
+    let flyoutHeight = 132;
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(800);
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+      if (this.matches(".composer-dropdown__menu--other")) return new DOMRect(0, 0, 260, flyoutHeight);
+      if (this.getAttribute("aria-haspopup") === "listbox") return new DOMRect(0, 560, 260, 40);
+      return new DOMRect(0, 0, 0, 0);
+    });
+    const props = {
+      ariaLabel: "Provider",
+      menuPlacement: "below" as const,
+      onChange: vi.fn(),
+      options: [{ value: "codex", label: "OpenAI" }],
+      otherLabel: "Unavailable",
+      value: "codex",
+    };
+    const view = render(
+      <ComposerDropdown {...props} otherOptions={[{ value: "slate", label: "Slate", description: "No models yet." }]} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Provider(?::|$)/ }));
+    fireEvent.click(screen.getByRole("option", { name: "Unavailable" }));
+    const flyout = screen.getByRole("listbox", { name: "Provider: Unavailable" });
+    expect(flyout).toHaveStyle({ top: "468px" });
+    // The catalog read finishes while the flyout is open: a longer line, a
+    // taller flyout, the same row count. Its bottom still meets the row.
+    flyoutHeight = 152;
+    view.rerender(
+      <ComposerDropdown {...props} otherOptions={[{
+        value: "slate", label: "Slate", description: "No models. Catalog unavailable: HTTP 401 Incorrect API key provided",
+      }]} />,
+    );
+    expect(flyout).toHaveStyle({ top: "448px" });
+  });
 });
 
 function composerOptionLabels(): string[] {
