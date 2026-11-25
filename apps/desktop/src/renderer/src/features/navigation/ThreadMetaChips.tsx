@@ -1,7 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SyntheticEvent } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
-import { isBranchDrifted } from "@pwragent/shared/contracts/branch-drift";
 import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
 import {
   BranchIcon,
@@ -89,6 +88,15 @@ type ThreadMetaChipsProps = {
    * of trailing the row.
    */
   prChips?: ReactNode;
+  /**
+   * Show the git chips (branch, uncommitted, unpushed) and the to-do count
+   * as they were when this became true, until it turns false. The thread
+   * list sets it while a thread is mid-turn and not the open thread: an
+   * agent edits, commits and pushes many times a turn, and each change
+   * resized the row and moved every row below it. Chips that wait on the
+   * operator stay live.
+   */
+  holdWorkProgress?: boolean;
   thread: NavigationThreadSummary;
 };
 
@@ -114,9 +122,47 @@ function ThreadMetaTooltip({ request, dismiss }: {
   return tooltipNode;
 }
 
+/**
+ * `value`, or while `hold` is true, the value last committed before it
+ * became true. A row that mounts held has nothing older to show, so it
+ * shows its first value.
+ */
+function useHeldWhile<T>(value: T, hold: boolean): T {
+  const committed = useRef(value);
+  const shown = hold ? committed.current : value;
+  // Only a committed render updates what a later hold shows.
+  useLayoutEffect(() => {
+    committed.current = shown;
+  });
+  return shown;
+}
+
+type WorkProgress = Pick<
+  NavigationThreadSummary,
+  "gitBranch" | "gitWorkingState" | "observedGitBranch"
+>;
+
+function useHeldWorkProgressThread(
+  thread: NavigationThreadSummary,
+  hold: boolean,
+): NavigationThreadSummary {
+  const held = useHeldWhile<WorkProgress>({
+    gitBranch: thread.gitBranch,
+    gitWorkingState: thread.gitWorkingState,
+    observedGitBranch: thread.observedGitBranch,
+  }, hold);
+  // Every other field stays live: identity, PRs, federation, agent.
+  return useMemo(
+    () => hold ? { ...thread, ...held } : thread,
+    [hold, held, thread],
+  );
+}
+
 export function ThreadMetaChips(props: ThreadMetaChipsProps) {
+  const holdWorkProgress = props.holdWorkProgress === true;
+  const thread = useHeldWorkProgressThread(props.thread, holdWorkProgress);
   const itemThreadKey = threadSummaryIdentityKey(props.thread);
-  const openTodos = useThreadTodosForKey(itemThreadKey);
+  const openTodos = useHeldWhile(useThreadTodosForKey(itemThreadKey), holdWorkProgress);
   const context = useOperatorWaitsContext();
   const waits = context?.waitsByThreadKey.get(itemThreadKey) ?? NO_WAITS;
   const dependencies = useThreadDependencyIndicatorsContext();
@@ -130,6 +176,7 @@ export function ThreadMetaChips(props: ThreadMetaChipsProps) {
   }
   return <ThreadMetaChipsContent
     {...props}
+    thread={thread}
     waits={waits}
     openWait={context?.openWait}
     openTodos={openTodos}
@@ -215,7 +262,6 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
     openItemNoun,
     unreadItemCount,
   ) + (openTodoCards ? "\nClick to show" : "");
-  const branchDrifted = isBranchDrifted(thread.gitBranch, thread.observedGitBranch);
   const branchChip = thread.gitBranch ?? thread.observedGitBranch;
   const gitWorking = thread.gitWorkingState;
   const branchTooltip = useMemo(
@@ -590,22 +636,9 @@ const ThreadMetaChipsContent = memo(function ThreadMetaChipsContent({
         </CopyableThreadChip>
       ) : null}
 
-      {branchDrifted && thread.observedGitBranch ? (
-        <CopyableThreadChip
-          aria-label={formatBranchCopyLabel({
-            branch: thread.observedGitBranch,
-            kind: "current",
-          })}
-          className="thread-row__chip path-copy-target tooltip-target thread-row__chip--muted thread-row__chip--mono"
-          delayedTooltip
-          value={thread.observedGitBranch}
-        >
-          <span aria-hidden="true" className="thread-row__chip-icon">
-            !
-          </span>
-          <span className="thread-row__chip-label">now {thread.observedGitBranch}</span>
-        </CopyableThreadChip>
-      ) : null}
+      {/* No drift chip ("! now <branch>") beside it: agents switch branches
+          mid-turn all the time, so it came and went on rows nobody had
+          open. The open thread warns about drift (ThreadWarnings). */}
 
       {hasDirtyState || hasUntracked ? (
         <span

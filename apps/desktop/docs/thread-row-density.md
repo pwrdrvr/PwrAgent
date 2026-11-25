@@ -34,3 +34,28 @@ Density is `<html data-density>`: absent for Mission Control, `compact`, or
   rule twice: the `:root[data-density="…"] … :not(:is(.density-preview, [data-xray-target]) *)`
   half and the `.density-preview--… ` half.
   `styles/__tests__/density-contract.test.ts` fails when a rule lacks either.
+
+## Working rows hold their progress chips
+
+An agent edits, commits, pushes and adds to-do cards many times a turn. Each
+change resized its row and moved every row below it, including the row under
+the pointer. So while a thread is mid-turn (`getThreadRowStatus` says
+`thinking`) and is not the open thread, its row passes `holdWorkProgress` to
+`ThreadMetaChips`, which shows these as they were when the hold began:
+
+- the branch chip (`gitBranch`, `observedGitBranch`);
+- the uncommitted and unpushed chips (`gitWorkingState`);
+- the to-do count's cards.
+
+Opening the thread, or the turn ending, shows the live values at once. Every
+other chip stays live: approvals, input, questions and held messages wait on
+the operator, PR chips mark a milestone, and drafts are the operator's own.
+A row that mounts mid-turn shows its first values. X-ray and chip tooltips
+show what the row shows.
+
+Rows show no branch-drift chip (`! now <branch>`). Agents switch branches
+mid-turn, so it came and went on rows nobody had open; the open thread's
+`ThreadWarnings` names the drift.
+
+`__tests__/thread-row-work-progress.model.test.tsx` checks these rules
+against an idle row rendered from the expected values.

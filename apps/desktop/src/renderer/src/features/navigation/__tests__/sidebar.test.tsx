@@ -9600,7 +9600,7 @@ describe("Sidebar", () => {
     expect(copyText).toHaveBeenCalledWith("ab12cd3344556677889900aabbccddeeff001122");
   });
 
-  it("shows when the local branch diverged from the codex thread branch", () => {
+  it("leaves branch drift to the open thread instead of the row", () => {
     render(
       <Sidebar
         backends={backends}
@@ -9628,7 +9628,9 @@ describe("Sidebar", () => {
       />
     );
 
-    expect(screen.getByText("now main")).toBeInTheDocument();
+    // The row keeps the recorded branch; ThreadWarnings names the drift.
+    expect(screen.queryByText("now main")).not.toBeInTheDocument();
+    expect(screen.getAllByText("codex/thread-centric-ui").length).toBeGreaterThan(0);
   });
 
   it("opens a new-thread draft from the masthead action", async () => {
