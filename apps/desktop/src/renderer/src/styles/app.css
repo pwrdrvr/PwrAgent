@@ -38383,6 +38383,8 @@ div.composer-error-row__toggle {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  /* A question's legend would otherwise sit 2px right of its options. */
+  padding: 0;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 650;
@@ -38396,7 +38398,7 @@ div.composer-error-row__toggle {
 }
 
 .transcript-mcp__field input,
-.transcript-mcp__field select {
+.transcript-mcp__field .select-trigger {
   min-height: 36px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -38407,12 +38409,12 @@ div.composer-error-row__toggle {
 }
 
 .transcript-mcp__field input:focus,
-.transcript-mcp__field select:focus {
+.transcript-mcp__field .select-trigger:focus {
   border-color: var(--accent-border);
 }
 
 .transcript-mcp__field input:focus-visible,
-.transcript-mcp__field select:focus-visible {
+.transcript-mcp__field .select-trigger:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }

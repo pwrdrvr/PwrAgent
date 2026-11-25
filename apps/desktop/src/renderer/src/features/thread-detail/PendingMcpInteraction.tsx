@@ -5,7 +5,7 @@ import {
   type ThreadTodoMergeMethod,
 } from "@pwragent/shared/contracts/thread-todos";
 import { type ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
-import { placeListbox, type ListboxPlacement } from "../../components/Select";
+import { placeListbox, Select, type ListboxPlacement } from "../../components/Select";
 import { CheckIcon, ChevronDownIcon } from "../../icons";
 import { openExternalUrl } from "../../lib/open-external-url";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
@@ -14,6 +14,7 @@ import {
   canAcceptMcpElicitation,
   mcpElicitationPurposeLabel,
   mcpFieldFormatError,
+  mcpFieldGroups,
   mcpFieldFormatPlaceholder,
   mcpSecretFields,
   redactDisplayValue,
@@ -22,12 +23,14 @@ import {
   readMcpMergeQueue,
   readMcpProjectApprovalOffer,
   readMcpRememberOptions,
+  readRecommendedOptionLabel,
   updateMcpFieldValue,
   type McpApprovalPersistence,
   type PendingMcpField,
   type PendingMcpInteractionState,
 } from "./mcp-elicitation";
 import { isLongMcpText, markdownNeedsSource, PendingMcpLongText } from "./PendingMcpLongText";
+import { resizeFreeformTextarea } from "./PendingQuestionnaire";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type PendingMcpInteractionProps = {
@@ -191,11 +194,12 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
 
       {props.state.form && props.state.form.fields.length > 0 ? (
         <div className="transcript-mcp__fields">
-          {props.state.form.fields.map((field) => (
+          {mcpFieldGroups(props.state).map(({ field, other }) => (
             <PendingMcpFieldControl
               key={field.key}
               busy={props.busy}
               field={field}
+              other={other}
               state={props.state}
               onChange={props.onChange}
             />
@@ -512,6 +516,8 @@ function PendingMcpAllowSplit(props: PendingMcpAllowSplitProps) {
 type PendingMcpFieldControlProps = {
   busy?: boolean;
   field: PendingMcpField;
+  /** An agent question's free-text answer, drawn inside the question. */
+  other?: PendingMcpField;
   state: PendingMcpInteractionState;
   onChange: (state: PendingMcpInteractionState) => void;
 };
@@ -519,6 +525,11 @@ type PendingMcpFieldControlProps = {
 function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
   const descriptionId = `${props.state.requestId}-${props.field.key}-description`;
   const requiredText = props.field.required ? "Required" : "Optional";
+
+  if (props.state.purpose === "agent-question"
+    && (props.field.kind === "singleSelect" || props.field.kind === "multiSelect")) {
+    return <PendingAgentQuestion {...props} field={props.field} />;
+  }
 
   if (props.field.kind === "secret") {
     return (
@@ -565,29 +576,27 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
   }
 
   if (props.field.kind === "singleSelect") {
+    const field = props.field;
     return (
       <label className="transcript-mcp__field">
         <span className="transcript-mcp__field-label">
-          <span>{props.field.label}</span>
+          <span>{field.label}</span>
           <span>{requiredText}</span>
         </span>
-        <select
-          aria-describedby={props.field.description ? descriptionId : undefined}
+        <Select
+          aria-describedby={field.description ? descriptionId : undefined}
           disabled={props.busy}
-          value={props.field.value}
-          onChange={(event) => {
-            props.onChange(
-              updateMcpFieldValue(props.state, props.field.key, event.target.value)
-            );
+          // An optional choice can go back to no answer, as the empty
+          // value it starts with.
+          options={field.required
+            ? field.options
+            : [{ value: "", label: "No answer" }, ...field.options]}
+          placeholder="Choose..."
+          value={field.value}
+          onChange={(value) => {
+            props.onChange(updateMcpFieldValue(props.state, field.key, value));
           }}
-        >
-          <option value="">Choose...</option>
-          {props.field.options.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        />
         {props.field.description ? (
           <span id={descriptionId} className="transcript-mcp__field-help">
             {props.field.description}
@@ -690,6 +699,91 @@ function PendingMcpFieldControl(props: PendingMcpFieldControlProps) {
         <span id={errorId} className="transcript-mcp__field-error">{formatError}</span>
       ) : null}
     </label>
+  );
+}
+
+type PendingAgentQuestionProps = PendingMcpFieldControlProps & {
+  field: Extract<PendingMcpField, { kind: "singleSelect" | "multiSelect" }>;
+};
+
+/**
+ * An agent's question, such as Antigravity's ask_question, drawn the way the
+ * questionnaire card draws Claude's and Codex's: every option in view, the
+ * recommended one marked, and the Other answer inside the question.
+ */
+function PendingAgentQuestion(props: PendingAgentQuestionProps) {
+  const field = props.field;
+  const other = props.other?.kind === "string" ? props.other : undefined;
+  const otherRef = useRef<HTMLTextAreaElement>(null);
+  const otherValue = other?.value ?? "";
+  useLayoutEffect(() => {
+    resizeFreeformTextarea(otherRef.current);
+  }, [otherValue]);
+
+  const isSelected = (value: string): boolean => field.kind === "multiSelect"
+    ? field.value.includes(value)
+    : field.value === value;
+  const toggle = (value: string): string | string[] => {
+    if (field.kind === "multiSelect") {
+      return field.value.includes(value)
+        ? field.value.filter((entry) => entry !== value)
+        : [...field.value, value];
+    }
+    // A second click withdraws an optional answer.
+    return field.value === value && !field.required ? "" : value;
+  };
+
+  return (
+    <fieldset className="transcript-mcp__field">
+      <legend className="transcript-mcp__field-label">
+        <span>{field.label}</span>
+        <span>{field.required ? "Required" : "Optional"}</span>
+      </legend>
+      <div className="transcript-mcp__options">
+        {field.options.map((option) => {
+          const selected = isSelected(option.value);
+          const { label, recommended } = readRecommendedOptionLabel(option.label);
+          return (
+            <button
+              key={option.value}
+              className={`transcript-questionnaire__option${selected ? " is-selected" : ""}`}
+              type="button"
+              aria-pressed={selected}
+              disabled={props.busy}
+              onClick={() => {
+                props.onChange(updateMcpFieldValue(props.state, field.key, toggle(option.value)));
+              }}
+            >
+              <span className="transcript-questionnaire__option-label">
+                <span>{label}</span>
+                {recommended ? (
+                  <span className="transcript-questionnaire__recommended">Recommended</span>
+                ) : null}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {field.description ? (
+        <span className="transcript-mcp__field-help">{field.description}</span>
+      ) : null}
+      {other ? (
+        <label className="transcript-questionnaire__freeform">
+          <span>Other answer</span>
+          <textarea
+            ref={otherRef}
+            disabled={props.busy}
+            maxLength={other.maxLength}
+            rows={1}
+            value={otherValue}
+            onChange={(event) => {
+              resizeFreeformTextarea(event.currentTarget);
+              props.onChange(updateMcpFieldValue(props.state, other.key, event.target.value));
+            }}
+          />
+        </label>
+      ) : null}
+    </fieldset>
   );
 }
 
