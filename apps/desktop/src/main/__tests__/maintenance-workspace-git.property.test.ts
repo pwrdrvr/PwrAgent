@@ -3,8 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import fc from "fast-check";
-import { expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as gitBoundary from "../app-server/git-executable";
 import { inspectMaintenanceWorkspace } from "../app-server/thread-maintenance-workspace";
 import { HIBERNATION_WORKSPACE_KEEP_REASONS, inspectHibernationWorkspace } from "../app-server/checkout-hibernation-workspace";
@@ -100,28 +99,39 @@ it.each(["nested cwd", "aliased cwd", "aliased nested cwd", "unrelated cwd", "ex
   },
 );
 
-it("uses one metadata launch per observation, with Git as the layout oracle after branch and cwd changes", async () => {
-  const f = await fixture();
-  const boundary = vi.spyOn(gitBoundary, "runGitCommand");
-  try {
-    const nested = path.join(f.checkout, "nested");
-    await mkdir(nested);
-    await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.boolean(), async (primary, detached, subdirectory) => {
-      await git(f.checkout, "checkout", ...(detached ? ["--detach", "main"] : ["owned"]));
-      const cwd = primary ? f.repo : subdirectory ? nested : f.checkout;
-      const admin = await git(cwd, "rev-parse", "--absolute-git-dir");
-      const common = await git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir");
-      boundary.mockClear();
-      expect(await inspectMaintenanceWorkspace(cwd, options())).toEqual({ workspace: {
-        kind: path.resolve(admin) === path.resolve(common) ? "inPlace" : "clean",
-      } });
-      const metadata = boundary.mock.calls.filter(([, args]) => args[0] === "rev-parse" && !args.includes("HEAD"));
-      expect(metadata).toHaveLength(1);
-    }), { numRuns: 25 });
-  } finally {
-    boundary.mockRestore();
-    await rm(f.root, { recursive: true, force: true });
-  }
+describe("Git layout observation", () => {
+  let f: Awaited<ReturnType<typeof fixture>>;
+  beforeAll(async () => {
+    f = await fixture();
+    await Promise.all([mkdir(path.join(f.repo, "nested")), mkdir(path.join(f.checkout, "nested"))]);
+  });
+  afterAll(async () => {
+    if (f) await rm(f.root, { recursive: true, force: true });
+  });
+
+  it.each([false, true].flatMap(primary => [false, true].flatMap(detached =>
+    [false, true].map(subdirectory => ({ primary, detached, subdirectory })))))(
+    "uses one metadata launch for the Git layout (primary=$primary, detached=$detached, subdirectory=$subdirectory)",
+    async ({ primary, detached, subdirectory }) => {
+      const boundary = vi.spyOn(gitBoundary, "runGitCommand");
+      try {
+        const checkout = primary ? f.repo : f.checkout;
+        const nested = path.join(checkout, "nested");
+        await git(checkout, "checkout", ...(detached ? ["--detach", "main"] : [primary ? "main" : "owned"]));
+        const cwd = subdirectory ? nested : checkout;
+        const admin = await git(cwd, "rev-parse", "--absolute-git-dir");
+        const common = await git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir");
+        boundary.mockClear();
+        expect(await inspectMaintenanceWorkspace(cwd, options())).toEqual({ workspace: {
+          kind: path.resolve(admin) === path.resolve(common) ? "inPlace" : "clean",
+        } });
+        const metadata = boundary.mock.calls.filter(([, args]) => args[0] === "rev-parse" && !args.includes("HEAD"));
+        expect(metadata).toHaveLength(1);
+      } finally {
+        boundary.mockRestore();
+      }
+    },
+  );
 });
 
 it.skipIf(process.platform === "win32")("preserves newline-bearing Git paths through the separate-query fallback", async () => {

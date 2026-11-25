@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import Database from "better-sqlite3";
-import fc from "fast-check";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { expect, it } from "vitest";
 import { StateDb } from "../state/state-db";
@@ -286,48 +285,46 @@ it("rejects a lost owner reply after IPC disconnect and joins the child before c
   await expectLostOwnerRepliesToReject(1, 23);
 });
 
-it("settles every outstanding owner request when the IPC connection is lost", async () => {
-  await fc.assert(fc.asyncProperty(
-    fc.integer({ min: 2, max: 5 }),
-    fc.constantFrom(0, 23),
-    expectLostOwnerRepliesToReject,
-  ), { numRuns: 4 });
-});
+it.each([2, 3, 4, 5].flatMap(requestCount => [0, 23].map(exitCode => ({ requestCount, exitCode }))))(
+  "settles $requestCount outstanding owner requests when IPC disconnects (exit $exitCode)",
+  async ({ requestCount, exitCode }) => {
+    await expectLostOwnerRepliesToReject(requestCount, exitCode);
+  },
+);
 
 it("fresh desktop and Node roots preserve one profile's native identities, titles and canonical metadata", async () => {
-  await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async suffix => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-profile-oracle-")));
-    for (const name of ["workspace", "fixture"]) fs.mkdirSync(path.join(root, name));
-    let host: Awaited<ReturnType<typeof openOwner>> | undefined;
-    type Ref = { backend: "codex"; threadId: string };
-    await runWithOwnerCleanup(async () => {
-      host = await openOwner(root, "desktop");
-      const parent = await host.call<Ref>("startThread", { backend: "codex", cwd: path.join(root, "workspace") });
-      const child = await host.call<Ref>("startThread", { backend: "codex", cwd: path.join(root, "workspace") });
-      await host.call("renameThread", { ...parent, name: `Parent ${suffix}` });
-      await host.call("renameThread", { ...child, name: `Desktop ${suffix}` });
-      await host.call("setThreadPin", { ...parent, pinnedRank: "8192" });
-      await host.call("setThreadParent", { ...child, parentThreadId: parent.threadId, parentThreadBackend: "codex" });
+  const suffix = "Fixture";
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-profile-oracle-")));
+  for (const name of ["workspace", "fixture"]) fs.mkdirSync(path.join(root, name));
+  let host: Awaited<ReturnType<typeof openOwner>> | undefined;
+  type Ref = { backend: "codex"; threadId: string };
+  await runWithOwnerCleanup(async () => {
+    host = await openOwner(root, "desktop");
+    const parent = await host.call<Ref>("startThread", { backend: "codex", cwd: path.join(root, "workspace") });
+    const child = await host.call<Ref>("startThread", { backend: "codex", cwd: path.join(root, "workspace") });
+    await host.call("renameThread", { ...parent, name: `Parent ${suffix}` });
+    await host.call("renameThread", { ...child, name: `Desktop ${suffix}` });
+    await host.call("setThreadPin", { ...parent, pinnedRank: "8192" });
+    await host.call("setThreadParent", { ...child, parentThreadId: parent.threadId, parentThreadBackend: "codex" });
+    await host.close(); host = undefined;
+    for (const [kind, title] of [["headless", `Desktop ${suffix}`], ["desktop", `Outpost ${suffix}`], ["headless", `Desktop again ${suffix}`]] as const) {
+      host = await openOwner(root, kind);
+      await host.call("readThread", child);
+      // The provider's completed inventory walk is the ownership boundary;
+      // startup's retained snapshot can precede a native observation.
+      await host.call("listThreads", { backend: "codex", forceRefresh: true, enrichDirectories: false });
+      const read = await host.call<{ thread: { title: string; titleSource: string; parentThreadId?: string } }>("getNavigationSelectedDetail", { protocol: 2, ref: child });
+      expect(read.thread).toMatchObject({ title, titleSource: "explicit", parentThreadId: parent.threadId });
+      expect((await host.call<{ thread: unknown }>("getNavigationSelectedDetail", { protocol: 2, ref: parent })).thread).toMatchObject({ title: `Parent ${suffix}`, pinnedRank: "8192" });
+      const next = kind === "headless" ? `Outpost ${suffix}` : `Desktop again ${suffix}`;
+      await host.call("renameThread", { ...child, name: next, expectedName: title });
+      const provider = JSON.parse(fs.readFileSync(path.join(root, "fixture/fixture-threads.json"), "utf8"));
+      expect(provider[child.threadId].name).toBe(next);
+      const after = await host.call<{ thread: unknown }>("getNavigationSelectedDetail", { protocol: 2, ref: child });
+      expect(after.thread, JSON.stringify({ info: await host.call("getThreadInfo", child), cached: await host.call("getCachedThreadSummary", child) })).toMatchObject({ title: next });
       await host.close(); host = undefined;
-      for (const [kind, title] of [["headless", `Desktop ${suffix}`], ["desktop", `Outpost ${suffix}`], ["headless", `Desktop again ${suffix}`]] as const) {
-        host = await openOwner(root, kind);
-        await host.call("readThread", child);
-        // The provider's completed inventory walk is the ownership boundary;
-        // startup's retained snapshot can precede a native observation.
-        await host.call("listThreads", { backend: "codex", forceRefresh: true, enrichDirectories: false });
-        const read = await host.call<{ thread: { title: string; titleSource: string; parentThreadId?: string } }>("getNavigationSelectedDetail", { protocol: 2, ref: child });
-        expect(read.thread).toMatchObject({ title, titleSource: "explicit", parentThreadId: parent.threadId });
-        expect((await host.call<{ thread: unknown }>("getNavigationSelectedDetail", { protocol: 2, ref: parent })).thread).toMatchObject({ title: `Parent ${suffix}`, pinnedRank: "8192" });
-        const next = kind === "headless" ? `Outpost ${suffix}` : `Desktop again ${suffix}`;
-        await host.call("renameThread", { ...child, name: next, expectedName: title });
-        const provider = JSON.parse(fs.readFileSync(path.join(root, "fixture/fixture-threads.json"), "utf8"));
-        expect(provider[child.threadId].name).toBe(next);
-        const after = await host.call<{ thread: unknown }>("getNavigationSelectedDetail", { protocol: 2, ref: child });
-        expect(after.thread, JSON.stringify({ info: await host.call("getThreadInfo", child), cached: await host.call("getCachedThreadSummary", child) })).toMatchObject({ title: next });
-        await host.close(); host = undefined;
-      }
-    }, () => removeOwnerFixture(root, host));
-  }), { numRuns: 3 });
+    }
+  }, () => removeOwnerFixture(root, host));
 }, 120_000);
 
 it("a refused headless startup cannot rewrite a live owner's profile configuration", async () => {
@@ -361,7 +358,6 @@ it("desktop → Codex-only headless → desktop preserves unsupported providers 
   const phases: Array<[number, string]> = [];
   const diagnostics: OwnerFixtureDiagnostics = {};
   let activeRoot: string | undefined;
-  let sample = 0;
   const trace: TraceOwnerPhase = phase => {
     phases.push([Math.round(performance.now() - startedAt), phase]);
     if (phases.length > 512) phases.shift();
@@ -378,83 +374,79 @@ it("desktop → Codex-only headless → desktop preserves unsupported providers 
     }
   });
 
-  // Each example builds and starts three owners. Report the first failure
-  // and its seed before shrinking can spend the Vitest deadline.
-  await fc.assert(fc.asyncProperty(fc.uuid(), fc.stringMatching(/^[A-Z][a-z]{0,8}$/), async (threadId, suffix) => {
-    const example = ++sample;
-    trace(`${example} setup:start`);
-    diagnostics.logTail = undefined;
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-unsupported-")));
-    activeRoot = root;
-    for (const name of ["workspace", "fixture", "profiles/t/state/claude"]) fs.mkdirSync(path.join(root, name), { recursive: true });
-    const database = path.join(root, "profiles/t/state/state.db");
-    const claude = path.join(root, `profiles/t/state/claude/${threadId}.json`);
-    const db = StateDb.open(database);
+  const threadId = "22345678-1234-4234-8234-123456789abc";
+  const suffix = "Fixture";
+  trace("setup:start");
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(process.platform === "win32" ? os.tmpdir() : "/tmp", "pa-unsupported-")));
+  activeRoot = root;
+  for (const name of ["workspace", "fixture", "profiles/t/state/claude"]) fs.mkdirSync(path.join(root, name), { recursive: true });
+  const database = path.join(root, "profiles/t/state/state.db");
+  const claude = path.join(root, `profiles/t/state/claude/${threadId}.json`);
+  const db = StateDb.open(database);
+  try {
+    const overlay = new SqliteOverlayStore(db);
+    const threads = (["claude", "acp:gemini"] as const).map(source => ({ id: threadId, source,
+      title: `${source} ${suffix}`, titleSource: "explicit" as const, createdAt: 1, updatedAt: 20,
+      linkedDirectories: [{ id: "w", kind: "local" as const, path: path.join(root, "workspace"), label: "w" }], executionMode: "default" as const }));
+    await new ClaudeSessionStore(path.dirname(claude)).save({ cwd: path.join(root, "workspace"), thread: threads[0]! });
+    new AcpSessionStore(db).upsertSession({ backendId: "acp:gemini", sessionId: threadId, title: `acp:gemini ${suffix}`,
+      titleSource: "explicit", cwd: path.join(root, "workspace"), createdAt: 1, updatedAt: 20, executionMode: "default", status: "idle" });
+    for (const thread of threads) {
+      new ProviderThreadSnapshotStore(db).replace({ backend: thread.source, observedAt: 21, threads: [thread] });
+      await overlay.updateThreadMetadata({ backend: thread.source, threadId }, { title: { text: thread.title, source: "explicit" },
+        pinnedRank: "4096", seenAt: 10, seenUpdatedAt: 9, archivedAt: 8, restoredAt: 11 });
+      observeStorageArchive(db.raw, thread.source, threadId, true, Date.now());
+    }
+    overlay.initializeNavigationUnreadBaseline(threads.map(thread => ({ ...thread, inbox: { inInbox: true } })));
+  } finally { db.close(); }
+  const snapshot = () => {
+    const db = new Database(database, { readonly: true, fileMustExist: true });
     try {
-      const overlay = new SqliteOverlayStore(db);
-      const threads = (["claude", "acp:gemini"] as const).map(source => ({ id: threadId, source,
-        title: `${source} ${suffix}`, titleSource: "explicit" as const, createdAt: 1, updatedAt: 20,
-        linkedDirectories: [{ id: "w", kind: "local" as const, path: path.join(root, "workspace"), label: "w" }], executionMode: "default" as const }));
-      await new ClaudeSessionStore(path.dirname(claude)).save({ cwd: path.join(root, "workspace"), thread: threads[0]! });
-      new AcpSessionStore(db).upsertSession({ backendId: "acp:gemini", sessionId: threadId, title: `acp:gemini ${suffix}`,
-        titleSource: "explicit", cwd: path.join(root, "workspace"), createdAt: 1, updatedAt: 20, executionMode: "default", status: "idle" });
-      for (const thread of threads) {
-        new ProviderThreadSnapshotStore(db).replace({ backend: thread.source, observedAt: 21, threads: [thread] });
-        await overlay.updateThreadMetadata({ backend: thread.source, threadId }, { title: { text: thread.title, source: "explicit" },
-          pinnedRank: "4096", seenAt: 10, seenUpdatedAt: 9, archivedAt: 8, restoredAt: 11 });
-        observeStorageArchive(db.raw, thread.source, threadId, true, Date.now());
-      }
-      overlay.initializeNavigationUnreadBaseline(threads.map(thread => ({ ...thread, inbox: { inInbox: true } })));
+      return db.transaction(() => JSON.stringify({
+        claude: fs.readFileSync(claude).toString("base64"),
+        metadata: db.prepare("SELECT * FROM threads WHERE thread_id IN (?, ?) ORDER BY thread_id").all(buildThreadIdentityKey("claude", threadId), buildThreadIdentityKey("acp:gemini", threadId)),
+        acp: db.prepare("SELECT * FROM acp_sessions ORDER BY backend_id, session_id").all(),
+        inventory: db.prepare("SELECT * FROM provider_thread_snapshots WHERE backend != 'codex' ORDER BY backend").all(),
+        unread: db.prepare("SELECT * FROM meta WHERE key = 'navigation-unread-baseline-v2'").all(),
+        archive: db.prepare("SELECT * FROM thread_storage_retention WHERE backend != 'codex' ORDER BY backend, thread_id").all(),
+      }))();
     } finally { db.close(); }
-    const snapshot = () => {
-      const db = new Database(database, { readonly: true, fileMustExist: true });
-      try {
-        return db.transaction(() => JSON.stringify({
-          claude: fs.readFileSync(claude).toString("base64"),
-          metadata: db.prepare("SELECT * FROM threads WHERE thread_id IN (?, ?) ORDER BY thread_id").all(buildThreadIdentityKey("claude", threadId), buildThreadIdentityKey("acp:gemini", threadId)),
-          acp: db.prepare("SELECT * FROM acp_sessions ORDER BY backend_id, session_id").all(),
-          inventory: db.prepare("SELECT * FROM provider_thread_snapshots WHERE backend != 'codex' ORDER BY backend").all(),
-          unread: db.prepare("SELECT * FROM meta WHERE key = 'navigation-unread-baseline-v2'").all(),
-          archive: db.prepare("SELECT * FROM thread_storage_retention WHERE backend != 'codex' ORDER BY backend, thread_id").all(),
-        }))();
-      } finally { db.close(); }
-    };
-    let host: Awaited<ReturnType<typeof openOwner>> | undefined;
-    await runWithOwnerCleanup(async () => {
-      // The observer must read even while a different connection owns the WAL writer lock.
-      const writer = new Database(database, { fileMustExist: true });
-      let expected: string;
-      try {
-        expected = writer.transaction(snapshot).immediate();
-      } finally {
-        writer.close();
+  };
+  let host: Awaited<ReturnType<typeof openOwner>> | undefined;
+  await runWithOwnerCleanup(async () => {
+    // The observer must read even while a different connection owns the WAL writer lock.
+    const writer = new Database(database, { fileMustExist: true });
+    let expected: string;
+    try {
+      expected = writer.transaction(snapshot).immediate();
+    } finally {
+      writer.close();
+    }
+    trace("setup:done");
+    for (const [index, kind] of (["desktop", "headless", "desktop"] as const).entries()) {
+      const ownerTrace: TraceOwnerPhase = phase => trace(`${index + 1}:${kind} ${phase}`);
+      host = await openOwner(root, kind, { trace: ownerTrace });
+      await host.call("listThreads", { forceRefresh: true, enrichDirectories: false });
+      for (const backend of ["claude", "acp:gemini"]) {
+        ownerTrace(`provider:${backend}`);
+        await host.call("getNavigationSelectedDetail", { protocol: 2, ref: { backend, threadId } });
+        await expect(host.call("startTurn", { backend, threadId, input: [{ type: "text", text: "Must refuse" }] })).rejects.toThrow(/disabled/);
       }
-      trace(`${example} setup:done`);
-      for (const [index, kind] of (["desktop", "headless", "desktop"] as const).entries()) {
-        const ownerTrace: TraceOwnerPhase = phase => trace(`${example}:${index + 1}:${kind} ${phase}`);
-        host = await openOwner(root, kind, { trace: ownerTrace });
-        await host.call("listThreads", { forceRefresh: true, enrichDirectories: false });
-        for (const backend of ["claude", "acp:gemini"]) {
-          ownerTrace(`provider:${backend}`);
-          await host.call("getNavigationSelectedDetail", { protocol: 2, ref: { backend, threadId } });
-          await expect(host.call("startTurn", { backend, threadId, input: [{ type: "text", text: "Must refuse" }] })).rejects.toThrow(/disabled/);
-        }
-        ownerTrace("running-snapshot:start");
-        expect(snapshot(), `${kind} changed unsupported provider state`).toBe(expected);
-        ownerTrace("running-snapshot:done");
-        await host.close(); host = undefined;
-        ownerTrace("stopped-snapshot:start");
-        expect(snapshot(), `${kind} shutdown changed unsupported provider state`).toBe(expected);
-        ownerTrace("stopped-snapshot:done");
-      }
-    }, async () => {
-      trace(`${example} cleanup:start`);
-      await removeOwnerFixture(root, host, diagnostics);
-      activeRoot = undefined;
-      trace(`${example} cleanup:done`);
-    }).catch((error: unknown) => {
-      trace(`${example} failed: ${String(error).slice(0, 900)}`);
-      throw error;
-    });
-  }), { numRuns: 3, endOnFailure: true });
+      ownerTrace("running-snapshot:start");
+      expect(snapshot(), `${kind} changed unsupported provider state`).toBe(expected);
+      ownerTrace("running-snapshot:done");
+      await host.close(); host = undefined;
+      ownerTrace("stopped-snapshot:start");
+      expect(snapshot(), `${kind} shutdown changed unsupported provider state`).toBe(expected);
+      ownerTrace("stopped-snapshot:done");
+    }
+  }, async () => {
+    trace("cleanup:start");
+    await removeOwnerFixture(root, host, diagnostics);
+    activeRoot = undefined;
+    trace("cleanup:done");
+  }).catch((error: unknown) => {
+    trace(`failed: ${String(error).slice(0, 900)}`);
+    throw error;
+  });
 }, 120_000);

@@ -3,7 +3,6 @@ import { chmod, link, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, wr
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import fc from "fast-check";
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import { scanCargoBuildOutputs, removeCargoBuildOutput } from "../app-server/maintenance-cargo-output";
 import { acquireMaintenanceLock } from "../app-server/maintenance-native-lock";
@@ -58,15 +57,16 @@ async function nestedProfile(parent: string, layout: "source" | "target") {
 describe("Cargo output cleanup", () => {
   // Model: output profile names and target location do not depend on the
   // thread's age or on unrelated ignored/operator files in the checkout.
-  it("finds Cargo profiles in standard, custom and nested target directories", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("target", "target-app", path.join("local-state", "stdio-bridge-target")),
-      fc.constantFrom("debug", "release", path.join("aarch64-apple-darwin", "release")), async (targetName, profileName) => {
+  it.each(["target", "target-app", path.join("local-state", "stdio-bridge-target")].flatMap(targetName =>
+    ["debug", "release", path.join("aarch64-apple-darwin", "release")].map(profileName => ({ targetName, profileName }))))(
+    "finds Cargo profile $profileName in $targetName",
+    async ({ targetName, profileName }) => {
       const { repo, profile } = await fixture(targetName, profileName);
       const discovery = await scanCargoBuildOutputs([repo, repo], signal(), undefined, { helperPath });
       expect(discovery.kept).toEqual([]);
       expect(discovery.items.map((item) => item.row.outputPath)).toEqual([profile]);
-    }), { numRuns: 6 });
-  });
+    },
+  );
 
   it.each(["directory", "file"] as const)("review regression: stops at nested .git %s boundaries before detecting targets", async (kind) => {
     const { repo, profile } = await fixture();

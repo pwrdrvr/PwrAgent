@@ -126,8 +126,8 @@ it("groups checkouts under the paths their threads use, even through a symlinked
     await runGitCommand(realParent, ["clone", "--no-local", first!, second!]);
 
     // Each checkout is opened either through the symlink or through its real parent.
-    const viaParents = fc.tuple(fc.boolean(), fc.boolean());
-    await fc.assert(fc.asyncProperty(viaParents, async ([firstLinked, secondLinked]) => {
+    const viaParents = [false, true].flatMap(firstLinked => [false, true].map(secondLinked => [firstLinked, secondLinked] as const));
+    for (const [firstLinked, secondLinked] of viaParents) {
       const paths = [[first!, firstLinked], [second!, secondLinked]].map(([name, linked]) =>
         canonicalizeNavigationPath(path.join(linked ? linkedParent : realParent, name as string)));
       const threads: AppServerThreadSummary[] = paths.map((checkout, index) => ({
@@ -147,7 +147,7 @@ it("groups checkouts under the paths their threads use, even through a symlinked
       store.setProjectCheckoutGroup({
         projectPath: paths[1]!, previousPaths: paths, group: { preferredPath: paths[1]!, paths: [paths[1]!] },
       });
-    }), { numRuns: 8 });
+    }
   } finally {
     db.close();
     await rm(tempDir, { recursive: true, force: true });

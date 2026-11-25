@@ -3,7 +3,6 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, realpath, rename, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
 import { afterEach, describe, expect, it } from "vitest";
 import { addManagedWorktree, removeManagedWorktree } from "../app-server/managed-worktree";
 import {
@@ -127,19 +126,17 @@ describe("worktree volume locks", () => {
     }
   });
 
-  it("locks exactly the worktrees a prune could lose while a drive is unplugged", () => {
-    // Oracle: unplug each drive except the home folder's (always mounted). A
-    // prune runs in the repository, so it can delete the worktree's records
-    // only while the repository's drive is attached and the worktree's is not.
-    const drive = fc.constantFrom(0, 1, 2);
-    fc.assert(fc.property(drive, drive, drive, (repository, worktree, home) => {
-      const pruneCanLoseIt = [0, 1, 2].some((unplugged) =>
+  const drives = [0, 1, 2];
+  it.each(drives.flatMap(repository => drives.flatMap(worktree => drives.map(home => ({ repository, worktree, home })))))(
+    "locks exactly the worktrees a prune could lose (repo=$repository, worktree=$worktree, home=$home)",
+    ({ repository, worktree, home }) => {
+      // Home is always mounted. Prune can lose a worktree only when its
+      // drive is unplugged while the repository's own drive is attached.
+      const pruneCanLoseIt = drives.some(unplugged =>
         unplugged !== home && unplugged === worktree && unplugged !== repository);
       expect(needsDriveLock({ repository, worktree, home })).toBe(pruneCanLoseIt);
-    }), { numRuns: 27 });
-    // The Windows CI layout: repository on D:, worktree under the home folder on C:.
-    expect(needsDriveLock({ repository: 2, worktree: 1, home: 1 })).toBe(false);
-  });
+    },
+  );
 
   it("treats a locked entry it cannot read as someone else's hold", async () => {
     const { repo, worktree } = await fixture();

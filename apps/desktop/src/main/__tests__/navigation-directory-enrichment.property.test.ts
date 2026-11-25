@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
@@ -88,7 +87,7 @@ it("validates stack attachments per thread only when the caller requests stack m
   const stackRead = vi.spyOn(StackReader.prototype, "read").mockResolvedValue({ stacks: [], catalogs: [] });
   try {
     execFileSync("git", ["-C", root, "init", "--initial-branch=main"], { stdio: "pipe" });
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async (count) => {
+    for (const count of [1, 2, 3, 4, 5]) {
       const attachment = (number: number): PrSummary => ({
         number, provider: "github.com", org: "example", repo: "project", state: "passing",
         url: `https://github.com/example/project/pull/${number}`,
@@ -108,7 +107,7 @@ it("validates stack attachments per thread only when the caller requests stack m
       } finally {
         await client.close();
       }
-    }), { numRuns: 7, examples: [[1]] });
+    }
   } finally {
     overlays.readPrs.mockReset();
     stackRead.mockRestore();
@@ -135,47 +134,46 @@ it("keeps navigation inventory independent of historical checkout discovery and 
     git(repo, "worktree", "add", "-b", "linked", linked);
     await mkdir(nested);
 
-    await fc.assert(fc.asyncProperty(
-      fc.array(fc.constantFrom(repo, linked, nested, plain, missing), { minLength: 1, maxLength: 35, size: "large" }),
-      async (history) => {
-        const paths = [nested, ...history];
-        let now = 0;
-        const { client, rows, read } = navigationFixture(paths, () => now);
-        const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit");
-        try {
-          const index = await read();
-          expect(index.threads.map((thread) => thread.id)).toEqual(rows.map((row) => row.id));
-          expect(launches.mock.calls.filter((call) => call[2] === "directory-enrichment")).toHaveLength(0);
-          const [primary, worktree] = git(repo, "worktree", "list", "--porcelain").split("\n")
-            .filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length));
-          for (const [indexPosition, cwd] of paths.entries()) {
-            expect(index.threads[indexPosition]?.gitOriginUrl).toBe(originUrl);
-            const [directory] = index.threads[indexPosition]!.linkedDirectories;
-            if (cwd === missing) {
-              expect(directory).toMatchObject({ path: normalize(primary!), kind: "worktree" });
-              expect(normalize(directory!.worktreePath!)).toBe(normalize(missing));
-            } else if (cwd === linked || cwd === nested) {
-              expect(directory).toMatchObject({ path: normalize(primary!), worktreePath: normalize(worktree!), kind: "worktree" });
-            } else {
-              expect(directory?.kind).toBe("local");
-              expect(normalize(directory!.path)).toBe(normalize(cwd));
-            }
+    const mixedHistory = [repo, linked, nested, plain, missing];
+    const histories = [[repo], [plain, repo], [missing], Array.from({ length: 35 }, (_, i) => mixedHistory[i % mixedHistory.length]!)];
+    for (const history of histories) {
+      const paths = [nested, ...history];
+      let now = 0;
+      const { client, rows, read } = navigationFixture(paths, () => now);
+      const launches = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+      try {
+        const index = await read();
+        expect(index.threads.map((thread) => thread.id)).toEqual(rows.map((row) => row.id));
+        expect(launches.mock.calls.filter((call) => call[2] === "directory-enrichment")).toHaveLength(0);
+        const [primary, worktree] = git(repo, "worktree", "list", "--porcelain").split("\n")
+          .filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length));
+        for (const [indexPosition, cwd] of paths.entries()) {
+          expect(index.threads[indexPosition]?.gitOriginUrl).toBe(originUrl);
+          const [directory] = index.threads[indexPosition]!.linkedDirectories;
+          if (cwd === missing) {
+            expect(directory).toMatchObject({ path: normalize(primary!), kind: "worktree" });
+            expect(normalize(directory!.worktreePath!)).toBe(normalize(missing));
+          } else if (cwd === linked || cwd === nested) {
+            expect(directory).toMatchObject({ path: normalize(primary!), worktreePath: normalize(worktree!), kind: "worktree" });
+          } else {
+            expect(directory?.kind).toBe("local");
+            expect(normalize(directory!.path)).toBe(normalize(cwd));
           }
-          const raw = (await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true }))[0]!;
-          const [selected] = await client.enrichThreadDirectories([raw], "selected-thread");
-          expect(selected).toMatchObject({ observedGitBranch: git(nested, "rev-parse", "--abbrev-ref", "HEAD").trim(),
-            linkedDirectories: [{ path: normalize(primary!), worktreePath: normalize(worktree!), kind: "worktree" }] });
-          git(linked, "checkout", "--detach");
-          now += 5_001;
-          const [refreshed] = await client.enrichThreadDirectories([raw], "selected-thread");
-          expect(refreshed?.observedGitBranch).toBe(git(nested, "rev-parse", "--abbrev-ref", "HEAD").trim());
-          git(linked, "checkout", "linked");
-        } finally {
-          launches.mockRestore();
-          await client.close();
         }
-      },
-    ), { examples: [[[repo]], [[plain, repo]], [[missing]]], numRuns: 8 });
+        const raw = (await client.listThreads({ enrichDirectories: false, skipArchivedMetadataRefresh: true }))[0]!;
+        const [selected] = await client.enrichThreadDirectories([raw], "selected-thread");
+        expect(selected).toMatchObject({ observedGitBranch: git(nested, "rev-parse", "--abbrev-ref", "HEAD").trim(),
+          linkedDirectories: [{ path: normalize(primary!), worktreePath: normalize(worktree!), kind: "worktree" }] });
+        git(linked, "checkout", "--detach");
+        now += 5_001;
+        const [refreshed] = await client.enrichThreadDirectories([raw], "selected-thread");
+        expect(refreshed?.observedGitBranch).toBe(git(nested, "rev-parse", "--abbrev-ref", "HEAD").trim());
+        git(linked, "checkout", "linked");
+      } finally {
+        launches.mockRestore();
+        await client.close();
+      }
+    }
   } finally {
     vi.unstubAllEnvs();
     await rm(root, { recursive: true, force: true });

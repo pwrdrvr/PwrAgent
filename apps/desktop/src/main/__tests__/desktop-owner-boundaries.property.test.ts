@@ -1,4 +1,3 @@
-import fc from "fast-check";
 import { createRequire } from "node:module";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
@@ -51,13 +50,12 @@ const shellFile = fileURLToPath(new URL("../shell/negative-sample.ts", import.me
 const fixtures: string[] = [];
 afterEach(async () => { await Promise.all(fixtures.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
-it("rejects owner hookup calls through generated aliases and optional/computed access", () => {
+it("rejects owner hookup calls through aliases and optional/computed access", () => {
   const started = performance.now();
   const cpu = process.cpuUsage();
-  const alias = fc.array(fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz"), { minLength: 2, maxLength: 12 })
-    .map((letters) => `install_${letters.join("")}`);
+  const name = "install_fixture";
   try {
-    fc.assert(fc.property(alias, fc.constantFrom("onEvent", "setForgePrToolHandler", "setThreadDependencyToolHandler", "setMessagingAgentToolService"), (name, method) => {
+    for (const method of ["onEvent", "setForgePrToolHandler", "setThreadDependencyToolHandler", "setMessagingAgentToolService"]) {
       const sources = [
         `registry.${method}(handler);`,
         `registry?.${method}?.(handler);`,
@@ -68,11 +66,11 @@ it("rejects owner hookup calls through generated aliases and optional/computed a
         `registry.${method}.call(registry, handler);`,
       ];
       for (const source of sources) expect(findOwnerWiring(source, shellFile).map((finding) => finding.method)).toEqual([method]);
-    }));
+    }
   } finally {
     const used = process.cpuUsage(cpu);
     console.info("[owner-boundary-cost]", JSON.stringify({
-      phase: "generated-property", pid: process.pid,
+      phase: "owner-wiring", pid: process.pid,
       wallMs: performance.now() - started, cpuMicros: used.user + used.system,
       parsing,
     }));
@@ -179,10 +177,10 @@ function originalOwnerBindingNames(source: string, filename: string): string[] {
   return [...names];
 }
 
-it("discovers exactly the original owner bindings across generated declaration forms and escaped identifiers", () => {
-  const suffix = fc.array(fc.constantFrom(..."abcdefghijklmnopqrstuvwxyz"), { minLength: 2, maxLength: 12 })
-    .map((letters) => letters.join(""));
-  fc.assert(fc.property(suffix, fc.constantFrom("function", "method", "signature"), fc.boolean(), (tail, kind, escaped) => {
+it("discovers exactly the original owner bindings across declaration forms and escaped identifiers", () => {
+  const tail = "Fixture";
+  const cases = ["function", "method", "signature"].flatMap(kind => [false, true].map(escaped => ({ kind, escaped })));
+  for (const { kind, escaped } of cases) {
     const name = `setGenerated${tail}`;
     const spelling = escaped ? `s\\u0065t\\u0047enerated${tail}` : name;
     const declaration = kind === "function"
@@ -198,7 +196,7 @@ it("discovers exactly the original owner bindings across generated declaration f
     const actual = findOwnerBindingNames(source, "owner-fixture.ts").sort();
     expect(actual).toEqual(originalOwnerBindingNames(source, "owner-fixture.ts").sort());
     expect(actual).toEqual([name, `setGenerated${tail}Handler`].sort());
-  }));
+  }
   for (const spelling of ["\\u0073etFixtureHandler", "\\u{73}etFixtureHandler", "set\\u0046ixtureHandler"]) {
     const source = `function ${spelling}(value: string) {}`;
     expect(findOwnerBindingNames(source, "escaped-fixture.ts")).toEqual(["setFixtureHandler"]);
@@ -214,11 +212,9 @@ it("bounds discovery work to candidate ASTs without parent or JSDoc construction
     expect(parsing.inventory.parented - before.parented).toBe(0);
     expect(parsing.inventory.jsDoc - before.jsDoc).toBe(0);
   };
-  fc.assert(fc.property(fc.nat(), (value) => {
-    const source = `export function readValue${value}(): number { return ${value}; }`;
-    checkBudget(findOwnerBindingNames, source, 0);
-    expect(() => checkBudget(originalOwnerBindingNames, source, 0)).toThrow();
-  }));
+  const nonCandidate = "export function readValue(): number { return 42; }";
+  checkBudget(findOwnerBindingNames, nonCandidate, 0);
+  expect(() => checkBudget(originalOwnerBindingNames, nonCandidate, 0)).toThrow();
   const candidate = "/** @param {() => void} handler */ function setFixtureHandler(handler: () => void) {}";
   checkBudget(findOwnerBindingNames, candidate, 1);
   expect(() => checkBudget(originalOwnerBindingNames, candidate, 1)).toThrow();

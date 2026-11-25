@@ -151,71 +151,59 @@ describe("Boat workspace push", () => {
     }
   });
 
-  it("sends what Git tracks or does not ignore, and never a .env file", async () => {
-    const spec = fc.record({
-      directory: fc.constantFrom("", "src/", "src/deep/", "ignored-dir/", "build/"),
-      name: fc.constantFrom(
-        // No name differs from another only by case: whether `.env*` then
-        // ignores it depends on the file system.
-        "a.txt", "b.ts", ".env", ".env.local", ".env.production", "notes.log", ".envrc", "env.txt", "x.env",
-      ),
-      tracked: fc.boolean(),
-    });
-    await fc.assert(fc.asyncProperty(
-      fc.uniqueArray(spec, { selector: (entry) => `${entry.directory}${entry.name}`.toLowerCase(), maxLength: 14 }),
-      fc.boolean(),
-      async (specs, ignoreEnv) => {
-        const root = temp("push");
-        await git(root, ["init", "-q"]);
-        write(root, ".gitignore", `ignored-dir/\n*.log\n${ignoreEnv ? ".env*\n" : ""}`);
-        for (const entry of specs) {
-          const file = `${entry.directory}${entry.name}`;
-          write(root, file, `content of ${file}\n`);
-          // Forced in: a tracked file is sent even where a pattern would ignore it.
-          if (entry.tracked) await git(root, ["add", "-f", "--", file]);
-        }
+  it.each([false, true].flatMap(ignoreEnv => [false, true].map(tracked => ({ ignoreEnv, tracked }))))(
+    "packs eligible files and omits environment files (tracked=$tracked, ignored env=$ignoreEnv)",
+    async ({ ignoreEnv, tracked }) => {
+      const directoriesToPack = ["", "src/", "src/deep/", "ignored-dir/", "build/"];
+      const names = ["a.txt", "b.ts", ".env", ".env.local", ".env.production", "notes.log", ".envrc", "env.txt", "x.env"];
+      const specs = [
+        ...directoriesToPack.flatMap(directory => names.map(name => ({ directory, name, tracked }))),
+        { directory: "src/", name: "mixed.ts", tracked: !tracked },
+        { directory: "ignored-dir/", name: "mixed.ts", tracked: !tracked },
+      ];
+      const root = temp("push");
+      await git(root, ["init", "-q"]);
+      write(root, ".gitignore", `ignored-dir/\n*.log\n${ignoreEnv ? ".env*\n" : ""}`);
+      for (const { directory, name } of specs) write(root, directory + name, `content of ${directory}${name}\n`);
+      const trackedPaths = specs.filter(entry => entry.tracked).map(({ directory, name }) => directory + name);
+      await git(root, ["add", "-f", "--", ...trackedPaths]);
 
-        const { files, envFilesLeftOut } = await listWorkspaceFiles(root, git);
-        const packed = await packWorkspace(root, files);
-        directories.push(packed.directory);
-        const archived: string[] = [];
-        await listTar({ file: packed.archive, onReadEntry: (entry) => void archived.push(entry.path.replace(/^\.\//, "")) });
+      const { files, envFilesLeftOut } = await listWorkspaceFiles(root, git);
+      const packed = await packWorkspace(root, files);
+      directories.push(packed.directory);
+      const archived: string[] = [];
+      await listTar({ file: packed.archive, onReadEntry: (entry) => void archived.push(entry.path.replace(/^\.\//, "")) });
 
-        // The model, from how each file was made and never from Git's answer.
-        const env = (name: string) => name === ".env" || name === ".envrc" || name.startsWith(".env.");
-        const ignored = (entry: (typeof specs)[number]) =>
-          entry.directory === "ignored-dir/" || entry.name.endsWith(".log") || (ignoreEnv && entry.name.startsWith(".env"));
-        const expected = [
-          ".gitignore",
-          ...specs.filter((entry) => !env(entry.name) && (entry.tracked || !ignored(entry)))
-            .map((entry) => `${entry.directory}${entry.name}`),
-        ];
-        expect(archived.toSorted()).toEqual(expected.toSorted());
-        expect(archived.filter(isEnvFilePath)).toEqual([]);
-        expect(envFilesLeftOut).toBe(
-          specs.filter((entry) => env(entry.name) && (entry.tracked || !ignored(entry))).length,
-        );
-      },
-    ), { numRuns: 25 });
-  }, 120_000);
+      // The model, from how each file was made and never from Git's answer.
+      const env = (name: string) => name === ".env" || name === ".envrc" || name.startsWith(".env.");
+      const ignored = (entry: (typeof specs)[number]) =>
+        entry.directory === "ignored-dir/" || entry.name.endsWith(".log") || (ignoreEnv && entry.name.startsWith(".env"));
+      const expected = [
+        ".gitignore",
+        ...specs.filter((entry) => !env(entry.name) && (entry.tracked || !ignored(entry)))
+          .map((entry) => `${entry.directory}${entry.name}`),
+      ];
+      expect(archived.toSorted()).toEqual(expected.toSorted());
+      expect(archived.filter(isEnvFilePath)).toEqual([]);
+      expect(envFilesLeftOut).toBe(
+        specs.filter((entry) => env(entry.name) && (entry.tracked || !ignored(entry))).length,
+      );
+    },
+  );
 
   it("reads and writes only a directory of the thread, at a plain path in the sandbox", async () => {
     const root = await repository({ "a.txt": "a\n" });
     const elsewhere = await repository({ "secret.txt": "not this thread's\n" });
-    const hostile = fc.oneof(
-      fc.constantFrom(
-        elsewhere, path.dirname(root), `${root}/..`, `${root}/sub`, "/", "", ".", "relative", `${root}x`,
-        "/home/user/x'; rm -rf /; '", "/etc", "/home/user/../../etc", "/home/user", "/tmp/", "/home/user/a b",
-        "/home/user/$(id)", "/home/user/ok", root,
-      ),
-      fc.string(),
-    );
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom("push_workspace", "pull_changes"),
-      fc.record({ directory: fc.option(hostile, { nil: undefined }), remotePath: fc.option(hostile, { nil: undefined }) }),
-      async (name, args) => {
-        const { sent, tools } = world([root]);
-        await tools.call("create_sandbox", {});
+    const paths = [
+      elsewhere, path.dirname(root), `${root}/..`, `${root}/sub`, "/", "", ".", "relative", `${root}x`,
+      "/home/user/x'; rm -rf /; '", "/etc", "/home/user/../../etc", "/home/user", "/tmp/", "/home/user/a b",
+      "/home/user/$(id)", "/home/user/ok", root,
+    ];
+    type Args = { directory?: string; remotePath?: string };
+    for (const name of ["push_workspace", "pull_changes"] as const) {
+      const { sent, tools } = world([root]);
+      await tools.call("create_sandbox", {});
+      const check = async (args: Args) => {
         const before = sent.length;
         const result = await tools.call(name, { sandboxId: "bx_0", ...args });
         const reached = sent.slice(before);
@@ -236,8 +224,16 @@ describe("Boat workspace push", () => {
           if (args.remotePath !== elsewhere) expect(text).not.toContain(elsewhere);
           expect(text).not.toContain("rm -rf /;");
         }
-      },
-    ), { numRuns: 60 });
+      };
+      await check({});
+      for (const candidate of paths) {
+        await check({ directory: candidate });
+        await check({ remotePath: candidate });
+      }
+      await fc.assert(fc.asyncProperty(fc.string(), fc.string(), async (directory, remotePath) => {
+        await check({ directory, remotePath });
+      }), { numRuns: 5 });
+    }
   }, 120_000);
 
   it.runIf(posix)("refuses a directory that already holds files, unless told to replace it", async () => {
@@ -263,73 +259,81 @@ describe("Boat workspace push", () => {
 
 describe.runIf(posix)("Boat workspace pull", () => {
   type Change = "keep" | "edit" | "delete";
-  const change = fc.constantFrom<Change>("keep", "keep", "edit", "delete");
   const NAMES = ["f0.txt", "f1.txt", "src/f2.txt", "src/f3.txt"];
 
-  it("lands every sandbox change or none, and never discards a local change", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.record({
-        box: fc.tuple(change, change, change, change),
-        local: fc.tuple(change, change, change, change),
-        boxAdds: fc.boolean(),
-        localAdds: fc.constantFrom("none", "other", "same"),
-      }),
-      async (plan) => {
-        const root = await repository(Object.fromEntries(NAMES.map((name) => [name, `base ${name}\n`])));
-        const { inBox, tools } = world([root]);
-        await tools.call("create_sandbox", {});
-        await tools.call("push_workspace", { sandboxId: "bx_0", remotePath: "/home/user/app" });
-        const remote = inBox("/home/user/app");
+  type PullPlan = {
+    label: string;
+    box: Change[];
+    local: Change[];
+    boxAdds: boolean;
+    localAdds: "none" | "other" | "same";
+  };
+  const collisionCases = (["edit", "delete"] as const).flatMap(box =>
+    (["edit", "delete"] as const).map(local => ({
+      label: `sandbox ${box} against local ${local}`,
+      box: [box, "edit"], local: [local], boxAdds: true, localAdds: "none",
+    } satisfies PullPlan)));
+  it.each<PullPlan>([
+    { label: "no sandbox changes", box: [], local: ["edit"], boxAdds: false, localAdds: "other" },
+    { label: "sandbox edits, deletions and additions", box: ["edit", "delete"], local: [], boxAdds: true, localAdds: "none" },
+    { label: "independent local and sandbox changes", box: ["edit", "delete"], local: ["keep", "keep", "edit", "delete"],
+      boxAdds: true, localAdds: "other" },
+    { label: "both sides added the same path", box: ["edit"], local: [], boxAdds: true, localAdds: "same" },
+    ...collisionCases,
+  ])("applies the whole pull atomically for $label", async (plan) => {
+    const root = await repository(Object.fromEntries(NAMES.map((name) => [name, `base ${name}\n`])));
+    const { inBox, tools } = world([root]);
+    await tools.call("create_sandbox", {});
+    await tools.call("push_workspace", { sandboxId: "bx_0", remotePath: "/home/user/app" });
+    const remote = inBox("/home/user/app");
 
-        const apply = (where: string, who: string, changes: readonly Change[]): void => {
-          changes.forEach((kind, index) => {
-            const file = path.join(where, NAMES[index]!);
-            if (kind === "edit") fs.writeFileSync(file, `${who} changed ${NAMES[index]}\n`);
-            if (kind === "delete") fs.rmSync(file);
-          });
-        };
-        apply(remote, "box", plan.box);
-        if (plan.boxAdds) write(remote, "added.txt", "box added\n");
-        apply(root, "local", plan.local);
-        if (plan.localAdds === "other") write(root, "mine.txt", "local added\n");
-        if (plan.localAdds === "same") write(root, "added.txt", "local added\n");
+    const apply = (where: string, who: string, changes: readonly Change[]): void => {
+      changes.forEach((kind, index) => {
+        const file = path.join(where, NAMES[index]!);
+        if (kind === "edit") fs.writeFileSync(file, `${who} changed ${NAMES[index]}\n`);
+        if (kind === "delete") fs.rmSync(file);
+      });
+    };
+    apply(remote, "box", plan.box);
+    if (plan.boxAdds) write(remote, "added.txt", "box added\n");
+    apply(root, "local", plan.local);
+    if (plan.localAdds === "other") write(root, "mine.txt", "local added\n");
+    if (plan.localAdds === "same") write(root, "added.txt", "local added\n");
 
-        const before = snapshot(root);
-        const boxChanged = plan.box.some((kind) => kind !== "keep") || plan.boxAdds;
-        const localChanged = plan.local.some((kind) => kind !== "keep") || plan.localAdds !== "none";
-        const collides = plan.box.some((kind, index) => kind !== "keep" && plan.local[index] !== "keep")
-          || (plan.boxAdds && plan.localAdds === "same");
-        const result = await tools.call("pull_changes", { sandboxId: "bx_0", remotePath: "/home/user/app" });
-        const after = snapshot(root);
+    const before = snapshot(root);
+    const boxChanged = plan.box.some((kind) => kind !== "keep") || plan.boxAdds;
+    const localChanged = plan.local.some((kind) => kind !== "keep") || plan.localAdds !== "none";
+    const collides = plan.box.some((kind, index) => kind !== "keep" && (plan.local[index] ?? "keep") !== "keep")
+      || (plan.boxAdds && plan.localAdds === "same");
+    const result = await tools.call("pull_changes", { sandboxId: "bx_0", remotePath: "/home/user/app" });
+    const after = snapshot(root);
 
-        if (collides) {
-          // Refused whole: the local files are exactly as they were.
-          expect(result.isError).toBe(true);
-          expect(result.content[0]).toMatchObject({ text: expect.stringContaining("Nothing was changed") });
-          expect(after).toEqual(before);
-          return;
-        }
-        expect(result.isError).toBeUndefined();
-        const expected = { ...before };
-        plan.box.forEach((kind, index) => {
-          if (kind === "edit") expected[NAMES[index]!] = `box changed ${NAMES[index]}\n`;
-          if (kind === "delete") delete expected[NAMES[index]!];
-        });
-        if (plan.boxAdds) expected["added.txt"] = "box added\n";
-        // Every sandbox change is here, and every local change still is.
-        expect(after).toEqual(expected);
-        if (boxChanged) {
-          expect(result.structuredContent).toMatchObject({ localChangesKept: localChanged });
-          // What was pulled is the new starting point: there is nothing more to pull.
-          const again = await tools.call("pull_changes", { sandboxId: "bx_0", remotePath: "/home/user/app" });
-          expect(again.structuredContent).toMatchObject({ files: [] });
-          expect(snapshot(root)).toEqual(expected);
-        } else {
-          expect(result.structuredContent).toMatchObject({ files: [] });
-        }
-      },
-    ), { numRuns: 30 });
-  }, 300_000);
+    if (collides) {
+      // Refused whole: the local files are exactly as they were.
+      expect(result.isError).toBe(true);
+      expect(result.content[0]).toMatchObject({ text: expect.stringContaining("Nothing was changed") });
+      expect(after).toEqual(before);
+      return;
+    }
+    expect(result.isError).toBeUndefined();
+    const expected = { ...before };
+    plan.box.forEach((kind, index) => {
+      if (kind === "edit") expected[NAMES[index]!] = `box changed ${NAMES[index]}\n`;
+      if (kind === "delete") delete expected[NAMES[index]!];
+    });
+    if (plan.boxAdds) expected["added.txt"] = "box added\n";
+    // Every sandbox change is here, and every local change still is.
+    expect(after).toEqual(expected);
+    if (boxChanged) {
+      expect(result.structuredContent).toMatchObject({ localChangesKept: localChanged });
+      // What was pulled is the new starting point: there is nothing more to pull.
+      const again = await tools.call("pull_changes", { sandboxId: "bx_0", remotePath: "/home/user/app" });
+      expect(again.structuredContent).toMatchObject({ files: [] });
+      expect(snapshot(root)).toEqual(expected);
+    } else {
+      expect(result.structuredContent).toMatchObject({ files: [] });
+    }
+  }, 30_000);
 
   it("refuses changes inside a Git directory or outside the thread's directory", async () => {
     const root = await repository({ "a.txt": "one\n" });

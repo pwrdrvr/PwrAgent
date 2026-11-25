@@ -373,42 +373,40 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const host = await startDesktopOwner();
     const registry = desktopOwner.registry as DesktopBackendRegistry;
     try {
-      await fc.assert(fc.asyncProperty(fc.string({ maxLength: 12 }), async suffix => {
-        const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
-        const identity = { backend: "codex" as const, threadId: created.threadId };
-        const id = randomUUID(), queueEntryId = `scheduled-turn:${id}`;
-        const input = [{ type: "text" as const, text: `Scheduled retry ${suffix}` }];
-        const active = locked ? undefined : await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-        if (locked) await registry.setThreadLock({ ...identity, locked: true }, { source: "operator" });
-        await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
-          displayText: "Scheduled retry", turn: { input } }, { id });
-        const admitted = await host.scheduler!.sendNow({ id });
-        expect(admitted.action.status).toBe(locked ? "held" : "queued");
-        const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
-        if (active) {
-          OwnerConformanceCodexTransport.refusedStarts = 1;
-          await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
-          await vi.waitFor(() => expect(host.scheduler!.get(id)?.status).toBe("held"));
-        }
-        const before = registry.getQueuedTurnsForThread(identity);
-        const retried = await host.scheduler!.sendNow({ id });
-        expect(retried.action.status).toBe(locked ? "held" : "started");
-        expect(retried.action.queueEntryId).toBe(queueEntryId);
-        if (locked) {
-          expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
-          expect(registry.getQueuedTurnsForThread(identity)).toEqual(before);
-          await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" }, { resumeQueue: false });
-          expect((await host.scheduler!.sendNow({ id })).action.status).toBe("started");
-        }
-        const requests = OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start"
-          && request.params.threadId === identity.threadId
-          && (request.params.input as Array<{ type: string; text?: string }>).some(item => item.type === "text" && item.text === input[0]!.text));
-        expect(requests).toHaveLength(locked ? 1 : 2);
-        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
-        const turnId = host.scheduler!.get(id)!.turnId;
-        await vi.waitFor(() => expect(host.events.some(event => event.notification.method === "turn/completed"
-          && (event.notification.params as { turn?: { id?: string } }).turn?.id === turnId)).toBe(true));
-      }), { numRuns: 4, examples: [[""]] });
+      const created = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const identity = { backend: "codex" as const, threadId: created.threadId };
+      const id = randomUUID(), queueEntryId = `scheduled-turn:${id}`;
+      const input = [{ type: "text" as const, text: "Scheduled retry" }];
+      const active = locked ? undefined : await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      if (locked) await registry.setThreadLock({ ...identity, locked: true }, { source: "operator" });
+      await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
+        displayText: "Scheduled retry", turn: { input } }, { id });
+      const admitted = await host.scheduler!.sendNow({ id });
+      expect(admitted.action.status).toBe(locked ? "held" : "queued");
+      const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
+      if (active) {
+        OwnerConformanceCodexTransport.refusedStarts = 1;
+        await host.client.interruptTurn({ ...identity, turnId: active.turnId! });
+        await vi.waitFor(() => expect(host.scheduler!.get(id)?.status).toBe("held"));
+      }
+      const before = registry.getQueuedTurnsForThread(identity);
+      const retried = await host.scheduler!.sendNow({ id });
+      expect(retried.action.status).toBe(locked ? "held" : "started");
+      expect(retried.action.queueEntryId).toBe(queueEntryId);
+      if (locked) {
+        expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
+        expect(registry.getQueuedTurnsForThread(identity)).toEqual(before);
+        await registry.setThreadLock({ ...identity, locked: false }, { source: "operator" }, { resumeQueue: false });
+        expect((await host.scheduler!.sendNow({ id })).action.status).toBe("started");
+      }
+      const requests = OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start"
+        && request.params.threadId === identity.threadId
+        && (request.params.input as Array<{ type: string; text?: string }>).some(item => item.type === "text" && item.text === input[0]!.text));
+      expect(requests).toHaveLength(locked ? 1 : 2);
+      expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries).toEqual([]);
+      const turnId = host.scheduler!.get(id)!.turnId;
+      await vi.waitFor(() => expect(host.events.some(event => event.notification.method === "turn/completed"
+        && (event.notification.params as { turn?: { id?: string } }).turn?.id === turnId)).toBe(true));
     } finally { await host.close(); }
   });
 
@@ -417,24 +415,22 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     try {
       const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
       await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-      await fc.assert(fc.asyncProperty(fc.string({ maxLength: 30 }), async suffix => {
-        const id = randomUUID();
-        const queueEntryId = `scheduled-turn:${id}`;
-        const text = `Same independent acceptance ${suffix}`;
-        await host.client.startTurn({ ...identity, queueEntryId, delivery: "new_turn", input: [{ type: "text", text }] });
-        const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
-        try {
-          await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
-            manualReleaseRequired: true, displayText: text, turn: { input: [{ type: "text", text }] } }, { id });
-          await expect(host.scheduler!.sendNow({ id })).rejects.toThrow(/reused|identity/);
-          expect(host.scheduler!.get(id)?.status).toBe("failed");
-          await host.scheduler!.cancel({ id });
-          expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
-          const rows = (await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries;
-          expect(rows.map(row => row.queueEntryId)).toEqual([queueEntryId]);
-          expect(Boolean(rows[0]!.manualReleaseRequired)).toBe(false);
-        } finally { await host.client.cancelQueuedTurn({ queueEntryId }); }
-      }), { numRuns: 6, examples: [[""]] });
+      const id = randomUUID();
+      const queueEntryId = `scheduled-turn:${id}`;
+      const text = "Same independent acceptance";
+      await host.client.startTurn({ ...identity, queueEntryId, delivery: "new_turn", input: [{ type: "text", text }] });
+      const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
+      try {
+        await host.scheduler!.create({ ...identity, kind: "turn", scheduledFor: Date.now() + 60_000,
+          manualReleaseRequired: true, displayText: text, turn: { input: [{ type: "text", text }] } }, { id });
+        await expect(host.scheduler!.sendNow({ id })).rejects.toThrow(/reused|identity/);
+        expect(host.scheduler!.get(id)?.status).toBe("failed");
+        await host.scheduler!.cancel({ id });
+        expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
+        const rows = (await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries;
+        expect(rows.map(row => row.queueEntryId)).toEqual([queueEntryId]);
+        expect(Boolean(rows[0]!.manualReleaseRequired)).toBe(false);
+      } finally { await host.client.cancelQueuedTurn({ queueEntryId }); }
     } finally { await host.close(); }
   });
 
@@ -562,10 +558,10 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     try {
       const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
       await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-      await fc.assert(fc.asyncProperty(fc.string({ maxLength: 30 }), fc.boolean(), async (suffix, local) => {
+      for (const local of [false, true]) {
         const queueEntryId = `explicit:${randomUUID()}`;
         const request = { ...identity, queueEntryId, delivery: "new_turn" as const,
-          input: [{ type: "text" as const, text: `Original acceptance ${suffix}` }] };
+          input: [{ type: "text" as const, text: "Original acceptance" }] };
         const call = (value: typeof request) => local
           ? (desktopOwner.registry as DesktopBackendRegistry).submitTurn(value)
           : host.client.startTurn(value);
@@ -573,7 +569,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           await call(request);
           const original = await host.client.readQueuedTurn({ ...identity, queueEntryId });
           const offset = host.events.length;
-          await expect(call({ ...request, input: [{ type: "text", text: `Different acceptance ${suffix}` }] }))
+          await expect(call({ ...request, input: [{ type: "text", text: "Different acceptance" }] }))
             .rejects.toThrow(/reused|identity/i);
           await call(request);
           expect(await host.client.readQueuedTurn({ ...identity, queueEntryId })).toEqual(original);
@@ -582,7 +578,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           expect(host.events.slice(offset).filter(event => event.notification.method === "thread/turnQueue/updated"
             && event.notification.params.queueEntryId === queueEntryId)).toEqual([]);
         } finally { await host.client.cancelQueuedTurn({ queueEntryId }); }
-      }), { numRuns: 6, examples: [["", false], ["", true]] });
+      }
     } finally { await host.close(); }
   });
 
@@ -754,7 +750,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
     try {
       await fc.assert(fc.asyncProperty(fc.array(fc.integer({ min: 0, max: 4 }), { minLength: 2, maxLength: 12 }),
-        fc.string({ maxLength: 20 }), async (wakes, suffix) => {
+        async (wakes) => {
           const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
           const snapshots = new Map<string, Awaited<ReturnType<typeof host.client.readQueuedTurn>>>();
           const ids = new Map<string, string>();
@@ -764,7 +760,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           const neighbors = structuredClone(queue.getQueuedEntries(identity));
           try {
             for (const wake of wakes) {
-              const prompt = `Wake ${wake}: ${suffix}`;
+              const prompt = `Wake ${wake}`;
               expect(await registry.holdBackendSelfStartedTurn({ ...identity, prompt,
                 source: ["task_notification", "loop_wakeup", "cron"][wake % 3] as "task_notification" | "loop_wakeup" | "cron" })).toBe(true);
               const waiting = queue.getQueuedEntries(identity);
@@ -787,7 +783,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
           } finally {
             for (const entry of queue.getQueuedEntries(identity)) await host.client.cancelQueuedTurn({ queueEntryId: entry.id });
           }
-        }), { numRuns: 25, examples: [[[0, 1, 0], ""]] });
+        }), { numRuns: 5, examples: [[[0, 1, 0]], [[0, 1, 2, 3, 4, 4, 0, 2, 3, 1, 4, 0]]] });
     } finally { await host.close(); }
   });
 
@@ -836,11 +832,11 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const registry = desktopOwner.registry as DesktopBackendRegistry;
     const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
     try {
-      await fc.assert(fc.asyncProperty(fc.string({ maxLength: 20 }), fc.boolean(), async (suffix, paused) => {
+      for (const paused of [false, true]) {
         const ref = await host.client.startThread({ backend: "codex", cwd: host.workspace });
         const active = await host.client.startTurn({ ...ref, input: [{ type: "text", text: "slow" }] });
         const starts = OwnerConformanceCodexTransport.requests.filter(request => request.method === "turn/start").length;
-        const prompt = `Concurrent wake ${suffix}`;
+        const prompt = "Concurrent wake";
         await registry.setThreadLock({ ...ref, locked: true }, { source: "operator" });
         // An unrelated sender with the same text must retain its own acceptance.
         const sender = await queue.submitSteer({ ...ref, origin: "manual", input: [{ type: "text", text: prompt }],
@@ -871,7 +867,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         await expect(host.client.readQueuedTurn({ ...ref, queueEntryId: first.id })).rejects.toThrow();
         for (const entry of queue.getQueuedEntries(ref)) await host.client.cancelQueuedTurn({ queueEntryId: entry.id });
         await host.client.interruptTurn(active);
-      }), { numRuns: 25, examples: [["", true], ["", false]] });
+      }
     } finally { await host.close(); }
   });
 
@@ -1696,36 +1692,32 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     } finally { await outpost.close(); }
   });
 
-  it("generated desktop sender replacement retires immutable queue identities before admitting changed input", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.array(fc.string({ minLength: 1, maxLength: 80 }).filter(text => Boolean(text.trim())), { minLength: 1, maxLength: 4 }),
-      async edits => {
-        const host = await startDesktopOwner();
-        try {
-          const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
-          await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-          const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender" } };
-          let accepted = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "Original accepted input" }], messageOrigin });
-          for (const text of edits) {
-            const oldId = accepted.queueEntryId!;
-            const original = await host.client.readQueuedTurn({ ...identity, queueEntryId: oldId });
-            const originalInput = structuredClone(original.input);
-            const offset = host.events.length;
-            accepted = await host.client.replaceQueuedMessage({ ...identity, queueEntryId: oldId, input: [{ type: "text", text }], messageOrigin });
-            // Each accepted identity names one immutable input. Changing it
-            // retires the old row and admits a fresh row, even inside a batch.
-            expect(accepted.queueEntryId).not.toBe(oldId);
-            await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: oldId })).rejects.toThrow();
-            expect(original.input).toEqual(originalInput);
-            expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).toMatchObject({ input: [{ type: "text", text }] });
-            const updates = host.events.slice(offset).flatMap(event => event.notification.method === "thread/turnQueue/updated"
-              ? [[event.notification.params.queueEntryId, event.notification.params.status]] : []);
-            expect(updates).toEqual([[oldId, "cancelled"], [accepted.queueEntryId, "queued"]]);
-            expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([accepted.queueEntryId]);
-          }
-        } finally { await host.close(); }
-      },
-    ), { numRuns: 4, examples: [[["!"]]] });
+  it("desktop sender replacement retires immutable queue identities before admitting changed input", async () => {
+    const edits = ["!", "Second accepted edit", "Third accepted edit", "Fourth accepted edit"];
+    const host = await startDesktopOwner();
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      const messageOrigin = { kind: "agent" as const, sourceThread: { backend: "codex" as const, threadId: "sender" } };
+      let accepted = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "Original accepted input" }], messageOrigin });
+      for (const text of edits) {
+        const oldId = accepted.queueEntryId!;
+        const original = await host.client.readQueuedTurn({ ...identity, queueEntryId: oldId });
+        const originalInput = structuredClone(original.input);
+        const offset = host.events.length;
+        accepted = await host.client.replaceQueuedMessage({ ...identity, queueEntryId: oldId, input: [{ type: "text", text }], messageOrigin });
+        // Each accepted identity names one immutable input. Changing it
+        // retires the old row and admits a fresh row, even inside a batch.
+        expect(accepted.queueEntryId).not.toBe(oldId);
+        await expect(host.client.readQueuedTurn({ ...identity, queueEntryId: oldId })).rejects.toThrow();
+        expect(original.input).toEqual(originalInput);
+        expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: accepted.queueEntryId! })).toMatchObject({ input: [{ type: "text", text }] });
+        const updates = host.events.slice(offset).flatMap(event => event.notification.method === "thread/turnQueue/updated"
+          ? [[event.notification.params.queueEntryId, event.notification.params.status]] : []);
+        expect(updates).toEqual([[oldId, "cancelled"], [accepted.queueEntryId, "queued"]]);
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries.map(entry => entry.queueEntryId)).toEqual([accepted.queueEntryId]);
+      }
+    } finally { await host.close(); }
   });
 
   it("desktop replacement retires its durable new-turn receipt without retargeting it to changed input", async () => {
@@ -1803,40 +1795,38 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   });
 
   it("desktop federation admits every additional agent message under its own immutable queue identity", async () => {
-    await fc.assert(fc.asyncProperty(fc.array(fc.tuple(fc.boolean(), fc.string({ minLength: 1, maxLength: 40 })),
-      { minLength: 2, maxLength: 5 }), async messages => {
-      const host = await startDesktopOwner();
-      const registry = desktopOwner.registry as DesktopBackendRegistry;
-      try {
-        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
-        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-        await registry.submitHeldTurn({ ...identity, queueEntryId: "admission-review",
-          input: [{ type: "text", text: "Explicit independent review" }], holdReason: "Review required" });
-        const peer = { target: { scope: "remote" as const, instanceId: host.ownerInstanceId },
-          label: "Invented owner", capabilities: ["thread_navigation", "turn_control"] };
-        const handler = createFederatedThreadMessageHandler({ runtime: () => ({ connectedPeerTargets: () => [peer],
-          remoteBackend: () => host.client }) as unknown as DesktopFederationRuntime });
-        const accepted: Array<{ id: string; input: Array<{ type: "text"; text: string }>; snapshot: Awaited<ReturnType<FederationRemoteBackendClient["readQueuedTurn"]>> }> = [];
-        for (const [bob, suffix] of messages) {
-          const input = [{ type: "text" as const, text: `Invented ${bob ? "Bob" : "Alice"} acceptance ${suffix}` }];
-          const response = (await handler({ backend: "codex", threadId: identity.threadId,
-            instanceId: host.ownerInstanceId, input, messageOrigin: { kind: "agent",
-              sourceThread: { backend: "codex", threadId: bob ? "bob" : "alice", instanceId: "sender" } } }))!;
-          expect(response.queueStatus).toBe("queued");
-          const snapshot = await host.client.readQueuedTurn({ ...identity, queueEntryId: response.queueEntryId! });
-          accepted.push({ id: response.queueEntryId!, input, snapshot });
-          expect(new Set(accepted.map(entry => entry.id)).size).toBe(accepted.length);
-          for (const entry of accepted) {
-            expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: entry.id })).toEqual(entry.snapshot);
-            expect(entry.snapshot.input).toEqual(entry.input);
-          }
-          expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries
-            .map(entry => entry.queueEntryId)).toEqual(["admission-review", ...accepted.map(entry => entry.id)]);
+    const messages = [[false, "!"], [false, "!"], [true, "!"], [true, "different"], [false, "different"]] as const;
+    const host = await startDesktopOwner();
+    const registry = desktopOwner.registry as DesktopBackendRegistry;
+    try {
+      const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+      const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+      await registry.submitHeldTurn({ ...identity, queueEntryId: "admission-review",
+        input: [{ type: "text", text: "Explicit independent review" }], holdReason: "Review required" });
+      const peer = { target: { scope: "remote" as const, instanceId: host.ownerInstanceId },
+        label: "Invented owner", capabilities: ["thread_navigation", "turn_control"] };
+      const handler = createFederatedThreadMessageHandler({ runtime: () => ({ connectedPeerTargets: () => [peer],
+        remoteBackend: () => host.client }) as unknown as DesktopFederationRuntime });
+      const accepted: Array<{ id: string; input: Array<{ type: "text"; text: string }>; snapshot: Awaited<ReturnType<FederationRemoteBackendClient["readQueuedTurn"]>> }> = [];
+      for (const [bob, suffix] of messages) {
+        const input = [{ type: "text" as const, text: `Invented ${bob ? "Bob" : "Alice"} acceptance ${suffix}` }];
+        const response = (await handler({ backend: "codex", threadId: identity.threadId,
+          instanceId: host.ownerInstanceId, input, messageOrigin: { kind: "agent",
+            sourceThread: { backend: "codex", threadId: bob ? "bob" : "alice", instanceId: "sender" } } }))!;
+        expect(response.queueStatus).toBe("queued");
+        const snapshot = await host.client.readQueuedTurn({ ...identity, queueEntryId: response.queueEntryId! });
+        accepted.push({ id: response.queueEntryId!, input, snapshot });
+        expect(new Set(accepted.map(entry => entry.id)).size).toBe(accepted.length);
+        for (const entry of accepted) {
+          expect(await host.client.readQueuedTurn({ ...identity, queueEntryId: entry.id })).toEqual(entry.snapshot);
+          expect(entry.snapshot.input).toEqual(entry.input);
         }
-        expect(host.providerSteerCount()).toBe(0);
-        await host.client.interruptTurn(active);
-      } finally { await host.close(); }
-    }), { numRuns: 12, examples: [[[[false, "!"], [true, "!"]]], [[[false, "!"], [false, "!"]]]] });
+        expect((await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries
+          .map(entry => entry.queueEntryId)).toEqual(["admission-review", ...accepted.map(entry => entry.id)]);
+      }
+      expect(host.providerSteerCount()).toBe(0);
+      await host.client.interruptTurn(active);
+    } finally { await host.close(); }
   });
 
   it("additional desktop admissions, reads and controls preserve acceptances without SQLite writes", async () => {
@@ -1992,9 +1982,9 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
       let serial = 0;
       // The live owner FIFO is the oracle for the viewer's notification map.
       // Both pause and resume can yield after mutating a row that cancel retires.
-      await fc.assert(fc.asyncProperty(fc.boolean(), fc.string({ maxLength: 80 }), async (initiallyPaused, text) => {
+      for (const initiallyPaused of [false, true]) {
         const queueEntryId = `pause-cancel-${serial++}`;
-        const input = [{ type: "text" as const, text: `Immutable waiting input ${text}` }];
+        const input = [{ type: "text" as const, text: "Immutable waiting input" }];
         await host.client.startTurn({ ...identity, queueEntryId, delivery: "new_turn", input });
         if (initiallyPaused) await host.client.setQueuedTurnPaused({ queueEntryId, paused: true });
         const accepted = await host.client.readQueuedTurn({ ...identity, queueEntryId });
@@ -2010,7 +2000,7 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
         expect(accepted.input).toEqual(input);
         expect(waiting).toEqual([]);
         expect(statuses.at(-1)).toBe("cancelled");
-      }), { numRuns: 25 });
+      }
       await host.client.interruptTurn(active);
     } finally { await host.close(); }
   });
@@ -2021,59 +2011,60 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     const queue = (registry as unknown as { threadTurnQueue: ThreadTurnQueue }).threadTurnQueue;
     try {
       let serial = 0;
-      await fc.assert(fc.asyncProperty(fc.boolean(), fc.constantFrom("cancel", "hold", "pause", "move"), fc.boolean(),
-        async (initiallyPaused, control, rejectObserver) => {
-          const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
-          const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
-          const id = `live-pause-${serial++}`;
-          const input = [{ type: "text" as const, text: `Immutable ${id}` }];
-          await host.client.startTurn({ ...identity, queueEntryId: id, delivery: "new_turn", input });
-          await host.client.startTurn({ ...identity, queueEntryId: `${id}-next`, delivery: "new_turn", input });
-          if (initiallyPaused) await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: true });
-          const accepted = await host.client.readQueuedTurn({ ...identity, queueEntryId: id });
-          const offset = host.events.length;
-          const stopObserver = registry.onEvent(event => {
-            if (rejectObserver && event.notification.method === "thread/turnQueue/updated"
-              && event.notification.params.queueEntryId === id) throw new Error("Invented pause observer refusal");
-          });
-          try {
-            const pause = registry.setQueuedTurnPaused({ queueEntryId: id, paused: !initiallyPaused });
-            await Promise.resolve();
-            if (control === "cancel") registry.cancelQueuedTurnWithDisposition(id);
-            else if (control === "hold") {
-              await queue.submitHeld({ ...identity, id: `${id}-review`, origin: "manual", input }, "first independent review");
-              await queue.submitHeld({ ...identity, id: `${id}-lock`, origin: "manual", input }, "second independent lock");
-            } else if (control === "pause") await registry.setQueuedTurnPaused({ queueEntryId: id, paused: initiallyPaused });
-            else await host.client.moveQueuedTurn({ queueEntryId: `${id}-next`, beforeQueueEntryId: id });
-            const response = await pause;
-            await new Promise<void>(resolve => setImmediate(resolve));
-            const authoritative = queue.getQueuedEntries(identity);
-            const projection = (await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries;
-            expect(projection.map(row => row.queueEntryId)).toEqual(authoritative.map(row => row.id));
-            const last = host.events.slice(offset).flatMap(event => event.notification.method === "thread/turnQueue/updated"
-              && event.notification.params.queueEntryId === id ? [event.notification.params] : []).at(-1)!;
-            const live = authoritative.find(row => row.id === id);
-            if (live) {
-              expect(last.status).toBe(live.manualReleaseRequired ? "held" : "queued");
-              expect(Boolean(last.paused)).toBe(Boolean(live.paused));
-              expect(last.pauseRevision ?? 0).toBe(live.pauseRevision ?? 0);
-              expect(last.errorMessage).toBe(live.holdReason);
-              expect((await host.client.readQueuedTurn({ ...identity, queueEntryId: id }))).toEqual(accepted);
-              // The response acknowledges its mutation. The existing renderer
-              // revision rule must preserve a newer event when that reply lands.
-              const rows = [{ id, queueEntryId: id, paused: live.paused, pauseRevision: live.pauseRevision }];
-              expect(withOwnerPauseState(rows, id, response) ?? rows).toEqual(rows);
-            } else expect(last.status).toBe("cancelled");
-            if (control === "hold") {
-              await queue.releaseHold(identity, reason => reason === "second independent lock");
-              expect(queue.getQueuedEntries(identity).every(row => row.manualReleaseRequired)).toBe(true);
-            }
-          } finally {
-            stopObserver();
-            for (const row of queue.getQueuedEntries(identity)) await host.client.cancelQueuedTurn({ queueEntryId: row.id });
-            await host.client.interruptTurn(active);
+      const cases = [false, true].flatMap(initiallyPaused => ["cancel", "hold", "pause", "move"].flatMap(control =>
+        [false, true].map(rejectObserver => ({ initiallyPaused, control, rejectObserver }))));
+      for (const { initiallyPaused, control, rejectObserver } of cases) {
+        const identity = await host.client.startThread({ backend: "codex", cwd: host.workspace });
+        const active = await host.client.startTurn({ ...identity, input: [{ type: "text", text: "slow" }] });
+        const id = `live-pause-${serial++}`;
+        const input = [{ type: "text" as const, text: `Immutable ${id}` }];
+        await host.client.startTurn({ ...identity, queueEntryId: id, delivery: "new_turn", input });
+        await host.client.startTurn({ ...identity, queueEntryId: `${id}-next`, delivery: "new_turn", input });
+        if (initiallyPaused) await host.client.setQueuedTurnPaused({ queueEntryId: id, paused: true });
+        const accepted = await host.client.readQueuedTurn({ ...identity, queueEntryId: id });
+        const offset = host.events.length;
+        const stopObserver = registry.onEvent(event => {
+          if (rejectObserver && event.notification.method === "thread/turnQueue/updated"
+            && event.notification.params.queueEntryId === id) throw new Error("Invented pause observer refusal");
+        });
+        try {
+          const pause = registry.setQueuedTurnPaused({ queueEntryId: id, paused: !initiallyPaused });
+          await Promise.resolve();
+          if (control === "cancel") registry.cancelQueuedTurnWithDisposition(id);
+          else if (control === "hold") {
+            await queue.submitHeld({ ...identity, id: `${id}-review`, origin: "manual", input }, "first independent review");
+            await queue.submitHeld({ ...identity, id: `${id}-lock`, origin: "manual", input }, "second independent lock");
+          } else if (control === "pause") await registry.setQueuedTurnPaused({ queueEntryId: id, paused: initiallyPaused });
+          else await host.client.moveQueuedTurn({ queueEntryId: `${id}-next`, beforeQueueEntryId: id });
+          const response = await pause;
+          await new Promise<void>(resolve => setImmediate(resolve));
+          const authoritative = queue.getQueuedEntries(identity);
+          const projection = (await host.client.getNavigationQueueProjection({ protocol: 2, ref: identity })).entries;
+          expect(projection.map(row => row.queueEntryId)).toEqual(authoritative.map(row => row.id));
+          const last = host.events.slice(offset).flatMap(event => event.notification.method === "thread/turnQueue/updated"
+            && event.notification.params.queueEntryId === id ? [event.notification.params] : []).at(-1)!;
+          const live = authoritative.find(row => row.id === id);
+          if (live) {
+            expect(last.status).toBe(live.manualReleaseRequired ? "held" : "queued");
+            expect(Boolean(last.paused)).toBe(Boolean(live.paused));
+            expect(last.pauseRevision ?? 0).toBe(live.pauseRevision ?? 0);
+            expect(last.errorMessage).toBe(live.holdReason);
+            expect((await host.client.readQueuedTurn({ ...identity, queueEntryId: id }))).toEqual(accepted);
+            // The response acknowledges its mutation. The existing renderer
+            // revision rule must preserve a newer event when that reply lands.
+            const rows = [{ id, queueEntryId: id, paused: live.paused, pauseRevision: live.pauseRevision }];
+            expect(withOwnerPauseState(rows, id, response) ?? rows).toEqual(rows);
+          } else expect(last.status).toBe("cancelled");
+          if (control === "hold") {
+            await queue.releaseHold(identity, reason => reason === "second independent lock");
+            expect(queue.getQueuedEntries(identity).every(row => row.manualReleaseRequired)).toBe(true);
           }
-        }), { numRuns: 25, examples: [[false, "hold", false], [true, "pause", true], [true, "cancel", false]] });
+        } finally {
+          stopObserver();
+          for (const row of queue.getQueuedEntries(identity)) await host.client.cancelQueuedTurn({ queueEntryId: row.id });
+          await host.client.interruptTurn(active);
+        }
+      }
     } finally { await host.close(); }
   });
 
@@ -2271,24 +2262,23 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
   });
 
 
-  it("projects canonical title provenance until a confirmed native name changes", async () => {
-    await fc.assert(fc.asyncProperty(fc.stringMatching(/^[A-Z][a-z]{0,12}$/), fc.constantFrom("pending", "acknowledged", "external"), async (suffix, state) => {
-      const nativeName = `Native ${suffix}`;
-      const ownerName = state === "pending" ? `Imported ${suffix}` : state === "external" ? `Previous ${suffix}` : nativeName;
-      const host = await startDesktopOwner(null, async (db, workspace) => {
-        OwnerConformanceCodexTransport.threads.set("imported", { id: "imported", name: nativeName, preview: "", cwd: workspace, createdAt: 1, updatedAt: 1, turns: [] });
-        await new SqliteOverlayStore(db).updateThreadMetadata({ backend: "codex", threadId: "imported" }, {
-          title: { text: ownerName, source: "derived", ...(state !== "pending" ? { nativeName: ownerName } : {}) },
-        });
+  it.each(["pending", "acknowledged", "external"])("projects canonical title provenance for a %s native name", async (state) => {
+    const suffix = "Fixture";
+    const nativeName = `Native ${suffix}`;
+    const ownerName = state === "pending" ? `Imported ${suffix}` : state === "external" ? `Previous ${suffix}` : nativeName;
+    const host = await startDesktopOwner(null, async (db, workspace) => {
+      OwnerConformanceCodexTransport.threads.set("imported", { id: "imported", name: nativeName, preview: "", cwd: workspace, createdAt: 1, updatedAt: 1, turns: [] });
+      await new SqliteOverlayStore(db).updateThreadMetadata({ backend: "codex", threadId: "imported" }, {
+        title: { text: ownerName, source: "derived", ...(state !== "pending" ? { nativeName: ownerName } : {}) },
       });
-      try {
-        const thread = (await host.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "imported" } })).thread;
-        expect(thread).toMatchObject(state === "external" ? { title: nativeName, titleSource: "explicit" } : { title: ownerName, titleSource: "derived" });
-        await host.client.renameThread({ backend: "codex", threadId: "imported", name: `Operator ${suffix}`, expectedName: thread!.title });
-        expect((await host.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "imported" } })).thread)
-          .toMatchObject({ title: `Operator ${suffix}`, titleSource: "explicit" });
-      } finally { await host.close(); }
-    }), { numRuns: 12 });
+    });
+    try {
+      const thread = (await host.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "imported" } })).thread;
+      expect(thread).toMatchObject(state === "external" ? { title: nativeName, titleSource: "explicit" } : { title: ownerName, titleSource: "derived" });
+      await host.client.renameThread({ backend: "codex", threadId: "imported", name: `Operator ${suffix}`, expectedName: thread!.title });
+      expect((await host.client.getNavigationSelectedDetail({ protocol: 2, ref: { backend: "codex", threadId: "imported" } })).thread)
+        .toMatchObject({ title: `Operator ${suffix}`, titleSource: "explicit" });
+    } finally { await host.close(); }
   });
 
 

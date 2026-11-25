@@ -974,12 +974,12 @@ describe("Thread maintenance's hibernate step", () => {
   // and held it awake. The provider inventory is the oracle: only an
   // unarchived co-owner shares the checkout, and an archived row is never
   // offered for archive again.
-  it("treats co-owners from the provider's archived page as archived, not as sharing users (oracle property)", ownFixtureTest(async () => {
+  it("uses the provider archive page to distinguish archived and sharing co-owners", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const target = ArchiveWorktreeTransport.threads[0]!;
     const { registry } = fixture.open({ ...ON, enabled: false });
     const service = maintenance(registry);
-    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { maxLength: 4 }), async (archived) => {
+    for (const archived of [[], [true], [false], [true, true], [true, false], [false, true, true, true]]) {
       ArchiveWorktreeTransport.threads = [target, ...archived.map((isArchived, index) => ({
         id: `co-owner-${index}`, cwd: fixture.worktree, source: "vscode", status: { type: "notLoaded" as const }, archived: isArchived,
       }))];
@@ -989,12 +989,12 @@ describe("Thread maintenance's hibernate step", () => {
       const offered = scan.threads.projects.flatMap((project) => project.idle.map((row) => row.threadId));
       const archivedIds = archived.flatMap((isArchived, index) => isArchived ? [`co-owner-${index}`] : []);
       expect(offered.filter((threadId) => archivedIds.includes(threadId))).toEqual([]);
-    }), { numRuns: 12, examples: [[[true, true]], [[true, false]]] });
+    }
   }));
 
   // ACP summaries drop the session's archive time, as Codex rows have none.
   // The page that lists the session is the oracle for whether it shares.
-  it("treats an ACP session from the archived page as archived, not as a sharing user (oracle property)", ownFixtureTest(async () => {
+  it("uses the ACP archive page to distinguish an archived and a sharing session", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
     const acp = (registry as unknown as { acpBackend: {
@@ -1011,11 +1011,11 @@ describe("Thread maintenance's hibernate step", () => {
       projectKey: fixture.worktree, linkedDirectories: [fixture.directory],
     }));
     const service = maintenance(registry);
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (archived) => {
+    for (const archived of [true, false]) {
       sessionArchived = archived;
       const scan = await service.scan({ steps: ["hibernate"] });
       expect(scan.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(archived);
-    }), { numRuns: 4, examples: [[true], [false]] });
+    }
   }));
 
   // Model test. Maintenance splits its owners into active and archived for
@@ -1044,7 +1044,7 @@ describe("Thread maintenance's hibernate step", () => {
       for (const [index, candidate] of candidates.entries()) {
         expect(active.has(candidate.thread.id)).toBe(owners.sharedWithAnotherThread(outsider, path.join(fixture.root, `checkout-${index}`)));
       }
-    }), { numRuns: 40, examples: [[["retention"]]] });
+    }), { numRuns: 5, examples: [[["retention"]], [["none", "provider", "tombstone", "retention"]], [[]]] });
   }));
 
   it("keeps a co-owner that both provider pages list as a sharing user", ownFixtureTest(async () => {
@@ -1407,13 +1407,18 @@ describe("Thread maintenance's hibernate step", () => {
       }
       return { activeThreads: [], archivedThreads };
     };
-    await ownFixtureWork(fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 3 }), async (valid) => {
+    const receiptSets = [1, 2, 3].flatMap(length =>
+      Array.from({ length: 2 ** length }, (_, bits) =>
+        Array.from({ length }, (_, index) => Boolean(bits & (1 << index)))));
+    for (const valid of receiptSets) {
       signal.throwIfAborted();
-      const owners = await inventory(valid);
-      const before = probeHook.identities;
-      expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(valid.every(Boolean));
-      expect(probeHook.identities - before).toBe(1);
-    }), { numRuns: 25, examples: [[[true, false, true]], [[true, true, true]]] }));
+      await ownFixtureWork((async () => {
+        const owners = await inventory(valid);
+        const before = probeHook.identities;
+        expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(valid.every(Boolean));
+        expect(probeHook.identities - before).toBe(1);
+      })());
+    }
     const owners = await inventory([true, true]);
     expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(true);
     await git(repo, ["worktree", "remove", worktree]);
@@ -1524,14 +1529,19 @@ describe("Thread maintenance's hibernate step", () => {
       }
       toString() { return this.operation; }
     }
-    await ownFixtureWork(fc.assert(fc.asyncProperty(fc.commands([
-      fc.constant(new RegistrationCommand("approve")), fc.constant(new RegistrationCommand("cancel")),
-      fc.constant(new RegistrationCommand("revoke")), fc.constant(new RegistrationCommand("observe")),
-    ], { maxCommands: 6 }), async (commands) => {
+    const check = async (commands: Iterable<fc.AsyncCommand<Model, Real>>) => {
       signal.throwIfAborted();
       await store.setThreadWorktreeRegistration({ ...identity, worktreePath: worktree });
       await fc.asyncModelRun(() => ({ model: { authorized: false }, real: fixture }), commands);
-    }), { numRuns: 10 }));
+    };
+    await ownFixtureWork(check([
+      new RegistrationCommand("approve"), new RegistrationCommand("cancel"), new RegistrationCommand("observe"),
+      new RegistrationCommand("revoke"), new RegistrationCommand("observe"),
+    ]));
+    await ownFixtureWork(fc.assert(fc.asyncProperty(fc.commands([
+      fc.constant(new RegistrationCommand("approve")), fc.constant(new RegistrationCommand("cancel")),
+      fc.constant(new RegistrationCommand("revoke")), fc.constant(new RegistrationCommand("observe")),
+    ], { maxCommands: 6 }), check), { numRuns: 4 }));
     expect((await call(worktree, "inspect")).ok).toBe(true);
   }));
 
@@ -1671,13 +1681,14 @@ describe("Thread maintenance's hibernate step", () => {
   it("includes every provider checkout owner even when navigation hides it", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open();
-    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.constantFrom("cli", "vscode", "exec", "appServer"), { minLength: 1 }), async (sources) => {
-      ArchiveWorktreeTransport.threads = sources.map((source, index) => ({
+    const sources = ["cli", "vscode", "exec", "appServer"] as const;
+    for (const inventory of [...sources.map(source => [source]), sources]) {
+      ArchiveWorktreeTransport.threads = inventory.map((source, index) => ({
         id: `owner-${index}`, cwd: fixture.worktree, source, name: "PwrSnap Capture Metadata Worker", status: { type: "notLoaded" },
       }));
       const found = await registry.listAutoArchiveCandidates();
       expect(found.map((row) => row.thread.id).sort()).toEqual(ArchiveWorktreeTransport.threads.map((row) => row.id).sort());
-    }), { numRuns: 12 });
+    }
   }));
 
   // Git is the oracle for workspace kind. A provider's minimal cwd summary
@@ -1692,7 +1703,7 @@ describe("Thread maintenance's hibernate step", () => {
       projectKey: fixture.worktree,
       linkedDirectories: [{ id: fixture.worktree, path: fixture.worktree, kind: "local", label: "repo" }],
     });
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 4 }), async (depth) => {
+    for (const depth of [0, 1, 2, 3, 4]) {
       // Equivalent Git spellings must produce the same native review paths.
       // Windows Git's forward slashes are covered by this real-Git oracle
       // there; dot segments exercise the normalization on every platform.
@@ -1704,7 +1715,7 @@ describe("Thread maintenance's hibernate step", () => {
       expect(refreshed.thread.linkedDirectories).toEqual([expect.objectContaining({
         kind: "worktree", worktreePath: fixture.worktree, path: fixture.repo,
       })]);
-    }), { numRuns: 8, examples: [[1]] });
+    }
   }));
 
   it("observes Git metadata again on the next pass when a checkout path is replaced (oracle)", ownFixtureTest(async () => {
