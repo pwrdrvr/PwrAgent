@@ -6478,8 +6478,9 @@ export class DesktopBackendRegistry {
       },
     });
 
+    let result: Awaited<ReturnType<typeof client.startPrompt>>;
     try {
-      const result = await client.startPrompt({
+      result = await client.startPrompt({
         sessionId: params.threadId,
         prompt: promptPayload.prompt,
         promptContent: promptPayload.promptContent,
@@ -6490,12 +6491,6 @@ export class DesktopBackendRegistry {
         agentInstructions: providerDeliveredAgentInstructions(overlay?.agent) ?? "",
         ...(overlay?.agent ? { readAgentMemory: () => this.readAgentMemoryContext(params) } : {}),
       });
-      this.invalidateThreadListCache(params.backend);
-      return {
-        backend: params.backend,
-        threadId: result.sessionId,
-        turnId: result.turnId,
-      };
     } catch (error) {
       await this.emit({
         backend: params.backend,
@@ -6517,6 +6512,43 @@ export class DesktopBackendRegistry {
       });
       throw error;
     }
+    this.invalidateThreadListCache(params.backend);
+    // ACP agents report no user item for the prompt itself. Publish the copy
+    // the owner just recorded, under the replay's id, so a window that holds
+    // no pending copy shows it live: a steer that fell back to a new turn, a
+    // queued release, or a send from another surface. The prompt is already
+    // dispatched, so a failed publish must not report the turn as failed;
+    // the replay still holds the prompt.
+    try {
+      await this.emit({
+        backend: params.backend,
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: result.sessionId,
+            turnId: result.turnId,
+            item: {
+              id: `user:${result.turnId}`,
+              type: "userMessage",
+              text: promptPayload.prompt,
+              ...(promptPayload.parts?.length ? { content: promptPayload.parts } : {}),
+            },
+          },
+        },
+      });
+    } catch (error) {
+      backendRegistryLog.warn("Could not publish the ACP turn's prompt", {
+        backend: params.backend,
+        threadId: result.sessionId,
+        turnId: result.turnId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return {
+      backend: params.backend,
+      threadId: result.sessionId,
+      turnId: result.turnId,
+    };
   }
 
   private async applyAcpRuntimeSelection(

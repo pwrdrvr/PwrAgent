@@ -17,10 +17,14 @@ import { useThreadSessionState } from "../useThreadSessionState";
 // disappears and no steer takes its place.
 //
 // Oracle: the owner's replay of the same turn, which records the prompt as
-// `user:<turnId>` and each accepted steer after it. ACP backends publish no
-// live user item for the prompt itself, so the pending copy is still waiting
-// when the first steer's item lands. A steer is in the sent turn but is not
-// the send, so it must not claim that pending copy.
+// `user:<turnId>` and each accepted steer after it. ACP owners before #4413
+// published no live user item for the prompt itself, so the pending copy was
+// still waiting when the first steer's item landed. A steer is in the sent
+// turn but is not the send, so it must not claim that pending copy.
+//
+// The owner can also start a turn this window holds no pending copy of: a
+// steer that missed its turn and started the next one, or a queued release.
+// Its prompt then shows live only through the owner's copy.
 
 const THREAD_ID = "steer-echo-thread";
 const SENT_TURN = "pending:steer-echo-thread:1000";
@@ -28,7 +32,17 @@ const PROMPT_ID = `user:${SENT_TURN}`;
 
 type Backend = "acp" | "codex";
 type Step = { kind: "steer"; text: string } | { kind: "assistant"; text: string } | { kind: "snapshot" };
-type Scenario = { backend: Backend; prompt: string; steps: Step[] };
+type Scenario = {
+  backend: Backend;
+  prompt: string;
+  /** The owner publishes the prompt's own user item; ACP owners before #4413 did not. */
+  promptEcho: boolean;
+  /** That item reaches the window before startTurn's response binds the send. */
+  echoBeforeBind: boolean;
+  /** This window sent the prompt, so it holds a pending copy. */
+  sentHere: boolean;
+  steps: Step[];
+};
 
 const history: AppServerThreadEntry[] = [
   {
@@ -113,17 +127,25 @@ async function runScenario(scenario: Scenario) {
   });
 
   await act(async () => {
-    const optimisticId = real.result.current.addOptimisticUserMessage(scenario.prompt);
-    // What Composer does once startTurn resolves with the started turn.
-    real.result.current.bindOptimisticUserMessageToTurn(optimisticId, SENT_TURN);
-    real.result.current.setActiveTurnId(SENT_TURN);
+    const optimisticId = scenario.sentHere
+      ? real.result.current.addOptimisticUserMessage(scenario.prompt)
+      : undefined;
     real.emit("turn/started", { turn: { id: SENT_TURN, status: "inProgress" } });
-    if (scenario.backend === "codex") {
-      // Codex publishes the prompt's own user item; ACP backends do not.
+    const echo = () => {
+      if (!scenario.promptEcho) return;
       const item = { id: PROMPT_ID, type: "userMessage", text: scenario.prompt };
-      real.emit("item/started", { turnId: SENT_TURN, item });
+      // Codex reports the item starting and completing; the ACP owner
+      // publishes only its completion once the agent accepts the prompt.
+      if (scenario.backend === "codex") real.emit("item/started", { turnId: SENT_TURN, item });
       real.emit("item/completed", { turnId: SENT_TURN, item });
+    };
+    if (scenario.echoBeforeBind) echo();
+    if (optimisticId) {
+      // What Composer does once startTurn resolves with the started turn.
+      real.result.current.bindOptimisticUserMessageToTurn(optimisticId, SENT_TURN);
     }
+    real.result.current.setActiveTurnId(SENT_TURN);
+    if (!scenario.echoBeforeBind) echo();
   });
   expect(turnUserTexts(real.result.current.entries), "after the send").toEqual(expected);
 
@@ -190,22 +212,47 @@ it("keeps the sent prompt above every steer delivered into its turn", async () =
       fc.record({
         backend: fc.constantFrom<Backend>("acp", "codex"),
         prompt: promptArbitrary,
-      }).chain(({ backend, prompt }) => fc.record({
-        backend: fc.constant(backend),
-        prompt: fc.constant(prompt),
-        steps: fc.array(stepArbitrary(prompt), { minLength: 1, maxLength: 5 })
-          .filter((steps) => steps.some((step) => step.kind === "steer")),
-      })),
+        promptEcho: fc.boolean(),
+        echoBeforeBind: fc.boolean(),
+        sentHere: fc.boolean(),
+      })
+        // Codex always echoes the prompt. A turn this window did not send
+        // shows its prompt live only through that echo.
+        .filter((s) => (s.backend === "acp" || s.promptEcho) && (s.sentHere || s.promptEcho))
+        .chain((setup) => fc.record({
+          steps: fc.array(stepArbitrary(setup.prompt), { minLength: 1, maxLength: 5 })
+            .filter((steps) => steps.some((step) => step.kind === "steer")),
+        }).map(({ steps }): Scenario => ({ ...setup, steps }))),
       runScenario,
     ),
     { numRuns: 80 },
   );
 });
 
+it("shows the prompt of a turn the owner started from a late steer", async () => {
+  // The live sequence from an Antigravity thread: a steer sent as the turn
+  // ended started the next turn. The window held no pending copy, the owner
+  // published none, and the replies drew under no prompt until a reload.
+  await runScenario({
+    backend: "acp",
+    prompt: "Is that thread on the M4 Mini also fixing that?",
+    promptEcho: true,
+    echoBeforeBind: false,
+    sentHere: false,
+    steps: [
+      { kind: "assistant", text: "Reading files" },
+      { kind: "steer", text: "stop and rebase" },
+    ],
+  });
+});
+
 it("keeps an Antigravity prompt when the steer repeats its words", async () => {
   await runScenario({
     backend: "acp",
     prompt: "ship it",
+    promptEcho: false,
+    echoBeforeBind: false,
+    sentHere: true,
     steps: [
       { kind: "steer", text: "ship it" },
       { kind: "assistant", text: "Reading files" },
@@ -220,6 +267,9 @@ it("keeps an Antigravity prompt when a steer lands between two replies", async (
   await runScenario({
     backend: "acp",
     prompt: "I started Dev instance. Proceed with the cohort.",
+    promptEcho: false,
+    echoBeforeBind: false,
+    sentHere: true,
     steps: [
       { kind: "assistant", text: "Reading files" },
       { kind: "steer", text: "I exited the Dev instance" },
