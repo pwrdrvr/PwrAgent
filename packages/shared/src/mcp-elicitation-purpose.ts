@@ -10,9 +10,15 @@ import type { AppServerMcpElicitationRequestNotification } from "./contracts/nor
  * - `confirmation`: an empty form from an MCP server, such as "Confirm the
  *   refund?".
  * - `form`: an MCP server asks for field values.
+ * - `agent-question`: a coding agent asks the operator questions over ACP
+ *   elicitation, such as Antigravity's ask_question. The ACP client marks it,
+ *   so an MCP server's form is never labelled as the agent's question.
  * - `url`: an MCP server asks the operator to open a page outside PwrAgent.
  */
-export type McpElicitationPurpose = "tool-approval" | "confirmation" | "form" | "url";
+export type McpElicitationPurpose = "tool-approval" | "confirmation" | "form" | "agent-question" | "url";
+
+/** `_meta` key the ACP client sets on an elicitation the agent itself sent. */
+export const ACP_AGENT_ELICITATION_META_KEY = "pwragent_acp_agent_elicitation";
 
 type PurposeInput = Pick<
   AppServerMcpElicitationRequestNotification["params"],
@@ -26,7 +32,7 @@ export function mcpElicitationPurpose(params: PurposeInput): McpElicitationPurpo
   const properties = params.requestedSchema?.properties;
   const empty = !properties || typeof properties !== "object" || Object.keys(properties).length === 0;
   if (!empty) {
-    return "form";
+    return params._meta?.[ACP_AGENT_ELICITATION_META_KEY] === true ? "agent-question" : "form";
   }
   return isMcpToolApprovalMeta(params.serverName, params._meta) ? "tool-approval" : "confirmation";
 }

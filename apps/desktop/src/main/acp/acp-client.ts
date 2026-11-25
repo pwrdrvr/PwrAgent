@@ -9,6 +9,7 @@ import {
 } from "@pwragent/shared/acp-permission-mode";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { ACP_AGENT_ELICITATION_META_KEY } from "@pwragent/shared/mcp-elicitation-purpose";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import type {
   AcpBackendId,
@@ -2747,7 +2748,8 @@ export class AcpAgentClient {
         serverName: this.approvalRequesterName,
         mode: "form",
         message,
-        _meta: null,
+        // Main's own marker, so the card names the agent's question as one.
+        _meta: { [ACP_AGENT_ELICITATION_META_KEY]: true },
         requestedSchema: acpElicitationFormSchema(params.requestedSchema),
       },
     };

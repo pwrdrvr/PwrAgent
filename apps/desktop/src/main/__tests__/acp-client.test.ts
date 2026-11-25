@@ -2041,7 +2041,7 @@ describe("AcpAgentClient", () => {
         serverName: "Antigravity",
         mode: "form",
         message: "The agent has 2 questions.",
-        _meta: null,
+        _meta: { pwragent_acp_agent_elicitation: true },
         requestedSchema: antigravityAskQuestion.requestedSchema,
       },
     });

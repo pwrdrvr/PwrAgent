@@ -79,7 +79,7 @@ export function PendingMcpInteraction(props: PendingMcpInteractionProps) {
     : sessionApproval
       ? gatewayApproval ? "Allow this tool for this conversation" : "Allow this conversation"
       // Not "Send": E2E specs find the composer's Send button page-wide.
-      : purpose === "form" ? "Submit" : "Allow";
+      : purpose === "form" || purpose === "agent-question" ? "Submit" : "Allow";
   const submitPrimary = (): void => {
     if (url) {
       // Accept means the operator consented to open the page; the

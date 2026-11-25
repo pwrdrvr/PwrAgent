@@ -6,6 +6,7 @@ import {
   buildMcpElicitationResponse,
   canAcceptMcpElicitation,
   createMcpElicitationState,
+  mcpElicitationPurposeLabel,
   mcpFieldFormatError,
   redactDisplayValue,
   readMcpApprovalPersistence,
@@ -263,6 +264,7 @@ describe("MCP elicitation helpers", () => {
       buildRequest({
         serverName: "Antigravity",
         message: "The agent has 2 questions.",
+        _meta: { pwragent_acp_agent_elicitation: true },
         requestedSchema: {
           type: "object",
           properties: {
@@ -290,6 +292,7 @@ describe("MCP elicitation helpers", () => {
       })
     )!;
 
+    expect(mcpElicitationPurposeLabel(state.purpose)).toBe("Question");
     expect(state.form?.fields.map((field) => [field.key, field.kind, field.label])).toEqual([
       ["q1", "singleSelect", "Pick a color"],
       ["q1_other", "string", "Other"],
