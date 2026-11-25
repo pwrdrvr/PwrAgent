@@ -1206,10 +1206,13 @@ it("shows per-provider tokens, cost, cache savings, and model/day breakdown acro
 
   // Tri-state multi-select: click Anthropic (include), then xAI (multi-include),
   // then Anthropic again (exclude) so only xAI remains, then clear filters.
-  const anthropicButton = within(providerList).getByRole("button", { name: /Anthropic/ });
-  const xaiButton = within(providerList).getByRole("button", { name: /xAI/ });
-  fireEvent.click(anthropicButton);
-  expect(anthropicButton).toHaveAttribute("aria-pressed", "true");
+  // Rows are looked up again after every click, so a re-rendered band cannot
+  // leave an assertion reading a detached node.
+  const providerRows = () => within(screen.getByRole("group", { name: "Usage by provider" }));
+  const anthropicButton = () => providerRows().getByRole("button", { name: /Anthropic/ });
+  const xaiButton = () => providerRows().getByRole("button", { name: /xAI/ });
+  fireEvent.click(anthropicButton());
+  expect(anthropicButton()).toHaveAttribute("aria-pressed", "true");
   // Overview filters scope everything below except account limits: Spend by
   // charts and lists only the included provider's threads.
   const spendByLegend = () => document.querySelector(".usage-timeline__legend")!;
@@ -1221,16 +1224,16 @@ it("shows per-provider tokens, cost, cache savings, and model/day breakdown acro
   expect(screen.queryByRole("button", { name: "Inspect Grok triage" })).not.toBeInTheDocument();
 
   // Adding a second included provider shows both without clearing the first.
-  fireEvent.click(xaiButton);
-  expect(xaiButton).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(xaiButton());
+  expect(xaiButton()).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Grok triage" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
 
   // Clicking Anthropic a second time flips it to excluded, leaving xAI included.
-  fireEvent.click(anthropicButton);
-  expect(anthropicButton).toHaveAttribute("aria-pressed", "false");
-  expect(anthropicButton).toHaveAccessibleName(/, excluded$/);
+  fireEvent.click(anthropicButton());
+  expect(anthropicButton()).toHaveAttribute("aria-pressed", "false");
+  expect(anthropicButton()).toHaveAccessibleName(/, excluded$/);
   expect(screen.queryByRole("button", { name: "Inspect Claude refactor" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Grok triage" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
@@ -1242,27 +1245,29 @@ it("shows per-provider tokens, cost, cache savings, and model/day breakdown acro
   expect(screen.queryByRole("button", { name: "Inspect Claude refactor" })).not.toBeInTheDocument();
 
   // Clicking Anthropic a third time returns it to unfiltered and clears the filter bar.
-  fireEvent.click(anthropicButton);
-  expect(anthropicButton).toHaveAttribute("aria-pressed", "false");
+  fireEvent.click(anthropicButton());
+  expect(anthropicButton()).toHaveAttribute("aria-pressed", "false");
   expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
   expect(within(overview).queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
 
   // Model breakdown rows use the same tri-state include/exclude + Clear filters button.
-  const gptButton = within(overview).getByRole("button", { name: /GPT-5\.4/ });
-  fireEvent.click(gptButton);
-  expect(gptButton).toHaveAttribute("aria-pressed", "true");
+  // Scoped to the Breakdown rows: an included model also gets a "Remove GPT-5.4 · OpenAI model filter" chip.
+  const gptButton = () => within(screen.getByRole("region", { name: "Usage overview" })
+    .querySelector<HTMLElement>(".usage-overview__table-body")!).getByRole("button", { name: /GPT-5\.4/ });
+  fireEvent.click(gptButton());
+  expect(gptButton()).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByRole("button", { name: "Inspect Codex fix" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Claude refactor" })).not.toBeInTheDocument();
 
-  fireEvent.click(gptButton);
-  expect(gptButton).toHaveAttribute("aria-pressed", "false");
-  expect(gptButton).toHaveAccessibleName(/, excluded$/);
+  fireEvent.click(gptButton());
+  expect(gptButton()).toHaveAttribute("aria-pressed", "false");
+  expect(gptButton()).toHaveAccessibleName(/, excluded$/);
   expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
 
   // Clear filters resets everything in one click.
   fireEvent.click(within(overview).getAllByRole("button", { name: "Clear filters" })[0]);
-  expect(gptButton).toHaveAttribute("aria-pressed", "false");
+  expect(gptButton()).toHaveAttribute("aria-pressed", "false");
   expect(screen.getByRole("button", { name: "Inspect Codex fix" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
 
