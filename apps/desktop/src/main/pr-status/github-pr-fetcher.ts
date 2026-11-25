@@ -71,6 +71,16 @@ const MERGE_METHOD_RESULTS: Record<ThreadTodoMergeMethod, string> = {
   merge: "Merged",
 };
 
+function mergedResult(mergedUrl: string, params: GithubMergeOptions): ThreadPullRequestMergeResult {
+  const verb = MERGE_METHOD_RESULTS[params.method];
+  return {
+    mergedUrl,
+    summary: /^\d+$/.test(params.pullRequest)
+      ? `${verb} #${params.pullRequest}`
+      : verb,
+  };
+}
+
 /**
  * GitHub refuses, for a token without `workflow`, any merge that changes
  * `.github/workflows/`. A retry fails the same way, so name the fix.
@@ -79,6 +89,22 @@ export function mergeScopeHint(message: string): string {
   return /without [`'"]?workflow[`'"]? scope/i.test(message)
     ? ". Run `gh auth refresh -s workflow`, then retry."
     : "";
+}
+
+/**
+ * gh appends the response body to a forge HTTP failure, so a gateway error
+ * carries the proxy's whole HTML page. Returns the status of a 5xx, which is
+ * GitHub's side and usually temporary, such as "502 Bad Gateway".
+ */
+export function ghServerErrorStatus(message: string): string | undefined {
+  const match = /(?:status code:\s*|\bHTTP\s+)(5\d\d)\b:?(?:\s+([A-Z][\w-]*(?: [A-Z][\w-]*)*))?/.exec(message);
+  if (!match) return undefined;
+  return match[2] ? `${match[1]} ${match[2]}` : match[1];
+}
+
+/** Drops an HTML response body gh appended to a failure line. */
+export function withoutHtmlBody(message: string): string {
+  return message.replace(/\s*body:\s*"\s*<[\s\S]*$/i, "");
 }
 const fetcherLog = getMainLogger("pwragent:pr-fetcher");
 
@@ -331,8 +357,18 @@ export class GithubPrFetcher {
         const queued = await this.mergeThroughQueue(reference, label, run, checkedBase);
         if (queued) return queued;
       }
-      const firstLine = detail.split("\n")[0];
-      throw new Error(`gh pr merge failed: ${firstLine}${mergeScopeHint(firstLine)}`);
+      const firstLine = withoutHtmlBody(detail.split("\n")[0]);
+      const serverError = ghServerErrorStatus(firstLine);
+      if (serverError) {
+        // A gateway can time out after GitHub merged: read what happened.
+        const state = await run(["pr", "view", mergeTarget, "--json", "state", "--jq", ".state"])
+          .then((result) => result.stdout.trim(), () => undefined);
+        if (state === "MERGED") return mergedResult(reference.url, params);
+        throw new Error(state
+          ? `GitHub returned ${serverError}, and ${label} did not merge. This is usually temporary: retry the merge.`
+          : `GitHub returned ${serverError}, and ${label}'s state could not be read. Retry the merge: one that went through reports as already merged.`, { cause: error });
+      }
+      throw new Error(`gh pr merge failed: ${firstLine}${mergeScopeHint(firstLine)}`, { cause: error });
     }
     // `gh pr merge` adds a PR to a required queue itself, and says so rather
     // than merging: report that, not a merge.
@@ -348,13 +384,7 @@ export class GithubPrFetcher {
     if (lines.some((line) => line.endsWith(`${label} was already merged`))) {
       return { summary: `Pull request ${label} was already merged`, mergedUrl: reference.url, alreadyMerged: true };
     }
-    const verb = MERGE_METHOD_RESULTS[params.method];
-    return {
-      mergedUrl: reference.url,
-      summary: /^\d+$/.test(params.pullRequest)
-        ? `${verb} #${params.pullRequest}`
-        : verb,
-    };
+    return mergedResult(reference.url, params);
   }
 
   private async checkStackOrder(
