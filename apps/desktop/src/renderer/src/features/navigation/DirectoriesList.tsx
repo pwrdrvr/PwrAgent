@@ -116,7 +116,6 @@ import {
 } from "./project-index";
 import {
   TOP_DOCK_RESERVE_CHANGE_EVENT,
-  clearTopDockReserve,
   topDockRegionOf,
   topDockReserve,
 } from "./selected-thread-dock-reserve";
@@ -1048,10 +1047,6 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
         scrollTopBeforeLift = scrollElement?.scrollTop;
         list.classList.add("is-folding-directories");
         if (scrollElement) scrollElement.scrollTop += header.getBoundingClientRect().top - before;
-        // The dock hides after layout. Release the sticky inset before the
-        // drag's first animation callback reads the folded drop targets.
-        const region = topDockRegionOf(list);
-        if (region) clearTopDockReserve(region);
         // After the fold, so its scroll correction cannot push the slot out
         // of view. The slot must be in the DOM before the first hit test.
         if (offersPinSlot) flushSync(() => setDirectoryPinSlotOpen(true));

@@ -1,6 +1,7 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { beginNativeDragInteraction, endNativeDragInteraction } from "../../lib/native-drag-interaction";
 import type { DropIndicatorController, DropIndicatorPosition } from "./drag-drop";
+import { dismissThreadDockForDrag } from "./selected-thread-dock-reserve";
 import {
   createThreadRowPointerDragPreview,
   type PointerDragPreviewOptions,
@@ -144,6 +145,7 @@ export function beginPointerReorderDrag<T>(options: PointerReorderDragOptions<T>
     options.clickSuppressionRoot.addEventListener("click", suppressReleaseClick, true);
     options.scrollElement?.addEventListener("scroll", schedule, { passive: true });
     options.onLift?.();
+    dismissThreadDockForDrag(sourceElement);
     schedule();
   };
   const deactivate = (): void => {

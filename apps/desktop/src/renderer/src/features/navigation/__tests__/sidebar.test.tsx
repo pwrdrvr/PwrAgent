@@ -1594,6 +1594,75 @@ describe("Sidebar", () => {
     expect(shell("Target thread")).not.toHaveClass("is-drop-target-inside");
   });
 
+  it.each(["top", "bottom"] as const)("hit-tests a stationary nesting drag through the former %s dock", async (edge) => {
+    const loose = { ...sharedThread, id: "loose", title: "Loose thread" };
+    const target = { ...sharedThread, id: "target", title: "Target thread" };
+    const selected = { ...sharedThread, id: "selected", title: "Selected thread" };
+    const threads = [loose, target, selected];
+    const selectedKey = threadSummaryIdentityKey(selected);
+    const targetY = edge === "top" ? 125 : 475;
+    const onSetThreadParent = vi.fn(async () => undefined);
+    const rect = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.matches(".sidebar__scroll-region, .sidebar-list--dense")) return new DOMRect(0, 100, 300, 400);
+      if (this.matches(".thread-row") && this.parentElement?.dataset.threadKey === selectedKey) {
+        return new DOMRect(0, edge === "top" ? 0 : 550, 300, 40);
+      }
+      return rect.call(this);
+    });
+    // Hold layout delivery until after the first drag hit test.
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const previousHitTest = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
+    try {
+      const { container } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="recents"
+          directories={[]}
+          inboxThreads={threads}
+          loading={false}
+          selectedItemKey={selectedKey}
+          threads={threads}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          onSetThreadParent={onSetThreadParent}
+        />,
+      );
+      const dock = screen.getByTestId("selected-thread-dock");
+      expect(dock).toHaveAttribute("data-edge", edge);
+      const row = screen.getByRole("button", { name: "Target thread" }).closest(".thread-row-shell")!;
+      const source = screen.getByRole("button", { name: "Loose thread" }).closest(".thread-row-shell")!;
+      mockElementRect(source, 200, 40);
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: () => dock.isConnected ? dock : row,
+      });
+
+      fireEvent.scroll(container.querySelector(".sidebar__scroll-region > .sidebar-list--dense")!);
+      startThreadPinPointerDrag(source, { x: 50, y: 220 });
+      moveThreadPinPointer({ x: 50, y: targetY });
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+      expect(row).toHaveClass("is-drop-target-inside");
+      expect(document.querySelector(".thread-row__drop-label")).toHaveTextContent("Make sub-thread");
+      await act(async () => {
+        releaseThreadPinPointer({ x: 50, y: targetY });
+      });
+      expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex", true);
+    } finally {
+      if (previousHitTest) Object.defineProperty(document, "elementFromPoint", previousHitTest);
+      else Reflect.deleteProperty(document, "elementFromPoint");
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("moves a sole sub-thread to another row but never under its own parent or its own sub-thread", async () => {
     const parent = { ...sharedThread, id: "parent", title: "First parent" };
     const child = { ...sharedThread, id: "child", title: "Only child", parentThreadId: "parent",

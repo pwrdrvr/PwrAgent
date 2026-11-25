@@ -19,6 +19,7 @@ import {
   type DockExtent,
 } from "./selected-thread-dock";
 import {
+  THREAD_DOCK_DRAG_LIFT_EVENT,
   TOP_DOCK_CLASS,
   TOP_DOCK_RESERVE_CHANGE_EVENT,
   TOP_DOCK_RESERVE_PROPERTY as RESERVE_PROPERTY,
@@ -275,7 +276,7 @@ function measure(
 function observeDockLayout(
   region: HTMLElement,
   cardRef: RefObject<HTMLButtonElement | null>,
-  sync: (lane: HTMLElement | undefined, elements: DockElements, inFrame: boolean) => void,
+  sync: (lane: HTMLElement | undefined, elements: DockElements | undefined, inFrame: boolean) => void,
   cardMounted: () => void,
 ) {
   let elements: DockElements = {};
@@ -401,14 +402,19 @@ function observeDockLayout(
   const onScroll = (event: Event): void => {
     if (event.target === lane) schedule();
   };
+  // Drag targets are hit-tested before the after-layout sample. Removing
+  // the dock needs no geometry, and the drag class still controls its return.
+  const onDragLift = (): void => sync(undefined, undefined, true);
   region.addEventListener("scroll", onScroll, { capture: true, passive: true });
   region.addEventListener(TOP_DOCK_RESERVE_SAMPLE_EVENT, sampleLayout);
+  region.addEventListener(THREAD_DOCK_DRAG_LIFT_EVENT, onDragLift);
   return {
     refresh,
     dispose() {
       cancelMeasure();
       region.removeEventListener("scroll", onScroll, { capture: true });
       region.removeEventListener(TOP_DOCK_RESERVE_SAMPLE_EVENT, sampleLayout);
+      region.removeEventListener(THREAD_DOCK_DRAG_LIFT_EVENT, onDragLift);
       resize?.disconnect();
       mutation?.disconnect();
       document.fonts?.removeEventListener("loadingdone", schedule);
