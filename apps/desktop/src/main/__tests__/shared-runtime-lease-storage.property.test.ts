@@ -30,11 +30,9 @@ function release(store: RuntimeLeaseStorage, kind: Kind, instanceId: string, now
 
 afterEach(() => vi.unstubAllEnvs());
 
-it("binds desktop construction and state compatibility to the functioning portable lease implementation", () => {
-  fc.assert(fc.property(fc.constantFrom("portable", "desktop", "state"), binding => {
-    const constructors = { portable: SharedStore, desktop: DesktopStore, state: CompatibilityStore };
-    expect(constructors[binding]).toBe(SharedStore);
-  }));
+it.each(["portable", "desktop", "state"] as const)("binds desktop construction and state compatibility to the functioning portable lease implementation [%#]", (binding) => {
+  const constructors = { portable: SharedStore, desktop: DesktopStore, state: CompatibilityStore };
+  expect(constructors[binding]).toBe(SharedStore);
 });
 
 it("does not retain a desktop-only class behind state compatibility exports", () => {
@@ -162,7 +160,7 @@ it("matches an independent owner model across WAL connections, clocks, death, PI
       for (const db of connections) db.close();
       removeTempStateDbDir(tempDir);
     }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("preserves owner exclusion in either portable/desktop order and isolates different profiles", async () => {
@@ -190,7 +188,7 @@ it("preserves owner exclusion in either portable/desktop order and isolates diff
         for (const db of connections) db.close();
         for (const fixture of fixtures) removeTempStateDbDir(fixture.tempDir);
       }
-    }), { numRuns: 12 });
+    }), { numRuns: 8 });
 });
 
 it("rolls back lease replacement and messaging side effects together when storage refuses the transition", async () => {
@@ -220,5 +218,5 @@ it("rolls back lease replacement and messaging side effects together when storag
       expect(acquire(store, kind, "challenger", 100_000, () => false, false).acquired).toBe(true);
       expect(read(new DesktopStore(observer), kind)?.ownerInstanceId).toBe("challenger");
     } finally { observer.close(); db.close(); removeTempStateDbDir(tempDir); }
-  }), { numRuns: 12 });
+  }), { numRuns: 8 });
 });

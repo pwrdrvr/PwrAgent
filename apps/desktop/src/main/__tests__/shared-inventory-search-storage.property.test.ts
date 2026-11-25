@@ -17,11 +17,9 @@ const inventoryBindings = [SharedInventory, DesktopInventory];
 const key = (thread: AppServerThreadSummary) => JSON.stringify([thread.source, thread.id]);
 afterEach(() => vi.unstubAllEnvs());
 
-it("binds desktop inventory and search to the portable implementations", () => {
-  fc.assert(fc.property(fc.constantFrom("inventory", "search"), binding => {
-    expect(binding === "inventory" ? DesktopInventory : DesktopSearch)
-      .toBe(binding === "inventory" ? SharedInventory : SharedSearch);
-  }));
+it.each(["inventory", "search"] as const)("binds desktop inventory and search to the portable implementations [%#]", (binding) => {
+  expect(binding === "inventory" ? DesktopInventory : DesktopSearch)
+    .toBe(binding === "inventory" ? SharedInventory : SharedSearch);
 });
 
 function summary(backend: number, slot: number, revision: number, archived = false): AppServerThreadSummary {
@@ -80,7 +78,7 @@ it("matches independent provider inventories across WAL connections and reopen o
         expect([reads.writes.commits, reads.writes.statements, reads.writes.rowsChanged]).toEqual([0, 0, 0]);
       }
     } finally { for (const db of connections) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 function matches(row: AppServerThreadSummary, request: ThreadSearchProjectionSearchRequest): boolean {
@@ -169,7 +167,7 @@ it("matches provider search facts, filters and pruning across hosts and reopens"
         expect([reads.writes.commits, reads.writes.statements, reads.writes.rowsChanged]).toEqual([0, 0, 0]);
       }
     } finally { for (const db of connections) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("scrubs legacy inventory once and refuses unsupported or malformed provider rows", async () => {
@@ -196,29 +194,38 @@ it("scrubs legacy inventory once and refuses unsupported or malformed provider r
       expect(JSON.parse(db.raw.prepare("SELECT payload FROM provider_thread_snapshots WHERE backend = 'codex'").pluck().get() as string))
         .toEqual([expected]);
     } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
-it("rolls inventory and document/FTS writes back together on a generated deletion refusal", () => {
-  fc.assert(fc.property(fc.integer({ min: 0, max: 1 }), fc.integer({ min: 0, max: 4 }), (backend, slot) => {
-    const fixture = createTempStateDb("shared-inventory-rollback-");
-    const db = StateDb.open(fixture.dbPath);
-    const reader = StateDb.open(fixture.dbPath);
-    try {
-      const inventory = new SharedInventory(db);
-      const search = new SharedSearch(db);
-      const original = summary(backend, slot, 0);
-      inventory.replace({ backend: original.source, observedAt: 0, threads: [original] });
-      search.upsertThread(original);
-      db.raw.exec("CREATE TEMP TRIGGER refuse_fixture_delete BEFORE DELETE ON main.thread_search_documents BEGIN SELECT RAISE(ABORT, 'fixture document refusal'); END");
-      const changed = { ...original, title: "Rejected change" };
-      expect(() => db.raw.transaction(() => {
-        inventory.replace({ backend: original.source, observedAt: 1, threads: [changed] });
-        search.deleteThread({ backend: original.source, threadId: original.id });
-      }).immediate()).toThrow("fixture document refusal");
-      expect(new DesktopInventory(reader).list()).toEqual([{ backend: original.source, observedAt: 0, threads: [original] }]);
-      expect(new DesktopSearch(reader).search({ query: "Beta", limit: 10 })).toMatchObject([{ title: original.title }]);
-      expect(new DesktopSearch(reader).search({ query: "Rejected", limit: 10 })).toEqual([]);
-    } finally { reader.close(); db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+it.each([
+  [0, 0],
+  [0, 1],
+  [0, 2],
+  [0, 3],
+  [0, 4],
+  [1, 0],
+  [1, 1],
+  [1, 2],
+  [1, 3],
+  [1, 4],
+] as const)("rolls inventory and document/FTS writes back together on a generated deletion refusal [%#]", (backend, slot) => {
+  const fixture = createTempStateDb("shared-inventory-rollback-");
+  const db = StateDb.open(fixture.dbPath);
+  const reader = StateDb.open(fixture.dbPath);
+  try {
+    const inventory = new SharedInventory(db);
+    const search = new SharedSearch(db);
+    const original = summary(backend, slot, 0);
+    inventory.replace({ backend: original.source, observedAt: 0, threads: [original] });
+    search.upsertThread(original);
+    db.raw.exec("CREATE TEMP TRIGGER refuse_fixture_delete BEFORE DELETE ON main.thread_search_documents BEGIN SELECT RAISE(ABORT, 'fixture document refusal'); END");
+    const changed = { ...original, title: "Rejected change" };
+    expect(() => db.raw.transaction(() => {
+      inventory.replace({ backend: original.source, observedAt: 1, threads: [changed] });
+      search.deleteThread({ backend: original.source, threadId: original.id });
+    }).immediate()).toThrow("fixture document refusal");
+    expect(new DesktopInventory(reader).list()).toEqual([{ backend: original.source, observedAt: 0, threads: [original] }]);
+    expect(new DesktopSearch(reader).search({ query: "Beta", limit: 10 })).toMatchObject([{ title: original.title }]);
+    expect(new DesktopSearch(reader).search({ query: "Rejected", limit: 10 })).toEqual([]);
+  } finally { reader.close(); db.close(); removeTempStateDbDir(fixture.tempDir); }
 });

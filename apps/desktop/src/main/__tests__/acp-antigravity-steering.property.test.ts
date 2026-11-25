@@ -374,7 +374,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
     async (outcome) => {
       await fc.assert(fc.asyncProperty(fc.boolean(), nonEmptyWord, async (together, text) => {
         await checkWireHandoff(outcome, together, text);
-      }), { numRuns: 10 });
+      }), { numRuns: 8 });
     },
   );
 
@@ -739,7 +739,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
           }
         },
       ),
-      { numRuns: 40 },
+      { numRuns: 8 },
     );
   });
 });

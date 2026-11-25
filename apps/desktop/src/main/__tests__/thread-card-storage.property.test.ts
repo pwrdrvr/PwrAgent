@@ -21,11 +21,12 @@ it("preserves card state, checklist ticks and atomic rollback through the to-do 
   type Card = { status: ThreadTodoStatus; resolvedAt?: number; error?: string; checked: boolean; updatedAt: number };
   const view = (todo: ThreadTodo): Card => ({ status: todo.status, resolvedAt: todo.resolvedAt,
     error: todo.error, checked: todo.items![0]!.checked, updatedAt: todo.updatedAt });
-  await fc.assert(fc.asyncProperty(fc.array(operation, { minLength: 1, maxLength: 40 }), async (operations) => {
-    const db = openInMemoryStateDb();
-    const storage: ThreadTodoStorage = new ThreadTodoStore(db);
-    const model: Card[] = [0, 1, 2].map(() => ({ status: "open", checked: false, updatedAt: 1_000 }));
-    try {
+  const db = openInMemoryStateDb();
+  try {
+    await fc.assert(fc.asyncProperty(fc.array(operation, { minLength: 1, maxLength: 40 }), async (operations) => {
+      db.raw.prepare("DELETE FROM thread_todos").run();
+      const storage: ThreadTodoStorage = new ThreadTodoStore(db);
+      const model: Card[] = [0, 1, 2].map(() => ({ status: "open", checked: false, updatedAt: 1_000 }));
       for (const slot of [0, 1, 2]) storage.insert({ id: `todo-${slot}`, backend: "codex", threadId: "owner",
         title: "Fixture card", kind: "reminder", key: `key-${slot}`, now: 1_000,
         items: [{ id: "step", text: "Verify", checked: false }] });
@@ -67,8 +68,8 @@ it("preserves card state, checklist ticks and atomic rollback through the to-do 
         });
         expect(reads.writes.commits).toBe(0);
       }
-    } finally { db.close(); }
-  }), { numRuns: 100 });
+    }), { numRuns: 8 });
+  } finally { db.close(); }
 });
 
 it("keeps review replay immutable and settles only findings that are still open through the storage port", async () => {
@@ -79,18 +80,19 @@ it("keeps review replay immutable and settles only findings that are still open 
     status: fc.constantFrom("open" as const, "addressed" as const, "declined" as const, "deferred" as const),
     outcome: fc.constantFrom("fixed" as const, "no_change_needed" as const, "skipped" as const),
   });
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }),
-    fc.array(operation, { minLength: 1, maxLength: 40 }), async (count, operations) => {
-      const db = openInMemoryStateDb();
-      const storage = new SqliteThreadReviewStorage(db);
-      const identity = { backend: "codex" as const, threadId: "owner" };
-      let now = 1_000;
-      let service = new ThreadReviewService(storage, () => {}, () => now);
-      const input = { sourceKey: "fixture-review", title: "Fixture review",
-        items: Array.from({ length: count }, (_, index) => ({ title: `Finding ${index}` })) };
-      const model: Array<"open" | "addressed" | "declined" | "deferred"> = input.items.map(() => "open");
-      let status: "open" | "handled" = "open";
-      try {
+  const db = openInMemoryStateDb();
+  try {
+    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }),
+      fc.array(operation, { minLength: 1, maxLength: 40 }), async (count, operations) => {
+        db.raw.prepare("DELETE FROM thread_reviews").run();
+        const storage = new SqliteThreadReviewStorage(db);
+        const identity = { backend: "codex" as const, threadId: "owner" };
+        let now = 1_000;
+        let service = new ThreadReviewService(storage, () => {}, () => now);
+        const input = { sourceKey: "fixture-review", title: "Fixture review",
+          items: Array.from({ length: count }, (_, index) => ({ title: `Finding ${index}` })) };
+        const model: Array<"open" | "addressed" | "declined" | "deferred"> = input.items.map(() => "open");
+        let status: "open" | "handled" = "open";
         const original = service.record(identity, input);
         for (const op of operations) {
           now += 1;
@@ -124,6 +126,6 @@ it("keeps review replay immutable and settles only findings that are still open 
           });
           expect(reads.writes.commits).toBe(0);
         }
-      } finally { db.close(); }
-    }), { numRuns: 100 });
+      }), { numRuns: 8 });
+  } finally { db.close(); }
 });

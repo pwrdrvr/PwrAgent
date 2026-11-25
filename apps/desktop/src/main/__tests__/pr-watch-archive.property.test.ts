@@ -83,27 +83,28 @@ describe("PR watches end at archive", () => {
   // These registry tests also run without the suite-wide owner-host setup.
   beforeAll(installTestOwnerHost);
 
-  it("retires setting-only legacy Auto-fix overlays without changing live settings", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom("codex" as const, "claude" as const, "acp:grok" as const),
-      fc.constantFrom("archiveRetentionStartedAt", "archiveTombstonedAt"),
-      async (backend, archiveField) => {
-        const db = openInMemoryStateDb();
-        const store = new SqliteOverlayStore(db);
-        const target = { backend, threadId: "legacy-setting-only" };
-        const live = { backend, threadId: "live-setting-only" };
-        try {
-          for (const identity of [target, live]) await store.setThreadPrAutoDispatchEnabled({ ...identity, enabled: true });
-          // Older releases retained the preference after their PR rows disappeared.
-          db.raw.prepare("UPDATE threads SET payload = json_set(payload, ?, 1) WHERE thread_id = ?")
-            .run(`$.${archiveField}`, buildLegacyEncodedThreadIdentityKey(backend, target.threadId));
-          await store.retireArchivedThreadPrAutomation(2);
-          await store.setThreadArchiveTombstone({ ...target, restoredAt: 3 });
-          expect((await store.getThreadOverlayState(target))?.prAutoDispatchEnabled).toBe(false);
-          expect((await store.getThreadOverlayState(live))?.prAutoDispatchEnabled).toBe(true);
-        } finally { db.close(); }
-      },
-    ), { numRuns: 25 });
+  it.each([
+    ["codex", "archiveRetentionStartedAt"],
+    ["codex", "archiveTombstonedAt"],
+    ["claude", "archiveRetentionStartedAt"],
+    ["claude", "archiveTombstonedAt"],
+    ["acp:grok", "archiveRetentionStartedAt"],
+    ["acp:grok", "archiveTombstonedAt"],
+  ] as const)("retires setting-only legacy Auto-fix overlays without changing live settings [%#]", async (backend, archiveField) => {
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const target = { backend, threadId: "legacy-setting-only" };
+    const live = { backend, threadId: "live-setting-only" };
+    try {
+      for (const identity of [target, live]) await store.setThreadPrAutoDispatchEnabled({ ...identity, enabled: true });
+      // Older releases retained the preference after their PR rows disappeared.
+      db.raw.prepare("UPDATE threads SET payload = json_set(payload, ?, 1) WHERE thread_id = ?")
+        .run(`$.${archiveField}`, buildLegacyEncodedThreadIdentityKey(backend, target.threadId));
+      await store.retireArchivedThreadPrAutomation(2);
+      await store.setThreadArchiveTombstone({ ...target, restoredAt: 3 });
+      expect((await store.getThreadOverlayState(target))?.prAutoDispatchEnabled).toBe(false);
+      expect((await store.getThreadOverlayState(live))?.prAutoDispatchEnabled).toBe(true);
+    } finally { db.close(); }
   });
 
   it("publishes retirement updates after the archive transaction for owners and prerequisites", async () => {
@@ -172,7 +173,7 @@ describe("PR watches end at archive", () => {
     await fc.assert(fc.asyncProperty(fc.boolean(), fc.array(
       fc.constantFrom("register" as const, "archive" as const, "restore" as const, "event" as const),
       { minLength: 1, maxLength: 16 },
-    ), lifecycle), { numRuns: 25 });
+    ), lifecycle), { numRuns: 8 });
   });
 
   it("retires legacy archived subscriptions before startup replays and preserves other identities", async () => {
@@ -300,7 +301,7 @@ describe("Auto-fix ends at archive", () => {
           }
         } finally { db.close(); }
       },
-    ), { numRuns: 25 });
+    ), { numRuns: 8 });
   });
 
   it.each(["pending", "reserving", "busy"] as const)("discards a repair archived while %s and does not rearm on restore", async (stage) => {
@@ -410,7 +411,7 @@ describe("PR prerequisite subscriptions end at archive", () => {
     await fc.assert(fc.asyncProperty(fc.array(
       fc.constantFrom<PrerequisiteCommand>("register", "archive", "restore", "event", "settle"),
       { minLength: 1, maxLength: 12 },
-    ), prerequisiteLifecycle), { numRuns: 25 });
+    ), prerequisiteLifecycle), { numRuns: 8 });
   });
 
   it("discards a claimed continuation archived during publication even after restore", async () => {

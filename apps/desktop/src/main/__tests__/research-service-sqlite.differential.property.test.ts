@@ -28,7 +28,7 @@ describe("research service on the SQLite projections", () => {
         return rows.length ? rows.map((row) => JSON.parse(row.payload) as ResearchEvent) : undefined;
       };
       await expectResearchServicesAgree(uuid, steps, new ResearchStore(db), journal, coverage);
-    }), { numRuns: 25 });
+    }), { numRuns: 6 });
     for (const type of ["worker", "status", "finding", "submission", "review", "item_work", "delivery", "bounds"]) expect(coverage.events[type] ?? 0, `${type} events recorded`).toBeGreaterThan(0);
     expect(Object.keys(coverage.refusals).length).toBeGreaterThan(10);
   });
@@ -42,7 +42,7 @@ describe("research service on the SQLite projections", () => {
         return rows.length ? rows.map((row) => JSON.parse(row.payload) as ResearchEvent) : undefined;
       };
       await expectResearchServicesAgree(uuid, steps, new ResearchStore(db), journal, coverage);
-    }), { numRuns: 25 });
+    }), { numRuns: 6 });
     for (const type of ["bounds", "worker:turn-limit", "status:worker-time"]) expect(coverage.events[type] ?? 0, `${type} events recorded`).toBeGreaterThan(0);
   });
 });

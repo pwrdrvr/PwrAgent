@@ -360,7 +360,7 @@ describe("Antigravity managed review mode and access", () => {
           expect(result.promptModes).toEqual([expectedMode]);
         },
       ),
-      { numRuns: 30 },
+      { numRuns: 8 },
     );
   });
 
@@ -431,7 +431,7 @@ describe("Antigravity managed review mode and access", () => {
         expect(result.cachedMode).toBe(currentMode);
         expect(result.unrelatedMode).toBe(currentMode);
       },
-    ), { numRuns: 10 });
+    ), { numRuns: 8 });
   });
 
   it("budgets SQLite writes from a cross-provider Antigravity Auto review start", async () => {

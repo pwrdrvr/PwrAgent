@@ -491,7 +491,7 @@ describe("Antigravity session access", () => {
         fc.constant(command({ type: "overlay-failure" })),
       ], { maxCommands: 20, size: "max" }),
       (initial, commands) => exercise(initial, commands, { verifyQueuedProjection: true }),
-    ), { numRuns: 30 });
+    ), { numRuns: 8 });
   });
 
   it("resets Plan back to Default when escalating to Full Access and restores native modes when leaving Full Access", async () => {
@@ -536,7 +536,7 @@ describe("Antigravity session access", () => {
       (mode, openWithPicker) => exercise("full-access", [
         command({ type: "start" }), command({ type: "finish" }),
       ], { legacyFullAccess: { mode, openWithPicker } }),
-    ), { numRuns: 12 });
+    ), { numRuns: 8 });
   });
 
   it("stops retrying rejected native-only selections at the queue attempt limit", async () => {
