@@ -61,5 +61,8 @@ Rows show no branch-drift chip (`! now <branch>`). Agents switch branches
 mid-turn, so it came and went on rows nobody had open; the open thread's
 `ThreadWarnings` names the drift.
 
-`__tests__/thread-row-work-progress.model.test.tsx` checks these rules
-against an idle row rendered from the expected values.
+`__tests__/thread-row-work-progress.property.test.ts` checks these rules over
+the pure hold model (`thread-row-work-progress.ts`), and
+`__tests__/thread-row-work-progress.model.test.tsx` ties that model to a
+mounted `ThreadRow` against an idle oracle row alongside the shrunk
+counterexamples.

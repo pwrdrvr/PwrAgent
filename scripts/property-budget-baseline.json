@@ -1090,9 +1090,6 @@
     "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-meta-wait-scope.property.test.tsx": {
       "heavyFixture": 1
     },
-    "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-row-work-progress.model.test.tsx": {
-      "heavyFixture": 1
-    },
     "apps/desktop/src/renderer/src/features/notifications/__tests__/thread-action-error-notice.property.test.tsx": {
       "heavyFixture": 2
     },
