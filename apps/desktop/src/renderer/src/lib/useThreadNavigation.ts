@@ -1091,7 +1091,7 @@ function hasPlaceholderThreadTitle(thread: NavigationThreadSummary): boolean {
   );
 }
 
-function reconcileLoadedNavigationRows(
+export function reconcileLoadedNavigationRows(
   previous: NavigationLoadedRows | undefined,
   next: NavigationLoadedRows
 ): NavigationLoadedRows {
@@ -1110,13 +1110,16 @@ function reconcileLoadedNavigationRows(
   );
   const reconciledDirectories = loadedDirectoryRows(next).map((directory) => {
     const previousDirectory = previousByDirectoryKey.get(directory.key);
-    return {
+    const merged = {
       ...directory,
       ...(previousDirectory?.gitStatus &&
       !Object.prototype.hasOwnProperty.call(directory, "gitStatus")
         ? { gitStatus: previousDirectory.gitStatus }
         : {}),
     };
+    return previousDirectory && JSON.stringify(previousDirectory) === JSON.stringify(merged)
+      ? previousDirectory
+      : merged;
   });
 
   const directories = sortNavigationDirectories(reconciledDirectories);
@@ -1135,7 +1138,7 @@ function reconcileLoadedNavigationRows(
   if (previousThreads.length === threads.length
     && previousThreads.every((thread, index) => thread === threads[index])
     && previousDirectories.length === directories.length
-    && previousDirectories.every((directory, index) => JSON.stringify(directory) === JSON.stringify(directories[index]))
+    && previousDirectories.every((directory, index) => directory === directories[index])
     && JSON.stringify(previous.launchpadDefaults) === JSON.stringify(next.launchpadDefaults)
     && JSON.stringify(previous.federationTarget) === JSON.stringify(next.federationTarget)) return previous;
   return {
