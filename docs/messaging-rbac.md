@@ -272,13 +272,11 @@ when the store affirmatively knows it is off:
 - *No RBAC data anywhere* (no config, or a config with no `[messaging.rbac]`
   section and no legacy JSON) → the empty, unenforced policy. The feature was
   never configured; legacy-compatible mode is correct.
-- *RBAC data exists but cannot be read* (malformed TOML whose raw text still
-  contains a `[messaging.rbac]` header, an unparseable legacy JSON, or a
-  section whose `enforced` flag is garbled) → **fail closed**: enforced with
-  zero attachments, default-denying every actor (with denial audit rows) until
-  the operator repairs the file. Only a clean `enforced = false` disables
-  enforcement. Falling open here would silently re-promote every admitted
-  actor to Admin — the exact regression enforcement was configured to prevent.
+- *A policy source is unreadable or contains invalid RBAC data* → **fail
+  closed** with enforcement on and zero attachments. Examples include an
+  I/O error, a malformed RBAC section, invalid legacy JSON, and configured
+  policy with a missing or garbled `enforced` flag. Configured policy requires
+  an explicit boolean `false` to disable enforcement.
   The fail-closed state is surfaced explicitly: the policy read carries a
   `failClosed` flag and the Access Control pane shows a repair callout
   (fix the file by hand; pane edits may fail while the TOML is malformed)
@@ -291,11 +289,13 @@ when the store affirmatively knows it is off:
   hand-edited `chat_user` granting full access, say). The genuine built-in
   still resolves; the pane names the ignored ids so the drop isn't silent.
 
-**Policy edits take effect without a restart.** The service caches the parsed
-policy but fingerprints the backing files (mtime + size) on every
-authorization, so an edit it did not make — a hand-edited `config.toml`, or
-another app instance sharing the profile — is picked up on the next check.
-Revocation that only applied after a relaunch would not be revocation.
+**Policy edits take effect without a restart.** On each authorization the
+service checks the backing files' device and inode, size, modification time,
+and change time. A peer replacement can preserve size and modification time,
+so those two fields alone would miss it. The service reuses the parsed policy
+while the fingerprint stays the same. When a metadata or read operation fails,
+the service checks the sources again on the next decision so transient file
+errors can recover without an edit.
 
 ## Full-access guardrails
 

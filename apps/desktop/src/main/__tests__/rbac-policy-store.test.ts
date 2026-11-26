@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RBAC_BUILT_IN_ROLE_IDS, emptyRbacPolicy, type RbacPolicy } from "@pwragent/shared/contracts/rbac";
 
@@ -18,6 +18,25 @@ import type { RecordMessagingActivityInput } from "../storage/messaging-activity
 
 let tmpHome: string;
 let storeOptions: { env: NodeJS.ProcessEnv };
+const actor = { actorId: "U1" };
+const grantedToml = [
+  "[messaging.rbac]",
+  "enforced = true",
+  "",
+  "[[messaging.rbac.attachments]]",
+  'platform = "slack"',
+  'subject_kind = "actor"',
+  `actor_id = "${actor.actorId}"`,
+  'role_ids = ["chat_user"]',
+  "",
+].join("\n");
+const grantedLegacyJson = JSON.stringify({
+  enforced: true,
+  attachments: [{
+    subject: { ...actor, kind: "actor", platform: "slack" },
+    roleIds: ["chat_user"],
+  }],
+});
 
 beforeEach(() => {
   tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-rbac-"));
@@ -25,6 +44,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });
 
@@ -163,17 +183,30 @@ describe("rbac policy store", () => {
     expect(readRbacPolicy(storeOptions)).toEqual(emptyRbacPolicy());
   });
 
-  it("fails CLOSED when the section exists but the enforced flag is garbled", () => {
+  it.each([
+    ["garbled flag", grantedToml.replace("enforced = true", 'enforced = "yes"')],
+    ["missing flag", grantedToml.replace("enforced = true", "")],
+    ["child table only", '[messaging.rbac.attachments]\nplatform = "slack"\n'],
+    ["RBAC array table", "[[messaging.rbac]]\nenforced = false\n"],
+  ])("fails closed for configured TOML with %s", (_name, source) => {
     const configPath = resolveRbacConfigPath(storeOptions);
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(
-      configPath,
-      '[messaging.rbac]\nenforced = "yes"\n',
-    );
-    expect(readRbacPolicy(storeOptions).enforced).toBe(true);
-    // Only a clean `enforced = false` turns enforcement off.
-    fs.writeFileSync(configPath, "[messaging.rbac]\nenforced = false\n");
-    expect(readRbacPolicy(storeOptions).enforced).toBe(false);
+    fs.writeFileSync(configPath, source);
+    fs.writeFileSync(resolveLegacyRbacPolicyJsonPath(storeOptions), grantedLegacyJson);
+    expect(readRbacPolicyState(storeOptions)).toMatchObject({
+      failClosed: true,
+      policy: { enforced: true, attachments: [] },
+    });
+  });
+
+  it("uses legacy fallback when malformed TOML has a similarly named unrelated table", () => {
+    const configPath = resolveRbacConfigPath(storeOptions);
+    fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    fs.writeFileSync(configPath, "[messaging.rbac-other]\n[broken");
+    fs.writeFileSync(resolveLegacyRbacPolicyJsonPath(storeOptions), grantedLegacyJson);
+    const state = readRbacPolicyState(storeOptions);
+    expect(state.failClosed).toBe(false);
+    expect(state.policy.attachments[0]?.roleIds).toEqual(["chat_user"]);
   });
 
   it("drops persisted roles that reuse a built-in id, and reports them", () => {
@@ -283,6 +316,20 @@ describe("rbac policy store", () => {
     expect(policy.attachments).toHaveLength(0);
   });
 
+  it.each([
+    grantedLegacyJson.replace('"enforced":true,', ""),
+    grantedLegacyJson.replace('"enforced":true', '"enforced":"off"'),
+    "[]",
+  ])("fails closed for legacy JSON without a boolean enforcement flag (%s)", (source) => {
+    const legacyPath = resolveLegacyRbacPolicyJsonPath(storeOptions);
+    fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+    fs.writeFileSync(legacyPath, source);
+    expect(readRbacPolicyState(storeOptions)).toMatchObject({
+      failClosed: true,
+      policy: { enforced: true, attachments: [] },
+    });
+  });
+
   it("falls back to the legacy JSON file and retires it on the next write", () => {
     const legacyPath = resolveLegacyRbacPolicyJsonPath(storeOptions);
     fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
@@ -326,6 +373,159 @@ describe("rbac policy store", () => {
 });
 
 describe("RbacPolicyService", () => {
+  it.each([
+    {
+      name: "a TOML revocation",
+      resolvePath: resolveRbacConfigPath,
+      before: grantedToml,
+      after: grantedToml.replace('["chat_user"]', "[]"),
+      failClosed: false,
+    },
+    {
+      name: "malformed TOML with an RBAC section",
+      resolvePath: resolveRbacConfigPath,
+      before: grantedToml,
+      after: "[messaging.rbac]\nenforced = true\n[broken",
+      failClosed: true,
+    },
+    {
+      name: "a legacy JSON revocation",
+      resolvePath: resolveLegacyRbacPolicyJsonPath,
+      before: grantedLegacyJson,
+      after: '{"enforced":true,"attachments":[]}',
+      failClosed: false,
+    },
+  ])("matches a fresh decision after a same-size, same-mtime peer replacement ($name)", ({
+    resolvePath, before, after, failClosed,
+  }) => {
+    const file = resolvePath(storeOptions);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const timestamp = new Date("2026-01-01T00:00:00Z");
+    fs.writeFileSync(file, before);
+    fs.utimesSync(file, timestamp, timestamp);
+    const { size, mtimeNs } = fs.statSync(file, { bigint: true });
+    const service = new RbacPolicyService(storeOptions);
+    const provider = service.providerFor("slack");
+    expect(provider.resolveIfEnforcing!(actor)?.permissions.has("message.reply")).toBe(true);
+
+    const peerFile = `${file}.peer`;
+    fs.writeFileSync(peerFile, after.padEnd(before.length));
+    fs.utimesSync(peerFile, timestamp, timestamp);
+    fs.renameSync(peerFile, file);
+    expect(fs.statSync(file, { bigint: true })).toMatchObject({ size, mtimeNs });
+
+    const fresh = new RbacPolicyService(storeOptions);
+    const expected = fresh.providerFor("slack").resolveIfEnforcing!(actor);
+    expect(expected?.rejected).toBe(true);
+    expect(fresh.isFailClosed()).toBe(failClosed);
+    expect(provider.resolveIfEnforcing!(actor)).toEqual(expected);
+    expect(service.isFailClosed()).toBe(failClosed);
+  });
+
+  it("matches a fresh decision when a peer replaces a just-written policy", () => {
+    const file = resolveRbacConfigPath(storeOptions);
+    const peerFile = `${file}.peer`;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(peerFile, "[messaging.rbac]\nenforced = true\n");
+    const rename = fs.renameSync;
+    vi.spyOn(fs, "renameSync").mockImplementationOnce((from, to) => {
+      rename(from, to);
+      rename(peerFile, file);
+    });
+
+    const service = new RbacPolicyService(storeOptions, () => undefined);
+    expect(service.setEnforced(true, [{
+      subject: { ...actor, kind: "actor", platform: "slack" },
+      roleIds: ["chat_user"],
+    }])).toEqual({ ok: true });
+
+    const fresh = new RbacPolicyService(storeOptions).providerFor("slack");
+    const expected = fresh.resolveIfEnforcing!(actor);
+    expect(expected?.rejected).toBe(true);
+    expect(service.providerFor("slack").resolveIfEnforcing!(actor)).toEqual(expected);
+  });
+
+  it("uses two stats and no policy reads for an unchanged admission", () => {
+    const file = resolveRbacConfigPath(storeOptions);
+    const legacyFile = resolveLegacyRbacPolicyJsonPath(storeOptions);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, grantedToml);
+    const provider = new RbacPolicyService(storeOptions).providerFor("slack");
+    expect(provider.resolveIfEnforcing!(actor)?.rejected).toBe(false);
+
+    const stat = vi.spyOn(fs, "statSync");
+    const read = vi.spyOn(fs, "readFileSync");
+    expect(provider.resolveIfEnforcing!(actor)?.rejected).toBe(false);
+    expect(stat.mock.calls.map(([filePath]) => filePath)).toEqual([file, legacyFile]);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("returns roles and attachments from one revision when a peer replaces the file during a read", () => {
+    const file = resolveRbacConfigPath(storeOptions);
+    const peerFile = `${file}.peer`;
+    const source = grantedToml.replace('["chat_user"]', '["local-role"]')
+      + '\n[[messaging.rbac.roles]]\nid = "local-role"\nname = "Local role"\npermissions = ["message.reply"]\n';
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, source);
+    fs.writeFileSync(peerFile, source.replaceAll("local-role", "other-role"));
+    const read = fs.readFileSync;
+    let replaced = false;
+    vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+      const result = read(filePath, options);
+      if (filePath === file && !replaced) {
+        fs.renameSync(peerFile, file);
+        replaced = true;
+      }
+      return result;
+    });
+
+    const service = new RbacPolicyService(storeOptions);
+    for (const roleId of ["local-role", "other-role"]) {
+      const snapshot = service.read();
+      expect(snapshot.attachments[0]?.roleIds).toEqual([roleId]);
+      expect(snapshot.roles.find(({ builtIn }) => !builtIn)?.id).toBe(roleId);
+    }
+  });
+
+  const policySources = [
+    { name: "TOML", resolvePath: resolveRbacConfigPath, source: grantedToml },
+    { name: "legacy JSON", resolvePath: resolveLegacyRbacPolicyJsonPath, source: grantedLegacyJson },
+  ];
+
+  it.each(policySources.flatMap((source) => [
+    { ...source, fault: "read" },
+    { ...source, fault: "stat and read" },
+  ]))("fails closed during a $name $fault error and retries the next decision", ({
+    resolvePath, source, fault,
+  }) => {
+    const file = resolvePath(storeOptions);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const service = new RbacPolicyService(storeOptions);
+    const provider = service.providerFor("slack");
+    expect(provider.resolveIfEnforcing!(actor)).toBeNull();
+
+    fs.writeFileSync(file, source);
+    let unavailable = true;
+    const denied = Object.assign(new Error("Fixture file inaccessible"), { code: "EACCES" });
+    const read = fs.readFileSync;
+    vi.spyOn(fs, "readFileSync").mockImplementation((filePath, options) => {
+      if (filePath === file && unavailable) throw denied;
+      return read(filePath, options);
+    });
+    if (fault === "stat and read") {
+      const stat = fs.statSync;
+      vi.spyOn(fs, "statSync").mockImplementation(((filePath: fs.PathLike, options: fs.StatSyncOptions) => {
+        if (filePath === file && unavailable) throw denied;
+        return stat(filePath, options);
+      }) as typeof fs.statSync);
+    }
+
+    expect(provider.resolveIfEnforcing!(actor)?.rejected).toBe(true);
+    expect(service.isFailClosed()).toBe(true);
+    unavailable = false;
+    expect(provider.resolveIfEnforcing!(actor)?.permissions.has("message.reply")).toBe(true);
+  });
+
   it("exposes built-in ∪ custom roles and starts unenforced", () => {
     const service = new RbacPolicyService(storeOptions);
     expect(service.isEnforcing()).toBe(false);

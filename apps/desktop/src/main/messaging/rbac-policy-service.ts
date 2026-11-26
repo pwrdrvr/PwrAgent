@@ -87,7 +87,7 @@ export class RbacPolicyService {
 
   /**
    * The cached policy, re-read whenever the backing files changed underneath
-   * us. Our own writes update the cache in place, so the fingerprint check is
+   * us. Our own writes clear the cache, so the fingerprint check is
    * for edits we did NOT make: a hand-edited `config.toml`, or another app
    * instance sharing this profile. Without it a revoked role kept working in
    * every other instance until restart — revocation that needs a relaunch is
@@ -98,10 +98,12 @@ export class RbacPolicyService {
    * inbound path.
    */
   private state(): RbacPolicyReadState {
+    // Sample before reading so a peer write during the read is checked again
+    // on the next decision.
     const fingerprint = rbacPolicySourceFingerprint(this.options);
-    if (!this.cache || fingerprint !== this.cacheFingerprint) {
+    if (fingerprint === null || !this.cache || fingerprint !== this.cacheFingerprint) {
       this.cache = readRbacPolicyState(this.options);
-      this.cacheFingerprint = fingerprint;
+      this.cacheFingerprint = this.cache.retryRead ? null : fingerprint;
     }
     return this.cache;
   }
@@ -163,7 +165,7 @@ export class RbacPolicyService {
     const state = this.state();
     return {
       enforced: state.policy.enforced,
-      roles: this.allRoles(),
+      roles: [...BUILT_IN_ROLES, ...state.policy.roles],
       attachments: state.policy.attachments,
       permissionCatalog: MESSAGING_PERMISSION_CATALOG,
       ...(state.failClosed ? { failClosed: true } : {}),
@@ -180,14 +182,8 @@ export class RbacPolicyService {
   private mutate(next: (policy: RbacPolicy) => RbacPolicy): void {
     const updated = next(structuredClonePolicy(this.policy()));
     writeRbacPolicy(updated, this.options);
-    // Adopt the write directly, and re-fingerprint so our own write doesn't
-    // read back as an external change on the next resolve.
-    this.cache = {
-      policy: updated,
-      failClosed: false,
-      ignoredReservedRoleIds: [],
-    };
-    this.cacheFingerprint = rbacPolicySourceFingerprint(this.options);
+    // The next read loads the file that won the race with any peer writer.
+    this.reload();
   }
 
   /**
