@@ -43,7 +43,7 @@ export function buildManagedReviewPrompt(
 ): string {
   const useLedgerTools = options?.candidateLedger === true;
   const instructions = options?.pinnedPatchFile && target.type === "pullRequest" && target.snapshot
-    ? `Review the pinned change from ${target.snapshot.mergeBaseCommit} to ${target.snapshot.headCommit}. Open ${JSON.stringify(options.pinnedPatchFile)} in the review workspace with a file-reading tool and use it as the complete diff.`
+    ? `Review the pinned change from ${target.snapshot.mergeBaseCommit} to ${target.snapshot.headCommit}. Open ${JSON.stringify(options.pinnedPatchFile)} in the review workspace with a file-reading tool and use it as the complete diff. Terminal and shell commands are unavailable in this read-only review mode and will abort the review if requested; do not run git or any other shell commands. Inspect the staged patch and repository files using file-reading and file-search tools only.`
     : reviewTargetInstructions(target);
   return [
     "Perform a code review. Do not modify files or mutate git state. Do not run commands that require elevated permissions.",

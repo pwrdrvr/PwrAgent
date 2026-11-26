@@ -6,6 +6,7 @@ import { relative, resolve } from "node:path";
 const repoRoot = resolve(import.meta.dirname, "..");
 const scanRoots = [
   "apps/desktop/src/main",
+  "evals",
   "packages/pwragent/src",
   "packages/owner-core/src",
   "packages/sqlite-storage/src",
