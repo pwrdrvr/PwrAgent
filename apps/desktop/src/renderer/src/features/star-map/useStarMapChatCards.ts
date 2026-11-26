@@ -50,6 +50,35 @@ export type StarMapChatCardAnchorResolution = {
   basis: "anchor" | "instance";
 };
 
+/**
+ * Resolve a chat card's canvas rect against a live anchor point in the current
+ * lens. Shared by `resolveRestoredAnchors` and view-restore content checks so
+ * both agree on where a restored or rebased card will sit before paint.
+ */
+export function resolveChatCardAnchorRect(
+  card: Pick<
+    StarMapChatCardEntry,
+    "rect" | "anchorDx" | "anchorDy" | "instanceDx" | "instanceDy"
+  >,
+  resolution: StarMapChatCardAnchorResolution | null | undefined,
+): ChatCardRect | undefined {
+  if (!resolution) return undefined;
+  const offset =
+    resolution.basis === "instance"
+    && card.instanceDx !== undefined
+    && card.instanceDy !== undefined
+      ? { dx: card.instanceDx, dy: card.instanceDy }
+      : resolution.basis === "anchor"
+        ? { dx: card.anchorDx, dy: card.anchorDy }
+        : undefined;
+  if (!offset) return undefined;
+  return {
+    ...card.rect,
+    left: resolution.point.x + offset.dx,
+    top: resolution.point.y + offset.dy,
+  };
+}
+
 type StarMapChatCardsState = {
   cards: StarMapChatCardEntry[];
   views: Partial<Record<StarMapWorkspaceLayout, StarMapWorkspaceView>>;
@@ -771,20 +800,7 @@ export function useStarMapChatCards(params: {
         // null means this owner is still loading, not that its anchor is
         // absent. Other owners can finish independently in the same pass.
         if (resolution === null) return card;
-        const offset = resolution?.basis === "instance"
-          && card.instanceDx !== undefined
-          && card.instanceDy !== undefined
-            ? { dx: card.instanceDx, dy: card.instanceDy }
-            : resolution?.basis === "anchor"
-              ? { dx: card.anchorDx, dy: card.anchorDy }
-              : undefined;
-        const rect = resolution && offset
-          ? {
-              ...card.rect,
-              left: resolution.point.x + offset.dx,
-              top: resolution.point.y + offset.dy,
-            }
-          : card.rect;
+        const rect = resolveChatCardAnchorRect(card, resolution) ?? card.rect;
         const pendingAnchorRestore = !finalize;
         if (rect.left === card.rect.left && rect.top === card.rect.top
           && pendingAnchorRestore === card.pendingAnchorRestore) return card;

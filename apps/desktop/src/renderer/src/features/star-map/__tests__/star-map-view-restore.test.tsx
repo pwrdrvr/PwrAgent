@@ -1,5 +1,5 @@
 import "./foreground-fixture";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   NAVIGATION_QUERY_PROTOCOL_VERSION,
@@ -7,6 +7,7 @@ import {
   type NavigationQueryRequest,
   type NavigationThreadSummary,
 } from "@pwragent/shared/contracts/navigation";
+import type { WriteStarMapWorkspaceRequest } from "@pwragent/shared/contracts/star-map";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 
@@ -357,5 +358,189 @@ describe("StarMapScreen view restore and offline instance defaults", () => {
     });
     // Disconnected peer must not appear on the canvas or in edge arrows.
     expect(screen.queryByText(/WindowsVM/)).toBeNull();
+  });
+
+  it("keeps a cold-start saved view framing a restored floating chat card in open sky", async () => {
+    // Saved view is anchored to the local body but offset into open sky where
+    // a restored chat card sits (`instanceDx: 900, instanceDy: 0`), far enough
+    // that the local body itself is off-screen while the restored chat card is
+    // squarely in the viewport.
+    const desktopApi = {
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway" as const,
+          status: "listening" as const,
+          instanceId: "pwr_local",
+          localLabel: "M5 Max",
+          peers: [],
+        },
+      })),
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          revision: 4,
+          updatedAt: 100,
+          cards: [
+            {
+              key: "pwr_local::codex:t-floating",
+              ownerInstanceId: "pwr_local",
+              thread: {
+                id: "t-floating",
+                inbox: { inInbox: true },
+                linkedDirectories: [],
+                source: "codex" as const,
+                title: "Floating chat in open sky",
+                titleSource: "derived" as const,
+              },
+              geometry: {
+                anchor: { kind: "instance" as const, instanceId: "pwr_local" },
+                dx: 900,
+                dy: 0,
+                instanceDx: 900,
+                instanceDy: 0,
+                fallbackRect: { left: 1200, top: 200, width: 420, height: 520 },
+              },
+              contextOpen: false,
+              terminalOpen: false,
+            },
+          ],
+          views: {
+            orbit: {
+              x: -900,
+              y: 0,
+              scale: 0.85,
+              anchor: { kind: "instance" as const, instanceId: "pwr_local" },
+              anchorDx: 1050,
+              anchorDy: 200,
+            },
+          },
+        },
+      })),
+      onAgentEvent: vi.fn(() => () => undefined),
+    } as unknown as DesktopApi;
+
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="M5 Max"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await screen.findByRole("region", {
+      name: "Chat: Floating chat in open sky",
+    });
+    await waitFor(() => {
+      const canvas = document.querySelector<HTMLElement>(".star-map__canvas");
+      expect(parseTransform(canvas!.style.transform).scale).toBeCloseTo(0.85);
+    });
+  });
+
+  it("does not persist a mismatched anchor kind when switching layouts during a pending wheel pan", async () => {
+    const writes: WriteStarMapWorkspaceRequest[] = [];
+    const writeStarMapWorkspace = vi.fn(
+      async (request: WriteStarMapWorkspaceRequest) => {
+        writes.push(request);
+        return {
+          workspace: {
+            ...request.workspace,
+            revision: request.baseRevision + 1,
+            updatedAt: 300,
+          },
+        };
+      },
+    );
+    const localThread: NavigationThreadSummary = {
+      id: "t-proj",
+      title: "Project thread",
+      titleSource: "generated",
+      linkedDirectories: [
+        {
+          id: "proj-alpha-dir",
+          label: "Alpha",
+          path: "/repos/Alpha",
+          kind: "local",
+        },
+      ],
+      source: "codex",
+      inbox: { inInbox: true, reason: "updated-since-seen" },
+      updatedAt: 100,
+    } as unknown as NavigationThreadSummary;
+
+    const desktopApi = {
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway" as const,
+          status: "listening" as const,
+          instanceId: "pwr_local",
+          localLabel: "M5 Max",
+          peers: [],
+        },
+      })),
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          revision: 1,
+          updatedAt: 100,
+          cards: [],
+          views: {
+            projects: {
+              x: 0,
+              y: 0,
+              scale: 0.9,
+              anchor: { kind: "project" as const, projectKey: "/repos/Alpha" },
+              anchorDx: 0,
+              anchorDy: 0,
+            },
+          },
+        },
+      })),
+      writeStarMapWorkspace,
+      onAgentEvent: vi.fn(() => () => undefined),
+    } as unknown as DesktopApi;
+
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[localThread]}
+        sessionKeys={{}}
+        localInstanceLabel="M5 Max"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector(".star-map-instance--local")).not.toBeNull();
+    });
+
+    // Start a trackpad wheel pan in orbit (leaving wheelIdleTimer pending).
+    const viewport = document.querySelector<HTMLElement>(".star-map__viewport")!;
+    fireEvent.wheel(viewport, { deltaX: 40, deltaY: 30 });
+
+    // Switch layout to Projects before the wheel idle timer fires.
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByRole("button", { name: "Projects" }));
+
+    await waitFor(() => {
+      expect(document.querySelector(".star-map__project-cloud")).not.toBeNull();
+    });
+    // Allow any queued writes to flush.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+
+    // No write may ever store a `kind: "project"` anchor under `views.orbit`.
+    for (const request of writes) {
+      const orbitAnchor = request.workspace.views.orbit?.anchor;
+      if (orbitAnchor) {
+        expect(orbitAnchor.kind).toBe("instance");
+      }
+    }
   });
 });

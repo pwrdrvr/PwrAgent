@@ -151,8 +151,10 @@ import {
 } from "./star-map-chat-card-geometry";
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import {
+  resolveChatCardAnchorRect,
   starMapChatCardReactKey,
   useStarMapChatCards,
+  type StarMapChatCardAnchorResolution,
 } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
 import {
@@ -803,8 +805,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * — in place, since the drag itself holds the same object.
    */
   const panBaseRef = useRef<StarMapView | undefined>(undefined);
-  /** Visible anchor bodies for view serialization in callbacks defined above layout. */
-  const viewRestoreAnchorsRef = useRef<readonly StarMapViewAnchorPoint[]>([]);
+  /** Latest rendered layout so stale gesture closures from a prior lens bail out. */
+  const activeLayoutRef = useRef<StarMapViewPreferences["layout"]>(
+    preferences.layout,
+  );
+  activeLayoutRef.current = preferences.layout;
+  /** Visible anchor bodies tagged with their layout for view serialization. */
+  const viewRestoreAnchorsRef = useRef<{
+    layout: StarMapViewPreferences["layout"];
+    anchors: readonly StarMapViewAnchorPoint[];
+  }>({ layout: preferences.layout, anchors: [] });
+  /** Current lens anchor resolver, populated during render for view restore. */
+  const resolveWorkspaceAnchorRef = useRef<
+    ((anchor: StarMapWorkspaceAnchor) => StarMapChatCardAnchorResolution | null | undefined)
+    | undefined
+  >(undefined);
 
   /**
    * Whoever wants to know about a view write the moment it is painted,
@@ -887,13 +902,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
   const commitViewAndPersist = useCallback(
     (next: StarMapView) => {
+      // Ignore a stale gesture-settle closure from a previous layout (such as
+      // a wheel-idle cleanup or pointer drag ending after a lens switch):
+      // `next` and `viewRestoreAnchorsRef` now belong to the new layout, so
+      // persisting under the closed-over `preferences.layout` would write a
+      // mismatched anchor kind and overwrite the new lens's live view.
+      if (activeLayoutRef.current !== preferences.layout) return;
       commitView(next);
+      const anchors =
+        viewRestoreAnchorsRef.current.layout === preferences.layout
+          ? viewRestoreAnchorsRef.current.anchors
+          : [];
       chatCards.commitView(
         preferences.layout,
         serializeStarMapWorkspaceView({
           view: next,
           viewport: viewportSizeRef.current,
-          anchors: viewRestoreAnchorsRef.current,
+          anchors,
         }),
       );
     },
@@ -2458,7 +2483,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
           })),
     [bodies, projectLayout.projects, projectsMode],
   );
-  viewRestoreAnchorsRef.current = viewRestoreAnchors;
+  viewRestoreAnchorsRef.current = {
+    layout: preferences.layout,
+    anchors: viewRestoreAnchors,
+  };
 
   /**
    * The body the map opens on, in canvas units: this machine's own
@@ -2705,12 +2733,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
       });
     }
     for (const card of chatCards.cards) {
-      if (card.pendingAnchorRestore) continue;
+      // Resolve every chat card against the CURRENT lens's anchors instead of
+      // reading `card.rect`: on cold start `resolveRestoredAnchors` has not
+      // cleared `pendingAnchorRestore` yet, and on a layout switch
+      // `beginAnchorRebase` has not re-seated cards away from the old lens yet.
+      const resolvedRect = resolveChatCardAnchorRect(
+        card,
+        resolveWorkspaceAnchorRef.current?.(card.anchor),
+      );
+      if (!resolvedRect) continue;
       contentBoxes.push({
-        left: card.rect.left,
-        top: card.rect.top,
-        right: card.rect.left + card.rect.width,
-        bottom: card.rect.top + card.rect.height,
+        left: resolvedRect.left,
+        top: resolvedRect.top,
+        right: resolvedRect.left + resolvedRect.width,
+        bottom: resolvedRect.top + resolvedRect.height,
       });
     }
     const restored = resolveRestoredStarMapView({
@@ -3890,6 +3926,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     },
     [bodies, flightRects, health, peers, props.desktopApi, remote.threadsByInstance, remote.unreachableInstanceIds],
   );
+  resolveWorkspaceAnchorRef.current = resolveWorkspaceAnchor;
 
   useLayoutEffect(() => {
     if (!chatCards.hydrated) return;
