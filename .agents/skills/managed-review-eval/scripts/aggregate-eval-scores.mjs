@@ -16,6 +16,7 @@
  *     --scoring .local/managed-review-eval/runs/dev-1/scoring \
  *     --out .local/managed-review-eval/runs/dev-1
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -50,6 +51,10 @@ const summary = JSON.parse(
 const manifest = JSON.parse(
   fs.readFileSync(path.join(scoringDir, "chunks-manifest.json"), "utf8"),
 );
+const unverifiedBaselineCount = cohortCases.filter(({ baseline }) => baseline.reviewedRangeVerified !== true).length;
+if (unverifiedBaselineCount !== manifest.unverifiedBaselineCount || (isBlind && unverifiedBaselineCount)) {
+  throw new Error("Decision scoring prerequisites changed or the blind cohort has an unverified baseline range.");
+}
 const arms = manifest.arms ?? ["codex", "neon"];
 const recallMeta = JSON.parse(fs.readFileSync(path.join(scoringDir, "recall-meta.json"), "utf8"));
 const precisionMeta = JSON.parse(
@@ -70,6 +75,10 @@ if (workflowLogPath && fs.existsSync(workflowLogPath)) {
 function loadChunkItems(chunk) {
   if (chunk.resultsFile && fs.existsSync(chunk.resultsFile)) {
     const lines = fs.readFileSync(chunk.resultsFile, "utf8").trim().split("\n");
+    const header = JSON.parse(lines.shift());
+    if (header.type !== "batch" || header.batchId !== chunk.batchId || header.count !== chunk.count) {
+      throw new Error(`Decision archive is incomplete or mismatched for ${chunk.batchType}#${chunk.chunkIndex}.`);
+    }
     const items = [];
     for (const line of lines) {
       const row = JSON.parse(line);
@@ -139,29 +148,66 @@ function getAnswer(answers, name) {
   return answers.find((a) => a.name === name);
 }
 
+const definitionsBytes = fs.readFileSync(path.join(scoringDir, "scoring-definitions.json"));
+const definitionSha256 = createHash("sha256").update(definitionsBytes).digest("hex");
+if (definitionSha256 !== manifest.definitionSha256) {
+  throw new Error("Decision definitions changed after preparation.");
+}
+const definitions = JSON.parse(definitionsBytes);
+const seenBatches = new Set();
+
+function completeAnswers(answers, questions) {
+  return Array.isArray(answers) && answers.length === questions.length && questions.every((question) => {
+    const answer = getAnswer(answers, question.name);
+    if (!answer) return false;
+    switch (question.type) {
+      case "predicate":
+        return Number.isFinite(answer.probability) && answer.probability >= 0 && answer.probability <= 1;
+      case "choice":
+        return question.choices.some((choice) => choice.value === answer.choice);
+      case "score":
+        return Number.isFinite(answer.score) && answer.score >= 0 && answer.score < question.levels.length;
+      default:
+        return false;
+    }
+  });
+}
+
 function loadAllFor(batchType, metaList) {
-  const chunks = summary[batchType] ?? [];
-  const merged = new Array(metaList.length);
+  const chunks = summary[batchType];
+  const expected = manifest[batchType];
+  if (!Array.isArray(chunks) || !Array.isArray(expected) || chunks.length !== expected.length) {
+    throw new Error(`Decision scorecard is incomplete for ${batchType}.`);
+  }
+  const merged = [];
   let totalCostUsd = 0;
-  for (const chunk of chunks) {
-    totalCostUsd += chunk.estimatedCostUsd ?? 0;
+  for (const [index, entry] of expected.entries()) {
+    const chunk = chunks[index];
+    if (chunk?.batchType !== batchType || chunk.chunkIndex !== index
+      || chunk.start !== merged.length || chunk.start !== entry.start || chunk.count !== entry.count
+      || !Number.isInteger(chunk.count) || chunk.count <= 0 || chunk.start + chunk.count > metaList.length
+      || chunk.succeeded !== chunk.count || chunk.failed !== 0
+      || typeof chunk.batchId !== "string" || !chunk.batchId || seenBatches.has(chunk.batchId)) {
+      throw new Error(`Decision scorecard is incomplete or duplicated at ${batchType}#${index}.`);
+    }
+    const currentInputsSha256 = createHash("sha256").update(fs.readFileSync(entry.file)).digest("hex");
+    if (chunk.definitionSha256 !== definitionSha256
+      || chunk.inputsSha256 !== entry.inputsSha256 || chunk.inputsSha256 !== currentInputsSha256) {
+      throw new Error(`Decision judgments for ${batchType}#${index} use different inputs or definitions.`);
+    }
+    seenBatches.add(chunk.batchId);
     const items = loadChunkItems(chunk);
-    if (items.length !== chunk.count) {
-      throw new Error(
-        `Count mismatch for ${batchType}#${chunk.chunkIndex}: got ${items.length}, expected ${chunk.count}`,
-      );
+    if (items.length !== chunk.count || items.some((item, i) =>
+      item.localIndex !== i || item.ok !== true || !completeAnswers(item.answers, definitions[batchType].questions)
+    )) {
+      throw new Error(`Decision answers are incomplete at ${batchType}#${index}.`);
     }
     for (const item of items) {
-      const globalIdx = chunk.start + item.localIndex;
-      merged[globalIdx] = {
-        ...metaList[globalIdx],
-        ok: item.ok,
-        answers: item.answers,
-      };
+      merged.push({ ...metaList[chunk.start + item.localIndex], ok: item.ok, answers: item.answers });
     }
+    totalCostUsd += chunk.estimatedCostUsd ?? 0;
   }
-  const missing = merged.filter((x) => !x).length;
-  if (missing > 0) throw new Error(`Missing ${missing} items in ${batchType}`);
+  if (merged.length !== metaList.length) throw new Error(`Decision scorecard is incomplete for ${batchType}.`);
   return { items: merged, totalCostUsd };
 }
 
@@ -442,6 +488,7 @@ const report = {
     model: "gpt-6-luna",
     totalItems: recallRows.length + precisionRows.length + holisticRows.length,
     totalCostUsd: totalDecisionCostUsd,
+    unverifiedBaselineCount,
   },
   aggregates,
   ...(isBlind && !allowInspectTest
@@ -502,6 +549,9 @@ if (!isBlind || allowInspectTest) {
 }
 
 console.log("=== AGGREGATES ===");
+if (unverifiedBaselineCount) {
+  console.log(`[PROVISIONAL] ${unverifiedBaselineCount} development baselines lack a captured original range.`);
+}
 console.log(JSON.stringify(aggregates, null, 2));
 console.log(`\nDecision cost: $${totalDecisionCostUsd} across ${report.decisionScoring.totalItems} items`);
 if (isBlind && !allowInspectTest) {

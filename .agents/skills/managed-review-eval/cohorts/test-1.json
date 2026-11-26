@@ -44,9 +44,9 @@
             "body": "When a remote draft opens on Codex and the viewer/owner catalogs differ, `DesktopAppServerService.ensureDirectoryLaunchpad` still seeds its model from the viewer's defaults; `resolveRemoteLaunchpadBackend` only reconciles the backend. The new Composer correction runs only after a provider change, so sending an untouched draft now fails this admission check instead of using the owner's default. Initialize automatic model settings from the owner before validation, while preserving rejection of explicit invalid selections.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 29856,
+            "endLine": 29857
           },
           {
             "id": "9bdca74e-c642-49a4-8994-8cb9b5891a8f",
@@ -54,9 +54,9 @@
             "body": "When a same-backend `handoff_task` changes models but omits reasoning or Fast settings, this validates the source thread's inherited values as explicit requests for the new model. For example, handing off from a reasoning model using `high` to a non-reasoning model now returns `invalid_arguments`; previously resolution discarded the incompatible inherited effort and created the child. Normalize or clear inherited settings for the new model before validation, while still rejecting explicitly supplied incompatible values.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 45000,
+            "endLine": 45003
           },
           {
             "id": "f41d915b-2e84-47dc-8628-ac7f0d17aede",
@@ -64,11 +64,12 @@
             "body": "For an ACP model exposing only one thought level, such as `on`, discovery deliberately reports `supportsReasoning: false`. A valid saved runtime containing `configValues.thinking: \"on\"` is now promoted into `requested.reasoningEffort` and rejected because the validator permits no efforts for that model. Consequently, `startThread` can no longer replay this valid runtime. Validate runtime-carried values against the ACP config menu, or avoid treating fixed runtime values as adjustable reasoning overrides.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 30700,
+            "endLine": 30702
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -107,9 +108,9 @@
             "body": "When `send_message_to_thread` requests Default Access for a Full Access Antigravity thread, the caller and target checks accept the lower override, but the ACP submission drops `params.executionMode`. The prompt then runs on the thread's Full Access process without permission prompts. Honor the lower mode or refuse the send if it cannot be enforced; accepting it and running at Full Access violates the [agent access rule](apps/desktop/docs/full-access-escalation.md#L19-L26).",
             "priority": 1,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 6220,
+            "endLine": 6224
           },
           {
             "id": "59a180f9-552b-4b4a-9ec3-277e29490e2c",
@@ -117,9 +118,9 @@
             "body": "If a queued switch to Default remains pending after the terminal flush—for example, because a native background command prevented the transfer—the next `startTurn` cannot retry it. The start reserves the thread before calling this method, so `threadHasActiveTurn` sees the start's own reservation and skips the flush. The new prompt can then run at Full Access. Ignore only the incoming start's reservation, and do not dispatch at Full Access while the downgrade remains pending. This preserves the documented [turn-end queue boundary](apps/desktop/docs/thread-state-update-bus.md#L56-L63).",
             "priority": 1,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 14834,
+            "endLine": 14836
           },
           {
             "id": "041b81e4-95a2-41dd-84fa-e53a6cd2b397",
@@ -127,9 +128,9 @@
             "body": "Before this patch, an Antigravity `startThread` request could persist `executionMode: \"full-access\"` while still starting the ordinary process. With native Default selected, that thread still asked for approval because native mode took precedence. After upgrading, resuming the same row starts a process that skips permissions, without a new access selection. Distinguish legacy values from confirmed process access so existing approval-required threads stay guarded until the operator opts in through the [Full Access gate](apps/desktop/docs/full-access-escalation.md#L8-L15).",
             "priority": 1,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/acp-backend-adapter.ts",
+            "startLine": 2482,
+            "endLine": 2485
           },
           {
             "id": "e2037f25-5c6a-425c-a027-7f15f4f81c45",
@@ -137,9 +138,9 @@
             "body": "If a Full Access → Default transfer succeeds but this overlay write fails, the user sees Default while the overlay still says Full Access. `startManagedReviewChild` and the Job Monitor start path still prefer that overlay over the ACP session, so they can launch a new Full Access Antigravity process from a Default thread without confirmation. Make both paths use the committed session mode, consistent with the [no agent escalation rule](apps/desktop/docs/full-access-escalation.md#L19-L23).",
             "priority": 1,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 14411,
+            "endLine": 14416
           },
           {
             "id": "829615b2-b844-47fa-bc5c-6802c36a4dab",
@@ -147,9 +148,9 @@
             "body": "An existing start card with an operator-selected Antigravity Plan or Accept Edits mode now enters the process-access branch, which never reads `card.nativeAccessMode`. It starts in the provider's default Agent mode instead of the mode saved on the card. Carry valid saved picks into `acpRuntime` independently of process access, as required by the [stored-pick contract](apps/desktop/docs/full-access-escalation.md#L27-L36).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "packages/shared/src/thread-todo-access.ts",
+            "startLine": 121,
+            "endLine": 130
           },
           {
             "id": "95e49110-3aee-462a-bdc1-1200274f109e",
@@ -157,11 +158,12 @@
             "body": "Advertising both process access modes makes `acpBackendUsesExecutionModePermissions` true. The messaging callbacks for `browse:new:permissions` and `status:permissions` then stop opening the native mode picker, so users can no longer select Plan, Auto, or Accept Edits from either surface. Expose Agent mode separately from process access and keep the existing messaging gate for Full Access.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/acp-backend-adapter.ts",
+            "startLine": 771,
+            "endLine": 772
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -200,11 +202,12 @@
             "body": "If an active turn completes while `prepareTurnInput` downloads or processes media, this earlier snapshot still reports the thread as busy. `isTurnOccupied` then puts the message into the controller-local queue after the completion handler has already called `startNextQueuedTurn` against an empty queue. The message can remain queued indefinitely; the owner's shared FIFO never receives it. Refresh or invalidate the admission snapshot after a lifecycle transition during preparation.",
             "priority": 1,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/messaging/core/messaging-controller.ts",
+            "startLine": 4588,
+            "endLine": 4590
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -243,11 +246,12 @@
             "body": "The fixture uses Mission Control density, where Project 00’s thread already has a 20px location chip. The reaction fits beside it at the same height, so the presence check can pass without the section resizing. That leaves the browser test unable to catch stale bounds when an existing project changes height during scrolling. Seed Compact density and assert that the section height changes before checking the viewport oracle ([AGENTS.md:52](AGENTS.md#L52)).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/e2e/project-index-scroll.spec.ts",
+            "startLine": 103,
+            "endLine": 109
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -279,7 +283,8 @@
           "declined": 0,
           "open": 0
         },
-        "items": []
+        "items": [],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -311,7 +316,8 @@
           "declined": 0,
           "open": 0
         },
-        "items": []
+        "items": [],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -350,9 +356,9 @@
             "body": "After an Antigravity install fails, the Settings Runtime row loses its status line, Check for updates, Reinstall and the Manual install guide button. Only the progress strip is left. The new `progress ? <Strip/> : <StatusLine/>` swaps the two, and a `failed` progress stays visible until the next event (`isManagedRuntimeProgressVisible` only times out `ready`). The old code rendered the strip alongside the buttons. Fix: render the status line under the strip when the progress has failed, so the manual guide stays reachable.\n\nFailure scenario: Google's download fails a checksum, so progress goes to `failed`. The operator opens Settings and sees only the failed strip with Retry. The Manual install guide button, the obvious fallback, is gone until the app restarts or another install is attempted.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/settings/AntigravitySetup.tsx",
+            "startLine": 196,
+            "endLine": 196
           },
           {
             "id": "2541ad57-9849-46b4-8c28-44a288613636",
@@ -360,9 +366,9 @@
             "body": "The startup notice can offer an update to a version that is already installed. `evaluate` runs from mount, from every BACKEND_SUMMARIES_REFRESH_EVENT and from `readyAt`, but nothing ensures the latest call wins. `check-update` reads the runtime and then waits on Google (up to the validation timeout), so a check that started before an install can resolve after the post-install evaluate and `setView` the old runtime. Fix: add a generation counter and drop results from superseded evaluations.\n\nFailure scenario: At launch, evaluate A starts and Google's manifest is slow. The user installs 1.5.16 from Settings. `readyAt` triggers evaluate B, which sees 1.5.16 as up to date. A then resolves with the runtime it read before the install (1.5.15), and the toast reappears offering \"Update to 1.5.16\".",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/notifications/AntigravityUpdateNotice.tsx",
+            "startLine": 512,
+            "endLine": 512
           },
           {
             "id": "69b40e5f-bd03-44e3-8eb8-a5a0a524d86a",
@@ -370,9 +376,9 @@
             "body": "A caller that joins an in-flight release check inherits the first caller's abort signal, clock and fetch. If the first caller's signal aborts, every joined caller fails too. The IPC handler passes its `lifecycle.signal`, which `dispose()` aborts on re-registration, so a check made right after Settings IPC re-registers can join the old, aborted request and report \"Could not check Google\". Fix: run the shared request on its own timeout signal and let each caller race its own signal against the shared promise.\n\nFailure scenario: `registerSettingsIpcHandlers` re-runs while a check is pending. The old lifecycle aborts, and the new window's `check-update` joins the pending promise and gets an AbortError. Settings then shows the check error even though the network is fine.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/acp/antigravity-managed-runtime.ts",
+            "startLine": 193,
+            "endLine": 193
           },
           {
             "id": "01cc8df3-2651-4b8e-8bc9-a89d9428c1e7",
@@ -380,9 +386,9 @@
             "body": "The Runtime row tells a user with Antigravity turned off that another Antigravity install is active. `antigravityRuntimeView` sets `inUse: false` both when the entry is disabled and when discovery has not reported an `activeCommand` yet, and the status line always explains `!inUse` as another install being active. Fix: carry the reason in the view and word the disabled or unknown cases separately.\n\nFailure scenario: The user turns Antigravity off, then opens its Settings section. The row reads \"installed · not in use, another Antigravity install is active\", but no other install exists.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/settings/AntigravitySetup.tsx",
+            "startLine": 306,
+            "endLine": 306
           },
           {
             "id": "52194639-2179-4b57-bb2e-71bb0aaa25dd",
@@ -390,11 +396,12 @@
             "body": "Nothing tests that the startup notice only asks Google when the managed install is in use, or that it updates after an install. The only test covers the pure `buildAntigravityUpdateNotice` builder, not the component's evaluation in `AntigravityUpdateNotice`. Fix: add a component test that a user's own or disabled `agy` makes no `check-update` request, and that an in-use managed install surfaces the notice.\n\nFailure scenario: A refactor drops the `local.inUse` guard and every launch asks Google for users who run their own `agy`. No test fails.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/notifications/AntigravityUpdateNotice.tsx",
+            "startLine": 497,
+            "endLine": 497
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -433,9 +440,9 @@
             "body": "threadProjectRepository reads only the navigation cache (attachedPrsByThreadKey), so a thread that no navigation refresh has listed yet has no project and its project's Tool approval is ignored.\n\nFailure scenario: Operator sets Linear to Allow all tools for PwrApps, starts a new PwrApps thread, and its first save_issue call arrives before the index refresh lists the thread: the cache has no primary repository, the connection's Ask before changes applies, and the card asks again (with no project offer).",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 45470,
+            "endLine": 45470
           },
           {
             "id": "e1475acc-11f6-4eb2-8a79-a8402e203b7f",
@@ -443,9 +450,9 @@
             "body": "Add project writes \"approve\" for whatever repository is typed, so typing a repository already in the list silently changes its mode to Allow all tools.\n\nFailure scenario: PwrApps is listed as Ask for every tool; the operator types github.com/pwrdrvr/PwrApps into Add project; upsert replaces the entry with approve and every tool now runs without asking in PwrApps.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/settings/McpProjectToolApprovals.tsx",
+            "startLine": 140,
+            "endLine": 140
           },
           {
             "id": "bc434b32-3f74-4c41-9f61-33c7273f5d16",
@@ -453,9 +460,9 @@
             "body": "ruleRepositoryProjectLabel copies forgeProjectLabel's resolver race, timeout and fallback logic instead of forgeProjectLabel delegating to one helper.\n\nFailure scenario: Two copies of the label lookup with the same timeout constant and logging; a change to one (timeout, fallback wording) silently diverges forge cards from MCP cards.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 45500,
+            "endLine": 45500
           },
           {
             "id": "7a4829aa-867b-4fdd-812e-637fc338f6cc",
@@ -463,9 +470,9 @@
             "body": "The directory-row loading state machine and projectLabel lookup are copied verbatim from ForgeProjectRules instead of shared through one hook.\n\nFailure scenario: About 30 duplicated lines (loading state, cancellation handling, label fallback); a fix to cancellation or label precedence in one Settings surface leaves the other stale.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/settings/McpProjectToolApprovals.tsx",
+            "startLine": 36,
+            "endLine": 36
           },
           {
             "id": "5d2feca7-1ae0-4218-89df-a59a3e8be71c",
@@ -473,11 +480,12 @@
             "body": "The Claude-direct MCP approval gap is recorded only as an open question on the design page and in chat, not as an add_todo card.\n\nFailure scenario: CLAUDE.md (repo root): \"When you find work that should be done but you are not doing it in this change, raise a PwrAgent to-do card with the `add_todo` tool.\" Claude threads using a connection's server directly still ask per call in a project set to Allow all tools, and nothing tracks fixing it.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 45470,
+            "endLine": 45470
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -516,9 +524,9 @@
             "body": "In a Model menu with provider groups (for example OpenAI models plus a PrismML Bonsai group), the 'Other ›' row now renders above the primary section's title, so it belongs to no section and it is unclear whose older models it holds. `listContent` emits `otherRow` before the `optionsLabel` header when `otherFirst`. Fix: render the section title first, then the Other row, then the options.\n\nFailure scenario: Codex thread with a local provider group: the menu reads 'Other ›', then the 'OpenAI' title, then OpenAI models, then 'PrismML Bonsai (local)'. 'Other' visually sits outside the OpenAI section whose superseded models it opens.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/composer/ComposerDropdown.tsx",
+            "startLine": 363,
+            "endLine": 363
           },
           {
             "id": "83f20259-859e-45a6-9604-7720845ace1c",
@@ -526,9 +534,9 @@
             "body": "A provider whose endpoint answered with an error can be labelled 'offline'. `UNREACHABLE_CATALOG_ERROR` matches 'did not answer' or an errno token anywhere in the error, including inside an HTTP error body. Fix: never treat an error that starts with `HTTP <status>` as unreachable.\n\nFailure scenario: A gateway returns 502 with body {\"error\":\"upstream did not answer\"}; the catalog stores 'HTTP 502: upstream did not answer', and the picker shows 'Runs on Codex · offline' instead of the HTTP 502 reason, hiding a misconfiguration.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "packages/shared/src/provider-picker.ts",
+            "startLine": 197,
+            "endLine": 197
           },
           {
             "id": "543b17f3-4a36-4f81-8d24-37878e56b45a",
@@ -536,9 +544,9 @@
             "body": "In a trigger-role menu (to-do card pickers) with nothing selected and every real choice disabled, opening the menu now focuses nothing, because the fallback skips the flyout row. Keyboard users then have no focused option. Fix: fall back to the first enabled option of any kind when no real choice is enabled.\n\nFailure scenario: To-do model menu where every primary model is disabled and older models are under Other: before, the Other row got focus on open; now `first` is null and focus stays on the trigger, so arrow keys start from nowhere.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/composer/ComposerDropdown.tsx",
+            "startLine": 247,
+            "endLine": 247
           },
           {
             "id": "45622159-029b-4e25-917a-fde19f2dbb28",
@@ -546,11 +554,12 @@
             "body": "An open flyout is not repositioned when its rows change height without the row count changing. The layout effect depends only on `otherOptions.length`. Provider catalog state streams in live (pending to offline), which changes description lines and so the flyout's height. Fix: re-measure whenever the options change (depend on `props.otherOptions`); the existing 0.5px guard prevents a render loop.\n\nFailure scenario: Unavailable flyout open while a provider's read finishes: its line changes from 'No models yet. Reading its catalog.' to a two-line HTTP error; the flyout grows 20px but keeps its old top, so a bottom-anchored flyout hangs below its row or past the window.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/composer/ComposerDropdown.tsx",
+            "startLine": 238,
+            "endLine": 238
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -589,9 +598,9 @@
             "body": "The to-do card's Start-thread split menu (.todo-split__menu, absolute, not portalled) now paints under the lock layer, so on a locked thread a menu that drops into the card's region is hidden behind the lock card and scrim.\n\nFailure scenario: Locked thread with a tall open to-do: operator opens the split menu near the card's bottom edge; its lower items render beneath the lock card and cannot be clicked.",
             "priority": null,
             "status": "deferred",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/styles/app.css",
+            "startLine": 24693,
+            "endLine": 24693
           },
           {
             "id": "acf89493-6c4a-468c-b1d5-3b84a854b09e",
@@ -599,9 +608,9 @@
             "body": "isolation: isolate on a locked column caps the to-do stack and find bar under the context rail (10), while on an unlocked thread they paint above it, so layering differs by lock state.\n\nFailure scenario: Unpinned context rail flyout overlapping the column's top-right: unlocked, the to-do card covers the rail; locked, the rail covers the to-do card.",
             "priority": null,
             "status": "declined",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/styles/app.css",
+            "startLine": 24683,
+            "endLine": 24683
           },
           {
             "id": "f1ba7533-3798-474c-ada3-5f1f161815c2",
@@ -609,9 +618,9 @@
             "body": "The isolation test asserts `.context-rail` z-index toBe(10), which says nothing about the lock layer and fails on any unrelated rail change.\n\nFailure scenario: Someone retunes the rail to 12 for an unrelated reason; this lock test fails with no lock regression, inviting a blind number update.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/styles/__tests__/thread-lock-layer-contract.test.ts",
+            "startLine": 31,
+            "endLine": 31
           },
           {
             "id": "392e2f67-e0f8-480c-8452-07ed11783e52",
@@ -619,9 +628,9 @@
             "body": "The contract only checks .thread-todo-stack and .thread-find; a new absolutely-positioned overlay added to the column above 31 would cover the lock card again without failing the test.\n\nFailure scenario: A future banner in .thread-view__primary ships at z-index 40; the lock card is covered again and the suite stays green.",
             "priority": null,
             "status": "declined",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/styles/__tests__/thread-lock-layer-contract.test.ts",
+            "startLine": 22,
+            "endLine": 22
           },
           {
             "id": "621c8c63-b48b-4e0e-a9b5-131512960596",
@@ -629,11 +638,12 @@
             "body": "The new comments repeat the to-do stack (29), find bar (30) and rail (10) values, which drift silently when those rules change.\n\nFailure scenario: The find bar moves to 32; the comment still says 30 and the lock layer at 31 reads as correct to a reviewer.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/styles/app.css",
+            "startLine": 24679,
+            "endLine": 24679
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     }
   ]

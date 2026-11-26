@@ -20,24 +20,24 @@ Every cohort shares the same balanced mix:
 - `3` Claude `/code-review` PRs with findings (high operator acceptance)
 - `1` Claude `/code-review` high-decline PR (`>= 2` declined findings — tests false-positive resistance)
 
-## GitHub Ref Survivability Guarantee
+## GitHub Ref Verification
 
 Every single PR in all four cohorts (`40 / 40`) was verified against `origin` (`git ls-remote origin 'refs/pull/*/head'`):
-1. `baseCommit` is an ancestor of `origin/main` (permanently reachable on any clone).
-2. `headCommit` is either identical to `refs/pull/<N>/head` (`PERM_PR_TIP`) or an exact ancestor of `refs/pull/<N>/head` (`PERM_PR_ANCESTOR`), meaning GitHub's permanent hidden pull-request ref retains the commit chain even after branch deletion and squash merge.
+1. `baseCommit` was an ancestor of `origin/main`.
+2. `headCommit` was either identical to `refs/pull/<N>/head` (`PERM_PR_TIP`) or an exact ancestor of `refs/pull/<N>/head` (`PERM_PR_ANCESTOR`).
 3. Dangling pre-force-push commits (`dangling_not_in_pr_tip`) are excluded during extraction.
 
-On a fresh clone, `review-matrix-driver.ts` and `prepare-scoring-batches.mjs` automatically fetch any missing `headCommit` via `git fetch --no-tags --no-write-fetch-head origin refs/pull/<N>/head`. You can re-verify all checked-in cohorts at any time with:
-
-```bash
-node .agents/skills/managed-review-eval/scripts/extract-cohorts.mjs --verify
-```
+The PR ref can retain the commit chain after branch deletion or a squash merge. A force-push can change which commits it retains. Follow [cohort maintenance](../references/cohort-maintenance.md) to recheck reachability without disclosing blind cases.
 
 ## Recorded Baseline Benchmark (`dev-1`, `origin/main` `165910030`)
 
-Measured on 2026-11-25 with PwrAgent's PR #4394 in-memory candidate ledger + two-pass managed review prompt (`decisions_invoke` / `gpt-6-luna`, 208 items, `$0.0249` total):
+Measured on 2026-11-25 with PwrAgent's PR #4394 in-memory candidate ledger + two-pass managed review prompt (`decisions_invoke` / `gpt-6-luna`, 208 items, `$0.0249` total).
 
-| Arm | Structured / Pending | Findings (Ledger `T→K/D`) | Mean Latency | Addressed Recall | Codex-Base Recall | Claude-Base Recall | Diff-Grounded Concrete Rate | Blinded SNR / Act / Overall |
+The original review range could be confirmed for 21 of 40 historical cases. The remaining cases are marked `reviewedRangeVerified: false`. These splits retain their original membership. Use unverified development baselines for exploratory scoring and use newly verified cohorts for blind validation.
+
+Treat the recorded precision and holistic columns as provisional until reproduced with verified ranges and anonymous judge inputs.
+
+| Arm | Structured / Pending | Findings (Ledger `T→K/D`) | Mean Latency | Addressed Recall | Codex-Base Recall | Claude-Base Recall | Recorded Concrete Rate | Holistic SNR / Act / Overall |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | Baseline (Codex / Claude) | `10/10` | `47` | — | ref (`43A/4X`) | ref (`23A`) | ref (`20A/4X`) | — | `3.43 / 3.08 / 3.26` |
 | **Codex Managed** (`gpt-6.2-sol · xhigh`) | `10/10` / `0` | `57` (`67→57/10`) | `228s` | **48.8%** (`21/43`) | **52.2%** (`12/23`) | `45.0%` (`9/20`) | `61.4%` (`35/57`) | `3.36 / 3.41 / 3.62` |

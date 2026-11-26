@@ -1,8 +1,8 @@
 /**
  * Headless PwrAgent owner eval driver for managed code reviews.
  *
- * Boots startOwnerServices in pure Node with desktop policy (memberRole=full,
- * isolated PWRAGENT_HOME) and executes startReview(request, true) across a
+ * Boots startOwnerServices in pure Node in an isolated PWRAGENT_HOME
+ * and executes startReview(request, true) across a
  * verified cohort JSON for Codex and/or Antigravity Neon.
  *
  * Build first via build-eval-driver.mjs, then run:
@@ -12,18 +12,23 @@
  *     --out .local/managed-review-eval/runs/dev-1-baseline \
  *     --arms codex,neon --concurrency 2
  */
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { promisify } from "node:util";
+import { reviewedMergeBase } from "./review-range.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
 import type {
   AgentEvent,
   StartReviewRequest,
+  StartReviewResponse,
 } from "@pwragent/shared/contracts/agent";
 import type {
   AppServerBackendKind,
   AppServerPendingRequestNotification,
   AppServerReviewOutput,
+  ThreadExecutionMode,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { initializeMainLogger } from "@pwragent/desktop-main/log";
 import {
@@ -37,6 +42,7 @@ import {
   isAppStateInitialized,
 } from "@pwragent/desktop-main/storage/desktop-state-lifecycle";
 import { issueProviderDiscoveryPermit } from "@pwragent/desktop-main/settings/provider-discovery-permit";
+import { createOutpostRuntimePolicy, type OwnerRuntimePolicy } from "@pwragent/desktop-main/owner-runtime-policy";
 import { createHeadlessOwnerHostServices } from "@pwragent/desktop-main/headless/owner-host-services";
 import {
   disposeOwnerServices,
@@ -71,6 +77,32 @@ type CohortFile =
     };
 
 type ArmId = "codex" | "neon";
+type Outcome = { status: "completed" | "failed" | "cancelled" | "timeout"; error?: string };
+const deadlineExceeded = Symbol("deadline exceeded");
+const approvalMethods = new Set([
+  "turn/requestApproval", "review/requestApproval", "item/commandExecution/requestApproval",
+  "item/fileChange/requestApproval", "item/permissions/requestApproval", "applyPatchApproval", "execCommandApproval",
+]);
+const runFile = promisify(execFile);
+
+async function beforeDeadline<T>(operation: Promise<T>, timeout: number): Promise<T | typeof deadlineExceeded> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([operation, new Promise<typeof deadlineExceeded>((resolve) => {
+      timer = setTimeout(() => resolve(deadlineExceeded), Math.max(0, timeout));
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function writeCell(file: string, record: unknown): void {
+  const temporary = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(record, null, 2));
+  fs.renameSync(temporary, file);
+}
+
+let blindOutput = false;
 
 function parseArg(name: string, fallback: string): string {
   const idx = process.argv.indexOf(name);
@@ -91,27 +123,28 @@ function hasCommit(repoCwd: string, sha: string): boolean {
   }
 }
 
-function ensureCommitPresent(
+async function ensureCommitPresent(
   repoCwd: string,
   remote: string,
   prNumber: number,
   sha: string,
-): void {
+): Promise<void> {
+  if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("Expected a pinned commit SHA.");
   if (hasCommit(repoCwd, sha)) return;
   try {
-    execFileSync(
+    await runFile(
       "git",
       ["-C", repoCwd, "fetch", "--no-tags", "--no-write-fetch-head", remote, `refs/pull/${prNumber}/head`],
-      { stdio: "ignore" },
+      { timeout: 60_000 },
     );
   } catch {
     // try direct SHA fetch fallback
   }
   if (!hasCommit(repoCwd, sha)) {
-    execFileSync(
+    await runFile(
       "git",
       ["-C", repoCwd, "fetch", "--no-tags", "--no-write-fetch-head", remote, sha],
-      { stdio: "ignore" },
+      { timeout: 60_000 },
     );
   }
   if (!hasCommit(repoCwd, sha)) {
@@ -166,12 +199,39 @@ async function main() {
   const casesArg = parseArg("--cases", "all");
   const armsArg = parseArg("--arms", "codex,neon");
   const timeoutMs = Number(parseArg("--timeout-ms", "900000"));
-  const caseConcurrency = Math.max(1, Number(parseArg("--concurrency", "2")));
+  const caseConcurrency = Number(parseArg("--concurrency", "2"));
   const codexModelOverride = parseArg("--codex-model", "gpt-6.2-sol");
   const codexEffortOverride = parseArg("--codex-effort", "xhigh");
   const neonModelOverride = parseArg("--neon-model", "gemini-4-neon");
   const neonEffortOverride = parseArg("--neon-effort", "high");
   const force = process.argv.includes("--force");
+
+  const allowFullAccess = process.argv.includes("--allow-full-access");
+  const executionMode: ThreadExecutionMode = allowFullAccess ? "full-access" : "default";
+  const parsedCohort = JSON.parse(fs.readFileSync(cohortPath, "utf8")) as CohortFile;
+  const allCases = Array.isArray(parsedCohort) ? parsedCohort : parsedCohort.cases;
+  const blind = !Array.isArray(parsedCohort) && parsedCohort.blind === true;
+  blindOutput = blind;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647
+    || !Number.isSafeInteger(caseConcurrency) || caseConcurrency <= 0) {
+    throw new Error("Concurrency and timeout must be positive integers within the supported bounds.");
+  }
+  const requestedArms = [...new Set(armsArg.split(",").map((arm) => arm.trim()))];
+  if (!requestedArms.length || !requestedArms.every((arm): arm is ArmId => arm === "codex" || arm === "neon")) {
+    throw new Error("Arms must be codex, neon, or both.");
+  }
+  const selectedCases = casesArg === "all"
+    ? allCases
+    : allCases.filter((c) => casesArg.split(",").map((id) => id.trim()).includes(c.id));
+  if (!selectedCases.length || selectedCases.some((c) => !/^[A-Za-z0-9_-]+$/.test(c.id))
+    || new Set(selectedCases.map((c) => c.id)).size !== selectedCases.length) {
+    throw new Error("Select at least one case with a unique, valid case ID.");
+  }
+  const bundleSha256 = createHash("sha256").update(fs.readFileSync(__filename)).digest("hex");
+  const requiredBackends: AppServerBackendKind[] = requestedArms.map((arm) =>
+    arm === "codex" ? "codex" : "acp:antigravity");
+  const totals = { completed: 0, failed: 0, cancelled: 0, timeout: 0, skipped: 0 };
+  let stopReason: string | undefined;
 
   const resultsDir = path.join(outDir, "results");
   const pwragentHome = path.join(outDir, "pwragent-home");
@@ -194,7 +254,7 @@ async function main() {
       'mode = "off"',
       "",
       "[experimental]",
-      "full_access_risk_warning_dismissed = true",
+      `full_access_risk_warning_dismissed = ${allowFullAccess}`,
       "token_miser_enabled = false",
       "",
       "[acp_agents.antigravity]",
@@ -228,10 +288,23 @@ async function main() {
     profileName: resolveActiveProfileName(),
     logDirectory,
     appName: "PwrAgent Eval",
+    consoleEnabled: !blind,
   });
 
   const desktopRoot = path.join(repoCwd, "apps/desktop");
-  const baseHost = createHeadlessOwnerHostServices({
+  const runtimePolicy: OwnerRuntimePolicy = {
+    ...createOutpostRuntimePolicy(),
+    enabledBackends: requiredBackends,
+    codexOpenAiProviderEnabled: true,
+    approvals: "ask",
+    agentNetwork: false,
+    memberRole: "full",
+    executionModes: allowFullAccess ? ["default", "full-access"] : ["default"],
+    sandboxByMode: allowFullAccess
+      ? { default: "read-only", "full-access": "danger-full-access" }
+      : { default: "read-only" },
+  };
+  const host = createHeadlessOwnerHostServices({
     runtime: {
       version: "1.5.0-eval",
       isPackaged: false,
@@ -239,11 +312,12 @@ async function main() {
       resourcesPath: path.join(desktopRoot, "resources"),
     },
     profileDirectory,
+    runtimePolicy,
     onQuit: () => {},
   });
-  const host = { ...baseHost, runtimePolicy: undefined };
 
-  console.log(`[eval] Booting headless PwrAgent owner (repo=${repoCwd}, out=${outDir})...`);
+  console.log(blind ? "[eval] Booting headless PwrAgent owner for a blind cohort." :
+    `[eval] Booting headless PwrAgent owner (repo=${repoCwd}, out=${outDir})...`);
   const services = await startOwnerServices(host, {
     bootMode: "active-profile",
     startedAt: Date.now(),
@@ -254,15 +328,6 @@ async function main() {
   let unsubscribe: (() => void) | undefined;
 
   try {
-    const requestedArms = armsArg
-      .split(",")
-      .map((s) => s.trim())
-      .filter((s): s is ArmId => s === "codex" || s === "neon");
-
-    const requiredBackends: AppServerBackendKind[] = [];
-    if (requestedArms.includes("codex")) requiredBackends.push("codex");
-    if (requestedArms.includes("neon")) requiredBackends.push("acp:antigravity");
-
     let backendsList: Awaited<ReturnType<typeof registry.listBackends>>["backends"] = [];
     const getModels = (entry: (typeof backendsList)[number] | undefined) =>
       entry?.launchpadOptions?.models?.length
@@ -287,7 +352,7 @@ async function main() {
           await registry.startThread({
             backend: "acp:antigravity",
             cwd: repoCwd,
-            executionMode: "full-access",
+            executionMode,
           });
         } catch (err) {
           console.warn("[eval] acp:antigravity warmup session warning:", String(err));
@@ -337,292 +402,257 @@ async function main() {
       `[eval] Backends ready! codex=${codexModel}/${codexEffortOverride} | neon=${neonModel}/${neonEffort ?? "model-pinned"}`,
     );
 
-    const parsedCohort = JSON.parse(fs.readFileSync(cohortPath, "utf8")) as CohortFile;
-    const allCases = Array.isArray(parsedCohort) ? parsedCohort : parsedCohort.cases;
-    const selectedCases =
-      casesArg === "all"
-        ? allCases
-        : allCases.filter((c) => casesArg.split(",").map((s) => s.trim()).includes(c.id));
-
     console.log(
       `[eval] Running ${selectedCases.length} cases x [${requestedArms.join(", ")}] = ${selectedCases.length * requestedArms.length} reviews (concurrency=${caseConcurrency})`,
     );
 
     type Waiter = {
-      parentBackend: AppServerBackendKind;
+      backend: AppServerBackendKind;
       parentThreadId: string;
       turnId?: string;
       reviewThreadId?: string;
       reviewOutput?: AppServerReviewOutput;
       reviewText?: string;
-      reviewer?: unknown;
-      approvals: number;
-      startedAt: number;
-      resolve: (result: {
-        status: "completed" | "failed" | "cancelled" | "timeout";
-        error?: string;
-      }) => void;
+      approvals: Set<string>;
+      resolve(result: Outcome): void;
     };
     const waiters = new Map<string, Waiter>();
 
-    unsubscribe = registry.onEvent(async (event: AgentEvent) => {
-      const method = event.notification.method;
+    function findWaiter(backend: AppServerBackendKind, threadId: string, turnId?: string) {
+      return [...waiters.values()].find((w) => w.backend === backend
+        && (w.parentThreadId === threadId || w.reviewThreadId === threadId)
+        && (!w.turnId || !turnId || w.turnId === turnId));
+    }
+
+    async function answerApproval(backend: AppServerBackendKind, notification: AppServerPendingRequestNotification) {
+      if (!approvalMethods.has(notification.method)) return;
+      const { threadId, turnId, requestId } = notification.params;
+      if (typeof threadId !== "string" || typeof requestId !== "string") return;
+      const w = findWaiter(backend, threadId, turnId ?? undefined);
+      if (!w || w.approvals.has(requestId)) return;
+      w.approvals.add(requestId);
+      try {
+        // No operator is editing this checkout from the eval process. Provider
+        // operations that need wider permissions get a refusal, even in Full Access.
+        const decision = notification.method === "item/permissions/requestApproval"
+          ? { permissions: {}, scope: "turn" }
+          : buildPendingRequestResponse(notification, "decline");
+        await registry.submitServerRequest({ backend, threadId, requestId, ...(turnId ? { turnId } : {}), response: decision });
+      } catch (error) {
+        if (!blind) console.warn("[eval] Could not decline a review approval:", error);
+      }
+    }
+
+    unsubscribe = registry.onEvent((event: AgentEvent) => {
+      const { method } = event.notification;
       const params = event.notification.params as Record<string, unknown>;
       const threadId = typeof params.threadId === "string" ? params.threadId : undefined;
-      const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
-
-      if (method === "serverRequest/requested" && threadId) {
-        const req = params as unknown as AppServerPendingRequestNotification["params"] & {
-          requestId?: string;
-        };
-        const w = [...waiters.values()].find(
-          (candidate) =>
-            candidate.parentBackend === event.backend
-            && (candidate.parentThreadId === threadId || candidate.reviewThreadId === threadId),
-        );
-        if (w) w.approvals += 1;
-        try {
-          const response = buildPendingRequestResponse(
-            event.notification as unknown as AppServerPendingRequestNotification,
-            "accept",
-          );
-          if (response && typeof req.requestId === "string") {
-            await registry.submitServerRequest({
-              backend: event.backend,
-              threadId,
-              ...(turnId ? { turnId } : {}),
-              requestId: req.requestId,
-              response,
-            });
-          }
-        } catch (err) {
-          console.warn(`[eval] auto-approve failed for ${threadId}:`, String(err));
-        }
+      if (!threadId) return;
+      if (approvalMethods.has(method)) {
+        void answerApproval(event.backend, event.notification as AppServerPendingRequestNotification);
         return;
       }
-
-      if (!threadId) return;
-      const key = `${event.backend}:${threadId}`;
-      const waiter = waiters.get(key);
-      if (!waiter) return;
-      if (waiter.turnId && turnId && turnId !== waiter.turnId) return;
-
+      const turn = params.turn as { id?: string; status?: string; error?: { message?: string } } | undefined;
+      const turnId = typeof params.turnId === "string" ? params.turnId : turn?.id;
+      const wait = waiters.get(`${event.backend}:${threadId}`);
+      // Parent terminal delivery follows publication of the managed artifact.
+      if (!turnId || !wait || (wait.turnId && turnId !== wait.turnId)) return;
       if (method === "item/completed") {
         const item = params.item as Record<string, unknown> | undefined;
-        if (item?.type === "exitedReviewMode") {
-          const data = item.data as Record<string, unknown> | undefined;
-          if (data?.reviewOutput) {
-            waiter.reviewOutput = data.reviewOutput as AppServerReviewOutput;
-          }
-          if (typeof item.review === "string") {
-            waiter.reviewText = item.review;
-          }
-          if (data?.reviewer) {
-            waiter.reviewer = data.reviewer;
-          }
-        }
-        return;
-      }
-
-      if (method === "turn/completed") {
-        waiter.resolve({ status: "completed" });
-      } else if (method === "turn/failed") {
-        const turn = params.turn as { error?: { message?: string } } | undefined;
-        waiter.resolve({ status: "failed", error: turn?.error?.message ?? "turn failed" });
-      } else if (method === "turn/cancelled") {
-        waiter.resolve({ status: "cancelled" });
+        if (item?.type !== "exitedReviewMode") return;
+        const data = item.data as Record<string, unknown> | undefined;
+        if (data?.reviewOutput) wait.reviewOutput = data.reviewOutput as AppServerReviewOutput;
+        if (typeof item.review === "string") wait.reviewText = item.review;
+      } else if (method === "turn/failed" || (method === "turn/completed" && turn?.status === "failed")) {
+        wait.resolve({ status: "failed", error: turn?.error?.message ?? "turn failed" });
+      } else if (method === "turn/cancelled" || (method === "turn/completed"
+        && (turn?.status === "cancelled" || turn?.status === "interrupted"))) {
+        wait.resolve({ status: "cancelled" });
+      } else if (method === "turn/completed") {
+        wait.resolve({ status: "completed" });
       }
     });
 
+    function interrupt(started: StartReviewResponse) {
+      return registry.interruptTurn({ backend: started.backend, threadId: started.threadId, turnId: started.turnId });
+    }
+
     async function runOne(c: CohortCase, arm: ArmId) {
       const outPath = path.join(resultsDir, `${c.id}--${arm}.json`);
-      if (!force && fs.existsSync(outPath)) {
-        try {
-          const existing = JSON.parse(fs.readFileSync(outPath, "utf8"));
-          if (existing.status === "completed") {
-            console.log(
-              `[SKIP] ${c.id} | ${arm} | already completed (${existing.findingsCount} findings, ${existing.elapsedSec}s)`,
-            );
-            return existing;
-          }
-        } catch {
-          // re-run
-        }
-      }
-
       const prNum = c.baseline.prNumber ?? c.pr;
-      ensureCommitPresent(repoCwd, remote, prNum, c.baseline.baseCommit);
-      ensureCommitPresent(repoCwd, remote, prNum, c.baseline.headCommit);
-
       const backend: AppServerBackendKind = arm === "codex" ? "codex" : "acp:antigravity";
       const model = arm === "codex" ? codexModel : neonModel;
       const reasoningEffort = arm === "codex" ? codexEffortOverride : neonEffort;
+      const identity = createHash("sha256").update(JSON.stringify({
+        c, arm, backend, model, reasoningEffort, bundleSha256, repoCwd, executionMode,
+      })).digest("hex");
+      if (!force && fs.existsSync(outPath)) {
+        try {
+          const existing = JSON.parse(fs.readFileSync(outPath, "utf8"));
+          if (existing.status === "completed" && existing.structured === true
+            && Array.isArray(existing.findings) && existing.findingsCount === existing.findings.length
+            && existing.identity === identity) {
+            totals.skipped += 1;
+            if (!blind) console.log(`[SKIP] ${c.id} | ${arm} | already completed`);
+            return;
+          }
+        } catch {
+          // Re-run malformed or obsolete entries.
+        }
+      }
 
       const startedAt = Date.now();
-      const parent = await registry.startThread({
-        backend,
-        cwd: repoCwd,
-        executionMode: "full-access",
-        model,
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-      });
-
-      const key = `${backend}:${parent.threadId}`;
-      let resolveWaiter!: (res: {
-        status: "completed" | "failed" | "cancelled" | "timeout";
-        error?: string;
-      }) => void;
-      const donePromise = new Promise<{
-        status: "completed" | "failed" | "cancelled" | "timeout";
-        error?: string;
-      }>((resolve) => {
-        resolveWaiter = resolve;
-      });
-
-      const waiter: Waiter = {
-        parentBackend: backend,
-        parentThreadId: parent.threadId,
-        approvals: 0,
-        startedAt,
-        resolve: resolveWaiter,
-      };
-      waiters.set(key, waiter);
-
-      const prUrl =
-        c.baseline.prUrl ?? `https://github.com/pwrdrvr/PwrAgent/pull/${prNum}`;
-      const mergeBaseCommit = execFileSync(
-        "git",
-        ["-C", repoCwd, "merge-base", "--all", c.baseline.baseCommit, c.baseline.headCommit],
-        { encoding: "utf8" },
-      ).trim();
-
-      await getDesktopOverlayStore().setThreadPullRequests({
-        backend,
-        threadId: parent.threadId,
-        prs: [
-          {
-            provider: "github",
-            repo: "pwrdrvr/PwrAgent",
-            number: prNum,
-            url: prUrl,
-            title: c.baseline.prTitle ?? `PR #${prNum}`,
-            state: "open",
-            baseRefName: c.baseline.baseBranch || "main",
-            headRefName: c.baseline.branch || `pr-${prNum}`,
-            baseSha: c.baseline.baseCommit,
-            headSha: c.baseline.headCommit,
-            source: "branch",
-            linkedDirectoryPaths: [repoCwd],
-          } as never,
-        ],
-        fetchedAt: Date.now(),
-      });
-
-      const request: StartReviewRequest = {
-        backend,
-        reviewBackend: backend,
-        threadId: parent.threadId,
-        runMode: "pwragent-sub-agent",
-        cwd: repoCwd,
-        model,
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        target: {
-          type: "pullRequest",
-          url: prUrl,
-          snapshot: {
-            pullRequest: {
-              provider: "github.com",
-              org: "pwrdrvr",
-              repo: "PwrAgent",
-              number: prNum,
-              url: prUrl,
-              ...(c.baseline.prTitle ? { title: c.baseline.prTitle } : {}),
-              baseRefName: c.baseline.baseBranch || "main",
-              headRefName: c.baseline.branch || `pr-${prNum}`,
-            },
-            baseCommit: c.baseline.baseCommit,
-            headCommit: c.baseline.headCommit,
-            mergeBaseCommit,
-            capturedAt: Date.now(),
-          },
-        },
-      };
-
-      const timer = setTimeout(() => {
-        resolveWaiter({ status: "timeout", error: `Timed out after ${timeoutMs}ms` });
-      }, timeoutMs);
-
+      const elapsed = () => Date.now() - startedAt;
+      const remaining = () => timeoutMs - elapsed();
+      let mergeBaseCommit: string | undefined;
+      let key: string | undefined;
+      let waiter: Waiter | undefined;
+      let started: StartReviewResponse | undefined;
+      let outcome: Outcome;
+      const timedOut = (stage: string): Outcome => ({ status: "timeout", error: `Timed out during ${stage} after ${timeoutMs}ms` });
       try {
-        const started = await registry.startReview(request, true);
-        waiter.turnId = started.turnId;
-        waiter.reviewThreadId = started.reviewThreadId;
-        console.log(
-          `[START] ${c.id} | ${arm} (${model}${reasoningEffort ? `/${reasoningEffort}` : ""}) | turn=${started.turnId.slice(0, 16)}`,
-        );
+        const setup = await beforeDeadline((async () => {
+          await ensureCommitPresent(repoCwd, remote, prNum, c.baseline.baseCommit);
+          await ensureCommitPresent(repoCwd, remote, prNum, c.baseline.headCommit);
+          const mergeBase = reviewedMergeBase(repoCwd, c.baseline.baseCommit, c.baseline.headCommit);
+          const parent = await registry.startThread({
+            backend, cwd: repoCwd, executionMode, model, mcpProviderServersEnabled: false, mcpConnectionIds: [],
+            ...(reasoningEffort ? { reasoningEffort } : {}),
+          });
+          const prUrl =
+            c.baseline.prUrl ?? `https://github.com/pwrdrvr/PwrAgent/pull/${prNum}`;
+          await getDesktopOverlayStore().setThreadPullRequests({
+            backend,
+            threadId: parent.threadId,
+            prs: [
+              {
+                provider: "github",
+                repo: "pwrdrvr/PwrAgent",
+                number: prNum,
+                url: prUrl,
+                title: c.baseline.prTitle ?? `PR #${prNum}`,
+                state: "open",
+                baseRefName: c.baseline.baseBranch || "main",
+                headRefName: c.baseline.branch || `pr-${prNum}`,
+                baseSha: c.baseline.baseCommit,
+                headSha: c.baseline.headCommit,
+                source: "branch",
+                linkedDirectoryPaths: [repoCwd],
+              } as never,
+            ],
+            fetchedAt: Date.now(),
+          });
 
-        const outcome = await donePromise;
-        clearTimeout(timer);
-        await new Promise((r) => setTimeout(r, 300));
-        const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-        const ledger = waiter.turnId
-          ? readLedgerStatsFromLog(mainLogPath, waiter.turnId)
-          : null;
-        const findings = waiter.reviewOutput?.findings ?? [];
+          return { parent, prUrl, mergeBase };
+        })(), remaining());
+        if (setup === deadlineExceeded) {
+          outcome = timedOut("cell setup");
+        } else if (stopReason) {
+          outcome = { status: "cancelled", error: stopReason };
+        } else {
+          const { parent, prUrl, mergeBase } = setup;
+          mergeBaseCommit = mergeBase;
+          key = `${backend}:${parent.threadId}`;
+          let resolve!: Waiter["resolve"];
+          const terminal = new Promise<Outcome>((done) => { resolve = done; });
+          waiter = { backend, parentThreadId: parent.threadId, approvals: new Set(), resolve };
+          waiters.set(key, waiter);
 
-        const record = {
-          caseId: c.id,
-          prNumber: prNum,
-          arm,
-          backend,
-          model,
-          reasoningEffort: reasoningEffort ?? null,
-          status: outcome.status,
-          error: outcome.error ?? null,
-          elapsedSec,
-          approvals: waiter.approvals,
-          parentThreadId: parent.threadId,
-          reviewThreadId: started.reviewThreadId,
-          turnId: started.turnId,
-          structured: Boolean(waiter.reviewOutput),
-          findingsCount: findings.length,
-          overallCorrectness: waiter.reviewOutput?.overall_correctness ?? null,
-          overallConfidence: waiter.reviewOutput?.overall_confidence_score ?? null,
-          overallExplanation: waiter.reviewOutput?.overall_explanation ?? null,
-          findings,
-          reviewText: waiter.reviewText ?? null,
-          ledger,
-          completedAt: new Date().toISOString(),
-        };
-        fs.writeFileSync(outPath, JSON.stringify(record, null, 2));
-        console.log(
-          `[DONE] ${c.id} | ${arm} | ${record.status} | ${elapsedSec}s | structured=${record.structured} | findings=${record.findingsCount} | ledger=${ledger ? `${ledger.total}(K:${ledger.keep}/D:${ledger.drop}/P:${ledger.pending})` : "n/a"} | approvals=${record.approvals}`,
-        );
-        return record;
+          const request: StartReviewRequest = {
+            backend,
+            reviewBackend: backend,
+            threadId: parent.threadId,
+            runMode: "pwragent-sub-agent",
+            cwd: repoCwd,
+            model,
+            ...(reasoningEffort ? { reasoningEffort } : {}),
+            target: {
+              type: "pullRequest",
+              url: prUrl,
+              snapshot: {
+                pullRequest: {
+                  provider: "github.com",
+                  org: "pwrdrvr",
+                  repo: "PwrAgent",
+                  number: prNum,
+                  url: prUrl,
+                  ...(c.baseline.prTitle ? { title: c.baseline.prTitle } : {}),
+                  baseRefName: c.baseline.baseBranch || "main",
+                  headRefName: c.baseline.branch || `pr-${prNum}`,
+                },
+                baseCommit: c.baseline.baseCommit,
+                headCommit: c.baseline.headCommit,
+                mergeBaseCommit: mergeBase,
+                capturedAt: Date.now(),
+              },
+            },
+          };
+
+          const antigravityAccess = arm === "neon" && !allowFullAccess
+            ? { mode: "plan" as const, fullAccess: false }
+            : undefined;
+          const starting = registry.startReview(request, true, undefined, antigravityAccess);
+          const accepted = await beforeDeadline(starting, remaining());
+          if (accepted === deadlineExceeded) {
+            outcome = timedOut("review start");
+            stopReason = "Review acceptance timed out and could not be confirmed.";
+            // Slow acceptance may arrive while the other admitted cells drain.
+            void starting.then(interrupt).catch(() => {});
+          } else {
+            started = accepted;
+            waiter.turnId = started.turnId;
+            waiter.reviewThreadId = started.reviewThreadId;
+            for (const pending of registry.listPendingServerRequests()) {
+              void answerApproval(pending.backend, pending.notification);
+            }
+            if (!blind) console.log(`[START] ${c.id} | ${arm} (${model}/${reasoningEffort ?? "model-pinned"})`);
+            const result = await beforeDeadline(terminal, remaining());
+            if (result === deadlineExceeded) {
+              outcome = timedOut("review");
+              void interrupt(started).catch(() => {});
+              if (await beforeDeadline(terminal, 10_000) === deadlineExceeded) {
+                stopReason = "The timed-out review did not confirm termination.";
+              }
+            } else {
+              outcome = result;
+              if (outcome.status === "completed" && !Array.isArray(waiter.reviewOutput?.findings)) {
+                outcome = { status: "failed", error: "Review completed without structured findings." };
+              }
+            }
+          }
+        }
       } catch (error) {
-        clearTimeout(timer);
-        const elapsedSec = Math.round((Date.now() - startedAt) / 1000);
-        const record = {
-          caseId: c.id,
-          prNumber: prNum,
-          arm,
-          backend,
-          model,
-          reasoningEffort: reasoningEffort ?? null,
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-          elapsedSec,
-          approvals: waiter.approvals,
-          structured: false,
-          findingsCount: 0,
-          findings: [],
-          ledger: null,
-          completedAt: new Date().toISOString(),
-        };
-        fs.writeFileSync(outPath, JSON.stringify(record, null, 2));
-        console.error(`[FAIL] ${c.id} | ${arm} | ${elapsedSec}s | ${record.error}`);
-        return record;
+        outcome = { status: "failed", error: error instanceof Error ? error.message : String(error) };
       } finally {
-        waiters.delete(key);
+        if (key) waiters.delete(key);
+      }
+
+      const review = waiter?.reviewOutput;
+      const findings = review?.findings ?? [];
+      const ledger = started ? readLedgerStatsFromLog(mainLogPath, started.turnId) : null;
+      const record = {
+        identity,
+        caseId: c.id, prNumber: prNum, arm, backend, model,
+        baseCommit: c.baseline.baseCommit, headCommit: c.baseline.headCommit, mergeBaseCommit,
+        reasoningEffort: reasoningEffort ?? null,
+        status: outcome.status, error: outcome.error ?? null,
+        elapsedSec: Math.round(elapsed() / 1000),
+        approvals: waiter?.approvals.size ?? 0,
+        parentThreadId: waiter?.parentThreadId,
+        reviewThreadId: started?.reviewThreadId,
+        turnId: started?.turnId,
+        structured: Array.isArray(review?.findings),
+        findingsCount: findings.length,
+        overallCorrectness: review?.overall_correctness ?? null,
+        overallConfidence: review?.overall_confidence_score ?? null,
+        overallExplanation: review?.overall_explanation ?? null,
+        findings, reviewText: waiter?.reviewText ?? null, ledger,
+        completedAt: new Date().toISOString(),
+      };
+      writeCell(outPath, record);
+      totals[record.status] += 1;
+      if (!blind) {
+        console.log(`[DONE] ${c.id} | ${arm} | ${record.status} | ${record.findingsCount} findings${record.error ? ` | ${record.error}` : ""}`);
       }
     }
 
@@ -630,21 +660,28 @@ async function main() {
     const workers = Array.from(
       { length: Math.min(caseConcurrency, selectedCases.length) },
       async () => {
-        for (;;) {
+        while (!stopReason) {
           const idx = nextIdx;
           nextIdx += 1;
           if (idx >= selectedCases.length) return;
           const c = selectedCases[idx]!;
-          await Promise.all(requestedArms.map((arm) => runOne(c, arm)));
+          await Promise.all(requestedArms.map((arm) => runOne(c, arm).catch((error) => {
+            stopReason = "Could not persist a matrix cell.";
+            if (!blind) console.error(stopReason, error);
+          })));
         }
       },
     );
     await Promise.all(workers);
+    console.log(`[eval] Cell totals: ${JSON.stringify(totals)}`);
+    if (stopReason) throw new Error(stopReason);
   } finally {
     unsubscribe?.();
     prepareOwnerShutdown();
     try {
-      await disposeOwnerServices("eval-complete");
+      if (await beforeDeadline(disposeOwnerServices("eval-complete"), 10_000) === deadlineExceeded) {
+        throw new Error("Headless owner shutdown did not complete.");
+      }
     } finally {
       if (isAppStateInitialized()) {
         disposeOwnerServicesSync();
@@ -655,6 +692,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("[eval] FATAL:", err);
+  if (blindOutput) process.stderr.write("[eval] Blind matrix failed. Diagnostic logs are local.\n");
+  else console.error("[eval] FATAL:", err);
   process.exit(1);
 });

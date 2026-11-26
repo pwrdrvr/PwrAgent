@@ -7,9 +7,12 @@ Pass Args={"scoringDir": "/abs/path/to/scoring"} when invoking `run_workflow`.
 Resumable per chunk and preserves each batch JSONL under `<scoringDir>/jsonl/`
 so PwrAgent's 20-file `decision-batches/` rotation never drops results.
 """
+import hashlib
 import json
 import os
+import re
 import shutil
+import tempfile
 
 SCORING_DIR = args["scoringDir"]
 DONE_DIR = os.path.join(SCORING_DIR, "chunks-done")
@@ -20,114 +23,44 @@ os.makedirs(JSONL_DIR, exist_ok=True)
 with open(os.path.join(SCORING_DIR, "chunks-manifest.json")) as f:
     manifest = json.load(f)
 
-DEFINITIONS = {
-    "recall": {
-        "provider": "openai",
-        "prefix": (
-            "You are an expert code-review evaluator comparing a baseline review finding against a candidate code review's findings on the same pull request. "
-            "Focus on semantic equivalence of the underlying software defect (root cause, broken invariant, or behavioral regression), NOT exact wording or exact line number."
-        ),
-        "questions": [
-            {
-                "name": "same_root_cause",
-                "type": "predicate",
-                "instructions": (
-                    "Does at least one finding in candidate_findings identify the SAME underlying defect or root cause described in baseline "
-                    "(even if phrased differently, assigned a different priority, or pointing to an adjacent line/caller in the same bug)?"
-                ),
-            },
-            {
-                "name": "match_grade",
-                "type": "choice",
-                "instructions": "Grade how well candidate_findings covers baseline.",
-                "choices": [
-                    {"value": "exact_match", "description": "Clearly identifies the same underlying defect and root cause."},
-                    {"value": "partial_match", "description": "Touches the same mechanism/area or symptom, or catches only part of the issue, while missing the core defect."},
-                    {"value": "missed", "description": "Does not identify this defect (including when 0 findings were reported)."},
-                ],
-            },
-        ],
-    },
-    "precision": {
-        "provider": "openai",
-        "prefix": (
-            "You are a strict senior software engineer auditing an automated code-review finding against the actual PR git diff excerpt and baseline findings. "
-            "Distinguish genuine, code-grounded bugs/regressions/missing tests from false positives, code misreads, speculative edge cases, or pure style nitpicks."
-        ),
-        "questions": [
-            {
-                "name": "matches_baseline",
-                "type": "predicate",
-                "instructions": "Does finding describe the same underlying defect as one of the items in baseline_findings?",
-            },
-            {
-                "name": "concrete_defect",
-                "type": "predicate",
-                "instructions": (
-                    "Grounded in diff and the explanation in finding, does this finding identify a REAL, concrete bug, behavioral/performance regression, "
-                    "contract violation, or meaningful missing test/property (as opposed to a false positive, misread of the diff, trivial style nitpick, or ungrounded speculation)?"
-                ),
-            },
-            {
-                "name": "defect_value",
-                "type": "score",
-                "instructions": "Rate the engineering value and validity of finding for the author of this PR.",
-                "levels": [
-                    {"label": "noise", "description": "False positive, misreads code, or trivial style nitpick with no real defect."},
-                    {"label": "weak", "description": "Speculative, marginal, or overly pedantic suggestion unlikely to merit a change."},
-                    {"label": "valid_p3", "description": "Real low-impact P3 issue, minor edge case, or worthwhile small test/clarity improvement."},
-                    {"label": "solid_p2", "description": "Concrete P2 bug, behavioral/performance regression, contract break, or important missing test/property."},
-                    {"label": "critical_p1", "description": "High-impact P0/P1 bug, crash, security vulnerability, or data-loss defect."},
-                ],
-            },
-        ],
-    },
-    "holistic": {
-        "provider": "openai",
-        "prefix": (
-            "You are a principal engineer evaluating the overall quality of an anonymized code review for a pull request. "
-            "Note that a clean 0-finding review can be high-signal if the PR is clean, while noisy or bloated reviews hurt signal-to-noise."
-        ),
-        "questions": [
-            {
-                "name": "signal_to_noise",
-                "type": "score",
-                "instructions": "Rate the signal-to-noise ratio of this review.",
-                "levels": [
-                    {"label": "1_very_low", "description": "Mostly noise, false positives, or unhelpful commentary."},
-                    {"label": "2_low", "description": "Noticeable fluff, redundancy, or questionable nitpicks mixed in."},
-                    {"label": "3_mixed", "description": "Reasonable mix of useful points and some weaker/verbose items."},
-                    {"label": "4_high", "description": "Focused, high-signal findings with minimal noise."},
-                    {"label": "5_excellent", "description": "Exceptionally crisp, high-signal, zero-fluff review."},
-                ],
-            },
-            {
-                "name": "actionability",
-                "type": "score",
-                "instructions": "Rate how concrete, code-grounded, and actionable the findings and suggested fixes are.",
-                "levels": [
-                    {"label": "1_very_low", "description": "Vague, ungrounded, or not actionable."},
-                    {"label": "2_low", "description": "Points at areas of concern without clear failure mechanism or fix."},
-                    {"label": "3_moderate", "description": "Understandable issues with adequate fix direction."},
-                    {"label": "4_high", "description": "Clear failure mechanisms, exact code locations, and concrete fixes."},
-                    {"label": "5_excellent", "description": "Pinpoint root causes, exact reproduction/failure mechanics, and minimal precise fixes."},
-                ],
-            },
-            {
-                "name": "overall_quality",
-                "type": "score",
-                "instructions": "Rate the overall usefulness of this code review to a senior engineer about to merge the PR.",
-                "levels": [
-                    {"label": "1_poor", "description": "Not helpful or actively misleading."},
-                    {"label": "2_below_avg", "description": "Limited value; weak coverage or poor precision."},
-                    {"label": "3_good", "description": "Solid, useful review."},
-                    {"label": "4_very_good", "description": "Strong review catching meaningful issues cleanly."},
-                    {"label": "5_outstanding", "description": "Top-tier senior engineering review."},
-                ],
-            },
-        ],
-    },
-}
+with open(os.path.join(SCORING_DIR, "scoring-definitions.json"), "rb") as f:
+    definition_bytes = f.read()
+definition_sha = hashlib.sha256(definition_bytes).hexdigest()
+if definition_sha != manifest["definitionSha256"]:
+    raise ValueError("Scoring definitions changed after preparation.")
+DEFINITIONS = json.loads(definition_bytes)
+
+
+def write_json(path, value):
+    with tempfile.NamedTemporaryFile(mode="w", dir=os.path.dirname(path), delete=False) as f:
+        temp_path = f.name
+        json.dump(value, f, indent=2)
+    os.replace(temp_path, path)
+
+
+def complete_archive(path, batch_id, count, questions):
+    try:
+        with open(path) as f:
+            header = json.loads(next(f))
+            if (header.get("type"), header.get("batchId"), header.get("count")) != ("batch", batch_id, count):
+                return False
+            expected = {(q["name"], q["type"]) for q in questions}
+            seen = set()
+            for line in f:
+                row = json.loads(line)
+                if row.get("type") != "item":
+                    continue
+                index = row["index"]
+                answers = row.get("response", {}).get("answers", [])
+                if (type(index) is not int or not 0 <= index < count or index in seen
+                        or row.get("ok") is not True or len(answers) != len(expected)
+                        or {(a.get("name"), a.get("type")) for a in answers} != expected):
+                    return False
+                seen.add(index)
+            return len(seen) == count
+    except (OSError, ValueError, StopIteration, KeyError, TypeError, AttributeError):
+        return False
+
 
 RESULT_SCHEMA = {
     "type": "object",
@@ -157,14 +90,30 @@ RESULT_SCHEMA = {
 
 
 async def score_chunk(batch_type, idx, chunk):
+    with open(chunk["file"], "rb") as f:
+        inputs_sha = hashlib.sha256(f.read()).hexdigest()
+    if inputs_sha != chunk["inputsSha256"]:
+        raise ValueError("Decision inputs changed after preparation.")
+    identity = {
+        "batchType": batch_type,
+        "chunkIndex": idx,
+        "start": chunk["start"],
+        "count": chunk["count"],
+        "inputsSha256": inputs_sha,
+        "definitionSha256": definition_sha,
+    }
+    definition = DEFINITIONS[batch_type]
     done_path = os.path.join(DONE_DIR, f"{batch_type}-{idx}.json")
     if os.path.exists(done_path):
         with open(done_path) as f:
             cached = json.load(f)
-        if cached.get("resultsFile") and os.path.exists(cached["resultsFile"]):
+        if (all(cached.get(key) == value for key, value in identity.items())
+                and cached.get("succeeded") == chunk["count"] and cached.get("failed") == 0
+                and cached.get("resultsFile")
+                and complete_archive(cached["resultsFile"], cached.get("batchId"), chunk["count"], definition["questions"])):
             return cached
 
-    defn_json = json.dumps(DEFINITIONS[batch_type])
+    defn_json = json.dumps(definition)
     prompt = f"""Score chunk {idx} of {batch_type} ({chunk['count']} items, offset {chunk['start']}).
 
 Steps:
@@ -178,7 +127,7 @@ Steps:
      - `concurrency`: 8
      - `detail`: `"compact"`
 3. Do NOT set `background: true`. Wait for the synchronous batch result.
-4. You MUST call the `finish` tool immediately with the required JSON object (`batchType`, `chunkIndex`, `start`, `count`, `batchId`, `resultsFile`, `succeeded`, `failed`, `estimatedCostUsd`). Do not stop with plain text — call `finish`.
+4. Call `finish` with the chunk metadata and batch response. Use `usage.estimatedCostUsd` for `estimatedCostUsd` when present, otherwise use 0.
 """
     last_err = None
     for attempt in range(2):
@@ -191,12 +140,17 @@ Steps:
                 model="flash",
             )
             src_jsonl = res.get("resultsFile")
-            if src_jsonl and os.path.exists(src_jsonl):
-                local_jsonl = os.path.join(JSONL_DIR, f"{batch_type}-{idx}.jsonl")
-                shutil.copyfile(src_jsonl, local_jsonl)
-                res["resultsFile"] = local_jsonl
-            with open(done_path, "w") as f:
-                json.dump(res, f, indent=2)
+            batch_id = res.get("batchId", "")
+            if (res.get("succeeded") != chunk["count"] or res.get("failed") != 0
+                    or not re.fullmatch(r"batch_[A-Za-z0-9-]{1,80}", batch_id) or not src_jsonl
+                    or os.path.basename(src_jsonl) != f"{batch_id}.jsonl"
+                    or os.path.basename(os.path.dirname(src_jsonl)) != "decision-batches"
+                    or not complete_archive(src_jsonl, batch_id, chunk["count"], definition["questions"])):
+                raise ValueError("Decision did not return a complete archived batch.")
+            local_jsonl = os.path.join(JSONL_DIR, f"{batch_type}-{idx}-{batch_id}.jsonl")
+            shutil.copyfile(src_jsonl, local_jsonl)
+            res.update(identity, resultsFile=local_jsonl)
+            write_json(done_path, res)
             return res
         except Exception as exc:
             last_err = exc
@@ -221,6 +175,5 @@ for batch_type in ["recall", "precision", "holistic"]:
     all_results[batch_type] = batch_out
 
 out_path = os.path.join(SCORING_DIR, "decision-batches-summary.json")
-with open(out_path, "w") as f:
-    json.dump(all_results, f, indent=2)
+write_json(out_path, all_results)
 print(json.dumps(all_results, indent=2))

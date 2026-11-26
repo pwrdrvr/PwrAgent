@@ -11,8 +11,10 @@
  *     --out .local/managed-review-eval/runs/dev-1/scoring
  */
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { reviewedMergeBase } from "./review-range.mjs";
 
 function parseArg(name, fallback) {
   const idx = process.argv.indexOf(name);
@@ -39,15 +41,56 @@ if (!cohortPath || !resultsDir || !scoringDir) {
 fs.mkdirSync(scoringDir, { recursive: true });
 const rawCohort = JSON.parse(fs.readFileSync(cohortPath, "utf8"));
 const cohortCases = Array.isArray(rawCohort) ? rawCohort : rawCohort.cases;
+const unverifiedBaselineCount = cohortCases.filter(({ baseline }) => baseline.reviewedRangeVerified !== true).length;
+if (unverifiedBaselineCount && (rawCohort.blind || !process.argv.includes("--allow-legacy-baselines"))) {
+  throw new Error(`Cohort contains ${unverifiedBaselineCount} baseline(s) without a verified original range.`);
+}
+const definitionsFile = new URL("./scoring-definitions.json", import.meta.url);
+const definitionSha256 = createHash("sha256").update(fs.readFileSync(definitionsFile)).digest("hex");
 
-function relPath(p) {
-  if (!p) return "";
-  const normalized = p.replace(/\\/g, "/");
-  for (const marker of ["/PwrAgnt/", "/PwrAgent/"]) {
-    const idx = normalized.lastIndexOf(marker);
-    if (idx >= 0) return normalized.slice(idx + marker.length);
+const repoRoot = fs.realpathSync(repoCwd);
+
+function relPath(value) {
+  if (!value) return "";
+  const normalized = value.replace(/\\/g, "/");
+  const relative = path.isAbsolute(value)
+    ? path.relative(repoCwd, value)
+    : path.win32.isAbsolute(value) ? "" : normalized;
+  const resolved = !relative || relative === ".." || relative.startsWith(`..${path.sep}`)
+    ? (path.isAbsolute(value) ? path.relative(repoRoot, value) : relative)
+    : relative;
+  const portable = path.posix.normalize(resolved.split(path.sep).join("/"));
+  return !resolved || portable === "." || portable === ".." || portable.startsWith("../") ? "" : portable;
+}
+
+function centeredExcerpt(text, center, limit) {
+  const buffer = Math.max(0, limit - 12);
+  const start = Math.max(0, Math.min(center - Math.floor(buffer / 2), text.length - buffer));
+  return `${start > 0 ? "...\n" : ""}${text.slice(start, start + buffer)}${start + buffer < text.length ? "\n..." : ""}`;
+}
+
+function excerptAtHeadLine(diff, startLine, limit) {
+  if (diff.length <= limit) return diff;
+  if (!Number.isInteger(startLine)) return centeredExcerpt(diff, 0, limit);
+  let best;
+  for (const hunk of diff.split(/(?=^@@ )/m).slice(1)) {
+    const header = hunk.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@[^\n]*\n/);
+    if (!header) continue;
+    const body = hunk.slice(header[0].length);
+    let headLine = Number(header[1]);
+    let offset = 0;
+    for (const line of body.split("\n")) {
+      if (line.startsWith("+") || line.startsWith(" ")) {
+        const distance = Math.abs(headLine - startLine);
+        if (!best || distance < best.distance) best = { body, offset, distance };
+        headLine += 1;
+      }
+      offset += line.length + 1;
+    }
   }
-  return normalized.replace(/^\/+/, "");
+  if (!best) return centeredExcerpt(diff, 0, limit);
+  // Preserve the cited line even when its hunk starts thousands of lines earlier.
+  return centeredExcerpt(best.body, best.offset, limit);
 }
 
 function ensureCommit(prNumber, sha) {
@@ -95,34 +138,9 @@ function getFileDiffExcerpt(baseCommit, headCommit, filePath, startLine, maxChar
         return `(file ${rel} not present in diff or headCommit)`;
       }
     }
-    if (diff.length <= maxChars) return diff;
-    if (startLine) {
-      const hunks = diff.split(/(?=^@@ )/m);
-      const header = hunks[0] ?? "";
-      let best = hunks[1] ?? "";
-      let bestDist = Infinity;
-      for (const h of hunks.slice(1)) {
-        const m = h.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/);
-        if (m) {
-          const hs = Number(m[1]);
-          const he = hs + Number(m[2] ?? 1);
-          const dist =
-            startLine >= hs && startLine <= he
-              ? 0
-              : Math.min(Math.abs(startLine - hs), Math.abs(startLine - he));
-          if (dist < bestDist) {
-            bestDist = dist;
-            best = h;
-          }
-        }
-      }
-      const focused = `${header}${best}`;
-      if (focused.length <= maxChars) return focused;
-      return `${focused.slice(0, maxChars)}\n... [truncated]`;
-    }
-    return `${diff.slice(0, maxChars)}\n... [truncated]`;
-  } catch (err) {
-    return `(git diff unavailable: ${String(err).slice(0, 120)})`;
+    return excerptAtHeadLine(diff, startLine, maxChars);
+  } catch {
+    return "(Git diff unavailable)";
   }
 }
 
@@ -149,11 +167,18 @@ for (const c of cohortCases) {
   ensureCommit(c.pr, c.baseline.baseCommit);
   ensureCommit(c.pr, c.baseline.headCommit);
 
+  const mergeBase = reviewedMergeBase(repoCwd, c.baseline.baseCommit, c.baseline.headCommit);
   const resultsByArm = {};
   for (const arm of arms) {
-    resultsByArm[arm] = JSON.parse(
-      fs.readFileSync(path.join(resultsDir, `${c.id}--${arm}.json`), "utf8"),
-    );
+    const file = path.join(resultsDir, `${c.id}--${arm}.json`);
+    const res = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+    if (res?.status !== "completed" || res.structured !== true || !Array.isArray(res.findings)
+      || res.findingsCount !== res.findings.length
+      || (res.mergeBaseCommit !== undefined && res.mergeBaseCommit !== mergeBase)
+      || (res.headCommit !== undefined && res.headCommit !== c.baseline.headCommit)) {
+      throw new Error(`Review matrix is incomplete or has a different snapshot at ${rawCohort.blind ? "a blind cell" : `${c.id}/${arm}`}`);
+    }
+    resultsByArm[arm] = res;
   }
 
   for (let bi = 0; bi < c.baseline.items.length; bi += 1) {
@@ -210,7 +235,7 @@ for (const c of cohortCases) {
       const fStart = f.code_location?.line_range?.start ?? null;
       const fEnd = f.code_location?.line_range?.end ?? null;
       const diffExcerpt = getFileDiffExcerpt(
-        c.baseline.baseCommit,
+        mergeBase,
         c.baseline.headCommit,
         fPath,
         fStart,
@@ -246,75 +271,82 @@ for (const c of cohortCases) {
   }
 
   const armsForHolistic = [
-    {
-      arm: "baseline",
-      findingsCount: c.baseline.items.length,
-      overallCorrectness:
-        c.baseline.items.length === 0 ? "patch is correct" : "patch is incorrect",
-      overallExplanation: "(baseline review)",
-      findingsText: c.baseline.items.length
-        ? c.baseline.items.map((b, i) => fmtFindingShort(b, i)).join("\n\n")
-        : "(0 findings reported — reviewer judged patch clean.)",
-    },
-    ...arms.map((arm) => {
-      const r = resultsByArm[arm];
-      return {
-        arm,
-        findingsCount: r.findingsCount,
-        overallCorrectness: r.overallCorrectness ?? "",
-        overallExplanation: (r.overallExplanation ?? "").slice(0, 300),
-        findingsText: r.findings.length
-          ? r.findings.map((f, i) => fmtFindingShort(f, i)).join("\n\n")
-          : "(0 findings reported — reviewer judged patch clean.)",
-      };
-    }),
+    { arm: "baseline", findings: c.baseline.items },
+    ...arms.map((arm) => ({ arm, findings: resultsByArm[arm].findings })),
   ];
 
-  for (const h of armsForHolistic) {
+  for (const { arm, findings } of armsForHolistic) {
     holisticMeta.push({
       index: holisticInputs.length,
       caseId: c.id,
       prNumber: c.pr,
       baselineBucket: c.bucket,
       baselineBackend: c.backend,
-      arm: h.arm,
-      findingsCount: h.findingsCount,
+      arm,
+      findingsCount: findings.length,
     });
     holisticInputs.push({
       pr: `PR #${c.pr}: ${c.baseline.prTitle ?? c.id} (${c.baseline.diffFiles} files, +${c.baseline.diffAdds}/-${c.baseline.diffDels})`,
-      verdict: h.overallCorrectness,
-      summary: h.overallExplanation,
-      count: h.findingsCount,
-      findings: h.findingsText
-        .split("\n\n")
-        .map((b) => b.slice(0, 320))
+      count: findings.length,
+      findings: findings.map((finding, index) => fmtFindingShort(finding, index).slice(0, 320))
         .join("\n---\n")
         .slice(0, 2800),
     });
   }
 }
 
-function writeChunks(name, items, chunkSize) {
+function planChunks(name, items, maxItems) {
+  const maxBytes = 37 * 1024;
   const chunks = [];
-  for (let i = 0; i < items.length; i += chunkSize) {
-    const slice = items.slice(i, i + chunkSize);
-    const file = path.join(scoringDir, `${name}-chunk-${chunks.length}.json`);
-    fs.writeFileSync(file, JSON.stringify(slice));
-    chunks.push({ file, start: i, count: slice.length, bytes: fs.statSync(file).size });
+  let parts = [];
+  let bytes = 2;
+  let start = 0;
+
+  function flush() {
+    const data = `[${parts.join(",")}]`;
+    chunks.push({
+      file: path.join(scoringDir, `${name}-chunk-${chunks.length}.json`),
+      start, count: parts.length, bytes,
+      inputsSha256: createHash("sha256").update(data).digest("hex"),
+      data,
+    });
+    start += parts.length;
+    parts = [];
+    bytes = 2;
   }
+
+  for (const [index, item] of items.entries()) {
+    const json = JSON.stringify(item);
+    const itemBytes = Buffer.byteLength(json);
+    if (itemBytes + 2 > maxBytes) {
+      throw new Error(`${name} input ${index} exceeds the 37 KiB scoring chunk budget on its own.`);
+    }
+    if (parts.length && (parts.length === maxItems || bytes + itemBytes + 1 > maxBytes)) flush();
+    bytes += itemBytes + (parts.length ? 1 : 0);
+    parts.push(json);
+  }
+  if (parts.length) flush();
   return chunks;
+}
+
+const plans = {
+  recall: planChunks("recall", recallInputs, 8),
+  precision: planChunks("precision", precisionInputs, 8),
+  holistic: planChunks("holistic", holisticInputs, 12),
+};
+const manifest = { arms, definitionSha256, unverifiedBaselineCount };
+for (const [name, chunks] of Object.entries(plans)) {
+  manifest[name] = chunks.map(({ data, ...chunk }) => {
+    fs.writeFileSync(chunk.file, data);
+    return chunk;
+  });
 }
 
 fs.writeFileSync(path.join(scoringDir, "recall-meta.json"), JSON.stringify(recallMeta, null, 2));
 fs.writeFileSync(path.join(scoringDir, "precision-meta.json"), JSON.stringify(precisionMeta, null, 2));
 fs.writeFileSync(path.join(scoringDir, "holistic-meta.json"), JSON.stringify(holisticMeta, null, 2));
 
-const manifest = {
-  arms,
-  recall: writeChunks("recall", recallInputs, 8),
-  precision: writeChunks("precision", precisionInputs, 8),
-  holistic: writeChunks("holistic", holisticInputs, 12),
-};
+fs.copyFileSync(definitionsFile, path.join(scoringDir, "scoring-definitions.json"));
 fs.writeFileSync(
   path.join(scoringDir, "chunks-manifest.json"),
   `${JSON.stringify(manifest, null, 2)}\n`,

@@ -44,9 +44,9 @@
             "body": "The sidebar passes a synthetic `subthread:…` key through `ThreadDirectoryService` as `directoryKey`. Returning immediately for that key skips the path lookup that previously found the real project. When **Directory threads** is collapsed and the parent is unpinned, creating a child now leaves the whole group hidden even if the owner already knows its membership. Resolve synthetic keys to the project before reading its fold so the owner can reveal the group while keeping the child in its [parent’s tray](docs/thread-navigation-rules.md#L101-L103).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 7872,
+            "endLine": 7876
           },
           {
             "id": "79c08cd4-e010-412a-b541-647c5ca84769",
@@ -54,9 +54,9 @@
             "body": "A handoff without a `directoryKey` from a secondary checkout resolves to the grouped project only if a navigation snapshot has already populated `checkoutPaths`. With a cold owner, it instead reads the secondary checkout’s overlay, while navigation shows the thread under the group’s preferred checkout and uses that checkout’s fold. The new root then stays hidden in a collapsed group, contrary to the [saved-fold rule](docs/thread-navigation-rules.md#L143-L144). Resolve the checkout through the persisted group before reading the fold.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 7890,
+            "endLine": 7892
           },
           {
             "id": "ffb92bf2-a0bb-4432-8fab-0588ac1a24fe",
@@ -64,9 +64,9 @@
             "body": "When a saved fold is collapsed but the cached project snapshot predates both its first pin and the new child’s parent, the new fold check proceeds where the old pin guard stopped. The missing parent is then treated as proof that the child renders at the root. A path-based child start can therefore save a pin on a nested row that has no Unpin control. Check current parent membership before applying the [root-only auto-pin rule](docs/thread-navigation-rules.md#L143-L144).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 8068,
+            "endLine": 8070
           },
           {
             "id": "8dba5ada-c00a-4bab-aa79-19a7b315bc0e",
@@ -74,11 +74,12 @@
             "body": "Starting a root with a saved collapsed fold and no navigation snapshot now writes a pin where it previously returned without writing. The new SQLite test checks the rank but not the commit count, and the existing all-pinned budget only covers creation with a seeded snapshot. Measure the new path and check in its budget as required by [the SQLite write-budget rule](AGENTS.md#L59-L62).",
             "priority": 3,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/__tests__/created-thread-visibility.property.test.ts",
+            "startLine": 98,
+            "endLine": 100
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -117,9 +118,9 @@
             "body": "If the same host reports a different logical CPU count after a VM resize or a temporary `os.cpus()` failure, startup passes a different capacity to `ensure()`. It rejects the existing revision-2 definition, marks machine ownership unresolved, and disables both checkout actions and managed jobs—even when the pool is empty. Use the detected count to initialize the [shared machine pool](apps/desktop/docs/resource-checkout-authority.md#L13-L23), or resize it transactionally without invalidating existing reservations.",
             "priority": 1,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/resource-checkouts/resource-checkout-service.ts",
+            "startLine": 77,
+            "endLine": 77
           },
           {
             "id": "e01ac108-b06d-4829-b9f1-38cfe644c0dc",
@@ -127,9 +128,9 @@
             "body": "The counted pool lets one thread hold multiple idle grants, but `admitLocalJob()` binds the first match by thread identity, and `admitMachineJob()` provides no allocation token. If a thread holds a short one-slot grant before acquiring a larger, longer grant for an environment action, the action can consume the wrong grant and stop at its earlier deadline while the intended grant remains idle. Pass the exact grant token or reject ambiguous matches so the action consumes the [reservation it binds](apps/desktop/docs/resource-checkout-authority.md#L31-L36).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/resource-checkouts/resource-checkout-service.ts",
+            "startLine": 77,
+            "endLine": 78
           },
           {
             "id": "cf28af8e-c5d8-4b2a-9bb5-38331b1b947d",
@@ -137,11 +138,12 @@
             "body": "Multiple managed jobs can now enter recovery in the same machine pool. `projectCheckoutDomain()` exposes only the first one and bases all recovery controls on it. On POSIX, if that job never recorded a process group or its group is still running, the operator cannot apply the [documented recovery procedure](apps/desktop/docs/resource-checkout-authority.md#L51-L54) to a later allocation whose recorded group is already gone. Expose recovery actions per allocation so each job can be verified independently.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/resource-checkouts/checkout-projection.ts",
+            "startLine": 39,
+            "endLine": 41
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -180,9 +182,9 @@
             "body": "If a cold checkout switches branches after `git remote get-url --all` samples an `includeIf.onbranch` URL rewrite, the second `git remote` call can still return the same names. The publish callback then installs the previous branch’s repository in the live cache for up to five minutes. The primed-result check cannot catch this because live discovery reads the same stale cache, so the thread can miss its own PRs or attach PRs from the old repository. Keep native URL samples batch-local unless their URLs are verified before publication, so discovery stays tied to the thread’s own checkout ([PR attachment rules](apps/desktop/docs/pull-request-status.md#L89-L96)).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/git-remote.ts",
+            "startLine": 288,
+            "endLine": 294
           },
           {
             "id": "ad79abcb-04c8-4eaa-a36f-df64d85925bf",
@@ -190,11 +192,12 @@
             "body": "On Windows, a cold checkout with ordinary HTTPS remotes now launches both `git config` and `git remote` for every branch in a multi-branch batch. The native-only path cannot share a checkout proof, and its config-backed HTTPS sample does not populate the live cache, so live discovery reads config again. Before this change, the first scheduled lookup populated the shared cache and later branches only listed remotes. Keep the ordinary cache-backed path on Windows when no checkout proof can be shared.",
             "priority": 3,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/pr-prefetch-metadata.ts",
+            "startLine": 113,
+            "endLine": 116
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -233,9 +236,9 @@
             "body": "When this probe is running, adding another PR label starts a workflow run in the same concurrency group. Workflow-level cancellation happens before the job's `if` skips that unrelated-label run, so it cancels the active probe and replaces it with a skipped job. Give unrelated-label events a separate group, as the Linux packaging workflow does, or move concurrency under the guarded job.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": ".github/workflows/windows-native-quit-repro.yml",
+            "startLine": 17,
+            "endLine": 19
           },
           {
             "id": "96f458dc-195f-4baa-9d80-3a85d08fded0",
@@ -243,11 +246,12 @@
             "body": "On macOS/Linux, if Electron exits but a Chromium descendant retains a launcher pipe, `closed` remains pending until the six-second timeout while `child.exitCode` is already non-null. This condition then skips the group cleanup, and the top-level `process.exit(1)` leaves the detached descendants alive. Target the owned process group on failure even when its leader has already exited.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/scripts/probe-electron-native-quit.mjs",
+            "startLine": 185,
+            "endLine": 187
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -279,7 +283,8 @@
           "declined": 0,
           "open": 0
         },
-        "items": []
+        "items": [],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -311,7 +316,8 @@
           "declined": 0,
           "open": 0
         },
-        "items": []
+        "items": [],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -350,9 +356,9 @@
             "body": "startNext's catch holds the queue without keepHeld, so a start refused while entries keep their own reasons rewrites them all to the refusal, including a stale steer's Retry-only reason.\n\nFailure scenario: Lock holds a monitor result, then a stale steer is held. Unlock releases the monitor result, but the thread is locked again before the drain runs; startTurn throws the lock refusal and holdQueue overwrites the stale steer's reason with the lock's. The next unlock releases the stale steer with no Retry.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/thread-turn-queue.ts",
+            "startLine": 1085,
+            "endLine": 1085
           },
           {
             "id": "149ca5a8-a35e-4ac9-8878-5c5bee343215",
@@ -360,9 +366,9 @@
             "body": "The queue's hold is dropped only when the FIFO empties, so after an unlock releases entries ahead, cancelling or starting out the last held entry leaves a reason with nothing to hold.\n\nFailure scenario: After unlock the queue is [monitor-result (released), stale-steer (held)]. The operator cancels the stale steer. The steer reason stays in heldQueues, so canStartImmediately is false and the operator's next message is queued held with the stale steer's reason, needing Retry.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/thread-turn-queue.ts",
+            "startLine": 1038,
+            "endLine": 1038
           },
           {
             "id": "4cb552bc-fe72-4ac9-9d29-0414bc3c4298",
@@ -370,9 +376,9 @@
             "body": "releaseEntryWithDisposition clears every hold when its entry is at the head, even when an unlock already released that entry, so it also releases later entries held for their own reasons.\n\nFailure scenario: After unlock, [monitor-result (released), stale-steer (held)]. A release of monitor-result (it is the head and the queue still has a reason) clears the stale steer's hold too, so the steer runs right after without its own Retry.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/thread-turn-queue.ts",
+            "startLine": 914,
+            "endLine": 914
           },
           {
             "id": "8a44b56c-a602-4df9-ab5e-2054cad9d36a",
@@ -380,9 +386,9 @@
             "body": "holdRevisions is a second per-thread map that only grows; the revision could live on the hold state itself, stamped from one monotonic counter.\n\nFailure scenario: Every thread that is ever held keeps a map entry for the life of the process, and the hold state is split across two maps that must be kept in step.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/thread-turn-queue.ts",
+            "startLine": 287,
+            "endLine": 287
           },
           {
             "id": "a01b05c2-ae0f-451b-a39d-2a490c43bd80",
@@ -390,11 +396,12 @@
             "body": "The new tests cover the two orders from the issue, but not a refused start, a cancelled last held entry, or a Retry of a released head once an unlock has released only part of the queue.\n\nFailure scenario: Any of the three defects above passes the suite today.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/__tests__/thread-turn-queue.test.ts",
+            "startLine": 968,
+            "endLine": 968
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -433,9 +440,9 @@
             "body": "A messaging new-thread launch can now resolve a saved reasoning effort for a backend whose summary reports no catalog. Before this PR, `newThreadOptionsForSession` and `normalizeReasoningEffortForModel` always received a defined `BackendSummary`, so they never passed the saved effort through. They now call `displayedReasoningEffort(backend.launchpadOptions, ...)`, which passes it through whenever `launchpadOptions` and the model are both absent. Today `supportsReasoning` comes out false in that case and hides the effort, so the launch omits it; but the effort is computed for a backend that cannot validate it. Fix: use `offeredReasoningEffort` at both sites; keep `displayedReasoningEffort` for callers whose summary may be undefined.\n\nFailure scenario: An ACP backend whose discovery has not answered yet has `launchpadOptions` undefined. A browse session saved `reasoningEffort: \"xhigh\"` from another provider. `newThreadOptionsForSession` now returns `reasoningEffort: \"xhigh\"` instead of undefined. Only `supportsReasoning === false` keeps it out of `materializeDirectoryLaunchpad`. If that guard changes, `assertThreadModelSettingsAvailable` rejects the start, because the backend offers no efforts.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/messaging/core/messaging-callback-helpers.ts",
+            "startLine": 697,
+            "endLine": 697
           },
           {
             "id": "ccb73949-870d-4cf0-8cb9-d37bc9b72383",
@@ -443,9 +450,9 @@
             "body": "A start card checks a reasoning effort against a model the owner may not start on. `resolveThreadTodoModel` picks the card's model, else the thread's, else current, else the first catalog entry. The owner starts a thread on `defaultModelOption`, which then tries Codex's preferred 6.1 model and a reasoning model. Fix: resolve the effective model with `modelOptionFor`, passing the destination backend kind through from `thread-todo-runtime.ts`.\n\nFailure scenario: A Codex catalog has no model marked current and lists `gpt-5.6` before `gpt-6.1-terra`. A card names effort `max` and no model. The card validates `max` against `gpt-5.6`, but the owner starts the thread on `gpt-6.1-terra`, which may not offer `max`. The owner-built catalog usually marks the preferred model current, which hides this.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/thread-todos/thread-todo-models.ts",
+            "startLine": 50,
+            "endLine": 50
           },
           {
             "id": "35e7839c-acff-4799-94fb-2232710d9d2d",
@@ -453,9 +460,9 @@
             "body": "The rule for which config option mirrors `currentModeId` still lives in four separate copies: `acp-client` `isRuntimeModeConfigOption`, `acp-runtime-selection`, `acp-session-runtime-options` `acpRuntimeConfigOptionMirrorsMode`, and `thread-model-options` `acpRuntimeModeDefaultsFromCapabilities`. The PR description defers it in Notes. Root CLAUDE.md says: \"When you find work worth doing but outside this change, raise a PwrAgent to-do card with `add_todo`... do not substitute a PR body, commit message, or code comment for a card.\" Fix: fold the four copies into `acpRuntimeModeSelector`, or raise a card for it.\n\nFailure scenario: The copies differ: `acp-runtime-selection` requires the option's values to include `currentModeId`, while `acp-client` takes the first mode-category option. An agent whose mirrored option omits the session's mode writes `set_mode` in one path and records a config value in the other. Root CLAUDE.md's Deferred Work rule is broken: the follow-up exists only in the PR Notes.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/acp-runtime-selection.ts",
+            "startLine": 37,
+            "endLine": 37
           },
           {
             "id": "6a73f049-022b-40d7-9d29-95ab02ffdc07",
@@ -463,11 +470,12 @@
             "body": "The PR description says a backend with no catalog now shows its saved effort in messaging, but no messaging path does that. The status card hides the effort because `supportsReasoning` is false, and `presentReasoningPicker` returns early when `summary && efforts.length === 0`. Fix: remove that bullet from the PR description, and keep the pass-through documented only for a missing summary.\n\nFailure scenario: A reviewer reading Behavior changes expects messaging to show a saved effort for an ACP agent before discovery. In practice the status card shows no Reasoning line and the picker re-renders status. The description misstates the change.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "packages/shared/src/model-defaults.ts",
+            "startLine": 96,
+            "endLine": 96
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -506,19 +514,19 @@
             "body": "The reviewed snapshot limit is stored per (backend, threadId), but maintenance removals run concurrently and are queued per worktree path, so two approved checkouts of one archived thread overwrite and clear each other's approval.\n\nFailure scenario: An archived thread links two over-limit checkouts A (150 MB) and B (300 MB), both approved. Both run under MAINTENANCE_CONCURRENCY. B's approval replaces A's, or A's finally block clears it while B is still snapshotting. B then hits the 100 MB cap, is forgotten as 'will not be retried', and is kept despite the operator's approval. A background archive cleanup of the same thread can also pick up the approval.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 31521,
+            "endLine": 31521
           },
           {
             "id": "4a2cb4bf-507a-40cd-9496-2190290dd00f",
             "title": "unchanged check compares raw worktree paths",
-            "body": "The `unchanged` check matches the prior deferred row by exact string, while the reference store keeps canonical paths (forget() checks both forms), so a spelling difference makes every retry look new.\n\nFailure scenario: A deferred row is stored as /private/var/... or with a trailing separator, but the candidate path is /var/.... No prior row matches, `unchanged` is never set, and the same 'kept' popup comes back at every launch, which is the bug this flag exists to stop.",
+            "body": "The `unchanged` check matches the prior deferred row by exact string, while the reference store keeps canonical paths (forget() checks both forms), so a spelling difference makes every retry look new.\n\nFailure scenario: A deferred row is stored as <local-path> or with a trailing separator, but the candidate path is <local-path> No prior row matches, `unchanged` is never set, and the same 'kept' popup comes back at every launch, which is the bug this flag exists to stop.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 32613,
+            "endLine": 32613
           },
           {
             "id": "5656ce0c-3cf4-406e-a668-7112d84e901b",
@@ -526,9 +534,9 @@
             "body": "Over-limit archived checkouts now appear under `checkouts.removable` with only `workspace: \"overLimit\"`. The agent must ask the operator before passing snapshotAll but is never given the changed-file count or bytes, which idle-thread rows do include.\n\nFailure scenario: An agent tells the operator a checkout is 'over the snapshot limit' and asks to snapshot it all, but cannot say whether that means 120 MB or 4 GB of Git objects. The operator approves blind.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/agent-tools/thread-maintenance-tool-results.ts",
+            "startLine": 96,
+            "endLine": 96
           },
           {
             "id": "8eac79be-2f2b-4d39-ab41-ef13d80cc3dd",
@@ -536,9 +544,9 @@
             "body": "This PR adds SnapshotLimitExceededError, but hibernation still recognizes the same failure by matching message text with /^Snapshot (size|file) limit exceeded/.\n\nFailure scenario: Rewording either throw message in worktree-archive-service silently turns hibernation's over-limit keep into a thrown error, while archive cleanup (which uses instanceof) keeps working. The two classifiers drift.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 8484,
+            "endLine": 8484
           },
           {
             "id": "27cac0bf-cf57-4989-a96c-959bc790d932",
@@ -546,9 +554,9 @@
             "body": "The over-limit approval cap `Math.ceil(bytes * 11 / 10)` is now written twice (checkout removal and thread archive at line 1152), next to a third `* 1.1` growth check.\n\nFailure scenario: Changing the allowed margin for one path leaves the other at 10%, so a thread archive and an archived-checkout removal approve different caps for the same reviewed size.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/thread-maintenance-service.ts",
+            "startLine": 966,
+            "endLine": 966
           },
           {
             "id": "1c957dd5-524a-4e0c-8a1f-dbffce6d2b8a",
@@ -556,9 +564,9 @@
             "body": "`row.monitor_id >= \"monitor-\" && row.monitor_id < \"monitor.\"` is a prefix test written as a code-point range.\n\nFailure scenario: A reader has to work out that '.' follows '-' to see this means startsWith(\"monitor-\"). It is easy to 'fix' into a wrong range. `startsWith` says the same thing directly.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "packages/sqlite-storage/src/thread-sub-agents.ts",
+            "startLine": 633,
+            "endLine": 633
           },
           {
             "id": "215da434-1d47-4cc9-8460-dd45a38f4ca3",
@@ -566,11 +574,12 @@
             "body": "canonicalArchiveOwnershipIndex calls listFinishedMonitorWorkerThreadKeys inline instead of reusing markFinishedMonitorWorkers, and drops its handling of a failed read.\n\nFailure scenario: If the sub-agent read throws, the whole ownership read fails and archive cleanup reports an error for the checkout. The maintenance paths treat the same failure as 'every worker is still a checkout user' and carry on. Two copies of one rule behave differently.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 33009,
+            "endLine": 33009
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -609,9 +618,9 @@
             "body": "The `before` field doc says a read without it answers only newest-page requests, but `findResponseIndex` lets an unpaged step answer a page request, so a gated unpaged read ahead of an older page blocks that page request.\n\nFailure scenario: In a block [newest(T), newest-later(T, afterResponseId: turn), older(T, before: X)], a page request for X scans past the consumed newest page, stops at the gated newest-later, and falls back to T's newest page. The older page is never served, although the doc promises it would be.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/testing/replay-fixture.ts",
+            "startLine": 30,
+            "endLine": 30
           },
           {
             "id": "142291f2-ca90-4223-b174-7d8208cfac4a",
@@ -619,9 +628,9 @@
             "body": "A derived fixture that captured two different reads of the same thread in one response run now fails `validateReplayFixture` inside derivation, and derivation has no option to gate them.\n\nFailure scenario: A capture where the app read thread T, then started a turn and read T again with no notification in between, fails `derive:replay-fixture` with 'second thread/read@T answer'. The author must hand-edit the output, which the derivation step itself refuses to write.",
             "priority": null,
             "status": "declined",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/testing/fixture-derivation.ts",
+            "startLine": 137,
+            "endLine": 137
           },
           {
             "id": "38528e4c-3d6e-48ae-a025-85449045e63c",
@@ -629,9 +638,9 @@
             "body": "The reuse lookup builds a key list that repeats the generic key when threadId or before is unset, then checks the generic key again in a separate return.\n\nFailure scenario: Each reused read builds up to three duplicate keys and does a fourth lookup outside the loop. The fallback order is split across two statements, which makes it harder to read than one ordered list.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/testing/replay-controller.ts",
+            "startLine": 100,
+            "endLine": 100
           },
           {
             "id": "480cd6c4-7b7e-4bfd-b75d-325fa162efa0",
@@ -639,9 +648,9 @@
             "body": "The derivation change copies `before` from a captured read request, but only the `threadId` copy is asserted.\n\nFailure scenario: A regression that drops `before` from derived steps passes the suite. Derived paged-read fixtures then fail the guard as repeated `thread/read@T` answers.",
             "priority": null,
             "status": "declined",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/__tests__/fixture-derivation.test.ts",
+            "startLine": 146,
+            "endLine": 146
           },
           {
             "id": "50215950-b2b0-458a-ae8b-501050051375",
@@ -649,11 +658,12 @@
             "body": "`readThread` with no params passes `threadId: undefined`, which never matches a `threadId`-keyed step, so the call takes only unkeyed or reused answers.\n\nFailure scenario: A caller that reads with no params against a fixture whose reads are all keyed gets 'Replay fixture expected thread/read (...) before thread/read' on its first read, instead of the next scripted read.",
             "priority": null,
             "status": "declined",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/testing/replay-client.ts",
+            "startLine": 170,
+            "endLine": 170
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     }
   ]

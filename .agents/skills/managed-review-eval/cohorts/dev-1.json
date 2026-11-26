@@ -44,9 +44,9 @@
             "body": "After a push resets an MR's mergeability to `UNCHECKED`, this guard accepts the GraphQL node and publishes `mergeState: \"unknown\"`. GitLab's GraphQL `detailedMergeStatus` reports that state without starting a recheck, whereas the [REST detail serializer](https://github.com/gitlabhq/gitlabhq/blob/v19.4.0/lib/api/entities/merge_request_basic.rb#L72-L80) starts one for users with update permission. If nothing else triggers the recheck, repeated batches can leave the MR unknown and keep stack automation blocked even after CI passes ([pull-request-status.md:206–210](apps/desktop/docs/pull-request-status.md#L206-L210)). Route unchecked open MRs through the REST detail path.",
             "priority": 1,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/gitlab-pr-fetcher.ts",
+            "startLine": 159,
+            "endLine": 163
           },
           {
             "id": "a36de75b-122e-4b6c-9b61-b8ebbe230b88",
@@ -54,9 +54,9 @@
             "body": "With five tokens and three due batches on merge-train projects, the three GraphQL requests can leave two tokens for overlapping synthetic-commit verifications. Neither batch then has a token left for its train-car read, and the third cannot verify its commit. Every MR stays due, but the fetched data is discarded, so the same interleaving can repeat on each five-token refill without publishing any status. Resume deferred follow-ups or reserve enough budget for at least one MR to finish; cover that interleaving with the model test required by [AGENTS.md:52](AGENTS.md#L52).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/gitlab-pr-fetcher.ts",
+            "startLine": 646,
+            "endLine": 652
           },
           {
             "id": "7fa29b45-ca00-4ce9-81f1-55e31a1c9e5f",
@@ -64,9 +64,9 @@
             "body": "With one token left and a focused GitLab MR ahead of an unfocused GitHub PR, this loop skips taking a token for GitLab and spends it on GitHub before starting either fetch. The focused MR is then deferred even though it was first in the due list. Preserve [the scheduler's due-order rule](docs/forge-support.md#L68) across both providers while still charging GitLab only when a request starts.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/pr-polling-scheduler.ts",
+            "startLine": 329,
+            "endLine": 335
           },
           {
             "id": "048c8e69-3334-46f1-8922-3ed18f219a98",
@@ -74,9 +74,9 @@
             "body": "If a transcript subscribes to a new MR while its GitLab host is honoring `Retry-After`, the transport rejects the read before it starts. Only budget errors are deferred, so `markAttempted` removes the subscription from the pending set even though it never reached GitLab. With background polling off, nothing retries it when the deadline passes, and the chip can stay unknown until another UI event resubscribes. Keep cooldown-blocked targets pending and make them eligible again after the provider's deadline.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/pr-polling-scheduler.ts",
+            "startLine": 471,
+            "endLine": 480
           },
           {
             "id": "c349c8a2-62d3-456d-b006-8b1177d5c5a0",
@@ -84,9 +84,9 @@
             "body": "On a self-hosted GitLab instance whose reverse proxy returns HTTP 403 for `/api/graphql` but permits the REST API, two or more due MRs in the same project get no updates: the GraphQL error escapes this handler and the batch returns without attempting MR detail reads. The same MRs work individually or through manual refresh, so the regression begins when they are batched. Try the budgeted REST fallback on a GraphQL-only denial when there is no provider backoff.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/gitlab-pr-fetcher.ts",
+            "startLine": 699,
+            "endLine": 704
           },
           {
             "id": "ccc3aac7-6924-4e3f-94b4-65ffa61191bf",
@@ -94,9 +94,9 @@
             "body": "All GitLab results inherit the timestamp allocated before the batch starts, including later pages and REST fallbacks. If a foreground lookup publishes an MR while the first page is still running, a subsequent fallback can observe a newer state but have it rejected as stale by `rememberPrStatuses`. Carry the start timestamp of the request that actually read each MR so a newer observation is not discarded.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/gitlab-pr-fetcher.ts",
+            "startLine": 669,
+            "endLine": 672
           },
           {
             "id": "6e6d52c0-a09a-4064-aee6-021dd3aebe65",
@@ -104,9 +104,9 @@
             "body": "If background polling sets a host cooldown and the user clicks Re-check during it, `/user` is rejected locally by this gate. `probeAuth` returns `loggedIn: false`, and `getAuthStatus` caches that result for five minutes even if the provider's cooldown ends seconds later. Treat cooldown as a temporary inability to verify login, and do not cache it past the retry deadline.",
             "priority": 3,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/gitlab-pr-fetcher.ts",
+            "startLine": 425,
+            "endLine": 430
           },
           {
             "id": "7a47c22b-c8ef-40d5-8f29-6d935bb3468d",
@@ -114,11 +114,12 @@
             "body": "When a manual refresh overlaps a singleton background read or REST fallback for the same MR, only the background call requests headers. Because `includeHeaders` is part of the deduplication key, the two reads no longer share a subprocess and token as they did before. Besides adding traffic, the duplicate can make a manual refresh hit the three-request concurrency limit rather than join the existing read. Use the same response mode for both detail paths so they can share the request.",
             "priority": 3,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/gitlab-pr-fetcher.ts",
+            "startLine": 421,
+            "endLine": 423
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -157,9 +158,9 @@
             "body": "With Token Miser enabled, managed Codex reviews fail at `thread/start`: both catalogs emit a namespace named `pwragent`, and concatenating them sends two namespace entries. The [PwrAgent Codex runtime rejects duplicate namespace names](https://github.com/pwrdrvr/codex/blob/pwragent-v0.171.0-pwragent.5/codex-rs/app-server/tests/suite/v2/dynamic_tools.rs#L445-L475). Use `mergeCodexDynamicToolSpecs` so both sets of tools share the [unified namespace](apps/desktop/docs/agent-tool-contracts.md#L39-L41).",
             "priority": 1,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/managed-review-service.ts",
+            "startLine": 1019,
+            "endLine": 1022
           },
           {
             "id": "6ca4563a-dbf2-4f8d-adbf-e73326a0a676",
@@ -167,9 +168,9 @@
             "body": "On ACP runtimes that support session close and load, every managed review child now bypasses idle cleanup, even when it uses the static fallback. The terminal path clears the candidate map but never closes the child, so repeated reviews leave provider sessions and their MCP connections open until the process exits. Retire the child after the review, or exempt it from idle close only while it still needs its review catalog. The [ACP lifecycle guide](apps/desktop/docs/protocol-captures.md#L40-L47) explains why `session/close` matters here.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/acp/acp-client.ts",
+            "startLine": 1411,
+            "endLine": 1413
           },
           {
             "id": "db8b1873-16d8-4252-92ab-6d34c6850aa4",
@@ -177,9 +178,9 @@
             "body": "A ledger call racing cancellation can still record a candidate after the review has been retired. The MCP resolver checks only generic turn registration, which is removed after review publication, and this authorization branch does not check review ownership. A call can therefore mutate the ledger after its terminal snapshot. Require an exact review-turn authorization that is established before prompting, retired at terminal ingress, and checked again at dispatch.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 20405,
+            "endLine": 20409
           },
           {
             "id": "4792861f-0579-4e1e-badf-2c9899715534",
@@ -187,9 +188,9 @@
             "body": "When an ACP reviewer reports a ledger invocation in a `tool_call` or `tool_call_update` with its input or result, `AcpAgentClient.appendHistoryUpdate` passes that payload to the disk-backed rollout store. For a new review session without verified provider replay, this can retain even dropped candidates after the in-memory ledger is cleared. Strip ledger arguments and results from the host's persisted tool events while preserving ordinary transcript entries.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/managed-review-candidate-ledger.ts",
+            "startLine": 170,
+            "endLine": 173
           },
           {
             "id": "d85bc1ae-ce49-49cb-b968-d7fb7bb87506",
@@ -197,9 +198,9 @@
             "body": "If Codex sends the first candidate call while the matching `turn/started` is still being delivered and before `startTurn()` returns, the child is already linked but `isLiveDynamicToolCall` rejects it because the turn is not registered yet. The adjacent input-source route already handles this ordering with the exact pending provider turn ID. Use that same evidence for the linked review child and cover the ordering in a [provider-event model](docs/property-model-oracle-testing.md#L123-L134).",
             "priority": 3,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 19912,
+            "endLine": 19917
           },
           {
             "id": "4b33e295-fc65-4dd1-a3db-d88a0d52d96d",
@@ -207,11 +208,12 @@
             "body": "If the terminal review-card write rejects, `completeReviewSubAgent` has already removed the live review and throws before `publishManagedReviewTerminal` enters this `try/finally`. A duplicate terminal can no longer find the review, so its candidates remain in memory until registry shutdown. Move the cleanup boundary around the terminal bookkeeping as well as artifact publication.",
             "priority": 3,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/managed-review-service.ts",
+            "startLine": 1889,
+            "endLine": 1892
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -250,9 +252,9 @@
             "body": "`AcpLiveToolUpdateResolver.resolve()` returns non-tool updates unchanged, so checking `resolvedToolUpdate` here adds a synchronous SQLite query and JSON parse to every streamed assistant chunk that reaches this handler. Only Antigravity file-edit diffs use `cwd`. Fetch it only for tool updates that need it, including deferred edits.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/acp-backend-adapter.ts",
+            "startLine": 3585,
+            "endLine": 3586
           },
           {
             "id": "3e1de065-0c5f-4062-8fa9-a0b5e03a2337",
@@ -260,9 +262,9 @@
             "body": "When a Grok `read_file` opens with `locations` and sends `rawInput` on a later update, the new fallback caches `Read main.ts` before the range arrives. The base branch displays `Read main.ts (lines 10-20)` for that sequence; the patch drops the range from both the summary and the detail. Treat the location-only result as provisional and cover late input in the [provider-event property](docs/property-model-oracle-testing.md#L129-L134).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/acp/acp-file-read.ts",
+            "startLine": 54,
+            "endLine": 60
           },
           {
             "id": "acab0ffa-3260-44dd-99f3-ef6624734600",
@@ -270,9 +272,9 @@
             "body": "The Antigravity `list_dir` frame in the new tests has `kind: \"read\"`. Extracting `Path` makes the live transcript label it `Read desktop` and count it as a file read, while replay correctly says `Listed desktop`. Live reads also discard line bounds and show the full path for backslash-only Windows paths. Use the normalized read/list result in both paths and compare the rendered labels in a [differential test](docs/property-model-oracle-testing.md#L136-L138).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/acp/acp-live-notifications.ts",
+            "startLine": 621,
+            "endLine": 621
           },
           {
             "id": "305648b1-fb40-4234-8d38-07af3db9c70a",
@@ -280,21 +282,22 @@
             "body": "Registering a slashless alias for every detail path also rewrites literal search text. With `/repo` linked and `/repo/src/main.ts` as the search location, `Searched \"repo/src/main.ts\"` now displays `Searched \"src/main.ts\"`, changing the query shown to the user. Apply the alias only to a known path field or a provider title whose path span is identifiable.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/thread-detail/activity-path-display.ts",
+            "startLine": 38,
+            "endLine": 45
           },
           {
             "id": "5242ab5a-09b0-46ff-9eaa-7f68c56a7c7e",
             "title": "Match mixed Windows separators in activity labels",
-            "body": "The Windows matcher tries only the original path and two uniform separator variants. If the detail carries `C:\\work\\repo\\src\\main.ts` but the title uses `C:/work/repo\\src/main.ts`, the title still shows the full path even though both spellings name the same file. Compare separators equivalently at each position and vary them independently in the existing path property test.",
+            "body": "The Windows matcher tries only the original path and two uniform separator variants. If the detail carries `<local-path>` but the title uses `<local-path>`, the title still shows the full path even though both spellings name the same file. Compare separators equivalently at each position and vary them independently in the existing path property test.",
             "priority": 3,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/thread-detail/activity-path-display.ts",
+            "startLine": 48,
+            "endLine": 52
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -333,9 +336,9 @@
             "body": "If a thread opens on the replacement CLI before the background probe finishes, the live client's `initialize` reply can inherit the old model list and persist it with `status: \"discovered\"` without setting `lastDiscoveredAt`. This guard then discards the completed probe, leaving the picker on the carried catalog or without the probe's per-model effort choices. Distinguish a completed probe from a live capability update, and cover this ordering in the upgrade property test ([AGENTS.md#L52](AGENTS.md#L52)).",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/acp-backend-adapter.ts",
+            "startLine": 3055,
+            "endLine": 3057
           },
           {
             "id": "06928318-f376-43af-bb48-a566e1191293",
@@ -343,9 +346,9 @@
             "body": "When a PATH symlink points to the active managed Antigravity release, `addManagedAntigravity` can keep the symlink as the selected command, while the installer returns the versioned binary path. The literal comparison rejects that valid managed selection, so the update leaves the old model list in place without probing the new binary. Compare resolved executable identities while still excluding explicitly pinned selections.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/acp-backend-adapter.ts",
+            "startLine": 3006,
+            "endLine": 3009
           },
           {
             "id": "4b7c9a48-0c0d-4f72-ba8b-9a54a4d543f8",
@@ -353,9 +356,9 @@
             "body": "If the user saves a different Antigravity CLI path while an upgrade probe is queued or running, `invalidateRuntimeSelections` marks the cached selection obsolete but does not immediately replace the durable record. This guard still accepts that record as long as Antigravity remains enabled, so the adapter can launch the old selection or publish its catalog after the path change. Apply the same `isRuntimeSelectionCurrent` check used for quota probes and ordinary launches.",
             "priority": 2,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/acp-backend-adapter.ts",
+            "startLine": 3042,
+            "endLine": 3049
           },
           {
             "id": "d49e6b4f-a502-4090-893c-319409567268",
@@ -363,11 +366,12 @@
             "body": "If the user clicks Re-probe while the post-install probe is running, Settings does not see that probe in `inFlightAcpRefreshes` and launches the same CLI again. The adapter queue only deduplicates its own work, so both processes open scratch sessions and walk the model catalog in parallel. Have these paths share the in-flight probe for the same runtime.",
             "priority": 3,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/shell/ipc/settings.ts",
+            "startLine": 378,
+            "endLine": 379
           }
-        ]
+        ],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -399,7 +403,8 @@
           "declined": 0,
           "open": 0
         },
-        "items": []
+        "items": [],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -431,7 +436,8 @@
           "declined": 0,
           "open": 0
         },
-        "items": []
+        "items": [],
+        "reviewedRangeVerified": true
       }
     },
     {
@@ -470,9 +476,9 @@
             "body": "Turning on Never merge leaves an already-open Merge #N card in place, and clicking it still merges. Saving Forge Automation runs `applyProjectForgeAutomationChange`, which never asks the offer coordinator to re-evaluate. The withdrawal only happens on the PR's next readiness transition, and a reviewed, green PR has none. Fix: when `projectNeverMerges` changes, re-evaluate the project's primary PRs through the coordinator.\n\nFailure scenario: The operator's fork PR #2 already shows a Merge card (reviewed, CI green). They check Never merge and save. No further transitions arrive, so the card stays open indefinitely and its Squash merge button merges into the fork's main.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/desktop-app-server-service.ts",
+            "startLine": 8452,
+            "endLine": 8452
           },
           {
             "id": "a5ff8754-02c6-4f43-8f01-d7bbade8d2d3",
@@ -480,9 +486,9 @@
             "body": "An agent can still raise a merge to-do card in a never-merge project. `prMergeOfferRefusal` returns undefined before the never-merge check whenever the coordinator is absent (background polling off) or the thread is not the PR's offer owner (Review offers off, or another thread owns the PR). Only `coordinator.mergeOfferRefusal` checks never-merge. Fix: check `projectNeverMergeRefusal(thread, …)` first in `prMergeOfferRefusal`.\n\nFailure scenario: The project has Never merge on and Review offers off. selectPrReviewOfferOwner returns no owner, so prMergeOfferRefusal returns undefined, and add_todo with a merge_pull_request action creates a Merge card.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/desktop-app-server-service.ts",
+            "startLine": 9124,
+            "endLine": 9124
           },
           {
             "id": "215a1f1d-c986-45b4-8b7a-fa270f35979e",
@@ -490,9 +496,9 @@
             "body": "Running a to-do merge card is not gated by Never merge, unlike the PR card's merge, which the owner refuses. The `mergePullRequest` runner checks only Continue After holds before `GithubPrFetcher.mergePullRequest`. Any merge card that exists (raised before the switch, by an older build, or through a missed gate) can merge the PR. Fix: refuse in the runner when the source thread's project never merges.\n\nFailure scenario: A Merge card raised before Never merge was turned on is clicked. The runner merges into the fork's main even though the project is set to never merge.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/thread-todos/thread-todo-runtime.ts",
+            "startLine": 797,
+            "endLine": 797
           },
           {
             "id": "b1b5e7cf-851b-4d8a-8a89-22bf916aaa8f",
@@ -500,9 +506,9 @@
             "body": "The upstream row compares against `upstream/main` (or `master`) whatever branch the work is based on. `resolveUpstreamDrift` ignores the picked base's label, so a branch based on the fork's `release/4.3` reports how far it is behind upstream's `main`. Fix: compare against `upstream/<base label>`, the same branch name on the upstream remote.\n\nFailure scenario: A fork PR targets release/4.3. Its base is origin/release/4.3 and the card's base rows apply, but the new row reads 'Behind upstream/main: 900 commits'. That count is meaningless for a release-branch PR, and the rollup label shows it when the base count is 0.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/git-working-state-service.ts",
+            "startLine": 463,
+            "endLine": 463
           },
           {
             "id": "dd4de8a5-2d05-4539-acea-037e73384a7c",
@@ -510,9 +516,9 @@
             "body": "Agents in a never-merge project get no 'do not merge' guidance unless their thread owns the PR's offers. The never-merge text is only threaded into `describePrReviewReadiness` for the readiness entries, and `readPrReviewReadiness` returns none when polling is off, Review offers are off, or another thread owns the PR. Fix: add a project-level never-merge line to the guidance whenever the thread's project never merges.\n\nFailure scenario: The thread is in a never-merge project with Review offers off. Thread PR status guidance says nothing about merging, so the agent suggests 'Ready to merge?' to the operator. That is the behavior the setting exists to stop.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/desktop-app-server-service.ts",
+            "startLine": 5180,
+            "endLine": 5180
           },
           {
             "id": "ea21a031-1a07-4c21-af47-13fa41fe3d68",
@@ -520,9 +526,9 @@
             "body": "In a never-merge project, guidance for a stack layer waiting on lower layers says it 'is reviewed … and its findings are settled'. `describeNeverMergeReadiness` returns early and skips the `stack_parent_open` sentence that the normal path gives. Fix: keep the stack_parent_open case before the never-merge text.\n\nFailure scenario: A stacked PR whose lower layer is still open, in a never-merge project, gets guidance saying it is reviewed and settled, even when no review covers it.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/pr-review-readiness.ts",
+            "startLine": 295,
+            "endLine": 295
           },
           {
             "id": "a339b96b-df2e-479f-b713-97bcf45ebf47",
@@ -530,11 +536,12 @@
             "body": "`projectAllowsMergeOffers` is exported but nothing calls it. The repo-root CLAUDE.md says to \"Check leading unused parameters, unused class members, and orphaned exports by hand; syntax lint does not catch all of them.\" Fix: remove the export, since the coordinator gates merge offers through `neverMergeRefusal`.\n\nFailure scenario: CLAUDE.md (repo root): \"Check leading unused parameters, unused class members, and orphaned exports by hand\". The new export has no consumer.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "packages/shared/src/project-forge-automation.ts",
+            "startLine": 169,
+            "endLine": 169
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -573,9 +580,9 @@
             "body": "Every Usage Activity refresh, including each window focus, can now wait up to 16 s before anything renders. `readUsageActivity` puts this call in `Promise.all` beside the fast ledger read, and `readCodexAccountTokenUsage` runs `account/read` and then `account/usage/read`, each with its own 8 s `withTimeout`. Fix: give both reads one shared deadline, so the whole account-token read is bounded by a single timeout.\n\nFailure scenario: Codex App Server is slow or hung: account/read times out after 8 s, then account/usage/read waits another 8 s, so the rows and limits on screen stay stale for 16 s on every refresh and window focus.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/codex-account-token-usage.ts",
+            "startLine": 512,
+            "endLine": 512
           },
           {
             "id": "9c52ccd3-237f-49bc-b62a-5fe2e53145ed",
@@ -583,9 +590,9 @@
             "body": "An older Codex without `account/usage/read` shows \"currently unavailable\" instead of \"not supported by this Codex version\". `classifyAccountTokenUsageError` only matches -32601, \"method not found\", \"unknown method\", \"not implemented\" and \"unsupported\". Codex App Server rejects unknown methods with \"unknown variant `account/usage/read`\" or \"… is not supported yet\", the strings `isMethodUnavailableError` in owner-core checks. The auth pattern `sign in` also matches unrelated words such as \"design in\". Fix: add `unknown variant` and `not supported` to the unsupported pattern, and anchor `sign in` to a word boundary.\n\nFailure scenario: An older Codex replies \"unknown variant `account/usage/read`, expected one of …\", which matches no pattern and returns \"unavailable\", so the UI says the history is temporarily unavailable instead of unsupported.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/codex-account-token-usage.ts",
+            "startLine": 468,
+            "endLine": 468
           },
           {
             "id": "4b4a96ee-ce1d-43cc-a4d3-1fc3750e7edc",
@@ -593,9 +600,9 @@
             "body": "The \"All\" range draws one focusable button per calendar day from the first bucket to the last, with no limit on the span. The parser caps the number of buckets at 4,000 but not how many days they cover, so one very old valid date, such as from a misbehaving or federated peer, makes `buildAccountTokenTrendView` loop over hundreds of thousands of days and render that many buttons. Fix: clamp `spanStart` so the span is at most MAX_ACCOUNT_TOKEN_USAGE_BUCKETS days before `latestReported`.\n\nFailure scenario: Buckets [{startDate:\"1000-01-01\"},{startDate:\"2026-11-25\"}] produce about 373,000 day buttons and freeze the renderer when All is selected.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/federation-activity/usage-account-tokens.ts",
+            "startLine": 1732,
+            "endLine": 1732
           },
           {
             "id": "81259d57-d13b-4e82-b6fd-3759a8af6b87",
@@ -603,9 +610,9 @@
             "body": "\"PwrAgent measured (included above)\" and the per-day measured readouts cover only the selected Usage Activity period, not the 14–90 day chart range. `UsageActivity` passes `measuredRows={included}`, which holds the rows for the current preset (for example the last 5 hours or today). Every other day in the chart therefore shows no measured usage even when PwrAgent recorded turns that day. Fix: label the metric as the selected period's measured subset, or read measured rows over the chart's range.\n\nFailure scenario: With the Today preset and the 30d chart, PwrAgent turns from yesterday appear nowhere, and the \"measured\" metric suggests PwrAgent accounted for only today's tokens across the whole 30-day span.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/federation-activity/UsageAccountTokenTrend.tsx",
+            "startLine": 737,
+            "endLine": 737
           },
           {
             "id": "3befff16-9f26-4a2e-a7ea-5b6247638454",
@@ -613,9 +620,9 @@
             "body": "An up-to-date peer can be labelled \"did not report account-wide token history (older PwrAgent version)\". The narrowed second `readAll` pass never requests account token usage. A source whose first read failed but whose second read succeeded therefore has `data.accountTokenUsage === undefined`, which `legacyTokenOwners` reads as an old peer. Fix: in the second pass, request token usage again for any source that returned no data the first time.\n\nFailure scenario: With a limit preset, peer X times out on the first read and answers the narrowed second read; its account history is missing, and the note blames an old PwrAgent version.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/federation-activity/UsageActivity.tsx",
+            "startLine": 1014,
+            "endLine": 1014
           },
           {
             "id": "013faa98-1243-447e-bd06-78d2d24b5cb5",
@@ -623,9 +630,9 @@
             "body": "A Settings read failure now fails the whole Usage Activity response. `readUsageActivity` calls `this.resolveUsageAccountGroupsFn().codex` without a guard, while `captureUsageAccount` and `providerLimitObservation` wrap the same call in try/catch because configuration failures must not stop accounting. Fix: wrap the group read in try/catch and pass undefined when it throws.\n\nFailure scenario: If resolveUsageAccountGroups throws (for example, a broken config read), the synchronous throw rejects readUsageActivity, and the user sees an error instead of the ledger.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/app-server/backend-registry.ts",
+            "startLine": 7989,
+            "endLine": 7989
           },
           {
             "id": "73c449db-73b6-4a3a-b126-c9280214c578",
@@ -633,11 +640,12 @@
             "body": "\"Peak day\" shows the provider's lifetime peak beside range-scoped totals. The value prefers `summary.peakDailyTokens` over `view.rangePeakTokens`, so it can exceed every bar in the selected range and stays the same when the range changes. Fix: show the range peak, and give the lifetime peak its own label.\n\nFailure scenario: With the 14d range, the bars top out at 2M while \"Peak day\" reads 9M (from months ago), contradicting the y-axis maximum.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/renderer/src/features/federation-activity/UsageAccountTokenTrend.tsx",
+            "startLine": 732,
+            "endLine": 732
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -676,9 +684,9 @@
             "body": "The card can say a PR \"did not merge\" when the merge is still landing. After a gateway 5xx, GitHub can finish the merge a few seconds later, but the state is read straight away, so an `OPEN` reading is treated as final. A repository with an undetected merge queue can also have queued the PR on that same request. Fix: say the PR had not merged when checked, and that retrying is safe because a merge that already landed comes back as already merged.\n\nFailure scenario: The gateway times out at 10 s, the state read at 11 s returns OPEN, and the merge lands at 15 s. The card says #4395 did not merge, but it has.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/github-pr-fetcher.ts",
+            "startLine": 368,
+            "endLine": 368
           },
           {
             "id": "7c49a08c-fd04-45cc-b8ee-f307f085afce",
@@ -686,9 +694,9 @@
             "body": "Both merge callers run the stack-order check and can go through the merge-queue path. A 5xx on either one still puts gh's whole HTML page into the merge card. The `gh api graphql` failures at lines 415 (stack history) and 439 (queue gate and mutation) use the first stderr line as is. Fix: run those lines through `withoutHtmlBody` and name a 5xx the same way the merge path does.\n\nFailure scenario: Merging from a to-do card (checkStackOrder: true) hits a 502 on the stack-history GraphQL read. The card shows `non-200 OK status code: 502 Bad Gateway body: \"<html>…nginx…\"`, the same output this PR set out to remove.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/github-pr-fetcher.ts",
+            "startLine": 415,
+            "endLine": 415
           },
           {
             "id": "d865731d-043f-4c13-9a34-b8ebec59f600",
@@ -696,9 +704,9 @@
             "body": "When local gh hits its 60 s timeout, the merge is reported as failed even if it went through. `run([\"pr\", \"merge\", …], 60_000)` kills gh at the timeout, and the error goes down the generic path with no state check. Fix: treat a killed or timed-out gh like a 5xx and read the PR's state before reporting.\n\nFailure scenario: A slow GitHub keeps gh past 60 s and execFile kills it after GitHub accepted the merge. The card shows `gh pr merge failed: Command failed …` for a PR that is already merged.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/github-pr-fetcher.ts",
+            "startLine": 352,
+            "endLine": 352
           },
           {
             "id": "587f32db-fad8-4493-9bc4-6e17d657c29c",
@@ -706,9 +714,9 @@
             "body": "A 4xx refusal can be shown as a temporary GitHub outage. `ghServerErrorStatus` scans the whole line, so after the first status code fails to match it keeps looking, including inside a JSON body (only HTML bodies are removed). Fix: read only the first status code on the line, then check whether it is a 5xx.\n\nFailure scenario: `non-200 OK status code: 422 Unprocessable Entity body: \"{\\\"message\\\":\\\"upstream HTTP 500 …\\\"}\"` is reported as \"GitHub returned 500, and #N did not merge. This is usually temporary\" instead of the 422 refusal.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/github-pr-fetcher.ts",
+            "startLine": 100,
+            "endLine": 100
           },
           {
             "id": "30a01f4f-1b63-4198-b55b-84504aee7187",
@@ -716,11 +724,12 @@
             "body": "If the state read after a 5xx fails, the error is dropped without a trace. The `.then(…, () => undefined)` on the `pr view` call discards the failure, so the logs cannot show why the card said the state could not be read. Fix: log the failure with `fetcherLog` before falling back.\n\nFailure scenario: gh auth expires between the merge and the state read. The card says the state could not be read, and nothing in the main log explains why.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/pr-status/github-pr-fetcher.ts",
+            "startLine": 365,
+            "endLine": 365
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     },
     {
@@ -759,9 +768,9 @@
             "body": "An operator can no longer clear a wrong target project on a merge card. When an agent raised the merge card with the wrong `project`, the card shows a static \"For X\" line, and both the renderer (no menu) and `setThreadTodoProject` (refuses `null` too) block resetting it to the thread's own repository. Fix: decide whether a `null` pick should stay allowed for merge cards with a target project, and offer only a \"This thread\" row in that case.\n\nFailure scenario: An agent calls add_todo with a merge_pull_request action and project=PwrSnap by mistake. The card reads \"For PwrSnap\" with no picker, and a setProject(null) from any window is refused, so the only recovery is dismissing the card and asking the agent to raise it again.",
             "priority": null,
             "status": "declined",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/thread-todos/thread-todo-runtime.ts",
+            "startLine": 158,
+            "endLine": 158
           },
           {
             "id": "47823ce6-ddec-43d8-a9d5-d4fa6f7bbce1",
@@ -769,9 +778,9 @@
             "body": "An agent can still point a merge card at another project. The new helper's doc comment says a merge card has no project to choose, but `update_todo` / `add_todo` with `project` still set `targetProject` on a merge card, and the merge then runs in that directory. Fix: confirm that agent-set targets are intended (a merge in a sibling repository) or apply `threadTodoProjectIsChoosable` there too.\n\nFailure scenario: An agent calls update_todo on an open merge card with project=PwrGit. The owner sets targetProject, so the merge runs `gh pr merge 42` in PwrGit's checkout, which is the same-number hazard the PR closes for the operator.",
             "priority": null,
             "status": "declined",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/thread-todos/thread-todo-runtime.ts",
+            "startLine": 617,
+            "endLine": 617
           },
           {
             "id": "df55fd54-3a74-40dc-ada6-797309d59965",
@@ -779,9 +788,9 @@
             "body": "The regression test is a hand-picked example table and not a property, model or oracle test. The new test enumerates merge and review × key and null only, so a future action type is never checked against the rule. Fix: state the rule as a fast-check property over every `THREAD_TODO_ACTION_TYPES` entry (and no action), with an oracle for which actions run in their own project.\n\nFailure scenario: CLAUDE.md (root): \"Bug fixes must state the broken rule as a property, model, or oracle test and confirm it fails on pre-fix code.\" The added test is an example loop over two fixed cards.",
             "priority": null,
             "status": "addressed",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/__tests__/thread-todo-runtime.test.ts",
+            "startLine": 428,
+            "endLine": 428
           },
           {
             "id": "101f50e8-3402-4050-ac14-9839c93ec59c",
@@ -789,9 +798,9 @@
             "body": "The fixed-project check reads the card outside the transaction that writes it. `setThreadTodoProject` calls `todos.get` and then `todos.update` separately, so a card whose action changes in between is judged on its old action. Fix: if action types can change on an open card, move the check into the service's update transaction.\n\nFailure scenario: An agent re-raises an open card under the same key with a merge action while an operator's project pick is in flight. The pick passes the check against the old handoff action, and update then writes a targetProject onto the merge card.",
             "priority": null,
             "status": "declined",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/thread-todos/thread-todo-runtime.ts",
+            "startLine": 158,
+            "endLine": 158
           },
           {
             "id": "053bc8e0-4e1f-4b61-b7d4-a9c4489f1833",
@@ -799,11 +808,12 @@
             "body": "A pick on a resolved merge or review card reports the wrong reason. `todos.get` returns cards in any status, so the fixed-project error is thrown before `update` can report that the card is no longer open. Fix: check open status first, or accept that order since the menu never renders on a resolved card.\n\nFailure scenario: A stale peer window sends setProject for a merge card that was already merged. The owner answers \"A review or merge card runs in its own thread's project.\" and not the not-open conflict, which misleads anyone debugging the stale request.",
             "priority": null,
             "status": "declined",
-            "file": null,
-            "startLine": null,
-            "endLine": null
+            "file": "apps/desktop/src/main/thread-todos/thread-todo-runtime.ts",
+            "startLine": 158,
+            "endLine": 158
           }
-        ]
+        ],
+        "reviewedRangeVerified": false
       }
     }
   ]

@@ -16,6 +16,10 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { baselineProvenance, capturedRange, containsMachinePath, sanitizeItems, sanitizeText } from "./cohort-data.mjs";
+
+const checkedInCohorts = fileURLToPath(new URL("../cohorts/", import.meta.url));
 
 function parseArg(name, fallback) {
   const idx = process.argv.indexOf(name);
@@ -39,30 +43,6 @@ function resolveSqliteBinary() {
     }
   }
   throw new Error("sqlite3 binary not found on PATH or at /usr/bin/sqlite3");
-}
-
-function sanitizeRepoPath(rawPath) {
-  if (!rawPath || typeof rawPath !== "string") return null;
-  const normalized = rawPath.replace(/\\/g, "/");
-  for (const marker of ["/PwrAgnt/", "/PwrAgent/"]) {
-    const idx = normalized.lastIndexOf(marker);
-    if (idx >= 0) {
-      return normalized.slice(idx + marker.length);
-    }
-  }
-  if (/^(\/Users\/|\/home\/|\/private\/|[A-Za-z]:\/)/.test(normalized)) {
-    return path.posix.basename(normalized);
-  }
-  return normalized.replace(/^\/+/, "");
-}
-
-function sanitizeText(text) {
-  if (!text || typeof text !== "string") return "";
-  return text
-    .replace(/\/(?:Users|home)\/[^\s`"')]+?\/(?:PwrAgnt|PwrAgent)\//g, "")
-    .replace(/\/(?:Users|home)\/[^\s`"')]+/g, "<local-path>")
-    .replace(/[A-Za-z]:\\[^\s`"')]+?\\(?:PwrAgnt|PwrAgent)\\/g, "")
-    .trim();
 }
 
 function git(repo, args, allowFailure = false) {
@@ -163,19 +143,6 @@ function shuffleWithSeed(items, seed) {
   return arr;
 }
 
-function sanitizeItems(rawItems) {
-  return (Array.isArray(rawItems) ? rawItems : []).map((it, idx) => ({
-    id: it.id || `item-${idx + 1}`,
-    title: sanitizeText(it.title || ""),
-    body: sanitizeText(it.body || ""),
-    priority: typeof it.priority === "number" ? it.priority : null,
-    status: it.status || "open",
-    file: sanitizeRepoPath(it.file ?? it.location?.file ?? it.codeLocation?.absoluteFilePath ?? null),
-    startLine: it.startLine ?? it.location?.startLine ?? it.codeLocation?.lineRange?.start ?? null,
-    endLine: it.endLine ?? it.location?.endLine ?? it.codeLocation?.lineRange?.end ?? null,
-  }));
-}
-
 function verifyCohorts(repo, outDir, remote) {
   const files = fs.readdirSync(outDir).filter((f) => f.endsWith(".json")).sort();
   if (files.length === 0) {
@@ -187,12 +154,11 @@ function verifyCohorts(repo, outDir, remote) {
 
   for (const file of files) {
     const full = path.join(outDir, file);
-    const rawText = fs.readFileSync(full, "utf8");
-    if (/\/Users\/|\/home\/|[A-Za-z]:\\Users\\/.test(rawText)) {
+    const cohort = JSON.parse(fs.readFileSync(full, "utf8"));
+    if (containsMachinePath(cohort)) {
       console.error(`[FAIL] ${file}: contains machine-local filesystem path`);
       failures += 1;
     }
-    const cohort = JSON.parse(rawText);
     const cases = Array.isArray(cohort.cases) ? cohort.cases : [];
     let okCount = 0;
     for (const c of cases) {
@@ -225,7 +191,7 @@ function verifyCohorts(repo, outDir, remote) {
   if (failures > 0) {
     throw new Error(`Cohort verification failed with ${failures} error(s)`);
   }
-  console.log(`Verified ${files.length} cohorts (${seenPrs.size} disjoint permanently survivable PRs).`);
+  console.log(`Verified ${files.length} cohorts (${seenPrs.size} disjoint PRs with reachable pinned commits).`);
 }
 
 function buildCohortDoc(name, split, blind, description, cases) {
@@ -271,10 +237,11 @@ function summarizeCohortSafe(doc) {
 
 function main() {
   const repo = path.resolve(parseArg("--repo", process.cwd()));
-  const outDir = path.resolve(parseArg("--out", path.join(repo, ".agents/skills/managed-review-eval/cohorts")));
+  const verify = hasFlag("--verify");
+  const outDir = path.resolve(parseArg("--out", verify ? checkedInCohorts : path.join(repo, ".local/managed-review-eval/new-cohorts")));
   const remote = parseArg("--remote", "origin");
 
-  if (hasFlag("--verify")) {
+  if (verify) {
     verifyCohorts(repo, outDir, remote);
     return;
   }
@@ -285,17 +252,38 @@ function main() {
   const seedDev1Path = parseArg("--seed-dev1", "");
   const seed = Number(parseArg("--seed", "20261125"));
   const limit = Number(parseArg("--limit", "1000"));
+  if (!Number.isSafeInteger(seed) || !Number.isSafeInteger(limit) || limit < 1) {
+    throw new Error("Seed and limit must be integers, and limit must be positive.");
+  }
 
   fs.mkdirSync(outDir, { recursive: true });
   const sqlite = resolveSqliteBinary();
   const prHeads = loadOriginPrHeads(repo, remote);
 
-  // 1. Optional dev-1 seed cohort (sanitized & survivability-verified)
+  // Exclude published cases even when a caller runs without a dev-1 seed.
   const usedPrs = new Set();
+  const lockedPrs = new Set();
+  const extraExclusions = parseArg("--exclude-cohorts", "");
+  for (const directory of [checkedInCohorts, ...(extraExclusions ? [extraExclusions] : [])]) {
+    for (const name of fs.readdirSync(directory).filter((file) => file.endsWith(".json"))) {
+      const cohort = JSON.parse(fs.readFileSync(path.join(directory, name), "utf8"));
+      const cases = Array.isArray(cohort) ? cohort : cohort.cases;
+      for (const c of cases) {
+        usedPrs.add(c.pr);
+        if (cohort.blind) lockedPrs.add(c.pr);
+      }
+    }
+  }
   const dev1Cases = [];
-  if (seedDev1Path && fs.existsSync(seedDev1Path)) {
+  if (seedDev1Path) {
     const rawDev1 = JSON.parse(fs.readFileSync(seedDev1Path, "utf8"));
-    for (const c of rawDev1) {
+    if (rawDev1.blind) throw new Error("A blind cohort cannot be used as a development seed.");
+    for (const c of Array.isArray(rawDev1) ? rawDev1 : rawDev1.cases) {
+      if (lockedPrs.has(c.pr)) throw new Error("The development seed overlaps a blind cohort.");
+      if (!["codex-native", "claude-code-review"].includes(c.baseline.reviewMode)
+        || c.baseline.reviewedRangeVerified !== true) {
+        throw new Error("The development seed requires verified reviewer and range provenance.");
+      }
       const surv = checkSurvivability(repo, c.pr, c.baseline.baseCommit, c.baseline.headCommit, prHeads, true, remote);
       if (!surv.ok) {
         throw new Error(`dev-1 case ${c.id} (PR #${c.pr}) failed survivability check: ${surv.reason}`);
@@ -312,7 +300,7 @@ function main() {
           reviewerBackend: c.baseline.reviewerBackend || c.backend,
           reviewerModel: c.baseline.reviewerModel ?? null,
           reviewerEffort: c.baseline.reviewerEffort ?? null,
-          reviewMode: c.baseline.reviewMode || (c.backend === "claude" ? "claude-code-review" : "codex-native"),
+          reviewMode: c.baseline.reviewMode,
           prNumber: c.pr,
           prUrl: `https://github.com/pwrdrvr/PwrAgent/pull/${c.pr}`,
           prTitle: sanitizeText(c.baseline.prTitle || `PR #${c.pr}`),
@@ -320,6 +308,7 @@ function main() {
           baseBranch: c.baseline.baseBranch || "main",
           baseCommit: c.baseline.baseCommit,
           headCommit: c.baseline.headCommit,
+          reviewedRangeVerified: true,
           diffFiles: stats.files,
           diffAdds: stats.adds,
           diffDels: stats.dels,
@@ -338,30 +327,11 @@ function main() {
       "-readonly",
       "-json",
       dbPath,
-      `SELECT review_id, thread_id, backend, status, updated_at, payload FROM thread_reviews ORDER BY updated_at DESC LIMIT ${limit};`,
+      `SELECT updated_at, payload FROM thread_reviews WHERE status = 'handled' ORDER BY updated_at DESC LIMIT ${limit};`,
     ],
     { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
   );
-  const subAgentsJson = execFileSync(
-    sqlite,
-    [
-      "-readonly",
-      "-json",
-      dbPath,
-      "SELECT thread_id, monitor_id, json_extract(card, '$.preferredModel') AS preferred_model, json_extract(card, '$.preferredReasoningEffort') AS preferred_effort FROM thread_sub_agents WHERE monitor_id LIKE 'review:%';",
-    ],
-    { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
-  );
-
   const reviewRows = JSON.parse(reviewsJson || "[]");
-  const subAgentRows = JSON.parse(subAgentsJson || "[]");
-  const subAgentByKey = new Map();
-  for (const sa of subAgentRows) {
-    subAgentByKey.set(`${sa.thread_id}::${sa.monitor_id}`, {
-      preferredModel: sa.preferred_model ?? null,
-      preferredReasoningEffort: sa.preferred_effort ?? null,
-    });
-  }
 
   const perPrCandidates = new Map();
   for (const row of reviewRows) {
@@ -372,28 +342,14 @@ function main() {
       continue;
     }
     const ctx = payload.context || {};
-    const prUrl = ctx.pullRequest?.url || "";
-    const isPwr =
-      /github\.com\/pwrdrvr\/PwrAgent\/pull\/(\d+)/i.test(prUrl)
-      || /PwrAgnt|PwrAgent/i.test(ctx.projectLabel || "")
-      || /PwrAgnt|PwrAgent/i.test(ctx.repositoryPath || "");
-    if (!isPwr) continue;
-
-    const prMatch = prUrl.match(/\/pull\/(\d+)/);
-    const prNum = prMatch ? Number(prMatch[1]) : (ctx.pullRequest?.number ?? null);
-    if (!prNum || usedPrs.has(prNum)) continue;
-
-    const headCommit = ctx.headCommit || null;
-    if (!headCommit || !/^[0-9a-f]{40}$/.test(headCommit)) continue;
-    if (!hasLocalCommit(repo, headCommit)) continue;
-
-    let baseCommit = ctx.baseCommit || null;
+    const range = capturedRange(ctx);
+    const provenance = baselineProvenance(payload);
+    if (!range || !provenance || usedPrs.has(range.pr)) continue;
+    const { pr: prNum, baseCommit, headCommit } = range;
+    const { backend, reviewMode } = provenance;
+    if (!hasLocalCommit(repo, baseCommit) || !hasLocalCommit(repo, headCommit)
+      || !isAncestor(repo, baseCommit, headCommit)) continue;
     const baseBranch = ctx.baseBranch || ctx.pullRequest?.baseRefName || "main";
-    if (!baseCommit || !hasLocalCommit(repo, baseCommit)) {
-      const ref = baseBranch.startsWith(`${remote}/`) ? baseBranch : `${remote}/${baseBranch}`;
-      baseCommit = git(repo, ["merge-base", ref, headCommit], true);
-    }
-    if (!baseCommit || !/^[0-9a-f]{40}$/.test(baseCommit)) continue;
 
     const surv = checkSurvivability(repo, prNum, baseCommit, headCommit, prHeads, false, remote);
     if (!surv.ok) continue;
@@ -401,20 +357,12 @@ function main() {
     const stats = diffStats(repo, baseCommit, headCommit);
     if (stats.files === 0 || (stats.adds + stats.dels) === 0) continue;
 
-    const items = sanitizeItems(payload.items);
+    const items = sanitizeItems(payload.items, ctx);
     const addressed = items.filter((i) => i.status === "addressed").length;
     const deferred = items.filter((i) => i.status === "deferred").length;
     const declined = items.filter((i) => i.status === "declined").length;
     const open = items.length - addressed - deferred - declined;
     if (open > 0) continue;
-
-    const backend = payload.backend;
-    if (backend !== "codex" && backend !== "claude") continue;
-
-    const saCard = subAgentByKey.get(`${row.backend}:${row.thread_id}::${row.review_id}`);
-    const reviewerModel = saCard?.preferredModel ?? payload.reviewer?.model ?? null;
-    const reviewerEffort = saCard?.preferredReasoningEffort ?? payload.reviewer?.reasoningEffort ?? null;
-    const reviewMode = backend === "claude" ? "claude-code-review" : "codex-native";
 
     let bucket;
     if (backend === "codex") {
@@ -437,8 +385,8 @@ function main() {
       updatedAt: row.updated_at,
       baseline: {
         reviewerBackend: backend,
-        reviewerModel,
-        reviewerEffort,
+        reviewerModel: null,
+        reviewerEffort: null,
         reviewMode,
         prNumber: prNum,
         prUrl: `https://github.com/pwrdrvr/PwrAgent/pull/${prNum}`,
@@ -447,6 +395,7 @@ function main() {
         baseBranch: baseBranch.replace(/^origin\//, ""),
         baseCommit,
         headCommit,
+        reviewedRangeVerified: true,
         diffFiles: stats.files,
         diffAdds: stats.adds,
         diffDels: stats.dels,
@@ -530,6 +479,7 @@ function main() {
     ),
   );
 
+  if (docs.some(containsMachinePath)) throw new Error("Draft cohorts contain machine-local paths.");
   for (const doc of docs) {
     const outPath = path.join(outDir, `${doc.name}.json`);
     fs.writeFileSync(outPath, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
