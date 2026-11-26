@@ -1228,14 +1228,31 @@ export class StackReader {
     const cloneCheckouts = directories ? scopedClones : new Map([...checkouts.values()]
       .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
     const attachments = validateAttachments && observeStackAttachments(checkouts, observation, retried);
+    const attachmentWitnesses = new Set<Checkout>();
     let validatedAny = false;
     const rows = validateAttachments && attachments ? await Promise.all(local.map(async (row) => {
-      if (!row.prs?.length || !threadDirectories(row).some((cwd) => {
+      if (!row.prs?.length) return row;
+      const paths = threadDirectories(row);
+      if (!paths.some((cwd) => {
         const checkout = checkouts.get(cwd);
         return checkout && cloneCheckouts.has(checkout.commonDir);
       })) return row;
       validatedAny = true;
-      return { ...row, prs: await validateAttachments({ ...row, prs: row.prs }, attachments.demand) };
+      const prs = await validateAttachments({ ...row, prs: row.prs }, attachments.demand);
+      if (backgroundNavigation) {
+        // Only a validated attachment can extend the evidence required by
+        // this background scan. Retain alternate paths for clone ambiguity,
+        // exact provenance paths, and the checkout that projects each clone.
+        const provenance = [...row.prs, ...prs].flatMap((pr) => pr.linkedDirectoryPaths ?? []);
+        for (const cwd of [...paths, ...provenance]) {
+          const checkout = checkouts.get(cwd);
+          if (!checkout) continue;
+          attachmentWitnesses.add(checkout);
+          const clone = cloneCheckouts.get(checkout.commonDir);
+          if (clone) attachmentWitnesses.add(clone);
+        }
+      }
+      return { ...row, prs };
     })) : local;
     demand.signal?.throwIfAborted();
     const attachmentCheckouts = await resolveAttachmentCheckouts(rows, checkouts, cloneCheckouts, observation);
@@ -1327,7 +1344,8 @@ export class StackReader {
     const threadKeys = new Set(stacks.flatMap(({ stack }) => stack.layers.flatMap((layer) => layer.thread ? [layer.thread.key] : [])));
     const activityByThread = new Map(await Promise.all([...threadKeys].map(async (key) => [key, await activity?.(key)] as const)));
     demand.signal?.throwIfAborted();
-    const witnessedCheckouts = validatedAny ? checkouts.values() : [...checkouts.values()].filter((checkout) => observation.rosterMember(checkout));
+    const witnessedCheckouts = validatedAny && !backgroundNavigation ? checkouts.values()
+      : [...checkouts.values()].filter((checkout) => attachmentWitnesses.has(checkout) || observation.rosterMember(checkout));
     if (!await observation.checkoutsStillMatch(witnessedCheckouts) || !await observation.rostersStillMatch(checkouts.values())
       || (validatedAny && !await attachments!.unchanged())) {
       if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
