@@ -3328,6 +3328,139 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads[0]?.reactions).toEqual(["✋", "👀"]);
   });
 
+  it("serializes rapid multi-select reaction toggles and preserves newer pending toggles across stale responses and notifications", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const readPopulation = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "Multi-select thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          updatedAt: 1_000,
+          reactions: [],
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const deferreds: {
+      request: Parameters<NonNullable<DesktopApi["setThreadReaction"]>>[0];
+      resolve: (value: { backend: "codex"; threadId: string; reactions: string[] }) => void;
+    }[] = [];
+    const setThreadReaction = vi.fn(
+      (request: Parameters<NonNullable<DesktopApi["setThreadReaction"]>>[0]) =>
+        new Promise<{ backend: "codex"; threadId: string; reactions: string[] }>(
+          (resolve) => {
+            deferreds.push({ request, resolve });
+          },
+        ),
+    );
+    const desktopApi: DesktopApi = {
+      readPopulation,
+      setThreadReaction,
+      onAgentEvent: (handler) => {
+        agentEventHandler = handler;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(1);
+    });
+
+    const initialThread = result.current.threads[0]!;
+    let firstPromise!: Promise<void>;
+    let secondPromise!: Promise<void>;
+    let thirdPromise!: Promise<void>;
+
+    // Fire three rapid toggles against the same stale thread snapshot before
+    // the first IPC returns: +👍, +🚀, -👍.
+    act(() => {
+      firstPromise = result.current.setThreadReaction(initialThread, "👍", true);
+      secondPromise = result.current.setThreadReaction(initialThread, "🚀", true);
+      thirdPromise = result.current.setThreadReaction(initialThread, "👍", false);
+    });
+
+    // Optimistic updates compose from live state rather than clobbering each other.
+    expect(result.current.threads[0]?.reactions).toEqual(["🚀"]);
+    // Only the first request is in flight until it completes (per-thread serialization).
+    expect(setThreadReaction).toHaveBeenCalledTimes(1);
+    expect(deferreds[0]?.request.emoji).toBe("👍");
+    expect(deferreds[0]?.request.present).toBe(true);
+
+    // Stale notification from the first mutation must not snap 👍 back on or drop 🚀.
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/reactions/updated",
+          params: {
+            threadId: "thread-1",
+            reactions: ["👍"],
+          },
+        },
+      } as never);
+    });
+    expect(result.current.threads[0]?.reactions).toEqual(["🚀"]);
+
+    // First response settles with ["👍"]; queued toggles (+🚀, -👍) stay applied
+    // and the second request now starts.
+    await act(async () => {
+      deferreds[0]!.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        reactions: ["👍"],
+      });
+      await firstPromise;
+    });
+    expect(result.current.threads[0]?.reactions).toEqual(["🚀"]);
+    expect(setThreadReaction).toHaveBeenCalledTimes(2);
+    expect(deferreds[1]?.request.emoji).toBe("🚀");
+    expect(deferreds[1]?.request.present).toBe(true);
+
+    // Second response settles with ["👍", "🚀"]; pending -👍 stays applied and
+    // the third request starts.
+    await act(async () => {
+      deferreds[1]!.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        reactions: ["👍", "🚀"],
+      });
+      await secondPromise;
+    });
+    expect(result.current.threads[0]?.reactions).toEqual(["🚀"]);
+    expect(setThreadReaction).toHaveBeenCalledTimes(3);
+    expect(deferreds[2]?.request.emoji).toBe("👍");
+    expect(deferreds[2]?.request.present).toBe(false);
+
+    // Third response settles cleanly with ["🚀"].
+    await act(async () => {
+      deferreds[2]!.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        reactions: ["🚀"],
+      });
+      await thirdPromise;
+    });
+    expect(result.current.threads[0]?.reactions).toEqual(["🚀"]);
+  });
+
   it("marks a remote snapshot unavailable and refreshes it after reconnect", async () => {
     const federationTarget = {
       scope: "remote" as const,
