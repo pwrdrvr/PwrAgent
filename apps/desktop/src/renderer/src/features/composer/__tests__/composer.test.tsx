@@ -9215,6 +9215,7 @@ describe("Composer", () => {
     const scheduledApi = createScheduledActionApi();
     const startReview = vi.fn(async () => ({ backend: source, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
     const removeOptimisticMessage = vi.fn();
+    const bindOptimisticReviewEntryToTurn = vi.fn();
     const codex = backendSummary("codex");
     codex.capabilities = { ...codex.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true,
       reviewCodexSubAgent: true, reviewAutoFix: true, reviewPullRequestSet: true };
@@ -9234,6 +9235,7 @@ describe("Composer", () => {
     const element = (
       <Composer
         addOptimisticReviewEntry={() => "optimistic-review-start"}
+        bindOptimisticReviewEntryToTurn={bindOptimisticReviewEntryToTurn}
         removeOptimisticMessage={removeOptimisticMessage}
         backends={source === "claude" ? [claude, codex] : [codex]}
         desktopApi={{ onAgentEvent: () => () => undefined, startReview, ...scheduledApi }}
@@ -9247,7 +9249,7 @@ describe("Composer", () => {
         }}
       />
     );
-    return { element, prs, scheduledApi, startReview, removeOptimisticMessage };
+    return { element, prs, scheduledApi, startReview, removeOptimisticMessage, bindOptimisticReviewEntryToTurn };
   };
 
   it("reviews a checked stack together, bottom first, on the PwrAgent Sub Agent", async () => {
@@ -9328,7 +9330,7 @@ describe("Composer", () => {
    * sends no reviewer: Claude Code reviews its own thread at the chosen effort.
    */
   it("runs Claude Code's /code-review on a Claude thread with the targets and effort it takes", async () => {
-    const { element, prs, startReview, removeOptimisticMessage } = stackReviewFixture("claude");
+    const { element, prs, startReview, removeOptimisticMessage, bindOptimisticReviewEntryToTurn } = stackReviewFixture("claude");
     render(element);
     await openReviewComposer();
     expect(screen.getByRole("button", { name: /^Branch/ })).toBeInTheDocument();
@@ -9354,6 +9356,7 @@ describe("Composer", () => {
     // Claude's accepted /code-review has its own user row and never emits a
     // review-start artifact to replace the Composer placeholder.
     expect(removeOptimisticMessage).toHaveBeenCalledExactlyOnceWith("optimistic-review-start");
+    expect(bindOptimisticReviewEntryToTurn).not.toHaveBeenCalled();
   });
 
   /**

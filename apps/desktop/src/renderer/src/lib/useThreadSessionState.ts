@@ -5595,6 +5595,7 @@ export function useThreadSessionState(params: {
   ) => string;
   addOptimisticReviewEntry: (displayText: string) => string;
   beginReviewSubmission: () => (() => void) | undefined;
+  bindOptimisticReviewEntryToTurn: (id: string, turnId: string) => void;
   /**
    * Names the turn a pending user message started, from the owner's
    * `startTurn` response. Call it only for a send that opened that turn.
@@ -8720,6 +8721,42 @@ export function useThreadSessionState(params: {
     [thread, threadKey, updateSession]
   );
 
+  const bindOptimisticReviewEntryToTurn = useCallback(
+    (id: string, turnId: string): void => {
+      if (!threadKey) return;
+
+      updateSession(threadKey, (current) => {
+        const pending = current.optimisticEntries.find(
+          (entry): entry is AppServerThreadReviewEntry =>
+            entry.id === id && entry.type === "review"
+        );
+        if (!pending || pending.turn?.id === turnId) return current;
+
+        const isOwnerHeader = (entry: AppServerThreadEntry): entry is AppServerThreadReviewEntry =>
+          entry.type === "review"
+          && entry.turn?.id === turnId
+          && !isPendingEntryId(entry.id)
+          && isReviewStartEntry(entry);
+        const replayHeader = current.response?.replay.entries.find(isOwnerHeader);
+        const headerAlreadyRetainedOrSettled =
+          current.optimisticEntries.some(isOwnerHeader)
+          || (replayHeader && replayHeader.turn?.status !== "in_progress");
+        // A running read can get here before the receipt and be absent from
+        // the next read. Keep that owner's header until replay settles it.
+        const fallback = replayHeader
+          ? preserveReviewMetadata(pending, replayHeader)
+          : { ...pending, turn: { id: turnId } };
+        return {
+          ...current,
+          optimisticEntries: headerAlreadyRetainedOrSettled
+            ? current.optimisticEntries.filter((entry) => entry.id !== id)
+            : current.optimisticEntries.map((entry) => entry.id === id ? fallback : entry),
+        };
+      });
+    },
+    [threadKey, updateSession]
+  );
+
   const upsertLiveTranscriptEntry = useCallback(
     (entry: AppServerThreadEntry): void => {
       if (!threadKey) {
@@ -9307,6 +9344,7 @@ export function useThreadSessionState(params: {
     addOptimisticUserMessage,
     addOptimisticReviewEntry,
     beginReviewSubmission,
+    bindOptimisticReviewEntryToTurn,
     bindOptimisticUserMessageToTurn,
     clearPendingRequest,
     entries,

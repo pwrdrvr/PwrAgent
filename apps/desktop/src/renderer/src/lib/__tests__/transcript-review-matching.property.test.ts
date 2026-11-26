@@ -13,7 +13,7 @@ const entry: fc.Arbitrary<AppServerThreadReviewEntry> = fc.record({
   createdAt: timestamp,
   turn: fc.option(fc.record({
     id: fc.constantFrom("one", "two", "*"),
-    status: fc.constantFrom("in_progress" as const, "completed" as const, "cancelled" as const),
+    status: fc.constantFrom("in_progress" as const, "completed" as const, "cancelled" as const, undefined),
     startedAt: timestamp,
     completedAt: timestamp,
   }), { nil: undefined }),

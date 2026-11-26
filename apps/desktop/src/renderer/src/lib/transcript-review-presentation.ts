@@ -150,7 +150,7 @@ export function summarizeTranscriptReviewSegment(
   for (const entry of entries) {
     const entryType = entry.type;
     if (entryType === "review") {
-      events.push(entry);
+      if (!isPendingEntryId(entry.id)) events.push(entry);
       continue;
     }
     if (
@@ -348,9 +348,9 @@ export function* iterateTranscriptReviewHistoryEvents(
 
 function reviewEvent(entry: AppServerThreadEntry): TranscriptReviewEvent | undefined {
   if (entry.type === "review") {
-    // A local submission header has neither a provider turn nor findings.
-    // It cannot claim messages in earlier turns even with identical text.
-    return !entry.turn?.id && isPendingEntryId(entry.id) ? undefined : entry;
+    // The receipt gives the placeholder a turn ID, but only the owner's
+    // review rows can be evidence for suppressing transcript messages.
+    return isPendingEntryId(entry.id) ? undefined : entry;
   }
   if (
     entry.type === "message"
