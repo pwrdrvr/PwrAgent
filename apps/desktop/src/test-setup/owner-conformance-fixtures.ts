@@ -32,28 +32,44 @@ export default async function setup(project: TestProject) {
   if (process.platform === "win32") return;
 
   let fixtures: ReturnType<typeof createNativeHelperFixture<Record<OwnerKind, OwnerPackage>>> | undefined;
-  const dispose = async (): Promise<void> => {
-    await fixtures?.dispose();
+  let preparation = Promise.resolve();
+
+  const rebuild = async (watchRerun: boolean): Promise<void> => {
+    const replacement = createNativeHelperFixture(buildOwnerPackages);
+    try {
+      const packages = await replacement.ready;
+      // Watch hooks run before Vitest joins the previous worker run. Keep its
+      // bundles available until those workers have finished.
+      if (watchRerun) await project.vitest.waitForTestRunEnd();
+      project.provide("ownerConformanceFixtures", packages);
+    } catch (error) {
+      await replacement.dispose();
+      throw error;
+    }
+    const previous = fixtures;
+    fixtures = replacement;
+    await previous?.dispose();
   };
-  const prepare = async (specifications: TestSpecification[]): Promise<void> => {
+
+  const prepare = async (specifications: TestSpecification[], watchRerun: boolean): Promise<void> => {
     // The pool applies sharding after global setup. Build only for a shard
-    // that will run conformance, and keep the packages for watch-mode reruns.
+    // that will run conformance.
     const selected = project.vitest.config.shard
       ? await new project.vitest.config.sequence.sequencer(project.vitest).shard(specifications)
       : specifications;
     if (!selected.some((spec) => spec.project === project && spec.moduleId === suite)) return;
 
-    fixtures ??= createNativeHelperFixture(buildOwnerPackages);
-    project.provide("ownerConformanceFixtures", await fixtures.ready);
+    // File changes can queue another watch rerun while the bundles compile.
+    const next = preparation.then(() => rebuild(watchRerun));
+    preparation = next.catch(() => {});
+    await next;
   };
 
-  try {
-    const specifications = project.vitest.state.getPaths().flatMap((file) => project.vitest.getModuleSpecifications(file));
-    await prepare(specifications);
-  } catch (error) {
-    await dispose();
-    throw error;
-  }
-  project.onTestsRerun(prepare);
-  return dispose;
+  const specifications = project.vitest.state.getPaths().flatMap((file) => project.vitest.getModuleSpecifications(file));
+  await prepare(specifications, false);
+  project.onTestsRerun((selected) => prepare(selected, true));
+  return async () => {
+    await preparation;
+    await fixtures?.dispose();
+  };
 }
