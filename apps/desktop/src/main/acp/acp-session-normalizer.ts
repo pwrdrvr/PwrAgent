@@ -21,7 +21,11 @@ import {
 } from "@pwragent/shared/command-action-labels";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { ACP_WORKSPACE_HISTORY_URI } from "./acp-workspace-history.js";
-import { MANAGED_REVIEW_CONTEXT_OPEN_MARKER, stripManagedReviewContextBlock } from "../../shared/review-command.js";
+import {
+  MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
+  MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
+  stripManagedReviewContextBlock,
+} from "../../shared/review-command.js";
 import { stripAcpAgentInstructionChunk } from "../../shared/agent-instruction-delivery.js";
 import {
   type AcpProviderTool,
@@ -742,18 +746,9 @@ export class AcpSessionReplayNormalizer {
           receivedAt: createdAt,
         });
       } else if (kind === "pwragent_user_prompt") {
-        const prompt = readString(update.update, "prompt") ?? "";
-        const parts = readMessageParts(update.update);
-        // Older versions stored the injected review both in the prompt and
-        // as its first text part. Keep the rest of the recorded user input.
-        const hasReviewContext = prompt.startsWith(`${MANAGED_REVIEW_CONTEXT_OPEN_MARKER}\n\n`);
-        const firstPart = parts?.[0];
         this.recordUserPrompt({
           sessionId: update.sessionId,
-          prompt: hasReviewContext ? stripManagedReviewContextBlock(prompt) : prompt,
-          parts: hasReviewContext && firstPart?.type === "text"
-            && firstPart.text.startsWith(`${MANAGED_REVIEW_CONTEXT_OPEN_MARKER}\n\n`)
-            ? parts?.slice(1) : parts,
+          ...readRecordedAcpPrompt(update.update),
           turnId: readString(update.update, "turnId") ?? buildPendingTurnId(update.sessionId),
           receivedAt: createdAt,
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
@@ -2123,6 +2118,35 @@ function readMessageParts(
   record: Record<string, unknown>,
 ): AppServerThreadMessagePart[] | undefined {
   return readAcpMessageParts(record, "parts");
+}
+
+function readRecordedAcpPrompt(record: Record<string, unknown>): {
+  prompt: string;
+  parts?: AppServerThreadMessagePart[];
+} {
+  const prompt = readString(record, "prompt") ?? "";
+  const parts = readMessageParts(record);
+  const open = `${MANAGED_REVIEW_CONTEXT_OPEN_MARKER}\n\n`;
+  if (record.reviewContextInjected === false || !prompt.startsWith(open)) return { prompt, parts };
+
+  const close = `\n\n${MANAGED_REVIEW_CONTEXT_CLOSE_MARKER}`;
+  if (parts?.length) {
+    const first = parts[0];
+    // The writer put the entire review in its own first text part. Use that
+    // boundary because a finding can quote the closing marker in its body.
+    if (parts.length > 1 && first?.type === "text"
+      && first.text.startsWith(open) && first.text.endsWith(close)
+      && (prompt === first.text || prompt.startsWith(`${first.text}\n`))) {
+      return { prompt: prompt.slice(first.text.length + 1), parts: parts.slice(1) };
+    }
+    return { prompt, parts };
+  }
+
+  // Older records without parts can only be identified by a complete envelope.
+  const closeAt = prompt.indexOf(close, open.length);
+  if (closeAt < 0) return { prompt, parts };
+  const reply = prompt.slice(closeAt + close.length);
+  return { prompt: !reply || reply.startsWith("\n") ? reply.trimStart() : prompt, parts };
 }
 
 function normalizeUserPrompt(

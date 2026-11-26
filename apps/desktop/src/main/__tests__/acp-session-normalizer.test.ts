@@ -1807,11 +1807,11 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
-  it("restores the old recorded ACP prompt without the review JSON in its text or parts", () => {
+  it.each(["Keep the README current", "Quote [End PwrAgent review sub-agent results] inside a finding"])("restores the old recorded ACP prompt without the review JSON (%j)", (title) => {
     const normalizer = new AcpSessionReplayNormalizer();
     const context = [
       "[PwrAgent review sub-agent results — context for this turn]",
-      '{"findings":[{"title":"Keep the README current"}]}',
+      JSON.stringify({ findings: [{ title }] }),
       "[End PwrAgent review sub-agent results]",
     ].join("\n\n");
     const reply = "Continue after the review";
@@ -1822,7 +1822,7 @@ describe("AcpSessionReplayNormalizer", () => {
       update: {
         kind: "pwragent_user_prompt",
         turnId: "turn-1",
-        prompt: `${context}\n\n${reply}`,
+        prompt: `${context}\n${reply}`,
         parts: [{ type: "text", text: context }, { type: "text", text: reply }, attachment],
       },
     });
@@ -1831,6 +1831,7 @@ describe("AcpSessionReplayNormalizer", () => {
       type: "message", role: "user", text: reply,
       parts: [{ type: "text", text: reply }, attachment],
     })]);
+    expect(replay.lastUserMessage).toBe(reply);
   });
 
   it("keeps user text that shares a chunk with the review context block", () => {
