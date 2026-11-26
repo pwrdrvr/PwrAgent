@@ -2019,10 +2019,17 @@ describe("Claude SDK backend", () => {
       permissionMode: "default",
       includePartialMessages: true,
     });
+    const {
+      PWRAGENT_BACKEND: queryBackend,
+      PWRAGENT_THREAD_ID: queryThreadId,
+      ...baseQueryEnv
+    } = f.queries[0].env ?? {};
+    expect(queryBackend).toBe("claude");
+    expect(queryThreadId).toBe(threadId);
     expect(f.queries[0].env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(f.queries[0].env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
     expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({
-      env: f.queries[0].env, signal: expect.any(AbortSignal),
+      env: baseQueryEnv, signal: expect.any(AbortSignal),
     });
     expect(f.queries[0].env?.PATH).toBe("/fixture");
     expect(f.queries[0].env?.CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
