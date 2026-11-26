@@ -397,15 +397,27 @@ function applyMatchedTitleToSummary(
   if (!presentation.hasNonBrowserDetails) {
     return matchedTitle;
   }
-  const segments = entry.summary.split(" · ");
-  const matchIndex = segments.lastIndexOf(presentation.title);
-  if (matchIndex !== -1) {
-    segments[matchIndex] = matchedTitle;
-    return segments.join(" · ");
+  if (entry.summary === presentation.title) {
+    return matchedTitle;
   }
-  return entry.summary === presentation.title
-    ? matchedTitle
-    : `${entry.summary} · ${matchedTitle}`;
+  const segments = entry.summary.split(" · ");
+  const titleSegments = presentation.title.split(" · ");
+  if (titleSegments.length > 0 && titleSegments.length <= segments.length) {
+    for (let start = segments.length - titleSegments.length; start >= 0; start -= 1) {
+      let matched = true;
+      for (let offset = 0; offset < titleSegments.length; offset += 1) {
+        if (segments[start + offset] !== titleSegments[offset]) {
+          matched = false;
+          break;
+        }
+      }
+      if (matched) {
+        segments.splice(start, titleSegments.length, matchedTitle);
+        return segments.join(" · ");
+      }
+    }
+  }
+  return `${entry.summary} · ${matchedTitle}`;
 }
 
 function hasTrailingUnresolvedBrowserCall(entry: AppServerThreadActivityEntry): boolean {

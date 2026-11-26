@@ -585,7 +585,10 @@ function classifyCompletedTurnEntries(
       }
       continue;
     }
-    if (isConcreteWorkEntry(entry)) {
+    if (
+      (entry.type === "activity" && isRichBrowserUseActivity(entry))
+      || isConcreteWorkEntry(entry)
+    ) {
       sawAnyWorkOrCommentaryAfter = true;
       if (!isAllFailedActivity(entry)) {
         sawNonFailedWorkAfter = true;

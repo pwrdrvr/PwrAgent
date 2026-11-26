@@ -329,9 +329,9 @@ it("replaces the browser summary segment anywhere in a mixed activity summary wi
   fc.assert(
     fc.property(
       fc.array(fc.constantFrom("Ran 1 command", "Read 2 files", "Used 1 tool"), { maxLength: 2 }),
+      fc.constantFrom("Browsed localhost:3000", "Check cart · confirm total"),
       fc.array(fc.constantFrom("Spawned 1 agent", "Waited on 1 agent"), { minLength: 1, maxLength: 2 }),
-      (prefixParts, suffixParts) => {
-        const browserTitle = "Browsed localhost:3000";
+      (prefixParts, browserTitle, suffixParts) => {
         const matchedTitle = "Verified checkout";
         const summary = [...prefixParts, browserTitle, ...suffixParts].join(" · ");
         const activity: AppServerThreadActivityEntry = {
@@ -344,7 +344,7 @@ it("replaces the browser summary segment anywhere in a mixed activity summary wi
             {
               id: "browser-1",
               kind: "command",
-              label: "In-app browser · localhost:3000",
+              label: browserTitle,
               status: "completed",
               browserUse: {
                 backend: "iab",
