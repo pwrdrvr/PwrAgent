@@ -106,14 +106,20 @@ export class ThreadSearchStore implements ThreadSearchStorage {
     }
 
     const cache = this.projectionCache;
-    const preflight = this.db.transaction(() => {
+    let preflight = this.db.transaction(() => {
       // Pin the version and the projection reads to the same snapshot.
       const version = this.refreshProjectionCache();
       return { version, changed: this.findChanges(threads, cache) };
     })();
-    // The final search can see commits hidden by the preflight snapshot.
-    // Read the version after closing it even when we found no changes.
-    if (preflight.changed.length === 0 && this.refreshProjectionCache() === preflight.version) return;
+    if (preflight.changed.length === 0) {
+      // The final search can see commits hidden by the preflight snapshot.
+      const version = this.refreshProjectionCache();
+      if (version === preflight.version) return;
+      // Recheck with fresh per-row reads. An unrelated commit should leave
+      // this slice read-only, even if a peer still holds the writer lock.
+      preflight = { version, changed: this.findChanges(threads) };
+      if (preflight.changed.length === 0) return;
+    }
 
     const committed = this.db.transaction(() => {
       // Take the writer lock before rechecking. If a peer committed after our

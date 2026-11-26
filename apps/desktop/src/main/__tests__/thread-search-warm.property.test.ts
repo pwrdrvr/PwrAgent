@@ -123,31 +123,63 @@ it.each([
     const listedFirst = replaceTitle ? { ...first, title: "Asterism revised" } : first;
     const second = summary("second");
     const removePeerRow = peer.raw.prepare("DELETE FROM thread_search_fts WHERE identity_key = ?");
-    const prepare = db.raw.prepare.bind(db.raw);
-    let peerWillCommit = false;
-    vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      if (sql.includes("pragma_data_version")) {
-        const get = statement.get.bind(statement);
-        statement.get = (...args: unknown[]) => {
-          const result = get(...args);
-          if (peerWillCommit) {
-            peerWillCommit = false;
-            removePeerRow.run("codex:second");
-          }
-          return result;
-        };
-      }
-      return statement;
-    });
+    const afterVersionRead = interceptProjectionVersion(db);
+    const removeFtsRow = vi.fn(() => removePeerRow.run("codex:second"));
     const store = new ThreadSearchStore(db);
     store.upsertThreads([first, second]);
-    peerWillCommit = true;
+    afterVersionRead(removeFtsRow);
     const service = new ThreadSearchService(store, async () => [listedFirst, second]);
     const result = await service.search({ query: "Asterism", contentMode: "metadata" });
-    expect(peerWillCommit).toBe(false);
+    expect(removeFtsRow).toHaveBeenCalledOnce();
     expect(result.results.map((row) => [row.threadId, row.title]).sort()).toEqual([
       ["first", listedFirst.title], ["second", second.title],
     ]);
   } finally { peer.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
 });
+
+it("returns unchanged search rows while a peer holds the writer lock after an unrelated commit", async () => {
+  const temp = createTempStateDb("search-preflight-lock-");
+  const db = StateDb.open(temp.dbPath);
+  const peer = StateDb.open(temp.dbPath);
+  try {
+    db.raw.pragma("busy_timeout = 0");
+    const afterVersionRead = interceptProjectionVersion(db);
+    const thread = summary("unchanged");
+    const store = new ThreadSearchStore(db);
+    store.upsertThreads([thread]);
+    afterVersionRead(() => {
+      peer.raw.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("contrived-search-peer", "updated");
+      peer.raw.exec("BEGIN IMMEDIATE");
+    });
+
+    const service = new ThreadSearchService(store, async () => [thread]);
+    const result = await service.search({ query: "Asterism", contentMode: "metadata" });
+    expect(peer.raw.inTransaction).toBe(true);
+    expect(result.results.map((row) => row.threadId)).toEqual([thread.id]);
+  } finally {
+    if (peer.raw.inTransaction) peer.raw.exec("ROLLBACK");
+    peer.close();
+    db.close();
+    removeTempStateDbDir(temp.tempDir);
+  }
+});
+
+function interceptProjectionVersion(db: StateDb) {
+  const prepare = db.raw.prepare.bind(db.raw);
+  let next: (() => void) | undefined;
+  vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    if (sql.includes("pragma_data_version")) {
+      const get = statement.get.bind(statement);
+      statement.get = (...args: unknown[]) => {
+        const result = get(...args);
+        const notify = next;
+        next = undefined;
+        notify?.();
+        return result;
+      };
+    }
+    return statement;
+  });
+  return (callback: () => void) => { next = callback; };
+}
