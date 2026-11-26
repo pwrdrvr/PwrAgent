@@ -14436,7 +14436,12 @@ export class DesktopBackendRegistry {
                   prompt: promptPayload.prompt,
                   ...(promptPayload.parts.length > 0 ? { parts: promptPayload.parts } : {}),
                 }
-              : {}),
+              : promptPayload.parts.some((part) => part.type !== "text")
+                ? {
+                    prompt: promptPayload.prompt,
+                    parts: promptPayload.parts,
+                  }
+                : {}),
             sessionId: params.threadId,
             text,
           });

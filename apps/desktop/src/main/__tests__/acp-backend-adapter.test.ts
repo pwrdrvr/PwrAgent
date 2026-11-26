@@ -125,6 +125,72 @@ describe("inputToAcpPrompt local image replay", () => {
       await rm(threadAssetRoot(owner), { recursive: true, force: true });
     }
   });
+
+  it("coalesces consecutive user text items into one promptContent block without merging across non-text items", async () => {
+    const payload = await inputToAcpPrompt([
+      { type: "text", text: "First line" },
+      { type: "text", text: "Second line" },
+      { type: "file", name: "notes.txt", mimeType: "text/plain", sizeBytes: 12, data: "aGVsbG8=" },
+      { type: "text", text: "Third line" },
+    ]);
+
+    expect(payload?.prompt).toBe("First line\nSecond line\nThird line");
+    expect(payload?.promptContent).toEqual([
+      { type: "text", text: "First line\nSecond line" },
+      { type: "text", text: "[File attachment: notes.txt]" },
+      { type: "text", text: "Third line" },
+    ]);
+  });
+
+  it("emits synthetic filename annotations and alt for unnamed images when there is no prompt text, including file+image turns", async () => {
+    const owner = { backend: "acp:antigravity" as const, threadId: "thread-unnamed-anchor" };
+    const imageBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4,
+    ]);
+    const dataUrl = `data:image/png;base64,${imageBytes.toString("base64")}`;
+    try {
+      // Image-only inline paste without explicit name.
+      const imageOnlyPayload = await inputToAcpPrompt(
+        [{ type: "image", url: dataUrl }],
+        { owner, privateStorageRoots: [] },
+      );
+      const imageOnlyPart = imageOnlyPayload?.parts.find((part) => part.type === "image");
+      expect(imageOnlyPart?.alt).toBeTruthy();
+      expect(imageOnlyPayload?.promptContent).toContainEqual({
+        type: "text",
+        text: `Attached image filename: ${imageOnlyPart?.alt}`,
+      });
+
+      // File attachment + unnamed inline image (file does not contribute to prompt text).
+      const fileAndImagePayload = await inputToAcpPrompt([
+        { type: "file", name: "report.pdf", mimeType: "application/pdf", sizeBytes: 128, data: "JVBERi0=" },
+        { type: "image", url: dataUrl },
+      ], { owner, privateStorageRoots: [] });
+      expect(fileAndImagePayload?.prompt).toBe("");
+      const fileImagePart = fileAndImagePayload?.parts.find((part) => part.type === "image");
+      expect(fileImagePart?.alt).toBeTruthy();
+      expect(fileAndImagePayload?.promptContent).toContainEqual({
+        type: "text",
+        text: `Attached image filename: ${fileImagePart?.alt}`,
+      });
+
+      // Thread-owned unnamed localImage with no prompt text also emits a wire anchor.
+      const ownedUrl = imageOnlyPart!.url;
+      const ownedPath = fileURLToPath(decodeURIComponent(ownedUrl.slice("pwragent-image://file/".length)));
+      const ownedLocalOnlyPayload = await inputToAcpPrompt(
+        [{ type: "localImage", path: ownedPath }],
+        { owner, privateStorageRoots: [] },
+      );
+      const ownedLocalPart = ownedLocalOnlyPayload?.parts.find((part) => part.type === "image");
+      expect(ownedLocalPart?.alt).toBe(path.basename(ownedPath));
+      expect(ownedLocalOnlyPayload?.promptContent).toContainEqual({
+        type: "text",
+        text: `[Local image: ${path.basename(ownedPath)}]`,
+      });
+    } finally {
+      await rm(threadAssetRoot(owner), { recursive: true, force: true });
+    }
+  });
 });
 
 describe("describeInstalledAcpBackend", () => {
