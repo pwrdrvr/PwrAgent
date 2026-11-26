@@ -22,9 +22,7 @@ const labels = {
   native: ["Review current changes", undefined],
 } as const;
 
-function checkReviewLifecycle(scenario: Scenario): void {
-  const { target, outcome, unfocus, ackAfterTerminal, nextTurn } = scenario;
-  const source = target === "native" ? "codex" : "acp:antigravity";
+function openReviewSession(source: NavigationThreadSummary["source"], readIdle = false) {
   const thread: NavigationThreadSummary = {
     id: "review-parent",
     title: "Review sample changes",
@@ -34,20 +32,42 @@ function checkReviewLifecycle(scenario: Scenario): void {
     inbox: { inInbox: false },
   };
   const key = `${source}:${thread.id}`;
-  const turnId = target === "native" ? "native-review" : "pending:review-child:1800000000000";
   let emit: (event: AgentEvent) => void = () => { throw new Error("missing subscription"); };
   const desktopApi: DesktopApi = {
     onAgentEvent: (listener) => {
       emit = listener;
       return () => undefined;
     },
+    ...(readIdle ? { readThread: async () => ({
+      backend: source,
+      threadId: thread.id,
+      threadStatus: "idle" as const,
+      fetchedAt: Date.now(),
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+      },
+    }) } : {}),
   };
   const view = renderHook(({ selected }) => useThreadSessionState({
     desktopApi,
     thread: selected ? thread : undefined,
   }), { initialProps: { selected: true } });
-  const send = (notification: AgentEvent["notification"]) => emit({ backend: source, notification });
-  const params = { threadId: thread.id, turnId };
+  return {
+    view,
+    threadId: thread.id,
+    send: (notification: AgentEvent["notification"]) => emit({ backend: source, notification }),
+    thinking: () => Boolean(view.result.current.thinkingThreadKeys[key]),
+  };
+}
+
+function checkReviewLifecycle(scenario: Scenario): void {
+  const { target, outcome, unfocus, ackAfterTerminal, nextTurn } = scenario;
+  const source = target === "native" ? "codex" : "acp:antigravity";
+  const turnId = target === "native" ? "native-review" : "pending:review-child:1800000000000";
+  const { view, send, thinking, threadId } = openReviewSession(source);
+  const params = { threadId, turnId };
   const terminal: AgentEvent["notification"] = outcome === "failed"
     ? { method: "turn/failed", params: { ...params, turn: { id: turnId, status: outcome, error: { message: "Review failed" } } } }
     : outcome === "cancelled"
@@ -55,7 +75,7 @@ function checkReviewLifecycle(scenario: Scenario): void {
       : { method: "turn/completed", params: { ...params, turn: { id: turnId, status: outcome, output: [] } } };
   const [localLabel, ownerLabel] = labels[target];
   const check = (phase: string, running: boolean) => {
-    expect(Boolean(view.result.current.thinkingThreadKeys[key]), phase).toBe(running);
+    expect(thinking(), phase).toBe(running);
   };
 
   try {
@@ -91,7 +111,7 @@ function checkReviewLifecycle(scenario: Scenario): void {
     check("after review", false);
 
     if (nextTurn) {
-      const next = { threadId: thread.id, turnId: "follow-up" };
+      const next = { threadId, turnId: "follow-up" };
       act(() => {
         send({ method: "turn/started", params: { ...next, turn: { id: next.turnId, status: "in_progress" } } });
       });
@@ -115,4 +135,59 @@ it.each<Scenario>([
   { target: "branch", outcome: "cancelled", unfocus: true, ackAfterTerminal: false, nextTurn: true },
 ])("settles Thinking for a $outcome $target review and any subsequent turn", (scenario) => {
   checkReviewLifecycle(scenario);
+});
+
+it("keeps an idle sender idle when a cross-thread delivery receipt follows a merge-build turn", async () => {
+  const { view, send, thinking, threadId } = openReviewSession("acp:antigravity", true);
+
+  try {
+    await act(async () => {});
+    const review = { threadId, turnId: "pending:review-child:1800000000000" };
+    act(() => {
+      view.result.current.addOptimisticReviewEntry("Review commit abcdef0123456789");
+      send({ method: "turn/started", params: { ...review, turn: { id: review.turnId, status: "in_progress" } } });
+      send({ method: "item/completed", params: { ...review, item: {
+        id: "review-start", type: "enteredReviewMode", review: "Review commit abcdef0",
+      } } });
+      send({ method: "item/completed", params: { ...review, item: {
+        id: "review-result", type: "exitedReviewMode", review: "No findings.",
+      } } });
+      send({ method: "turn/completed", params: {
+        ...review, turn: { id: review.turnId, status: "completed", output: [] },
+      } });
+    });
+    await act(async () => { await view.result.current.reload(); });
+    view.rerender({ selected: false });
+
+    act(() => send({ method: "thread/dependencies/updated", params: { threadId, dependencyId: "build-watch" } }));
+    expect(thinking(), "arming the watch").toBe(false);
+    const followUp = { threadId, turnId: "pending:review-parent:1800000001000" };
+    act(() => send({ method: "turn/started", params: {
+      ...followUp, turn: { id: followUp.turnId, status: "in_progress" },
+    } }));
+    expect(thinking(), "investigating the failed merge build").toBe(true);
+    act(() => send({ method: "turn/completed", params: {
+      ...followUp, turn: { id: followUp.turnId, status: "completed", output: [{ type: "text", text: "The merge build failed." }] },
+    } }));
+
+    // An idle read clears the indicator while the unmatched review header
+    // remains in the transcript. The recipient's receipt belongs to no
+    // active sender turn and must leave the sender idle.
+    view.rerender({ selected: true });
+    await act(async () => { await view.result.current.reload(); });
+    view.rerender({ selected: false });
+    expect(thinking(), "after the idle read").toBe(false);
+    act(() => send({ method: "item/completed", params: {
+      threadId,
+      item: {
+        id: "correspondence:example",
+        type: "agentMessage",
+        text: "Sent the build findings.",
+        origin: { kind: "pwragent", systemReason: "thread-correspondence" },
+      },
+    } }));
+    expect(thinking(), "after recording the receipt").toBe(false);
+  } finally {
+    view.unmount();
+  }
 });
