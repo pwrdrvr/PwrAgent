@@ -239,10 +239,14 @@ const sidebarPrValidations = new WeakMap<DesktopBackendRegistry, Map<string, Sid
 const SIDEBAR_PR_VALIDATION_REUSE_MS = 60_000;
 const MAX_SIDEBAR_PR_VALIDATIONS = 256;
 
+function needsSidebarPrValidation(pr: PrSummary): boolean {
+  return !pr.explicitlyAttached && Boolean(pr.linkedDirectoryPaths?.length);
+}
+
 async function readSidebarPullRequests(registry: DesktopBackendRegistry, prs: PrSummary[],
   demand: { signal?: AbortSignal; priority: () => number }): Promise<PrSummary[]> {
   const canonical = await registry.canonicalizeNavigationPullRequests(prs, demand, false);
-  const automatic = canonical.filter((pr) => !pr.explicitlyAttached && pr.linkedDirectoryPaths?.length);
+  const automatic = canonical.filter(needsSidebarPrValidation);
   if (!automatic.length) return canonical;
   // Status changes alone do not invalidate a checkout's attachment verdict.
   const key = createHash("sha256").update(JSON.stringify(automatic.map((pr) => [buildPullRequestStatusKey(pr),
@@ -251,17 +255,24 @@ async function readSidebarPullRequests(registry: DesktopBackendRegistry, prs: Pr
   if (!validations) sidebarPrValidations.set(registry, validations = new Map());
   let validation = validations.get(key);
   if (!validation && validations.size >= MAX_SIDEBAR_PR_VALIDATIONS) {
-    const reusable = [...validations].find(([, entry]) => !entry.pending);
-    if (!reusable) return canonical;
+    // Keep fresh verdicts through a multi-page refresh. Cycling them through
+    // this cache would keep republishing the same validation results.
+    const now = Date.now();
+    const reusable = [...validations].find(([, entry]) => !entry.pending && entry.expiresAt <= now);
+    if (!reusable) {
+      return registry.getStartupProviderRefreshStatus?.()?.state === "checking"
+        ? canonical.filter((pr) => !needsSidebarPrValidation(pr))
+        : registry.canonicalizeNavigationPullRequests(canonical, demand);
+    }
     validations.delete(reusable[0]);
   }
   if (!validation) validations.set(key, validation = { expiresAt: 0, pending: false });
-  const accept = (pr: PrSummary) => pr.explicitlyAttached || !pr.linkedDirectoryPaths?.length
-    || !validation.accepted || validation.accepted.has(buildPullRequestStatusKey(pr));
+  const accept = (pr: PrSummary) => !needsSidebarPrValidation(pr)
+    || validation.accepted?.has(buildPullRequestStatusKey(pr)) === true;
   const visible = canonical.filter(accept);
   if (!validation.pending && validation.expiresAt <= Date.now()) {
     validation.pending = true;
-    const oldKeys = new Set(automatic.filter(accept).map(buildPullRequestStatusKey));
+    const oldKeys = validation.accepted ?? new Set<string>();
     void registry.canonicalizeNavigationPullRequests(automatic, {
       priority: () => PR_METADATA_PRIORITY.background, signal: AbortSignal.timeout(30_000),
     })
@@ -531,11 +542,19 @@ export async function loadLocalNavigationQueryIndex(params: {
 }
 
 type SidebarStackFields = Pick<NavigationThreadSummary, "stackMemberships" | "stackLeadPrKey">;
+type SidebarStackRow = { binding: string; fields: SidebarStackFields };
+
+function sidebarStackBinding(row: NavigationThreadSummary): string {
+  return JSON.stringify([row.projectKey, row.primaryGitRepository, row.observedGitBranch ?? row.gitBranch,
+    row.linkedDirectories.map((directory) => [directory.worktreePath ?? directory.path, directory.repositoryKey, directory.gitBranch]),
+    row.prs?.map((pr) => [buildPullRequestStatusKey(pr), pr.headRefName, pr.linkedDirectoryPaths])]);
+}
+
 type SidebarStackRead = {
   epoch?: number;
   version?: string;
   expiresAt: number;
-  rows: Map<string, SidebarStackFields>;
+  rows: Map<string, SidebarStackRow>;
   pending: boolean;
   requestedAgain: boolean;
 };
@@ -573,13 +592,13 @@ export async function loadSidebarNavigationQueryIndex(
   }
   const current = read.epoch === epoch?.value && read.version === navigationIndexVersion(registry, overlay, false);
   if (!current || read.expiresAt <= Date.now()) refreshSidebarStacks(read, registry, params, epoch);
-  if (!current || !read.rows.size) return local;
+  if (!read.rows.size) return local;
   const rows = read.rows;
   const snapshot = sidebarStackSnapshots.get(local);
   if (snapshot?.rows === rows) return snapshot.index;
   const index = createNavigationQuerySnapshot({ ...local, threads: local.threads.map((row) => {
     const stack = !row.federation && rows.get(buildThreadIdentityKey(row.source, row.id));
-    return stack ? { ...row, ...stack } : row;
+    return stack && stack.binding === sidebarStackBinding(row) ? { ...row, ...stack.fields } : row;
   }) }, undefined, local);
   sidebarStackSnapshots.set(local, { rows, index });
   return index;
@@ -603,20 +622,22 @@ function refreshSidebarStacks(read: SidebarStackRead, registry: DesktopBackendRe
     callerReason: params.callerReason, includeStacks: true, signal: AbortSignal.timeout(30_000) })
     .then((index) => {
       if (!isCurrent()) return;
-      const rows = new Map<string, SidebarStackFields>();
+      const rows = new Map<string, SidebarStackRow>();
       for (const row of index.threads) {
         if (row.stackMemberships?.length) rows.set(buildThreadIdentityKey(row.source, row.id), {
-          stackMemberships: row.stackMemberships, stackLeadPrKey: row.stackLeadPrKey,
+          binding: sidebarStackBinding(row),
+          fields: { stackMemberships: row.stackMemberships, stackLeadPrKey: row.stackLeadPrKey },
         });
       }
       const changed = rows.size !== read.rows.size || [...rows].some(([key, value]) =>
         JSON.stringify(value) !== JSON.stringify(read.rows.get(key)));
-      const becameCurrent = (read.epoch !== startedEpoch || read.version !== version) && rows.size > 0;
-      read.rows = rows;
       read.epoch = startedEpoch;
       read.version = version;
       read.expiresAt = Date.now() + STACK_DETAIL_REUSE_MS;
-      if (changed || becameCurrent) publishSidebarEnrichment(registry);
+      if (changed) {
+        read.rows = rows;
+        publishSidebarEnrichment(registry);
+      }
     }).finally(() => {
       read.pending = false;
       const requestedAgain = read.requestedAgain;

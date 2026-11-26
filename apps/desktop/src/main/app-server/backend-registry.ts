@@ -5201,18 +5201,15 @@ export class DesktopBackendRegistry {
     if (!this.providerThreadSnapshotStore || this.closed || this.isBootstrapModeFn()
       || this.isCodexBootstrapDeferredFn() || this.startupProviderRefreshStatus?.state !== "checking") return undefined;
     return this.hydrateSavedStartupThreads().then((saved) => {
-      // Starts made in this process must land in navigation while discovery
-      // is still running. Prefer a completed live observation when another
-      // consumer already has one and merge owner-known pending starts.
-      const key = this.buildThreadListCacheKey({ backend: "codex", enrichDirectories: false });
-      const cached = this.threadListCache.get(key);
-      const liveCodex = cached?.threads && (cached.expiresAt ?? 0) > Date.now() && !this.isIncompleteThreadList(cached.threads)
-        ? cached.threads : undefined;
-      const inventory = liveCodex ? [...saved.filter((thread) => thread.source !== "codex"), ...liveCodex] : saved;
-      const rows = this.withPendingStartedThreads("codex", inventory).map((thread) => {
+      const reviewParents = new Set<string>();
+      for (const review of this.context.turnState.liveReviewRecords().values()) {
+        if (review.parentBackend === "codex") reviewParents.add(review.parentThreadId);
+      }
+      const rows = saved.map((thread) => {
         if (thread.source !== "codex") return thread;
         const status = this.context.turnState.statusObservation(thread.id)?.status;
-        const threadStatus = this.threadHasActiveTurn(thread.id) ? "active" : status ?? thread.threadStatus;
+        const active = reviewParents.has(thread.id) || this.context.turnState.hasActiveTurn(thread.id);
+        const threadStatus = active ? "active" : status ?? thread.threadStatus;
         return threadStatus === thread.threadStatus ? thread : { ...thread, threadStatus };
       });
       return backend ? rows.filter((thread) => thread.source === backend) : rows;
@@ -5236,24 +5233,21 @@ export class DesktopBackendRegistry {
     // Claude and ACP own their session metadata locally. Read it directly
     // so a retained snapshot cannot resurrect a deleted session.
     const [claudeThreads, acpThreads] = await Promise.all([this.claudeBackend.listThreads(), this.readAcpThreadsForCache(true)]);
-    const nativeThreads = [...snapshots.flatMap((snapshot) => snapshot.backend === "codex"
-      ? snapshot.threads.filter((thread) => thread.archivedAt === undefined) : []), ...claudeThreads, ...acpThreads];
+    const savedCodex = snapshots.flatMap((snapshot) => snapshot.backend === "codex" ? snapshot.threads : []);
     if (this.closed) return [];
-    if (!this.savedStartupThreadMetadataHydrated) {
-      this.confirmRetainedNativeOwners(snapshots.flatMap(snapshot => snapshot.backend === "codex" ? [...snapshot.threads] : []));
-    }
-    const codexIds = nativeThreads.filter(thread => thread.source === "codex").map(thread => thread.id);
-    const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
-    const overlays = codexIds.length ? await readOverlays.call(this.overlayStore, { backend: "codex", threadIds: codexIds }) : {};
-    // A retained inventory predates handover. It cannot contradict the latest
-    // canonical acknowledgement the way a fresh provider response can.
-    const titledThreads = nativeThreads.map(thread => thread.source === "codex"
-      ? { ...thread, ...projectOverlayThreadTitle(thread, {
-          title: overlays[thread.id]?.title, titleSource: overlays[thread.id]?.titleSource,
-        }) } : thread)
+    if (!this.savedStartupThreadMetadataHydrated) this.confirmRetainedNativeOwners(savedCodex);
+    // A completed live listing can contribute threads created by this owner
+    // during startup. Pending starts cover local creation before that listing.
+    const key = this.buildThreadListCacheKey({ backend: "codex", enrichDirectories: false });
+    const cached = this.threadListCache.get(key);
+    const liveCodex = cached?.threads && (cached.expiresAt ?? 0) > Date.now() && !this.isIncompleteThreadList(cached.threads)
+      ? cached.threads : undefined;
+    const nativeThreads = [...(liveCodex ?? savedCodex.filter((thread) => thread.archivedAt === undefined)), ...claudeThreads, ...acpThreads]
       .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-    const threads = this.mergeRetainedOwnerThreads(titledThreads, {}, new Set(snapshots.flatMap(snapshot =>
-      snapshot.backend === "codex" ? snapshot.threads.filter(thread => thread.archivedAt !== undefined).map(thread => thread.id) : [])));
+    const archivedNativeIds = new Set(savedCodex.filter((thread) => thread.archivedAt !== undefined).map((thread) => thread.id));
+    const retained = this.mergeRetainedOwnerThreads(this.withPendingStartedThreads("codex", nativeThreads), {}, archivedNativeIds);
+    const threads = await this.applySavedCodexOverlays(retained);
+    if (this.closed) return [];
     if (!this.savedStartupThreadMetadataHydrated) {
       this.savedStartupThreadMetadataHydrated = true;
       this.rememberThreadListContexts(threads, displayMetadataObservationSequence, false, false);
@@ -5263,6 +5257,21 @@ export class DesktopBackendRegistry {
       });
     }
     return threads;
+  }
+
+  private async applySavedCodexOverlays(threads: AppServerThreadSummary[]): Promise<AppServerThreadSummary[]> {
+    const codexIds = threads.filter((thread) => thread.source === "codex").map((thread) => thread.id);
+    if (!codexIds.length) return threads;
+    const readOverlays = this.overlayStore.getThreadListingOverlayStates ?? this.overlayStore.getThreadOverlayStates;
+    const overlays = await readOverlays.call(this.overlayStore, { backend: "codex", threadIds: codexIds });
+    return threads.flatMap((thread) => {
+      if (thread.source !== "codex") return [thread];
+      const overlay = overlays[thread.id];
+      // An acknowledged archive can be newer than the saved provider row.
+      if (thread.archivedAt !== undefined || overlay?.archiveRetentionStartedAt !== undefined
+        || overlay?.archiveTombstonedAt !== undefined) return [];
+      return [{ ...thread, ...projectOverlayThreadTitle(thread, { title: overlay?.title, titleSource: overlay?.titleSource }) }];
+    });
   }
 
   /**
@@ -5467,23 +5476,26 @@ export class DesktopBackendRegistry {
     const refreshedBackends = new Set(
       refreshes.flatMap((refresh) => refresh.backends),
     );
+    const codexFailed = this.startupCodexRefreshFailed && !refreshedBackends.has("codex");
     const acpObservationSequence = this.reserveThreadInfoObservation();
-    const [acpThreads, localClaudeThreads] = await Promise.all([
+    const [acpThreads, localClaudeThreads, codexIncomplete] = await Promise.all([
       this.readAcpThreadsForCache(),
       refreshedBackends.has("claude") ? [] : this.claudeBackend.listThreads(),
+      codexFailed ? this.hasCodexExecutable() : false,
     ]);
     if (this.closed) return;
+    const savedCodex = this.providerThreadSnapshotStore.list().flatMap((snapshot) =>
+      snapshot.backend === "codex" ? snapshot.threads : []);
     const providerThreads = [
-      ...refreshes.flatMap((refresh) => refresh.threads).filter(thread => !isAcpBackendId(thread.source)),
-      ...this.providerThreadSnapshotStore.list()
-        .filter((snapshot) => snapshot.backend === "codex" && !refreshedBackends.has("codex"))
-        .flatMap((snapshot) => snapshot.threads),
+      ...refreshes.flatMap((refresh) => refresh.threads).filter((thread) => !isAcpBackendId(thread.source)),
+      ...(!refreshedBackends.has("codex") && (!codexFailed || codexIncomplete) ? savedCodex : []),
       ...localClaudeThreads,
       ...acpThreads,
-    ]
-      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-    const threads = this.mergeRetainedOwnerThreads(providerThreads, {}, new Set(this.providerThreadSnapshotStore.list()
-      .flatMap(snapshot => snapshot.backend === "codex" ? snapshot.threads.filter(thread => thread.archivedAt !== undefined).map(thread => thread.id) : [])));
+    ].sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    const archivedNativeIds = new Set(savedCodex.filter((thread) => thread.archivedAt !== undefined).map((thread) => thread.id));
+    const retained = this.mergeRetainedOwnerThreads(providerThreads, {}, archivedNativeIds);
+    const threads = refreshedBackends.has("codex") ? retained : await this.applySavedCodexOverlays(retained);
+    if (this.closed) return;
     // Model discovery can finish after a rename. Publishing its earlier
     // inventory is not a new provider observation; retain both its original
     // sequence and any newer acknowledged title in the cache we publish.
@@ -5506,8 +5518,7 @@ export class DesktopBackendRegistry {
     // already cached or in flight when discarding the earlier inventory.
     if (this.threadListCacheRevision !== cacheRevision) return;
     this.invalidateThreadListCache();
-    const incomplete = (this.startupCodexRefreshFailed && !refreshedBackends.has("codex"))
-      || refreshes.some(({ threads }) => this.isIncompleteThreadList(threads));
+    const incomplete = codexIncomplete || refreshes.some(({ threads }) => this.isIncompleteThreadList(threads));
     if (incomplete) this.incompleteThreadLists.add(currentThreads);
     const cacheKey = this.buildThreadListCacheKey({
       callerReason: "navigation-snapshot",

@@ -6305,7 +6305,8 @@ describe("app server ipc", () => {
       ]);
       expect(index.directories?.map(({ key }) => key)).toEqual(expect.arrayContaining([project.key, secondProject.key]));
       expect(index.counts.total).toBe(174);
-      expect(attention.entries[0]?.row).toMatchObject({ id: selected.threadId, prs: [expect.objectContaining({ number: pr.number })] });
+      expect(attention.entries[0]?.row.id).toBe(selected.threadId);
+      expect(attention.entries[0]?.row.prs ?? []).toEqual([]);
       expect(opened.entries.map(({ row }) => row.id)).toEqual([selected.threadId]);
       expect(pin.coverage.state).toBe("checking");
       expect(archiveSettled).toBe(false);

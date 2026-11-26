@@ -49,7 +49,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () 
 vi.mock("../messaging/desktop-messaging-store", () => ({ getDesktopMessagingStore: () => mocks.messaging }));
 vi.mock("../app-server/backend-registry", () => ({ getDesktopBackendRegistry: vi.fn() }));
 vi.mock("../app-server/scratch-projects", () => ({ resolveScratchProjectsRoots: () => [] }));
-import { loadLocalNavigationQueryIndex, navigationQueryShowsStacks, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
+import { loadLocalNavigationQueryIndex, loadSidebarNavigationQueryIndex, navigationPullRequestProjection, navigationQueryShowsStacks, projectBoundNavigationStacks, projectSelectedStackLayers, readNavigationStackLayers } from "../app-server/navigation-query-source";
 import { StackReader, readStackClones } from "../stacks/stack-reader";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { resolveNavigationWorktreeProjects } from "../app-server/navigation-worktree-projects";
@@ -1100,6 +1100,74 @@ describe("owner index coverage", () => {
     expect((await read()).coverage).toEqual({ state: "complete" });
     expect(listThreads).toHaveBeenCalledTimes(2);
   });
+});
+
+it("keeps confirmed stack badges for unchanged rows while Git revalidates", async () => {
+  const source = createSource();
+  const row: NavigationThreadSummary = {
+    id: "stacked", source: "codex", title: "Stacked", titleSource: "explicit", gitBranch: "topic",
+    linkedDirectories: [{ id: "/fixture/stack", kind: "local", path: "/fixture/stack", label: "Stack" }],
+    inbox: { inInbox: false },
+  };
+  const initial: StackSummary = { key: "stack", name: "Stack", trunk: "main", inferred: false,
+    repository: "github.com:fixture/stack", layers: [{
+      role: "layer", branch: "topic", parent: "main", health: "in_sync", thread: { key: "codex:stacked", title: "Stacked" },
+    }] };
+  source.listThreads.mockResolvedValue([row]);
+  source.registry.publishLocalEvent = vi.fn(async () => {});
+  const projection = mocks.store.readNavigationQueryIndex;
+  const original = projection.getMockImplementation()!;
+  projection.mockImplementation(({ threads }) => ({ threads, directories: [] }));
+  const nextScan = Promise.withResolvers<void>();
+  const git = vi.spyOn(StackReader.prototype, "read").mockResolvedValueOnce({ stacks: [initial], catalogs: [] })
+    .mockImplementation(async () => { await nextScan.promise; return { stacks: [], catalogs: [] }; });
+  const read = () => loadSidebarNavigationQueryIndex({ registry: source.registry, includeStacks: true, callerReason: "renderer-navigation-query" });
+  const badges = async () => (await read()).threads[0]?.stackMemberships;
+  try {
+    await read();
+    await vi.waitFor(async () => expect(await badges()).toEqual([expect.objectContaining({ key: "stack" })]));
+    source.emit("turn/started");
+    expect(await badges()).toEqual([expect.objectContaining({ key: "stack" })]);
+    await vi.waitFor(() => expect(git).toHaveBeenCalledTimes(2));
+    nextScan.resolve();
+    await vi.waitFor(async () => expect(await badges()).toBeUndefined());
+  } finally {
+    nextScan.resolve();
+    git.mockRestore();
+    projection.mockImplementation(original);
+    source.emit("thread/name/updated");
+  }
+});
+
+it("keeps rejected automatic PRs hidden across sidebar cache pressure", async () => {
+  const { registry } = createSource();
+  registry.publishLocalEvent = vi.fn(async () => {});
+  const verifyAttachments = vi.fn<DesktopBackendRegistry["canonicalizeNavigationPullRequests"]>(
+    async (prs, _demand, verify) => verify === false ? prs : [],
+  );
+  registry.canonicalizeNavigationPullRequests = verifyAttachments;
+  const projection = navigationPullRequestProjection({ kind: "directory", registry, backgroundValidation: true });
+  const batches = Array.from({ length: 257 }, (_, index): PrSummary[] => [{
+    number: index + 1, provider: "github.com", org: "fixture", repo: "project", state: "passing",
+    url: `https://github.com/fixture/project/pull/${index + 1}`, linkedDirectoryPaths: ["/fixture/project"], headRefName: "main",
+  }]);
+  const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    await projection.verify(batches.slice(0, 256));
+    await settle();
+    expect(await projection.verify(batches.slice(256))).toEqual([[]]);
+    clock.mockReturnValue(now + 60_001);
+    await projection.verify(batches.slice(256));
+    await settle();
+    // A cache miss may require fresh proof. It cannot turn a failed
+    // attachment into a visible chip, or publish a refresh for rejecting it again.
+    expect(await projection.verify(batches.slice(0, 1))).toEqual([[]]);
+    await settle();
+    expect(verifyAttachments.mock.calls.filter(([prs, , verify]) => prs[0]?.number === 1 && verify !== false)).toHaveLength(2);
+    expect(registry.publishLocalEvent).not.toHaveBeenCalled();
+  } finally { clock.mockRestore(); }
 });
 
 it("reuses membership across a PR status burst while pages observe the current registry", async () => {
