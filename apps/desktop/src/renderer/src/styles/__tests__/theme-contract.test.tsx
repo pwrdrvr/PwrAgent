@@ -2521,6 +2521,44 @@ describe("Tangerine Terminal theme contract", () => {
     expect(listRule).toContain("overflow-wrap: anywhere;");
   });
 
+  it("wraps long markdown table headers, label cells, and unbroken cell text without cell-to-cell overflow", () => {
+    // Pairing `max-width` with `white-space: nowrap` on table cells causes
+    // Chromium's TablesNG to cap the cell box at `max-width` while painting
+    // non-wrapping inline content across the border onto the adjacent cell.
+    const cellRule = extractRuleBody(css, ".thread-markdown__th,\n.thread-markdown__td");
+    expect(cellRule).toContain("overflow-wrap: break-word;");
+
+    const headerBodies = [
+      ...css.matchAll(/(?:^|\n)\.thread-markdown__th\s*\{([^}]*)\}/g),
+    ].map((match) => match[1] ?? "");
+    expect(headerBodies.length).toBeGreaterThan(0);
+    for (const body of headerBodies) {
+      expect(body).not.toMatch(/white-space:\s*nowrap;/);
+    }
+
+    const labelRule = extractRuleBody(
+      css,
+      ".thread-markdown__th[data-col-kind=\"label\"],\n.thread-markdown__td[data-col-kind=\"label\"]",
+    );
+    expect(labelRule).toContain("max-width: 36ch;");
+    expect(labelRule).not.toMatch(/white-space:\s*nowrap;/);
+    expect(labelRule).not.toMatch(/min-width:\s*max-content;/);
+
+    const codeRule = extractRuleBody(
+      css,
+      ".thread-markdown__th .transcript-message__code,\n.thread-markdown__td .transcript-message__code",
+    );
+    expect(codeRule).toContain("display: inline;");
+    expect(codeRule).toContain("white-space: normal;");
+    expect(codeRule).toContain("overflow-wrap: anywhere;");
+
+    const linkRule = extractRuleBody(
+      css,
+      ".thread-markdown__th .transcript-message__link,\n.thread-markdown__td .transcript-message__link",
+    );
+    expect(linkRule).toContain("overflow-wrap: anywhere;");
+  });
+
   it("bounds long transcript code and quote blocks with their own vertical scroll", () => {
     const preRule = extractRuleBody(css, ".transcript-message__pre");
     expect(preRule).toContain("max-height:");

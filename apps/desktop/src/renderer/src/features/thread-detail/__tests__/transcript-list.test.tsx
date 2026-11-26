@@ -2369,6 +2369,34 @@ Implementation notes remain in a readable bubble.`;
     expect(container.querySelector("pre code")).toHaveTextContent("| Key | Value |");
   });
 
+  it("marks wide GFM tables with short single-dash delimiters and escaped pipes as wide", () => {
+    const shortDelimiterTable = [
+      "| Metric \\| Scope | Col A | Col B | Col C |",
+      "| - | :-: | -: | :- |",
+      "| Latency | 12ms | 18ms | OK |",
+    ].join("\n");
+
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-short-delim-table",
+            role: "assistant",
+            text: `Summary:\n\n${shortDelimiterTable}`,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const tableArticle = container.querySelector("article.transcript-message--table");
+    expect(tableArticle).toHaveClass("transcript-message--table-wide");
+    expect(tableArticle?.querySelector("table.thread-markdown__table")).toBeInTheDocument();
+  });
+
   it("opens transcript file links with the OS default and provides a separate editor action", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
     const openPath = vi.fn(async () => ({ opened: true as const }));
