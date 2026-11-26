@@ -130,6 +130,38 @@ describe("turnAnswerIndexForLateWork", () => {
     expect(turnAnswerIndexForLateWork(entries, note)).toBe(-1);
   });
 
+  it("caps a retained live-tools bucket carrying an ACP edit diff above the finished turn's answer", () => {
+    const entries = [tUser, tFinal];
+    const liveEditBucket = lateWork({
+      id: "live-tools-turn-t-1",
+      summary: "Edited app.ts",
+      details: [{
+        id: "call_1",
+        kind: "write",
+        label: "Edited app.ts",
+        path: "/work/app.ts",
+        status: "completed",
+        fileDiff: { kind: "update", diff: "+a", additions: 1, removals: 0 },
+      }],
+    });
+    const cumulativeDiff = lateWork({
+      id: "live-diff-turn-t",
+      summary: "Edited 1 file, +1, -0",
+      details: [{
+        id: "live-diff-turn-t-1",
+        kind: "write",
+        label: "Update app.ts",
+        path: "/work/app.ts",
+        fileDiff: { kind: "update", diff: "+a", additions: 1, removals: 0 },
+      }],
+    });
+
+    expect(turnAnswerIndexForLateWork(entries, liveEditBucket)).toBe(1);
+    expect(lateWorkBelongsAboveAnswer(liveEditBucket, tFinal)).toBe(true);
+    expect(turnAnswerIndexForLateWork(entries, cumulativeDiff)).toBe(-1);
+    expect(lateWorkBelongsAboveAnswer(cumulativeDiff, tFinal)).toBe(false);
+  });
+
   it("returns -1 when the turn has no answer on the list", () => {
     expect(turnAnswerIndexForLateWork([tUser, tTools, vUser], lateWork())).toBe(-1);
   });

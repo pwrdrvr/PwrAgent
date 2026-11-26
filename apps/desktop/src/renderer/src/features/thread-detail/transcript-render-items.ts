@@ -74,6 +74,7 @@ export function buildTranscriptRenderItems(params: {
       params.alwaysVisibleEntryIds,
       reviewTurnIds,
       activeReview,
+      params.backend,
     );
     const activeGroups = activeReview
       ? []
@@ -97,6 +98,8 @@ export function buildTranscriptRenderItems(params: {
     undefined,
     params.alwaysVisibleEntryIds,
     reviewTurnIds,
+    undefined,
+    params.backend,
   );
   if (completedGroups.length > 0) {
     return renderWithGroups(entries, completedGroups);
@@ -257,6 +260,7 @@ function buildCompletedGroups(
   alwaysVisibleEntryIds?: ReadonlySet<string>,
   reviewTurnIds?: ReadonlySet<string>,
   activeReview?: { startedAt?: number; turnId: string },
+  backend?: AppServerBackendKind,
 ): RenderGroup[] {
   const groups: RenderGroup[] = [];
   const groupIds = new Set<string>();
@@ -270,7 +274,10 @@ function buildCompletedGroups(
       lastReviewIndexByTurn.set(entry.turn.id, index);
     }
   });
-  const interimReplies = collectInterimReplies(entries);
+  const { interimReplies, trailingFileDiffs } = classifyCompletedTurnEntries(
+    entries,
+    backend,
+  );
   let currentEntries: AppServerThreadEntry[] = [];
   let currentTurnId: string | undefined;
 
@@ -290,7 +297,7 @@ function buildCompletedGroups(
       return;
     }
 
-    const hasWork = hasConcreteWork(currentEntries);
+    const hasWork = hasConcreteWork(currentEntries, trailingFileDiffs);
     const firstEntryId = currentEntries[0]?.id ?? groups.length.toString();
     const baseId = `${hasWork ? "work" : "commentary"}:${currentTurnId}:${firstEntryId}:complete`;
     const repeatedWorkTurn = hasWork && completedWorkTurnIds.has(currentTurnId);
@@ -347,7 +354,7 @@ function buildCompletedGroups(
       && Boolean(turnId)
       && turnId !== excludeTurnId
       && (
-        isWorkPhaseEntry(entry)
+        isWorkPhaseEntry(entry, trailingFileDiffs)
         || isReplyBetweenReviewCards
         || interimReplies.has(entry)
       );
@@ -424,51 +431,188 @@ function openStoppedTurnTails(
 }
 
 /**
- * Replies a turn wrote on its way to its answer. Codex tags those commentary,
- * but Claude tags no reply and ACP agents tag every reply final, so a finished
- * turn of theirs kept each reply between tool calls in view and split its work
- * into a run of "More work" groups. A reply that more tool work follows in the
- * same turn was not the answer, whatever its phase says. A user message in
- * between ends the search: a reply the operator answered stays in view.
+ * Classifies two turn-shape roles for completed work folding:
  *
- * A turn that tags some replies commentary does tell its answer apart, so its
- * final reply stays the answer. Codex reports a tool call it cancelled at turn
- * end after the answer, and that call is not work done after it. A row whose
- * every call failed is how that arrives, with or without commentary, so it
- * never makes the reply before it interim.
+ * 1. Trailing (post-answer) file-diff rows: a cumulative `live-diff-*` row or
+ *    a file-diff activity that lands directly after the turn's answer with no
+ *    subsequent work or reply stays at top level and never folds that answer.
+ *    Mid-turn file edits (before the answer, or before more work, or in a turn
+ *    with no answer) fold into the turn's work group instead of splitting it
+ *    into repeated "Edited ..." / "More work" rows; their patches stay
+ *    expandable inside the group and in the Edits rail/panel.
+ *
+ * 2. Interim assistant replies: Codex tags mid-turn prose `commentary`, while
+ *    Claude tags no reply and ACP agents tag thoughts `commentary` but every
+ *    visible `agent_message_chunk` (both mid-turn updates and the final
+ *    answer) `final`. A reply followed by work in the same turn — or followed
+ *    by a failed tool call or thought and a later reply — was not the answer.
+ *    A user message or rewind marker resets the search so a steered reply
+ *    stays in view. A non-ACP turn that tags commentary still protects its
+ *    sole/last `final` answer from a late tool row, and an all-failed trailing
+ *    tool call never folds the answer before it.
  */
-function collectInterimReplies(
+function classifyCompletedTurnEntries(
   entries: AppServerThreadEntry[],
-): Set<AppServerThreadEntry> {
+  backend?: AppServerBackendKind,
+): {
+  interimReplies: Set<AppServerThreadEntry>;
+  trailingFileDiffs: Set<AppServerThreadEntry>;
+} {
+  const acpBackend = isAcpBackend(backend);
   const phaseTaggedTurnIds = new Set<string>();
+  const fileDiffImmediatelyAfterAnswer = new Set<AppServerThreadEntry>();
+
+  let forwardTurnId: string | undefined;
+  let immediatelyAfterAnswer = false;
   for (const entry of entries) {
-    if (entry.turn?.id && isAssistantMessage(entry) && entry.phase === "commentary") {
-      phaseTaggedTurnIds.add(entry.turn.id);
+    if (isAutoReviewActivityEntry(entry)) {
+      continue;
+    }
+    if ((entry.type === "message" && entry.role === "user") || isRewindMarkerEntry(entry)) {
+      forwardTurnId = undefined;
+      immediatelyAfterAnswer = false;
+      continue;
+    }
+    const turnId = entry.turn?.id;
+    if (!turnId) {
+      forwardTurnId = undefined;
+      immediatelyAfterAnswer = false;
+      continue;
+    }
+    if (turnId !== forwardTurnId) {
+      forwardTurnId = turnId;
+      immediatelyAfterAnswer = false;
+    }
+    if (entry.type === "activity") {
+      if (isTokenUsageActivity(entry) || isTerminalTurnFailureActivity(entry)) {
+        continue;
+      }
+      if (isFileDiffActivity(entry) && !entry.id.startsWith("live-tools-")) {
+        if (immediatelyAfterAnswer) {
+          fileDiffImmediatelyAfterAnswer.add(entry);
+        }
+        continue;
+      }
+      if (!isAllFailedActivity(entry)) {
+        immediatelyAfterAnswer = false;
+      }
+      continue;
+    }
+    if (entry.type === "plan") {
+      immediatelyAfterAnswer = false;
+      continue;
+    }
+    if (isAssistantMessage(entry)) {
+      if (entry.phase === "commentary") {
+        phaseTaggedTurnIds.add(turnId);
+      }
+      immediatelyAfterAnswer = entry.phase !== "commentary" && entry.phase !== "partial";
     }
   }
-  const interim = new Set<AppServerThreadEntry>();
-  let workFollowsInTurn: string | undefined;
+
+  const interimReplies = new Set<AppServerThreadEntry>();
+  const trailingFileDiffs = new Set<AppServerThreadEntry>();
+  let backwardTurnId: string | undefined;
+  let sawReplyAfter = false;
+  let sawFinalAfter = false;
+  let sawNonFailedWorkAfter = false;
+  let sawAnyWorkOrCommentaryAfter = false;
+  let sawSteerAfterInTurn = false;
+
+  const resetBackwardSegment = (nextTurnId?: string, keepSteerInTurn = false) => {
+    backwardTurnId = nextTurnId;
+    sawReplyAfter = false;
+    sawFinalAfter = false;
+    sawNonFailedWorkAfter = false;
+    sawAnyWorkOrCommentaryAfter = false;
+    sawSteerAfterInTurn = keepSteerInTurn;
+  };
+
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     // A review notice is not work: an answer it follows is still the answer.
     if (isAutoReviewActivityEntry(entry)) {
       continue;
     }
+    if ((entry.type === "message" && entry.role === "user") || isRewindMarkerEntry(entry)) {
+      const steerTurnId = entry.turn?.id;
+      if (steerTurnId && steerTurnId === backwardTurnId) {
+        resetBackwardSegment(steerTurnId, true);
+      } else {
+        resetBackwardSegment();
+      }
+      continue;
+    }
     const turnId = entry.turn?.id;
-    if (entry.type === "message" && entry.role === "user") {
-      workFollowsInTurn = undefined;
-    } else if (turnId && isConcreteWorkEntry(entry)) {
-      if (!isAllFailedActivity(entry)) workFollowsInTurn = turnId;
-    } else if (!turnId || turnId !== workFollowsInTurn) {
-      workFollowsInTurn = undefined;
-    } else if (
-      isAssistantMessage(entry)
-      && !(entry.phase === "final" && phaseTaggedTurnIds.has(turnId))
+    if (!turnId) {
+      resetBackwardSegment();
+      continue;
+    }
+    if (turnId !== backwardTurnId) {
+      resetBackwardSegment(turnId);
+    }
+    if (
+      entry.type === "activity"
+      && (isTokenUsageActivity(entry) || isTerminalTurnFailureActivity(entry))
     ) {
-      interim.add(entry);
+      continue;
+    }
+    if (entry.type === "activity" && isFileDiffActivity(entry)) {
+      const hasWorkOrReplyAfter = sawReplyAfter || sawNonFailedWorkAfter;
+      const isTrailing =
+        !hasWorkOrReplyAfter
+        && (
+          entry.id.startsWith("live-diff-")
+          || (!acpBackend
+            && !entry.id.startsWith("live-tools-")
+            && !sawSteerAfterInTurn
+            && fileDiffImmediatelyAfterAnswer.has(entry))
+        );
+      if (isTrailing) {
+        trailingFileDiffs.add(entry);
+      } else {
+        sawAnyWorkOrCommentaryAfter = true;
+        if (!isAllFailedActivity(entry)) {
+          sawNonFailedWorkAfter = true;
+        }
+      }
+      continue;
+    }
+    if (isConcreteWorkEntry(entry)) {
+      sawAnyWorkOrCommentaryAfter = true;
+      if (!isAllFailedActivity(entry)) {
+        sawNonFailedWorkAfter = true;
+      }
+      continue;
+    }
+    if (isAssistantMessage(entry)) {
+      if (entry.phase === "commentary" || entry.phase === "partial") {
+        sawAnyWorkOrCommentaryAfter = true;
+        continue;
+      }
+      const isProtectedCodexFinal =
+        !acpBackend
+        && entry.phase === "final"
+        && phaseTaggedTurnIds.has(turnId)
+        && !sawFinalAfter;
+      if (
+        !isProtectedCodexFinal
+        && (sawNonFailedWorkAfter || (sawAnyWorkOrCommentaryAfter && sawReplyAfter))
+      ) {
+        interimReplies.add(entry);
+      }
+      sawReplyAfter = true;
+      if (entry.phase === "final") {
+        sawFinalAfter = true;
+      }
     }
   }
-  return interim;
+
+  return { interimReplies, trailingFileDiffs };
+}
+
+function isAcpBackend(backend: AppServerBackendKind | undefined): boolean {
+  return typeof backend === "string" && backend.startsWith("acp:");
 }
 
 function buildCommentaryOnlyGroup(
@@ -629,7 +773,8 @@ function isAssistantInterimMessage(
 }
 
 function isWorkPhaseEntry(
-  entry: AppServerThreadEntry
+  entry: AppServerThreadEntry,
+  trailingFileDiffs?: ReadonlySet<AppServerThreadEntry>,
 ): entry is
   | AppServerThreadMessageEntry
   | AppServerThreadActivityEntry
@@ -638,7 +783,7 @@ function isWorkPhaseEntry(
     return (
       !isTerminalTurnFailureActivity(entry) &&
       !isRewindMarkerEntry(entry) &&
-      !isFileDiffActivity(entry) &&
+      !(trailingFileDiffs ? trailingFileDiffs.has(entry) : isFileDiffActivity(entry)) &&
       !isTokenUsageActivity(entry)
     );
   }
@@ -650,8 +795,20 @@ function isWorkPhaseEntry(
   return isAssistantInterimMessage(entry);
 }
 
-function hasConcreteWork(entries: AppServerThreadEntry[]): boolean {
-  return entries.some(isConcreteWorkEntry);
+function hasConcreteWork(
+  entries: AppServerThreadEntry[],
+  trailingFileDiffs?: ReadonlySet<AppServerThreadEntry>,
+): boolean {
+  return entries.some((entry) =>
+    trailingFileDiffs
+      ? entry.type === "plan"
+        || (entry.type === "activity"
+          && !isTerminalTurnFailureActivity(entry)
+          && !isRewindMarkerEntry(entry)
+          && !trailingFileDiffs.has(entry)
+          && !isTokenUsageActivity(entry))
+      : isConcreteWorkEntry(entry),
+  );
 }
 
 export function isConcreteWorkEntry(
@@ -662,7 +819,7 @@ export function isConcreteWorkEntry(
     (entry.type === "activity" &&
       !isTerminalTurnFailureActivity(entry) &&
       !isRewindMarkerEntry(entry) &&
-      !isFileDiffActivity(entry) &&
+      (!isFileDiffActivity(entry) || entry.id.startsWith("live-tools-")) &&
       !isTokenUsageActivity(entry))
   );
 }

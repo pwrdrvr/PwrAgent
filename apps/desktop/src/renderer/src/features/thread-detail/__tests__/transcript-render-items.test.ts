@@ -407,6 +407,119 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("folds an ACP turn's mid-turn progress messages even when thoughts carry commentary phase", () => {
+    // ACP normalizes thoughts as commentary and every agent_message_chunk as
+    // final, so commentary thoughts must not exempt mid-turn progress updates.
+    const turn = completedTurn("turn-1", 2_312_651);
+    const thought = commentary("t1", "Checking test failures.", turn);
+    const firstTool = tool("tool-1", turn);
+    const progress = reply("m1", "Fixed the two TypeScript errors; running tests.", turn, "final");
+    const secondTool = tool("tool-2", turn);
+    const answer = reply("m2", "Opened PR #99.", turn, "final");
+
+    expect(buildTranscriptRenderItems({
+      entries: [thought, firstTool, progress, secondTool, answer],
+      backend: "acp:antigravity",
+    })).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:t1:complete",
+        collapsible: true,
+        entries: [thought, firstTool, progress, secondTool],
+        label: "Worked for 38m 32s · 2 tool updates",
+      },
+      { type: "entry", entry: answer },
+    ]);
+  });
+
+  it("folds an interim reply separated from the final answer by only a thought or failed tool", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const progressBeforeThought = reply("m1", "Checking the result.", turn, "final");
+    const thought = commentary("t1", "Reasoning about the next reply.", turn);
+    const afterThought = reply("m2", "Final answer.", turn, "final");
+    expect(buildTranscriptRenderItems({
+      entries: [progressBeforeThought, thought, afterThought],
+      backend: "acp:antigravity",
+    })).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "commentary:turn-1:m1:complete",
+        collapsible: true,
+        entries: [progressBeforeThought, thought],
+        label: "2 previous messages",
+      },
+      { type: "entry", entry: afterThought },
+    ]);
+
+    const progressBeforeFailure = reply("m3", "Running the test suite.", turn, "final");
+    const failedCommand: AppServerThreadActivityEntry = {
+      ...tool("tool-fail", turn),
+      status: "failed",
+      details: [{ id: "call-fail", kind: "command", label: "pnpm test", status: "failed" }],
+    };
+    const afterFailure = reply("m4", "Tests failed on line 12.", turn, "final");
+    expect(buildTranscriptRenderItems({
+      entries: [progressBeforeFailure, failedCommand, afterFailure],
+      backend: "acp:antigravity",
+    })).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:m3:complete",
+        collapsible: true,
+        entries: [progressBeforeFailure, failedCommand],
+        label: "Worked for 1m 10s",
+      },
+      { type: "entry", entry: afterFailure },
+    ]);
+  });
+
+  it("folds mid-turn file edits into the completed work group before the final answer", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const read = tool("tool-1", turn);
+    const edit: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "edit-1",
+      summary: "Edited app.ts",
+      status: "completed",
+      details: [{
+        id: "edit-detail-1",
+        kind: "write",
+        label: "Edited app.ts",
+        path: "/work/app.ts",
+        fileDiff: {
+          kind: "update",
+          additions: 2,
+          removals: 1,
+          diff: "",
+          diffRef: {
+            source: "thread",
+            key: "thread:acp:antigravity:t:edit-1:edit-detail-1",
+            threadId: "t",
+            entryId: "edit-1",
+            detailId: "edit-detail-1",
+          },
+        },
+      }],
+      turn,
+    };
+    const testRun = tool("tool-2", turn);
+    const answer = final("f1", "All green.", turn);
+
+    expect(buildTranscriptRenderItems({
+      entries: [read, edit, testRun, answer],
+      backend: "acp:antigravity",
+    })).toEqual([
+      {
+        type: "workPhaseGroup",
+        id: "work:turn-1:tool-1:complete",
+        collapsible: true,
+        entries: [read, edit, testRun],
+        label: "Worked for 1m 10s · 3 tool updates",
+      },
+      { type: "entry", entry: answer },
+    ]);
+  });
+
   it("keeps a Codex final answer in view when a tool call cancelled at turn end lands after it", () => {
     // Codex cancels a dynamic tool call that is still waiting when the turn
     // ends, and reports it after the answer. That call did no work after the
@@ -1005,6 +1118,48 @@ describe("buildTranscriptRenderItems", () => {
         label: "More work",
       },
     ]);
+  });
+
+  it("keeps a post-answer file diff and final answer visible when a cancelled tool follows them", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const firstActivity = tool("tool-1", turn);
+    const cancelledTool: AppServerThreadActivityEntry = {
+      ...tool("tool-cancelled", turn),
+      status: "failed",
+      details: [{ id: "call-cancelled", kind: "command", label: "create_pull_request", status: "failed" }],
+    };
+    const makeDiff = (id: string): AppServerThreadActivityEntry => ({
+      type: "activity",
+      id,
+      summary: "Edited 1 file, +2, -1",
+      details: [{
+        id: `${id}-detail`,
+        kind: "write",
+        label: "Update app.ts",
+        path: "/work/app.ts",
+        fileDiff: { kind: "update", additions: 2, removals: 1, diff: "+a\n-b" },
+      }],
+      turn,
+    });
+
+    // Claude (phase-less answer) and non-commentary Codex (final answer) with
+    // either a post-answer file diff or a cumulative live-diff-* row.
+    for (const [answer, backend, diffId] of [
+      [reply("r1", "Done.", turn), "claude", "diff-1"],
+      [final("f1", "Done.", turn), "codex", "diff-1"],
+      [final("f2", "Done.", turn), "codex", "live-diff-turn-1"],
+    ] as const) {
+      const diff = makeDiff(diffId);
+      expect(buildTranscriptRenderItems({
+        entries: [firstActivity, answer, diff, cancelledTool],
+        backend,
+      })).toEqual([
+        expect.objectContaining({ type: "workPhaseGroup", entries: [firstActivity] }),
+        { type: "entry", entry: answer },
+        { type: "entry", entry: diff },
+        expect.objectContaining({ type: "workPhaseGroup", entries: [cancelledTool], label: "More work" }),
+      ]);
+    }
   });
 
   it("renders edited-file diffs as top-level activity instead of nested work", () => {
