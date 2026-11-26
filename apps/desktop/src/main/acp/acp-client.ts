@@ -1152,6 +1152,11 @@ export class AcpAgentClient {
     if (activeTurn.pendingSteerHandoff) {
       throw new Error("Another Antigravity steering request is already in flight");
     }
+    const session = this.options.store.getSession(this.options.backendId, params.sessionId);
+    const isCompactCommand = isAcpCompactPromptBlocks(
+      params.content,
+      session?.availableCommands,
+    );
     const nextGeneration = activeTurn.promptGeneration + 1;
     const messageId = `user:${activeTurn.turnId}:steer:${params.interjectionId}`;
     const displayPrompt = params.prompt ?? params.text;
@@ -1160,6 +1165,9 @@ export class AcpAgentClient {
     let nextPromptSettled = false;
 
     const adoptSteer = (): void => {
+      if (isCompactCommand) {
+        activeTurn.isCompactCommand = true;
+      }
       // This receipt describes provider acceptance. The history write can
       // fail after ownership has already moved to the replacement prompt.
       handoff.resolve();

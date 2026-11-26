@@ -18,6 +18,10 @@
  *   below the trigger, or the provider reporting a compaction.
  * - `resume`: a steered compaction worked. The turn it was steered into ends
  *   early, so one continuation is sent when it does.
+ * - `verifying`: a deferred-fill provider (such as Antigravity `agy acp`)
+ *   finished its `/compact` turn cleanly, so any steered continuation has
+ *   already been sent; waiting for the next turn's fill report to confirm the
+ *   drop (`armed`) or hold (`no-shrink`).
  * - `held`: compaction ran without bringing the fill down, the provider
  *   refused it three times, or the thread has no way to compact. Nothing is
  *   requested until the fill falls below `rearmTokens`, the provider reports a
@@ -35,9 +39,11 @@ export type AutoCompactionPhase =
   | "starting"
   | "compacting"
   | "resume"
+  | "verifying"
   | "held";
 
 export type AutoCompactionHeldReason = "no-shrink" | "refused" | "unsupported";
+export type AutoCompactionTurnEndOutcome = "completed" | "failed" | "cancelled";
 
 export type AutoCompactionState = {
   phase: AutoCompactionPhase;
@@ -59,6 +65,10 @@ export type AutoCompactionState = {
   turnId?: string;
   /** That turn has ended. */
   turnEnded?: boolean;
+  /** How that turn ended when recorded before acceptance. */
+  turnEndOutcome?: AutoCompactionTurnEndOutcome;
+  /** In `verifying`, a subsequent turn has started so a high fill proves no-shrink. */
+  sawNextTurn?: boolean;
   /** The fill when the request was made. */
   dispatchedAtTokens?: number;
   /**
@@ -83,6 +93,12 @@ export type AutoCompactionContext = {
    * the provider has no way to compact.
    */
   canStart: "yes" | "blocked" | "unsupported";
+  /**
+   * True when the provider emits no compaction event and reports the compacted
+   * context fill only on the next turn's model call (Antigravity `agy acp`
+   * emits the summarization call's higher `usage_update` as `/compact` ends).
+   */
+  reportsFillOnNextTurn?: boolean;
 };
 
 export type AutoCompactionThresholdInput = {
@@ -101,7 +117,13 @@ export type AutoCompactionInput =
       context: AutoCompactionContext;
     }
   | { kind: "turn-started"; turnId: string }
-  | { kind: "turn-ended"; turnId?: string; context: AutoCompactionContext }
+  | {
+      kind: "turn-ended";
+      turnId?: string;
+      /** Defaults to `completed` when omitted. */
+      outcome?: AutoCompactionTurnEndOutcome;
+      context: AutoCompactionContext;
+    }
   | { kind: "compaction-observed"; context: AutoCompactionContext }
   | { kind: "dispatch-accepted"; turnId?: string; context: AutoCompactionContext }
   | { kind: "dispatch-refused"; context: AutoCompactionContext }
@@ -157,6 +179,8 @@ function dispatch(state: AutoCompactionState, context: AutoCompactionContext): A
     via: undefined,
     turnId: undefined,
     turnEnded: undefined,
+    turnEndOutcome: undefined,
+    sawNextTurn: undefined,
     dispatchedAtTokens: undefined,
     evidence: undefined,
     heldReason: undefined,
@@ -202,6 +226,27 @@ function completed(state: AutoCompactionState, context: AutoCompactionContext): 
   return state.turnEnded
     ? { state: armed(state) }
     : { state: { ...armed(state), phase: "resume" } };
+}
+
+/**
+ * A deferred-fill provider completed `/compact` cleanly. Continue a steered
+ * turn right away, then verify the actual compacted fill on the next turn.
+ */
+function finishDeferredCompaction(
+  state: AutoCompactionState,
+  context: AutoCompactionContext,
+): AutoCompactionStep {
+  const next: AutoCompactionState = {
+    ...armed(state),
+    phase: "verifying",
+    ...(state.via ? { via: state.via } : {}),
+    ...(state.dispatchedAtTokens !== undefined ? { dispatchedAtTokens: state.dispatchedAtTokens } : {}),
+    ...(context.turnRunning ? { sawNextTurn: true } : {}),
+  };
+  if (state.via === "steer" && !context.turnRunning) {
+    return { state: next, command: { kind: "start-continuation" } };
+  }
+  return { state: next };
 }
 
 /** A compaction ran and the fill is still at or above the trigger. */
@@ -252,6 +297,11 @@ export function stepAutoCompaction(
         case "compacting":
           if (below) return completed(next, input.context);
           return next.turnEnded ? retryOrHold(next, input.context) : { state: next };
+        case "verifying":
+          if (below) return { state: armed(next) };
+          return state.sawNextTurn || input.context.turnRunning
+            ? { state: held(next, "no-shrink") }
+            : { state: next };
         case "held":
           return input.usedTokens < threshold.rearmTokens ? { state: armed(next) } : { state: next };
       }
@@ -263,6 +313,9 @@ export function stepAutoCompaction(
         // The next turn started without us and carries on the work.
         return { state: armed(state) };
       }
+      if (state.phase === "verifying") {
+        return { state: { ...state, sawNextTurn: true } };
+      }
       if (
         (state.phase === "starting" || state.phase === "compacting")
         && state.via === "start"
@@ -273,23 +326,35 @@ export function stepAutoCompaction(
       }
       return { state };
 
-    case "turn-ended":
+    case "turn-ended": {
+      const outcome = input.outcome ?? "completed";
       switch (state.phase) {
         case "due":
           return dispatch(state, input.context);
         case "resume":
-          return { state: armed(state), command: { kind: "start-continuation" } };
+          return outcome === "completed"
+            ? { state: armed(state), command: { kind: "start-continuation" } }
+            : { state: armed(state) };
         case "steering":
         case "starting":
         case "compacting": {
           const sameTurn = input.turnId === undefined
             || state.turnId === undefined
             || input.turnId === state.turnId;
-          return sameTurn ? { state: { ...state, turnEnded: true } } : { state };
+          if (!sameTurn) return { state };
+          if (
+            state.phase === "compacting"
+            && outcome === "completed"
+            && input.context.reportsFillOnNextTurn
+          ) {
+            return finishDeferredCompaction(state, input.context);
+          }
+          return { state: { ...state, turnEnded: true, turnEndOutcome: outcome } };
         }
         default:
           return { state };
       }
+    }
 
     case "compaction-observed":
       switch (state.phase) {
@@ -300,6 +365,7 @@ export function stepAutoCompaction(
           // Evidence can arrive before the request's answer, which settles it.
           return { state: { ...state, evidence: true } };
         case "due":
+        case "verifying":
         case "held":
           // The provider compacted on its own.
           return { state: armed(state) };
@@ -309,16 +375,28 @@ export function stepAutoCompaction(
 
     case "dispatch-accepted": {
       if (state.phase !== "steering" && state.phase !== "starting") return { state };
+      const turnEnded = state.via === "steer"
+        ? state.turnEnded === true
+        : state.turnId !== undefined && state.turnEnded === true;
       const accepted: AutoCompactionState = {
         ...state,
         phase: "compacting",
         ...(state.via === "steer" ? { steerUsed: true } : { startUsed: true }),
         ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
-        turnEnded: state.via === "steer" ? state.turnEnded === true : false,
+        turnEnded,
+        ...(turnEnded && state.turnEndOutcome ? { turnEndOutcome: state.turnEndOutcome } : { turnEndOutcome: undefined }),
         evidence: undefined,
       };
       // Evidence that came first settles it now.
-      return state.evidence ? completed(accepted, input.context) : { state: accepted };
+      if (state.evidence) return completed(accepted, input.context);
+      if (
+        accepted.turnEnded
+        && accepted.turnEndOutcome === "completed"
+        && input.context.reportsFillOnNextTurn
+      ) {
+        return finishDeferredCompaction(accepted, input.context);
+      }
+      return { state: accepted };
     }
 
     case "dispatch-refused": {

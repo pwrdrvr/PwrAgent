@@ -46,7 +46,7 @@ export type ThreadAutoCompactionHost = {
   resolveThreadModel(params: { backend: AppServerBackendKind; threadId: string }): Promise<string | undefined>;
   /** The running turn's id, or undefined when the thread is idle. */
   activeTurnId(params: { backend: AppServerBackendKind; threadId: string }): string | undefined;
-  support(params: { backend: AppServerBackendKind; threadId: string }): Pick<AutoCompactionContext, "canSteer" | "canStart">;
+  support(params: { backend: AppServerBackendKind; threadId: string }): Pick<AutoCompactionContext, "canSteer" | "canStart" | "reportsFillOnNextTurn">;
   steerCompact(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -201,9 +201,15 @@ export class ThreadAutoCompactionMonitor {
       case "turn/cancelled": {
         const ended = (notification as Notification<"turn/completed" | "turn/failed" | "turn/cancelled">).params;
         const turnId = providerTurnId(ended.turnId ?? undefined);
+        const outcome = notification.method === "turn/completed"
+          ? "completed"
+          : notification.method === "turn/failed"
+            ? "failed"
+            : "cancelled";
         this.enqueueKnown(event.backend, threadId, (entry) => this.apply(entry, {
           kind: "turn-ended",
           ...(turnId ? { turnId } : {}),
+          outcome,
           context: this.context(entry, true),
         }));
         return;
@@ -294,6 +300,7 @@ export class ThreadAutoCompactionMonitor {
       ...(turnId ? { turnId } : {}),
       canSteer: support.canSteer,
       canStart: support.canStart,
+      ...(support.reportsFillOnNextTurn ? { reportsFillOnNextTurn: true } : {}),
     };
   }
 
@@ -455,7 +462,7 @@ export class ThreadAutoCompactionMonitor {
 export type AutoCompactionRegistry = {
   onEvent(listener: (event: AgentEvent) => void | Promise<void>): () => void;
   getActiveTurnForThread(params: { backend: AppServerBackendKind; threadId: string }): { turnId: string } | undefined;
-  autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }): Pick<AutoCompactionContext, "canSteer" | "canStart">;
+  autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }): Pick<AutoCompactionContext, "canSteer" | "canStart" | "reportsFillOnNextTurn">;
   resolveAutoCompactionModel(params: { backend: AppServerBackendKind; threadId: string }): Promise<string | undefined>;
   startAutoCompaction(params: {
     backend: AppServerBackendKind;

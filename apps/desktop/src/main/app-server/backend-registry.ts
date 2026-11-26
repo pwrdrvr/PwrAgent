@@ -13567,6 +13567,7 @@ export class DesktopBackendRegistry {
   autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }): {
     canSteer: boolean;
     canStart: "yes" | "blocked" | "unsupported";
+    reportsFillOnNextTurn?: boolean;
   } {
     const gate = this.closed || this.isRestartGateClosed() ? "blocked" as const : "yes" as const;
     if (!isAcpBackendId(params.backend)) return { canSteer: false, canStart: gate };
@@ -13579,6 +13580,7 @@ export class DesktopBackendRegistry {
       canSteer: params.backend === "acp:antigravity"
         && this.acpBackend.supportsActiveAntigravitySteering(params.threadId),
       canStart: gate,
+      ...(params.backend === "acp:antigravity" ? { reportsFillOnNextTurn: true } : {}),
     };
   }
 
