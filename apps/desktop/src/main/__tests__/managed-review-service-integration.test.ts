@@ -3711,6 +3711,60 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it.each(["cancelled", "failed"] as const)(
+    "refuses a stale PR review start until the accepted review is %s",
+    async (status) => {
+      const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-review-start-"));
+      onTestFinished(async () => { await rm(cwd, { recursive: true, force: true }); });
+      const url = "https://github.com/example/atlas/pull/42";
+      await git(cwd, ["init", "-b", "main"]);
+      await git(cwd, ["remote", "add", "origin", "https://github.com/example/atlas.git"]);
+      await git(cwd, ["commit", "--allow-empty", "-m", "Base"]);
+      const baseCommit = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+      await git(cwd, ["commit", "--allow-empty", "-m", "Head"]);
+      const headCommit = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+      const pullRequest = { provider: "github.com", org: "example", repo: "atlas", number: 42, url,
+        headRefName: "feature", baseRefName: "main", state: "passing" as const };
+      const attachment = (threadId: string): ThreadOverlayState => ({
+        backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [], prs: [pullRequest],
+      });
+      const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/start", "turn/start"] } });
+      const registry = createDesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock({
+          overlays: { "codex:independent": attachment("independent"), "codex:offer-owner": attachment("offer-owner") },
+        }),
+      });
+      onTestFinished(async () => { await registry.close(); });
+      const request = {
+        backend: "codex" as const,
+        cwd,
+        runMode: "pwragent-sub-agent" as const,
+        target: { type: "pullRequest" as const, url,
+          snapshot: { pullRequest, headCommit, baseCommit, mergeBaseCommit: baseCommit, capturedAt: 1_000 } },
+      };
+
+      const activeHeads: Array<string | undefined> = [];
+      const unsubscribe = registry.onLiveReviewChanged(() => {
+        activeHeads.push([...registry.reviewsInProgress()][0]?.context?.headCommit);
+      });
+      const original = await registry.startReview({ ...request, threadId: "independent" }, true);
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .rejects.toThrow("A review is already running for PR #42");
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await codexClient.emit({ method: `turn/${status}`, params: {
+        threadId: original.reviewThreadId, turnId: original.turnId,
+        turn: { id: original.turnId, status, ...(status === "failed" ? { error: { message: "Review failed" } } : {}) },
+      } });
+      expect(activeHeads).toEqual([headCommit, undefined]);
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .resolves.toMatchObject({ status: "started" });
+      expect(codexClient.startTurnCallCount).toBe(2);
+      unsubscribe();
+    },
+  );
+
   it("fingerprints failed review starts by target and error, not snapshot time", () => {
     // Each scheduled pull request review captures a new snapshot. Comparing
     // whole targets let every retry of a failing PR review send a new notice.

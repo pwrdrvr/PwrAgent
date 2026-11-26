@@ -1,7 +1,8 @@
 import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerBackendKind, AppServerReviewContext } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadTodo, ThreadTodoAction } from "@pwragent/shared/contracts/thread-todos";
+import { hasActivePrReview, reviewPullRequestSnapshots } from "./active-pr-review";
 import type { PrChangeIdentitySource } from "./pr-change-identity";
 import {
   deriveReviewStanding,
@@ -80,6 +81,7 @@ export type PrReviewOfferPorts = {
    * wherever it ran.
    */
   listReviews(thread: PrReviewOfferThread, pr: PrSummary): ThreadReview[];
+  liveReviews?(): Iterable<{ context?: AppServerReviewContext }>;
   recordFixedThrough(reviewId: string, commit: string, settledAt: number): void;
   cards: PrOfferCardPort;
   identity: PrChangeIdentitySource;
@@ -250,6 +252,11 @@ export class PrReviewOfferCoordinator {
     this.track(this.reconcile(new Set(prKeys)));
   }
 
+  /** Acceptance and terminal are wakeups. The evaluation reads the current owner state. */
+  handleLiveReviewChanged(context: AppServerReviewContext | undefined): void {
+    this.reevaluate(reviewPullRequestSnapshots(context).map(({ pullRequest }) => buildPullRequestStatusKey(pullRequest)));
+  }
+
   /** A review on a thread was recorded, settled, or reopened. */
   handleReviewChanged(review: ThreadReview): void {
     if (this.closed) return;
@@ -386,7 +393,11 @@ export class PrReviewOfferCoordinator {
     } else if (assessment.readiness === "closed") {
       this.trackLowers(prKey, []);
     }
-    if (recoveryOnly && assessment.standing !== "ready_to_merge" && !withdrawMerge) return undefined;
+    // Read after the asynchronous coverage and stack checks so a review
+    // accepted during those checks cannot race a card write.
+    const reviewInProgress = hasActivePrReview(this.ports.liveReviews?.() ?? [], prKey, pr.headSha);
+    if (recoveryOnly && assessment.standing !== "ready_to_merge" && !withdrawMerge
+      && !(reviewInProgress && open?.kind === "review")) return undefined;
     // A transient transport failure defers a new offer. A previously
     // verified card stays put; executing it always rechecks live evidence.
     if (assessment.retryOnObservation && !assessment.stackHold && open?.kind === "merge" && open.headSha === pr.headSha
@@ -398,7 +409,8 @@ export class PrReviewOfferCoordinator {
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
       ...(headContentId ? { headContentId } : {}),
     });
-    const desired = neverMerge && offer?.kind === "merge" ? undefined : offer;
+    const desired = ((neverMerge && offer?.kind === "merge") || (reviewInProgress && offer?.kind === "review"))
+      ? undefined : offer;
     const plan = withdrawMerge && open
       ? { retire: { cardId: open.cardId, reason: "never_merge" as const }, raise: desired }
       : assessment.stackHold && open
@@ -407,6 +419,7 @@ export class PrReviewOfferCoordinator {
       desired,
       readiness,
       headCovered,
+      reviewInProgress,
       ...(standing ? { standing } : {}),
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
     });

@@ -1,6 +1,9 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { AppServerReviewPullRequestSnapshot } from "@pwragent/shared/contracts/normalized-app-server";
+import { RegistryTurnState } from "../app-server/registry-turn-state";
+import { buildActiveTurnKey } from "../app-server/thread-turn-keys";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import {
@@ -57,6 +60,11 @@ const THREAD = { backend: "codex" as const, threadId: "thread-1" };
 const prKeyFor = (number: number) => buildPullRequestStatusKey({ provider: "github.com", org: "example", repo: "project", number });
 const PR_KEY = prKeyFor(7);
 const PR_URL = "https://github.com/example/project/pull/7";
+const INCIDENT_HEAD = "ba1f726f299f2b6127afd2b38d1210e82971bd52";
+const INCIDENT_PR = {
+  provider: "github.com", org: "pwrdrvr", repo: "PwrAgent", number: 4463,
+  url: "https://github.com/pwrdrvr/PwrAgent/pull/4463",
+};
 
 type Ci = "pending" | "passing" | "failing";
 
@@ -88,6 +96,11 @@ class World {
   /** Offers the operator dismissed or ran: `review:<change>` or `merge:<sha>`. */
   readonly operatorClosed = new Set<string>();
   gitProcesses = 0;
+  prIdentity: Pick<PrSummary, "provider" | "org" | "repo" | "number" | "url"> = {
+    provider: "github.com", org: "example", repo: "project", number: 7, url: PR_URL,
+  };
+  readonly turnState = new RegistryTurnState();
+  beforeChangeIdentity?: () => void;
 
   constructor() {
     this.head = this.commit(this.newChange());
@@ -107,11 +120,7 @@ class World {
 
   pr(): PrSummary {
     return {
-      provider: "github.com",
-      org: "example",
-      repo: "project",
-      number: 7,
-      url: PR_URL,
+      ...this.prIdentity,
       title: "Add the thing",
       headRefName: "feature",
       baseRefName: this.base,
@@ -152,6 +161,7 @@ const identity = (world: World): PrChangeIdentitySource => ({
   },
   // A reviewed working tree is modeled as one more id with a change.
   changeIdentity: async ({ sha, tree }) => {
+    world.beforeChangeIdentity?.();
     world.gitProcesses += 3;
     return world.changeOf.get(tree ?? sha);
   },
@@ -184,9 +194,10 @@ function createHarness(
     newId: () => `todo-${++ids}`,
   });
   const buildCoordinator = () => new PrReviewOfferCoordinator({
+    liveReviews: () => world.turnState.liveReviewRecords().values(),
     ownerThread: async (key) => {
       world.evaluatedOwners.push(key);
-      return key === PR_KEY ? await ownerThread(world) : undefined;
+      return key === buildPullRequestStatusKey(world.pr()) ? await ownerThread(world) : undefined;
     },
     ...(ineligibleThreads
       ? { ineligibleThreads: async (key: string) => key === PR_KEY ? ineligibleThreads() : [] }
@@ -242,16 +253,186 @@ function openOfferCards(todos: ThreadTodoService, thread: PrReviewOfferThread = 
 type Command = { name: string; run: (harness: Harness) => Promise<void> };
 
 async function transition(harness: Harness, changed: PrStatusTransitionChanges): Promise<void> {
+  const pr = harness.world.pr();
   harness.coordinator.handleTransition({
-    prKey: PR_KEY,
-    url: PR_URL,
-    pr: harness.world.pr(),
-    headSha: harness.world.head,
+    prKey: buildPullRequestStatusKey(pr),
+    url: pr.url,
+    pr,
+    headSha: pr.headSha,
     changed,
     threadKeys: [],
   });
   await harness.coordinator.idle();
 }
+
+function prepareIncident(world: World): void {
+  world.prIdentity = INCIDENT_PR;
+  world.changeOf.set(INCIDENT_HEAD, world.changeOf.get(world.head)!);
+  world.head = INCIDENT_HEAD;
+}
+
+function acceptReview(harness: Harness, pullRequest = INCIDENT_PR, headCommit = INCIDENT_HEAD): string {
+  const snapshot: AppServerReviewPullRequestSnapshot = {
+    pullRequest,
+    headCommit,
+    baseCommit: "b".repeat(40),
+    mergeBaseCommit: "a".repeat(40),
+    capturedAt: harness.world.clock,
+  };
+  const review = {
+    backend: "acp:antigravity" as const,
+    mode: "managed" as const,
+    createdAt: harness.world.clock,
+    displayText: "Review pull request",
+    parentBackend: THREAD.backend,
+    parentThreadId: "independent-review-thread",
+    reviewThreadId: "review-child",
+    turnId: "review-turn",
+    task: "Review pull request",
+    context: {
+      workspacePath: "/work/project",
+      pullRequest,
+      headCommit,
+      pullRequestSnapshot: snapshot,
+    },
+  };
+  harness.world.turnState.activateReview(review);
+  harness.coordinator.handleLiveReviewChanged(review.context);
+  return buildActiveTurnKey(review.backend, review.reviewThreadId, review.turnId);
+}
+
+const CI_GREEN = { checkState: { from: "pending", to: "passing" } } as const;
+
+it("does not offer the incident head when CI goes green during an accepted review", async () => {
+  const harness = createHarness();
+  try {
+    prepareIncident(harness.world);
+    acceptReview(harness);
+    harness.world.ci = "passing";
+    await transition(harness, CI_GREEN);
+
+    // The live review suppresses the card, but still supplies no merge coverage.
+    expect(openOfferCards(harness.todos)).toEqual([]);
+    const key = buildPullRequestStatusKey(INCIDENT_PR);
+    await expect(harness.coordinator.assess(THREAD, key)).resolves.toMatchObject({
+      readiness: "needs_review", headCovered: false,
+    });
+    await expect(harness.coordinator.mergeOfferRefusal(THREAD, key)).resolves.toEqual(expect.any(String));
+  } finally {
+    harness.close();
+  }
+});
+
+it("withdraws an open offer when an independent review of its frozen head is accepted", async () => {
+  const harness = createHarness();
+  try {
+    prepareIncident(harness.world);
+    harness.world.ci = "passing";
+    await transition(harness, CI_GREEN);
+    expect(openOfferCards(harness.todos)).toHaveLength(1);
+
+    const { coordinator, todos, world } = harness;
+    const [original] = openOfferCards(todos);
+    const turnKey = acceptReview(harness);
+    const context = world.turnState.liveReviewRecords().get(turnKey)!.context;
+    await coordinator.idle();
+    expect(openOfferCards(todos)).toEqual([]);
+
+    // A delayed CI transition or a duplicate review wakeup reads live state.
+    coordinator.handleLiveReviewChanged(context);
+    await transition(harness, CI_GREEN);
+    expect(openOfferCards(todos)).toEqual([]);
+
+    world.turnState.finishReview(turnKey);
+    coordinator.handleLiveReviewChanged(context);
+    coordinator.handleLiveReviewChanged(context);
+    await coordinator.idle();
+    expect(openOfferCards(todos).map(({ id }) => id)).toEqual([original!.id]);
+  } finally {
+    harness.close();
+  }
+});
+
+it.each(["number", "repo", "provider", "sha"] as const)("offers the incident head when the active review differs by %s", async (difference) => {
+  const harness = createHarness();
+  try {
+    prepareIncident(harness.world);
+    const pullRequest = difference === "number" ? { ...INCIDENT_PR, number: 4462, url: INCIDENT_PR.url.replace("4463", "4462") }
+      : difference === "repo" ? { ...INCIDENT_PR, repo: "Other", url: INCIDENT_PR.url.replace("PwrAgent", "Other") }
+      : difference === "provider" ? { ...INCIDENT_PR, provider: "git.example.com", url: INCIDENT_PR.url.replace("github.com", "git.example.com") }
+      : INCIDENT_PR;
+    acceptReview(harness, pullRequest, difference === "sha" ? harness.world.commit(harness.world.changeOf.get(INCIDENT_HEAD)!) : INCIDENT_HEAD);
+    harness.world.ci = "passing";
+    await transition(harness, CI_GREEN);
+    expect(openOfferCards(harness.todos)).toHaveLength(1);
+  } finally {
+    harness.close();
+  }
+});
+
+it("checks acceptance again before writing an offer when a review starts during change identity lookup", async () => {
+  const harness = createHarness();
+  try {
+    prepareIncident(harness.world);
+    harness.world.ci = "passing";
+    harness.world.beforeChangeIdentity = () => {
+      harness.world.beforeChangeIdentity = undefined;
+      acceptReview(harness);
+    };
+    await transition(harness, CI_GREEN);
+
+    // Check history too. Raising a card and then withdrawing it is a race.
+    expect(harness.todos.list(THREAD)).toEqual([]);
+  } finally {
+    harness.close();
+  }
+});
+
+it("budgets active-review withdrawal, repeat wakeups, and reopening", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const temp = createTempStateDb("pwragent-active-review-offer-");
+  const harness = createHarness(StateDb.open(temp.dbPath));
+  const { world, coordinator, todos } = harness;
+  try {
+    prepareIncident(world);
+    world.ci = "passing";
+    await transition(harness, CI_GREEN);
+    const [offer] = openOfferCards(todos);
+    const { result: turnKey, writes: withdrawal } = await measureSqliteWrites(async () => {
+      const key = acceptReview(harness);
+      await coordinator.idle();
+      return key;
+    });
+    const context = world.turnState.liveReviewRecords().get(turnKey)!.context;
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-active-withdrawal", writes: withdrawal,
+      note: "One commit to withdraw an open offer on independent review acceptance. At 100/day, about 1.24 MB/day." });
+    const { writes: repeat } = await measureSqliteWrites(async () => {
+      coordinator.handleLiveReviewChanged(context);
+      await transition(harness, CI_GREEN);
+    });
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-active-repeat", writes: repeat,
+      note: "Repeated acceptance and CI wakeups during an active review use no commits." });
+    const { writes: reopen } = await measureSqliteWrites(async () => {
+      world.turnState.finishReview(turnKey);
+      coordinator.handleLiveReviewChanged(context);
+      await coordinator.idle();
+    });
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-active-reopen", writes: reopen,
+      note: "One commit to reopen an eligible offer after cancellation or failure. At 100/day, about 1.24 MB/day." });
+
+    acceptReview(harness);
+    await coordinator.idle();
+    const { writes: consume } = await measureSqliteWrites(() => {
+      todos.resolveStartedReview({ ...THREAD, id: offer!.id });
+    });
+    expect(todos.get(offer!.id).status).toBe("done");
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-active-consume", writes: consume,
+      note: "One commit when the accepted scheduled review consumes its source card after the offer was withdrawn. At 100/day, about 0.82 MB/day." });
+  } finally {
+    harness.close();
+    removeTempStateDbDir(temp.tempDir);
+  }
+});
 
 it("retracts a stale review offer, holds merge offers, and rechecks once the lower layer settles", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");

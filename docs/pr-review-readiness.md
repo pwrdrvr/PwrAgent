@@ -105,7 +105,14 @@ findings withdraws it too, even while CI is running or failing. A merge card who
 is left alone, and no other offer is raised beside it. The next event
 reconciles again. A review offer survives CI runs and
 failures, because the change still needs review. A covering review withdraws
-it, however that review was started.
+it, however that review was started. An accepted review with a snapshot of
+the same PR and exact head also suppresses new review offers and withdraws
+an open one. PwrAgent reads its owner's live review registry, including
+reviews from other threads and each frozen snapshot in a combined review.
+A failed or cancelled review releases the hold, so an eligible offer can
+return. Coverage and merge eligibility still come from recorded reviews.
+At dispatch the owner checks the frozen target again before a provider
+starts a PR review, including one submitted from a stale card.
 
 ### Agents
 
@@ -227,6 +234,10 @@ separate poll or repository scan for merge offers.
 | --- | --- | --- |
 | Raise an offer (`pr-review-offer-raise`) | 1 | ~29 KB |
 | Swap review offer for merge offer (`pr-review-offer-swap-to-merge`) | 1 | ~29 KB |
+| Withdraw an offer at review acceptance (`pr-review-offer-active-withdrawal`) | 1 | ~12 KB |
+| Reopen an eligible offer after a review fails or is cancelled (`pr-review-offer-active-reopen`) | 1 | ~12 KB |
+| Duplicate wakeup during a review (`pr-review-offer-active-repeat`) | 0 | 0 |
+| Mark the scheduled review's source offer done if already withdrawn (`pr-review-offer-active-consume`) | 1 | ~8 KB |
 | Evaluation with nothing to change (`pr-review-offer-unchanged`) | 0 | 0 |
 | Eligible stack child released by a base change or final lower-layer merge (`pr-review-stack-*-offer`) | 1 per child | ~29 KB |
 | Repeat of the same stack event (`pr-review-stack-*-repeat`) | 0 | 0 |

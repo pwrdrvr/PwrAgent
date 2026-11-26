@@ -4,6 +4,7 @@ import type { RegistryHostPorts } from "./registry-host-ports";
 import { randomUUID } from "node:crypto";
 import { buildPendingTurnId, isPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
+  buildPullRequestStatusKey,
   buildThreadIdentityKey,
   isAcpBackendId,
   type ThreadOverlayState,
@@ -51,6 +52,7 @@ import { formatReviewOutputText, parseReviewOutputText } from "../../shared/revi
 import type { CodexPwrdrvrTokenMiserActivation } from "../codex-app-server/desktop-client";
 import { getMainLogger } from "../log";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
+import { hasActivePrReview } from "../pr-status/active-pr-review";
 import { getReviewAutoFixArming } from "../thread-reviews/review-auto-fix";
 import type { TokenMiserService } from "../token-miser/token-miser-service";
 import type { TokenMiserStore } from "../token-miser/token-miser-store";
@@ -184,6 +186,8 @@ export class ManagedReviewService {
   readonly candidateLedger: ManagedReviewCandidateLedger;
   private readonly operatorReviewInputs = new Map<string, OperatorReviewInput>();
   private readonly drainingReviewTerminals = new Set<string>();
+  private readonly publishingReviewResults = new Set<ReviewSubAgentRecord>();
+  private readonly liveReviewListeners = new Set<(context: AppServerReviewContext | undefined) => void>();
 
   constructor(
     context: RegistryContext,
@@ -257,25 +261,37 @@ export class ManagedReviewService {
     // Once terminal ingress has fenced the tools, only the counts are needed.
     // Dispose before any card write or duplicate terminal can intervene.
     this.candidateLedger.clearTurn(turn);
-    await this.completeReviewSubAgent({
-      ...turn,
-      completedAt: completedAtFromTerminalNotification(notification),
-      errorMessage: errorMessageFromTerminalNotification(notification),
-      method: notification.method,
-    }).catch((error) => {
-      if (managedReview?.mode !== "managed") throw error;
-      // Card bookkeeping must not prevent publishing the managed review
-      // result or delivering the terminal to its parent.
-      backendRegistryLog.warn("could not persist managed review sub-agent terminal", {
-        ...turn, error: String(error),
-      });
-    });
-    if (managedReview && ledgerSummary) {
-      await this.publishManagedReviewTerminal({
+    // Successful managed reviews keep suppressing review offers until the
+    // result event has reached recorded coverage. The live turn itself is
+    // removed as usual so duplicate terminals cannot publish it again.
+    const publishing = notification.method === "turn/completed" && managedReview && ledgerSummary;
+    if (publishing) this.publishingReviewResults.add(managedReview);
+    try {
+      await this.completeReviewSubAgent({
+        ...turn,
+        completedAt: completedAtFromTerminalNotification(notification),
+        errorMessage: errorMessageFromTerminalNotification(notification),
         method: notification.method,
-        notification,
-        record: managedReview,
-      }, ledgerSummary);
+      }).catch((error) => {
+        if (managedReview?.mode !== "managed") throw error;
+        // Card bookkeeping must not prevent publishing the managed review
+        // result or delivering the terminal to its parent.
+        backendRegistryLog.warn("could not persist managed review sub-agent terminal", {
+          ...turn, error: String(error),
+        });
+      });
+      if (managedReview && ledgerSummary) {
+        await this.publishManagedReviewTerminal({
+          method: notification.method,
+          notification,
+          record: managedReview,
+        }, ledgerSummary);
+      }
+    } finally {
+      if (managedReview) {
+        this.publishingReviewResults.delete(managedReview);
+        this.notifyLiveReviewChanged(managedReview);
+      }
     }
   }
 
@@ -319,6 +335,32 @@ export class ManagedReviewService {
       return;
     }
     await this.drainPendingReviewStartsForTerminalTurn(terminal);
+  }
+
+  /** Reviews that can still settle an outstanding PR review offer. */
+  *reviewsInProgress(): Iterable<ReviewSubAgentRecord> {
+    yield* this.context.turnState.liveReviewRecords().values();
+    yield* this.publishingReviewResults;
+  }
+
+  onLiveReviewChanged(listener: (context: AppServerReviewContext | undefined) => void): () => void {
+    this.liveReviewListeners.add(listener);
+    return () => { this.liveReviewListeners.delete(listener); };
+  }
+
+  private notifyLiveReviewChanged(record: ReviewSubAgentRecord): void {
+    for (const listener of this.liveReviewListeners) listener(record.context);
+  }
+
+  private assertPullRequestReviewNotRunning(target: AppServerReviewTarget): void {
+    const snapshots = target.type === "pullRequest" && target.snapshot ? [target.snapshot]
+      : target.type === "pullRequests" ? target.pullRequests.flatMap(({ snapshot }) => snapshot ? [snapshot] : [])
+      : [];
+    for (const { pullRequest, headCommit } of snapshots) {
+      if (hasActivePrReview(this.activeReviewSubAgentRecords.values(), buildPullRequestStatusKey(pullRequest), headCommit)) {
+        throw new Error(`A review is already running for PR #${pullRequest.number} at ${headCommit.slice(0, 7)}.`);
+      }
+    }
   }
 
   /** Live review sub-agents by review turn, for the registry's usage reads. */
@@ -542,6 +584,7 @@ export class ManagedReviewService {
     // A review reads the checkout, so a hibernated one comes back first.
     await this.host().ensureCheckoutAwake(params);
     params = await this.prepareReviewRequest(params, trustedSnapshot);
+    this.assertPullRequestReviewNotRunning(params.target);
     const acpManagedMode =
       isAcpBackendId(params.backend)
       && this.context.providers.acp.supportsManagedReview(params.backend);
@@ -742,6 +785,7 @@ export class ManagedReviewService {
             threadId: params.threadId,
             tokenMiserEnabled,
           });
+        this.assertPullRequestReviewNotRunning(params.target);
         return await client.startReview({
           threadId: params.threadId,
           target: params.target,
@@ -864,12 +908,17 @@ export class ManagedReviewService {
     );
     this.context.turnState.activateReview(reviewSubAgentRecord);
     this.reviewSubAgentsByReviewTurn.set(reviewSubAgentKey, reviewSubAgentRecord);
+    this.notifyLiveReviewChanged(reviewSubAgentRecord);
     if (reserveCodexReviewStart) {
       this.context.turnState.releaseStart(params.threadId, reviewReservation);
     }
     const earlyTerminal = this.context.turnState.reviewStartTerminal(terminals, reviewSubAgentKey);
     if (!managedMode && earlyTerminal) {
-      await this.completeReviewSubAgent(earlyTerminal);
+      try {
+        await this.completeReviewSubAgent(earlyTerminal);
+      } finally {
+        this.notifyLiveReviewChanged(reviewSubAgentRecord);
+      }
       this.clearNativeReviewActiveTurns(reviewSubAgentRecord);
       await this.releaseNativeReviewParent(reviewSubAgentRecord, earlyTerminal);
     } else {
@@ -973,6 +1022,7 @@ export class ManagedReviewService {
       });
       const candidateLedger = thread.managedReviewLedgerAvailable === true;
       try {
+        this.assertPullRequestReviewNotRunning(params.target);
         const turn = await this.host().startAcpTurn({
           backend: params.backend,
           threadId: thread.threadId,
@@ -1061,6 +1111,7 @@ export class ManagedReviewService {
     }
     const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
     try {
+      this.assertPullRequestReviewNotRunning(params.target);
       const turn = await client.startTurn({
         ...params.turnAttribution,
         threadId: thread.threadId,
