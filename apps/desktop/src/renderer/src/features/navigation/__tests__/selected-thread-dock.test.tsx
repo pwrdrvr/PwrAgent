@@ -225,6 +225,7 @@ describe("SelectedThreadDock", () => {
     for (height of [74, 60, 46]) {
       if (observed.get(card) === "border-box") resize();
       act(() => frames.splice(0).forEach((frame) => frame(0)));
+      act(() => resize());
       expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe(`${height + 12}px`);
     }
   });

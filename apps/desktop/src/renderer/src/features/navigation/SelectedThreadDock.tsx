@@ -19,9 +19,12 @@ import {
   type DockExtent,
 } from "./selected-thread-dock";
 import {
+  THREAD_DOCK_DRAG_LIFT_EVENT,
   TOP_DOCK_CLASS,
   TOP_DOCK_RESERVE_CHANGE_EVENT,
   TOP_DOCK_RESERVE_PROPERTY as RESERVE_PROPERTY,
+  TOP_DOCK_RESERVE_SAMPLE_EVENT,
+  clearTopDockReserve,
   topDockReserve,
 } from "./selected-thread-dock-reserve";
 import { formatRelativeTime } from "./thread-time";
@@ -273,7 +276,7 @@ function measure(
 function observeDockLayout(
   region: HTMLElement,
   cardRef: RefObject<HTMLButtonElement | null>,
-  sync: (lane: HTMLElement | undefined, elements: DockElements, inFrame: boolean) => void,
+  sync: (lane: HTMLElement | undefined, elements: DockElements | undefined, inFrame: boolean) => void,
   cardMounted: () => void,
 ) {
   let elements: DockElements = {};
@@ -281,6 +284,7 @@ function observeDockLayout(
   let observedCard: HTMLButtonElement | null;
   let initialized = false;
   let frame = 0;
+  let layoutSample: "pending" | "sampled" | undefined;
   const containsMatch = (node: Element, selector: string): boolean =>
     node.matches(selector) || node.querySelector(selector) !== null;
   const forgetTargets = (): void => {
@@ -316,11 +320,12 @@ function observeDockLayout(
     }
     return changed;
   };
-  const cancelFrame = (): void => {
+  const cancelMeasure = (): void => {
     if (frame !== 0) {
       window.cancelAnimationFrame(frame);
       frame = 0;
     }
+    layoutSample = undefined;
   };
   const refresh = (inFrame = false): void => {
     // Each lens renders one lane directly inside the region. Identify it
@@ -329,7 +334,7 @@ function observeDockLayout(
       child instanceof HTMLElement && child.matches(LANE));
     const replaced = !initialized || lane !== nextLane;
     if (replaced) {
-      cancelFrame();
+      cancelMeasure();
       mutation?.takeRecords();
       if (lane) resize?.unobserve(lane);
       lane = nextLane;
@@ -350,14 +355,37 @@ function observeDockLayout(
       }
     }
   };
+  const sampleLayout = (): void => {
+    if (layoutSample !== "pending") return;
+    // The Project Index may need the reserve before our observer runs. Its
+    // request performs the same sample and leaves the delivery accounted for.
+    layoutSample = "sampled";
+    refresh(true);
+  };
   const schedule = (): void => {
-    if (frame !== 0) return;
+    if (frame !== 0 || layoutSample === "pending") return;
     frame = window.requestAnimationFrame(() => {
       frame = 0;
-      refresh(true);
+      if (!resize) {
+        refresh(true);
+        return;
+      }
+      // Animation callbacks run before layout. A fresh observation delivers
+      // after layout in this same rendering update, even on a pure scroll.
+      // Reuse the region's observation so it still reports later resizes.
+      layoutSample = "pending";
+      resize.unobserve(region);
+      resize.observe(region);
     });
   };
-  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : undefined;
+  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
+    if (layoutSample === undefined) {
+      schedule();
+      return;
+    }
+    sampleLayout();
+    layoutSample = undefined;
+  }) : undefined;
   const mutation = typeof MutationObserver === "function" ? new MutationObserver((records) => {
     if (noteMutations(records)) schedule();
   }) : undefined;
@@ -374,12 +402,19 @@ function observeDockLayout(
   const onScroll = (event: Event): void => {
     if (event.target === lane) schedule();
   };
+  // Drag targets are hit-tested before the after-layout sample. Removing
+  // the dock needs no geometry, and the drag class still controls its return.
+  const onDragLift = (): void => sync(undefined, undefined, true);
   region.addEventListener("scroll", onScroll, { capture: true, passive: true });
+  region.addEventListener(TOP_DOCK_RESERVE_SAMPLE_EVENT, sampleLayout);
+  region.addEventListener(THREAD_DOCK_DRAG_LIFT_EVENT, onDragLift);
   return {
     refresh,
     dispose() {
-      cancelFrame();
+      cancelMeasure();
       region.removeEventListener("scroll", onScroll, { capture: true });
+      region.removeEventListener(TOP_DOCK_RESERVE_SAMPLE_EVENT, sampleLayout);
+      region.removeEventListener(THREAD_DOCK_DRAG_LIFT_EVENT, onDragLift);
       resize?.disconnect();
       mutation?.disconnect();
       document.fonts?.removeEventListener("loadingdone", schedule);
@@ -452,8 +487,9 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       }
       if (!region.classList.contains(TOP_DOCK_CLASS)) region.classList.add(TOP_DOCK_CLASS);
       reservedRegionRef.current = region;
-    } else if (region && reserved === region && reserveBefore > 0) {
-      region.classList.remove(TOP_DOCK_CLASS);
+    } else if (region && reserved === region) {
+      clearTopDockReserve(region);
+      return;
     }
     if (region && topDockReserve(region) !== reserveBefore) {
       region.dispatchEvent(new Event(TOP_DOCK_RESERVE_CHANGE_EVENT));

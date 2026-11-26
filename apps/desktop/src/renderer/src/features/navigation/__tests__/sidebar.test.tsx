@@ -42,6 +42,7 @@ import type {
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_GAP } from "../../../lib/tooltip-placement";
 import { PROJECT_CARD_HOVER_DELAY_MS } from "../ProjectHeaderCard";
+import { TOP_DOCK_CLASS, TOP_DOCK_RESERVE_PROPERTY, topDockReserve } from "../selected-thread-dock-reserve";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
 import { ThreadMaintenanceLauncherContext } from "../../maintenance/thread-maintenance-launcher";
@@ -1591,6 +1592,75 @@ describe("Sidebar", () => {
     expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex", true);
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(target, false);
     expect(shell("Target thread")).not.toHaveClass("is-drop-target-inside");
+  });
+
+  it.each(["top", "bottom"] as const)("hit-tests a stationary nesting drag through the former %s dock", async (edge) => {
+    const loose = { ...sharedThread, id: "loose", title: "Loose thread" };
+    const target = { ...sharedThread, id: "target", title: "Target thread" };
+    const selected = { ...sharedThread, id: "selected", title: "Selected thread" };
+    const threads = [loose, target, selected];
+    const selectedKey = threadSummaryIdentityKey(selected);
+    const targetY = edge === "top" ? 125 : 475;
+    const onSetThreadParent = vi.fn(async () => undefined);
+    const rect = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.matches(".sidebar__scroll-region, .sidebar-list--dense")) return new DOMRect(0, 100, 300, 400);
+      if (this.matches(".thread-row") && this.parentElement?.dataset.threadKey === selectedKey) {
+        return new DOMRect(0, edge === "top" ? 0 : 550, 300, 40);
+      }
+      return rect.call(this);
+    });
+    // Hold layout delivery until after the first drag hit test.
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const previousHitTest = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
+    try {
+      const { container } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="recents"
+          directories={[]}
+          inboxThreads={threads}
+          loading={false}
+          selectedItemKey={selectedKey}
+          threads={threads}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          onSetThreadParent={onSetThreadParent}
+        />,
+      );
+      const dock = screen.getByTestId("selected-thread-dock");
+      expect(dock).toHaveAttribute("data-edge", edge);
+      const row = screen.getByRole("button", { name: "Target thread" }).closest(".thread-row-shell")!;
+      const source = screen.getByRole("button", { name: "Loose thread" }).closest(".thread-row-shell")!;
+      mockElementRect(source, 200, 40);
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: () => dock.isConnected ? dock : row,
+      });
+
+      fireEvent.scroll(container.querySelector(".sidebar__scroll-region > .sidebar-list--dense")!);
+      startThreadPinPointerDrag(source, { x: 50, y: 220 });
+      moveThreadPinPointer({ x: 50, y: targetY });
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+      expect(row).toHaveClass("is-drop-target-inside");
+      expect(document.querySelector(".thread-row__drop-label")).toHaveTextContent("Make sub-thread");
+      await act(async () => {
+        releaseThreadPinPointer({ x: 50, y: targetY });
+      });
+      expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex", true);
+    } finally {
+      if (previousHitTest) Object.defineProperty(document, "elementFromPoint", previousHitTest);
+      else Reflect.deleteProperty(document, "elementFromPoint");
+      vi.unstubAllGlobals();
+    }
   });
 
   it("moves a sole sub-thread to another row but never under its own parent or its own sub-thread", async () => {
@@ -10168,6 +10238,33 @@ describe("Sidebar directory pinning", () => {
     expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
     expect(onReorderDirectoryPins).not.toHaveBeenCalled();
     expect(list.querySelector(".directories-pin-slot")).toBeNull();
+  });
+
+  it.each([46, 58, 86])("hits the Pin slot before layout can clear a %ipx dock reserve", async (reserve) => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+    renderSidebar([projectADirectory, projectBDirectory], {
+      onSetDirectoryPin, onReorderDirectoryPins: async () => undefined,
+    });
+    layoutDirectoryHeaders([[/ProjectA/i, 40], [/ProjectB/i, 70]]);
+    const region = document.querySelector<HTMLElement>(".sidebar__scroll-region")!;
+    region.classList.add(TOP_DOCK_CLASS);
+    region.style.setProperty(TOP_DOCK_RESERVE_PROPERTY, `${reserve}px`);
+
+    startThreadPinPointerDrag(directoryHeader(/ProjectB/i), { x: 50, y: 80 });
+    moveThreadPinPointer({ x: 50, y: 12 });
+    const slot = region.querySelector<HTMLElement>(".directories-pin-slot")!;
+    // CSS puts the slot below the sticky inset. Keep the pointer stationary
+    // from lift through drop so a later move cannot repair stale feedback.
+    vi.spyOn(slot, "getBoundingClientRect").mockImplementation(() =>
+      new DOMRect(0, 2 + topDockReserve(slot), 300, 34));
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(slot).toHaveClass("is-drop-target");
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 12 });
+    });
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
   });
 
   it("keeps the directory launchpad button a single click and puts machines behind the chevron", async () => {

@@ -5,8 +5,8 @@
  * list sticks lower by this reserve (see `.has-selected-thread-dock-top` in
  * app.css). Anything that places a project at the top of the list has to
  * place it under the dock, at the reserve, or its own stuck header slides
- * down over the project's first rows. `SelectedThreadDock` owns the value;
- * this module is how the rest of the sidebar reads it.
+ * down over the project's first rows. `SelectedThreadDock` sets the value;
+ * a sidebar pointer drag releases it before the first hit test.
  */
 
 import { SIDEBAR_REGION } from "./reveal-selected-thread-row";
@@ -22,6 +22,10 @@ export const TOP_DOCK_RESERVE_PROPERTY = "--selected-thread-dock-reserve";
  * whatever placed a project by the old reserve has to place it again.
  */
 export const TOP_DOCK_RESERVE_CHANGE_EVENT = "selected-thread-dock-reserve-change";
+/** Lets the Project Index finish an already scheduled dock sample before it reads the reserve after layout. */
+export const TOP_DOCK_RESERVE_SAMPLE_EVENT = "selected-thread-dock-reserve-sample";
+/** The dock must be out of the hit-test path before a sidebar pointer drag measures its targets. */
+export const THREAD_DOCK_DRAG_LIFT_EVENT = "selected-thread-dock-drag-lift";
 
 /** The lane region `element` sits in, or is. */
 export function topDockRegionOf(element: Element): HTMLElement | null {
@@ -36,4 +40,18 @@ export function topDockReserve(element: Element): number {
   }
   const reserve = Number.parseFloat(region.style.getPropertyValue(TOP_DOCK_RESERVE_PROPERTY));
   return Number.isFinite(reserve) && reserve > 0 ? reserve : 0;
+}
+
+/** Release the sticky inset without reading layout. */
+export function clearTopDockReserve(region: HTMLElement): void {
+  if (topDockReserve(region) === 0) return;
+  region.classList.remove(TOP_DOCK_CLASS);
+  region.dispatchEvent(new Event(TOP_DOCK_RESERVE_CHANGE_EVENT));
+}
+
+export function dismissThreadDockForDrag(source: HTMLElement): void {
+  const region = topDockRegionOf(source);
+  if (!region) return;
+  clearTopDockReserve(region);
+  region.dispatchEvent(new Event(THREAD_DOCK_DRAG_LIFT_EVENT));
 }
