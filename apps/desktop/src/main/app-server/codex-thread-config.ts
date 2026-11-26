@@ -223,6 +223,21 @@ export function withoutMcpProjectToolApprovalOffer(
 export function buildCodexConnectionMcpServerName(
   server: McpConnectionBridgeRegistration["server"],
 ): string {
+  // Codex exposes hyphens as underscores in tool namespaces. Resource calls
+  // use the exact configured key, so use the same spelling for both routes.
+  return buildConnectionMcpServerName(server, server.name.replaceAll("-", "_"));
+}
+
+export function buildClaudeConnectionMcpServerName(
+  server: McpConnectionBridgeRegistration["server"],
+): string {
+  return buildConnectionMcpServerName(server, server.name);
+}
+
+function buildConnectionMcpServerName(
+  server: McpConnectionBridgeRegistration["server"],
+  name: string,
+): string {
   const identity = createHash("sha256")
     .update(server.command)
     .update("\0")
@@ -236,7 +251,7 @@ export function buildCodexConnectionMcpServerName(
     )
     .digest("hex")
     .slice(0, PWRAGENT_MCP_SERVER_HASH_LENGTH);
-  return `${PWRAGENT_MCP_SERVER_PREFIX}${server.name}_${identity}`;
+  return `${PWRAGENT_MCP_SERVER_PREFIX}${name}_${identity}`;
 }
 
 /**

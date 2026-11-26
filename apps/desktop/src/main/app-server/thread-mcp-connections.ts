@@ -95,6 +95,7 @@ import type {
   TaskMonitorMcpAccess,
 } from "./backend-registry-types";
 import {
+  buildClaudeConnectionMcpServerName,
   buildCodexConnectionMcpConfig,
   buildCodexConnectionMcpServerName,
   mergeCodexThreadConfigs,
@@ -620,7 +621,10 @@ export class ThreadMcpConnections {
     if (!bridge) return undefined;
     // ACP receives the bridge name verbatim; Codex and Claude receive the
     // hashed configuration alias. Gateway discovery has a separate session.
-    return isAcpBackendId(context.backend) ? bridge.name : buildCodexConnectionMcpServerName(bridge);
+    if (isAcpBackendId(context.backend)) return bridge.name;
+    return context.backend === "claude"
+      ? buildClaudeConnectionMcpServerName(bridge)
+      : buildCodexConnectionMcpServerName(bridge);
   }
 
   /**

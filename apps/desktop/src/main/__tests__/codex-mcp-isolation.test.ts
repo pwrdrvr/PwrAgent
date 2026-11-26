@@ -16,6 +16,14 @@ function registration(name: string): McpConnectionBridgeRegistration {
 }
 
 describe("buildCodexConnectionMcpConfig", () => {
+  it.each([
+    ["a-0", /^pwragent_a_0_[0-9a-f]{32}$/u],
+    ["pwrsuitelab-control", /^pwragent_pwrsuitelab_control_[0-9a-f]{32}$/u],
+  ])("registers %s under the namespace Codex exposes to the model", (name, alias) => {
+    const config = buildCodexConnectionMcpConfig([registration(name)]);
+    expect(Object.keys(config?.mcp_servers ?? {})).toEqual([expect.stringMatching(alias)]);
+  });
+
   it("leaves the agent's own servers alone by default", () => {
     const config = buildCodexConnectionMcpConfig(
       [registration("pwrsnap")],

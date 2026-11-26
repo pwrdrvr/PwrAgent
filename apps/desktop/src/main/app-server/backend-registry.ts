@@ -888,8 +888,8 @@ import {
 } from "./backend-registry-notification-values";
 import {
   TOKEN_MISER_MANAGED_CAPABILITY_REASON,
+  buildClaudeConnectionMcpServerName,
   buildCodexConnectionMcpConfig,
-  buildCodexConnectionMcpServerName,
   buildCodexParentDynamicToolSpecs,
   buildCodexPdfMcpConfig,
   buildCodexPdfMcpDisabledConfig,
@@ -12051,7 +12051,7 @@ export class DesktopBackendRegistry {
               return undefined;
             });
           const servers = [...registrations.map((registration) => ({
-            ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
+            ...registration.server, name: buildClaudeConnectionMcpServerName(registration.server),
           })), ...(owned ? [owned.server] : [])];
           const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
             ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
