@@ -5561,6 +5561,14 @@ export class DesktopBackendRegistry {
     return resolved;
   }
 
+  private async resolveAcpAvailableCommands(params: {
+    backend: AcpBackendId;
+    cwds: Array<string | undefined>;
+    allowProbe?: boolean;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    return (await this.resolveAcpAvailableCommandCatalog(params)).commands;
+  }
+
   /**
    * Serve an ACP agent's slash commands for a request with no session behind
    * it. Cache first (free, and kept fresh by every real session's
@@ -5574,11 +5582,11 @@ export class DesktopBackendRegistry {
    * any more, and ignoring the ones already on disk lets an affected profile
    * heal on the next request.
    */
-  private async resolveAcpAvailableCommands(params: {
+  private async resolveAcpAvailableCommandCatalog(params: {
     backend: AcpBackendId;
     cwds: Array<string | undefined>;
     allowProbe?: boolean;
-  }): Promise<AppServerListSkillsResponse["data"][number]> {
+  }): Promise<{ commands: AppServerAvailableCommandSummary[]; cwd?: string }> {
     const repositoryPaths = await this.resolveAcpCommandRepositoryPaths(
       params.cwds,
     );
@@ -5589,26 +5597,22 @@ export class DesktopBackendRegistry {
       );
       if (cached && cached.commands.length > 0) {
         return {
-          commands: cached.commands, skills: [],
+          commands: cached.commands,
           ...(params.backend === "acp:antigravity" && cached.workspaceCwd ? { cwd: cached.workspaceCwd } : {}),
         };
       }
     }
 
-    if (params.allowProbe === false) {
-      return { commands: [], skills: [] };
-    }
-
     const probeTarget = repositoryPaths[0];
-    if (!probeTarget) {
-      return { commands: [], skills: [] };
+    if (params.allowProbe === false || !probeTarget) {
+      return { commands: [] };
     }
     const commands = await this.probeAcpAvailableCommands({
       backend: params.backend,
       repositoryPath: probeTarget,
     });
     return {
-      commands, skills: [],
+      commands,
       ...(params.backend === "acp:antigravity" ? { cwd: path.resolve(probeTarget) } : {}),
     };
   }
@@ -5944,7 +5948,10 @@ export class DesktopBackendRegistry {
           // The provider's own loader cannot honor a directory-limited file
           // pull. A remote restricted request may only use live commands.
           if (authorized?.resolvePath) return { commands: [], skills: [] };
-          return await this.resolveAcpAvailableCommands({ backend, cwds });
+          if (backend === "acp:antigravity") {
+            return { ...await this.resolveAcpAvailableCommandCatalog({ backend, cwds }), skills: [] };
+          }
+          return { commands: await this.resolveAcpAvailableCommands({ backend, cwds }), skills: [] };
         }
         const cwd = backend === "acp:antigravity" && !commandSession.requiresAgentSessionRebind
           ? commandSession.antigravityPrimaryCwd ?? commandSession.cwd
