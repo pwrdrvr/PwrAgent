@@ -2571,6 +2571,64 @@ describe("Tangerine Terminal theme contract", () => {
     expect(tagInlineRule).toContain("word-break: normal;");
   });
 
+  it("uses tabular numerals, pretty wrapping, KaTeX max-width exemption, and tokenized horizontal scroll fades on markdown tables", () => {
+    const tableRule = extractRuleBody(css, ".thread-markdown__table");
+    expect(tableRule).toContain("font-variant-numeric: tabular-nums;");
+
+    const cellRule = extractRuleBody(css, ".thread-markdown__th,\n.thread-markdown__td");
+    expect(cellRule).toContain("text-wrap: pretty;");
+
+    const katexSelector = ".thread-markdown__th:has(.katex),\n.thread-markdown__td:has(.katex)";
+    const katexRule = extractRuleBody(css, katexSelector);
+    expect(katexRule).toContain("max-width: none;");
+
+    const proseIndex = css.indexOf(
+      ".thread-markdown__th[data-col-kind=\"prose\"],\n.thread-markdown__td[data-col-kind=\"prose\"]",
+    );
+    const katexIndex = css.indexOf(katexSelector);
+    expect(proseIndex).toBeGreaterThan(-1);
+    expect(katexIndex).toBeGreaterThan(proseIndex);
+
+    const wrapRule = extractRuleBody(css, ".thread-markdown__table-wrap");
+    expect(wrapRule).toContain("position: relative;");
+    expect(wrapRule).toContain("max-width: 100%;");
+    expect(wrapRule).not.toMatch(/overflow:\s*hidden;/);
+
+    const fadeSharedRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap::before,\n.thread-markdown__table-wrap::after",
+    );
+    expect(fadeSharedRule).toContain("pointer-events: none;");
+    expect(fadeSharedRule).toContain("opacity: 0;");
+
+    const fadeLeftRule = extractRuleBody(css, ".thread-markdown__table-wrap::before");
+    const fadeRightRule = [
+      ...css.matchAll(/(?:^|\n)\.thread-markdown__table-wrap::after\s*\{([^}]*)\}/g),
+    ]
+      .map((match) => match[1] ?? "")
+      .join("\n");
+    expect(fadeLeftRule).toContain("var(--bg-app)");
+    expect(fadeLeftRule).toContain("var(--border-strong)");
+    expect(fadeRightRule).toContain("var(--bg-app)");
+    expect(fadeRightRule).toContain("var(--border-strong)");
+
+    const fadeVisibleRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap[data-scroll-left=\"true\"]::before,\n.thread-markdown__table-wrap[data-scroll-right=\"true\"]::after",
+    );
+    expect(fadeVisibleRule).toContain("opacity: 1;");
+
+    const scrollFocusRule = extractRuleBody(css, ".thread-markdown__table-scroll:focus-visible");
+    expect(scrollFocusRule).toContain("outline: 2px solid var(--focus-ring);");
+    expect(scrollFocusRule).toContain("outline-offset: 2px;");
+
+    const innerFocusRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-scroll :where(:focus-visible)",
+    );
+    expect(innerFocusRule).toContain("scroll-margin-inline:");
+  });
+
   it("bounds long transcript code and quote blocks with their own vertical scroll", () => {
     const preRule = extractRuleBody(css, ".transcript-message__pre");
     expect(preRule).toContain("max-height:");

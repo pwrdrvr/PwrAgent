@@ -1782,6 +1782,102 @@ describe("ThreadMarkdown", () => {
     expect(headerCellKinds).toEqual(["prose", "prose", "prose"]);
   });
 
+  it("tracks horizontal scroll-edge overflow cues on wide tables and keeps keyboard focusability", () => {
+    let observerCallback: ResizeObserverCallback | undefined;
+    const observedTargets = new Set<Element>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          observerCallback = callback;
+        }
+        observe(target: Element) {
+          observedTargets.add(target);
+        }
+        unobserve(target: Element) {
+          observedTargets.delete(target);
+        }
+        disconnect() {
+          observedTargets.clear();
+        }
+      },
+    );
+
+    try {
+      const { container } = render(
+        <ThreadMarkdown
+          text={`| Metric | North America | Europe | Asia Pacific |
+| --- | ---: | ---: | ---: |
+| Latency | 12.4ms | 18.2ms | 24.9ms |`}
+        />,
+      );
+
+      const wrap = container.querySelector<HTMLDivElement>(".thread-markdown__table-wrap")!;
+      const scroller = container.querySelector<HTMLDivElement>(".thread-markdown__table-scroll")!;
+      const table = container.querySelector<HTMLTableElement>(".thread-markdown__table")!;
+
+      expect(wrap).not.toBeNull();
+      expect(scroller).toHaveAttribute("tabindex", "0");
+      expect(observedTargets.has(scroller)).toBe(true);
+      expect(observedTargets.has(table)).toBe(true);
+
+      // Default jsdom metrics (0 / 0) show no edge fades.
+      expect(wrap).not.toHaveAttribute("data-scroll-left");
+      expect(wrap).not.toHaveAttribute("data-scroll-right");
+
+      let clientWidth = 400;
+      let scrollWidth = 760;
+      let scrollLeft = 0;
+      Object.defineProperties(scroller, {
+        clientWidth: { configurable: true, get: () => clientWidth },
+        scrollWidth: { configurable: true, get: () => scrollWidth },
+        scrollLeft: {
+          configurable: true,
+          get: () => scrollLeft,
+          set: (value: number) => {
+            scrollLeft = value;
+          },
+        },
+      });
+
+      // ResizeObserver notifies initial overflow -> right fade visible only.
+      act(() => {
+        observerCallback?.(
+          [{ target: scroller } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wrap).not.toHaveAttribute("data-scroll-left");
+      expect(wrap).toHaveAttribute("data-scroll-right", "true");
+
+      // Scroll midway -> both edges visible.
+      scrollLeft = 180;
+      fireEvent.scroll(scroller);
+      expect(wrap).toHaveAttribute("data-scroll-left", "true");
+      expect(wrap).toHaveAttribute("data-scroll-right", "true");
+
+      // Scroll to right end -> left edge visible only.
+      scrollLeft = 360;
+      fireEvent.scroll(scroller);
+      expect(wrap).toHaveAttribute("data-scroll-left", "true");
+      expect(wrap).not.toHaveAttribute("data-scroll-right");
+
+      // Container widens past table -> both fades clear.
+      clientWidth = 800;
+      scrollLeft = 0;
+      act(() => {
+        observerCallback?.(
+          [{ target: table } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wrap).not.toHaveAttribute("data-scroll-left");
+      expect(wrap).not.toHaveAttribute("data-scroll-right");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("skips raw html parsing for oversized html-like messages", () => {
     const oversizedHtml = "<em>safe</em>".repeat(2_000);
     const { container } = render(<ThreadMarkdown text={oversizedHtml} />);

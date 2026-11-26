@@ -8,6 +8,7 @@ import {
   type FilePreviewNotice,
   type FilePreviewTable,
 } from "./file-preview-model";
+import { TableScrollContainer } from "./TableScrollContainer";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
 type CodeKind = Exclude<FilePreviewKind, "markdown" | "csv" | "tsv" | "html">;
@@ -177,11 +178,10 @@ function DelimitedTable(props: { kind: "csv" | "tsv"; table: FilePreviewTable })
           }}
         />
       ) : null}
-      <div
-        className="thread-markdown__table-scroll file-preview__table"
+      <TableScrollContainer
+        ariaLabel={`${capitalizedKindLabel(props.kind)} contents`}
+        className="file-preview__table"
         role="region"
-        aria-label={`${capitalizedKindLabel(props.kind)} contents`}
-        tabIndex={0}
       >
         <table className="thread-markdown__table">
           <thead className="thread-markdown__thead">
@@ -213,7 +213,7 @@ function DelimitedTable(props: { kind: "csv" | "tsv"; table: FilePreviewTable })
             ))}
           </tbody>
         </table>
-      </div>
+      </TableScrollContainer>
     </div>
   );
 }

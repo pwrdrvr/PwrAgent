@@ -65,6 +65,7 @@ import {
 } from "./remark-pull-request-references";
 import { remarkTableProfile } from "./remark-table-profile";
 import { buildSelectionClipboard } from "./selection-clipboard";
+import { TableScrollContainer } from "./TableScrollContainer";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
@@ -742,9 +743,9 @@ const markdownComponents: Components = {
   pre: MarkdownPre,
   table(tableProps) {
     return (
-      <div className="thread-markdown__table-scroll" tabIndex={0}>
+      <TableScrollContainer>
         <table className="thread-markdown__table">{tableProps.children}</table>
-      </div>
+      </TableScrollContainer>
     );
   },
   tbody(tableBodyProps) {
