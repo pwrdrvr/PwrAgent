@@ -1259,8 +1259,7 @@ it("observes a retired Git stack before starting a new viewer lease", async () =
 
 it("isolates local owner listing and stack projection from remote pin and peer-status churn", async () => {
   await withNavigationStackCheckout(async ({ source, read, viewer }) => {
-    const started = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(started);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const stackReads = vi.spyOn(StackReader.prototype, "read");
     const materialize = mocks.store.readNavigationQueryIndex;
     let pinTitle = "Viewer pin v0";
@@ -1291,8 +1290,9 @@ it("isolates local owner listing and stack projection from remote pin and peer-s
           { minLength: 4, maxLength: 8, size: "max" },
         ),
         async (events) => {
-          // Reset caches cleanly at a fresh timestamp for each generated run.
-          clock.mockReturnValue(Date.now() + 2_000);
+          // Advance both Date.now() and pool retention timers between runs so
+          // slow real-Git runs cannot expire the 1,000 ms owner snapshot mid-pass.
+          vi.advanceTimersByTime(2_000);
           source.emit("thread/name/updated");
           pinTitle = "Viewer pin warm";
           peerOnline = true;
@@ -1335,7 +1335,7 @@ it("isolates local owner listing and stack projection from remote pin and peer-s
       ), { numRuns: 5 });
     } finally {
       stackReads.mockRestore();
-      clock.mockRestore();
+      vi.useRealTimers();
     }
   });
 });
