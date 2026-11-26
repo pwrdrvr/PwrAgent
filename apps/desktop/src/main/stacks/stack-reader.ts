@@ -28,6 +28,8 @@ const MAX_CLONE_STATUS_ENTRIES = 512;
 const MAX_WITNESSED_WORKTREES = 256;
 const MAX_WITNESSED_REF_ENTRIES = 1_024;
 const MAX_WITNESSED_CONFIG_BYTES = 1024 * 1024;
+const MAX_WITNESSED_GLOBAL_INCLUDE_DEPTH = 2;
+const MAX_WITNESSED_GLOBAL_CONFIG_FILES = 16;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 type CatalogObservation = { catalog: CatalogRead; version?: string };
@@ -779,6 +781,103 @@ async function configHasIncludes(configPath: string, expectedVersion: string, si
   }
 }
 
+/**
+ * Parse literal `path = ...` entries inside `[include]` / `[includeIf]` sections
+ * of a global Git config. Returns `undefined` when any include directive uses
+ * escapes, continuations, or syntax that cannot be resolved safely, so the
+ * caller falls back to live Git.
+ */
+function parseGlobalConfigIncludeTargets(
+  text: string,
+  configPath: string,
+  homeDir: string | undefined,
+): string[] | undefined {
+  const targets: string[] = [];
+  let inInclude = false;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    if (line.startsWith("[")) {
+      const closeIndex = line.indexOf("]");
+      if (closeIndex < 0) return undefined;
+      const header = line.slice(0, closeIndex + 1);
+      inInclude = /^\[\s*include(?:if)?(?:\s|"|\])/i.test(header);
+      const trailing = line.slice(closeIndex + 1).trim();
+      if (inInclude && trailing && !trailing.startsWith("#") && !trailing.startsWith(";")) {
+        return undefined;
+      }
+      continue;
+    }
+    if (!inInclude) continue;
+    if (rawLine.endsWith("\\")) return undefined;
+    const match = /^path\s*=\s*(.+)$/i.exec(line);
+    if (!match) continue;
+    let value = match[1]!.trim();
+    if (value.startsWith("\"")) {
+      const endQuote = value.indexOf("\"", 1);
+      if (endQuote < 0) return undefined;
+      const rest = value.slice(endQuote + 1).trim();
+      if (rest && !rest.startsWith("#") && !rest.startsWith(";")) return undefined;
+      value = value.slice(1, endQuote);
+      if (value.includes("\\")) return undefined;
+    } else {
+      const commentIndex = value.search(/[;#]/);
+      if (commentIndex >= 0) value = value.slice(0, commentIndex).trim();
+      if (value.includes("\"") || value.includes("\\")) return undefined;
+    }
+    if (!value) return undefined;
+    if (value.startsWith("~/") || value.startsWith("~\\")) {
+      if (!homeDir) return undefined;
+      targets.push(path.resolve(homeDir, value.slice(2)));
+    } else if (value.startsWith("~")) {
+      return undefined;
+    } else {
+      targets.push(path.isAbsolute(value) ? value : path.resolve(path.dirname(configPath), value));
+    }
+  }
+  return targets;
+}
+
+async function witnessGlobalConfigFiles(
+  initialPaths: readonly string[],
+  homeDir: string | undefined,
+  hash: ReturnType<typeof createHash>,
+  signal: AbortSignal,
+): Promise<boolean> {
+  const visited = new Set<string>();
+  const queue: { configPath: string; depth: number }[] = [...initialPaths]
+    .sort()
+    .map((configPath) => ({ configPath, depth: 0 }));
+  while (queue.length) {
+    signal.throwIfAborted();
+    const { configPath, depth } = queue.shift()!;
+    if (visited.has(configPath)) continue;
+    if (visited.size >= MAX_WITNESSED_GLOBAL_CONFIG_FILES) return false;
+    visited.add(configPath);
+    const version = await followedFileOrMissingVersion(configPath, signal);
+    if (!version) return false;
+    hash.update(`gcfg:${configPath}=${version}\0`);
+    if (version === "missing") continue;
+    let text: string;
+    try {
+      const info = await stat(configPath, { bigint: true });
+      if (!info.isFile() || info.size > MAX_WITNESSED_CONFIG_BYTES || catalogVersion(info) !== version) return false;
+      text = await readFile(configPath, "utf8");
+      const after = await stat(configPath, { bigint: true });
+      if (!after.isFile() || catalogVersion(after) !== version) return false;
+    } catch {
+      return false;
+    }
+    const includes = parseGlobalConfigIncludeTargets(text, configPath, homeDir);
+    if (!includes) return false;
+    if (includes.length && depth >= MAX_WITNESSED_GLOBAL_INCLUDE_DEPTH) return false;
+    for (const target of [...new Set(includes)].sort()) {
+      if (!visited.has(target)) queue.push({ configPath: target, depth: depth + 1 });
+    }
+  }
+  return true;
+}
+
 async function witnessLooseRefsTree(
   root: string,
   prefix: string,
@@ -842,13 +941,13 @@ async function observeCloneStatusWitness(
       globalConfigPaths.add(path.join(env.HOME, ".gitconfig"));
       globalConfigPaths.add(path.join(env.HOME, ".config", "git", "config"));
     }
-    if (env.USERPROFILE) globalConfigPaths.add(path.join(env.USERPROFILE, ".gitconfig"));
-    if (env.XDG_CONFIG_HOME) globalConfigPaths.add(path.join(env.XDG_CONFIG_HOME, "git", "config"));
-    for (const configPath of [...globalConfigPaths].sort()) {
-      const version = await followedFileOrMissingVersion(configPath, signal);
-      if (!version) return undefined;
-      hash.update(`gcfg:${configPath}=${version}\0`);
+    if (env.USERPROFILE) {
+      globalConfigPaths.add(path.join(env.USERPROFILE, ".gitconfig"));
+      globalConfigPaths.add(path.join(env.USERPROFILE, ".config", "git", "config"));
     }
+    if (env.XDG_CONFIG_HOME) globalConfigPaths.add(path.join(env.XDG_CONFIG_HOME, "git", "config"));
+    const homeDir = env.HOME || env.USERPROFILE;
+    if (!await witnessGlobalConfigFiles([...globalConfigPaths], homeDir, hash, signal)) return undefined;
 
     const commonInfo = await lstat(clone.commonDir, { bigint: true });
     if (!commonInfo.isDirectory()) return undefined;
@@ -857,12 +956,17 @@ async function observeCloneStatusWitness(
     const headVersion = await regularFileOrMissingVersion(path.join(clone.commonDir, "HEAD"), signal);
     const configPath = path.join(clone.commonDir, "config");
     const configVersion = await regularFileOrMissingVersion(configPath, signal);
-    const worktreeConfigVersion = await regularFileOrMissingVersion(path.join(clone.commonDir, "config.worktree"), signal);
+    const worktreeConfigPath = path.join(clone.commonDir, "config.worktree");
+    const worktreeConfigVersion = await regularFileOrMissingVersion(worktreeConfigPath, signal);
     const packedRefsVersion = await regularFileOrMissingVersion(path.join(clone.commonDir, "packed-refs"), signal);
     const reftableVersion = await regularFileOrMissingVersion(path.join(clone.commonDir, "reftable", "tables.list"), signal);
     if (!headVersion || !configVersion || !worktreeConfigVersion || !packedRefsVersion || !reftableVersion) return undefined;
     if (configVersion !== "missing") {
       const includes = await configHasIncludes(configPath, configVersion, signal);
+      if (includes !== false) return undefined;
+    }
+    if (worktreeConfigVersion !== "missing") {
+      const includes = await configHasIncludes(worktreeConfigPath, worktreeConfigVersion, signal);
       if (includes !== false) return undefined;
     }
     hash.update(`head:${headVersion}\0cfg:${configVersion}\0wtcfg:${worktreeConfigVersion}\0packed:${packedRefsVersion}\0reftable:${reftableVersion}\0`);
@@ -886,14 +990,19 @@ async function observeCloneStatusWitness(
         signal.throwIfAborted();
         if (!entry.isDirectory()) return undefined;
         const entryDir = path.join(worktreesDir, entry.name);
+        const wtConfigPath = path.join(entryDir, "config.worktree");
         const [wtHead, wtGitdir, wtConfig, wtReftable, wtLocked] = await Promise.all([
           regularFileOrMissingVersion(path.join(entryDir, "HEAD"), signal),
           regularFileOrMissingVersion(path.join(entryDir, "gitdir"), signal),
-          regularFileOrMissingVersion(path.join(entryDir, "config.worktree"), signal),
+          regularFileOrMissingVersion(wtConfigPath, signal),
           regularFileOrMissingVersion(path.join(entryDir, "reftable", "tables.list"), signal),
           regularFileOrMissingVersion(path.join(entryDir, "locked"), signal),
         ]);
         if (!wtHead || !wtGitdir || !wtConfig || !wtReftable || !wtLocked) return undefined;
+        if (wtConfig !== "missing") {
+          const includes = await configHasIncludes(wtConfigPath, wtConfig, signal);
+          if (includes !== false) return undefined;
+        }
         hash.update(`wt:${entry.name}:${wtHead}:${wtGitdir}:${wtConfig}:${wtReftable}:${wtLocked}\0`);
       }
     }
@@ -1275,7 +1384,8 @@ export class StackReader {
           const { worktrees, refs, ok } = await this.sampleLiveCloneGitStatus(clone, sharedDemand);
           sharedDemand.signal?.throwIfAborted();
           if (ok) {
-            const afterWitness = await observeCloneStatusWitness(clone, envVersion, sharedDemand);
+            const afterEnvVersion = observation.hints.gitEnvironmentVersion();
+            const afterWitness = await observeCloneStatusWitness(clone, afterEnvVersion, sharedDemand);
             sharedDemand.signal?.throwIfAborted();
             if (afterWitness === beforeWitness) {
               this.cloneStatuses.delete(clone.commonDir);

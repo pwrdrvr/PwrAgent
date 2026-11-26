@@ -83,4 +83,28 @@ describe("stackIndexEventInvalidates PR key relevance", () => {
       { numRuns },
     );
   });
+
+  it("preserves host ports when normalizing catalog repository strings", () => {
+    const scope = buildStackPrRelevanceScope({
+      repositories: ["ghe.internal:8443:platform/service"],
+    });
+    expect(
+      stackIndexEventInvalidates(
+        { method: "pullRequest/status/updated", params: { prKey: "ghe.internal:8443/platform/service#42" } },
+        scope,
+      ),
+    ).toBe(true);
+    expect(
+      stackIndexEventInvalidates(
+        { method: "pullRequest/status/updated", params: { prKey: "ghe.internal:8443/platform/other#42" } },
+        scope,
+      ),
+    ).toBe(false);
+    expect(
+      stackIndexEventInvalidates(
+        { method: "pullRequest/status/updated", params: { prKey: "ghe.internal/platform/service#42" } },
+        scope,
+      ),
+    ).toBe(false);
+  });
 });

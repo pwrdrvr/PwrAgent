@@ -762,6 +762,100 @@ describe("desktop sidebar background stack Git reuse", () => {
     }
   });
 
+  it("does not filter mid-flight PR events with a stale stackInputEpoch prScope or coalesce selected-stack-detail onto background reads", { timeout: 60_000 }, async () => {
+    const fixture = await createRealGitSidebarFixture(2);
+    try {
+      // Warm initial projection (epoch 0, prScope knows fixture/bound and catalog-1 only).
+      await fixture.readOwnerIndex();
+
+      // Advance epoch with a new-PR event, then pause listThreads so a PR event
+      // for a newly added repository lands mid-flight while the stale epoch-0
+      // projection is still stored in latestStackProjections.
+      const gate = Promise.withResolvers<void>();
+      const originalList = fixture.registry.listThreads;
+      let pausedOnce = false;
+      fixture.registry.listThreads = vi.fn(async (...args) => {
+        if (!pausedOnce) {
+          pausedOnce = true;
+          await gate.promise;
+        }
+        return await originalList(...args);
+      });
+      fixture.emit("thread/pullRequests/updated", { threadId: "bound-parent" });
+      const inFlightBackground = fixture.readOwnerIndex();
+      // Start an authoritative selected-stack-detail read while the background read is in flight.
+      fixture.resetCounters();
+      const detailPromise = readNavigationStackLayers({ backend: "codex", threadId: "bound-parent" });
+
+      // Emit a PR update for a repo absent from the stale epoch-0 prScope while in flight.
+      const newRepoPr: PrSummary = {
+        provider: "github.com",
+        org: "new-org",
+        repo: "new-repo",
+        number: 7,
+        state: "failing",
+        lifecycleState: "open",
+        url: "https://github.com/new-org/new-repo/pull/7",
+      };
+      fixture.emit("pullRequest/status/updated", {
+        prKey: buildPullRequestStatusKey(newRepoPr),
+        pr: newRepoPr,
+      });
+      gate.resolve();
+      await Promise.all([inFlightBackground, detailPromise]);
+
+      // Because the mid-flight PR event was NOT filtered out by the stale epoch-0
+      // prScope, the next detail read must observe Git afresh rather than reusing
+      // the projection that started before that event.
+      fixture.resetCounters();
+      await readNavigationStackLayers({ backend: "codex", threadId: "bound-parent" });
+      expect(countLaunches(fixture.launches).stackStatus).toBeGreaterThanOrEqual(4);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
+  it("witnesses global includeIf config targets and falls back to live Git for worktree config includes", { timeout: 60_000 }, async () => {
+    const fixture = await createRealGitSidebarFixture(2);
+    try {
+      const homeDir = path.join(fixture.base, "home");
+      const includedConfig = path.join(homeDir, ".gitconfig-extra");
+      await writeFile(includedConfig, "[user]\n\tname = ExtraBefore\n");
+      await writeFile(
+        path.join(homeDir, ".gitconfig"),
+        "[includeIf \"gitdir:/\"]\n\tpath = ~/.gitconfig-extra\n",
+      );
+
+      await fixture.readOwnerIndex();
+
+      // Unchanged included global config still allows zero-launch display-only reuse.
+      fixture.resetCounters();
+      fixture.emit("navigation/thread/seen", { threadId: "bound-parent", seenUpdatedAt: 9_001 });
+      await fixture.readOwnerIndex();
+      expect(countLaunches(fixture.launches).stackStatus).toBe(0);
+
+      // Editing the included global config file must invalidate the clone witness immediately.
+      await writeFile(includedConfig, "[user]\n\tname = ExtraAfterChanged\n");
+      fixture.resetCounters();
+      fixture.emit("navigation/thread/seen", { threadId: "bound-parent", seenUpdatedAt: 9_002 });
+      await fixture.readOwnerIndex();
+      expect(countLaunches(fixture.launches).stackStatus).toBeGreaterThan(0);
+
+      // Adding an [include] directive in config.worktree must fall back to live Git.
+      await writeFile(
+        path.join(fixture.boundRoot, ".git", "config.worktree"),
+        "[include]\n\tpath = ~/.gitconfig-extra\n",
+      );
+      await fixture.readOwnerIndex();
+      fixture.resetCounters();
+      fixture.emit("navigation/thread/seen", { threadId: "bound-parent", seenUpdatedAt: 9_003 });
+      await fixture.readOwnerIndex();
+      expect(countLaunches(fixture.launches).stackStatus).toBeGreaterThan(0);
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("holds display-only reuse and freshness invariants across random operation sequences", { timeout: 120_000 }, async () => {
     const fixture = await createRealGitSidebarFixture(2);
     let now = Date.now();

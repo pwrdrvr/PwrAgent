@@ -76,7 +76,7 @@ function normalizedPullRequestRepository(value: string): string | undefined {
     const host = provider === "github" || provider === "gitlab" ? `${provider}.com` : provider;
     return `${host}/${repository}`;
   }
-  const fromCatalog = /^([^:/#]+):([^/#]+(?:\/[^/#]+)+)$/.exec(trimmed);
+  const fromCatalog = /^([^/#]+):([^:/#]+(?:\/[^/#]+)+)$/.exec(trimmed);
   if (fromCatalog) {
     const [, provider, repository] = fromCatalog;
     const host = provider === "github" || provider === "gitlab" ? `${provider}.com` : provider;
@@ -140,7 +140,17 @@ function stackInputEpoch(registry: DesktopBackendRegistry): { value: number } | 
   // One listener for the registry's lifetime, so no change is missed between
   // projections. Without events, nothing could say a projection went stale.
   registry.onEvent((event) => {
-    if (stackIndexEventInvalidates(event.notification, latestStackProjections.get(registry)?.prScope)) counter.value += 1;
+    const latest = latestStackProjections.get(registry);
+    const overlayStore = getDesktopOverlayStore();
+    // Only filter PR events against a projection that is still current; while
+    // a newer scan is pending or running, conservatively invalidate.
+    const prScope = latest
+      && latest.epoch === counter.value
+      && latest.overlayStore === overlayStore
+      && latest.version === navigationIndexVersion(registry, overlayStore, false)
+      ? latest.prScope
+      : undefined;
+    if (stackIndexEventInvalidates(event.notification, prScope)) counter.value += 1;
   });
   epoch = counter;
   stackInputEpochs.set(registry, epoch);
@@ -299,10 +309,13 @@ export async function loadLocalNavigationQueryIndex(params: {
   // in-flight index that predates it, nor overtake other readers' scans.
   const keyFor = (variant: (string | number)[]) => JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...variant, ...(params.refreshProviders ? ["refresh-providers"] : [])]);
+  const selectedStackDetail = params.includeStacks && params.callerReason === "selected-stack-detail";
   const key = keyFor([
     ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
     ...(params.includeStacks
-      ? params.stackLeaseScope ? ["stacks", sourceId(params.stackLeaseScope)] : ["stacks"]
+      ? params.stackLeaseScope
+        ? ["stacks", sourceId(params.stackLeaseScope)]
+        : selectedStackDetail ? ["stacks", "selected-stack-detail"] : ["stacks"]
       : []),
   ]);
   // An index's coverage reads the startup refresh state, so an index built
@@ -629,18 +642,15 @@ async function readActiveNavigationStacks(
     unsubscribe?.();
     unsubscribe = undefined;
   };
-  let prScope: StackPrRelevanceScope | undefined;
   const read = new SharedPrMetadataRead(async (demand) => {
     try {
-      return await projectNavigationStacks(nativeRows, registry, priority, demand.signal!, (scope) => {
-        prScope = scope;
-      });
+      return await projectNavigationStacks(nativeRows, registry, priority, demand.signal!);
     } finally {
       release();
     }
   });
   let unsubscribe: (() => void) | undefined = registry.onEvent?.((event) => {
-    if (stackIndexEventInvalidates(event.notification, prScope)) release();
+    if (stackIndexEventInvalidates(event.notification)) release();
   });
   read.signal.addEventListener("abort", release, { once: true });
   activeStackReads.set(key, read);
@@ -652,7 +662,6 @@ async function projectNavigationStacks(
   registry: DesktopBackendRegistry,
   priority: number,
   signal: AbortSignal,
-  onPrScope?: (scope: StackPrRelevanceScope) => void,
 ): Promise<NavigationStackProjection> {
   const prKeys = new Set<string>();
   const repositories = new Set<string>();
@@ -666,9 +675,7 @@ async function projectNavigationStacks(
     directory.gitBranch || directory.worktreePath || directory.repositoryKey)
     || ((thread.observedGitBranch || thread.gitBranch) && thread.linkedDirectories?.length)));
   if (!candidates.length) {
-    const prScope = { prKeys, repositories };
-    onPrScope?.(prScope);
-    return { projection: undefined, prScope };
+    return { projection: undefined, prScope: { prKeys, repositories } };
   }
   const attachments = getDesktopOverlayStore().readNavigationPullRequests(
     candidates.map((thread) => ({ backend: thread.source, threadId: thread.id })),
@@ -722,7 +729,6 @@ async function projectNavigationStacks(
     }
   }
   const prScope = incompleteCatalog ? undefined : { prKeys, repositories };
-  if (prScope) onPrScope?.(prScope);
   return { projection: projectBoundNavigationStacks(threads, stacks, validated), prScope };
 }
 
