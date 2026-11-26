@@ -164,7 +164,9 @@ function oracleWithSkillOrigins<T extends AppServerSkillSummary>(
 
 // Generators that deliberately exercise nested roots, shared prefixes,
 // duplicate roots, worktree ties, POSIX/Windows/UNC paths, casing variants,
-// trailing slashes, padding whitespace, and Unicode case-length expansion.
+// trailing slashes, and padding whitespace on the indexed fast path.
+// Unicode case-length expansion is tested separately so it does not divert
+// these runs onto the linear fallback.
 
 const segmentArb = fc.constantFrom(
   "work",
@@ -177,8 +179,6 @@ const segmentArb = fc.constantFrom(
   ".agents",
   ".codex",
   "skills",
-  "İndex",
-  "i\u0307ndex",
 );
 
 const rootKindArb = fc.constantFrom("posix", "win-drive", "win-slash", "unc-win", "unc-posix", "slash-root", "empty-slashes");
@@ -336,15 +336,14 @@ describe("withSkillOrigins differential oracle", () => {
     );
   });
 
-  it("preserves worktree precedence, early-directory ties, UNC casing ties, and Unicode case-length roots", () => {
-    const directories: SkillOriginDirectory[] = [
+  it("preserves worktree precedence, early-directory ties, UNC casing ties in both orderings, and slash-root matching on the indexed path", () => {
+    const baseDirectories: SkillOriginDirectory[] = [
       { label: "First", path: "/work/repo", worktreePath: "/work/repo/" },
       { label: "Second", path: "/work/repo" },
       { label: "Nested", path: "/work/repo/apps/desktop" },
       { label: "UncPosix", path: "//Server/Share" },
       { label: "UncWin", path: "\\\\server\\share" },
-      { label: "UnicodeDotI", path: "C:\\İndex" },
-      { label: "UnicodeCombined", path: "C:\\i\u0307ndex" },
+      { label: "Root", path: "/" },
     ];
     const skills: AppServerSkillSummary[] = [
       { name: "same-root", path: "/work/repo/.agents/skills/same-root/SKILL.md", scope: "repo" },
@@ -352,23 +351,58 @@ describe("withSkillOrigins differential oracle", () => {
       { name: "unc-exact", path: "//Server/Share/.agents/skills/unc-exact/SKILL.md", scope: "repo" },
       { name: "unc-folded", path: "//SERVER/SHARE/.agents/skills/unc-folded/SKILL.md", scope: "repo" },
       { name: "unc-backslash", path: "\\\\SERVER\\SHARE\\.agents\\skills\\unc-backslash\\SKILL.md", scope: "repo" },
-      { name: "unicode-i", path: "c:\\i\u0307ndex\\.agents\\skills\\unicode-i\\SKILL.md", scope: "repo" },
       { name: "slash-only", path: "/", scope: "repo" },
+      { name: "root-child", path: "/unmatched", scope: "repo" },
     ];
 
-    const withSlashRoot = [...directories, { label: "Root", path: "/" }];
-    const actual = withSkillOrigins(skills, withSlashRoot);
-    const expected = oracleWithSkillOrigins(skills, withSlashRoot);
-    expect(actual).toEqual(expected);
-
-    // Explicit sanity checks on the key precedence rules:
+    const actual = withSkillOrigins(skills, baseDirectories);
+    expect(actual).toEqual(oracleWithSkillOrigins(skills, baseDirectories));
     expect(actual[0]?.origin).toEqual({ kind: "project", label: "First", directoryIndex: 0, worktree: true });
     expect(actual[1]?.origin).toEqual({ kind: "project", label: "Nested", directoryIndex: 2 });
     expect(actual[2]?.origin).toEqual({ kind: "project", label: "UncPosix", directoryIndex: 3 });
     expect(actual[3]?.origin).toEqual({ kind: "project", label: "UncWin", directoryIndex: 4 });
     expect(actual[4]?.origin).toEqual({ kind: "project", label: "UncPosix", directoryIndex: 3 });
-    expect(actual[5]?.origin).toEqual({ kind: "project", label: "UnicodeCombined", directoryIndex: 6 });
-    expect(actual[6]?.origin).toEqual({ kind: "project", label: "Root", directoryIndex: 7 });
+    expect(actual[5]?.origin).toEqual({ kind: "project", label: "Root", directoryIndex: 5 });
+    expect(actual[6]?.origin).toEqual({ kind: "project", label: "Root", directoryIndex: 5 });
+
+    // Reversed UNC ordering: UncWin before UncPosix must win on exactHit && windowsHit ties.
+    const reversedUncDirectories: SkillOriginDirectory[] = [
+      { label: "UncWin", path: "\\\\server\\share" },
+      { label: "UncPosix", path: "//Server/Share" },
+    ];
+    const uncSkills: AppServerSkillSummary[] = [
+      { name: "unc-exact", path: "//Server/Share/.agents/skills/unc-exact/SKILL.md", scope: "repo" },
+      { name: "unc-folded", path: "//SERVER/SHARE/.agents/skills/unc-folded/SKILL.md", scope: "repo" },
+      { name: "unc-backslash", path: "\\\\SERVER\\SHARE\\.agents\\skills\\unc-backslash\\SKILL.md", scope: "repo" },
+    ];
+    const reversedActual = withSkillOrigins(uncSkills, reversedUncDirectories);
+    expect(reversedActual).toEqual(oracleWithSkillOrigins(uncSkills, reversedUncDirectories));
+    expect(reversedActual[0]?.origin).toEqual({ kind: "project", label: "UncWin", directoryIndex: 0 });
+    expect(reversedActual[1]?.origin).toEqual({ kind: "project", label: "UncWin", directoryIndex: 0 });
+    expect(reversedActual[2]?.origin).toEqual({ kind: "project", label: "UncWin", directoryIndex: 0 });
+  });
+
+  it("falls back cleanly when Unicode case folding changes path length", () => {
+    const unicodeRootDirectories: SkillOriginDirectory[] = [
+      { label: "UnicodeDotI", path: "C:\\İndex" },
+      { label: "UnicodeCombined", path: "C:\\i\u0307ndex" },
+    ];
+    const skills: AppServerSkillSummary[] = [
+      { name: "unicode-combined", path: "c:\\i\u0307ndex\\.agents\\skills\\unicode-combined\\SKILL.md", scope: "repo" },
+      { name: "unicode-dot-i", path: "C:\\İndex\\.agents\\skills\\unicode-dot-i\\SKILL.md", scope: "repo" },
+    ];
+    const actual = withSkillOrigins(skills, unicodeRootDirectories);
+    expect(actual).toEqual(oracleWithSkillOrigins(skills, unicodeRootDirectories));
+    expect(actual[0]?.origin).toEqual({ kind: "project", label: "UnicodeCombined", directoryIndex: 1 });
+    expect(actual[1]?.origin).toEqual({ kind: "project", label: "UnicodeCombined", directoryIndex: 1 });
+
+    // Skill path itself expands on toLowerCase() against a standard Windows root.
+    const standardDirs: SkillOriginDirectory[] = [
+      { label: "CombinedOnly", path: "C:\\i\u0307ndex" },
+    ];
+    const skillExpands = withSkillOrigins([skills[1]!], standardDirs);
+    expect(skillExpands).toEqual(oracleWithSkillOrigins([skills[1]!], standardDirs));
+    expect(skillExpands[0]?.origin).toEqual({ kind: "project", label: "CombinedOnly", directoryIndex: 0 });
   });
 
   it("returns distinct origin objects per skill so callers cannot alias mutations across skills", () => {
