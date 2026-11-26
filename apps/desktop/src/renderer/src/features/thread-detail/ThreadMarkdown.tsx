@@ -757,6 +757,7 @@ const markdownComponents: Components = {
         className="thread-markdown__td"
         style={tableCellAlignStyle(tableCellProps.style)}
         data-col-kind={dataColKind(tableCellProps.node)}
+        data-cell-math={dataCellMath(tableCellProps.node)}
       >
         {tableCellProps.children}
       </td>
@@ -768,6 +769,7 @@ const markdownComponents: Components = {
         className="thread-markdown__th"
         style={tableCellAlignStyle(tableHeaderCellProps.style)}
         data-col-kind={dataColKind(tableHeaderCellProps.node)}
+        data-cell-math={dataCellMath(tableHeaderCellProps.node)}
       >
         {tableHeaderCellProps.children}
       </th>
@@ -1293,6 +1295,12 @@ function dataColKind(node: unknown): string | undefined {
   const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
   const value = properties?.["dataColKind"] ?? properties?.["data-col-kind"];
   return typeof value === "string" ? value : undefined;
+}
+
+function dataCellMath(node: unknown): string | undefined {
+  const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
+  const value = properties?.["dataCellMath"] ?? properties?.["data-cell-math"];
+  return value === "only" ? value : undefined;
 }
 
 function tableCellAlignStyle(

@@ -32969,11 +32969,20 @@ a.transcript-message__messaging-origin:focus-visible {
   max-width: 48ch;
 }
 
-/* Exempt cells containing KaTeX formulas from max-width clipping so equations
-   keep their natural width and scroll horizontally with the table. */
-.thread-markdown__th:has(.katex),
-.thread-markdown__td:has(.katex) {
+/* Exempt formula-only cells and display equations from max-width clipping so
+   standalone equations keep their natural width and scroll horizontally with
+   the table, while mixed prose + inline math cells still wrap at their column
+   cap. Keep individual inline KaTeX formulas unbroken inside cells. */
+.thread-markdown__th[data-cell-math="only"]:has(.katex),
+.thread-markdown__td[data-cell-math="only"]:has(.katex),
+.thread-markdown__th:has(.katex-display),
+.thread-markdown__td:has(.katex-display) {
   max-width: none;
+}
+
+.thread-markdown__th .katex,
+.thread-markdown__td .katex {
+  white-space: nowrap;
 }
 
 .thread-markdown__th .transcript-message__code,

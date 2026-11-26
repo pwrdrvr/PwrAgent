@@ -40,14 +40,32 @@ function buildTable(rows: TestNode[][]): TestNode {
   };
 }
 
-function profileTable(rows: TestNode[][]): ColumnKind[][] {
+function mathCell(children: TestNode[]): TestNode {
+  return {
+    type: "tableCell",
+    children,
+  };
+}
+
+function inlineMath(value: string): TestNode {
+  return {
+    type: "inlineMath",
+    value,
+  };
+}
+
+function profileTableCells(rows: TestNode[][]): Array<Array<Record<string, unknown> | undefined>> {
   const tree = buildTable(rows);
   remarkTableProfile()(tree);
   const table = tree.children?.[0];
   return (table?.children ?? []).map((row) =>
-    (row.children ?? []).map(
-      (cell) => cell.data?.hProperties?.["data-col-kind"] as ColumnKind,
-    ),
+    (row.children ?? []).map((cell) => cell.data?.hProperties),
+  );
+}
+
+function profileTable(rows: TestNode[][]): ColumnKind[][] {
+  return profileTableCells(rows).map((row) =>
+    row.map((props) => props?.["data-col-kind"] as ColumnKind),
   );
 }
 
@@ -139,9 +157,91 @@ describe("remarkTableProfile properties", () => {
       ),
     );
   });
+  it("marks formula-only cells with data-cell-math=only and never marks mixed prose+math or non-math cells", () => {
+    const mathExprArb = fc.constantFrom(
+      "n",
+      "O(n \\log n)",
+      "p < 0.05",
+      "\\sum_{i=1}^{n} \\frac{a_i x_i + b_i y_i}{\\sqrt{c_i^2 + d_i^2}}",
+    );
+    const whitespaceArb = fc.constantFrom("", " ", "  ", "\t");
+    const wrapperArb = fc.constantFrom<"none" | "strong" | "emphasis" | "delete">(
+      "none",
+      "strong",
+      "emphasis",
+      "delete",
+    );
+    const proseTokenArb = fc.stringMatching(/^[A-Za-z0-9.,;:()_-]{1,18}$/);
+
+    const wrapNode = (
+      wrapper: "none" | "strong" | "emphasis" | "delete",
+      node: TestNode,
+    ): TestNode =>
+      wrapper === "none" ? node : { type: wrapper, children: [node] };
+
+    fc.assert(
+      fc.property(
+        mathExprArb,
+        whitespaceArb,
+        whitespaceArb,
+        wrapperArb,
+        proseTokenArb,
+        fc.boolean(),
+        (expr, leadSpace, trailSpace, wrapper, proseToken, proseBefore) => {
+          const mathNode = wrapNode(wrapper, inlineMath(expr));
+          const formulaOnlyChildren: TestNode[] = [];
+          if (leadSpace) formulaOnlyChildren.push({ type: "text", value: leadSpace });
+          formulaOnlyChildren.push(mathNode);
+          if (trailSpace) formulaOnlyChildren.push({ type: "text", value: trailSpace });
+
+          const mixedChildren: TestNode[] = proseBefore
+            ? [{ type: "text", value: `${proseToken} ` }, mathNode]
+            : [mathNode, { type: "text", value: ` ${proseToken}` }];
+
+          const plainChildren: TestNode[] = [{ type: "text", value: proseToken }];
+
+          const props = profileTableCells([
+            [textCell("Formula"), textCell("Mixed"), textCell("Plain")],
+            [
+              mathCell(formulaOnlyChildren),
+              mathCell(mixedChildren),
+              mathCell(plainChildren),
+            ],
+          ]);
+
+          expect(props[1]?.[0]?.["data-cell-math"]).toBe("only");
+          expect(props[1]?.[1]?.["data-cell-math"]).toBeUndefined();
+          expect(props[1]?.[2]?.["data-cell-math"]).toBeUndefined();
+        },
+      ),
+    );
+  });
 });
 
 describe("remarkTableProfile regression counterexamples", () => {
+  it("does not mark mixed prose+inline-math cells as math-only while marking standalone formula cells", () => {
+    const props = profileTableCells([
+      [textCell("Metric"), textCell("Formula"), textCell("Notes")],
+      [
+        textCell("Complexity"),
+        mathCell([
+          inlineMath(
+            "\\sum_{i=1}^{n} \\frac{a_i x_i + b_i y_i}{\\sqrt{c_i^2 + d_i^2}} = \\int_0^\\infty e^{-t^2}\\,dt",
+          ),
+        ]),
+        mathCell([
+          { type: "text", value: "This algorithm achieves " },
+          inlineMath("O(n \\log n)"),
+          { type: "text", value: " worst-case time across balanced trees." },
+        ]),
+      ],
+    ]);
+
+    expect(props[1]?.[0]?.["data-cell-math"]).toBeUndefined();
+    expect(props[1]?.[1]?.["data-cell-math"]).toBe("only");
+    expect(props[1]?.[2]?.["data-col-kind"]).toBe("prose");
+    expect(props[1]?.[2]?.["data-cell-math"]).toBeUndefined();
+  });
   it("promotes short body columns to prose when the column header is long or multi-word", () => {
     const kinds = profileTextTable([
       [

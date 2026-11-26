@@ -48,10 +48,14 @@ export const remarkTableProfile: RemarkPlugin = () => (tree) => {
           return;
         }
         cell.data ??= {};
-        cell.data.hProperties = {
+        const hProperties: Record<string, unknown> = {
           ...(cell.data.hProperties ?? {}),
           "data-col-kind": kind,
         };
+        if (isMathOnlyCell(cell)) {
+          hProperties["data-cell-math"] = "only";
+        }
+        cell.data.hProperties = hProperties;
       });
     }
   });
@@ -86,6 +90,54 @@ function computeColumnKinds(
 
 function isCell(cell: MdastTableCell | undefined): cell is MdastTableCell {
   return cell !== undefined;
+}
+
+type CellMathScan = "empty" | "math" | "other";
+
+function isMathOnlyCell(cell: MdastNode): boolean {
+  return scanCellMath(cell.children) === "math";
+}
+
+function scanCellMath(children: ReadonlyArray<MdastNode> | undefined): CellMathScan {
+  if (!children || children.length === 0) {
+    return "empty";
+  }
+  let sawMath = false;
+  for (const child of children) {
+    if (child.type === "inlineMath" || child.type === "math") {
+      if (typeof child.value === "string" && child.value.trim() !== "") {
+        sawMath = true;
+      } else {
+        return "other";
+      }
+      continue;
+    }
+    if (child.type === "text") {
+      if (typeof child.value === "string" && child.value.trim() !== "") {
+        return "other";
+      }
+      continue;
+    }
+    if (child.type === "break") {
+      continue;
+    }
+    if (
+      child.type === "emphasis"
+      || child.type === "strong"
+      || child.type === "delete"
+    ) {
+      const inner = scanCellMath(child.children);
+      if (inner === "other") {
+        return "other";
+      }
+      if (inner === "math") {
+        sawMath = true;
+      }
+      continue;
+    }
+    return "other";
+  }
+  return sawMath ? "math" : "empty";
 }
 
 function classifyCells(cells: readonly MdastTableCell[]): ColumnKind {

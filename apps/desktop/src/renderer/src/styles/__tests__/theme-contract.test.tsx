@@ -2578,9 +2578,24 @@ describe("Tangerine Terminal theme contract", () => {
     const cellRule = extractRuleBody(css, ".thread-markdown__th,\n.thread-markdown__td");
     expect(cellRule).toContain("text-wrap: pretty;");
 
-    const katexSelector = ".thread-markdown__th:has(.katex),\n.thread-markdown__td:has(.katex)";
+    const katexSelector =
+      ".thread-markdown__th[data-cell-math=\"only\"]:has(.katex),\n"
+      + ".thread-markdown__td[data-cell-math=\"only\"]:has(.katex),\n"
+      + ".thread-markdown__th:has(.katex-display),\n"
+      + ".thread-markdown__td:has(.katex-display)";
     const katexRule = extractRuleBody(css, katexSelector);
     expect(katexRule).toContain("max-width: none;");
+
+    // Mixed prose + inline math cells must keep their column max-width so
+    // prose still wraps instead of stretching onto one unwrapped line.
+    expect(css).not.toContain(".thread-markdown__th:has(.katex)");
+    expect(css).not.toContain(".thread-markdown__td:has(.katex)");
+
+    const inlineKatexRule = extractRuleBody(
+      css,
+      ".thread-markdown__th .katex,\n.thread-markdown__td .katex",
+    );
+    expect(inlineKatexRule).toContain("white-space: nowrap;");
 
     const proseIndex = css.indexOf(
       ".thread-markdown__th[data-col-kind=\"prose\"],\n.thread-markdown__td[data-col-kind=\"prose\"]",

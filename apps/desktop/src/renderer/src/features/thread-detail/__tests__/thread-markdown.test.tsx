@@ -324,6 +324,38 @@ describe("ThreadMarkdown", () => {
       expect(container.querySelectorAll("td .katex")).toHaveLength(1);
     });
     expect(container.querySelector("annotation[encoding='application/x-tex']")).toHaveTextContent("x");
+    expect(container.querySelector("td")).toHaveAttribute("data-cell-math", "only");
+  });
+
+  it("marks standalone math table cells without disabling wrapping on mixed prose and inline math cells", async () => {
+    const markdown = [
+      String.raw`| $f(x)$ | Complexity $O(n)$ | Plain |`,
+      "| --- | --- | --- |",
+      String.raw`| $\sum_{i=1}^{n} \frac{a_i x_i + b_i y_i}{\sqrt{c_i^2 + d_i^2}}$ | This algorithm achieves $O(n \log n)$ worst-case time across balanced trees. | Plain text |`,
+    ].join("\n");
+
+    const { container } = render(
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown text={markdown} />
+      </MarkdownRenderingOptionsProvider>,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll("table .katex")).toHaveLength(4);
+    });
+
+    const headers = Array.from(container.querySelectorAll("thead th"));
+    expect(headers[0]).toHaveAttribute("data-cell-math", "only");
+    expect(headers[1]).not.toHaveAttribute("data-cell-math");
+    expect(headers[2]).not.toHaveAttribute("data-cell-math");
+
+    const cells = Array.from(container.querySelectorAll("tbody td"));
+    expect(cells[0]).toHaveAttribute("data-cell-math", "only");
+    expect(cells[0]?.querySelector(".katex")).not.toBeNull();
+    expect(cells[1]).toHaveAttribute("data-col-kind", "prose");
+    expect(cells[1]).not.toHaveAttribute("data-cell-math");
+    expect(cells[1]?.querySelector(".katex")).not.toBeNull();
+    expect(cells[2]).not.toHaveAttribute("data-cell-math");
   });
 
   it.each([
