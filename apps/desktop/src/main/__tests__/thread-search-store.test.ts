@@ -28,6 +28,14 @@ describe("ThreadSearchStore", () => {
     ]);
   });
 
+  it("keeps successive projection updates for the same thread in slice order", () => {
+    const original = threadSummary({ id: "same-thread", title: "Original" });
+    store.upsertThread(original);
+    store.upsertThreads([{ ...original, title: "Intermediate" }, { ...original, title: "Final" }]);
+    expect(store.search({ query: '"Intermediate"', limit: 10 })).toEqual([]);
+    expect(store.search({ query: '"Final"', limit: 10 })).toMatchObject([{ threadId: original.id, title: "Final" }]);
+  });
+
   it("rolls back the entire projection refresh if one changed document cannot be indexed", () => {
     const original = threadSummary({ id: "existing", title: "Original title" });
     store.upsertThread(original);

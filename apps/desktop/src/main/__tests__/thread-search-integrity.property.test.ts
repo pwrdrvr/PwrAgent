@@ -147,7 +147,6 @@ it("preserves a peer's committed rename between repair preflight and the write t
     let committed = false;
     const spy = afterProjectionCheck(reader, () => {
       if (committed) return;
-      expect(reader.raw.inTransaction).toBe(false);
       writerStore.upsertThread(renamed, 200);
       committed = true;
     });
@@ -179,11 +178,11 @@ it.each(["metadata search", "single upsert"] as const)(
       // Try once at the recheck boundary, while the reader's transaction is open.
       writer.raw.pragma("busy_timeout = 0");
       const touchPeer = writer.raw.prepare("UPDATE thread_search_documents SET indexed_at = ? WHERE identity_key = ?");
-      let attempted = false;
+      let checks = 0;
       let blocked = false;
       const spy = afterProjectionCheck(reader, () => {
-        if (attempted || !reader.raw.inTransaction) return;
-        attempted = true;
+        if (++checks !== 2) return;
+        expect(reader.raw.inTransaction).toBe(true);
         try {
           touchPeer.run(300, "claude:peer");
         } catch (error) {
@@ -201,7 +200,7 @@ it.each(["metadata search", "single upsert"] as const)(
         store.upsertThread(listed);
       }
       spy.mockRestore();
-      expect(attempted).toBe(true);
+      expect(checks).toBe(2);
       expect(blocked).toBe(true);
       expect(store.search({ query: '"Sunflower"', limit: 10 }).map(({ threadId }) => threadId)).toEqual([listed.id]);
       expect(store.search({ query: '"Nightshade"', limit: 10 })).toEqual([]);
@@ -214,11 +213,119 @@ it.each(["metadata search", "single upsert"] as const)(
   },
 );
 
+it.each([
+  { entry: "cold insert", peerChange: "rename" },
+  { entry: "changed projection", peerChange: "rename" },
+  { entry: "changed projection", peerChange: "delete" },
+] as const)("preserves a peer $peerChange committed after preflight of a $entry", ({ entry, peerChange }) => {
+  const { dbPath, tempDir } = createTempStateDb("search-wal-projection-");
+  const reader = StateDb.open(dbPath);
+  const writer = StateDb.open(dbPath);
+  try {
+    const initial = { ...listed, updatedAt: 100 };
+    const inventory = { ...initial, title: "Poppy" };
+    const renamed = { ...initial, title: "Marigold", summary: "Committed rename" };
+    const writerStore = new ThreadSearchStore(writer);
+    if (entry === "changed projection") writerStore.upsertThread(initial, 100);
+    let committed = false;
+    const spy = afterProjectionCheck(reader, () => {
+      if (committed) return;
+      if (peerChange === "rename") writerStore.upsertThread(renamed, 100);
+      else writerStore.deleteThread({ backend: initial.source, threadId: initial.id });
+      committed = true;
+    });
+    const store = new ThreadSearchStore(reader);
+    if (entry === "cold insert") store.upsertThread(inventory, 100);
+    else store.upsertThreads([inventory]);
+    spy.mockRestore();
+
+    expect(committed).toBe(true);
+    const hits = store.search({ limit: 10 }).map(({ title, summary }) => ({ title, summary }));
+    expect(hits).toEqual(peerChange === "rename" ? [{ title: renamed.title, summary: renamed.summary }] : []);
+    expect(store.search({ query: '"Poppy"', limit: 10 })).toEqual([]);
+    expect(store.search({ query: '"Marigold"', limit: 10 })).toHaveLength(peerChange === "rename" ? 1 : 0);
+  } finally {
+    writer.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
+});
+
+it("gives all projection checks in a refresh slice one WAL snapshot", () => {
+  const { dbPath, tempDir } = createTempStateDb("search-wal-slice-");
+  const reader = StateDb.open(dbPath);
+  const writer = StateDb.open(dbPath);
+  try {
+    const writerStore = new ThreadSearchStore(writer);
+    writerStore.upsertThreads([listed, peer]);
+    let committed = false;
+    const spy = afterProjectionCheck(reader, () => {
+      if (committed) return;
+      writerStore.upsertThread({ ...peer, title: "Marigold" });
+      committed = true;
+    });
+    const store = new ThreadSearchStore(reader);
+    store.upsertThreads([{ ...listed, title: "Poppy" }, peer]);
+    spy.mockRestore();
+
+    expect(committed).toBe(true);
+    expect(store.search({ query: '"Marigold"', limit: 10 }).map(({ threadId }) => threadId)).toEqual([peer.id]);
+    expect(store.search({ query: '"Poppy"', limit: 10 }).map(({ threadId }) => threadId)).toEqual([listed.id]);
+    expect(store.search({ query: '"Juniper"', limit: 10 })).toEqual([]);
+  } finally {
+    writer.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
+});
+
+it("holds the writer lock while pruning the selected projection slice", () => {
+  const { dbPath, tempDir } = createTempStateDb("search-wal-prune-");
+  const reader = StateDb.open(dbPath);
+  const writer = StateDb.open(dbPath);
+  try {
+    new ThreadSearchStore(writer).upsertThreads([listed, peer]);
+    writer.raw.pragma("busy_timeout = 0");
+    const touchPeer = writer.raw.prepare("UPDATE thread_search_documents SET indexed_at = ? WHERE identity_key = ?");
+    const prepare = reader.raw.prepare.bind(reader.raw);
+    let blocked = false;
+    const spy = vi.spyOn(reader.raw, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql.includes("SELECT identity_key, backend, thread_id, archived_at")) {
+        const all = statement.all.bind(statement);
+        statement.all = (...args: unknown[]) => {
+          const rows = all(...args);
+          try {
+            touchPeer.run(300, "claude:peer");
+          } catch (error) {
+            expect(error).toMatchObject({ code: "SQLITE_BUSY" });
+            blocked = true;
+          }
+          return rows;
+        };
+      }
+      return statement;
+    });
+    const store = new ThreadSearchStore(reader);
+    store.pruneMissingThreads({ backend: "codex", includeArchived: true, retainedIdentityKeys: [] });
+    spy.mockRestore();
+
+    expect(blocked).toBe(true);
+    expect(store.search({ query: '"Sunflower"', limit: 10 })).toEqual([]);
+    expect(store.search({ query: '"Juniper"', limit: 10 })).toHaveLength(1);
+    expect(touchPeer.run(300, "claude:peer").changes).toBe(1);
+  } finally {
+    writer.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
+});
+
 function afterProjectionCheck(db: StateDb, callback: () => void) {
   const prepare = db.raw.prepare.bind(db.raw);
   return vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
     const statement = prepare(sql);
-    if (sql.includes("AS fts_current")) {
+    if (sql.includes("AS projection_check")) {
       const get = statement.get.bind(statement);
       statement.get = (...args: unknown[]) => {
         const result = get(...args);

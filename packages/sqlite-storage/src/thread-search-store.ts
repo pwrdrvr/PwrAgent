@@ -40,7 +40,9 @@ type ThreadSearchFtsRow = ThreadSearchDocumentRow & {
 };
 
 type ThreadSearchProjection = ReturnType<typeof buildThreadSearchProjection>;
-type ThreadSearchProjectionStatus = "current" | "repair" | "upsert";
+// A matching document returns its FTS status. Otherwise retain the observed
+// document for revalidation, or undefined when the identity has no document.
+type ThreadSearchProjectionCheck = 0 | 1 | string | undefined;
 
 export class ThreadSearchStore implements ThreadSearchStorage {
   private readonly db: BetterSqlite3.Database;
@@ -53,61 +55,80 @@ export class ThreadSearchStore implements ThreadSearchStorage {
 
   /** Archive-inclusive global search must not commit once per listed thread. */
   upsertThreads(threads: readonly AppServerThreadSummary[]): void {
-    const changed = threads.flatMap((thread) => {
+    if (threads.length === 0) return;
+    // Use one read snapshot so a peer commit during preflight cannot turn a
+    // later healthy row into an apparent update from the older listing.
+    const changed = this.db.transaction(() => threads.flatMap((thread) => {
       const projection = buildThreadSearchProjection(thread);
-      const status = this.getProjectionStatus(projection);
-      return status === "current" ? [] : [{ projection, repairOnly: status === "repair" }];
-    });
+      const preflight = this.getProjectionCheck(projection);
+      return preflight === 1 ? [] : [{ projection, preflight }];
+    })).deferred();
     if (changed.length === 0) return;
     this.db.transaction(() => {
-      for (const { projection, repairOnly } of changed) {
-        this.writeProjection(projection, Date.now(), repairOnly);
+      const updatedDocuments = new Set<string>();
+      for (const { projection, preflight } of changed) {
+        const { identityKey } = projection;
+        if (this.writeProjection(projection, Date.now(), preflight, updatedDocuments.has(identityKey))) {
+          updatedDocuments.add(identityKey);
+        }
       }
     }).immediate();
   }
 
-  private getProjectionStatus(projection: ThreadSearchProjection): ThreadSearchProjectionStatus {
+  private getProjectionCheck(projection: ThreadSearchProjection): ThreadSearchProjectionCheck {
     const statement = this.currentThreadStatement ??= this.db.prepare(`
-      SELECT EXISTS (
-        SELECT 1 FROM thread_search_fts_rows k
-        JOIN thread_search_fts f ON f.rowid = k.fts_rowid
-        WHERE k.identity_key = d.identity_key
-          AND f.identity_key IS k.identity_key
-          AND f.title IS @title AND f.summary IS COALESCE(@summary, '')
-          AND f.project_key IS COALESCE(@projectKey, '')
-          AND f.directory_labels IS @directoryLabels AND f.directory_paths IS @directoryPaths
-          AND f.git_branch IS COALESCE(@gitBranch, '') AND f.git_origin_url IS COALESCE(@gitOriginUrl, '')
-          AND f.model IS COALESCE(@model, '') AND f.backend IS @backend AND f.thread_id IS @threadIdSearchText
-      ) AS fts_current
-      FROM thread_search_documents d
-      WHERE d.identity_key = @identityKey AND d.backend IS @backend AND d.thread_id IS @threadId
+      SELECT CASE WHEN
+        d.backend IS @backend AND d.thread_id IS @threadId
         AND d.title IS @title AND d.title_source IS @titleSource AND d.summary IS @summary AND d.project_key IS @projectKey
         AND d.created_at IS @createdAt AND d.updated_at IS @updatedAt AND d.archived_at IS @archivedAt
         AND d.git_branch IS @gitBranch AND d.git_origin_url IS @gitOriginUrl AND d.model IS @model
         AND d.linked_directories_json IS @linkedDirectoriesJson AND d.display_json IS @displayJson
-    `);
-    const row = statement.get(projection) as { fts_current: number } | undefined;
-    if (!row) return "upsert";
-    return row.fts_current ? "current" : "repair";
+      THEN EXISTS (
+          SELECT 1 FROM thread_search_fts_rows k
+          JOIN thread_search_fts f ON f.rowid = k.fts_rowid
+          WHERE k.identity_key = d.identity_key
+            AND f.identity_key IS k.identity_key
+            AND f.title IS @title AND f.summary IS COALESCE(@summary, '')
+            AND f.project_key IS COALESCE(@projectKey, '')
+            AND f.directory_labels IS @directoryLabels AND f.directory_paths IS @directoryPaths
+            AND f.git_branch IS COALESCE(@gitBranch, '') AND f.git_origin_url IS COALESCE(@gitOriginUrl, '')
+            AND f.model IS COALESCE(@model, '') AND f.backend IS @backend AND f.thread_id IS @threadIdSearchText
+        )
+      ELSE json_array(
+        d.backend, d.thread_id, d.title, d.title_source, d.summary, d.project_key,
+        d.created_at, d.updated_at, d.archived_at, d.git_branch, d.git_origin_url,
+        d.model, d.linked_directories_json, d.display_json, d.indexed_at
+      ) END AS projection_check
+      FROM thread_search_documents d
+      WHERE d.identity_key = @identityKey
+    `).pluck();
+    return statement.get(projection) as ThreadSearchProjectionCheck;
   }
 
   upsertThread(thread: AppServerThreadSummary, indexedAt = Date.now()): void {
     const projection = buildThreadSearchProjection(thread);
-    const status = this.getProjectionStatus(projection);
-    if (status !== "current") this.writeProjection(projection, indexedAt, status === "repair");
+    const preflight = this.getProjectionCheck(projection);
+    if (preflight !== 1) this.writeProjection(projection, indexedAt, preflight);
   }
 
-  private writeProjection(projection: ThreadSearchProjection, indexedAt: number, repairOnly: boolean): void {
+  private writeProjection(
+    projection: ThreadSearchProjection,
+    indexedAt: number,
+    preflight: ThreadSearchProjectionCheck,
+    documentUpdatedInSlice = false,
+  ): boolean {
     const { identityKey } = projection;
-    this.db.transaction(() => {
-      // A peer may have changed the document after the preflight read. Keep an
-      // FTS-only repair tied to the matching document. The outermost immediate
-      // transaction holds the WAL writer lock before this recheck reads.
-      const status = this.getProjectionStatus(projection);
-      if (status === "current" || (repairOnly && status !== "repair")) return;
+    return this.db.transaction(() => {
+      // The outermost immediate transaction holds the WAL writer lock for the
+      // recheck. Preserve a peer's changed or deleted document while allowing
+      // multiple updates to one identity by this slice in their original order.
+      const current = this.getProjectionCheck(projection);
+      if (current === 1) return false;
+      const repairOnly = current === 0;
+      if (!repairOnly && (preflight === 0 || (!documentUpdatedInSlice && current !== preflight))) return false;
 
       this.deleteFtsRows(identityKey);
-      if (status === "upsert") {
+      if (!repairOnly) {
         this.db.prepare(
           `INSERT INTO thread_search_documents (
              identity_key, backend, thread_id, title, title_source, summary,
@@ -154,6 +175,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         @directoryLabels, @directoryPaths, COALESCE(@gitBranch, ''), COALESCE(@gitOriginUrl, ''),
         COALESCE(@model, ''), @backend, @threadIdSearchText
       )`).run(projection);
+      return !repairOnly;
     }).immediate();
   }
 
@@ -252,7 +274,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         this.deleteThreadRows(row.identity_key, row.backend, row.thread_id);
       }
       return rows.length === 64 ? rows[rows.length - 1].identity_key : "";
-    })();
+    }).immediate();
     this.pruneCursors.set(scope, next);
   }
 
