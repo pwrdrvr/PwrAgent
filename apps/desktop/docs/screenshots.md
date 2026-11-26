@@ -9,8 +9,9 @@ says when to read this document. Relative links were updated for this location.
 > `docs/assets/screenshots/*.webp` (hero, Star Map, backends, review,
 > terminal), taken from the built app at 1440×900 on a Retina display with
 > invented showcase data. They are ordinary Git blobs, not LFS: GitHub's
-> README renderer cannot resolve LFS pointers. The spec below still exists
-> and still writes the older PNG and GIF captures.
+> README renderer cannot resolve LFS pointers. The older PNG and GIF captures
+> were removed from `docs/assets/screenshots/`; the spec below still exists
+> for reference and ad-hoc capture.
 
 The PNGs and animated GIF under `docs/assets/screenshots/` are produced by an inspect-style Playwright
 spec that drives five known UI surfaces and shells out to Swift for
