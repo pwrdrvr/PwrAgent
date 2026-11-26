@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import type { MessagingApprovalIntent } from "@pwragent/messaging-interface";
+import type { NativeAlertObservation } from "../../shared/operator-alert-history";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 import { DesktopNotificationService } from "../shell/notifications/desktop-notification-service";
 
@@ -31,6 +32,7 @@ const {
     private clickHandler?: () => void;
     private closeHandler?: () => void;
     private failedHandler?: (error: string) => void;
+    private showHandler?: () => void;
 
     constructor(
       private readonly payload: {
@@ -41,13 +43,19 @@ const {
     ) {}
 
     on(
-      event: "action" | "click" | "close" | "failed",
+      event: "action" | "click" | "close" | "failed" | "show",
       handler: (
         details: { actionIndex?: number; preventDefault?: () => void },
         actionIndex: number,
         selectionIndex: number,
       ) => void,
     ): void {
+      if (event === "show") {
+        this.showHandler = () => {
+          (handler as unknown as () => void)();
+        };
+        return;
+      }
       if (event === "action") {
         this.actionHandler = handler;
         return;
@@ -87,6 +95,10 @@ const {
 
     emitClick(): void {
       this.clickHandler?.();
+    }
+
+    emitShow(): void {
+      this.showHandler?.();
     }
 
     emitClose(): void {
@@ -665,6 +677,33 @@ describe("DesktopNotificationService", () => {
     expect(serviceWithLiveNotifications.liveNotifications.size).toBe(1);
     shownNotifications[1]?.instance.emitClick();
     expect(serviceWithLiveNotifications.liveNotifications.size).toBe(0);
+  });
+
+  it("records Electron display, click, close and failure separately from submission", () => {
+    const observations: NativeAlertObservation[] = [];
+    const service = new DesktopNotificationService(undefined, (event) => observations.push(event));
+    const options = { enabled: true, title: "private fixture title", body: "private fixture body" };
+    service.notifyAttention({ ...options, key: "private-fixture-key" });
+    service.notifyAttention({ ...options, key: "private-fixture-key" });
+    service.notifyTerminal({ ...options, status: "failed" });
+    expect(observations.map(({ phase }) => phase)).toEqual(["submitted", "submitted"]);
+    shownNotifications[0]?.instance.emitShow();
+    shownNotifications[0]?.instance.emitClick();
+    shownNotifications[0]?.instance.emitClose();
+    shownNotifications[1]?.instance.emitFailed("private fixture error");
+
+    expect(observations.map(({ identity, ...event }) => ({
+      ...event,
+      attempt: identity === observations[0]?.identity ? 1 : 2,
+    }))).toEqual([
+      { category: "attention", surface: "native", phase: "submitted", attempt: 1 },
+      { category: "turn-failed", surface: "native", phase: "submitted", attempt: 2 },
+      { category: "attention", surface: "native", phase: "displayed", attempt: 1 },
+      { category: "attention", surface: "native", phase: "clicked", attempt: 1 },
+      { category: "attention", surface: "native", phase: "closed", attempt: 1 },
+      { category: "turn-failed", surface: "native", phase: "failed", attempt: 2 },
+    ]);
+    expect(JSON.stringify(observations)).not.toContain("private");
   });
 
   it("releases a notification the OS refuses to show", () => {

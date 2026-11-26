@@ -1,3 +1,4 @@
+import { useStandaloneToastHistory } from "../notifications/toast-history";
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { CheckIcon, CloseIcon, ExpandIcon } from "../../icons";
 import {
@@ -223,13 +224,26 @@ export function LiveThreadHandoffToastCard(props: {
   onRetryNow: () => void;
 }) {
   const transfer = useThreadHandoffTransfer(props.store, props.handoffId);
+  const recordHistory = useStandaloneToastHistory(
+    transfer ? `thread-handoff-progress:${props.handoffId}` : undefined,
+    "handoff",
+  );
   if (!transfer) return null;
   return (
     <ThreadHandoffToastCard
       transfer={transfer}
-      onExpand={props.onExpand}
-      onCancel={props.onCancel}
-      onRetryNow={props.onRetryNow}
+      onExpand={() => {
+        recordHistory("action-invoked");
+        props.onExpand();
+      }}
+      onCancel={() => {
+        recordHistory("action-invoked");
+        props.onCancel();
+      }}
+      onRetryNow={() => {
+        recordHistory("action-invoked");
+        props.onRetryNow();
+      }}
     />
   );
 }

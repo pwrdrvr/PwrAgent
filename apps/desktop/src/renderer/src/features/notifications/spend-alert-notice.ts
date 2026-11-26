@@ -26,6 +26,7 @@ export function buildSpendAlertNotice(params: {
       threadId: alert.threadId,
     }),
     autoDismiss: false,
+    historyCategory: "spend",
     id: scopeThreadCostNoticeId({
       id: alert.alertId,
       ...(params.instanceId ? { instanceId: params.instanceId } : {}),

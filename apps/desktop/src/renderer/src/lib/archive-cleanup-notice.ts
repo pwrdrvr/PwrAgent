@@ -50,6 +50,7 @@ export function formatArchiveCleanupNotice(
   }));
 
   return withThreadActionErrorContext({
+    historyCategory: "archive",
     id: [firstFailure.worktreePath ?? "no-worktree", reason, Date.now().toString()].join("\n"),
     title,
     message,

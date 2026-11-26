@@ -1,4 +1,5 @@
 {
+  "operator-alert-history-batch": {"commits": 1, "note": "One flush batches two toast lifecycles and a native display failure, including first-use correlation salt.", "observedWalBytes": 16512, "rowsChanged": 8, "statements": 9},
   "token-miser-startup-repeat": {"commits": 0, "note": "Startup reconciliation of 65 unchanged gates after backfill. Zero recurring writes and 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
   "token-miser-startup-backfill": {"commits": 4, "note": "One startup reconciliation of 65 existing gates without ledger rows, in two pages of at most 64.", "observedWalBytes": 453200, "rowsChanged": 196, "statements": 196},
   "new-thread-model-settings-recent": {"commits": 2, "note": "Two new-thread starts on new settings, then 20 more on the newest: 2 commits, one meta upsert each; repeats write nothing. ~8 KB WAL per changed start; 100 starts/day on changing settings projects ~0.8 MB/day, no idle writes.", "observedWalBytes": 16512, "rowsChanged": 2, "statements": 2},

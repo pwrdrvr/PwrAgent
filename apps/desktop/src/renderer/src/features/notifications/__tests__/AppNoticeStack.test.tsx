@@ -1,14 +1,36 @@
 import "@testing-library/jest-dom/vitest";
 import { useState } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppNoticeStack } from "../AppNoticeStack";
 import type { AppNoticeToastNotice } from "../AppNoticeToast";
 import { buildSpendAlertNotice } from "../spend-alert-notice";
 
 afterEach(cleanup);
+afterEach(() => vi.unstubAllGlobals());
 
 describe("AppNoticeStack", () => {
+  it("records queued cards separately from the displayed and dismissed ones", () => {
+    const recordToastHistory = vi.fn();
+    vi.stubGlobal("pwragent", { recordToastHistory });
+    const approval = { id: "operator-approval:fixture-id", title: "Approval", message: "Fixture prompt", autoDismiss: false };
+    const warning = { id: "config-file-invalid", title: "Settings", message: "Fixture error", autoDismiss: false };
+    const dismiss = vi.fn();
+    render(<AppNoticeStack durableNotices={[approval, warning]} onDismissDurable={dismiss} />);
+    const observations = () => recordToastHistory.mock.calls.map(([{ category, phase }]) => [category, phase]);
+
+    expect(observations()).toEqual([
+      ["approval", "queued"], ["configuration", "queued"], ["approval", "displayed"],
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Next notice" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(observations().slice(3)).toEqual([
+      ["configuration", "displayed"], ["configuration", "dismissed"],
+    ]);
+    expect(dismiss).toHaveBeenCalledWith(warning.id);
+    expect(JSON.stringify(recordToastHistory.mock.calls)).not.toContain("Fixture error");
+  });
+
   it("navigates durable notices in order and dismisses each one independently", async () => {
     const initial: AppNoticeToastNotice[] = [
       { id: "first", title: "First", message: "One", autoDismiss: false },

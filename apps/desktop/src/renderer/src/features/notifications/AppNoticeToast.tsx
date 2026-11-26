@@ -11,6 +11,8 @@ import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { statusPulseRef } from "../../lib/status-pulse";
 import { ThreadChip } from "../thread-detail/ThreadChip";
 import { TodoSplitButton, type TodoSplitMenuEntry } from "../thread-todos/TodoSplitButton";
+import type { ToastCategory } from "../../../../shared/operator-alert-history";
+import { reportToastHistory } from "./toast-history";
 
 const AUTO_DISMISS_MS = 9_000;
 
@@ -48,6 +50,7 @@ export type AppNoticeToastNotice = {
     onDismissAll?: () => void;
   };
   id: string;
+  historyCategory?: ToastCategory;
   title: string;
   message: string;
   /** Rich in-window message; `message` remains the plain-text fallback. */
@@ -82,8 +85,20 @@ export type AppNoticeToastNotice = {
   transientSlot?: string;
 };
 
+function recordMenuActions(
+  entries: TodoSplitMenuEntry[],
+  recordAction: (action: () => void) => () => void,
+): TodoSplitMenuEntry[] {
+  return entries.map((entry) => {
+    if (entry.kind === "item") return { ...entry, onSelect: recordAction(entry.onSelect) };
+    if (entry.kind === "submenu") return { ...entry, entries: recordMenuActions(entry.entries, recordAction) };
+    return entry;
+  });
+}
+
 export function AppNoticeToast(props: {
   children?: ReactNode;
+  historyQueued?: boolean;
   desktopApi?: Pick<DesktopApi, "copyText" | "copyRichText">;
   navigation?: {
     current: number;
@@ -112,11 +127,20 @@ export function AppNoticeToast(props: {
   // bar's animation, so a resume must continue from here, not from 9s.
   const remainingRef = useRef(AUTO_DISMISS_MS);
   const onDismissRef = useRef(props.onDismiss);
+  const noticeRef = useRef(props.notice);
+  noticeRef.current = props.notice;
   const noticeId = props.notice?.id;
+  const historyCategory = props.notice?.historyCategory;
   const noticePresent = props.notice !== undefined;
   const autoDismiss = props.notice?.autoDismiss !== false;
   // Every reason the timer is stopped also holds the bar where it is.
   const countdownHeld = paused || suppressOnDismiss || suppressionSaving;
+
+  useEffect(() => {
+    if (!props.historyQueued && noticeRef.current) {
+      reportToastHistory(noticeRef.current, "displayed", true);
+    }
+  }, [autoDismiss, historyCategory, noticeId, props.historyQueued]);
 
   useEffect(() => {
     onDismissRef.current = props.onDismiss;
@@ -149,6 +173,10 @@ export function AppNoticeToast(props: {
     const startedAt = Date.now();
     timeoutRef.current = window.setTimeout(() => {
       timeoutRef.current = undefined;
+      const notice = noticeRef.current;
+      if (notice && notice.id === noticeId) {
+        reportToastHistory(notice, "expired");
+      }
       onDismissRef.current();
     }, remainingRef.current);
 
@@ -202,7 +230,16 @@ export function AppNoticeToast(props: {
               : "neutral";
   const facts = props.notice.facts ?? [];
   const dismissAllText = props.navigation?.dismissAll?.actionLabel ?? "Dismiss all";
-  const dismissNotice = props.notice.onDismiss ?? props.onDismiss;
+  const notice = props.notice;
+  const dismissNotice = () => {
+    reportToastHistory(notice, "dismissed");
+    (notice.onDismiss ?? props.onDismiss)();
+  };
+  const recordAction = (action: () => void) => () => {
+    reportToastHistory(notice, "action-invoked");
+    action();
+  };
+  const onOpenThread = props.onOpenThread;
   const { warningSuppressionId } = props.notice;
   const onSuppressCodexWarning = props.onSuppressCodexWarning;
   const suppressWarning = props.notice.skillQuestionsWarning
@@ -292,13 +329,16 @@ export function AppNoticeToast(props: {
           </p>
         ) : null}
         <p className="app-notice-toast__message">{props.notice.messageContent ?? props.notice.message}</p>
-        {props.notice.threadLink && props.onOpenThread ? (
+        {props.notice.threadLink && onOpenThread ? (
           <div className="app-notice-toast__thread-link">
             <ThreadChip
               contextMenuClassName="app-notice-toast__thread-menu"
               fallbackLabel={props.notice.detail}
               link={props.notice.threadLink}
-              onOpen={props.onOpenThread}
+              onOpen={(link) => {
+                reportToastHistory(notice, "action-invoked");
+                onOpenThread(link);
+              }}
             />
           </div>
         ) : props.notice.detail ? (
@@ -379,15 +419,15 @@ export function AppNoticeToast(props: {
                   key={`${noticeId}:${action.label}`}
                   label={action.label}
                   menuLabel={action.menu.label}
-                  entries={action.menu.entries}
-                  onClick={action.onClick}
+                  entries={recordMenuActions(action.menu.entries, recordAction)}
+                  onClick={recordAction(action.onClick)}
                 />
               ) : (
                 <button
                   key={action.label}
                   className={`button button--${action.tone ?? "secondary"} app-notice-toast__button`}
                   type="button"
-                  onClick={action.onClick}
+                  onClick={recordAction(action.onClick)}
                 >
                   {action.label}
                 </button>

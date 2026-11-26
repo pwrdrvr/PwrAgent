@@ -3,6 +3,11 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { AppNoticeToast, type AppNoticeToastNotice } from "./AppNoticeToast";
 import { useToastStackPlacement } from "./toast-stack-placement";
+import { reportToastHistory, toastHistorySurface } from "./toast-history";
+
+function historyKey(notice: AppNoticeToastNotice): string {
+  return JSON.stringify([toastHistorySurface(notice), notice.historyCategory, notice.id]);
+}
 
 export function AppNoticeStack(props: {
   children?: ReactNode;
@@ -33,6 +38,31 @@ export function AppNoticeStack(props: {
         (notice) => notice.dismissGroup?.key === activeDismissGroup.key,
       )
     : [];
+
+  const previousQueued = useRef(new Map<string, AppNoticeToastNotice>());
+  const previousDisplayed = useRef(new Set<string>());
+  const transientNotices = props.transientNotices;
+  useEffect(() => {
+    const transient = transientNotices?.flatMap(({ notice }) => notice ? [notice] : []) ?? [];
+    const queued = new Map<string, AppNoticeToastNotice>();
+    for (const notice of [...durableNotices, ...transient]) {
+      const key = historyKey(notice);
+      queued.set(key, notice);
+      if (!previousQueued.current.has(key)) reportToastHistory(notice, "queued");
+    }
+    for (const [key, notice] of previousQueued.current) {
+      if (!queued.has(key)) reportToastHistory(notice, "withdrawn");
+    }
+    previousQueued.current = queued;
+
+    const displayed = new Set<string>();
+    for (const notice of activeNotice ? [...transient, activeNotice] : transient) {
+      const key = historyKey(notice);
+      displayed.add(key);
+      if (!previousDisplayed.current.has(key)) reportToastHistory(notice, "displayed");
+    }
+    previousDisplayed.current = displayed;
+  }, [activeNotice, durableNotices, transientNotices]);
 
   useEffect(() => {
     if (durableNotices.length === 0) {
@@ -69,6 +99,7 @@ export function AppNoticeStack(props: {
           <AppNoticeToast
             key={notice.id}
             desktopApi={props.desktopApi}
+            historyQueued
             notice={notice}
             onDismiss={onDismiss}
             onOpenThread={props.onOpenThread}
@@ -79,6 +110,7 @@ export function AppNoticeStack(props: {
       )}
       <AppNoticeToast
         desktopApi={props.desktopApi}
+        historyQueued
         notice={activeNotice}
         onOpenThread={props.onOpenThread}
         onSuppressSkillQuestionsWarning={props.onSuppressSkillQuestionsWarning}
@@ -93,6 +125,9 @@ export function AppNoticeStack(props: {
                       label: activeDismissGroup.label,
                       actionLabel: activeDismissGroup.actionLabel,
                       onDismiss: () => {
+                        for (const notice of groupedNotices) {
+                          reportToastHistory(notice, "dismissed");
+                        }
                         if (activeDismissGroup.onDismissAll) {
                           activeDismissGroup.onDismissAll();
                           return;

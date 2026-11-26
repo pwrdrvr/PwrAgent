@@ -2675,6 +2675,36 @@ function DesktopAppShell(props: {
     () => [...approvalNotices, ...monitorWakeNotices, ...appNotices.durable],
     [appNotices.durable, approvalNotices, monitorWakeNotices],
   );
+  const transientNotices = useMemo(() => [
+    { notice: claudeSignIn.notice, onDismiss: claudeSignIn.dismissNotice },
+    {
+      notice: navigation.archiveCleanupSummaryNotice,
+      onDismiss: navigation.dismissArchiveCleanupSummaryNotice,
+    },
+    {
+      notice: navigation.archiveCleanupProgressNotice,
+      onDismiss: navigation.dismissArchiveCleanupProgressNotice,
+    },
+    {
+      notice: navigation.archiveThreadNotice,
+      onDismiss: navigation.dismissArchiveThreadNotice,
+    },
+    ...appNotices.transient.map((notice) => ({
+      notice,
+      onDismiss: () => dismissAppNotice(notice.id),
+    })),
+  ], [
+    appNotices.transient,
+    claudeSignIn.dismissNotice,
+    claudeSignIn.notice,
+    dismissAppNotice,
+    navigation.archiveCleanupProgressNotice,
+    navigation.archiveCleanupSummaryNotice,
+    navigation.archiveThreadNotice,
+    navigation.dismissArchiveCleanupProgressNotice,
+    navigation.dismissArchiveCleanupSummaryNotice,
+    navigation.dismissArchiveThreadNotice,
+  ]);
   const listThreadTodos = desktopApi?.listThreadTodos;
   const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
   const setThreadTodoProject = desktopApi?.setThreadTodoProject;
@@ -5339,25 +5369,7 @@ function DesktopAppShell(props: {
               experimental: { codexSkillQuestionsWarningDismissed: true },
             })}
             onSuppressCodexWarning={suppressCodexWarning}
-            transientNotices={[
-              { notice: claudeSignIn.notice, onDismiss: claudeSignIn.dismissNotice },
-              {
-                notice: navigation.archiveCleanupSummaryNotice,
-                onDismiss: navigation.dismissArchiveCleanupSummaryNotice,
-              },
-              {
-                notice: navigation.archiveCleanupProgressNotice,
-                onDismiss: navigation.dismissArchiveCleanupProgressNotice,
-              },
-              {
-                notice: navigation.archiveThreadNotice,
-                onDismiss: navigation.dismissArchiveThreadNotice,
-              },
-              ...appNotices.transient.map((notice) => ({
-                notice,
-                onDismiss: () => dismissAppNotice(notice.id),
-              })),
-            ]}
+            transientNotices={transientNotices}
           >
             <QuitBlockerQueueToast desktopApi={desktopApi} />
             <ThreadMaintenanceMinimizedNotice controller={threadMaintenance} />

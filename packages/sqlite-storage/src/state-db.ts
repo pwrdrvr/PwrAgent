@@ -23,7 +23,7 @@ import {
   THREAD_NAVIGATION_RELATIONSHIPS_GENERATION_SCHEMA,
   THREAD_NAVIGATION_RELATIONSHIPS_SCHEMA,
 } from "./thread-navigation-relationships.js";
-import { STORAGE_RETENTION_SCHEMA } from "./state-schema.js";
+import { OPERATOR_ALERT_HISTORY_SCHEMA, STORAGE_RETENTION_SCHEMA } from "./state-schema.js";
 import { THREAD_DEPENDENCY_SCHEMA } from "./state-schema.js";
 import { AGENT_FOLLOW_UP_GUARD_SCHEMA, AUTOMATIC_WAKE_GUARD_SCHEMA } from "./state-schema.js";
 import { PROJECT_HELD_WAKEUP_SCHEMA } from "./state-schema.js";
@@ -2364,6 +2364,7 @@ export class StateDb {
       }
       ensureAutomationCostAccounting(db);
       db.exec(OWNER_JOB_SCHEMA);
+      db.exec(OPERATOR_ALERT_HISTORY_SCHEMA);
       // Converge a profile whose v79 or v80 came from another branch. On a
       // current profile every statement is IF NOT EXISTS and writes nothing.
       ensureThreadSubAgentSchema(db);
