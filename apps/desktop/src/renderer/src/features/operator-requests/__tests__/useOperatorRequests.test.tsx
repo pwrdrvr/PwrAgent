@@ -136,11 +136,15 @@ describe("operator queue owner identity", () => {
 });
 
 describe("operator queue refresh", () => {
-  it("admits one initial read when React replays effect setup", async () => {
-    const { api } = fixture();
+  it("reads the initial queue once when StrictMode replays the effect and still refreshes on invalidation", async () => {
+    const { api, changed } = fixture();
     const { result } = renderHook(() => useOperatorRequests(api), { wrapper: StrictMode });
-    await waitFor(() => expect(result.current.ready).toBe(true));
+    await act(async () => {});
+    expect(result.current.ready).toBe(true);
     expect(api.listOperatorRequests).toHaveBeenCalledTimes(1);
+
+    await act(async () => changed({ reason: "questions" }));
+    expect(api.listOperatorRequests).toHaveBeenCalledTimes(2);
   });
 
   it("resolves only after a read that started after the call", async () => {

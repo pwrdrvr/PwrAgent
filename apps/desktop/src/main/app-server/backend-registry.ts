@@ -13063,10 +13063,13 @@ export class DesktopBackendRegistry {
     params: StartReviewRequest,
     trustedSnapshot = false,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
+    antigravityAccess?: Parameters<ManagedReviewService["startReview"]>[3],
   ): Promise<StartReviewResponse> {
-    if (this.codexOpenAiProviderEnabled) return this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution);
+    if (this.codexOpenAiProviderEnabled) {
+      return this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution, antigravityAccess);
+    }
     return this.assertThreadCodexInferenceAvailable(params)
-      .then(() => this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution));
+      .then(() => this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution, antigravityAccess));
   }
 
   submitReview(

@@ -38,6 +38,7 @@ export type BuildManagedReviewPromptOptions = {
    * `dispose_review_candidate`, and `submit_review_output` attached.
    */
   candidateLedger?: boolean;
+  pinnedPatchFile?: string;
 };
 
 export function buildManagedReviewPrompt(
@@ -45,9 +46,12 @@ export function buildManagedReviewPrompt(
   options?: BuildManagedReviewPromptOptions,
 ): string {
   const useLedgerTools = options?.candidateLedger === true;
+  const instructions = options?.pinnedPatchFile && target.type === "pullRequest" && target.snapshot
+    ? `Review the pinned change from ${target.snapshot.mergeBaseCommit} to ${target.snapshot.headCommit}. Open ${JSON.stringify(options.pinnedPatchFile)} in the review workspace with a file-reading tool and use it as the complete diff.`
+    : reviewTargetInstructions(target);
   return [
     "Perform a code review. Do not modify files or mutate git state. Do not run commands that require elevated permissions.",
-    reviewTargetInstructions(target),
+    instructions,
     useLedgerTools
       ? MANAGED_REVIEW_LEDGER_GUIDANCE
       : MANAGED_REVIEW_STATIC_GUIDANCE,

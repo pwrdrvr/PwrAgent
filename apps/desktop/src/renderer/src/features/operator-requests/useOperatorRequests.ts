@@ -123,14 +123,16 @@ export function useOperatorRequests(
   }, [api]);
 
   useEffect(() => {
+    // StrictMode can dispose this setup before the first read starts.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void reload();
+    });
     const unsubscribe = api?.onOperatorRequestsChanged?.(() => {
       void reload();
     });
-    // A dev StrictMode setup that is disposed immediately owns no read.
-    let active = true;
-    queueMicrotask(() => { if (active) void reload(); });
     return () => {
-      active = false;
+      cancelled = true;
       unsubscribe?.();
     };
   }, [api, reload]);
