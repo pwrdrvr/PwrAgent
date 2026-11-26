@@ -57,7 +57,15 @@ import {
 import { hydrateComposerDraft } from "./composer-draft-hydration";
 import { resolveComposerThreadDestinations } from "./composer-thread-references";
 import { contextWindowMoonFace } from "./context-window-moon";
-import { useContextMoonStyle } from "../../lib/context-moon-preferences";
+import {
+  applyContextWindowBudget,
+  autoCompactionStatusLine,
+  isAutoCompactionActive,
+  type ContextWindowBudget,
+  type ThreadAutoCompactionStatus,
+} from "./context-window-budget";
+import { useAutoCompactionRules, useContextMoonStyle } from "../../lib/context-moon-preferences";
+import { useThreadAutoCompaction } from "../../lib/useThreadAutoCompaction";
 import {
   getShortTermRateLimitResetAt,
   getRateLimitResetSendAt,
@@ -16607,6 +16615,9 @@ function useComposerController(props: ComposerProps) {
           ) : null}
           <ContextWindowMoon
             contextWindow={props.contextWindow}
+            desktopApi={props.desktopApi}
+            model={selectedModelOption?.id ?? currentSettings?.model}
+            thread={props.thread}
             onOpenUsage={props.desktopApi?.openUsageActivity
               ? () => void props.desktopApi?.openUsageActivity?.({
                 provider: usageLimitProviderForBackend(props.thread?.source),
@@ -17760,10 +17771,17 @@ function AttachmentTooltip({
 }
 
 function ContextWindowMoon({
-  contextWindow,
+  contextWindow: reportedContextWindow,
+  desktopApi,
+  model,
+  thread,
   onOpenUsage,
 }: {
   contextWindow?: ThreadContextWindowState;
+  desktopApi?: DesktopApi;
+  /** The thread's model, matched against auto-compaction rules. */
+  model?: string;
+  thread?: NavigationThreadSummary;
   /** Opens Usage Activity; the moon is a button only when this is given. */
   onOpenUsage?: () => void;
 }) {
@@ -17773,6 +17791,18 @@ function ContextWindowMoon({
   // The card's copy depends on availability, not the callback identity.
   const opensUsage = Boolean(onOpenUsage);
   const moonStyle = useContextMoonStyle();
+  const savedRules = useAutoCompactionRules();
+  const autoCompaction = useThreadAutoCompaction(desktopApi, thread);
+  const backend = thread?.source;
+  // A rule's budget, when one matches, is the window the moon measures.
+  const measured = useMemo(
+    () => reportedContextWindow
+      ? applyContextWindowBudget({ contextWindow: reportedContextWindow, savedRules, backend, model })
+      : undefined,
+    [backend, model, reportedContextWindow, savedRules],
+  );
+  const contextWindow = measured?.contextWindow;
+  const budget = measured?.budget;
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
@@ -17791,13 +17821,15 @@ function ContextWindowMoon({
     recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
     update(
       <ContextWindowUsageCard
+        autoCompaction={autoCompaction}
+        budget={budget}
         contextWindow={contextWindow}
         critical={moonFace.critical}
         opensUsage={opensUsage}
         phaseLabel={moonFace.phaseLabel}
       />,
     );
-  }, [contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
+  }, [autoCompaction, budget, contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
 
   if (!contextWindow) {
     return null;
@@ -17809,9 +17841,15 @@ function ContextWindowMoon({
   const tokenLabel = `${formatCompactNumber(
     contextWindow.totalTokens
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
-  const label = `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const compacting = isAutoCompactionActive(autoCompaction);
+  const label = budget
+    ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : phaseLabel}`
+    : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const moonClassName = compacting ? " context-window-moon--compacting" : "";
   const card = (
     <ContextWindowUsageCard
+      autoCompaction={autoCompaction}
+      budget={budget}
       contextWindow={contextWindow}
       critical={moonFace.critical}
       opensUsage={opensUsage}
@@ -17845,7 +17883,7 @@ function ContextWindowMoon({
   return onOpenUsage ? (
     <button
       aria-label={label}
-      className="context-window-moon context-window-moon--button"
+      className={`context-window-moon context-window-moon--button${moonClassName}`}
       type="button"
       onBlur={hide}
       onClick={() => {
@@ -17861,7 +17899,7 @@ function ContextWindowMoon({
   ) : (
     <div
       aria-label={label}
-      className="context-window-moon"
+      className={`context-window-moon${moonClassName}`}
       role="img"
       tabIndex={0}
       onBlur={hide}
@@ -17875,16 +17913,21 @@ function ContextWindowMoon({
 }
 
 function ContextWindowUsageCard({
+  autoCompaction,
+  budget,
   contextWindow,
   critical,
   opensUsage,
   phaseLabel,
 }: {
+  autoCompaction?: ThreadAutoCompactionStatus;
+  budget?: ContextWindowBudget;
   contextWindow: ThreadContextWindowState;
   critical: boolean;
   opensUsage?: boolean;
   phaseLabel: string;
 }) {
+  const statusLine = budget ? autoCompactionStatusLine(autoCompaction, formatCompactNumber) : undefined;
   const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
   const hasBreakdown =
     typeof contextWindow.inputTokens === "number"
@@ -17895,14 +17938,20 @@ function ContextWindowUsageCard({
   return (
     <>
       <div className="context-usage-card__header">
-        <span className="context-usage-card__eyebrow">Context window</span>
+        <span className="context-usage-card__eyebrow">{budget ? "Context budget" : "Context window"}</span>
         <span className="context-usage-card__phase">{phaseLabel}</span>
       </div>
       <div className="context-usage-card__headline">
         <span className="context-usage-card__percent">
           {Math.round(usedPercent)}% full
         </span>
-        {typeof contextWindow.remainingTokens === "number" ? (
+        {budget ? (
+          <span className="context-usage-card__remaining">
+            {budget.tokensToTrigger > 0
+              ? `${formatCompactNumber(budget.tokensToTrigger)} to compaction`
+              : `past ${budget.compactAtPercent}%`}
+          </span>
+        ) : typeof contextWindow.remainingTokens === "number" ? (
           <span className="context-usage-card__remaining">
             {formatCompactNumber(contextWindow.remainingTokens)} left
           </span>
@@ -17917,12 +17966,35 @@ function ContextWindowUsageCard({
           }
           style={{ width: `${usedPercent}%` }}
         />
+        {budget ? (
+          <span
+            className="context-usage-card__meter-mark"
+            style={{ left: `${budget.compactAtPercent}%` }}
+          />
+        ) : null}
       </div>
       <div className="context-usage-card__caption">
         {`${formatCompactNumber(contextWindow.totalTokens)} of ${formatCompactNumber(
           contextWindow.modelContextWindow
-        )} tokens`}
+        )} ${budget ? "budget" : "tokens"}`}
       </div>
+      {budget ? (
+        <div className="context-usage-card__budget">
+          <ContextUsageRow
+            label="Compacts at"
+            value={`${formatCompactNumber(budget.triggerTokens)} · ${budget.compactAtPercent}%`}
+          />
+          {budget.reportedContextWindow !== budget.effectiveContextWindow ? (
+            <ContextUsageRow
+              label="Model window"
+              value={formatCompactNumber(budget.reportedContextWindow)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {statusLine ? (
+        <div className="context-usage-card__status">{statusLine}</div>
+      ) : null}
       {hasBreakdown ? (
         <div className="context-usage-card__section">
           <span className="context-usage-card__section-title">Current request</span>

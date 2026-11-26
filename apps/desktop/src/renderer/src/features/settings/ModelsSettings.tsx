@@ -75,6 +75,8 @@ import { claudeProviderStatus } from "./claude-provider-status";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { HelperModelSettings } from "./HelperModelSettings";
 import { TaskMonitorModelSettings } from "./TaskMonitorModelSettings";
+import { AutoCompactionSettings } from "./AutoCompactionSettings";
+import type { DesktopAutoCompactionRule } from "@pwragent/shared/auto-compaction";
 import { UsageAccountSettings } from "./UsageAccountSettings";
 import { CodexModelProvidersSettings } from "./CodexModelProvidersSettings";
 import {
@@ -209,6 +211,8 @@ export function ModelsSettings(props: {
     taskMonitorModels: Record<string, DesktopTaskMonitorModelChoice>,
   ) => Promise<unknown>;
   onSaveUsageAccountGroups?: (groups: Record<string, string>) => Promise<unknown>;
+  /** Persist a provider screen's Auto-compaction rules (every saved rule). */
+  onSaveAutoCompaction?: (rules: DesktopAutoCompactionRule[]) => Promise<boolean>;
   onSaveCodexFastAllowed: (allowed: boolean) => Promise<boolean>;
   /** Persist Settings → Codex → Model providers. */
   onSaveCodexModelProviders?: (providers: CodexModelProviderSettings[]) => Promise<boolean>;
@@ -801,6 +805,16 @@ export function ModelsSettings(props: {
             onSave={props.onSaveTaskMonitorModels}
           />
         ) : null}
+        {props.onSaveAutoCompaction ? (
+          <AutoCompactionSettings
+            backendId="claude"
+            providerLabel="Claude"
+            backends={backends}
+            saved={props.snapshot.models.autoCompaction ?? []}
+            saving={props.saving}
+            onSave={props.onSaveAutoCompaction}
+          />
+        ) : null}
         <ClaudeSettings
           backend={claude}
           desktopApi={props.desktopApi}
@@ -844,6 +858,16 @@ export function ModelsSettings(props: {
           onEditDefaults={editDefaults}
         />
         {codexSection}
+        {props.onSaveAutoCompaction ? (
+          <AutoCompactionSettings
+            backendId="codex"
+            providerLabel="Codex"
+            backends={backends}
+            saved={props.snapshot.models.autoCompaction ?? []}
+            saving={props.saving}
+            onSave={props.onSaveAutoCompaction}
+          />
+        ) : null}
         {props.onSaveCodexModelProviders ? (
           <CodexModelProvidersSettings
             codexHomesKey={[
@@ -917,6 +941,16 @@ export function ModelsSettings(props: {
             catalogReading={refreshingCatalog}
             saving={props.saving}
             onSave={props.onSaveTaskMonitorModels}
+          />
+        ) : null}
+        {focusedAcpEntry && props.onSaveAutoCompaction ? (
+          <AutoCompactionSettings
+            backendId={focusedAcpEntry.backendId}
+            providerLabel={focusedAcpEntry.name}
+            backends={backends}
+            saved={props.snapshot.models.autoCompaction ?? []}
+            saving={props.saving}
+            onSave={props.onSaveAutoCompaction}
           />
         ) : null}
         {focusedAcpEntry && props.onSaveUsageAccountGroups ? (
