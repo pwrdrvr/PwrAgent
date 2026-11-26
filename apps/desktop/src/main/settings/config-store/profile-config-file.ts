@@ -3,9 +3,9 @@ import type { DesktopSettingsConfigPatch } from "@pwragent/shared/contracts/sett
 import {
   DEFAULT_GITHUB_ENTERPRISE_HOSTS,
   applyDesktopSettingsPatch,
-  readDesktopSettingsConfig,
   type DesktopSettingsConfig,
 } from "../desktop-config";
+import { readSavedProfileConfig } from "./raw-config-file";
 
 export { requireSavedMessagingSafetyAcknowledgment } from "./raw-config-file";
 
@@ -17,7 +17,7 @@ export { requireSavedMessagingSafetyAcknowledgment } from "./raw-config-file";
 export function readProfileConfigFile(
   configPath: string,
 ): DesktopSettingsConfig {
-  return readDesktopSettingsConfig(configPath);
+  return structuredClone(readSavedProfileConfig(configPath));
 }
 
 export function writeProfileConfigPatch(
@@ -37,7 +37,7 @@ export function writeBootstrapConfigToProfile(
   if (githubEnterpriseHosts?.source === "config" && !githubEnterpriseHosts.error) {
     // The bootstrap projection describes a different file. Use the
     // destination's revision so a concurrent edit there is still protected.
-    const current = readDesktopSettingsConfig(configPath).git?.githubEnterpriseHosts ?? DEFAULT_GITHUB_ENTERPRISE_HOSTS;
+    const current = readSavedProfileConfig(configPath).git?.githubEnterpriseHosts ?? DEFAULT_GITHUB_ENTERPRISE_HOSTS;
     if (current.repairable !== false) {
       const { servers } = mergeGithubEnterpriseHosts(githubEnterpriseHosts.value, [], URL);
       // A broken pin must not turn into an active-account authorization on copy.

@@ -202,15 +202,6 @@ export class DesktopConfigStore {
     return this.snapshot.domains[domain];
   }
 
-  /** Reuse the messaging snapshot only after the caller verifies the saved file. */
-  readMessagingForSavedContent(configPath: string, contentHash: string): ConfigDomainMap["messaging"] | undefined {
-    const file = this.snapshot.configFile;
-    if (this.options.configPath === configPath && file.kind === "valid" && file.contentHash === contentHash) {
-      return this.snapshot.domains.messaging;
-    }
-    return undefined;
-  }
-
   /** Read the saved value before deciding whether a targeted write is a no-op. */
   readSavedDevelopmentWorkingUpdatesMode(): ConfigDomainMap["messaging"]["toolUpdateMode"] {
     const observation = readRawConfigFile(this.options.configPath, { now: this.now });
@@ -302,16 +293,8 @@ export class DesktopConfigStore {
       this.now(),
     );
     if (observation.kind !== "valid") {
-      throw new Error(
-        observation.kind === "invalid"
-          ? observation.error
-          : `Settings config is missing: ${this.options.configPath}`,
-      );
+      throw new Error(observation.error);
     }
-    const domains = normalizeConfigDomains({
-      config: observation.config,
-      previousProviders: previous.domains.providers,
-    });
     const codexModelProvidersSaved = patch.models?.codex?.providers !== undefined;
     const next =
       previous.configFile.kind === "valid"
@@ -324,7 +307,10 @@ export class DesktopConfigStore {
               observedAt: observation.observedAt,
             },
             configRevision: observation.contentHash,
-            domains,
+            domains: normalizeConfigDomains({
+              config: observation.config,
+              previousProviders: previous.domains.providers,
+            }),
             codexModelProvidersSaved,
           });
     if (next === previous && codexModelProvidersSaved) this.notifyCodexModelProviders();
