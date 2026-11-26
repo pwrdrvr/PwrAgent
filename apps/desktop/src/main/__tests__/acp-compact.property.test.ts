@@ -21,6 +21,7 @@ import {
   createAcpSessionStoreMock,
   createKimiAcpRegistry,
   createOverlayStoreMock,
+  toTestRepositoryPath,
 } from "./helpers/backend-registry-fixture";
 
 vi.mock("../log", () => ({
@@ -225,7 +226,7 @@ describe("ACP /compact dispatch and wire preservation", () => {
     const availableCommandsStore = createAcpAvailableCommandsStoreMock([
       {
         backendId: ANTIGRAVITY,
-        repositoryPath: CWD,
+        repositoryPath: toTestRepositoryPath(CWD),
         observedAt: 1000,
         commands: [
           {
