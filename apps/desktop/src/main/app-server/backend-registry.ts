@@ -1315,6 +1315,7 @@ export class DesktopBackendRegistry {
     assertUnlocked: ({ backend, threadId }) => this.assertThreadNotLocked(backend, threadId),
     wake: (identity) => this.threadArchiveCoordinator.ensureCheckoutAwake(identity),
   });
+  private readonly pendingClaudeCompactions = new Set<string>();
   private readonly transcriptRepairs = new Map<string, Promise<void>>();
   private readonly pendingTranscriptRepairReplays = new Map<string, AppServerThreadReplay>();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
@@ -11923,10 +11924,12 @@ export class DesktopBackendRegistry {
       );
       // The first call establishes the per-turn context by calling startTurnNow
       // again. Add the notice at its inner, actual admission boundary.
-      // Never prepend stack notices to an ACP `/compact` command: ACP agents
-      // only trigger compaction when `/compact` is the leading text.
+      // Never prepend stack notices to a `/compact` command: ACP and Claude
+      // agents only trigger compaction when `/compact` is the leading text.
       const notices =
-        !acpCompactTurn && this.tokenMiserServerCapabilitiesForTurn.getStore()
+        params.isCompactCommand !== true
+        && !acpCompactTurn
+        && this.tokenMiserServerCapabilitiesForTurn.getStore()
           ? this.correspondenceStore.pendingStackNotices(params)
           : [];
       const result = await this.startTurnWithoutHandoff(notices.length ? {
@@ -13485,6 +13488,12 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
       });
     }
+    if (params.backend === "claude") {
+      return await this.compactClaudeThread({
+        backend: "claude",
+        threadId: params.threadId,
+      });
+    }
     await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
     return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
   }
@@ -13631,6 +13640,58 @@ export class DesktopBackendRegistry {
       messageOrigin: params.messageOrigin,
     });
     return result.status === "started" ? { status: "started", turnId: result.turnId } : { status: "busy" };
+  }
+
+  private async compactClaudeThread(params: {
+    backend: "claude";
+    threadId: string;
+  }): Promise<{
+    backend: "claude";
+    threadId: string;
+    turnId: string;
+  }> {
+    if (this.closed) throw new Error("Desktop backend registry is closed");
+    this.assertThreadOwnership();
+    this.assertNotBootstrap("compactThread");
+    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    // Compaction runs a backend turn, so a lock refuses it like any other.
+    await this.assertThreadNotLocked(params.backend, params.threadId);
+    const isBusy = () =>
+      this.threadStarts.hasPending(params)
+      || this.threadTurnQueue.hasDispatchInFlight(params)
+      || this.threadHasActiveTurn(params.threadId, "claude")
+      || this.claudeBackend.hasActiveOperation(params.threadId);
+    if (this.pendingClaudeCompactions.has(params.threadId) || isBusy()) {
+      throw new Error("Cannot compact a thread while another operation is running");
+    }
+    this.pendingClaudeCompactions.add(params.threadId);
+    try {
+      if (!await this.claudeBackend.supportsCompactCommand(params.threadId)) {
+        throw new Error("Claude does not support thread compaction for this thread");
+      }
+      // Recheck after the async store lookup in case another operation started.
+      if (isBusy()) {
+        throw new Error("Cannot compact a thread while another operation is running");
+      }
+      const started = await this.startTurnNow({
+        backend: "claude",
+        threadId: params.threadId,
+        input: [{ type: "text", text: "/compact" }],
+        isCompactCommand: true,
+      });
+      return {
+        backend: "claude",
+        threadId: started.threadId,
+        turnId: started.turnId,
+      };
+    } catch (error) {
+      if (error instanceof ThreadAlreadyActiveError) {
+        throw new Error("Cannot compact a thread while another operation is running", { cause: error });
+      }
+      throw error;
+    } finally {
+      this.pendingClaudeCompactions.delete(params.threadId);
+    }
   }
 
   private async compactThreadNow(params: {
