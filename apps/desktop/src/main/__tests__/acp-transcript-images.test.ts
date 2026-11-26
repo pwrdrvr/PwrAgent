@@ -116,7 +116,7 @@ describe("ACP transcript image live completion and replay parity", () => {
           ].join("\n"),
         },
       });
-      // A steer or tool call closes the first assistant bubble mid-turn.
+      // A steer closes the first assistant bubble while keeping it visible (`phase: "final"`).
       transport.emitSessionUpdate(session.sessionId, {
         sessionUpdate: "pwragent_steered_user_prompt",
         prompt: "Continue watching",
@@ -124,21 +124,21 @@ describe("ACP transcript image live completion and replay parity", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 5));
 
-      const midTurnCompletions = events.filter(
+      const steeredCompletions = events.filter(
         (event) => event.notification.method === "item/completed"
           && (event.notification.params as { item?: { type?: string } }).item?.type === "agentMessage",
       );
-      expect(midTurnCompletions).toHaveLength(1);
+      expect(steeredCompletions).toHaveLength(1);
       expect(
-        (midTurnCompletions[0]?.notification.params as { item?: { phase?: string } } | undefined)?.item?.phase,
-      ).toBe("partial");
+        (steeredCompletions[0]?.notification.params as { item?: { phase?: string } } | undefined)?.item?.phase,
+      ).toBe("final");
 
       const deps = {
         resolveRoot: () => cacheDir,
         retainLocalImage: async () => undefined,
       };
       const materializedLive = await materializeTranscriptImageEventForRenderer(
-        midTurnCompletions[0]!,
+        steeredCompletions[0]!,
         deps,
         { approvedLocalImageRoots: [worktreeDir], includeTemporaryImageRoots: true },
       );
@@ -147,7 +147,19 @@ describe("ACP transcript image live completion and replay parity", () => {
         pathToFileURL(panelShot).toString(),
       ]);
 
-      // Finish the turn after a second assistant message and delete /tmp sources.
+      // A mid-turn progress bubble followed by a tool call emits `phase: "partial"`,
+      // followed by the final answer (`phase: "final"`) and matching `turn/completed` output.
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Running one last check..." },
+      });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "tool_call",
+        toolCallId: "check-1",
+        kind: "other",
+        title: "check_status",
+        status: "completed",
+      });
       transport.emitSessionUpdate(session.sessionId, {
         sessionUpdate: "agent_message_chunk",
         content: { type: "text", text: "All done." },
@@ -160,9 +172,12 @@ describe("ACP transcript image live completion and replay parity", () => {
         (event) => event.notification.method === "item/completed"
           && (event.notification.params as { item?: { type?: string } }).item?.type === "agentMessage",
       );
-      expect(allAssistantCompletions).toHaveLength(2);
+      expect(allAssistantCompletions).toHaveLength(3);
       expect(
         (allAssistantCompletions[1]?.notification.params as { item?: { phase?: string } } | undefined)?.item?.phase,
+      ).toBe("partial");
+      expect(
+        (allAssistantCompletions[2]?.notification.params as { item?: { phase?: string } } | undefined)?.item?.phase,
       ).toBe("final");
       const turnCompleted = events.find((event) => event.notification.method === "turn/completed");
       expect((turnCompleted?.notification.params as { turn?: { output?: unknown } } | undefined)?.turn?.output)
@@ -480,8 +495,8 @@ describe("ACP transcript image live completion and replay parity", () => {
     }
   });
 
-  it("extracts multi-level ACP content wrappers and avoids JSON.parse on plain streaming text chunks", async () => {
-    const { extractAcpContentImageParts } = await import("../acp/acp-tool-images");
+  it("extracts multi-level ACP content wrappers, array rawOutput, and avoids JSON.parse on plain streaming text chunks", async () => {
+    const { extractAcpContentImageParts, extractAcpToolImageParts } = await import("../acp/acp-tool-images");
     const wrapped = {
       type: "content",
       content: {
@@ -491,6 +506,13 @@ describe("ACP transcript image live completion and replay parity", () => {
     };
     expect(extractAcpContentImageParts(wrapped)).toEqual([
       { type: "image", url: "https://example.test/nested.png", alt: "nested" },
+    ]);
+    expect(extractAcpToolImageParts({
+      rawOutput: [
+        { type: "resource_link", uri: "pwrsnap://capture/cap_arr/composite", mimeType: "image/png", name: "arr.png" },
+      ],
+    })).toEqual([
+      { type: "image", url: "pwrsnap://capture/cap_arr/composite", alt: "arr.png" },
     ]);
 
     const originalParse = JSON.parse;
@@ -506,6 +528,91 @@ describe("ACP transcript image live completion and replay parity", () => {
       expect(parseCount).toBe(0);
     } finally {
       JSON.parse = originalParse;
+    }
+  });
+
+  it("serializes ACP session update emissions when async item/completed image materialization is in flight", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-order-"));
+    let resolvePrompt!: (value: unknown) => void;
+    const transport = new FakeAcpAgentTransport({
+      "session/prompt": new Promise((resolve) => { resolvePrompt = resolve; }),
+    });
+    const events: string[] = [];
+    const sessions = new Map<string, AcpSessionMetadata>();
+    const agent = buildAgent("acp:antigravity");
+    const adapter = new AcpBackendAdapter({
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [agent],
+      acpAgentStore: {
+        getInstalledAgent: (id) => (id === "acp:antigravity" ? agent : undefined),
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: () => {},
+      },
+      acpSessionStore: {
+        getSession: (_b, id) => sessions.get(id),
+        listSessions: () => [...sessions.values()],
+        listBackendIds: () => ["acp:antigravity"],
+        upsertSession: (session) => { sessions.set(session.sessionId, session); },
+      },
+      createAcpTransport: () => transport,
+      emit: async (event) => {
+        const item = (event.notification.params as { item?: { id?: string; type?: string } }).item;
+        if (event.notification.method === "item/completed" && item?.type === "agentMessage") {
+          // Simulate disk-backed image materialization latency on the closed bubble.
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        events.push(`${event.notification.method}:${item?.type ?? ""}:${item?.id ?? ""}`);
+      },
+      handleServerRequest: async () => ({ decision: "accept" }),
+    });
+
+    try {
+      const client = await adapter.getClient("acp:antigravity");
+      const session = await client.startSession({ cwd: tempDir, executionMode: "default" });
+      const promptPromise = client.startPrompt({
+        sessionId: session.sessionId,
+        prompt: "Run tool",
+        turnId: "turn-order",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Starting tool [shot.png](/tmp/shot.png)" },
+      });
+      // Immediately send tool_call (closes assistant bubble -> async item/completed),
+      // followed synchronously by tool completion and prompt settlement.
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "tool_call",
+        toolCallId: "t-order",
+        kind: "execute",
+        title: "run check",
+        status: "in_progress",
+      });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "t-order",
+        status: "completed",
+      });
+      resolvePrompt({ stopReason: "end_turn" });
+      await promptPromise;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const relevant = events.filter((entry) =>
+        entry.startsWith("item/completed:agentMessage:")
+        || entry.startsWith("item/started:commandExecution:t-order")
+        || entry.startsWith("item/completed:commandExecution:t-order")
+        || entry.startsWith("turn/completed:"),
+      );
+      expect(relevant).toEqual([
+        expect.stringMatching(/^item\/completed:agentMessage:/),
+        "item/started:commandExecution:t-order",
+        "item/completed:commandExecution:t-order",
+        "turn/completed::",
+      ]);
+    } finally {
+      await adapter.close();
+      await rm(tempDir, { recursive: true, force: true });
     }
   });
 });

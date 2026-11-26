@@ -151,6 +151,8 @@ export function extractAcpToolImageParts(
   const rawOutput = update.rawOutput;
   if (typeof rawOutput === "string") {
     pushAll(pwrSnapResourceLinkImageParts({ content: [{ type: "text", text: rawOutput }] }));
+  } else if (Array.isArray(rawOutput)) {
+    pushAll(extractAcpContentImageParts(rawOutput, fallbackAlt));
   } else {
     const rawRecord = asRecord(rawOutput);
     if (rawRecord) {

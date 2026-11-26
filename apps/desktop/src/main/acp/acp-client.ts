@@ -529,6 +529,8 @@ export class AcpAgentClient {
   private readonly managedReviewLedgerToolCalls = new Map<string, Map<string, string>>();
   /** MCP tools the operator allowed for the rest of a thread. */
   private readonly sessionMcpToolGrants = new Map<string, Set<string>>();
+  /** Per-session FIFO queue so async emit work (e.g. image materialization) cannot reorder events. */
+  private readonly sessionNotificationQueues = new Map<string, Promise<void>>();
   private readonly now: () => number;
   private readonly approvalRequesterName: string;
   private unsubscribe?: () => void;
@@ -696,6 +698,7 @@ export class AcpAgentClient {
       this.agentSessionIdsByAppSessionId.delete(sessionId);
       this.appSessionIdsByAgentSessionId.delete(protocolSessionId);
       this.retainableSessionIds.delete(sessionId);
+      this.sessionNotificationQueues.delete(sessionId);
       this.forgetSessionActivity(sessionId, retainMcpGrants);
       return true;
     });
@@ -1006,6 +1009,7 @@ export class AcpAgentClient {
     this.sessionAgentToolCatalogKeys.clear();
     this.sessionMcpServers.clear();
     this.sessionMcpToolGrants.clear();
+    this.sessionNotificationQueues.clear();
     await this.options.transport.close?.();
   }
 
@@ -1231,7 +1235,9 @@ export class AcpAgentClient {
       // fail after ownership has already moved to the replacement prompt.
       handoff.resolve();
       const receivedAt = this.now();
-      const replay = this.normalizerFor(params.sessionId).recordSteeredUserPrompt({
+      const normalizer = this.normalizerFor(params.sessionId);
+      const previousActiveAssistantId = normalizer.readActiveAssistantMessageId();
+      const replay = normalizer.recordSteeredUserPrompt({
         sessionId: params.sessionId,
         messageId,
         prompt: displayPrompt,
@@ -1239,6 +1245,9 @@ export class AcpAgentClient {
         turnId: activeTurn.turnId,
         receivedAt,
       });
+      const completedAssistantMessage = previousActiveAssistantId
+        ? normalizer.readMessageEntry(previousActiveAssistantId)
+        : undefined;
       const update: Record<string, unknown> = {
         kind: "pwragent_steered_user_prompt",
         messageId,
@@ -1258,6 +1267,7 @@ export class AcpAgentClient {
         });
       }
       void this.notifySessionUpdate({
+        ...(completedAssistantMessage ? { completedAssistantMessage } : {}),
         sessionId: params.sessionId,
         replay,
         turnId: activeTurn.turnId,
@@ -2061,7 +2071,7 @@ export class AcpAgentClient {
               )
             : undefined
         );
-        return Promise.resolve(
+        return this.enqueueSessionNotification(sessionId, () =>
           this.options.onPromptError?.({
             ...(finished.completedAssistantMessage
               ? { completedAssistantMessage: finished.completedAssistantMessage }
@@ -2071,7 +2081,7 @@ export class AcpAgentClient {
             error,
             ...(errorUsage ? { usage: errorUsage } : {}),
           }),
-        ).catch(() => undefined);
+        );
       });
   }
 
@@ -3256,17 +3266,54 @@ export class AcpAgentClient {
     });
   }
 
-  private async notifySessionUpdate(event: {
-    assistantMessageItemId?: string;
-    fromSessionLoad?: boolean;
-    sessionId: string;
-    replay: AppServerThreadReplay;
-    title?: string;
-    turnId?: string;
-    update: Record<string, unknown>;
-  }): Promise<void> {
-    await Promise.resolve(this.options.onSessionUpdate?.(event)).catch(
-      () => undefined,
+  private enqueueSessionNotification(
+    sessionId: string,
+    task: () => Promise<void> | void,
+  ): Promise<void> {
+    const run = (): Promise<void> | undefined => {
+      try {
+        const result = task();
+        if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+          return Promise.resolve(result).catch(() => undefined);
+        }
+        return undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const previous = this.sessionNotificationQueues.get(sessionId);
+    if (!previous) {
+      // Start synchronously when idle so synchronous callbacks observe events
+      // immediately; only track and serialize when an async callback suspends.
+      const inFlight = run();
+      if (!inFlight) {
+        return Promise.resolve();
+      }
+      const tracked = inFlight.finally(() => {
+        if (this.sessionNotificationQueues.get(sessionId) === tracked) {
+          this.sessionNotificationQueues.delete(sessionId);
+        }
+      });
+      this.sessionNotificationQueues.set(sessionId, tracked);
+      return tracked;
+    }
+    const next = previous
+      .catch(() => undefined)
+      .then(() => run());
+    const tracked = next.finally(() => {
+      if (this.sessionNotificationQueues.get(sessionId) === tracked) {
+        this.sessionNotificationQueues.delete(sessionId);
+      }
+    });
+    this.sessionNotificationQueues.set(sessionId, tracked);
+    return tracked;
+  }
+
+  private notifySessionUpdate(
+    event: Parameters<NonNullable<AcpAgentClientOptions["onSessionUpdate"]>>[0],
+  ): Promise<void> {
+    return this.enqueueSessionNotification(event.sessionId, () =>
+      this.options.onSessionUpdate?.(event),
     );
   }
 

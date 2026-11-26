@@ -719,14 +719,15 @@ const markdownComponents: Components = {
     const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
     const href = windowsMarkdownDestinationFromSource(sourceForNode(markdownText, imageProps.node))
       ?? (typeof imageProps.src === "string" ? imageProps.src : "");
-    const src = denormalizeMarkdownUrl(href);
-    const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
 
     // The message's image strip owns previews and gallery navigation. Hide
     // markup only for a reference that main successfully materialized.
     if (findMarkdownLinkedImagePart(imagePartsByPath, href)) {
       return null;
     }
+
+    const src = denormalizeMarkdownUrl(href);
+    const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
 
     return (
       <span className="thread-markdown__image-literal">
@@ -1562,8 +1563,8 @@ function fallbackFileViewerContext(filePath: string): MarkdownFileViewerContext 
 }
 
 function denormalizeMarkdownUrl(url: string): string {
-  if (url.startsWith("file://")) {
-    return decodeURIComponent(url.replace(/^file:\/\//, ""));
+  if (/^file:\/\//i.test(url)) {
+    return decodeMarkdownDestination(url.replace(/^file:\/\//i, ""));
   }
 
   return url;

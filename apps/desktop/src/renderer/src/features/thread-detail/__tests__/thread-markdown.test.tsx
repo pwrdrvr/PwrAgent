@@ -605,6 +605,26 @@ describe("ThreadMarkdown", () => {
     expect(openPath).not.toHaveBeenCalled();
   });
 
+  it("renders Markdown images with malformed percent sequences without throwing URIError", () => {
+    const unmaterialized = render(
+      <ThreadMarkdown text={String.raw`![bad](file:///work/100%ZZ.png) ![win](C:\work\100%ZZ.png)`} />,
+    );
+    expect(unmaterialized.container.textContent).toContain("![bad](/work/100%ZZ.png)");
+    expect(unmaterialized.container.textContent).toContain(String.raw`![win](C:\work\100%ZZ.png)`);
+
+    const materialized = render(
+      <ThreadMarkdown
+        text="![bad](file:///work/100%ZZ.png)"
+        imageParts={[{
+          type: "image",
+          url: "pwragent-image://file/cached-badpct",
+          sourceUrl: "file:///work/100%25ZZ.png",
+        }]}
+      />,
+    );
+    expect(materialized.container.querySelector(".thread-markdown__image-literal")).toBeNull();
+  });
+
   it.each([undefined, "File pull is disabled on the owning machine.", "The owning machine does not support file pull.", "Remote machine disconnected."])("keeps remote Markdown reads in the local modal: %s", async (error) => {
     const federationTarget = { scope: "remote" as const, instanceId: "owner" };
     const thread = { backend: "codex" as const, threadId: "owner-thread" };

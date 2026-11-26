@@ -3841,7 +3841,8 @@ export class AcpBackendAdapter {
           if (completedAssistantMessage.text.trim() || completedImages.length > 0) {
             const completedPhase = acpCompletedAssistantMessagePhase(
               completedAssistantMessage.phase,
-              promptSettledTurnFinished && update.stopReason !== "cancelled",
+              (promptSettledTurnFinished && update.stopReason !== "cancelled")
+                || updateKind === "pwragent_steered_user_prompt",
             );
             await this.emit({
               backend: agent.backendId,
