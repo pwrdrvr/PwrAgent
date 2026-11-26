@@ -162,16 +162,23 @@ export function createStackCheckoutHints(demand: PrMetadataDemand, purpose: "rea
     return observed;
   }
 
+  function gitEnvironmentVersion(): string | undefined {
+    // Nonstandard discovery or runtime settings belong to Git. Do not
+    // transfer confirmed checkout or clone evidence across these environments.
+    const env = process.env;
+    if ((requiresGitDiscovery && !installedGitVersion) || hasRelativeConfigRoot(env)
+      || gitCommandPreference(env) !== configuredGit || hasGitDiscoveryOverrides() || Object.keys(env).some((key) =>
+      /^GIT_(?:CONFIG(?:_|$)|TEST_|NAMESPACE$|OBJECT_DIRECTORY$)/i.test(key))) return undefined;
+    return JSON.stringify([getSelectedManagedGit(), installedGitVersion, env.HOME, env.USERPROFILE, env.XDG_CONFIG_HOME, env.SUDO_UID]);
+  }
+
   return {
     requiresGitDiscovery,
     installedGitVersion,
+    gitEnvironmentVersion,
     async checkoutIdentity(cwd: string) {
-      // Nonstandard discovery or runtime settings belong to Git. Do not
-      // transfer a confirmed inventory checkout across these environments.
       const env = process.env;
-      if ((requiresGitDiscovery && !installedGitVersion) || hasRelativeConfigRoot(env)
-        || gitCommandPreference(env) !== configuredGit || hasGitDiscoveryOverrides() || Object.keys(env).some((key) =>
-        /^GIT_(?:CONFIG(?:_|$)|TEST_|NAMESPACE$|OBJECT_DIRECTORY$)/i.test(key))) return undefined;
+      if (!gitEnvironmentVersion()) return undefined;
       const runtime = getSelectedManagedGit();
       return await runPrMetadataFileProbe(async (signal) => {
         const observed = await observeInventoryCheckout(cwd, undefined, signal);
