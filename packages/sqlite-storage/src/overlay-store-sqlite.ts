@@ -5036,9 +5036,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       // Creation may race an explicit pin. Keep the rank the operator gave
       // the thread, and allocate against the live local and viewer ranks.
       if (params.prepend && current.pinnedRank) return current;
-      const rank = params.prepend ? buildPrependPinRank : buildAppendPinRank;
       const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim()
-        : params.pinned ? current.pinnedRank ?? rank(this.readThreadPinRanks()) : undefined;
+        : params.pinned ? current.pinnedRank ?? buildPrependPinRank(this.readThreadPinRanks()) : undefined;
       const nextState: ThreadOverlayState = {
         ...current,
         pinnedRank: pinnedRank || undefined,
@@ -5207,7 +5206,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim() || undefined
         : params.pinned ? (typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank
-          ? parsed.localPinnedRank : buildAppendPinRank(this.readThreadPinRanks())) : undefined;
+          ? parsed.localPinnedRank : buildPrependPinRank(this.readThreadPinRanks())) : undefined;
       if (pinnedRank === undefined) {
         delete parsed.localPinnedRank;
       } else {
