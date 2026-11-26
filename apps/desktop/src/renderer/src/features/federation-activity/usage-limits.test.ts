@@ -51,7 +51,8 @@ describe("usage limit history", () => {
     expect(sinceResetSeries(resetAccount)!.pacePerHour).toBeUndefined();
 
     // A later coarse Claude stream reading rounding resetAt up to the hour must
-    // not shift scheduledStart past the mid-window credit and re-count the floor.
+    // not shift scheduledStart past the mid-window credit and re-count the floor,
+    // even when the rounded resetAt arrives on the credit reading itself.
     const claudeReset = t0 + 5 * HOUR;
     const claudeObs = (at: number, usedPercent: number, reset: number): UsageLimitObservation => ({
       observedAt: at, provider: "anthropic", accountKey: "a",
@@ -63,6 +64,41 @@ describe("usage limit history", () => {
       current: claudeObs(t0 + 90 * 60_000, 8, claudeReset + 45 * 60_000),
     }]);
     expect(sinceResetSeries(claudeAccount)!.pacePerHour).toBeUndefined();
+
+    const [claudeCreditRounded] = buildLimitAccounts([{
+      ...studio,
+      history: [claudeObs(t0 + 20 * 60_000, 25, claudeReset), claudeObs(t0 + 30 * 60_000, 8, claudeReset + 45 * 60_000)],
+      current: claudeObs(t0 + 90 * 60_000, 8, claudeReset + 45 * 60_000),
+    }]);
+    expect(sinceResetSeries(claudeCreditRounded)!.pacePerHour).toBeUndefined();
+
+    // Same-window jitter crossing a slightly early before.resetAt must not
+    // fabricate a reset when after.resetAt is still within windowToleranceMs.
+    const [jitterCross] = buildLimitAccounts([{
+      ...studio,
+      history: [claudeObs(t0 + 4 * HOUR, 20, claudeReset)],
+      current: claudeObs(t0 + 5 * HOUR + 5 * 60_000, 25, claudeReset + 45 * 60_000),
+    }]);
+    expect(sinceResetSeries(jitterCross)!.resets).toEqual([]);
+  });
+
+  it("classifies a same-window drop near resetAt as unscheduled", () => {
+    const resetAt = t0 + 5 * HOUR;
+    const reading = (at: number, usedPercent: number): UsageLimitObservation => ({
+      observedAt: at, accountKey: "a",
+      limits: [{ name: "5-hour limit", windowKey: "primary", usedPercent, resetAt, windowMinutes: 300 }],
+    });
+    const [account] = buildLimitAccounts([{
+      ...studio,
+      history: [reading(t0 + 4 * HOUR + 55 * 60_000, 80)],
+      current: reading(t0 + 4 * HOUR + 57 * 60_000, 40),
+    }]);
+    expect(sinceResetSeries(account)!.resets).toEqual([{
+      at: t0 + 4 * HOUR + 57 * 60_000,
+      kind: "unscheduled",
+      after: t0 + 4 * HOUR + 55 * 60_000,
+      before: t0 + 4 * HOUR + 57 * 60_000,
+    }]);
   });
 
   it("detects an early reset when the deadline advances even without a usage drop", () => {

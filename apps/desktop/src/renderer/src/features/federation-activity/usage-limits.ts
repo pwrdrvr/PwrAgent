@@ -242,9 +242,9 @@ function describeSeries(provider: string, key: string, reading: UsageLimitReadin
     const elapsed = before.resetAt !== undefined && before.resetAt <= after.at;
     const deadlineAdvanced = before.resetAt !== undefined && after.resetAt !== undefined
       && after.resetAt > before.resetAt + windowToleranceMs;
-    // A window that elapsed or advanced its deadline still reset even if usage
-    // was low before the reset or filled back up past its old level.
-    if (!dropped && !deadlineAdvanced && !(elapsed && after.resetAt !== undefined && after.resetAt > before.resetAt!)) {
+    // A window whose deadline advanced still reset even if usage was low before
+    // the reset or filled back up past its old level.
+    if (!dropped && !deadlineAdvanced) {
       continue;
     }
     // A moved schedule says when the new window began, even if the old
@@ -252,23 +252,25 @@ function describeSeries(provider: string, key: string, reading: UsageLimitReadin
     // current window; treating it as the reset would charge all current usage
     // to the time since that deadline instead of the whole current window.
     const movedSchedule = after.resetAt !== undefined && windowMs !== undefined
-      && (before.resetAt === undefined || after.resetAt > before.resetAt + SCHEDULE_JITTER_MS);
+      && (before.resetAt === undefined || deadlineAdvanced);
     const began = movedSchedule ? after.resetAt! - windowMs! : undefined;
     const beganInGap = began !== undefined && began > before.at && began <= after.at;
     const beganFuture = began !== undefined && began > after.at;
-    const elapsedIntoNewWindow = elapsed && (after.resetAt === undefined || after.resetAt > before.resetAt!);
+    const elapsedIntoNewWindow = elapsed && (after.resetAt === undefined || deadlineAdvanced);
     const at = beganInGap ? began
       : elapsedIntoNewWindow && !beganFuture ? before.resetAt! : after.at;
     const zeroAtStart = beganInGap || (elapsedIntoNewWindow && !beganFuture);
-    // A gap can skip full windows without changing the provider's schedule.
-    const scheduled = isScheduledReset(before.resetAt, at, windowMs);
+    const sameWindow = !movedSchedule && !elapsedIntoNewWindow;
+    // A gap can skip full windows without changing the provider's schedule;
+    // drops within the same window are always unscheduled.
+    const scheduled = !sameWindow && isScheduledReset(before.resetAt, at, windowMs);
     resetDetails.push({
       at,
       kind: scheduled ? "scheduled" : "unscheduled",
       after: before.at,
       before: after.at,
       zeroAtStart,
-      sameWindow: !movedSchedule && !elapsedIntoNewWindow,
+      sameWindow,
       observedUsedPercent: after.usedPercent,
     });
   }
