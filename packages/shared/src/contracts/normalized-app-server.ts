@@ -2171,8 +2171,10 @@ export type AppServerPendingRequestNotification = {
     turnId?: string | null;
     requestId: string;
     prompt?: string;
-    /** Tool name reported by ACP. This is display metadata, not a grant. */
+    /** Display name of an MCP tool approval target. Display metadata only, never a grant key. */
     acpMcpToolName?: string;
+    /** Redacted, bounded invocation detail (such as formatted arguments) for an MCP tool approval. */
+    acpMcpToolDetail?: string;
     options?: string[];
     [key: string]: unknown;
   };

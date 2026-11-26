@@ -20,6 +20,7 @@ import {
   type MessagingCapabilityProfile,
 } from "@pwragent/messaging-interface";
 import { redactCommandText } from "../../util/redact-command-text";
+import { redactSecretStringValue } from "../../util/redact-mcp-tool-args";
 
 export function buildApprovalIntent(params: {
   capabilityProfile?: MessagingCapabilityProfile;
@@ -33,6 +34,9 @@ export function buildApprovalIntent(params: {
     ?? stringField(params.request.params.message)
     ?? "Approve this action?";
   const mcpToolName = params.request.params.acpMcpToolName;
+  const mcpToolDetail = mcpToolName
+    ? formatMessagingMcpDetail(stringField(params.request.params.acpMcpToolDetail))
+    : undefined;
   const command = mcpToolName ? undefined : extractCommand(params.request.params);
   const context = buildPendingRequestApprovalContext(params.request, {
     directoryPaths: params.directoryPaths,
@@ -59,7 +63,9 @@ export function buildApprovalIntent(params: {
     title: mcpToolName ? "MCP Tool Approval" : titleForRequest(params.request),
     ...(context ? { context } : {}),
     body: [
-      mcpToolName ? ["```", mcpToolName, "```"].join("\n") : undefined,
+      mcpToolName
+        ? ["```", mcpToolDetail ? `${mcpToolName}\n${mcpToolDetail}` : mcpToolName, "```"].join("\n")
+        : undefined,
       prompt,
       command
         ? ["Command:", "```shell", stripDisplayShellWrapper(command), "```"].join("\n")
@@ -564,6 +570,16 @@ function countDiffLines(diff: string | undefined): {
 function stripDisplayShellWrapper(command: string): string {
   const match = /^\/bin\/(?:zsh|bash|sh)\s+-lc\s+(['"])([\s\S]*)\1$/.exec(command.trim());
   return match?.[2] ?? command;
+}
+
+function formatMessagingMcpDetail(detail: string | undefined): string | undefined {
+  if (!detail) {
+    return undefined;
+  }
+  const redacted = redactSecretStringValue(detail);
+  return redacted.length > MCP_PARAM_VALUE_LIMIT
+    ? `${redacted.slice(0, MCP_PARAM_VALUE_LIMIT)}… (${redacted.length.toLocaleString("en-US")} characters; the desktop card shows all of it)`
+    : redacted;
 }
 
 function stringField(value: unknown): string | undefined {

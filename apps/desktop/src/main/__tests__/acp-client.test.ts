@@ -2309,8 +2309,17 @@ describe("AcpAgentClient", () => {
             continue;
           }
           expect(asked).toHaveLength(askedBefore + 1);
+          const expectedGrantLabel = call.name === "mcp_pwragent_add_todo"
+            ? "Allow add_todo for this conversation"
+            : call.name === "mcp_pwragent_purge_cache"
+              ? "Allow purge_cache for this conversation"
+              : call.name === "mcp_pwragent_unlisted"
+                ? "Allow unlisted for this conversation"
+                : call.name === "mcp_linear_list_issues"
+                  ? "Allow list_issues for this conversation"
+                  : "Allow for this conversation";
           expect(buildPendingRequestActions(asked.at(-1)!).map((action) => action.label))
-            .toEqual(["Allow", "Allow for this thread", "Deny", "Cancel turn"]);
+            .toEqual(["Allow", expectedGrantLabel, "Deny", "Cancel turn"]);
           if (call.choice === "accept_for_session") granted.add(call.name);
           // Antigravity hears only options it offered.
           expect(outcome).toEqual({
@@ -2327,9 +2336,21 @@ describe("AcpAgentClient", () => {
     }), async (offersAlways, writes) => {
       const transport = new FakeAcpAgentTransport();
       const onRequest = vi.fn((request: AppServerPendingRequestNotification) => {
-        expect(buildPendingRequestActions(request).map(({ label }) => label)).toEqual(["Allow", "Deny", "Cancel turn"]);
-        expect(request.params.prompt).toContain(writes[onRequest.mock.calls.length - 1]);
-        return { decision: "accept" };
+        const expectedTool = writes[onRequest.mock.calls.length - 1]!;
+        expect(buildPendingRequestActions(request).map(({ label }) => label)).toEqual([
+          "Allow",
+          `Allow ${expectedTool} for this conversation`,
+          "Deny",
+          "Cancel turn",
+        ]);
+        expect(request.params.acpMcpToolName).toBe(expectedTool);
+        expect(request.params.prompt).toContain(expectedTool);
+        // Choosing conversation approval for the first write must grant only
+        // that wrapped tool, return allow_once to Antigravity, and still ask
+        // for every other wrapped write.
+        return onRequest.mock.calls.length === 1
+          ? { decision: "accept_for_session" }
+          : { decision: "accept" };
       });
       const hostApprovesToolCall = vi.fn(async (_server: string, _name: string, input: unknown) =>
         (input as { toolName?: string })?.toolName === "get_pull_request");

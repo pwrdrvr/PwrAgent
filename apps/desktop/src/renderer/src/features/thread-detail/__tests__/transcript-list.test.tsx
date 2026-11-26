@@ -5919,6 +5919,46 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
   });
 
+  it("renders unwrapped MCP tool name, redacted arguments, and scoped conversation grant", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-wrapped-1",
+            prompt: "Antigravity wants to use the PwrAgent tool update_review_item.\n\nSettle finding 1 as addressed",
+            acpMcpToolName: "update_review_item",
+            acpMcpToolDetail: JSON.stringify({ id: "review-1", itemId: "finding-1", status: "addressed" }, null, 2),
+            acpPermissionOptions: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              {
+                optionId: "pwragent_allow_tool_for_thread",
+                name: "Allow update_review_item for this conversation",
+                kind: "allow_always",
+              },
+              { optionId: "deny", name: "Deny", kind: "reject_once" },
+            ],
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("MCP tool approval")).toBeInTheDocument();
+    const codeText = container.querySelector(".transcript-request pre code")?.textContent ?? "";
+    expect(codeText).toContain("update_review_item");
+    expect(codeText).toContain("\"status\": \"addressed\"");
+    expect(codeText).not.toContain("mcp_pwragent_call_pwragent_tool");
+    expect(
+      screen.getByRole("button", { name: "Allow update_review_item for this conversation" }),
+    ).toBeInTheDocument();
+  });
+
   it("shows command approval reason and command when no prompt is provided", () => {
     const { container } = render(
       <TranscriptList

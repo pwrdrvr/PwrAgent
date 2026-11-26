@@ -504,7 +504,14 @@ function pendingRequestPrompt(
     typeof request.params.prompt === "string" ? request.params.prompt.trim() : "";
   const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
   if (request.params.acpMcpToolName) {
-    return [prompt || reason, markdownCodeBlock(request.params.acpMcpToolName, "")]
+    const detail =
+      typeof request.params.acpMcpToolDetail === "string"
+        ? request.params.acpMcpToolDetail.trim()
+        : "";
+    const toolBlock = detail
+      ? `${request.params.acpMcpToolName}\n${detail}`
+      : request.params.acpMcpToolName;
+    return [prompt || reason, markdownCodeBlock(toolBlock, "")]
       .filter(Boolean).join("\n\n");
   }
   const command = approvalDisplayCommand(request.params);
