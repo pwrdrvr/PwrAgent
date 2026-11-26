@@ -15701,6 +15701,306 @@ describe("useThreadSessionState", () => {
     ]);
     expect(result.current.entries.some((entry) => entry.id === "item-inner-prompt")).toBe(false);
     expect(result.current.messages.some((message) => message.id === "item-inner-prompt")).toBe(false);
+
+    // Completing the inner turn without repeating rootTurnId must keep the prompt hidden.
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-split-review",
+            turnId: "turn-inner",
+            turn: {
+              id: "turn-inner",
+              status: "interrupted",
+              output: [],
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries.some((entry) => entry.id === "item-inner-prompt")).toBe(false);
+    expect(result.current.messages.some((message) => message.id === "item-inner-prompt")).toBe(false);
+  });
+
+  it("backfills an already-rendered inner review prompt when thread/subAgents/updated delivers correlation", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-split-race", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result, "thread-split-race");
+
+    // Inner turn events arrive before review/start resolves, so neither carries rootTurnId.
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-split-race",
+            turnId: "turn-outer",
+            item: {
+              id: "item-entered",
+              type: "enteredReviewMode",
+              review: pullRequestReviewPrompt,
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-split-race",
+            turnId: "turn-inner",
+            turn: { id: "turn-inner", status: "inProgress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-split-race",
+            turnId: "turn-inner",
+            item: {
+              id: "item-inner-prompt",
+              type: "userMessage",
+              content: [{ type: "text", text: pullRequestReviewPrompt }],
+            },
+          },
+        },
+      });
+    });
+
+    // Once startReview resolves, thread/subAgents/updated delivers the inner -> outer correlation.
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/subAgents/updated",
+          params: {
+            threadId: "thread-split-race",
+            correlatedTurn: {
+              turnId: "turn-inner",
+              rootTurnId: "turn-outer",
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries.some((entry) => entry.id === "item-inner-prompt")).toBe(false);
+    expect(result.current.messages.some((message) => message.id === "item-inner-prompt")).toBe(false);
+
+    // Completing turn-inner without rootTurnId keeps the backfilled prompt hidden.
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "thread-split-race",
+            turnId: "turn-inner",
+            turn: { id: "turn-inner", status: "interrupted", output: [] },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries.some((entry) => entry.id === "item-inner-prompt")).toBe(false);
+    expect(result.current.messages.some((message) => message.id === "item-inner-prompt")).toBe(false);
+  });
+
+  it("prefers known string rootTurnId over explicit null across backfill, hydration carry-forward, and item updates", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    let readCount = 0;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => {
+        readCount += 1;
+        if (readCount === 1) {
+          return {
+            backend: backend ?? "codex",
+            fetchedAt: Date.now(),
+            threadId,
+            threadStatus: "active",
+            replay: {
+              entries: [
+                {
+                  type: "review",
+                  id: "item-entered",
+                  review: pullRequestReviewPrompt,
+                  displayText: `Review ${pullRequestReviewUrl}`,
+                  turn: { id: "turn-outer", status: "in_progress" },
+                  createdAt: 1_000,
+                },
+                {
+                  type: "message",
+                  id: "item-hydrated-null",
+                  role: "user",
+                  text: pullRequestReviewPrompt,
+                  turn: { id: "turn-inner-1", rootTurnId: null, status: "in_progress" },
+                  createdAt: 1_001,
+                },
+              ],
+              messages: [
+                {
+                  id: "item-hydrated-null",
+                  role: "user",
+                  text: pullRequestReviewPrompt,
+                  turn: { id: "turn-inner-1", rootTurnId: null, status: "in_progress" },
+                  createdAt: 1_001,
+                },
+              ],
+              pagination: { supportsPagination: false, hasPreviousPage: false },
+            },
+          };
+        }
+        // Second read simulates a mid-review replay that still reports rootTurnId: null.
+        return {
+          backend: backend ?? "codex",
+          fetchedAt: Date.now(),
+          threadId,
+          threadStatus: "active",
+          replay: {
+            entries: [
+              {
+                type: "review",
+                id: "item-entered",
+                review: pullRequestReviewPrompt,
+                displayText: `Review ${pullRequestReviewUrl}`,
+                turn: { id: "turn-outer", status: "in_progress" },
+                createdAt: 1_000,
+              },
+              {
+                type: "message",
+                id: "item-hydrated-null",
+                role: "user",
+                text: pullRequestReviewPrompt,
+                turn: { id: "turn-inner-1", rootTurnId: null, status: "in_progress" },
+                createdAt: 1_001,
+              },
+              {
+                type: "message",
+                id: "item-live-null",
+                role: "user",
+                text: pullRequestReviewPrompt,
+                turn: { id: "turn-inner-1", rootTurnId: null, status: "in_progress" },
+                createdAt: 1_002,
+              },
+            ],
+            messages: [
+              {
+                id: "item-hydrated-null",
+                role: "user",
+                text: pullRequestReviewPrompt,
+                turn: { id: "turn-inner-1", rootTurnId: null, status: "in_progress" },
+                createdAt: 1_001,
+              },
+              {
+                id: "item-live-null",
+                role: "user",
+                text: pullRequestReviewPrompt,
+                turn: { id: "turn-inner-1", rootTurnId: null, status: "in_progress" },
+                createdAt: 1_002,
+              },
+            ],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+        };
+      },
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-null-root", updatedAt: 1_000 }),
+      }),
+    );
+
+    await waitForThreadHydration(result, "thread-null-root");
+
+    // 1. turn/started with string rootTurnId backfills the entry hydrated with rootTurnId: null.
+    // 2. Subsequent item/completed with explicit rootTurnId: null still inherits the known string rootTurnId.
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-null-root",
+            turnId: "turn-inner-1",
+            turn: { id: "turn-inner-1", rootTurnId: "turn-outer", status: "inProgress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-null-root",
+            turnId: "turn-inner-1",
+            rootTurnId: null,
+            item: {
+              id: "item-live-null",
+              type: "userMessage",
+              content: [{ type: "text", text: pullRequestReviewPrompt }],
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries.some((entry) => entry.id === "item-hydrated-null")).toBe(false);
+    expect(result.current.entries.some((entry) => entry.id === "item-live-null")).toBe(false);
+
+    // 3. Mid-review hydration returning rootTurnId: null carries forward the live string rootTurnId.
+    act(() => {
+      result.current.reload();
+    });
+    await waitFor(() => {
+      expect(readCount).toBe(2);
+    });
+
+    expect(result.current.entries.some((entry) => entry.id === "item-hydrated-null")).toBe(false);
+    expect(result.current.entries.some((entry) => entry.id === "item-live-null")).toBe(false);
   });
 
   it("keeps a live review authoritative across a transient idle hydration", async () => {

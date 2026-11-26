@@ -3156,6 +3156,11 @@ export type AppServerNotification =
         threadId: string;
         /** False only for producer-proven detail/accounting changes. */
         navigationChanged?: false;
+        /** Owner-correlated inner turn -> outer review root turn ID for inline native Codex reviews. */
+        correlatedTurn?: {
+          turnId: string;
+          rootTurnId: string;
+        };
         subAgents?: ThreadSubAgentSummary[];
       };
     }

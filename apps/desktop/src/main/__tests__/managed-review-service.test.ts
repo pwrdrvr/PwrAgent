@@ -601,5 +601,89 @@ describe("ManagedReviewService pending review starts", () => {
       },
     };
     expect(harness.service.withReviewRuntimeMetadata(unrelatedPrompt)).toBe(unrelatedPrompt);
+
+    const completedEvent: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: THREAD,
+          turnId: "inner-review-turn",
+          turn: { id: "inner-review-turn", rootTurnId: null, status: "interrupted", output: [] },
+        },
+      },
+    };
+    const decoratedCompleted = harness.service.withReviewRuntimeMetadata(completedEvent);
+    expect(decoratedCompleted.notification).toMatchObject({
+      method: "turn/completed",
+      params: {
+        threadId: THREAD,
+        turnId: "inner-review-turn",
+        turn: { id: "inner-review-turn", rootTurnId: REVIEW_TURN },
+      },
+    });
+  });
+
+  it("propagates inner->outer inline Codex review correlation when inner turn starts before review/start resolves and on inner terminal", async () => {
+    const harness = createReviewHarness({
+      onStep: (step) => {
+        if (step === "startReview") {
+          harness.activity.registerTurn({
+            backend: "codex",
+            threadId: THREAD,
+            turnId: "inner-early-turn",
+          });
+        }
+      },
+    });
+
+    await harness.service.startReview(REVIEW_REQUEST);
+
+    expect(harness.events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: THREAD,
+          correlatedTurn: {
+            turnId: "inner-early-turn",
+            rootTurnId: REVIEW_TURN,
+          },
+        },
+      },
+    });
+
+    const delivery = {
+      event: {
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: THREAD,
+            turnId: "inner-early-turn",
+            turn: {
+              id: "inner-early-turn",
+              status: "interrupted",
+              output: [],
+            },
+          },
+        },
+      } as AgentEvent,
+    };
+    await harness.service.turnEventObservers().terminal.onTurnTerminal?.(delivery as never);
+    expect(delivery.event).toMatchObject({
+      relatedReviewTurnId: REVIEW_TURN,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: THREAD,
+          turnId: "inner-early-turn",
+          turn: {
+            id: "inner-early-turn",
+            rootTurnId: REVIEW_TURN,
+          },
+        },
+      },
+    });
   });
 });

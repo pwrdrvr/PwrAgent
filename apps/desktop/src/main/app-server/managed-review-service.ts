@@ -256,8 +256,31 @@ export class ManagedReviewService {
         buildActiveTurnModeKey(managedReview.reviewThreadId, managedReview.turnId),
       );
       const relatedReviewTurnId = turnId === managedReview.turnId ? interruptTurnId : managedReview.turnId;
-      if (relatedReviewTurnId && relatedReviewTurnId !== turnId) {
-        delivery.event = { ...event, relatedReviewTurnId };
+      const shouldAttachRootTurnId =
+        Boolean(turnId)
+        && turnId !== managedReview.turnId
+        && typeof notification.params.turn.rootTurnId !== "string";
+      if ((relatedReviewTurnId && relatedReviewTurnId !== turnId) || shouldAttachRootTurnId) {
+        delivery.event = {
+          ...event,
+          ...(relatedReviewTurnId && relatedReviewTurnId !== turnId
+            ? { relatedReviewTurnId }
+            : {}),
+          ...(shouldAttachRootTurnId
+            ? {
+                notification: {
+                  ...notification,
+                  params: {
+                    ...notification.params,
+                    turn: {
+                      ...notification.params.turn,
+                      rootTurnId: managedReview.turnId,
+                    },
+                  },
+                },
+              }
+            : {}),
+        } as AgentEvent;
       }
     }
     if (!turnId) return;
@@ -1712,12 +1735,23 @@ export class ManagedReviewService {
     // wrote, so a write without a status keeps a terminal's.
     await this.reviewCardWrites.run(reviewKey, async () => await this.writeReviewSubAgentCard(record, patch));
     this.host().invalidateThreadListCache(record.parentBackend);
+    const correlatedTurnId =
+      record.mode === "native"
+      && record.backend === "codex"
+      && record.reviewThreadId === record.parentThreadId
+        ? this.context.turnState.reviewInterrupt(
+            buildActiveTurnModeKey(record.reviewThreadId, record.turnId),
+          )
+        : undefined;
     await this.context.emit({
       backend: record.parentBackend,
       notification: {
         method: "thread/subAgents/updated",
         params: {
           threadId: record.parentThreadId,
+          ...(correlatedTurnId && correlatedTurnId !== record.turnId
+            ? { correlatedTurn: { turnId: correlatedTurnId, rootTurnId: record.turnId } }
+            : {}),
         },
       },
     });
@@ -2607,7 +2641,15 @@ export class ManagedReviewService {
    */
   withReviewRuntimeMetadata(event: AgentEvent): AgentEvent {
     const method = event.notification.method;
-    if (method === "turn/started" && event.backend === "codex") {
+    if (
+      event.backend === "codex"
+      && (
+        method === "turn/started"
+        || method === "turn/completed"
+        || method === "turn/failed"
+        || method === "turn/cancelled"
+      )
+    ) {
       const params = readRecord(event.notification.params);
       const threadId = readNonEmptyString(params?.threadId);
       const turn = readRecord(params?.turn);
