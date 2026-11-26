@@ -88,7 +88,11 @@ import {
   type AcpUsageEnvelope,
 } from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
-import { ANTIGRAVITY_CALL_PWRAGENT_TOOL, readPwrAgentCallTarget } from "../agent-tools/antigravity-mcp-catalog.js";
+import {
+  inspectAcpMcpPermission,
+  resolveAntigravityMcpToolTarget,
+  type AcpMcpPermissionInspection,
+} from "./acp-mcp-permission.js";
 import { isManagedReviewLedgerToolName } from "../agent-tools/pwragent-managed-review-ledger-tools.js";
 import { getMainLogger } from "../log.js";
 import {
@@ -280,22 +284,7 @@ function toAcpMcpServerWireConfigs(
  * case, so a server matching only after folding still counts as a possible
  * source.
  */
-export function resolveAntigravityMcpToolTarget(
-  reportedName: string,
-  serverNames: readonly string[],
-): { serverName: string; toolName: string } | undefined {
-  const fold = (value: string) => value.replace(/-/gu, "_").toLowerCase();
-  const foldedName = fold(reportedName);
-  const sources = [...new Set(serverNames)].filter((serverName) => {
-    const prefix = `mcp_${fold(serverName)}_`;
-    return foldedName.length > prefix.length && foldedName.startsWith(prefix);
-  });
-  if (sources.length !== 1) return undefined;
-  const serverName = sources[0]!;
-  const prefix = `mcp_${serverName}_`;
-  if (!reportedName.startsWith(prefix)) return undefined;
-  return { serverName, toolName: reportedName.slice(prefix.length) };
-}
+export { resolveAntigravityMcpToolTarget };
 
 /**
  * The choice PwrAgent adds to an Antigravity MCP tool approval when the agent
@@ -2791,24 +2780,33 @@ export class AcpAgentClient {
     }
 
     const protocolSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
-    const session = protocolSessionId
-      ? this.options.store.getSession(this.options.backendId, this.appSessionIdFor(protocolSessionId))
+    const appSessionId = protocolSessionId ? this.appSessionIdFor(protocolSessionId) : undefined;
+    const session = appSessionId
+      ? this.options.store.getSession(this.options.backendId, appSessionId)
       : undefined;
     if (session?.approvalPolicy === "deny-all") {
       return cancelledPermissionOutcome();
     }
 
-    const reportedTool = this.antigravityMcpToolName(asRecord(params.toolCall) ?? {});
+    const toolCall = asRecord(params.toolCall) ?? {};
+    const servers = appSessionId ? this.sessionMcpServers.get(appSessionId) : undefined;
+    const mcpInspection = inspectAcpMcpPermission({
+      backendId: this.options.backendId,
+      requesterName: this.approvalRequesterName,
+      toolCall,
+      servers,
+    });
     let permissionOptions = readPermissionOptions(params.options);
-    if (reportedTool === ANTIGRAVITY_CALL_PWRAGENT_TOOL) {
-      // An approval that applies to the dispatcher name would cover unrelated
-      // targets. Leave persistent MCP approval to tools with a fixed identity.
+    if (mcpInspection?.isWrapper) {
+      // Never send native `allow_always` back to the backend for a wrapper
+      // dispatcher (`call_pwragent_tool`, `call_mcp_tool`, Grok `use_tool`),
+      // because the backend would permanently approve unrelated wrapped calls.
       permissionOptions = permissionOptions.filter((option) => option.kind !== "allow_always");
     }
-    const allowedWithoutOperator = protocolSessionId
+    const allowedWithoutOperator = appSessionId
       ? await this.permissionAnsweredWithoutOperator(
-        this.appSessionIdFor(protocolSessionId),
-        params,
+        appSessionId,
+        mcpInspection,
         permissionOptions,
       )
       : undefined;
@@ -2816,18 +2814,18 @@ export class AcpAgentClient {
       return { outcome: { outcome: "selected", optionId: allowedWithoutOperator } };
     }
 
-    const request = this.normalizePermissionRequest(params, permissionOptions, id);
+    const request = this.normalizePermissionRequest(params, permissionOptions, mcpInspection, id);
     if (!request || !this.options.onRequest) {
       return cancelledPermissionOutcome();
     }
 
     const sessionId = request.params.threadId;
     const response = await this.askOperator(sessionId, request);
-    const toolName = request.params.acpMcpToolName;
+    const grantKey = mcpInspection?.grantKey;
     const allowOnce = allowOncePermissionOptionId(permissionOptions);
-    if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
+    if (grantKey && allowOnce && isThreadToolGrantResponse(response, request)) {
       const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
-      grants.add(toolName);
+      grants.add(grantKey);
       this.sessionMcpToolGrants.set(sessionId, grants);
       return { outcome: { outcome: "selected", optionId: allowOnce } };
     }
@@ -2935,6 +2933,7 @@ export class AcpAgentClient {
   private normalizePermissionRequest(
     params: Record<string, unknown>,
     permissionOptions: AcpPermissionOption[],
+    mcpInspection: AcpMcpPermissionInspection | undefined,
     id?: JsonRpcId,
   ): AppServerPendingRequestNotification | undefined {
     const protocolSessionId =
@@ -2956,11 +2955,12 @@ export class AcpAgentClient {
           : undefined;
     const requestId = id == null ? toolCallId ?? `acp:${this.now()}` : String(id);
     const activeTurn = this.activeTurns.get(sessionId);
-    const acpMcpToolName = this.antigravityMcpToolName(toolCall);
-    const prompt = acpMcpToolName
-      ? mcpPermissionPrompt(this.approvalRequesterName, acpMcpToolName, toolCall)
+    const acpMcpToolName = mcpInspection?.displayToolName;
+    const acpMcpToolDetail = mcpInspection?.displayDetail;
+    const prompt = mcpInspection
+      ? mcpInspection.prompt
       : permissionPrompt(this.approvalRequesterName, title, toolCall);
-    const command = acpMcpToolName ? undefined : permissionCommand(title, toolCall);
+    const command = mcpInspection ? undefined : permissionCommand(title, toolCall);
 
     return {
       method: "item/commandExecution/requestApproval",
@@ -2970,61 +2970,51 @@ export class AcpAgentClient {
         requestId,
         prompt,
         reason: prompt,
-        ...(acpMcpToolName ? { acpMcpToolName } : { command, displayCommand: command }),
+        ...(acpMcpToolName
+          ? {
+              acpMcpToolName,
+              ...(acpMcpToolDetail ? { acpMcpToolDetail } : {}),
+            }
+          : { command, displayCommand: command }),
         acpMethod: "session/request_permission",
         acpToolCallId: toolCallId,
         acpToolKind: typeof toolCall.kind === "string" ? toolCall.kind : undefined,
-        acpPermissionOptions: acpMcpToolName && acpMcpToolName !== ANTIGRAVITY_CALL_PWRAGENT_TOOL
-          ? withThreadToolGrantOption(permissionOptions)
+        acpPermissionOptions: mcpInspection?.grantKey
+          ? withThreadToolGrantOption(permissionOptions, mcpInspection.grantLabel)
           : permissionOptions,
       },
     };
   }
 
   /**
-   * Antigravity reports MCP invocations as kind "other" with a flattened
-   * tool name. The name is as reported, so use it to display or to match a
-   * grant the operator made for that exact name, never to infer a server.
-   */
-  private antigravityMcpToolName(toolCall: Record<string, unknown>): string | undefined {
-    return this.options.backendId === "acp:antigravity"
-      && toolCall.kind === "other"
-      && typeof toolCall.name === "string"
-      && /^mcp_[A-Za-z0-9_-]+$/u.test(toolCall.name)
-      ? toolCall.name
-      : undefined;
-  }
-
-  /**
    * The agent's `allow_once` option when the operator need not be asked: the
-   * operator already allowed this MCP tool for the thread, or the call is to
-   * one of PwrAgent's own tools that PwrAgent approves itself or that only
-   * reads. A name that more than one session server could have produced
-   * still asks.
+   * operator already allowed this MCP tool target for the conversation, or the
+   * call is to one of PwrAgent's own tools that PwrAgent approves itself or
+   * that only reads. A name that more than one session server could have
+   * produced still asks.
    */
   private async permissionAnsweredWithoutOperator(
     sessionId: string,
-    params: Record<string, unknown>,
+    mcpInspection: AcpMcpPermissionInspection | undefined,
     options: AcpPermissionOption[],
   ): Promise<string | undefined> {
-    const toolCall = asRecord(params.toolCall) ?? {};
-    const toolName = this.antigravityMcpToolName(toolCall);
     const allowOnce = allowOncePermissionOptionId(options);
-    if (!toolName || !allowOnce) return undefined;
+    if (!mcpInspection || !allowOnce) return undefined;
     const servers = this.sessionMcpServers.get(sessionId);
-    if (!servers?.registeredNames) return undefined;
-    if (this.sessionMcpToolGrants.get(sessionId)?.has(toolName)) return allowOnce;
-    if (!servers.hostApprovesToolCall) return undefined;
-    const target = resolveAntigravityMcpToolTarget(toolName, servers.agentNames);
-    if (!target || !servers.registeredNames.has(target.serverName)) return undefined;
+    if (!servers?.registeredNames || servers.registeredNames.size === 0) return undefined;
+    if (mcpInspection.grantKey && this.sessionMcpToolGrants.get(sessionId)?.has(mcpInspection.grantKey)) {
+      return allowOnce;
+    }
+    const target = mcpInspection.hostApprovalTarget;
+    if (!target || !servers.hostApprovesToolCall) return undefined;
     try {
-      return await servers.hostApprovesToolCall(target.serverName, target.toolName, toolCall.rawInput)
+      return await servers.hostApprovesToolCall(target.serverName, target.toolName, target.args)
         ? allowOnce
         : undefined;
     } catch (error) {
       acpClientLog.warn("could not check ACP MCP tool approval; asking the operator", {
         sessionId,
-        toolName,
+        toolName: mcpInspection.displayToolName,
         error: error instanceof Error ? error.message : String(error),
       });
       return undefined;
@@ -4262,27 +4252,6 @@ function isApprovalPromptText(text: string): boolean {
   return /^Requesting approval to Running:\s*/imu.test(text);
 }
 
-function mcpPermissionPrompt(
-  requesterName: string,
-  toolName: string,
-  toolCall: Record<string, unknown>,
-): string {
-  const invocation = toolName === ANTIGRAVITY_CALL_PWRAGENT_TOOL
-    ? readPwrAgentCallTarget(toolCall.rawInput)
-    : undefined;
-  const title = readToolCallText(toolCall.title);
-  const content = readToolCallText(toolCall.content);
-  const details = [title, content].filter((text) =>
-    text && text !== toolName && text !== `Run ${toolName}`,
-  );
-  return [
-    invocation
-      ? `${requesterName} wants to use the PwrAgent tool ${invocation.name}.`
-      : `${requesterName} wants to use an MCP tool.`,
-    ...new Set(details),
-  ].join("\n\n");
-}
-
 function readToolCallText(value: unknown): string | undefined {
   return readAcpToolText(value);
 }
@@ -4322,14 +4291,17 @@ function allowOncePermissionOptionId(options: AcpPermissionOption[]): string | u
   return options.find((option) => option.kind === "allow_once")?.optionId;
 }
 
-/** Offers "Allow for this thread" when the agent can allow once but never always. */
-function withThreadToolGrantOption(options: AcpPermissionOption[]): AcpPermissionOption[] {
+/** Offers a conversation-scoped grant when the agent can allow once but never always. */
+function withThreadToolGrantOption(
+  options: AcpPermissionOption[],
+  label = "Allow for this conversation",
+): AcpPermissionOption[] {
   if (!allowOncePermissionOptionId(options) || options.some((option) => option.kind === "allow_always")) {
     return options;
   }
   const grant: AcpPermissionOption = {
     optionId: ACP_THREAD_TOOL_GRANT_OPTION_ID,
-    name: "Allow for this thread",
+    name: label,
     kind: "allow_always",
   };
   const firstReject = options.findIndex((option) => option.kind?.startsWith("reject"));

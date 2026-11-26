@@ -7,6 +7,12 @@ import {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { FORGE_PR_TOOL_OPERATIONS, FORGE_PR_WRITE_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
 import { FORGE_READ_OPERATIONS } from "../pr-status/forge-tool-contract";
+import { formatConversationGrantLabel } from "../acp/acp-mcp-permission";
+import {
+  formatRedactedToolArguments,
+  redactSecretStringValue,
+  redactToolArgumentsForDisplay,
+} from "../util/redact-mcp-tool-args";
 import { CLAUDE_ARTIFACT_TOOLS } from "./claude-tool-activity";
 
 /** PwrAgent's MCP gateway invocation tool, as Claude names it. */
@@ -114,6 +120,86 @@ function displayInput(toolName: string, input: Record<string, unknown>): Record<
   return Object.fromEntries(Object.entries(input).filter(([key]) => !key.startsWith("__")));
 }
 
+type ClaudeMcpToolApproval = {
+  acpMcpToolName: string;
+  acpMcpToolDetail?: string;
+  prompt: string;
+  reason: string;
+  grantKey?: string;
+  grantLabel?: string;
+};
+
+function inspectClaudeMcpToolApproval(
+  toolName: string,
+  input: Record<string, unknown>,
+  context: Parameters<CanUseTool>[2],
+  allowConversationGrant: boolean,
+): ClaudeMcpToolApproval | undefined {
+  const match = /^mcp__(.+?)__(.+)$/u.exec(toolName);
+  if (!match?.[1] || !match[2]) {
+    return undefined;
+  }
+  const serverName = match[1];
+  const innerTool = match[2];
+  const isVerifiedPwrAgent =
+    context.mcpServer?.source === "sdk" && context.mcpServer.name === PWRAGENT_TOOL_NAMESPACE;
+
+  if (toolName === CLAUDE_MCP_GATEWAY_TOOL) {
+    const targetTool =
+      isVerifiedPwrAgent && typeof input.toolName === "string" && input.toolName.trim()
+        ? input.toolName.trim()
+        : undefined;
+    const connectionId =
+      isVerifiedPwrAgent && typeof input.connectionId === "string" && input.connectionId.trim()
+        ? input.connectionId.trim()
+        : undefined;
+    const acpMcpToolName = targetTool
+      ? (connectionId ? `${connectionId} / ${targetTool}` : targetTool)
+      : toolName;
+    const defaultPrompt = targetTool
+      ? (connectionId
+          ? `Claude wants to use the MCP tool ${targetTool} on ${connectionId}.`
+          : `Claude wants to use the MCP tool ${targetTool}.`)
+      : `Claude requests permission to use ${toolName}.`;
+    const prompt = context.decisionReason ? redactSecretStringValue(context.decisionReason) : defaultPrompt;
+    const detailSource = targetTool ? input.arguments : displayInput(toolName, input);
+    // Never offer a conversation grant on `call_mcp_tool`: the MCP gateway
+    // owns per-upstream-tool and per-server conversation grants.
+    return {
+      acpMcpToolName,
+      ...(formatRedactedToolArguments(detailSource) ? { acpMcpToolDetail: formatRedactedToolArguments(detailSource) } : {}),
+      prompt,
+      reason: prompt,
+    };
+  }
+
+  const isPwrAgentTool = serverName === PWRAGENT_TOOL_NAMESPACE && isVerifiedPwrAgent;
+  const isUntrustedPwrAgentNamesake =
+    serverName === PWRAGENT_TOOL_NAMESPACE && !isVerifiedPwrAgent;
+  const acpMcpToolName = isUntrustedPwrAgentNamesake
+    ? toolName
+    : isPwrAgentTool
+      ? innerTool
+      : `${serverName} / ${innerTool}`;
+  const defaultPrompt = isUntrustedPwrAgentNamesake
+    ? `Claude requests permission to use ${toolName}.`
+    : isPwrAgentTool
+      ? `Claude wants to use the PwrAgent tool ${innerTool}.`
+      : `Claude wants to use the MCP tool ${innerTool} on ${serverName}.`;
+  const prompt = context.decisionReason ? redactSecretStringValue(context.decisionReason) : defaultPrompt;
+  const detail = formatRedactedToolArguments(displayInput(toolName, input));
+  const grantKey = allowConversationGrant && !isUntrustedPwrAgentNamesake
+    ? JSON.stringify([context.mcpServer?.source ?? "", context.mcpServer?.name ?? "", toolName])
+    : undefined;
+  return {
+    acpMcpToolName,
+    ...(detail ? { acpMcpToolDetail: detail } : {}),
+    prompt,
+    reason: prompt,
+    ...(grantKey ? { grantKey, grantLabel: formatConversationGrantLabel(innerTool) } : {}),
+  };
+}
+
 /**
  * What an approval card says. Claude Code writes its own question for an
  * artifact request (a publish to claude.ai, a public share, a delete), so
@@ -127,10 +213,11 @@ function claudeApprovalText(
     ? context.decisionReason ?? context.description ?? context.title
     : undefined;
   if (question) return { prompt: question, reason: question };
+  const redactedInput = redactToolArgumentsForDisplay(displayInput(toolName, input));
   return {
     command: toolName === "Bash"
       ? String(input.command ?? "")
-      : `${toolName}: ${JSON.stringify(displayInput(toolName, input))}`,
+      : `${toolName}: ${JSON.stringify(redactedInput)}`,
     reason: context.decisionReason ?? `Claude requests permission to use ${toolName}.`,
   };
 }
@@ -150,9 +237,28 @@ export function createClaudePermissionHandler(options: {
    * process's permission mode.
    */
   planTurn?: () => boolean;
+  /**
+   * Key representing the active MCP server configuration for this live session.
+   * When it changes (for example after `query.setMcpServers`), in-memory
+   * conversation MCP grants are cleared so grants cannot carry over to newly
+   * configured servers under the same name.
+   */
+  mcpKey?: () => string | undefined;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
   cancelRequest: (requestId: string, turnId: string) => Promise<void>;
 }): CanUseTool {
+  // In-memory conversation-scoped MCP tool grants. Never written to Claude CLI
+  // permission rules, and bypassed whenever a plan turn or operator ask rule applies.
+  const sessionMcpGrants = new Set<string>();
+  let lastMcpKey = options.mcpKey?.();
+  const syncMcpGrantGeneration = (): string | undefined => {
+    const currentMcpKey = options.mcpKey?.();
+    if (currentMcpKey !== lastMcpKey) {
+      sessionMcpGrants.clear();
+      lastMcpKey = currentMcpKey;
+    }
+    return currentMcpKey;
+  };
   return async (toolName, input, context) => {
     if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
     if (toolName === CLAUDE_EXIT_PLAN_TOOL && options.planTurn?.()) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
@@ -164,8 +270,23 @@ export function createClaudePermissionHandler(options: {
     if (toolName === CLAUDE_MCP_GATEWAY_TOOL && options.planTurn?.()
       && context.mcpServer?.source === "sdk" && context.mcpServer.name === PWRAGENT_TOOL_NAMESPACE
       && !context.matchedAskRule) return { behavior: "allow", updatedInput: input };
+    const mcpKeyAtStart = syncMcpGrantGeneration();
+    const allowConversationGrant = !options.planTurn?.() && !context.matchedAskRule;
+    const mcpApproval = inspectClaudeMcpToolApproval(toolName, input, context, allowConversationGrant);
+    if (mcpApproval?.grantKey && sessionMcpGrants.has(mcpApproval.grantKey)) {
+      return { behavior: "allow", updatedInput: input };
+    }
     const requestId = randomUUID();
     const turnId = options.turnId();
+    const redactedArguments = redactToolArgumentsForDisplay(displayInput(toolName, input));
+    const availableDecisions: unknown[] = mcpApproval?.grantKey
+      ? [
+          "accept",
+          { decision: "accept_for_session", label: mcpApproval.grantLabel ?? "Allow for this conversation" },
+          "decline",
+          "cancel",
+        ]
+      : ["accept", "decline", "cancel"];
     const request: AppServerPendingRequestNotification = toolName === "AskUserQuestion"
       ? {
           method: "item/tool/requestUserInput",
@@ -195,9 +316,16 @@ export function createClaudePermissionHandler(options: {
             requestId,
             itemId: context.toolUseID,
             toolName,
-            arguments: displayInput(toolName, input),
-            ...claudeApprovalText(toolName, input, context),
-            availableDecisions: ["accept", "decline", "cancel"],
+            arguments: redactedArguments,
+            ...(mcpApproval
+              ? {
+                  acpMcpToolName: mcpApproval.acpMcpToolName,
+                  ...(mcpApproval.acpMcpToolDetail ? { acpMcpToolDetail: mcpApproval.acpMcpToolDetail } : {}),
+                  prompt: mcpApproval.prompt,
+                  reason: mcpApproval.reason,
+                }
+              : claudeApprovalText(toolName, input, context)),
+            availableDecisions,
           },
         };
     let abort: (() => void) | undefined;
@@ -229,8 +357,14 @@ export function createClaudePermissionHandler(options: {
         if (Object.keys(answers).length) return { behavior: "allow", updatedInput: { ...input, answers } };
       }
       const decision = "decision" in response ? response.decision : undefined;
-      // Only explicitly offered one-shot approval can authorize execution.
+      // Only explicitly offered approval can authorize execution.
       // Never turn a generic UI response into a saved CLI permission rule.
+      if (mcpApproval?.grantKey && decision === "accept_for_session") {
+        if (syncMcpGrantGeneration() === mcpKeyAtStart) {
+          sessionMcpGrants.add(mcpApproval.grantKey);
+        }
+        return { behavior: "allow", updatedInput: input };
+      }
       if (decision === "accept" || decision === "approve") {
         return { behavior: "allow", updatedInput: input };
       }
