@@ -42,7 +42,8 @@ export type ManagedReviewCandidateTurnKey = {
 
 type ReviewChild = Pick<ManagedReviewCandidateTurnKey, "backend" | "threadId">;
 
-type ReviewWorkspace = { cwd?: string; worktreeRoot?: string };
+export type ManagedReviewWorkspace = { cwd?: string; worktreeRoot?: string };
+type ReviewWorkspace = ManagedReviewWorkspace;
 
 export type ManagedReviewCandidate = {
   id: string;
@@ -776,4 +777,63 @@ export class ManagedReviewCandidateLedger {
   get activeTurnCount(): number {
     return this.turns.size;
   }
+}
+
+/**
+ * Synthesize a structured review artifact from the `keep` entries of a turn's
+ * in-memory candidate ledger when no valid final review report was submitted
+ * or parsed (for example, an absent, truncated, or malformed final report).
+ * Returns `undefined` when no kept candidate can be resolved to an absolute
+ * file path.
+ */
+export function buildReviewOutputFromCandidateLedger(
+  candidates: readonly ManagedReviewCandidate[],
+  workspace?: ManagedReviewWorkspace,
+): AppServerReviewOutput | undefined {
+  const paths = reviewWorkspacePaths(workspace);
+  const kept = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(({ candidate }) => candidate.disposition === "keep");
+  if (kept.length === 0) {
+    return undefined;
+  }
+  kept.sort((a, b) => {
+    const prioDiff = (a.candidate.priority ?? 3) - (b.candidate.priority ?? 3);
+    return prioDiff !== 0 ? prioDiff : a.index - b.index;
+  });
+
+  const findings: AppServerReviewFinding[] = [];
+  for (const { candidate } of kept) {
+    const absoluteFilePath = resolveLedgerFindingPath(
+      candidate.file,
+      paths,
+      workspace?.worktreeRoot,
+    );
+    if (!absoluteFilePath) {
+      continue;
+    }
+    findings.push({
+      title: candidate.summary,
+      body: candidate.mechanism,
+      confidence_score: candidate.confidenceScore ?? 0,
+      priority: candidate.priority ?? 3,
+      ...(candidate.category ? { category: candidate.category } : {}),
+      code_location: {
+        absolute_file_path: absoluteFilePath,
+        line_range: {
+          start: candidate.startLine,
+          end: Math.max(candidate.startLine, candidate.endLine),
+        },
+      },
+    });
+  }
+  if (findings.length === 0) {
+    return undefined;
+  }
+
+  return {
+    findings,
+    overall_correctness: "patch is incorrect",
+    overall_explanation: `Recovered ${findings.length} kept ${findings.length === 1 ? "finding" : "findings"} from the managed review candidate ledger because no valid final review report was submitted or parsed.`,
+  };
 }

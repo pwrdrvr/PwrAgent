@@ -283,8 +283,14 @@ export function transition(
               if (!matches(terminal)) return terminal;
               // The tool ledger is already cleared on terminal redelivery.
               if (event.terminal.method === "turn/completed"
-                && !event.terminal.submittedOutput && terminal.submittedOutput) {
-                return { ...event.terminal, submittedOutput: terminal.submittedOutput };
+                && (terminal.submittedOutput || terminal.candidateLedgerSnapshot)) {
+                const submittedOutput = event.terminal.submittedOutput ?? terminal.submittedOutput;
+                const candidateLedgerSnapshot = event.terminal.candidateLedgerSnapshot ?? terminal.candidateLedgerSnapshot;
+                return {
+                  ...event.terminal,
+                  ...(submittedOutput ? { submittedOutput } : {}),
+                  ...(candidateLedgerSnapshot ? { candidateLedgerSnapshot } : {}),
+                };
               }
               return event.terminal;
             })

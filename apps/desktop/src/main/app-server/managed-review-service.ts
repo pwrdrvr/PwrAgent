@@ -47,7 +47,7 @@ import {
   prefersClaudeCodeReview,
   type NamedReviewPullRequest,
 } from "../../shared/review-command";
-import { formatReviewOutputText, parseReviewOutputText } from "../../shared/review-output";
+import { formatReviewOutputText, parsePlainReview, parseReviewOutputText } from "../../shared/review-output";
 import type { CodexPwrdrvrTokenMiserActivation } from "../codex-app-server/desktop-client";
 import { getMainLogger } from "../log";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
@@ -76,7 +76,11 @@ import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
 import { buildManagedReviewPrompt, managedReviewAcpRuntime } from "./managed-review";
-import { ManagedReviewCandidateLedger } from "./managed-review-candidate-ledger";
+import {
+  buildReviewOutputFromCandidateLedger,
+  ManagedReviewCandidateLedger,
+  type ManagedReviewCandidateListResult,
+} from "./managed-review-candidate-ledger";
 import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
 import { localMemberRole } from "../member-containment";
 import { prepareClaudeCodeReview, validateClaudeCodeReview } from "./claude-code-review-start";
@@ -299,17 +303,27 @@ export class ManagedReviewService {
     record: ReviewSubAgentRecord | undefined,
     arrivedBeforeStart = false,
   ): Promise<void> {
-    const ledgerSummary = record?.mode === "managed" ? this.candidateLedger.snapshot(terminal) : undefined;
+    const ledgerSnapshot = terminal.candidateLedgerSnapshot
+      ?? (record?.mode === "managed" || (!record && terminal.method === "turn/completed")
+        ? this.candidateLedger.list(terminal)
+        : undefined);
     const submittedOutput = terminal.method === "turn/completed"
       ? terminal.submittedOutput ?? this.candidateLedger.submittedOutput(terminal)
       : undefined;
-    // Capture output before clearing the ledger. Terminal evidence also
-    // carries it when the child finished before its start acknowledgement.
-    const evidence = submittedOutput ? { ...terminal, submittedOutput } : terminal;
+    // An early completion must carry its candidates until the start
+    // acknowledgement supplies the review record and checkout root.
+    const earlyCandidates = !record && ledgerSnapshot?.total ? ledgerSnapshot : undefined;
+    const evidence = submittedOutput || earlyCandidates
+      ? {
+          ...terminal,
+          ...(submittedOutput ? { submittedOutput } : {}),
+          ...(earlyCandidates ? { candidateLedgerSnapshot: earlyCandidates } : {}),
+        }
+      : terminal;
     this.candidateLedger.clearTurn(terminal);
     // Keep suppression through publication. The live turn itself is removed
     // synchronously by completeReviewSubAgent, so redelivery cannot settle it twice.
-    if (terminal.method === "turn/completed" && record && ledgerSummary) {
+    if (terminal.method === "turn/completed" && record?.mode === "managed") {
       this.publishingReviewResults.add(record);
     }
     try {
@@ -321,9 +335,9 @@ export class ManagedReviewService {
           backend: terminal.backend, threadId: terminal.threadId, turnId: terminal.turnId, error: String(error),
         });
       });
-      if (record && ledgerSummary) {
+      if (record?.mode === "managed" && ledgerSnapshot) {
         if (arrivedBeforeStart) await this.emitManagedReviewStarted(record);
-        await this.publishManagedReviewTerminal({ ...evidence, record }, ledgerSummary);
+        await this.publishManagedReviewTerminal({ ...evidence, record }, ledgerSnapshot);
       }
     } finally {
       if (record) {
@@ -690,6 +704,7 @@ export class ManagedReviewService {
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
+    let checkoutRoot: string | undefined;
     let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let reviewContext: AppServerReviewContext | undefined;
     let tokenMiserEnabled = false;
@@ -775,14 +790,19 @@ export class ManagedReviewService {
         executionTarget: codexEnvironmentRuntime?.executionTarget,
         target: params.target,
       });
-      reviewContext = await this.resolveReviewContext({
-        backend: params.backend,
-        cwd,
-        executionTarget: codexEnvironmentRuntime?.executionTarget,
-        overlay,
-        target: params.target,
-        threadId: params.threadId,
-      });
+      [reviewContext, checkoutRoot] = await Promise.all([
+        this.resolveReviewContext({
+          backend: params.backend,
+          cwd,
+          executionTarget: codexEnvironmentRuntime?.executionTarget,
+          overlay,
+          target: params.target,
+          threadId: params.threadId,
+        }),
+        managedMode && (reviewBackendDiffers || codexEnvironmentRuntime?.executionTarget !== "remote")
+          ? resolveLocalReviewWorktreeRoot(cwd)
+          : undefined,
+      ]);
       // A review on another provider cannot inherit the parent thread's model
       // settings — that model belongs to a different catalog. Fall back to the
       // review backend's own defaults instead of carrying gpt-5.6-sol onto a
@@ -857,6 +877,7 @@ export class ManagedReviewService {
             agentAntigravityAccess,
             turnAttribution,
             backend: reviewBackend,
+            checkoutRoot,
             cwd,
             // The parent thread's persisted Codex environment only describes
             // its own provider's runtime; a cross-provider review must not
@@ -938,6 +959,7 @@ export class ManagedReviewService {
     }
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
       backend: reviewBackend,
+      ...(checkoutRoot ? { checkoutRoot } : {}),
       createdAt: Date.now(),
       displayText: reviewTaskLabel(params.target),
       ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
@@ -1029,6 +1051,7 @@ export class ManagedReviewService {
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
     /** Backend that runs the review — the reviewer override when set. */
     backend: AppServerBackendKind;
+    checkoutRoot?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     cwd?: string;
     modelSettings: ModelSettings;
@@ -1127,9 +1150,6 @@ export class ManagedReviewService {
       ? buildCodexTokenMiserDynamicToolSpecs(this.host().tokenMiserStore, this.host().tokenMiserService?.focused)
       : [];
     const candidateLedger = localMemberRole() !== "contained";
-    const worktreeRoot = candidateLedger && params.codexEnvironmentRuntime?.executionTarget !== "remote"
-      ? await resolveLocalReviewWorktreeRoot(params.cwd)
-      : undefined;
     const reviewLedgerDynamicTools = candidateLedger
       ? buildManagedReviewLedgerToolRouter(this.candidateLedger).buildDynamicToolSpecs()
       : [];
@@ -1168,7 +1188,7 @@ export class ManagedReviewService {
     if (candidateLedger) {
       this.candidateLedger.armToolTurn({ backend: "codex", threadId: thread.threadId }, null, {
         cwd: params.cwd,
-        worktreeRoot,
+        worktreeRoot: params.checkoutRoot,
       });
     }
     const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
@@ -2013,7 +2033,7 @@ export class ManagedReviewService {
 
   private async publishManagedReviewTerminal(
     params: ReviewTerminal & { record: ReviewSubAgentRecord },
-    ledgerSummary: { total: number; pending: number; keep: number; drop: number },
+    ledgerSnapshot: ManagedReviewCandidateListResult,
   ): Promise<void> {
     const completedAt = params.completedAt ?? Date.now();
     const completedItemOutput = this.takeManagedReviewOutput(params.record);
@@ -2022,7 +2042,17 @@ export class ManagedReviewService {
       const output = submittedOutput
         ? undefined
         : await this.readManagedReviewOutput(params.record, params.output, completedItemOutput);
-      const parsed = submittedOutput ?? parseReviewOutputText(output);
+      const parsedOutput = submittedOutput ?? parseReviewOutputText(output);
+      const recoveredFromLedger = !parsedOutput && parsePlainReview(output ?? "").findings.length === 0
+        ? buildReviewOutputFromCandidateLedger(
+            ledgerSnapshot.candidates,
+            {
+              cwd: params.record.context?.workspacePath,
+              worktreeRoot: params.record.checkoutRoot,
+            },
+          )
+        : undefined;
+      const parsed = parsedOutput ?? recoveredFromLedger;
       const review = parsed
         ? formatReviewOutputText(parsed)
         : output ?? "Review completed without output.";
@@ -2071,14 +2101,15 @@ export class ManagedReviewService {
         parentThreadId: params.record.parentThreadId,
         reviewThreadId: params.record.reviewThreadId,
         structured: Boolean(parsed),
-        outputSource: submittedOutput ? "tool" : output ? "text" : "none",
+        ...(recoveredFromLedger ? { recoveredFromCandidateLedger: true } : {}),
+        outputSource: submittedOutput ? "tool" : recoveredFromLedger ? "ledger" : output ? "text" : "none",
         turnId: params.record.turnId,
-        ...(ledgerSummary.total > 0
+        ...(ledgerSnapshot.total > 0
           ? {
-              candidateLedgerTotal: ledgerSummary.total,
-              candidateLedgerKeep: ledgerSummary.keep,
-              candidateLedgerDrop: ledgerSummary.drop,
-              candidateLedgerPending: ledgerSummary.pending,
+              candidateLedgerTotal: ledgerSnapshot.total,
+              candidateLedgerKeep: ledgerSnapshot.counts.keep,
+              candidateLedgerDrop: ledgerSnapshot.counts.drop,
+              candidateLedgerPending: ledgerSnapshot.counts.pending,
             }
           : {}),
       });
