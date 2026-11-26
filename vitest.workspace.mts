@@ -260,6 +260,9 @@ export default defineConfig({
             // Outpost consumers import its published JavaScript, whose bundle
             // must exist before workers start, regardless of test selection.
             "apps/desktop/src/test-setup/outpost-build.ts",
+            // The conformance shard needs both real owner bundles before its
+            // workers start, outside the suite's test and hook deadlines.
+            "apps/desktop/src/test-setup/owner-conformance-fixtures.ts",
             // Windows only in effect: warms the Job-object wrapper that owns
             // `git worktree remove` so its one-time PowerShell + helper-compile
             // cold start is not billed to whichever test reaches it first.
@@ -267,9 +270,6 @@ export default defineConfig({
             // Only the selected native-helper consumers compile, into isolated
             // outputs owned until their build trees and test workers drain.
             "apps/desktop/src/test-setup/native-helper-fixtures.ts",
-            // Prepare the selected conformance suite's two owner bundles
-            // before starting workers, outside the suite's hook budget.
-            "apps/desktop/src/test-setup/owner-conformance-fixtures.ts",
             // PDF.js's 1 MB first read: 3,943ms in the first process on a
             // Windows runner against 111ms in every process after it.
             "apps/desktop/src/test-setup/pdf-runtime-prewarm.ts",

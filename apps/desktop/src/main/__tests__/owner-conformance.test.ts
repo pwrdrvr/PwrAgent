@@ -363,6 +363,15 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
     fixturePackages = result.fixtures;
   });
 
+  it("receives both built owner packages from global setup", () => {
+    for (const kind of ["desktop", "headless"] as const) {
+      const { directory, preload } = fixturePackages[kind];
+      expect(existsSync(path.join(directory, "bin/pwragent.js"))).toBe(true);
+      expect(existsSync(path.join(directory, "dist/index.js"))).toBe(true);
+      expect(existsSync(preload)).toBe(true);
+    }
+  });
+
   it.each([false, true])("scheduler retries its original acceptance after provider refusal or a thread lock (locked=%s)", async locked => {
     const host = await startDesktopOwner();
     const registry = desktopOwner.registry as DesktopBackendRegistry;

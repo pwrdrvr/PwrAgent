@@ -465,6 +465,7 @@ export type ComposerProps = {
   onOpenCodexSkillProfiles?: () => void;
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage?: (
     text: string,
     imageParts?: AppServerThreadImagePart[],
@@ -3475,7 +3476,7 @@ function useComposerController(props: ComposerProps) {
     terminalTurnKeysRef,
     queuedRowActionIdsRef,
     activeReviewTurnIdRef,
-    inFlightReviewSubmissionKeyRef,
+    inFlightReviewSubmissionRef,
     autocompleteOptionRefs,
     reviewOptionRefs,
     reviewCommitInputRef,
@@ -3712,7 +3713,7 @@ function useComposerController(props: ComposerProps) {
     // waiting.
     const queuedRowActionIdsRef = useRef(new Set<string>());
     const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
-    const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
+    const inFlightReviewSubmissionRef = useRef<{ key: string; scopeKey: string } | undefined>(undefined);
     const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
     const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
     const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
@@ -4208,7 +4209,7 @@ function useComposerController(props: ComposerProps) {
       terminalTurnKeysRef,
       queuedRowActionIdsRef,
       activeReviewTurnIdRef,
-      inFlightReviewSubmissionKeyRef,
+      inFlightReviewSubmissionRef,
       autocompleteOptionRefs,
       reviewOptionRefs,
       reviewCommitInputRef,
@@ -7685,8 +7686,9 @@ function useComposerController(props: ComposerProps) {
         statusRecord?.type === "idle"
       ) {
         if (
-          activeReviewTurnIdRef.current &&
-          activeTurnIdRef.current === activeReviewTurnIdRef.current
+          inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey ||
+          (activeReviewTurnIdRef.current &&
+            activeTurnIdRef.current === activeReviewTurnIdRef.current)
         ) {
           return;
         }
@@ -7780,7 +7782,8 @@ function useComposerController(props: ComposerProps) {
     const submissionKey = reviewSubmissionKey(reviewCommand);
     if (
       sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === submissionKey
+      inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey &&
+      inFlightReviewSubmissionRef.current.key === submissionKey
     ) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -7825,7 +7828,13 @@ function useComposerController(props: ComposerProps) {
     }
 
     setSendError(undefined);
-    inFlightReviewSubmissionKeyRef.current = submissionKey;
+    const submission = { key: submissionKey, scopeKey: composerScopeKey };
+    inFlightReviewSubmissionRef.current = submission;
+    const clearReviewSubmission = () => {
+      if (inFlightReviewSubmissionRef.current === submission) {
+        inFlightReviewSubmissionRef.current = undefined;
+      }
+    };
     updateSending(true);
     props.onPendingStatusChange?.("Reviewing");
 
@@ -7861,7 +7870,6 @@ function useComposerController(props: ComposerProps) {
         } else {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
         }
-        inFlightReviewSubmissionKeyRef.current = undefined;
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
         releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -7869,12 +7877,14 @@ function useComposerController(props: ComposerProps) {
           setSendError(error instanceof Error ? error.message : String(error));
         }
       } finally {
+        clearReviewSubmission();
         updateSending(false);
       }
       return;
     }
 
     if (!props.thread || !props.desktopApi?.startReview) {
+      clearReviewSubmission();
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
@@ -7918,6 +7928,7 @@ function useComposerController(props: ComposerProps) {
       resetComposerDraftAndState(submittedScopeKey);
       setReviewConfig(undefined);
     }
+    const releaseReviewReservation = props.beginReviewSubmission?.();
     try {
       const response = await props.desktopApi.startReview({
         backend: props.thread.source,
@@ -7979,7 +7990,6 @@ function useComposerController(props: ComposerProps) {
           },
         })?.catch(() => undefined);
       }
-      inFlightReviewSubmissionKeyRef.current = undefined;
       props.onReviewStarted?.(threadSummaryIdentityKey(props.thread), submittedReviewRequestId);
       if (updateActiveTurnId(response.turnId, { review: true })) {
         props.onActiveTurnIdChange?.(response.turnId);
@@ -7999,7 +8009,6 @@ function useComposerController(props: ComposerProps) {
       if (optimisticReviewId) {
         props.removeOptimisticMessage?.(optimisticReviewId);
       }
-      inFlightReviewSubmissionKeyRef.current = undefined;
       if (!options?.queued) {
         if (restoreRejectedReviewDraft(submittedScopeKey, submittedSnapshot)) {
           setReviewConfig(submittedReviewConfig ?? createReviewConfig({
@@ -8023,6 +8032,9 @@ function useComposerController(props: ComposerProps) {
         message,
         tone: "error",
       });
+    } finally {
+      clearReviewSubmission();
+      releaseReviewReservation?.();
     }
   };
 
@@ -10348,7 +10360,8 @@ function useComposerController(props: ComposerProps) {
     if (
       reviewCommand &&
       sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === reviewSubmissionKey(reviewCommand)
+      inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey &&
+      inFlightReviewSubmissionRef.current.key === reviewSubmissionKey(reviewCommand)
     ) {
       return;
     }

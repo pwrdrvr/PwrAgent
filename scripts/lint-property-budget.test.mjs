@@ -402,7 +402,7 @@ describe("property budget baseline ratchet", () => {
 
   // The repository scan itself runs as `pnpm lint:property-budget` in the
   // Lint job. It parses every fast-check test file, about 950 of them, and
-  // takes 5-10 s on CI runners, past the default 5 s unit test timeout.
+  // can exceed the default 5 s unit test timeout on slower CI runners.
   it("keeps the checked-in baseline well formed", () => {
     const baseline = JSON.parse(readFileSync(resolve(REPO_ROOT, BASELINE_REL_PATH), "utf8"));
     expect(validateBaselineObject(baseline)).toEqual([]);
@@ -421,6 +421,16 @@ describe("property budget baseline ratchet", () => {
         "",
       ].join("\r\n"));
       writeFileSync(join(testsDir, "pure.test.ts"), 'import { it } from "vitest";\n');
+
+      // Ignored directories and non-test source files must not be scanned.
+      const ignoredNodeModules = join(root, "apps", "desktop", "node_modules", "pkg");
+      const ignoredLocal = join(root, "apps", "desktop", ".local");
+      mkdirSync(ignoredNodeModules, { recursive: true });
+      mkdirSync(ignoredLocal, { recursive: true });
+      const violationSnippet = 'import fc from "fast-check";\nfc.assert(fc.property(fc.integer(), () => true), { numRuns: 500 });\n';
+      writeFileSync(join(ignoredNodeModules, "ignored.test.ts"), violationSnippet);
+      writeFileSync(join(ignoredLocal, "ignored.test.ts"), violationSnippet);
+      writeFileSync(join(testsDir, "not-a-test.ts"), violationSnippet);
 
       const { scannedFiles, violationsByFile } = scanRepository(root);
       expect(scannedFiles).toBe(2);

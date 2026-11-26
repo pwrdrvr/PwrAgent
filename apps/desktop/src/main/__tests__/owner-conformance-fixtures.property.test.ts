@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type ProvidedContext } from "vitest";
 import type { TestProject, TestSpecification } from "vitest/node";
 import setup from "../../test-setup/owner-conformance-fixtures";
 import { buildOwnerFixture } from "./helpers/built-owner-fixture";
@@ -8,7 +8,7 @@ import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 vi.mock("./helpers/built-owner-fixture", () => ({ buildOwnerFixture: vi.fn() }));
 
 function watchProject() {
-  const provide = vi.fn();
+  const provide = vi.fn<(key: string, value: ProvidedContext["ownerConformanceFixtures"]) => void>();
   const onTestsRerun = vi.fn<(prepare: (specs: TestSpecification[]) => Promise<void>) => void>();
   const moduleId = path.join(import.meta.dirname, "owner-conformance.test.ts");
   const project = {
@@ -16,13 +16,12 @@ function watchProject() {
     vitest: {
       config: { watch: true },
       state: { getPaths: () => [moduleId] },
-      getModuleSpecifications: () => specifications,
+      getModuleSpecifications: (id: string) => [{ moduleId: id, project }],
     },
     provide,
     onTestsRerun,
   } as unknown as TestProject;
-  const specifications = [{ moduleId, project }] as TestSpecification[];
-  const rerun = () => onTestsRerun.mock.calls[0]![0](specifications);
+  const rerun = (id = moduleId) => onTestsRerun.mock.calls[0]![0](project.vitest.getModuleSpecifications(id));
   return { project, provide, rerun };
 }
 
@@ -39,6 +38,31 @@ describe.skipIf(process.platform === "win32")("owner conformance fixture watch m
     vi.mocked(buildOwnerFixture).mockReset().mockImplementation(async (directory) => writePreload(directory));
   });
   afterEach(() => { vi.restoreAllMocks(); });
+
+  it("publishes two freshly built packages only when a watch rerun selects conformance", async () => {
+    let revision = "original";
+    vi.mocked(buildOwnerFixture).mockImplementation(async (directory) => path.join(directory, revision));
+    const { project, provide, rerun } = watchProject();
+    const dispose = await setup(project);
+    try {
+      const original = provide.mock.lastCall![1];
+      revision = "edited";
+      await rerun(path.join(import.meta.dirname, "unrelated.test.ts"));
+      expect(provide).toHaveBeenCalledOnce();
+      expect(buildOwnerFixture).toHaveBeenCalledTimes(2);
+
+      await rerun();
+      const updated = provide.mock.lastCall![1];
+      expect(buildOwnerFixture).toHaveBeenCalledTimes(4);
+      if ("error" in original || "error" in updated) throw new Error("Expected fixtures for both revisions");
+      for (const kind of ["desktop", "headless"] as const) {
+        expect(path.basename(updated.fixtures[kind].preload)).toBe(revision);
+        expect(updated.fixtures[kind].directory).not.toBe(original.fixtures[kind].directory);
+      }
+    } finally {
+      await dispose();
+    }
+  });
 
   it("keeps published files readable across a second rerun queued during a build", async () => {
     const { project, provide, rerun } = watchProject();
