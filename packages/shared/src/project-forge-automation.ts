@@ -264,19 +264,26 @@ export function formatProjectMergeBranches(branches: readonly string[]): string 
 /**
  * Why an agent may not merge, or raise a merge card for, a pull request in
  * a never-merge project. Used as the tool refusal and the readiness line.
- * With `mergeBranches`, it names the branches that still merge.
+ * With `mergeBranches`, it names the branches that still merge, and with
+ * `baseUnknown` it says the PR's base has not been read, which counts as a
+ * branch the project does not list.
  */
 export function buildProjectNeverMergeRefusal(params: {
   projectLabel: string;
   pullRequest?: string;
   mergeBranches?: readonly string[];
+  baseUnknown?: boolean;
 }): string {
+  const listed = Boolean(params.mergeBranches?.length);
   const subject = params.pullRequest ? `${params.pullRequest} is in` : "This thread is in";
-  const object = params.pullRequest ?? "it";
-  const rule = params.mergeBranches?.length
-    ? `merges only pull requests into ${formatProjectMergeBranches(params.mergeBranches)}: the rest land upstream`
+  const object = params.pullRequest ?? (listed ? "a pull request into any other branch" : "it");
+  const rule = listed
+    ? `merges only pull requests into ${formatProjectMergeBranches(params.mergeBranches!)}: the rest land upstream`
     : "is set to never merge pull requests: they land upstream";
-  return `${subject} ${params.projectLabel}, where Forge Automation ${rule}. Do not merge ${object}, offer a merge, or raise a merge card. The operator can change this from the project menu: Forge Automation.`;
+  const unread = listed && params.pullRequest && params.baseUnknown
+    ? ` PwrAgent has not read ${params.pullRequest}'s base branch yet, so it counts as another branch.`
+    : "";
+  return `${subject} ${params.projectLabel}, where Forge Automation ${rule}.${unread} Do not merge ${object}, offer a merge, or raise a merge card. The operator can change this from the project menu: Forge Automation.`;
 }
 
 /**

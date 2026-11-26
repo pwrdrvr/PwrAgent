@@ -101,6 +101,20 @@ describe("mergeThreadPullRequest (property)", () => {
     ));
   });
 
+  // Shrunk counterexamples: the pre-change gate refused every PR in a
+  // never-merge project, including one into a listed branch.
+  it("merges a never-merge project's PR into a listed branch, and refuses one whose base was not read", async () => {
+    const url = githubUrl({ repo: REPOS[0], number: 4 });
+    const project: Project = { neverMerge: true, mergeBranches: ["pwrdrvr"] };
+    const read = harness([url], new Set(), project, new Map([[url, "pwrdrvr"]]));
+    await expect(mergeThreadPullRequest(read.deps, { ...THREAD, url, method: "squash" }))
+      .resolves.toEqual({ summary: "Squash-merged #4" });
+    const unread = harness([url], new Set(), project);
+    await expect(mergeThreadPullRequest(unread.deps, { ...THREAD, url, method: "squash" }))
+      .rejects.toThrow("canvas merges only pull requests into pwrdrvr. Change it from the project menu: Forge Automation.");
+    expect(unread.merge).not.toHaveBeenCalled();
+  });
+
   it("refuses GitLab, non-PR URLs, unknown methods and malformed threads without merging", async () => {
     const attached = ["https://gitlab.com/group/app/-/merge_requests/7", githubUrl({ repo: REPOS[0], number: 1 })];
     const cases: [unknown, RegExp][] = [

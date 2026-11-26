@@ -53,6 +53,13 @@ describe("never-merge projects that still merge into listed branches (property)"
     }));
   });
 
+  // Shrunk counterexample against the pre-change gate, which refused it.
+  it("merges a PR into release/2.0 when the never-merge project lists release/2.0", () => {
+    const automation = resolveProjectForgeAutomation({ neverMerge: true, mergeBranches: ["release/2.0"] });
+    expect(projectMergesPullRequest(automation, "release/2.0")).toBe(true);
+    expect(projectMergesPullRequest(automation, "main")).toBe(false);
+  });
+
   it("keeps a valid list through the owner's read, so the setting survives storage and federation", () => {
     fc.assert(fc.property(
       fc.uniqueArray(branchArb, { minLength: 1, maxLength: BRANCHES.length }),
@@ -96,7 +103,10 @@ describe("never-merge projects that still merge into listed branches (property)"
     expect(buildProjectNeverMergeRefusal({ projectLabel: "canvas", pullRequest: "#2", mergeBranches: ["pwrdrvr"] }))
       .toBe("#2 is in canvas, where Forge Automation merges only pull requests into pwrdrvr: the rest land upstream. Do not merge #2, offer a merge, or raise a merge card. The operator can change this from the project menu: Forge Automation.");
     expect(buildProjectNeverMergeRefusal({ projectLabel: "canvas", mergeBranches: ["a", "b", "c"] }))
-      .toContain("merges only pull requests into a, b or c");
+      .toBe("This thread is in canvas, where Forge Automation merges only pull requests into a, b or c: the rest land upstream. Do not merge a pull request into any other branch, offer a merge, or raise a merge card. The operator can change this from the project menu: Forge Automation.");
+    // A base not read yet counts as unlisted, and the refusal says so.
+    expect(buildProjectNeverMergeRefusal({ projectLabel: "canvas", pullRequest: "#7", mergeBranches: ["pwrdrvr"], baseUnknown: true }))
+      .toContain("PwrAgent has not read #7's base branch yet, so it counts as another branch. Do not merge #7");
     expect(buildProjectNeverMergeRefusal({ projectLabel: "canvas" }))
       .toContain("is set to never merge pull requests");
   });

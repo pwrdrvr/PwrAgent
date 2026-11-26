@@ -161,10 +161,14 @@ describe("ForgeAutomationDialog", () => {
     fireEvent.change(input, { target: { value: "two words" } });
     expect(within(merging).queryByRole("alert")).not.toBeInTheDocument();
     fireEvent.click(add);
-    expect(input).toHaveAccessibleDescription(/A branch name has no spaces\./);
+    expect(input).toHaveAccessibleDescription(/Enter one branch name, without spaces/);
     fireEvent.change(input, { target: { value: "release" } });
     fireEvent.click(add);
-    fireEvent.click(within(merging).getByRole("button", { name: "Remove release" }));
+    const remove = within(merging).getByRole("button", { name: "Remove release" });
+    remove.focus();
+    fireEvent.click(remove);
+    // The removed row took its button with it, so focus lands on the field.
+    expect(input).toHaveFocus();
 
     save();
     await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith({

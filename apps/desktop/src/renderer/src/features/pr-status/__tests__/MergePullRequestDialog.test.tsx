@@ -67,31 +67,27 @@ afterEach(() => {
 });
 
 describe("MergePullRequestDialog", () => {
-  it("offers the merge in a never-merge project exactly when the PR's base is a branch it still merges into", async () => {
-    const cases: Array<[string | undefined, string[] | undefined, boolean]> = [
-      ["main", undefined, false],
-      ["main", ["pwrdrvr"], false],
-      ["pwrdrvr", ["pwrdrvr"], true],
-      ["pwrdrvr", ["release", "pwrdrvr"], true],
-      [undefined, ["pwrdrvr"], false],
-    ];
-    for (const [base, mergeBranches, offered] of cases) {
-      const { baseRefName: _base, ...rest } = PR;
-      renderDialog(false, {
-        pr: base ? { ...rest, baseRefName: base } : rest,
-        owner: { neverMergeProject: "canvas", ...(mergeBranches ? { mergeBranches } : {}) },
-      });
-      if (offered) {
-        expect(await screen.findByRole("button", { name: "Squash merge" })).toBeInTheDocument();
-      } else {
-        expect(await screen.findByText(mergeBranches
-          ? `canvas merges only pull requests into ${mergeBranches.join(" or ")}. Change it from the project menu: Forge Automation.`
-          : "canvas never merges its pull requests. Change it from the project menu: Forge Automation."))
-          .toBeInTheDocument();
-        expect(screen.queryByRole("button", { name: "Squash merge" })).toBeNull();
-      }
-      cleanup();
+  it.each<[string, string | undefined, string[] | undefined, boolean]>([
+    ["refuses a PR into main when nothing is listed", "main", undefined, false],
+    ["refuses a PR into main when pwrdrvr is listed", "main", ["pwrdrvr"], false],
+    ["offers a PR into pwrdrvr when pwrdrvr is listed", "pwrdrvr", ["pwrdrvr"], true],
+    ["offers a PR into pwrdrvr among several listed", "pwrdrvr", ["release", "pwrdrvr"], true],
+    ["refuses a PR whose base is unknown", undefined, ["pwrdrvr"], false],
+  ])("in a never-merge project, %s", async (_name, base, mergeBranches, offered) => {
+    const { baseRefName: _base, ...rest } = PR;
+    renderDialog(false, {
+      pr: base ? { ...rest, baseRefName: base } : rest,
+      owner: { neverMergeProject: "canvas", ...(mergeBranches ? { mergeBranches } : {}) },
+    });
+    if (offered) {
+      expect(await screen.findByRole("button", { name: "Squash merge" })).toBeInTheDocument();
+      return;
     }
+    expect(await screen.findByText(mergeBranches
+      ? `canvas merges only pull requests into ${mergeBranches.join(" or ")}. Change it from the project menu: Forge Automation.`
+      : "canvas never merges its pull requests. Change it from the project menu: Forge Automation."))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Squash merge" })).toBeNull();
   });
 
   it("starts on Cancel and the card's method, and remembers a changed method", async () => {

@@ -48,6 +48,12 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
   const [error, setError] = useState<string>();
   const [branchInput, setBranchInput] = useState("");
   const [branchError, setBranchError] = useState<string>();
+  const branchInputRef = useRef<HTMLInputElement>(null);
+  // Bumped by a removal: its button unmounts, so focus moves to the field.
+  const [branchRemovals, setBranchRemovals] = useState(0);
+  useEffect(() => {
+    if (branchRemovals > 0) branchInputRef.current?.focus();
+  }, [branchRemovals]);
   const mergeBranches = draft.mergeBranches ?? [];
   const heldCount = useHeldWakeupCount(stored.paused ? props.listHeldWakeups : undefined);
   const dialogRef = useModalDialog<HTMLElement>({
@@ -91,7 +97,9 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
   const addBranch = () => {
     const branch = normalizeProjectMergeBranch(branchInput);
     if (!branch) {
-      setBranchError(branchInput.trim() ? "A branch name has no spaces." : undefined);
+      setBranchError(branchInput.trim()
+        ? "Enter one branch name, without spaces, of at most 255 characters."
+        : undefined);
       return;
     }
     if (mergeBranches.includes(branch)) {
@@ -106,6 +114,7 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
   const removeBranch = (branch: string) => {
     const next = mergeBranches.filter((entry) => entry !== branch);
     update({ mergeBranches: next.length ? next : undefined });
+    setBranchRemovals((count) => count + 1);
   };
 
   const branchesFull = mergeBranches.length >= MAX_PROJECT_MERGE_BRANCHES;
@@ -297,6 +306,7 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
                 {branchesFull ? null : (
                   <div className="forge-automation-dialog__branch-add">
                     <input
+                      ref={branchInputRef}
                       aria-describedby={`${optionId}-branches-hint${branchError ? ` ${optionId}-branches-error` : ""}`}
                       aria-invalid={branchError ? true : undefined}
                       aria-label="Branch that still merges"

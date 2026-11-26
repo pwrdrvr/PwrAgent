@@ -5292,8 +5292,11 @@ class DesktopAppServerService {
         ? `${baseGuidance} ${forgeProject.label} skips ${projectSkippedKind} in Forge Automation, so PwrAgent will not start a repair turn for ${projectSkippedKind}.`
         : baseGuidance;
     // Readiness lines name the project only for PRs this thread owns offers
-    // for; any other thread in a never-merge project still hears it.
-    const neverMergeGuidance = neverMerge && readinessGuidance.length === 0
+    // for; any other thread in a never-merge project still hears it, unless
+    // every PR it shows targets a branch the project still merges into.
+    const showsOnlyMergeablePrs = primaryPrs.length > 0
+      && primaryPrs.every((pr) => projectMergesPullRequest(forgeProject?.automation, pr.baseRefName));
+    const neverMergeGuidance = neverMerge && readinessGuidance.length === 0 && !showsOnlyMergeablePrs
       ? [buildProjectNeverMergeRefusal({ projectLabel: neverMerge, mergeBranches })]
       : [];
     const stackGuidance = await this.threadStackGuidance(primaryPrs);
@@ -6859,6 +6862,7 @@ class DesktopAppServerService {
       projectLabel: project.label,
       ...(pr ? { pullRequest: `#${pr.number}` } : {}),
       ...(mergeBranches.length ? { mergeBranches } : {}),
+      ...(pr && !pr.baseRefName?.trim() ? { baseUnknown: true } : {}),
     });
   }
 
