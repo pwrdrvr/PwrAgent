@@ -2516,4 +2516,167 @@ describe("ThreadMarkdown sticky headers, pinned first column, and table viewer m
 
     expect(renderCount).toBe(rendersAfterMount);
   });
+
+  it("opens blockquote-nested tables in TableDocumentModal with stripped prefixes, title, filter, and CSV export", async () => {
+    const copyTextApi = vi.fn(async () => undefined);
+    const quotedTableMarkdown = [
+      "> ## Quoted Gateway Matrix",
+      ">",
+      "> | Capability | Atlas | Beacon |",
+      "> | --- | --- | --- |",
+      "> | **Managed Broker** | Full multi-instance router | Local proxy |",
+      "> | **Secret Vault** | Encrypted local vault | OS keychain |",
+    ].join("\n");
+
+    render(
+      <ThreadMarkdown
+        desktopApi={{ copyText: copyTextApi }}
+        text={quotedTableMarkdown}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open table viewer" }));
+    const dialog = screen.getByRole("dialog", {
+      name: "Table viewer: Quoted Gateway Matrix",
+    });
+    expect(dialog.querySelector("table")).not.toBeNull();
+    expect(within(dialog).getByText("3 cols · 2 rows")).toBeInTheDocument();
+
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Filter table rows" }),
+      { target: { value: "keychain" } },
+    );
+    await waitFor(() => {
+      expect(within(dialog).getByText("3 cols · 1 / 2 rows")).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy CSV" }));
+    await waitFor(() => {
+      expect(copyTextApi).toHaveBeenCalledWith(
+        "Capability,Atlas,Beacon\r\nSecret Vault,Encrypted local vault,OS keychain",
+      );
+    });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy Markdown table" }));
+    await waitFor(() => {
+      expect(copyTextWithHtml).toHaveBeenCalledTimes(1);
+    });
+    const firstRichCall = copyTextWithHtml.mock.calls[0] as unknown as [
+      string,
+      string,
+    ];
+    expect(firstRichCall[0]).toContain("| Capability | Atlas | Beacon |");
+    expect(firstRichCall[0]).not.toMatch(/^>/m);
+    expect(firstRichCall[1]).toContain("<table");
+  });
+
+  it("withholds data-can-pin-col when the narrow-viewport guard blocks column 0 pinning", () => {
+    const { container } = render(<ThreadMarkdown text={comparisonMatrixMarkdown} />);
+    const wrap = container.querySelector<HTMLDivElement>(".thread-markdown__table-wrap")!;
+    const scroller = container.querySelector<HTMLDivElement>(".thread-markdown__table-scroll")!;
+    const firstHeader = container.querySelector<HTMLTableCellElement>(".thread-markdown__th")!;
+
+    let clientWidth = 280;
+    Object.defineProperties(scroller, {
+      clientWidth: { configurable: true, get: () => clientWidth },
+      scrollWidth: { configurable: true, get: () => 960 },
+      scrollLeft: { configurable: true, get: () => 80 },
+    });
+    Object.defineProperty(firstHeader, "offsetWidth", {
+      configurable: true,
+      get: () => 220,
+    });
+
+    // Narrow pane: 280 - 220 = 60px < 120px floor -> overflows horizontally, but
+    // pin capability is blocked so the pin button stays hidden.
+    fireEvent.scroll(scroller);
+    expect(wrap).toHaveAttribute("data-can-scroll-x", "true");
+    expect(wrap).not.toHaveAttribute("data-can-pin-col");
+    expect(wrap).not.toHaveAttribute("data-pinned-col-active");
+
+    // Widening the pane unlocks pinning and exposes data-can-pin-col.
+    clientWidth = 560;
+    fireEvent.scroll(scroller);
+    expect(wrap).toHaveAttribute("data-can-pin-col", "true");
+    expect(wrap).toHaveAttribute("data-pinned-col-active", "true");
+  });
+
+  it("re-syncs sticky header offset when content layout shifts without a scroll event", () => {
+    const callbacks: Array<{ callback: ResizeObserverCallback; targets: Set<Element> }> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private readonly record: { callback: ResizeObserverCallback; targets: Set<Element> };
+        constructor(callback: ResizeObserverCallback) {
+          this.record = { callback, targets: new Set<Element>() };
+          callbacks.push(this.record);
+        }
+        observe(target: Element) {
+          this.record.targets.add(target);
+        }
+        unobserve(target: Element) {
+          this.record.targets.delete(target);
+        }
+        disconnect() {
+          this.record.targets.clear();
+        }
+      },
+    );
+
+    try {
+      let tableTop = 40;
+      const { container } = render(
+        <div
+          className="transcript-list__items"
+          style={{ overflowY: "auto", height: "400px" }}
+        >
+          <div className="transcript-list__content">
+            <ThreadMarkdown text={comparisonMatrixMarkdown} />
+          </div>
+        </div>,
+      );
+
+      const ancestor = container.querySelector<HTMLDivElement>(".transcript-list__items")!;
+      const contentRoot = container.querySelector<HTMLDivElement>(".transcript-list__content")!;
+      const wrap = container.querySelector<HTMLDivElement>(".thread-markdown__table-wrap")!;
+      const table = container.querySelector<HTMLTableElement>(".thread-markdown__table")!;
+      const thead = table.querySelector("thead")!;
+
+      ancestor.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 500, left: 0, right: 800, width: 800, height: 400, x: 0, y: 100, toJSON: () => ({}) }) as DOMRect;
+      table.getBoundingClientRect = () =>
+        ({ top: tableTop, bottom: tableTop + 520, left: 0, right: 800, width: 800, height: 520, x: 0, y: tableTop, toJSON: () => ({}) }) as DOMRect;
+      thead.getBoundingClientRect = () =>
+        ({ top: tableTop, bottom: tableTop + 40, left: 0, right: 800, width: 800, height: 40, x: 0, y: tableTop, toJSON: () => ({}) }) as DOMRect;
+
+      const stickyObserver = callbacks.find(
+        (entry) => entry.targets.has(contentRoot) && entry.targets.has(wrap),
+      );
+      expect(stickyObserver).toBeDefined();
+
+      // Simulate an expanded work-phase group shifting the table up without
+      // scrolling or resizing the viewport itself.
+      act(() => {
+        stickyObserver!.callback(
+          [{ target: contentRoot } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wrap).toHaveAttribute("data-sticky-header", "true");
+      expect(wrap.style.getPropertyValue("--table-sticky-y")).toBe("60px");
+
+      // Collapsing content above pushes the table back below the viewport top.
+      tableTop = 140;
+      act(() => {
+        stickyObserver!.callback(
+          [{ target: contentRoot } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wrap).not.toHaveAttribute("data-sticky-header");
+      expect(wrap.style.getPropertyValue("--table-sticky-y")).toBe("");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

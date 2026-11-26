@@ -2673,6 +2673,18 @@ describe("Tangerine Terminal theme contract", () => {
     expect(pinnedColRule).toContain("position: sticky;");
     expect(pinnedColRule).toContain("left: 0;");
 
+    const pinActionVisibleRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap[data-can-pin-col=\"true\"] .thread-markdown__table-action--pin",
+    );
+    expect(pinActionVisibleRule).toContain("display: inline-flex;");
+
+    const emptyActionBarRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap:not([data-can-pin-col=\"true\"])\n  .thread-markdown__table-actions:not(:has(.thread-markdown__table-action--expand))",
+    );
+    expect(emptyActionBarRule).toContain("display: none;");
+
     const tableViewerRule = extractRuleBody(css, ".table-viewer-modal__content");
     expect(tableViewerRule).toContain("width:");
     expect(tableViewerRule).toContain("height:");

@@ -33005,8 +33005,16 @@ a.transcript-message__messaging-origin:focus-visible {
   display: none;
 }
 
-.thread-markdown__table-wrap[data-can-scroll-x="true"] .thread-markdown__table-action--pin {
+.thread-markdown__table-wrap[data-can-pin-col="true"] .thread-markdown__table-action--pin {
   display: inline-flex;
+}
+
+/* Hide the floating toolbar pill when it has no expand button and the pin
+   button is hidden (for example a non-overflowing or narrow-pane CSV/TSV
+   preview table). */
+.thread-markdown__table-wrap:not([data-can-pin-col="true"])
+  .thread-markdown__table-actions:not(:has(.thread-markdown__table-action--expand)) {
+  display: none;
 }
 
 .thread-markdown__table-action--pin[aria-pressed="true"] {

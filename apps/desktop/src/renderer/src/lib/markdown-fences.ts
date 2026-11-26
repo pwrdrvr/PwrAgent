@@ -95,15 +95,33 @@ export function repairNestedLanguageFences(markdown: string): string {
     lineIndex: number;
     maxInnerLength: number;
     openingLength: number;
+    prevLongerIndex: number;
     sawNestedLanguage: boolean;
   };
   const stack: OpenFenceFrame[] = [];
   let changed = false;
 
+  const pushFrame = (lineIndex: number, openingLength: number): void => {
+    let prevLongerIndex = stack.length - 1;
+    while (
+      prevLongerIndex >= 0
+      && stack[prevLongerIndex]!.openingLength <= openingLength
+    ) {
+      prevLongerIndex = stack[prevLongerIndex]!.prevLongerIndex;
+    }
+    stack.push({
+      lineIndex,
+      maxInnerLength: 0,
+      openingLength,
+      prevLongerIndex,
+      sawNestedLanguage: false,
+    });
+  };
+
   // Single O(N) stack pass: pairs each opening fence with its matching bare
-  // closing fence so well-formed blocks advance past their close (never
-  // treating a closing ``` as a new opener) and unclosed fences never rescan
-  // the remainder of the document.
+  // closing fence while respecting CommonMark closing-fence length rules
+  // (`closing.length >= opening.length`). Monotonic `prevLongerIndex` links
+  // resolve longer enclosing openers in amortized O(1) time.
   for (let index = 0; index < lines.length; index += 1) {
     const fence = parseBacktickFenceLine(lines[index] ?? "");
     if (!fence) {
@@ -111,12 +129,7 @@ export function repairNestedLanguageFences(markdown: string): string {
     }
 
     if (stack.length === 0) {
-      stack.push({
-        lineIndex: index,
-        maxInnerLength: 0,
-        openingLength: fence.length,
-        sawNestedLanguage: false,
-      });
+      pushFrame(index, fence.length);
       continue;
     }
 
@@ -124,16 +137,47 @@ export function repairNestedLanguageFences(markdown: string): string {
       const parent = stack[stack.length - 1]!;
       parent.sawNestedLanguage = true;
       parent.maxInnerLength = Math.max(parent.maxInnerLength, fence.length);
-      stack.push({
-        lineIndex: index,
-        maxInnerLength: 0,
-        openingLength: fence.length,
-        sawNestedLanguage: false,
-      });
+      pushFrame(index, fence.length);
       continue;
     }
 
+    const top = stack[stack.length - 1]!;
+    if (fence.length < top.openingLength) {
+      // A bare fence shorter than the active opener cannot close it in
+      // CommonMark; treat it as literal content inside the open block.
+      top.maxInnerLength = Math.max(top.maxInnerLength, fence.length);
+      continue;
+    }
+
+    // Close the deepest eligible frame whose opening length is maximal among
+    // frames that `fence.length` can close. When a longer bare closer matches
+    // an enclosing frame (e.g. ```` closing ````md around an unclosed ```ts),
+    // fold the unclosed inner frames into that enclosing frame.
+    let matchIndex = stack.length - 1;
+    let candidate = top.prevLongerIndex;
+    while (candidate >= 0 && stack[candidate]!.openingLength <= fence.length) {
+      matchIndex = candidate;
+      candidate = stack[candidate]!.prevLongerIndex;
+    }
+
+    let foldedInnerMax = 0;
+    let foldedSawNested = false;
+    while (stack.length - 1 > matchIndex) {
+      const inner = stack.pop()!;
+      foldedSawNested = true;
+      foldedInnerMax = Math.max(
+        foldedInnerMax,
+        inner.openingLength,
+        inner.maxInnerLength,
+      );
+    }
+
     const closing = stack.pop()!;
+    if (foldedSawNested) {
+      closing.sawNestedLanguage = true;
+      closing.maxInnerLength = Math.max(closing.maxInnerLength, foldedInnerMax);
+    }
+
     if (stack.length > 0) {
       const parent = stack[stack.length - 1]!;
       parent.sawNestedLanguage = true;

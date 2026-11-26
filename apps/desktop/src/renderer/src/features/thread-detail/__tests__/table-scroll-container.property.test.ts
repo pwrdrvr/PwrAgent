@@ -6,6 +6,7 @@ import {
   computeStickyHeaderState,
   extractTableTitleFromMarkdown,
   matchesTableRowFilter,
+  normalizeExtractedTableMarkdown,
   serializeTableCellsToCsv,
 } from "../table-sticky-model";
 
@@ -634,9 +635,54 @@ describe("table viewer filter, CSV, and title extraction properties", () => {
 
     expect(
       extractTableTitleFromMarkdown(
+        "> ## Quoted Gateway Matrix\n>\n> | A | B |\n> | --- | --- |",
+        "> ## Quoted Gateway Matrix\n>\n> ".length,
+      ),
+    ).toBe("Quoted Gateway Matrix");
+
+    expect(
+      extractTableTitleFromMarkdown(
         "## Heading\n\nSome prose in between.\n\n| A | B |\n| --- | --- |",
         "## Heading\n\nSome prose in between.\n\n".length,
       ),
     ).toBeUndefined();
+  });
+
+  it("strips blockquote and list container prefixes from extracted table slices and falls back on invalid slices", () => {
+    const cellWordArb = fc.constantFrom("Alpha", "Beta", "**Key**", "`code`", "123");
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 3 }),
+        fc.boolean(),
+        fc.constantFrom("> ", ">", "> > ", "    "),
+        fc.array(fc.tuple(cellWordArb, cellWordArb), { minLength: 1, maxLength: 5 }),
+        (quoteDepth, stripFirstLinePrefix, basePrefix, rows) => {
+          const prefix = basePrefix === "    "
+            ? "    "
+            : basePrefix.repeat(quoteDepth);
+          const cleanLines = [
+            "| Capability | Runtime |",
+            "| --- | --- |",
+            ...rows.map(([left, right]) => `| ${left} | ${right} |`),
+          ];
+          const rawLines = cleanLines.map((line, index) =>
+            index === 0 && stripFirstLinePrefix ? line : `${prefix}${line}`,
+          );
+          const normalized = normalizeExtractedTableMarkdown(
+            rawLines.join("\n"),
+            "| Fallback | Value |\n| --- | --- |\n| X | Y |",
+          );
+          expect(normalized).toBe(cleanLines.join("\n"));
+          for (const line of normalized.split("\n")) {
+            expect(line.startsWith(">")).toBe(false);
+          }
+        },
+      ),
+    );
+
+    const fallback = "| A | B |\n| --- | --- |\n| 1 | 2 |";
+    expect(
+      normalizeExtractedTableMarkdown("not a table\njust prose", fallback),
+    ).toBe(fallback);
   });
 });

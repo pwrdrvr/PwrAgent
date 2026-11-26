@@ -82,6 +82,7 @@ import {
 import {
   extractTableTitleFromMarkdown,
   matchesTableRowFilter,
+  normalizeExtractedTableMarkdown,
   parsePinFirstColumnRecommendation,
 } from "./table-sticky-model";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
@@ -783,7 +784,10 @@ const markdownComponents: Components = {
         const fallbackMarkdown = context.tableElement
           ? serializeTableElementToMarkdown(context.tableElement)
           : "";
-        const baseMarkdown = rawSource?.trim() || fallbackMarkdown;
+        const baseMarkdown = normalizeExtractedTableMarkdown(
+          rawSource,
+          fallbackMarkdown,
+        );
         if (!baseMarkdown) {
           return;
         }

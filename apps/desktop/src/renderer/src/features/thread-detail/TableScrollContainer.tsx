@@ -68,6 +68,7 @@ function flushTableEdgeUpdates(tables: Iterable<ObservedTable>): void {
   // Two-phase read-then-write avoids O(K^2) interleaved forced layouts when
   // multiple tables resize in a single ResizeObserver batch.
   const updates: Array<{
+    canPinCol: boolean;
     canScrollX: boolean;
     edges: HorizontalScrollEdges;
     pinned: PinnedColumnState;
@@ -85,28 +86,34 @@ function flushTableEdgeUpdates(tables: Iterable<ObservedTable>): void {
     const canScrollX = Number.isFinite(clientWidth)
       && Number.isFinite(scrollWidth)
       && scrollWidth - clientWidth > 1;
-    const firstColumnWidth = table.canPin && table.desiredPinned && canScrollX
+    const firstColumnWidth = table.canPin && canScrollX
       ? measureFirstHeaderCellWidth(table.scroller)
       : 0;
-    const pinned = computePinnedFirstColumnState({
+    const eligiblePinState = computePinnedFirstColumnState({
       clientWidth,
-      desiredPinned: table.desiredPinned,
+      desiredPinned: true,
       eligible: table.canPin,
       firstColumnWidth,
       scrollLeft,
       scrollWidth,
     });
+    const canPinCol = eligiblePinState.active;
+    const pinned: PinnedColumnState = canPinCol && table.desiredPinned
+      ? eligiblePinState
+      : { active: false, pinnedWidthPx: 0, scrolledUnder: false };
     updates.push({
+      canPinCol,
       canScrollX,
       edges,
       pinned,
       wrap: table.wrap,
     });
   }
-  for (const { canScrollX, edges, pinned, wrap } of updates) {
+  for (const { canPinCol, canScrollX, edges, pinned, wrap } of updates) {
     applyBooleanAttribute(wrap, "data-scroll-left", edges.left);
     applyBooleanAttribute(wrap, "data-scroll-right", edges.right);
     applyBooleanAttribute(wrap, "data-can-scroll-x", canScrollX);
+    applyBooleanAttribute(wrap, "data-can-pin-col", canPinCol);
     applyBooleanAttribute(wrap, "data-pinned-col-active", pinned.active);
     applyBooleanAttribute(wrap, "data-pinned-col-scrolled", pinned.scrolledUnder);
   }
@@ -181,6 +188,7 @@ type StickyRegistration = {
 
 type ScrollAncestorCoordinator = {
   allTables: Set<StickyRegistration>;
+  ensureContentRootObserved: () => void;
   intersectionObserver?: IntersectionObserver;
   resizeObserver?: ResizeObserver;
   scrollAncestor: HTMLElement;
@@ -340,11 +348,21 @@ function getOrCreateScrollAncestorCoordinator(
   }
 
   let resizeObserver: ResizeObserver | undefined;
+  let observedContentRoot: Element | null = null;
   if (typeof ResizeObserver !== "undefined") {
     resizeObserver = new ResizeObserver(() => {
       syncVisible();
     });
     resizeObserver.observe(scrollAncestor);
+    // Also observe the scroll ancestor's content container (e.g.
+    // `.transcript-list__content`) so expanding/collapsing work phases or
+    // streaming content above a visible table re-syncs `--table-sticky-y`
+    // even when `scrollAncestor`'s own box and `scrollTop` do not change.
+    const firstChild = scrollAncestor.firstElementChild;
+    if (firstChild && firstChild !== scrollAncestor) {
+      observedContentRoot = firstChild;
+      resizeObserver.observe(firstChild);
+    }
   }
 
   scrollAncestor.addEventListener("scroll", syncVisible, { passive: true });
@@ -353,11 +371,30 @@ function getOrCreateScrollAncestorCoordinator(
     scrollAncestor.removeEventListener("scroll", syncVisible);
     intersectionObserver?.disconnect();
     resizeObserver?.disconnect();
+    observedContentRoot = null;
     scrollAncestorCoordinators.delete(scrollAncestor);
+  };
+
+  const ensureContentRootObserved = (): void => {
+    if (!resizeObserver) {
+      return;
+    }
+    const firstChild = scrollAncestor.firstElementChild;
+    if (firstChild === observedContentRoot) {
+      return;
+    }
+    if (observedContentRoot) {
+      resizeObserver.unobserve(observedContentRoot);
+    }
+    observedContentRoot = firstChild && firstChild !== scrollAncestor ? firstChild : null;
+    if (observedContentRoot) {
+      resizeObserver.observe(observedContentRoot);
+    }
   };
 
   const coordinator: ScrollAncestorCoordinator = {
     allTables,
+    ensureContentRootObserved,
     intersectionObserver,
     resizeObserver,
     scrollAncestor,
@@ -384,6 +421,8 @@ function registerStickyTable(
   const registration: StickyRegistration = { scroller, wrap };
   coordinator.allTables.add(registration);
   coordinator.wrapToRegistration.set(wrap, registration);
+  coordinator.ensureContentRootObserved();
+  coordinator.resizeObserver?.observe(wrap);
   if (coordinator.intersectionObserver) {
     coordinator.intersectionObserver.observe(wrap);
   } else {
@@ -397,6 +436,7 @@ function registerStickyTable(
     coordinator.visibleTables.delete(registration);
     coordinator.wrapToRegistration.delete(wrap);
     coordinator.intersectionObserver?.unobserve(wrap);
+    coordinator.resizeObserver?.unobserve(wrap);
     if (coordinator.allTables.size === 0) {
       coordinator.teardown();
     }

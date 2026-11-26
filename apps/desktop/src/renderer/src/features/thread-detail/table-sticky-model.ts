@@ -246,6 +246,49 @@ function escapeCsvCell(value: string): string {
   return normalized;
 }
 
+const GFM_TABLE_DELIMITER_LINE_PATTERN =
+  /^\|?[ \t]*:?-{1,}:?[ \t]*(?:\|[ \t]*:?-{1,}:?[ \t]*)*\|?$/;
+
+function stripMarkdownContainerPrefix(line: string): string {
+  return line.replace(/^(?:[ \t]*>[ \t]?)+/, "").trimStart();
+}
+
+/**
+ * Normalizes a table source slice extracted via mdast offsets so tables nested
+ * inside blockquotes (e.g. `> | A | B |`) or indented list items remain valid
+ * standalone GFM tables when rendered inside `TableDocumentModal`. Falls back
+ * to DOM-serialized Markdown if the normalized slice does not start with a
+ * valid GFM header + delimiter row.
+ */
+export function normalizeExtractedTableMarkdown(
+  rawSource: string | undefined,
+  fallbackMarkdown: string,
+): string {
+  const trimmed = rawSource?.trim() ?? "";
+  if (!trimmed) {
+    return fallbackMarkdown;
+  }
+
+  const lines = trimmed.split(/\r?\n/);
+  const hasContainerPrefix = lines.some((line) =>
+    /^[ \t]*>/.test(line) || /^[ \t]{4,}/.test(line),
+  );
+  const candidateLines = hasContainerPrefix
+    ? lines.map(stripMarkdownContainerPrefix)
+    : lines;
+
+  if (candidateLines.length >= 2) {
+    const headerLine = candidateLines[0] ?? "";
+    const delimiterLine = candidateLines[1] ?? "";
+    const hasPipe = headerLine.includes("|") || delimiterLine.includes("|");
+    if (hasPipe && GFM_TABLE_DELIMITER_LINE_PATTERN.test(delimiterLine.trim())) {
+      return candidateLines.join("\n").trim();
+    }
+  }
+
+  return fallbackMarkdown || trimmed;
+}
+
 /**
  * Looks immediately before a table's start offset in Markdown source for an ATX
  * heading (ignoring blank lines and thematic breaks) so the table viewer can
@@ -266,7 +309,7 @@ export function extractTableTitleFromMarkdown(
   const lines = prefix.split(/\r?\n/);
   let index = lines.length - 1;
   while (index >= 0) {
-    const trimmed = (lines[index] ?? "").trim();
+    const trimmed = stripMarkdownContainerPrefix(lines[index] ?? "").trim();
     if (
       trimmed === ""
       || /^(?:(?:\*\s*){3,}|(?:_\s*){3,}|(?:-\s*){3,})$/.test(trimmed)
