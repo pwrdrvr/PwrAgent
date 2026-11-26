@@ -17794,12 +17794,13 @@ function ContextWindowMoon({
   const savedRules = useAutoCompactionRules();
   const autoCompaction = useThreadAutoCompaction(desktopApi, thread);
   const backend = thread?.source;
+  const ownedElsewhere = Boolean(thread?.federation?.ref);
   // A rule's budget, when one matches, is the window the moon measures.
   const measured = useMemo(
     () => reportedContextWindow
-      ? applyContextWindowBudget({ contextWindow: reportedContextWindow, savedRules, backend, model })
+      ? applyContextWindowBudget({ contextWindow: reportedContextWindow, savedRules, backend, model, ownedElsewhere })
       : undefined,
-    [backend, model, reportedContextWindow, savedRules],
+    [backend, model, ownedElsewhere, reportedContextWindow, savedRules],
   );
   const contextWindow = measured?.contextWindow;
   const budget = measured?.budget;

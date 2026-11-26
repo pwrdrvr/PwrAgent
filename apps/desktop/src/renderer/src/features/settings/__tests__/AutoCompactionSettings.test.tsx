@@ -69,6 +69,23 @@ describe("AutoCompactionSettings", () => {
     expect(onSave).not.toHaveBeenCalled();
   });
 
+  it("saves a rule switched Off even when its hidden budget is out of range", async () => {
+    const onSave = renderSection([]);
+    fireEvent.click(screen.getByRole("button", { name: "Edit Gemini models auto-compaction" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Context budget (tokens)" }), {
+      target: { value: "5000000" },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Auto-compaction" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave.mock.calls[0]![0]).toEqual([
+      expect.objectContaining({ provider: "acp:antigravity", model: "gemini-*", enabled: false }),
+    ]);
+  });
+
   it("offers Reset to default on a provider override, which removes only that override", async () => {
     const onSave = renderSection([
       { provider: "acp:antigravity", model: "gemini-*", enabled: false },
@@ -87,7 +104,7 @@ describe("AutoCompactionSettings", () => {
 
   it("explains that Codex waits for the turn to end and offers no steering choice", () => {
     renderSection([], "codex");
-    expect(screen.getByText(/Codex compacts between turns/u)).toBeInTheDocument();
+    expect(screen.getByText(/PwrAgent compacts Codex threads between turns/u)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Edit Gemini models auto-compaction" }));
     expect(screen.queryByText("During a turn")).not.toBeInTheDocument();
   });

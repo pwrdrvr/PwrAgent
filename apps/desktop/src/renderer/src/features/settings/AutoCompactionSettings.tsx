@@ -62,11 +62,9 @@ export function AutoCompactionSettings(props: {
   const labelOf = (pattern: string): string =>
     models.find((model) => model.id === pattern)?.label ?? describeAutoCompactionModelPattern(pattern);
   const canSteer = STEERING_PROVIDERS.has(props.backendId);
-  const turnNote = props.backendId === "codex"
-    ? "Codex compacts between turns. A threshold passed mid-turn waits for the turn to end."
-    : canSteer
-      ? undefined
-      : `${props.providerLabel} compacts between turns. A threshold passed mid-turn waits for the turn to end.`;
+  const turnNote = canSteer
+    ? undefined
+    : `PwrAgent compacts ${props.providerLabel} threads between turns. A threshold passed mid-turn waits for the turn to end.`;
 
   const save = async (next: DesktopAutoCompactionRule[]): Promise<boolean> => {
     try {
@@ -208,6 +206,8 @@ function parseWhole(value: string): number | undefined {
 /** The problem with a draft, worded for the field it belongs to. */
 export function autoCompactionDraftProblem(draft: RuleDraft): string | undefined {
   if (!draft.model.trim()) return "Name a model id, or a family ending in *, such as gemini-*.";
+  // Off hides the budget and percent, so they cannot hold a save back.
+  if (!draft.enabled) return undefined;
   if (draft.budget.trim()) {
     const budget = parseWhole(draft.budget);
     if (budget === undefined || budget < MIN_AUTO_COMPACTION_WINDOW_TOKENS || budget > MAX_AUTO_COMPACTION_WINDOW_TOKENS) {
@@ -252,6 +252,7 @@ function AutoCompactionRuleEditor(props: {
       provider: props.backendId,
       model: draft.values.model.trim(),
       enabled: draft.values.enabled,
+      // Normalization drops a hidden out-of-range value from an Off rule.
       ...(budget !== undefined && draft.values.budget.trim() ? { contextWindowTokens: budget } : {}),
       ...(percent !== undefined ? { compactAtPercent: percent } : {}),
       ...(props.canSteer && draft.values.duringTurn === "wait" ? { duringTurn: "wait" as const } : {}),

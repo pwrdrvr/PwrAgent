@@ -28,6 +28,18 @@ describe("context window budget", () => {
     });
   });
 
+  it("leaves a thread another instance owns on its reported window, since that owner's rules apply", () => {
+    const result = applyContextWindowBudget({
+      contextWindow: neonAt400k,
+      savedRules: [],
+      backend: "acp:antigravity",
+      model: "gemini-4-neon",
+      ownedElsewhere: true,
+    });
+    expect(result.contextWindow).toBe(neonAt400k);
+    expect(result.budget).toBeUndefined();
+  });
+
   it("leaves a model no rule covers on its reported window", () => {
     const result = applyContextWindowBudget({
       contextWindow: neonAt400k,

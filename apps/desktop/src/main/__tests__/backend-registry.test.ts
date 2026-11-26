@@ -15727,6 +15727,29 @@ command = "pnpm dev"
     }
   });
 
+  it("answers busy for auto-compaction on an archived Codex thread instead of compacting it", async () => {
+    const codexClient = new MockBackendClient({ models: [] });
+    const threadId = "thread-auto-compact-archived";
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: {
+        [`codex:${threadId}`]: {
+          backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [],
+          archiveRetentionStartedAt: 1_700_000_000_000,
+        },
+      } }),
+      threadTitleGenerationService: null,
+    });
+    try {
+      await expect(registry.startAutoCompaction({
+        backend: "codex", threadId, messageOrigin: { kind: "pwragent", systemReason: "auto-compaction" },
+      })).resolves.toEqual({ status: "busy" });
+      expect(codexClient.lastCompactThreadParams).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
   describe("manual compaction invalid message-ID recovery", () => {
     const threadId = "thread-compact-invalid-id";
     const invalidIdFailure =

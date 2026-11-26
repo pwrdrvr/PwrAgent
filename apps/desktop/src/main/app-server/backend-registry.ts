@@ -13486,10 +13486,22 @@ export class DesktopBackendRegistry {
     messageOrigin: AppServerThreadMessageOrigin;
   }): Promise<{ status: "started"; turnId?: string } | { status: "busy" }> {
     if (params.backend === "codex") {
+      // The holds `submitTurnIfIdle` answers busy for, plus a pending retry:
+      // `compactThread` would wake an archived checkout or throw, and a throw
+      // counts as the provider refusing.
+      const identityKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const overlay = await this.overlayStore.getThreadOverlayState(params);
+      const archived = this.getThreadInfo(params)?.archived
+        ?? (overlay?.archiveRetentionStartedAt !== undefined || overlay?.archiveTombstonedAt !== undefined);
       if (
         await this.isThreadLocked(params)
+        || archived
         || this.threadHasActiveTurn(params.threadId, "codex")
         || this.threadTurnQueue.hasWaitingEntries(params)
+        || this.context.turnState.hasRetry(params.threadId)
+        || this.threadWorkspaceService.threadHandoffReservationRecords.has(identityKey)
+        || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(params)
+        || this.threadArchiveCoordinator.checkoutRestoreRecords.has(identityKey)
       ) {
         return { status: "busy" };
       }

@@ -34,9 +34,14 @@ export function applyContextWindowBudget(params: {
   savedRules: readonly DesktopAutoCompactionRule[] | undefined;
   backend?: string;
   model?: string;
+  /**
+   * Another instance owns the thread and compacts it by its own rules, which
+   * this window cannot read, so the reported window stands.
+   */
+  ownedElsewhere?: boolean;
 }): { contextWindow: ThreadContextWindowState; budget?: ContextWindowBudget } {
   const { contextWindow } = params;
-  if (!params.backend) return { contextWindow };
+  if (!params.backend || params.ownedElsewhere) return { contextWindow };
   const threshold = resolveAutoCompactionThreshold({
     rules: effectiveAutoCompactionRules(params.savedRules ?? []),
     backend: params.backend,

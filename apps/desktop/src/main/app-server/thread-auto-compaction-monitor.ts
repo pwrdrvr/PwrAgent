@@ -12,6 +12,7 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   INITIAL_AUTO_COMPACTION_STATE,
+  isAutoCompactionInFlight,
   stepAutoCompaction,
   type AutoCompactionCommand,
   type AutoCompactionContext,
@@ -268,6 +269,9 @@ export class ThreadAutoCompactionMonitor {
       this.rulesKey = key;
       if (!first) {
         for (const entry of this.threads.values()) {
+          // An open or accepted request keeps its tracking: reset, its answer
+          // would be dropped and the next fill would send a second `/compact`.
+          if (isAutoCompactionInFlight(entry.state.phase)) continue;
           this.clearSettleTimer(entry);
           entry.state = INITIAL_AUTO_COMPACTION_STATE;
         }

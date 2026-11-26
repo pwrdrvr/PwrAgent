@@ -109,6 +109,41 @@ describe("ThreadAutoCompactionMonitor", () => {
     monitor.dispose();
   });
 
+  it("keeps an open steer when the rules change, so its answer is not dropped and no second /compact goes out", async () => {
+    const world = fakeRegistry();
+    let answerSteer: (() => void) | undefined;
+    world.registry.steerTurn.mockImplementationOnce(() => new Promise((resolve) => {
+      answerSteer = () => resolve({});
+    }));
+    let saved: DesktopAutoCompactionRule[] = [];
+    const monitor = createRegistryAutoCompactionMonitor({
+      registry: world.registry,
+      resolveSavedRules: () => saved,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+    monitor.start();
+    world.turnStarted("turn-1");
+    world.fill(412_000);
+    await vi.waitFor(() => expect(answerSteer).toBeDefined());
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("steering");
+
+    // Another thread's fill picks up a rule saved meanwhile.
+    saved = [{ provider: "codex", model: "gpt-5", enabled: true }];
+    world.emit({
+      method: "thread/contextWindow/updated",
+      params: { threadId: "thread-2", usedTokens: 100_000, modelContextWindow: NEON_WINDOW },
+    });
+    await vi.waitFor(() => expect(monitor.stateFor(world.backend, "thread-2")?.lastFill).toBe(100_000));
+
+    answerSteer?.();
+    await monitor.idle();
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("compacting");
+    world.fill(415_000);
+    await monitor.idle();
+    expect(world.registry.steerTurn).toHaveBeenCalledTimes(1);
+    monitor.dispose();
+  });
+
   it("starts one compaction between turns when the provider cannot steer", async () => {
     const world = fakeRegistry({ canSteer: false });
     const monitor = start(world);
