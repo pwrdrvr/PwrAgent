@@ -240,8 +240,10 @@ export function projectLimit(series: LimitSeries): LimitProjection | undefined {
 }
 
 export function limitLabel(series: LimitSeries): string {
-  if (series.windowMinutes === 300) return "5-hour window";
-  // Claude has several weekly limits (all models, Opus, Sonnet) and names each.
+  if (series.windowMinutes === 300) {
+    return series.windowKey || series.limitId === "five_hour" ? "5-hour window" : series.name;
+  }
+  // Claude and Antigravity have several weekly limits and name each.
   if (series.windowMinutes === 10_080) return series.windowKey ? "Weekly limit" : series.name;
   if (series.windowKey === "individual") return "Individual limit";
   return series.name;

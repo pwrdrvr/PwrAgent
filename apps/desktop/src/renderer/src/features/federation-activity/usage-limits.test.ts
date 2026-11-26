@@ -156,4 +156,32 @@ describe("usage limit history", () => {
     expect(sinceResetSeries(accounts[1])?.limitId).toBe("seven_day");
     expect(series.at(-1)!.latest.expires).toBe(true);
   });
+
+  it("keeps Antigravity 5h labels distinct and paces each 5h bucket on its 300-minute window", () => {
+    const antigravity: UsageLimitObservation = {
+      observedAt: t0 + 2 * HOUR,
+      provider: "google",
+      limits: [
+        { name: "5h Gemini limit", limitId: "gemini-5h", usedPercent: 20, resetAt: t0 + 5 * HOUR, windowMinutes: 300 },
+        { name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 10, resetAt: t0 + 168 * HOUR, windowMinutes: 10_080 },
+        { name: "5h Claude/GPT limit", limitId: "3p-5h", usedPercent: 0, windowMinutes: 300 },
+        { name: "Weekly Claude/GPT limit", limitId: "3p-weekly", usedPercent: 18, resetAt: t0 + 168 * HOUR, windowMinutes: 10_080 },
+      ],
+    };
+    const [account] = buildLimitAccounts([{ ...studio, current: antigravity }]);
+    expect(account.series.map(limitLabel)).toEqual([
+      "5h Gemini limit",
+      "5h Claude/GPT limit",
+      "Weekly Gemini limit",
+      "Weekly Claude/GPT limit",
+    ]);
+    const gemini5h = account.series.find((series) => series.limitId === "gemini-5h")!;
+    expect(gemini5h.windowStart).toBe(t0);
+    expect(gemini5h.pacePerHour).toBeCloseTo(10);
+    expect(projectLimit(gemini5h)).toEqual({ kind: "atReset", percent: 50, resetAt: t0 + 5 * HOUR });
+    const claude5h = account.series.find((series) => series.limitId === "3p-5h")!;
+    expect(claude5h.windowStart).toBeUndefined();
+    expect(claude5h.pacePerHour).toBeUndefined();
+    expect(projectLimit(claude5h)).toBeUndefined();
+  });
 });

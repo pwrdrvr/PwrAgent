@@ -20,7 +20,7 @@ export function RateLimitRow({ limit, now, account, labelTooltip }: {
     && (limit.resetAt === undefined || limit.resetAt > now)
     ? describeLimitPace(series, now, true)
     : undefined;
-  // Each Antigravity pool is a separate weekly allowance. Elsewhere, keep
+  // Each Antigravity pool is a separate allowance. Elsewhere, keep
   // the sentence for the main window and any window about to run out.
   const sentence = described && (described.short || series === sinceResetSeries(account)
     || account?.provider === "google");
