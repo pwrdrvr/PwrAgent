@@ -1688,7 +1688,7 @@ export class AcpBackendAdapter {
       }
       this.planLimits.record(backend, {
         limits: providerStatus.rateLimits ?? [], since, precise: true, dated: true,
-        ...(antigravity ? { account } : {}),
+        ...(antigravity ? { account, complete: true } : {}),
       });
       await this.emit({
         backend,
