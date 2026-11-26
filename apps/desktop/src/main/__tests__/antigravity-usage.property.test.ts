@@ -150,7 +150,9 @@ describe("Antigravity quota commands", () => {
           const isUsage = args.includes("/usage") || args.some((arg) => arg.includes("/usage"));
           const checkShim = isUsage && (platform === "darwin" || platform === "linux")
             ? (async () => {
-                const firstPath = (options.env?.PATH ?? "").split(":")[0];
+                const pathValue = Object.entries(options.env ?? {})
+                  .find(([key]) => key.toUpperCase() === "PATH")?.[1] ?? "";
+                const firstPath = pathValue.split(path.delimiter)[0];
                 const shimName = platform === "darwin" ? "open" : "xdg-open";
                 if (firstPath) {
                   await access(path.join(firstPath, shimName), constants.X_OK);

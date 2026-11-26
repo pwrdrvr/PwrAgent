@@ -93,9 +93,8 @@ async function nonInteractiveUsageEnv(
       env[key] = value;
     }
   }
-  const pathDelimiter = platform === "win32" ? ";" : ":";
   const runtime = platform === "win32" ? process.execPath.replaceAll("\\", "/") : process.execPath;
-  if (runtime.includes(pathDelimiter) || /[\r\n\0]|%s/u.test(runtime)) {
+  if (runtime.includes(path.delimiter) || /[\r\n\0]|%s/u.test(runtime)) {
     return undefined;
   }
   env.SSH_CONNECTION = "127.0.0.1 0 127.0.0.1 0";
@@ -104,7 +103,7 @@ async function nonInteractiveUsageEnv(
 
   if (platform === "darwin" || platform === "linux") {
     const browserBin = path.join(cwd, "browser-bin");
-    if (browserBin.includes(pathDelimiter)) return undefined;
+    if (browserBin.includes(path.delimiter)) return undefined;
     try {
       await mkdir(browserBin, { mode: 0o700 });
       const opener = platform === "darwin" ? "open" : "xdg-open";
@@ -112,7 +111,8 @@ async function nonInteractiveUsageEnv(
     } catch {
       return undefined;
     }
-    env.PATH = `${browserBin}${pathDelimiter}${env.PATH ?? "/usr/bin:/bin"}`;
+    const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+    env[pathKey] = `${browserBin}${path.delimiter}${env[pathKey] ?? "/usr/bin:/bin"}`;
   }
   return env;
 }
