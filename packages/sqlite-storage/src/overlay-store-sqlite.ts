@@ -8878,6 +8878,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       .run(now, identity.backend, identity.threadId).changes;
   }
 
+  async hasActiveChecksWatch(params: Parameters<PrStatusWatchStorage["hasActiveChecksWatch"]>[0]): Promise<boolean> {
+    return Boolean(this.stateDb.raw.prepare(
+      `SELECT 1 FROM pr_status_watches
+       WHERE pr_key = ? AND head_sha = ? AND head_sha <> ''
+         AND status IN ('watching', 'dispatching')
+         AND ((? = 'success' AND notify_on_success = 1) OR (? = 'failure' AND notify_on_failure = 1))
+       LIMIT 1`,
+    ).get(params.prKey, params.headSha, params.outcome, params.outcome));
+  }
+
   async claimThreadPrStatusWatches(params: Parameters<PrStatusWatchStorage["claimThreadPrStatusWatches"]>[0]): Promise<PrStatusWatchClaimResult> {
     const claim = this.stateDb.raw.transaction((): PrStatusWatchClaimResult => {
       const activeDispatch = this.stateDb.raw
@@ -13406,6 +13416,7 @@ export type OverlayStoreLike = Pick<
   | "registerThreadPrStatusWatch"
   | "isThreadPrStatusWatchClaimActive"
   | "retireArchivedThreadPrAutomation"
+  | "hasActiveChecksWatch"
   | "claimThreadPrStatusWatches"
   | "releaseThreadPrStatusWatch"
   | "renewThreadPrStatusWatchLease"

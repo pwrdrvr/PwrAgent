@@ -1216,6 +1216,7 @@ vi.mock("../storage/desktop-overlay-store", () => ({
     registerThreadPrStatusWatch,
     retireArchivedThreadPrAutomation: async () => [],
     isThreadPrStatusWatchClaimActive: async () => true,
+    hasActiveChecksWatch: async () => true,
     claimThreadPrStatusWatches,
     releaseThreadPrStatusWatch,
     renewThreadPrStatusWatchLease,
