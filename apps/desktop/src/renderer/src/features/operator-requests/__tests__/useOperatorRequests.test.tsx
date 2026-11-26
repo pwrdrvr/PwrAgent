@@ -1,4 +1,5 @@
 import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ListOperatorRequestsResponse,
@@ -135,6 +136,17 @@ describe("operator queue owner identity", () => {
 });
 
 describe("operator queue refresh", () => {
+  it("reads the initial queue once when StrictMode replays the unchanged mount effect", async () => {
+    const { api, changed } = fixture();
+    const { result } = renderHook(() => useOperatorRequests(api, ""), { wrapper: StrictMode });
+    await act(async () => {});
+    expect(result.current.ready).toBe(true);
+    expect(api.listOperatorRequests).toHaveBeenCalledTimes(1);
+
+    await act(async () => changed({ reason: "questions" }));
+    expect(api.listOperatorRequests).toHaveBeenCalledTimes(2);
+  });
+
   it("resolves only after a read that started after the call", async () => {
     const { api } = fixture();
     const reads: Array<() => void> = [];
