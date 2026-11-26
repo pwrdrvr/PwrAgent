@@ -4,6 +4,8 @@ import {
   MAX_TRANSCRIPT_IMAGE_BYTES,
   pwrSnapToolImageParts,
 } from "@pwragent/shared/transcript-image-sources";
+import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
   AppServerBackendKind,
@@ -50,7 +52,34 @@ const DATA_IMAGE_EXTENSIONS = new Map<string, string>([
   ["image/webp", "webp"],
 ]);
 
-const MARKDOWN_LINKED_IMAGE_PATTERN = /!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))[^)]*\)/g;
+const ANTIGRAVITY_BRAIN_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/u;
+
+/**
+ * Antigravity stores per-conversation artifacts and screenshots in
+ * `~/.gemini/antigravity-cli/brain/<id>`. Scope strictly to this thread's
+ * own session id(s) so one thread can never read another thread's brain.
+ */
+export function antigravityThreadBrainRoots(params: {
+  backend: AppServerBackendKind;
+  threadId: string;
+  agentSessionId?: string;
+  homeDir?: string;
+}): string[] {
+  if (params.backend !== "acp:antigravity") {
+    return [];
+  }
+  const homeDir = params.homeDir ?? os.homedir();
+  const ids = new Set<string>();
+  for (const candidate of [params.threadId, params.agentSessionId]) {
+    if (candidate && ANTIGRAVITY_BRAIN_ID_PATTERN.test(candidate)) {
+      ids.add(candidate);
+    }
+  }
+  return [...ids].map((id) =>
+    path.resolve(homeDir, ".gemini", "antigravity-cli", "brain", id),
+  );
+}
+
 const PWRSNAP_SESSION_ENDED_REASON =
   "PwrSnap image unavailable. The PwrSnap session that returned it has ended.";
 const PWRSNAP_READ_FAILED_REASON = "PwrSnap could not provide this image.";
@@ -512,15 +541,29 @@ export async function materializeTranscriptImageEventForRenderer(
   if (typeof record.id !== "string") return event;
   const isMessage = record.type === "agentMessage" && typeof record.text === "string";
   const isImageView = event.backend === "codex" && record.type === "imageView";
-  const resourceImages = pwrSnapToolImageParts(record);
-  if (!isMessage && !isImageView && resourceImages.length === 0) return event;
+  const messageContentImages = isMessage ? readCompletedItemImageParts(record.content) : [];
+  const toolImages = [
+    ...pwrSnapToolImageParts(record),
+    ...(isMessage ? [] : readCompletedItemImageParts(record.images)),
+  ];
+  const dedupedToolImages = dedupeImagePartsByUrl(toolImages);
+  if (!isMessage && !isImageView && dedupedToolImages.length === 0) return event;
   const sourcePath = isImageView && typeof record.path === "string" && path.isAbsolute(record.path)
     ? record.path : undefined;
   const sourceUrl = sourcePath ? pathToFileURL(sourcePath).toString() : undefined;
+  const messageText = isMessage ? record.text as string : "";
   const message: AppServerThreadMessage = {
     id: record.id,
     role: "assistant",
-    text: isMessage ? record.text as string : "",
+    text: messageText,
+    ...(messageContentImages.length > 0
+      ? {
+          parts: [
+            ...(messageText ? [{ type: "text" as const, text: messageText }] : []),
+            ...messageContentImages,
+          ],
+        }
+      : {}),
   };
   const result = await materializeTranscriptImageUrlsForRenderer({
     backend: event.backend,
@@ -528,11 +571,11 @@ export async function materializeTranscriptImageEventForRenderer(
     fetchedAt: 0,
     replay: {
       messages: isMessage ? [message] : [],
-      entries: resourceImages.length || (sourceUrl && sourcePath) ? [{
+      entries: dedupedToolImages.length || (sourceUrl && sourcePath) ? [{
         type: "activity", id: record.id, summary: "Tool images", status: "completed",
         details: [{
           id: record.id, kind: "command", label: "Tool images", status: "completed",
-          images: resourceImages.length ? resourceImages
+          images: dedupedToolImages.length ? dedupedToolImages
             : [{ type: "image", url: sourceUrl!, sourceUrl, alt: path.basename(sourcePath!) }],
         }],
       }] : [],
@@ -540,7 +583,7 @@ export async function materializeTranscriptImageEventForRenderer(
     },
   }, dependencies, options);
   const activity = result.replay.entries[0];
-  const images = isImageView || resourceImages.length
+  const images = isImageView || dedupedToolImages.length
     ? activity?.type === "activity" ? activity.details[0]?.images ?? [] : []
     : result.replay.messages[0]?.parts?.filter(
         (part): part is AppServerThreadImagePart => part.type === "image",
@@ -1320,65 +1363,202 @@ function resolveMarkdownLinkedImage(
   return resolution;
 }
 
+function readCompletedItemImageParts(value: unknown): AppServerThreadImagePart[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const images: AppServerThreadImagePart[] = [];
+  for (const candidate of value) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      continue;
+    }
+    const part = candidate as Record<string, unknown>;
+    if (part.type !== "image" || typeof part.url !== "string" || !part.url.trim()) {
+      continue;
+    }
+    images.push({
+      type: "image",
+      url: part.url,
+      ...(typeof part.alt === "string" && part.alt ? { alt: part.alt } : {}),
+      ...(typeof part.sourceUrl === "string" && part.sourceUrl ? { sourceUrl: part.sourceUrl } : {}),
+      ...(typeof part.unavailableReason === "string" && part.unavailableReason
+        ? { unavailableReason: part.unavailableReason }
+        : {}),
+    });
+  }
+  return images;
+}
+
+function dedupeImagePartsByUrl(
+  parts: readonly AppServerThreadImagePart[],
+): AppServerThreadImagePart[] {
+  const seen = new Set<string>();
+  const result: AppServerThreadImagePart[] = [];
+  for (const part of parts) {
+    if (seen.has(part.url)) {
+      continue;
+    }
+    seen.add(part.url);
+    result.push(part);
+  }
+  return result;
+}
+
+type MdastLikeNode = {
+  type: string;
+  url?: string;
+  alt?: string | null;
+  value?: string;
+  identifier?: string;
+  children?: MdastLikeNode[];
+  position?: {
+    start?: { offset?: number };
+    end?: { offset?: number };
+  };
+};
+
+function sourceSliceForMdastNode(text: string, node: MdastLikeNode): string | undefined {
+  const start = node.position?.start?.offset;
+  const end = node.position?.end?.offset;
+  if (typeof start !== "number" || typeof end !== "number" || start < 0 || end < start) {
+    return undefined;
+  }
+  return text.slice(start, end);
+}
+
+function windowsDestinationFromInlineSource(source: string | undefined): string | undefined {
+  const match = /^!?\[[\s\S]*?\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))/.exec(source ?? "");
+  const destination = match?.[1] ?? match?.[2];
+  return destination && isWindowsFilesystemPath(safelyDecodeUriComponent(destination))
+    ? destination
+    : undefined;
+}
+
+function windowsDestinationFromDefinitionSource(source: string | undefined): string | undefined {
+  const match = /^\s*\[[^\]]+\]:\s*(?:<([^>\r\n]+)>|(\S+))/.exec(source ?? "");
+  const destination = match?.[1] ?? match?.[2];
+  return destination && isWindowsFilesystemPath(safelyDecodeUriComponent(destination))
+    ? destination
+    : undefined;
+}
+
+function mdastNodeText(node: MdastLikeNode): string {
+  if (typeof node.value === "string") {
+    return node.value;
+  }
+  if (typeof node.alt === "string") {
+    return node.alt;
+  }
+  if (Array.isArray(node.children)) {
+    return node.children.map(mdastNodeText).join("");
+  }
+  return "";
+}
+
 function extractMarkdownLinkedImageParts(text: string): Array<{
   alt?: string;
   sourcePath: string;
 }> {
-  const output: Array<{ alt?: string; sourcePath: string }> = [];
-  let fenceMarker: "`" | "~" | undefined;
-
-  for (const line of text.split(/\r?\n/u)) {
-    const fence = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1];
-    if (fence) {
-      const marker = fence[0] as "`" | "~";
-      if (!fenceMarker) {
-        fenceMarker = marker;
-      } else if (fenceMarker === marker) {
-        fenceMarker = undefined;
-      }
-      continue;
-    }
-    if (fenceMarker) {
-      continue;
-    }
-
-    MARKDOWN_LINKED_IMAGE_PATTERN.lastIndex = 0;
-    let match: RegExpExecArray | null;
-    while ((match = MARKDOWN_LINKED_IMAGE_PATTERN.exec(line))) {
-      if (isInsideInlineCode(line, match.index)) {
-        continue;
-      }
-
-      const sourcePath = localImageLinkPath(match[2] ?? match[3] ?? "");
-      if (!sourcePath || !mimeTypeForImagePath(sourcePath)) {
-        continue;
-      }
-      output.push({
-        alt: match[1]?.trim() || undefined,
-        sourcePath,
-      });
-    }
+  // Every CommonMark inline or reference link/image contains `](` or a `]:` definition.
+  if (!text.includes("](") && !text.includes("]:")) {
+    return [];
   }
 
+  const tree = fromMarkdown(text) as unknown as MdastLikeNode;
+  const definitions = new Map<string, string>();
+  const collectDefinitions = (node: MdastLikeNode): void => {
+    if (node.type === "definition" && typeof node.identifier === "string" && typeof node.url === "string") {
+      const key = node.identifier.toLowerCase();
+      if (!definitions.has(key)) {
+        const destination = windowsDestinationFromDefinitionSource(sourceSliceForMdastNode(text, node))
+          ?? node.url;
+        definitions.set(key, destination);
+      }
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        collectDefinitions(child);
+      }
+    }
+  };
+  collectDefinitions(tree);
+
+  const output: Array<{ alt?: string; sourcePath: string }> = [];
+  const pushDestination = (destination: string, alt: string | undefined): void => {
+    const sourcePath = localImageLinkPath(destination);
+    if (!sourcePath || !mimeTypeForImagePath(sourcePath)) {
+      return;
+    }
+    output.push({
+      alt: alt?.trim() || undefined,
+      sourcePath,
+    });
+  };
+
+  const walk = (node: MdastLikeNode): void => {
+    if (node.type === "link" || node.type === "image") {
+      const destination = windowsDestinationFromInlineSource(sourceSliceForMdastNode(text, node))
+        ?? (typeof node.url === "string" ? node.url : "");
+      const alt = node.type === "image"
+        ? (typeof node.alt === "string" ? node.alt : undefined)
+        : mdastNodeText(node);
+      pushDestination(destination, alt);
+    } else if (node.type === "linkReference" || node.type === "imageReference") {
+      const destination = typeof node.identifier === "string"
+        ? definitions.get(node.identifier.toLowerCase())
+        : undefined;
+      if (destination) {
+        const alt = node.type === "imageReference"
+          ? (typeof node.alt === "string" ? node.alt : undefined)
+          : mdastNodeText(node);
+        pushDestination(destination, alt);
+      }
+    }
+    if (Array.isArray(node.children)) {
+      for (const child of node.children) {
+        walk(child);
+      }
+    }
+  };
+  walk(tree);
+
   return output;
+}
+
+function stripOptionalFileLineSuffix(filePath: string): string {
+  const match = /:(\d+)(?::(\d+))?$/.exec(filePath);
+  return match ? filePath.slice(0, match.index) : filePath;
 }
 
 function localImageLinkPath(destination: string): string | undefined {
   const trimmed = destination.trim();
   if (trimmed.startsWith("file://")) {
     try {
-      return fileURLToPath(trimmed);
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== "file:") {
+        return undefined;
+      }
+      parsed.search = "";
+      parsed.hash = "";
+      if (parsed.hostname.toLowerCase() === "localhost") {
+        parsed.hostname = "";
+      }
+      const filePath = stripOptionalFileLineSuffix(fileURLToPath(parsed));
+      return path.resolve(filePath);
     } catch {
       return undefined;
     }
   }
 
   if (path.isAbsolute(trimmed)) {
-    return safelyDecodeUriComponent(trimmed);
+    return path.resolve(stripOptionalFileLineSuffix(safelyDecodeUriComponent(trimmed)));
   }
 
   if (trimmed.startsWith("~/")) {
-    return path.join(os.homedir(), safelyDecodeUriComponent(trimmed.slice(2)));
+    return path.resolve(
+      os.homedir(),
+      stripOptionalFileLineSuffix(safelyDecodeUriComponent(trimmed.slice(2))),
+    );
   }
 
   return undefined;
@@ -1390,26 +1570,6 @@ function safelyDecodeUriComponent(value: string): string {
   } catch {
     return value;
   }
-}
-
-function isInsideInlineCode(line: string, offset: number): boolean {
-  let markerLength = 0;
-  for (let index = 0; index < offset; index += 1) {
-    if (line[index] !== "`" || line[index - 1] === "\\") {
-      continue;
-    }
-    let length = 1;
-    while (line[index + length] === "`") {
-      length += 1;
-    }
-    if (markerLength === 0) {
-      markerLength = length;
-    } else if (markerLength === length) {
-      markerLength = 0;
-    }
-    index += length - 1;
-  }
-  return markerLength > 0;
 }
 
 type TranscriptImageUrlRewriter = (url: string) => string | undefined;

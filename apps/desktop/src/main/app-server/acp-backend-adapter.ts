@@ -18,6 +18,7 @@ import {
   type AppServerBackendKind,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
+  type AppServerThreadImagePart,
   type AppServerThreadMessagePart,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
@@ -3599,6 +3600,7 @@ export class AcpBackendAdapter {
         }),
       onSessionUpdate: async ({
         assistantMessageItemId,
+        completedAssistantMessage,
         fromSessionLoad,
         sessionId,
         replay,
@@ -3790,6 +3792,32 @@ export class AcpBackendAdapter {
             });
           }
         }
+        if (turnId && !fromSessionLoad && completedAssistantMessage) {
+          const completedImages = completedAssistantMessage.parts?.filter(
+            (part): part is AppServerThreadImagePart => part.type === "image",
+          ) ?? [];
+          if (completedAssistantMessage.text.trim() || completedImages.length > 0) {
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "item/completed",
+                params: {
+                  threadId: sessionId,
+                  turnId,
+                  item: {
+                    id: completedAssistantMessage.id,
+                    type: "agentMessage",
+                    text: completedAssistantMessage.text,
+                    ...(completedAssistantMessage.phase
+                      ? { phase: completedAssistantMessage.phase }
+                      : {}),
+                    ...(completedImages.length > 0 ? { content: completedImages } : {}),
+                  },
+                },
+              },
+            });
+          }
+        }
         if (
           updateKind === "pwragent_steered_user_prompt"
           && turnId
@@ -3930,7 +3958,33 @@ export class AcpBackendAdapter {
         // that running turn. Live lifecycle is owned by turn/started and the
         // prompt-settled terminal events, not transcript replay snapshots.
       },
-      onPromptError: async ({ sessionId, turnId, error, usage }) => {
+      onPromptError: async ({ completedAssistantMessage, sessionId, turnId, error, usage }) => {
+        if (completedAssistantMessage) {
+          const completedImages = completedAssistantMessage.parts?.filter(
+            (part): part is AppServerThreadImagePart => part.type === "image",
+          ) ?? [];
+          if (completedAssistantMessage.text.trim() || completedImages.length > 0) {
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "item/completed",
+                params: {
+                  threadId: sessionId,
+                  turnId,
+                  item: {
+                    id: completedAssistantMessage.id,
+                    type: "agentMessage",
+                    text: completedAssistantMessage.text,
+                    ...(completedAssistantMessage.phase
+                      ? { phase: completedAssistantMessage.phase }
+                      : {}),
+                    ...(completedImages.length > 0 ? { content: completedImages } : {}),
+                  },
+                },
+              },
+            }).catch(() => undefined);
+          }
+        }
         this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),

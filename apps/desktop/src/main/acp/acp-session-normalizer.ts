@@ -1,17 +1,18 @@
 import { createHash } from "node:crypto";
 import type { AcpSessionNormalizer } from "@pwrdrvr/agent-acp";
-import type {
-  AppServerThreadActivityEntry,
-  AppServerThreadCommandDetail,
-  AppServerThreadEntry,
-  AppServerThreadImagePart,
-  AppServerThreadMessage,
-  AppServerThreadMessagePart,
-  AppServerThreadPlanEntry,
-  AppServerThreadReplay,
-  AppServerThreadStatus,
-  AppServerThreadTurnStatus,
-  AppServerTranscriptPhase,
+import {
+  type AppServerThreadActivityEntry,
+  type AppServerThreadCommandDetail,
+  type AppServerThreadEntry,
+  type AppServerThreadImagePart,
+  type AppServerThreadMessage,
+  type AppServerThreadMessageEntry,
+  type AppServerThreadMessagePart,
+  type AppServerThreadPlanEntry,
+  type AppServerThreadReplay,
+  type AppServerThreadStatus,
+  type AppServerThreadTurnStatus,
+  type AppServerTranscriptPhase,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
@@ -53,6 +54,7 @@ import {
   readAcpFileRead,
 } from "./acp-file-read.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
+import { extractAcpContentImageParts, extractAcpToolImageParts } from "./acp-tool-images.js";
 import { reduceNormalizedThread } from "./normalized-thread-reducer.js";
 import { normalizedThreadToReplay, normalizedToolCallToReplayDetail } from "./normalized-thread-to-replay.js";
 
@@ -838,11 +840,11 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (
-      !text
-      || isModeUpdateMarker(text)
-      || (!this.activeAssistantMessageId && !text.trim())
-    ) {
+    const imageParts = extractAcpContentImageParts(update.update.content);
+    const hasText = Boolean(text)
+      && !isModeUpdateMarker(text)
+      && (Boolean(this.activeAssistantMessageId) || Boolean(text.trim()));
+    if (!hasText && imageParts.length === 0) {
       return;
     }
     const id = this.assistantMessageIdForChunk(update);
@@ -850,7 +852,8 @@ export class AcpSessionReplayNormalizer {
       id,
       phase: "final",
       role: "assistant",
-      text,
+      text: hasText ? text : "",
+      ...(imageParts.length > 0 ? { parts: imageParts } : {}),
       createdAt,
     });
   }
@@ -1445,6 +1448,13 @@ export class AcpSessionReplayNormalizer {
     return this.activeAssistantMessageId;
   }
 
+  /** Read a message entry by its replay id so live completions match replay. */
+  readMessageEntry(id: string): AppServerThreadMessageEntry | undefined {
+    const entryIndex = this.typedEntryIndexes.get(`message:${id}`);
+    const entry = entryIndex === undefined ? undefined : this.entries[entryIndex];
+    return entry?.type === "message" ? entry : undefined;
+  }
+
   private assistantMessageIdForChunk(update: AcpSessionUpdate): string {
     const explicitId =
       readString(update.update, "messageId") ??
@@ -1909,20 +1919,26 @@ export class AcpSessionReplayNormalizer {
     const existingMessage = messageIndex === undefined
       ? undefined : this.messages[messageIndex];
     if (existingMessage) {
-      existingMessage.text = appendAcpTranscriptChunk(
-        existingMessage.text,
-        params.text,
-        params.phase,
-      );
-      if (params.parts?.length && !existingMessage.parts?.length) {
-        existingMessage.parts = params.parts;
+      const nextText = params.text
+        ? appendAcpTranscriptChunk(existingMessage.text, params.text, params.phase)
+        : existingMessage.text;
+      existingMessage.text = nextText;
+      const mergedParts = mergeMessageChunkParts(existingMessage.parts, nextText, params.parts);
+      if (mergedParts) {
+        existingMessage.parts = mergedParts;
       }
     } else {
+      const initialParts = params.parts?.length
+        ? [
+            ...(params.text ? [{ type: "text" as const, text: params.text }] : []),
+            ...params.parts,
+          ]
+        : undefined;
       this.appendMessage({
         id: params.id,
         role: params.role,
         text: params.text,
-        ...(params.parts?.length ? { parts: params.parts } : {}),
+        ...(initialParts?.length ? { parts: initialParts } : {}),
         createdAt: params.createdAt,
       });
     }
@@ -1931,22 +1947,28 @@ export class AcpSessionReplayNormalizer {
     const existingEntry = entryIndex === undefined
       ? undefined : this.entries[entryIndex];
     if (existingEntry?.type === "message") {
-      existingEntry.text = appendAcpTranscriptChunk(
-        existingEntry.text,
-        params.text,
-        params.phase,
-      );
-      if (params.parts?.length && !existingEntry.parts?.length) {
-        existingEntry.parts = params.parts;
+      const nextText = params.text
+        ? appendAcpTranscriptChunk(existingEntry.text, params.text, params.phase)
+        : existingEntry.text;
+      existingEntry.text = nextText;
+      const mergedParts = mergeMessageChunkParts(existingEntry.parts, nextText, params.parts);
+      if (mergedParts) {
+        existingEntry.parts = mergedParts;
       }
     } else {
+      const initialParts = params.parts?.length
+        ? [
+            ...(params.text ? [{ type: "text" as const, text: params.text }] : []),
+            ...params.parts,
+          ]
+        : undefined;
       this.appendEntry(this.withCurrentTurn({
         type: "message",
         id: params.id,
         phase: params.phase,
         role: params.role,
         text: params.text,
-        ...(params.parts?.length ? { parts: params.parts } : {}),
+        ...(initialParts?.length ? { parts: initialParts } : {}),
         createdAt: params.createdAt,
       }));
     }
@@ -2655,6 +2677,7 @@ function toolActivity(
     : webFetchUrl || fileRead
       ? "read"
       : toolDetailKind(readString(update.update, "kind"), path);
+  const images = extractAcpToolImageParts(update.update, label);
 
   return {
     type: "activity",
@@ -2668,6 +2691,7 @@ function toolActivity(
         kind: detailKind,
         label,
         path,
+        ...(images.length > 0 ? { images } : {}),
         command:
           displayCommand || output !== undefined || exitCode !== undefined
             ? {
@@ -2843,9 +2867,63 @@ function mergeActivityEntryDetails(
             }
           : undefined,
       fileDiff: incomingDetail.fileDiff ?? existingDetail.fileDiff,
+      ...(() => {
+        const mergedImages = mergeActivityDetailImages(existingDetail.images, incomingDetail.images);
+        return mergedImages?.length ? { images: mergedImages } : {};
+      })(),
     };
   }
   return merged;
+}
+
+function mergeActivityDetailImages(
+  existing: AppServerThreadImagePart[] | undefined,
+  incoming: AppServerThreadImagePart[] | undefined,
+): AppServerThreadImagePart[] | undefined {
+  if (!existing?.length && !incoming?.length) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const combined: AppServerThreadImagePart[] = [];
+  for (const image of [...(existing ?? []), ...(incoming ?? [])]) {
+    if (seen.has(image.url)) {
+      continue;
+    }
+    seen.add(image.url);
+    combined.push(image);
+  }
+  return combined;
+}
+
+function mergeMessageChunkParts(
+  existingParts: AppServerThreadMessagePart[] | undefined,
+  nextText: string,
+  incomingParts: AppServerThreadMessagePart[] | undefined,
+): AppServerThreadMessagePart[] | undefined {
+  if (!existingParts?.length && !incomingParts?.length) {
+    return undefined;
+  }
+  const nonTextParts: AppServerThreadMessagePart[] = [];
+  const seenImageUrls = new Set<string>();
+  for (const part of [...(existingParts ?? []), ...(incomingParts ?? [])]) {
+    if (part.type === "text") {
+      continue;
+    }
+    if (part.type === "image") {
+      if (seenImageUrls.has(part.url)) {
+        continue;
+      }
+      seenImageUrls.add(part.url);
+    }
+    nonTextParts.push(part);
+  }
+  if (nonTextParts.length === 0) {
+    return existingParts;
+  }
+  return [
+    ...(nextText ? [{ type: "text" as const, text: nextText }] : []),
+    ...nonTextParts,
+  ];
 }
 
 function preferSpecificLabel(

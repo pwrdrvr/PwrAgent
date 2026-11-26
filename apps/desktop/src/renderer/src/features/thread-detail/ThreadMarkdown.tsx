@@ -1226,9 +1226,36 @@ function MarkdownDocumentModal(props: {
   );
 }
 
+function encodePosixPathForFileUrl(filePath: string): string {
+  return filePath
+    .replace(/%(?![0-9a-fA-F]{2})/g, "%25")
+    .replace(/#/g, "%23")
+    .replace(/\?/g, "%3F");
+}
+
+function normalizePosixPath(filePath: string): string {
+  const isUnc = filePath.startsWith("//") && !filePath.startsWith("///");
+  const segments = filePath.split("/");
+  const normalized: string[] = [];
+  for (const segment of segments) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      normalized.pop();
+      continue;
+    }
+    normalized.push(segment);
+  }
+  return `${isUnc ? "//" : "/"}${normalized.join("/")}`;
+}
+
 const normalizeMarkdownUrl: UrlTransform = (url) => {
   const trimmed = url.trim();
-  if (trimmed.startsWith("/") || isWindowsFilesystemPath(decodeMarkdownDestination(trimmed))) {
+  if (trimmed.startsWith("/")) {
+    return `file://${encodePosixPathForFileUrl(trimmed)}`;
+  }
+  if (isWindowsFilesystemPath(decodeMarkdownDestination(trimmed))) {
     // Directory chips serialize Windows separators as %5C. Classify the
     // decoded path, but retain its encoding here so localFileTargetFromHref
     // decodes exactly once (a filename containing literal %5C stays literal).
@@ -1239,7 +1266,8 @@ const normalizeMarkdownUrl: UrlTransform = (url) => {
     // tilde-form local paths — expand to the same file:// form as
     // absolute paths so the local-file machinery (and the directory
     // chip) can resolve them.
-    return `file://${expandTildePath(trimmed)}`;
+    const expanded = expandTildePath(trimmed);
+    return `file://${expanded.startsWith("/") ? encodePosixPathForFileUrl(expanded) : expanded}`;
   }
 
   return isSafeMarkdownUrl(trimmed) ? trimmed : "";
@@ -1383,7 +1411,7 @@ function localFileTargetFromHref(
   href: string
 ): LocalFileTarget | undefined {
   if (href.startsWith("file://")) {
-    return splitFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
+    return splitFileLineSuffix(decodeMarkdownDestination(href.replace(/^file:\/\//, "")));
   }
 
   if (href.startsWith("/")) {
@@ -1415,7 +1443,7 @@ function markdownImagePathFromHref(href: string): string | undefined {
     } else {
       try {
         const url = new URL(href);
-        const host = url.hostname && url.hostname !== "localhost" ? `//${url.hostname}` : "";
+        const host = url.hostname && url.hostname.toLowerCase() !== "localhost" ? `//${url.hostname}` : "";
         imagePath = decodeURIComponent(`${host}${url.pathname}`);
       } catch {
         return undefined;
@@ -1428,7 +1456,9 @@ function markdownImagePathFromHref(href: string): string | undefined {
   if (isWindowsFilesystemPath(imagePath)) {
     return splitFileLineSuffix(imagePath.replace(/\\/g, "/")).path;
   }
-  return imagePath.startsWith("/") ? splitFileLineSuffix(imagePath).path : undefined;
+  return imagePath.startsWith("/")
+    ? normalizePosixPath(splitFileLineSuffix(imagePath).path)
+    : undefined;
 }
 
 function findMarkdownLinkedImagePart(

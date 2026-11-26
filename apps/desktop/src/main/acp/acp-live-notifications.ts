@@ -21,6 +21,7 @@ import {
   readAcpWebSearch,
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
+import { extractAcpToolImageParts } from "./acp-tool-images.js";
 import { type ReadAcpFileEditOptions, readAcpFileEdit } from "./acp-file-edit.js";
 import { type AcpFileRead, fileBaseName, readAcpFileRead } from "./acp-file-read.js";
 import {
@@ -545,6 +546,7 @@ function liveItemForAcpToolUpdate(
         ? command
         : title,
   });
+  const images = extractAcpToolImageParts(update, title);
   const item: Record<string, unknown> = {
     id: id ?? `${toolKind}:${title}`,
     type: "commandExecution",
@@ -555,6 +557,7 @@ function liveItemForAcpToolUpdate(
     ...(fileRead ? { path: fileRead.path } : {}),
     ...(!rawCommand && mcpToolName ? { commandToolName: mcpToolName } : {}),
     ...(commandActions.length ? { commandActions } : {}),
+    ...(images.length ? { images } : {}),
     ...(output ? { data: { output } } : {}),
   };
   return item;

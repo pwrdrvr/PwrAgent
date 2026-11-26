@@ -5378,6 +5378,7 @@ function isMessagingConversationKind(
 }
 
 function assistantMessageEntryFromCompletedItem(params: {
+  hasRendererImages?: boolean;
   itemParams: AppServerNotification["params"];
   turn: AppServerThreadTurnMetadata | undefined;
 }): AppServerThreadMessageEntry | undefined {
@@ -5401,7 +5402,7 @@ function assistantMessageEntryFromCompletedItem(params: {
   }
 
   const text = typeof record.text === "string" ? record.text.trim() : "";
-  if (!text) {
+  if (!text && !params.hasRendererImages) {
     return undefined;
   }
 
@@ -7721,12 +7722,15 @@ export function useThreadSessionState(params: {
           const assistantMessageEntry = !retainTranscript || transientTaskMonitorItem
             ? undefined
             : assistantMessageEntryFromCompletedItem({
+                hasRendererImages: Boolean(event.rendererImageParts?.length),
                 itemParams: event.notification.params,
                 turn: assistantTurn,
               });
           if (assistantMessageEntry && event.rendererImageParts?.length) {
             assistantMessageEntry.parts = [
-              { type: "text", text: assistantMessageEntry.text },
+              ...(assistantMessageEntry.text
+                ? [{ type: "text" as const, text: assistantMessageEntry.text }]
+                : []),
               ...event.rendererImageParts,
             ];
           }

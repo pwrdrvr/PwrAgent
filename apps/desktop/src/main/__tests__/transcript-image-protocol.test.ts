@@ -1264,6 +1264,180 @@ describe("transcript image protocol", () => {
       status: 403,
     });
   });
+
+  it("extracts CommonMark image links with parens, nested brackets, references, suffixes, and non-canonical paths", async () => {
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../shell/transcript-image-protocol"
+    );
+    const worktree = path.join(tempDir, "worktree");
+    const nested = path.join(worktree, "nested");
+    await mkdir(nested, { recursive: true });
+    const bytes = Buffer.from([1, 2, 3, 4]);
+    const files = {
+      parens: path.join(worktree, "shot(1).png"),
+      nestedBracket: path.join(worktree, "panel.png"),
+      refFull: path.join(worktree, "ref-full.png"),
+      refShortcut: path.join(worktree, "ref-shortcut.png"),
+      percentSpace: path.join(worktree, "100% done.png"),
+      hashSpace: path.join(worktree, "shot #1.png"),
+      lineSuffix: path.join(worktree, "line-suffix.png"),
+      ignoredCode: path.join(worktree, "ignored.png"),
+    };
+    await Promise.all(Object.values(files).map((file) => writeFile(file, bytes)));
+
+    const text = [
+      `- Parens: [shot(1).png](${pathToFileURL(files.parens).toString()}#view=fit)`,
+      `- Nested: [Run [1] panel](${path.join(nested, "..", "panel.png")})`,
+      `- Full ref: [full][r1] and shortcut [ref-shortcut.png]`,
+      `- Raw angle: [pct](<${files.percentSpace}>) and [hash](<${files.hashSpace}>)`,
+      `- Suffix and double slash: [line](${worktree}//line-suffix.png:1)`,
+      `- Code ignored: \`[ignored](${pathToFileURL(files.ignoredCode).toString()})\``,
+      "",
+      `[r1]: ${pathToFileURL(files.refFull).toString().replace(/^file:\/\//, "file://localhost")}?v=2`,
+      `[ref-shortcut.png]: ${pathToFileURL(files.refShortcut).toString()}`,
+    ].join("\n");
+
+    const result = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "acp:antigravity",
+        threadId: "md-links",
+        fetchedAt: 1,
+        replay: {
+          entries: [{ type: "message", id: "m1", role: "assistant", text }],
+          messages: [{ id: "m1", role: "assistant", text }],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      },
+      { resolveRoot: () => path.join(tempDir, "cache"), retainLocalImage: async () => undefined },
+      { approvedLocalImageRoots: [worktree] },
+    );
+
+    const imageParts = (result.replay.messages[0]?.parts ?? []).filter((part) => part.type === "image");
+    const sourceUrls = imageParts.map((part) => part.sourceUrl);
+    expect(sourceUrls).toEqual([
+      pathToFileURL(files.parens).toString(),
+      pathToFileURL(files.nestedBracket).toString(),
+      pathToFileURL(files.refFull).toString(),
+      pathToFileURL(files.refShortcut).toString(),
+      pathToFileURL(files.percentSpace).toString(),
+      pathToFileURL(files.hashSpace).toString(),
+      pathToFileURL(files.lineSuffix).toString(),
+    ]);
+    expect(sourceUrls).not.toContain(pathToFileURL(files.ignoredCode).toString());
+  });
+
+  it("scopes Antigravity brain image roots strictly to the thread and its agent session", async () => {
+    const { antigravityThreadBrainRoots, materializeTranscriptImageUrlsForRenderer } = await import(
+      "../shell/transcript-image-protocol"
+    );
+    const homeDir = path.join(tempDir, "home");
+    const ownDir = path.join(homeDir, ".gemini", "antigravity-cli", "brain", "thread-own");
+    const reboundDir = path.join(homeDir, ".gemini", "antigravity-cli", "brain", "agent-rebound");
+    const otherDir = path.join(homeDir, ".gemini", "antigravity-cli", "brain", "thread-other");
+    await Promise.all([ownDir, reboundDir, otherDir].map((dir) => mkdir(dir, { recursive: true })));
+
+    const ownShot = path.join(ownDir, "running.png");
+    const reboundShot = path.join(reboundDir, "panel.png");
+    const otherShot = path.join(otherDir, "secret.png");
+    await Promise.all([ownShot, reboundShot, otherShot].map((file) => writeFile(file, Buffer.from([9, 8, 7]))));
+
+    expect(antigravityThreadBrainRoots({ backend: "codex", threadId: "thread-own", homeDir })).toEqual([]);
+    expect(antigravityThreadBrainRoots({ backend: "acp:antigravity", threadId: "../escape", homeDir })).toEqual([]);
+
+    const roots = antigravityThreadBrainRoots({
+      backend: "acp:antigravity",
+      threadId: "thread-own",
+      agentSessionId: "agent-rebound",
+      homeDir,
+    });
+    const text = [
+      `[own](${pathToFileURL(ownShot).toString()})`,
+      `[rebound](${pathToFileURL(reboundShot).toString()})`,
+      `[other](${pathToFileURL(otherShot).toString()})`,
+    ].join(" ");
+    const result = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "acp:antigravity",
+        threadId: "thread-own",
+        fetchedAt: 1,
+        replay: {
+          entries: [{ type: "message", id: "m1", role: "assistant", text }],
+          messages: [{ id: "m1", role: "assistant", text }],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      },
+      { resolveRoot: () => path.join(tempDir, "cache"), retainLocalImage: async () => undefined },
+      { approvedLocalImageRoots: roots },
+    );
+
+    const sourceUrls = (result.replay.messages[0]?.parts ?? [])
+      .filter((part) => part.type === "image")
+      .map((part) => part.sourceUrl);
+    expect(sourceUrls).toEqual([
+      pathToFileURL(ownShot).toString(),
+      pathToFileURL(reboundShot).toString(),
+    ]);
+  });
+
+  it("materializes live ACP assistant content images and commandExecution tool images", async () => {
+    const { materializeTranscriptImageEventForRenderer } = await import(
+      "../shell/transcript-image-protocol"
+    );
+    const bytes = Buffer.from([5, 6, 7]);
+    const dataUrl = `data:image/png;base64,${bytes.toString("base64")}`;
+    const pwrSnapUri = "pwrsnap://capture/acp_cap_1/composite";
+    const readPwrSnapMedia = vi.fn(async () => ({
+      ok: true as const,
+      mimeType: "image/png",
+      dataBase64: bytes.toString("base64"),
+    }));
+    const deps = {
+      resolveRoot: () => path.join(tempDir, "cache"),
+      retainLocalImage: async () => undefined,
+      readPwrSnapMedia,
+    };
+
+    const assistantEvent: AgentEvent = {
+      backend: "acp:antigravity",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "acp-live",
+          turnId: "turn-1",
+          item: {
+            id: "assistant:turn-1:0",
+            type: "agentMessage",
+            text: "",
+            content: [{ type: "image", url: dataUrl, alt: "Generated" }],
+          },
+        },
+      },
+    };
+    const materializedAssistant = await materializeTranscriptImageEventForRenderer(assistantEvent, deps);
+    expect(materializedAssistant.rendererImageParts).toHaveLength(1);
+    expect(materializedAssistant.rendererImageParts?.[0]?.url).toMatch(/^pwragent-image:\/\/file\//);
+
+    const toolEvent: AgentEvent = {
+      backend: "acp:antigravity",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "acp-live",
+          turnId: "turn-1",
+          item: {
+            id: "tool-1",
+            type: "commandExecution",
+            status: "completed",
+            images: [{ type: "image", url: pwrSnapUri, alt: "Window capture" }],
+          },
+        },
+      },
+    };
+    const materializedTool = await materializeTranscriptImageEventForRenderer(toolEvent, deps);
+    expect(readPwrSnapMedia).toHaveBeenCalledTimes(1);
+    expect(materializedTool.rendererImageParts).toHaveLength(1);
+    expect(materializedTool.rendererImageParts?.[0]?.url).toMatch(/^pwragent-image:\/\/file\//);
+  });
 });
 
 function toProtocolUrl(filePath: string): string {

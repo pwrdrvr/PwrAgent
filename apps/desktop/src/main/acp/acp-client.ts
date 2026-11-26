@@ -12,12 +12,14 @@ import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools"
 import { ACP_AGENT_ELICITATION_META_KEY } from "@pwragent/shared/mcp-elicitation-purpose";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
 import { isAcpCompactPromptBlocks } from "./acp-compact";
+import { extractAcpContentImageParts } from "./acp-tool-images.js";
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
   AppServerMcpElicitationRequestNotification,
   AppServerMcpElicitationSchema,
   AppServerPendingRequestNotification,
+  AppServerThreadMessageEntry,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
   ThreadExecutionMode,
@@ -343,6 +345,7 @@ type AcpPromptSteerHandoff = {
 
 type AcpActiveTurn = {
   assistantText: string;
+  hasAssistantImage?: boolean;
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
   /** The prompt itself is a leading `/compact` slash command. */
@@ -402,6 +405,7 @@ export type AcpAgentClientOptions = {
   onSessionStartError?: (error: unknown) => Promise<void>;
   onSessionUpdate?: (event: {
     assistantMessageItemId?: string;
+    completedAssistantMessage?: AppServerThreadMessageEntry;
     fromSessionLoad?: boolean;
     sessionId: string;
     replay: AppServerThreadReplay;
@@ -410,6 +414,7 @@ export type AcpAgentClientOptions = {
     update: Record<string, unknown>;
   }) => Promise<void> | void;
   onPromptError?: (event: {
+    completedAssistantMessage?: AppServerThreadMessageEntry;
     sessionId: string;
     turnId: string;
     error: unknown;
@@ -2004,6 +2009,9 @@ export class AcpAgentClient {
           ...(promptUsage ? { usage: promptUsage } : {}),
         });
         void this.notifySessionUpdate({
+          ...(finished.completedAssistantMessage
+            ? { completedAssistantMessage: finished.completedAssistantMessage }
+            : {}),
           sessionId,
           replay: finished.replay,
           turnId: finished.turnId,
@@ -2043,7 +2051,7 @@ export class AcpAgentClient {
             () => undefined,
           );
         }
-        this.finishTrackedTurn(sessionId, this.now());
+        const finished = this.finishTrackedTurn(sessionId, this.now());
         this.recordPromptFailure(sessionId, activeTurn.turnId, error);
         const errorUsage = failedPromptUsage ?? (
           activeTurn.accumulatedPromptUsage
@@ -2055,6 +2063,9 @@ export class AcpAgentClient {
         );
         return Promise.resolve(
           this.options.onPromptError?.({
+            ...(finished.completedAssistantMessage
+              ? { completedAssistantMessage: finished.completedAssistantMessage }
+              : {}),
             sessionId,
             turnId: activeTurn.turnId,
             error,
@@ -2724,6 +2735,9 @@ export class AcpAgentClient {
       this.appendHistoryUpdate(sessionId, receivedAt, update);
     }
     const normalizer = this.normalizerFor(sessionId);
+    const previousActiveAssistantId = activeTurn
+      ? normalizer.readActiveAssistantMessageId()
+      : undefined;
     const replay = normalizer.apply({
       sessionId,
       update,
@@ -2737,15 +2751,27 @@ export class AcpAgentClient {
       (updateKind === "agent_thought_chunk"
         && this.normalizerOptions.surfaceThoughtsAsMessages === true);
     const text = readUpdateText(update);
+    const currentActiveAssistantId = activeTurn
+      ? normalizer.readActiveAssistantMessageId()
+      : undefined;
+    const completedAssistantMessage =
+      previousActiveAssistantId && previousActiveAssistantId !== currentActiveAssistantId
+        ? normalizer.readMessageEntry(previousActiveAssistantId)
+        : undefined;
     // Replay owns message boundaries, including metadata, late tool progress,
     // explicit IDs, and phase changes. A second live-only tracker can split a
     // paragraph that the normalizer correctly keeps together after reload.
     const assistantMessageItemId =
       activeTurn && shouldTrackAssistantTextUpdate && text
-        ? normalizer.readActiveAssistantMessageId()
+        ? currentActiveAssistantId
         : undefined;
-    if (activeTurn && assistantMessageItemId && updateKind === "agent_message_chunk") {
-      activeTurn.assistantText += text;
+    if (activeTurn && updateKind === "agent_message_chunk") {
+      if (assistantMessageItemId && text) {
+        activeTurn.assistantText += text;
+      }
+      if (extractAcpContentImageParts(update.content).length > 0) {
+        activeTurn.hasAssistantImage = true;
+      }
     } else if (
       activeTurn
       && text
@@ -2759,6 +2785,7 @@ export class AcpAgentClient {
     }
     void this.notifySessionUpdate({
       assistantMessageItemId,
+      ...(completedAssistantMessage ? { completedAssistantMessage } : {}),
       ...(fromSessionLoad ? { fromSessionLoad: true } : {}),
       sessionId,
       replay,
@@ -3712,6 +3739,7 @@ export class AcpAgentClient {
     clearAgentInstructionsDigest?: boolean,
   ): {
     assistantText: string;
+    completedAssistantMessage?: AppServerThreadMessageEntry;
     replay: AppServerThreadReplay;
     turnId?: string;
   } {
@@ -3720,11 +3748,16 @@ export class AcpAgentClient {
     this.retireManagedReviewSession(sessionId);
     // The idle clock starts when the turn ends, not when it began.
     this.touchSession(sessionId);
-    const replay = this.normalizerFor(sessionId).recordTurnFinished(
+    const normalizer = this.normalizerFor(sessionId);
+    const previousActiveAssistantId = normalizer.readActiveAssistantMessageId();
+    const replay = normalizer.recordTurnFinished(
       activeTurn?.turnId,
       completedAt,
       status,
     );
+    const completedAssistantMessage = previousActiveAssistantId
+      ? normalizer.readMessageEntry(previousActiveAssistantId)
+      : undefined;
     // Use the existing idle write so remembering one accepted context block
     // or clearing delivered instructions after `/compact` does not introduce
     // another per-turn commit.
@@ -3734,6 +3767,7 @@ export class AcpAgentClient {
     });
     return {
       assistantText: activeTurn?.assistantText ?? "",
+      ...(completedAssistantMessage ? { completedAssistantMessage } : {}),
       replay,
       turnId: activeTurn?.turnId,
     };
@@ -3749,6 +3783,7 @@ export class AcpAgentClient {
     const activeTurn = this.activeTurns.get(sessionId);
     if (
       activeTurn?.assistantText.trim()
+      || activeTurn?.hasAssistantImage
       || activeTurn?.isCompactCommand
       || activeTurn?.compacted
     ) {

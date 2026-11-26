@@ -565,6 +565,37 @@ describe("ThreadMarkdown", () => {
     expect(onOpenImage).toHaveBeenCalledWith(imagePart);
   });
 
+  it.each([
+    ["angle path with literal percent", "[pct](</work/100% done.png>)", "pct", "file:///work/100%25%20done.png"],
+    ["angle path with literal hash", "[hash](</work/shot #1.png>)", "hash", "file:///work/shot%20%231.png"],
+    ["double slash path", "[dup](/work//shot.png)", "dup", "file:///work/shot.png"],
+    ["dotdot path", "[dotdot](/work/nested/../shot.png)", "dotdot", "file:///work/shot.png"],
+    ["file localhost with query", "[host](file://localhost/work/shot.png?v=1)", "host", "file:///work/shot.png"],
+    ["parens with fragment", "[parens](file:///work/shot(1).png#view=fit)", "parens", "file:///work/shot(1).png"],
+    ["reference link", "[ref][r1]\n\n[r1]: file:///work/shot.png", "ref", "file:///work/shot.png"],
+    ["nested brackets", "[Run [1] shot](/work/shot.png:1)", "Run [1] shot", "file:///work/shot.png"],
+  ])("opens %s in the built-in lightbox instead of OS Preview", (_label, text, linkName, sourceUrl) => {
+    const onOpenImage = vi.fn();
+    const openPath = vi.fn(async () => ({ opened: true as const }));
+    const imagePart = {
+      type: "image" as const,
+      url: "pwragent-image://file/cached-image",
+      sourceUrl,
+    };
+    render(<ThreadMarkdown
+      desktopApi={{ openPath }}
+      text={text}
+      imageParts={[imagePart]}
+      onOpenImage={onOpenImage}
+    />);
+    const link = screen.getByRole("link", { name: linkName });
+    expect(link).toHaveAttribute("href", imagePart.url);
+    expect(link).toHaveAttribute("title", "Open image in PwrAgent");
+    fireEvent.click(link);
+    expect(onOpenImage).toHaveBeenCalledWith(imagePart);
+    expect(openPath).not.toHaveBeenCalled();
+  });
+
   it.each([undefined, "File pull is disabled on the owning machine.", "The owning machine does not support file pull.", "Remote machine disconnected."])("keeps remote Markdown reads in the local modal: %s", async (error) => {
     const federationTarget = { scope: "remote" as const, instanceId: "owner" };
     const thread = { backend: "codex" as const, threadId: "owner-thread" };
