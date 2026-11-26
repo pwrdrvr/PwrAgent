@@ -1,6 +1,6 @@
 // Run from the repository root with PWRAGENT_BENCH_STARTUP_LEDGER=1:
 // node --expose-gc node_modules/vitest/vitest.mjs run --config vitest.workspace.mts startup-ledger-benchmark --maxWorkers=1 --silent=false --reporter=verbose
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
@@ -197,9 +197,13 @@ function instrumentFleet(db: StateDb) {
   };
 }
 
-async function measureFleet(probe: ReturnType<typeof instrumentFleet>, phase: string, run: () => Promise<void>): Promise<void> {
+async function measureFleet(
+  probe: ReturnType<typeof instrumentFleet>,
+  phase: string,
+  run: () => Promise<void>,
+  profileDir?: string,
+): Promise<void> {
   global.gc?.();
-  const profileDir = process.env.PWRAGENT_BENCH_STARTUP_PROFILE_DIR;
   const profiler = profileDir ? new Session() : undefined;
   profiler?.connect();
   if (profiler) {
@@ -284,6 +288,13 @@ function fleetLedger(db: StateDb, root: string) {
 }
 
 async function runFleet(): Promise<void> {
+  const profileRoot = process.env.PWRAGENT_BENCH_STARTUP_PROFILE_DIR;
+  let profileDir: string | undefined;
+  if (profileRoot) {
+    mkdirSync(profileRoot, { recursive: true });
+    profileDir = mkdtempSync(path.join(profileRoot, "run-"));
+    console.log(JSON.stringify({ profileDir }));
+  }
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-reconciled-fleet-"));
   const dbPath = path.join(directory, "state.db");
@@ -316,14 +327,13 @@ async function runFleet(): Promise<void> {
     })();
     await seed.ledger.initializeTokenMiserLedger();
     db.raw.pragma("wal_checkpoint(TRUNCATE)");
-    const profileDir = process.env.PWRAGENT_BENCH_STARTUP_PROFILE_DIR;
     if (profileDir) db.raw.prepare("VACUUM INTO ?").run(path.join(profileDir, "reconciled-fixture.db"));
     db.close();
     db = StateDb.open(dbPath);
     const { ledger, storage, store } = fleetLedger(db, root);
     const probe = instrumentFleet(db);
-    await measureFleet(probe, "cold", () => ledger.initializeTokenMiserLedger());
-    await measureFleet(probe, "warm", () => ledger.initializeTokenMiserLedger());
+    await measureFleet(probe, "cold", () => ledger.initializeTokenMiserLedger(), profileDir);
+    await measureFleet(probe, "warm", () => ledger.initializeTokenMiserLedger(), profileDir);
 
     const missing = gates[1]!;
     const stale = { ...gates[2]!, retrievedCharacters: 400 };
@@ -344,7 +354,7 @@ async function runFleet(): Promise<void> {
         if (after === gates[63]!.objectId) peerStorage.writeMetadata(changedByPeer);
         return readPage(after, limit);
       });
-      await measureFleet(probe, "mixed", () => ledger.initializeTokenMiserLedger());
+      await measureFleet(probe, "mixed", () => ledger.initializeTokenMiserLedger(), profileDir);
     } finally {
       probe.finish();
       peer.close();
