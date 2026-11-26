@@ -1928,12 +1928,7 @@ export class AcpSessionReplayNormalizer {
         existingMessage.parts = mergedParts;
       }
     } else {
-      const initialParts = params.parts?.length
-        ? [
-            ...(params.text ? [{ type: "text" as const, text: params.text }] : []),
-            ...params.parts,
-          ]
-        : undefined;
+      const initialParts = initialMessageChunkParts(params.text, params.parts);
       this.appendMessage({
         id: params.id,
         role: params.role,
@@ -1956,12 +1951,7 @@ export class AcpSessionReplayNormalizer {
         existingEntry.parts = mergedParts;
       }
     } else {
-      const initialParts = params.parts?.length
-        ? [
-            ...(params.text ? [{ type: "text" as const, text: params.text }] : []),
-            ...params.parts,
-          ]
-        : undefined;
+      const initialParts = initialMessageChunkParts(params.text, params.parts);
       this.appendEntry(this.withCurrentTurn({
         type: "message",
         id: params.id,
@@ -2893,6 +2883,18 @@ function mergeActivityDetailImages(
     combined.push(image);
   }
   return combined;
+}
+
+function initialMessageChunkParts(
+  text: string,
+  parts: AppServerThreadMessagePart[] | undefined,
+): AppServerThreadMessagePart[] | undefined {
+  if (!parts?.length) {
+    return undefined;
+  }
+  return text && !parts.some((part) => part.type === "text")
+    ? [{ type: "text", text }, ...parts]
+    : parts;
 }
 
 function mergeMessageChunkParts(
