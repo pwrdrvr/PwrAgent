@@ -1,7 +1,7 @@
 import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import { canRetryAfterShutdown, groupUnitRetries, planE2eRetry, planUnitRetry, unitRetryNamePattern, verifyE2eRetry, verifyInitialE2eRun, verifyInitialUnitRun, verifyUnitRetry } from "./retry-failures.mjs";
+import { canRetryAfterShutdown, collectedE2eFilesMatch, groupUnitRetries, planE2eRetry, planUnitRetry, unitRetryNamePattern, verifyE2eRetry, verifyInitialE2eRun, verifyInitialUnitRun, verifyUnitRetry } from "./retry-failures.mjs";
 
 const directory = path.resolve(".local/ci/retry");
 const read = (name) => JSON.parse(readFileSync(path.join(directory, name), "utf8"));
@@ -10,6 +10,10 @@ const summary = (line) => {
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n`);
 };
 const budget = 20;
+const plannedE2eFiles = () => {
+  const list = process.env.E2E_TEST_LIST;
+  return list ? readFileSync(list, "utf8").trimEnd().split("\n") : undefined;
+};
 
 function retryUnits() {
   const first = read("unit-first.json");
@@ -42,7 +46,10 @@ function retryUnits() {
 }
 
 function prepareE2e() {
-  const plan = planE2eRetry(read("e2e-first.json"), read("e2e-last.json"), budget);
+  const first = read("e2e-first.json");
+  const files = plannedE2eFiles();
+  if (files && !collectedE2eFilesMatch(first, files)) throw new Error("The E2E slice did not collect every planned file");
+  const plan = planE2eRetry(first, read("e2e-last.json"), budget);
   const circuit = path.resolve("apps/desktop/test-results/electron-shutdown-circuit.json");
   if (process.env.PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER === "1" && existsSync(circuit)
     && !canRetryAfterShutdown(JSON.parse(readFileSync(circuit, "utf8")))) {
@@ -78,7 +85,9 @@ try {
     }
     case "e2e-first-verify": {
       const report = read("e2e-first.json");
-      if (!verifyInitialE2eRun(report)) throw new Error("The E2E slice did not complete successfully");
+      if (!verifyInitialE2eRun(report, plannedE2eFiles())) {
+        throw new Error("The E2E slice did not complete every planned file successfully");
+      }
       const expected = report.tests.filter((test) => test.outcome === "expected").length;
       summary(`E2E slice completed: ${report.tests.length} discovered, ${expected} expected outcomes, ${report.tests.length - expected} skipped.`);
       break;

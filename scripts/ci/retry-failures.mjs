@@ -113,11 +113,17 @@ export function planE2eRetry(report, lastRun, budget) {
   return { tests: failed };
 }
 
-export function verifyInitialE2eRun(report) {
-  return report?.status === "passed" && report.complete === true && report.errors === 0
-    && Array.isArray(report.tests) && report.tests.length > 0
-    && report.tests.every((test) => test.outcome === "expected" || test.outcome === "skipped")
-    && report.tests.some((test) => test.outcome === "expected");
+export function collectedE2eFilesMatch(report, files) {
+  const collected = new Set(report?.tests?.map(({ file }) => file));
+  return collected.size === files.length && files.every((file) => collected.has(file));
+}
+
+export function verifyInitialE2eRun(report, files) {
+  if (report?.status !== "passed" || report.complete !== true || report.errors !== 0
+    || !Array.isArray(report.tests) || !report.tests.length
+    || report.tests.some((test) => test.outcome !== "expected" && test.outcome !== "skipped")) return false;
+  if (!files) return report.tests.some((test) => test.outcome === "expected");
+  return collectedE2eFilesMatch(report, files);
 }
 
 export function verifyE2eRetry(plan, report) {
