@@ -72,7 +72,7 @@ export function buildManagedReviewLedgerToolDefinitions(
         properties: {
           file: {
             type: "string",
-            description: "Absolute or repository-relative path to the affected file.",
+            description: "Absolute path or path relative to the Git worktree root.",
           },
           start_line: {
             type: "integer",
@@ -204,7 +204,7 @@ export function buildManagedReviewLedgerToolDefinitions(
           },
           file: {
             type: "string",
-            description: "Optional corrected absolute or workspace-relative file path.",
+            description: "Optional corrected absolute path or path relative to the Git worktree root.",
           },
           start_line: {
             type: "integer",

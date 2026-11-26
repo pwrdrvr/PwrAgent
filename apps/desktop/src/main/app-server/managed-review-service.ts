@@ -86,7 +86,11 @@ import type { RegistryContext, RegistryHost } from "./registry-context";
 import { immutableReviewDiffHash, isOperatorReviewInput } from "./agent-review-submission";
 import { refreshReviewBaseBranch } from "./review-base-branch";
 import { resolveReviewProvenance } from "./review-provenance";
-import { assertReviewWorkspaceMatchesAttachedPullRequest, normalizeWorkspacePath } from "./review-workspace-guard";
+import {
+  assertReviewWorkspaceMatchesAttachedPullRequest,
+  normalizeWorkspacePath,
+  resolveLocalReviewWorktreeRoot,
+} from "./review-workspace-guard";
 import type { ThreadInfoStore } from "./thread-info-store";
 import { buildReviewStartFailurePrompt, reviewStartFailureFingerprint } from "./thread-orchestration-prompts";
 import {
@@ -1099,6 +1103,9 @@ export class ManagedReviewService {
       ? buildCodexTokenMiserDynamicToolSpecs(this.host().tokenMiserStore, this.host().tokenMiserService?.focused)
       : [];
     const candidateLedger = localMemberRole() !== "contained";
+    const worktreeRoot = candidateLedger && params.codexEnvironmentRuntime?.executionTarget !== "remote"
+      ? await resolveLocalReviewWorktreeRoot(params.cwd)
+      : undefined;
     const reviewLedgerDynamicTools = candidateLedger
       ? buildManagedReviewLedgerToolRouter(this.candidateLedger).buildDynamicToolSpecs()
       : [];
@@ -1135,7 +1142,10 @@ export class ManagedReviewService {
       parentThreadId: params.parentThreadId,
     });
     if (candidateLedger) {
-      this.candidateLedger.armToolTurn({ backend: "codex", threadId: thread.threadId }, null, params.cwd);
+      this.candidateLedger.armToolTurn({ backend: "codex", threadId: thread.threadId }, null, {
+        cwd: params.cwd,
+        worktreeRoot,
+      });
     }
     const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
     try {

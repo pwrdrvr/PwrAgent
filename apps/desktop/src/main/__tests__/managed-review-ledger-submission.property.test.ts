@@ -3,13 +3,71 @@ import type { AppServerReviewOutput } from "@pwragent/shared/contracts/normalize
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  MANAGED_REVIEW_CANDIDATE_MAX_FIELD_LENGTH,
   ManagedReviewCandidateLedger,
   type ManagedReviewCandidatePriority,
 } from "../app-server/managed-review-candidate-ledger";
 
 const priorityArb = fc.constantFrom<ManagedReviewCandidatePriority>(0, 1, 2, 3);
+const turn = { backend: "codex", threadId: "review", turnId: "turn" } as const;
+const candidate = {
+  file: "src/a.ts",
+  start_line: 1,
+  end_line: 1,
+  category: "correctness",
+  summary: "Fix input validation",
+  mechanism: "An empty input reaches the parser.",
+};
+const ledgerVerdict = {
+  use_ledger: true,
+  overall_correctness: "patch is incorrect",
+  overall_explanation: "Verified defects.",
+};
+
+function explicitFinding(file: string) {
+  return {
+    title: "Check overflow",
+    body: "A large input overflows the size field.",
+    priority: 1,
+    confidence_score: 0.9,
+    code_location: { absolute_file_path: file, line_range: { start: 2, end: 2 } },
+  };
+}
 
 describe("managed review ledger submission", () => {
+  it.each([
+    ["/remote/selected", "/remote/selected/src/a.ts"],
+    ["D:\\remote\\selected", "D:\\remote\\selected\\src\\a.ts"],
+  ])("validates kept and overflow paths in workspace %s using the same rules", (workspace, file) => {
+    const ledger = new ManagedReviewCandidateLedger();
+    ledger.armToolTurn(turn, turn.turnId, { cwd: workspace });
+    expect(ledger.record(turn, { ...candidate, file }).ok).toBe(true);
+    expect(ledger.dispose(turn, { id: "C1", disposition: "keep", priority: 2, reason: "Verified." }).ok).toBe(true);
+
+    expect(ledger.submitOutput(turn, { ...ledgerVerdict, findings: [explicitFinding(file)] }).ok).toBe(true);
+    expect(ledger.submittedOutput(turn)?.findings.map(({ code_location }) => code_location.absolute_file_path))
+      .toEqual([file, file]);
+  });
+
+  it("refuses to shorten paths at record or refinement and accepts the full explicit location", () => {
+    const ledger = new ManagedReviewCandidateLedger();
+    const prefix = resolve("/repo");
+    const file = resolve(prefix, ...Array.from({ length: 21 }, () => "x".repeat(100)), "a.ts");
+    expect(file.length).toBeGreaterThan(MANAGED_REVIEW_CANDIDATE_MAX_FIELD_LENGTH);
+    expect(ledger.record(turn, { ...candidate, file })).toMatchObject({ ok: false, code: "limit_exceeded" });
+    expect(ledger.list(turn).candidates).toEqual([]);
+
+    expect(ledger.record(turn, candidate).ok).toBe(true);
+    const before = ledger.list(turn);
+    expect(ledger.dispose(turn, { id: "C1", disposition: "keep", priority: 2, reason: "Verified.", file }))
+      .toMatchObject({ ok: false, code: "limit_exceeded" });
+    expect(ledger.list(turn)).toEqual(before);
+    expect(ledger.dispose(turn, { id: "C1", disposition: "drop", reason: "Reporting the verified full path explicitly." }).ok)
+      .toBe(true);
+    expect(ledger.submitOutput(turn, { ...ledgerVerdict, findings: [explicitFinding(file)] }).ok).toBe(true);
+    expect(ledger.submittedOutput(turn)?.findings).toEqual([explicitFinding(file)]);
+  });
+
   it("submits only fully triaged keeps in priority and recording order, using their latest details", () => {
     fc.assert(fc.property(fc.array(fc.record({
       keep: fc.boolean(),
@@ -19,7 +77,10 @@ describe("managed review ledger submission", () => {
       const ledger = new ManagedReviewCandidateLedger();
       const turn = { backend: "codex", threadId: "review", turnId: "turn" } as const;
       const workspace = resolve("/repo");
-      ledger.armToolTurn(turn, turn.turnId, workspace);
+      ledger.armToolTurn(turn, turn.turnId, {
+        cwd: resolve(workspace, "packages", "app"),
+        worktreeRoot: workspace,
+      });
       const expectedBuckets = [0, 1, 2, 3].map(() => [] as AppServerReviewOutput["findings"]);
       const submit = {
         use_ledger: true,
@@ -78,10 +139,10 @@ describe("managed review ledger submission", () => {
     ["D:\\workspace\\repo", "/src/a.ts", undefined],
     ["D:\\workspace\\repo", "C:src\\a.ts", undefined],
     [undefined, "src/a.ts", undefined],
-  ] as const)("resolves a kept candidate against workspace %s and file %s", (workspace, file, expected) => {
+  ] as const)("resolves a kept candidate against worktree root %s and file %s", (worktreeRoot, file, expected) => {
     const ledger = new ManagedReviewCandidateLedger();
     const turn = { backend: "codex", threadId: "review", turnId: "turn" } as const;
-    ledger.armToolTurn(turn, null, workspace);
+    ledger.armToolTurn(turn, null, { worktreeRoot });
     ledger.confirmToolTurn(turn);
     const recorded = ledger.record(turn, {
       file,
@@ -114,5 +175,20 @@ describe("managed review ledger submission", () => {
       expect(submitted.ok).toBe(true);
       expect(ledger.submittedOutput(turn)?.findings[0]?.code_location.absolute_file_path).toBe(expected);
     }
+  });
+
+  it("requires an absolute location when the reviewer cwd is known but the Git root is unavailable", () => {
+    const ledger = new ManagedReviewCandidateLedger();
+    ledger.armToolTurn(turn, turn.turnId, { cwd: "/remote/repo/packages/app" });
+    expect(ledger.record(turn, { ...candidate, file: "packages/app/src/a.ts" }).ok).toBe(true);
+    const keep = { id: "C1", disposition: "keep", priority: 2, reason: "Verified." };
+    expect(ledger.dispose(turn, keep).ok).toBe(true);
+    expect(ledger.submitOutput(turn, ledgerVerdict)).toMatchObject({
+      ok: false, code: "invalid_arguments", message: expect.stringContaining("C1"),
+    });
+    const file = "/remote/repo/packages/app/src/a.ts";
+    expect(ledger.dispose(turn, { ...keep, file }).ok).toBe(true);
+    expect(ledger.submitOutput(turn, ledgerVerdict).ok).toBe(true);
+    expect(ledger.submittedOutput(turn)?.findings[0]?.code_location.absolute_file_path).toBe(file);
   });
 });

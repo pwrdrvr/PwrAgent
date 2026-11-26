@@ -42,6 +42,8 @@ export type ManagedReviewCandidateTurnKey = {
 
 type ReviewChild = Pick<ManagedReviewCandidateTurnKey, "backend" | "threadId">;
 
+type ReviewWorkspace = { cwd?: string; worktreeRoot?: string };
+
 export type ManagedReviewCandidate = {
   id: string;
   file: string;
@@ -149,10 +151,17 @@ function readCandidateDetails(
   previous?: ManagedReviewCandidate,
 ):
   | { ok: true; value: Pick<ManagedReviewCandidate, "file" | "startLine" | "endLine" | "summary" | "mechanism"> }
-  | { ok: false; message: string } {
+  | { ok: false; code?: "limit_exceeded"; message: string } {
   const { start_line = previous?.startLine, end_line = previous?.endLine } = input;
-  const file = readBoundedText(input.file, "file", previous?.file);
+  const file = readNonEmptyString(input.file === undefined ? previous?.file : input.file, "file");
   if (!file.ok) return file;
+  if (file.value.length > MANAGED_REVIEW_CANDIDATE_MAX_FIELD_LENGTH) {
+    return {
+      ok: false,
+      code: "limit_exceeded",
+      message: `file exceeds ${MANAGED_REVIEW_CANDIDATE_MAX_FIELD_LENGTH} characters. Submit this finding with its full path in the explicit findings array.`,
+    };
+  }
   const startLine = readPositiveLine(start_line, "start_line");
   if (!startLine.ok) return startLine;
   const endLine = readPositiveLine(end_line, "end_line");
@@ -292,6 +301,7 @@ function asPlainObject(value: unknown): Record<string, unknown> | undefined {
 function parseSubmittedFinding(
   value: unknown,
   index: number,
+  paths: path.PlatformPath,
 ): { ok: true; value: AppServerReviewFinding } | { ok: false; message: string } {
   const prefix = `findings[${index}]`;
   const record = asPlainObject(value);
@@ -331,9 +341,7 @@ function parseSubmittedFinding(
     `${prefix}.code_location.absolute_file_path`,
   );
   if (!filePath.ok) return filePath;
-  // A rooted Windows path without a drive or share still depends on the current drive.
-  if (!path.isAbsolute(filePath.value)
-    || (process.platform === "win32" && path.parse(filePath.value).root.length === 1)) {
+  if (!isAbsoluteReviewPath(filePath.value, paths)) {
     return {
       ok: false,
       message: `${prefix}.code_location.absolute_file_path must be an absolute path to the file in the reviewed worktree.`,
@@ -378,20 +386,27 @@ function parseSubmittedFinding(
   };
 }
 
-function fullyQualifiedWindowsPath(value: string): boolean {
-  return path.win32.isAbsolute(value) && path.win32.parse(value).root.length > 1;
+function isAbsoluteReviewPath(file: string, paths: path.PlatformPath): boolean {
+  // A rooted Windows path without a drive or share still depends on the current drive.
+  return paths.isAbsolute(file) && (paths !== path.win32 || paths.parse(file).root.length > 1);
 }
 
-function resolveLedgerFindingPath(file: string, cwd?: string): string | undefined {
-  if (fullyQualifiedWindowsPath(file)) return file;
-  if (cwd && fullyQualifiedWindowsPath(cwd)) {
-    // A partially rooted path can depend on a drive or its working directory.
-    return path.win32.parse(file).root ? undefined : path.win32.resolve(cwd, file);
-  }
-  if (cwd && path.posix.isAbsolute(cwd)) {
-    return path.posix.isAbsolute(file) ? file : path.posix.resolve(cwd, file);
-  }
-  return process.platform !== "win32" && path.posix.isAbsolute(file) ? file : undefined;
+function reviewWorkspacePaths(workspace?: ReviewWorkspace): path.PlatformPath {
+  const anchor = workspace?.worktreeRoot ?? workspace?.cwd;
+  if (anchor && isAbsoluteReviewPath(anchor, path.win32)) return path.win32;
+  if (anchor && path.posix.isAbsolute(anchor)) return path.posix;
+  return path;
+}
+
+function resolveLedgerFindingPath(
+  file: string,
+  paths: path.PlatformPath,
+  worktreeRoot?: string,
+): string | undefined {
+  if (isAbsoluteReviewPath(file, paths)) return file;
+  // Partially rooted Windows paths must never fall back to the owner's drive or cwd.
+  if (!worktreeRoot || paths.parse(file).root) return undefined;
+  return paths.resolve(worktreeRoot, file);
 }
 
 /**
@@ -402,10 +417,10 @@ function resolveLedgerFindingPath(file: string, cwd?: string): string | undefine
 export class ManagedReviewCandidateLedger {
   private readonly turns = new Map<string, TurnLedgerState>();
   /** Only a fresh Codex child can be armed before the provider assigns its turn ID. */
-  private readonly toolTurns = new Map<string, { turnId: string | null; cwd?: string }>();
+  private readonly toolTurns = new Map<string, { turnId: string | null; workspace?: ReviewWorkspace }>();
 
-  armToolTurn(child: ReviewChild, turnId: string | null, cwd?: string): void {
-    this.toolTurns.set(buildThreadIdentityKey(child.backend, child.threadId), { turnId, cwd });
+  armToolTurn(child: ReviewChild, turnId: string | null, workspace?: ReviewWorkspace): void {
+    this.toolTurns.set(buildThreadIdentityKey(child.backend, child.threadId), { turnId, workspace });
   }
 
   confirmToolTurn(turn: ManagedReviewCandidateTurnKey): void {
@@ -435,7 +450,7 @@ export class ManagedReviewCandidateLedger {
     total_candidates: number;
   }> {
     const details = readCandidateDetails(input);
-    if (!details.ok) return { ok: false, code: "invalid_arguments", message: details.message };
+    if (!details.ok) return { ok: false, code: details.code ?? "invalid_arguments", message: details.message };
     const category = readCategory(input.category);
     if (!category.ok) {
       return { ok: false, code: "invalid_arguments", message: category.message };
@@ -553,7 +568,7 @@ export class ManagedReviewCandidateLedger {
     }
 
     const details = readCandidateDetails(input, candidate);
-    if (!details.ok) return { ok: false, code: "invalid_arguments", message: details.message };
+    if (!details.ok) return { ok: false, code: details.code ?? "invalid_arguments", message: details.message };
     if (input.confidence_score !== undefined) {
       const confidence = readConfidenceScore(input.confidence_score, "confidence_score");
       if (!confidence.ok) return { ok: false, code: "invalid_arguments", message: confidence.message };
@@ -613,12 +628,13 @@ export class ManagedReviewCandidateLedger {
         message: "Mark every recorded candidate keep or drop before submitting the ledger.",
       };
     }
+    const active = this.toolTurns.get(buildThreadIdentityKey(turn.backend, turn.threadId));
+    const workspace = active?.turnId === turn.turnId ? active.workspace : undefined;
+    const paths = useLedger ? reviewWorkspacePaths(workspace) : path;
     if (useLedger && state) {
-      const active = this.toolTurns.get(buildThreadIdentityKey(turn.backend, turn.threadId));
-      const cwd = active?.turnId === turn.turnId ? active.cwd : undefined;
       for (const candidate of state.candidates) {
         if (candidate.disposition !== "keep") continue;
-        const file = resolveLedgerFindingPath(candidate.file, cwd);
+        const file = resolveLedgerFindingPath(candidate.file, paths, workspace?.worktreeRoot);
         if (!file) {
           return {
             ok: false,
@@ -640,7 +656,7 @@ export class ManagedReviewCandidateLedger {
       }
     }
     for (let index = 0; index < explicitFindings.length; index += 1) {
-      const parsed = parseSubmittedFinding(explicitFindings[index], index);
+      const parsed = parseSubmittedFinding(explicitFindings[index], index, paths);
       if (!parsed.ok) {
         return { ok: false, code: "invalid_arguments", message: parsed.message };
       }

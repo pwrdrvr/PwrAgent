@@ -1,10 +1,12 @@
-import { resolve } from "node:path";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import fc from "fast-check";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { AgentToolMcpServer, type AgentToolHttpMcpServerConfig } from "../agent-tools/agent-tool-mcp-server";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -30,6 +32,7 @@ import type { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
+import { runIsolatedGit } from "./helpers/isolated-git";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const { registryLogInfo } = vi.hoisted(() => ({ registryLogInfo: vi.fn() }));
@@ -46,6 +49,17 @@ vi.mock("../log", async (importOriginal) => {
 
 const BACKENDS: readonly AppServerBackendKind[] = ["codex", "acp:antigravity", "acp:grok"];
 const ABSOLUTE_FINDING_PATH = resolve("/repo/a.ts");
+
+async function createNestedReviewCheckout() {
+  const scratch = await mkdtemp(join(tmpdir(), "pwragent-review-ledger-"));
+  onTestFinished(async () => await rm(scratch, { recursive: true, force: true }));
+  const root = await realpath(scratch);
+  const cwd = join(root, "packages", "app");
+  await mkdir(cwd, { recursive: true });
+  await runIsolatedGit(root, ["init", "-b", "main"]);
+  const { stdout } = await runIsolatedGit(cwd, ["rev-parse", "--show-toplevel"]);
+  return { cwd, root: resolve(stdout.trim()) };
+}
 
 const turnKeyArb: fc.Arbitrary<ManagedReviewCandidateTurnKey> = fc.record({
   backend: fc.constantFrom(...BACKENDS),
@@ -524,7 +538,7 @@ describe("ManagedReviewCandidateLedger model properties", () => {
       overall_explanation: "No concrete defects.",
     });
 
-    ledger.armToolTurn(turn, turn.turnId, resolve("/repo"));
+    ledger.armToolTurn(turn, turn.turnId, { worktreeRoot: resolve("/repo") });
     for (const { id } of ledger.list(turn).candidates) {
       expect(ledger.dispose(turn, { id, disposition: "keep", priority: 2, reason: "Verified." }).ok).toBe(true);
     }
@@ -621,7 +635,7 @@ describe("managed review ledger MCP isolation and approval", () => {
         // Bind review thread and execute Pass 1 -> Pass 2 calls.
         reviewReg.bindThread("review-child-thread");
         const turn = { backend: "acp:antigravity", threadId: "review-child-thread", turnId: "active-turn" } as const;
-        ledger.armToolTurn(turn, turn.turnId, resolve("/repo"));
+        ledger.armToolTurn(turn, turn.turnId, { worktreeRoot: resolve("/repo") });
         const recorded = await reviewClient.callTool({
           name: "record_review_candidate",
           arguments: {
@@ -1260,6 +1274,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
   });
 
   it.each(["explicit", "ledger"])("publishes %s ACP findings even when the terminal text is invalid JSON", async (mode) => {
+    const { cwd, root } = await createNestedReviewCheckout();
     const backend = "acp:antigravity";
     const agentStore = new AcpAgentStore(stateDb);
     const sessionStore = new AcpSessionStore(stateDb);
@@ -1314,7 +1329,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
           expect((await client.callTool({
             name: "record_review_candidate",
             arguments: {
-              file: "src/disconnect.ts",
+              file: "packages/app/src/disconnect.ts",
               start_line: 10,
               end_line: 11,
               category: "lifecycle",
@@ -1362,7 +1377,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       threadTitleGenerationService: null,
     });
     try {
-      const parent = await registry.startThread({ backend, cwd: resolve("/repo") });
+      const parent = await registry.startThread({ backend, cwd });
       await registry.startReview({
         backend,
         threadId: parent.threadId,
@@ -1382,7 +1397,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
             confidence_score: 0,
             priority: 1,
             code_location: {
-              absolute_file_path: resolve("/repo/src/disconnect.ts"),
+              absolute_file_path: join(root, "packages", "app", "src", "disconnect.ts"),
               line_range: { start: 10, end: 11 },
             },
           }] : []),
@@ -1406,6 +1421,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
   });
 
   it.each(["keep", "drop"] as const)("publishes a Codex ledger batch with a %s disposition and empty terminal text", async (disposition) => {
+    const { cwd, root } = await createNestedReviewCheckout();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
       models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
@@ -1431,11 +1447,11 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       threadTitleGenerationService: null,
     });
     try {
-      const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
+      const parent = await registry.startThread({ backend: "codex", cwd });
       const review = await registry.startReview({
         backend: "codex",
         threadId: parent.threadId,
-        cwd: resolve("/repo"),
+        cwd,
         target: { type: "uncommittedChanges" },
         runMode: "pwragent-sub-agent",
       });
@@ -1456,7 +1472,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
         summary: "Preserve quoted code span",
         mechanism: 'Keeps `"remote-pin"` intact.',
         category: "correctness",
-        file: "src/review.ts",
+        file: "packages/app/src/review.ts",
         start_line: 5,
         end_line: 9,
       })).success).toBe(true);
@@ -1498,7 +1514,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
             body: 'Keeps `"remote-pin"` intact.',
             priority: 1,
             code_location: {
-              absolute_file_path: resolve("/repo/src/review.ts"),
+              absolute_file_path: join(root, "packages", "app", "src", "review.ts"),
               line_range: { start: 5, end: 9 },
             },
           },
