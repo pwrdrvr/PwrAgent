@@ -234,7 +234,13 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
   let trajectory: DomTrajectoryRecorder | undefined;
 
   try {
-    const mapWindow = await openStarMapWindow(app);
+    // On macOS, lazy thread startup can replace the loading header between
+    // mouse-down and mouse-up. Scope the click to the settled thread header
+    // or the persistent title bar on platforms that use it.
+    const header = app.window.locator(
+      ".thread-header:not(.thread-header--placeholder), .app-titlebar",
+    );
+    const mapWindow = await openStarMapWindow(app, { header });
     // Armed BEFORE the card opens: the composer's first `detail:none` is the
     // card's own opening state, and a report that cannot show that one has
     // no baseline to call a later `detail:none` a regression against.
