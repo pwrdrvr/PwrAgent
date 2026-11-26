@@ -1257,6 +1257,51 @@ it("observes a retired Git stack before starting a new viewer lease", async () =
   });
 });
 
+it("rechecks Git at the native stack deadline even when a peer event refreshed the viewer", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer, retargetCatalog }) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const layers = (index: NavigationQueryIndex) => projectSelectedStackLayers(index, { backend: "codex", threadId: "stacked" }).count;
+    try {
+      expect(layers(await read(viewer))).toBe(1);
+      await retargetCatalog();
+      vi.advanceTimersByTime(900);
+      source.emit("federation/peerStatus/changed");
+      expect(layers(await read(viewer))).toBe(1);
+      vi.advanceTimersByTime(100);
+      // The on-disk catalog retired this thread's layer. Only the original
+      // native observation's one-second window may hide that change.
+      expect(layers(await read(viewer))).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("keeps the owner listing when a stacked viewer with peer pins nears the byte budget", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+    const list = source.listThreads.getMockImplementation()!;
+    // The stack-free inventory and one stacked copy fit the pool. A second
+    // charge for the viewer's identical stacked rows would evict the owner.
+    const history = Array.from({ length: 128 }, (_, i): NavigationThreadSummary => ({
+      id: `history-${i}`, source: "codex", title: "x".repeat(24_000), titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }));
+    source.listThreads.mockImplementation(async () => [...await list(), ...history]);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const first = await read(viewer);
+      expect(first.threads.find((thread) => thread.id === "stacked")?.stackMemberships).toHaveLength(1);
+      expect(first.threads.at(-1)?.id).toBe("remote");
+      expect(source.listThreads).toHaveBeenCalledTimes(1);
+      source.emit("navigation/remoteThreadPins/changed");
+      await read(viewer);
+      expect(source.listThreads).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 it("isolates local owner listing and stack projection from remote pin and peer-status churn", async () => {
   await withNavigationStackCheckout(async ({ source, read, viewer }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });

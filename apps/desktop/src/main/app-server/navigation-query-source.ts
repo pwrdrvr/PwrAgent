@@ -220,18 +220,20 @@ export async function loadLocalNavigationQueryIndex(params: {
   const publishesSidebar = backend === "all" && !params.requireVerifiedDirectories;
   // A refresh reads under its own key: it must not be served a retained or
   // in-flight index that predates it, nor overtake other readers' scans.
-  const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
+  const keyFor = (variant: (string | number)[]) => JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
+    ...variant, ...(params.refreshProviders ? ["refresh-providers"] : [])]);
+  const key = keyFor([
     ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
     ...(params.includeStacks
       ? params.stackLeaseScope ? ["stacks", sourceId(params.stackLeaseScope)] : ["stacks"]
       : []),
-    ...(params.refreshProviders ? ["refresh-providers"] : [])]);
+  ]);
   // An index's coverage reads the startup refresh state, so an index built
   // while startup was checking must not serve a reader after it finishes.
   // The refreshed event invalidates the read too, but a listener that runs
   // before the pool's (owner PR metadata) would join the stale index.
   const version = navigationIndexVersion(registry, overlayStore, Boolean(params.viewer));
-  return reads.read(key, async (signal, checkpoint, previous) => {
+  return reads.read(key, async (signal, checkpoint, previous, limitReuseTo) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
     // one follow-up scan. Each run owns its listener, because the pool can
@@ -272,6 +274,7 @@ export async function loadLocalNavigationQueryIndex(params: {
           }),
         ]);
         signal.throwIfAborted();
+        limitReuseTo(keyFor(["stacks", sourceId(params.viewer.source)]), nativeStacks);
         if (!nativeStacks.stacks?.length) return viewerLocal;
         const nativeRows = navigationQuerySnapshotSharedThreads(viewerLocal);
         const pins = nativeRows && viewerLocal.threads !== nativeRows ? viewerLocal.threads.slice(nativeRows.length) : [];
@@ -304,7 +307,7 @@ export async function loadLocalNavigationQueryIndex(params: {
           ...viewerLocal,
           stacks: nativeStacks.stacks,
           threads,
-        }, undefined, viewerLocal, previous());
+        }, undefined, share ? nativeStacks : viewerLocal, previous());
       }
       // Taken before reading: a change during the read makes its result stale.
       const epoch = backend === "all" && !params.requireVerifiedDirectories ? stackInputEpoch(registry)?.value : undefined;

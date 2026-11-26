@@ -872,6 +872,7 @@ export class StackReader {
   private readonly inventoryCheckouts = new Map<string, {
     version: string; checkout: CheckoutLookup; expiresAt: number;
   }>();
+  private inventoryCheckoutCapacity = MAX_INVENTORY_CHECKOUTS;
   private readonly deferredTtlRevalidations = new Set<string>();
 
   /** Lives as long as this reader, so every projection it makes shares the answers. */
@@ -916,14 +917,13 @@ export class StackReader {
   private claimBackgroundTtlRevalidation(
     cwd: string,
     observation: StackReadObservation,
-    cacheCapacity = MAX_INVENTORY_CHECKOUTS,
   ): boolean {
     if (observation.claimBackgroundTtlRevalidation(cwd, this.backgroundTtlRevalidationBudget)) {
       this.deferredTtlRevalidations.delete(cwd);
       return true;
     }
     this.deferredTtlRevalidations.add(cwd);
-    while (this.deferredTtlRevalidations.size > cacheCapacity) {
+    while (this.deferredTtlRevalidations.size > this.inventoryCheckoutCapacity) {
       this.deferredTtlRevalidations.delete(this.deferredTtlRevalidations.values().next().value!);
     }
     return false;
@@ -934,13 +934,12 @@ export class StackReader {
     observation: StackReadObservation,
     candidates: readonly string[],
     useWorktreeInventory = false,
-    options: { allowUnavailableCache?: boolean; budgetTtlRevalidation?: boolean; hasHints?: boolean; cacheCapacity?: number } = {},
+    options: { allowUnavailableCache?: boolean; budgetTtlRevalidation?: boolean; hasHints?: boolean } = {},
   ): Promise<CheckoutLookup> {
     const { hints, inventoryDemand } = observation;
     const hasHints = options.hasHints !== false;
     const allowUnavailableCache = options.allowUnavailableCache === true;
     const budgetTtlRevalidation = options.budgetTtlRevalidation === true;
-    const cacheCapacity = options.cacheCapacity ?? MAX_INVENTORY_CHECKOUTS;
     const nearest = candidates[0];
     const ready = nearest && hasHints && useWorktreeInventory ? observation.readyWorktreeInventory(nearest) : undefined;
     const identity = hasHints && candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
@@ -969,7 +968,7 @@ export class StackReader {
       && (cached.checkout !== "unavailable" || allowUnavailableCache)
     ) {
       const fresh = cached.expiresAt > this.now();
-      if (fresh || (budgetTtlRevalidation && !this.claimBackgroundTtlRevalidation(cwd, observation, cacheCapacity))) {
+      if (fresh || (budgetTtlRevalidation && !this.claimBackgroundTtlRevalidation(cwd, observation))) {
         // Refresh recency on hits so active directories survive eviction.
         this.inventoryCheckouts.delete(key);
         this.inventoryCheckouts.set(key, cached);
@@ -991,7 +990,7 @@ export class StackReader {
       this.deferredTtlRevalidations.delete(cwd);
       this.inventoryCheckouts.delete(key);
       this.inventoryCheckouts.set(key, { version, checkout, expiresAt });
-      while (this.inventoryCheckouts.size > cacheCapacity) {
+      while (this.inventoryCheckouts.size > this.inventoryCheckoutCapacity) {
         this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
       }
     };
@@ -1070,9 +1069,11 @@ export class StackReader {
     }));
     const paths = !directories || wanted.size || eligible.size
       ? [...new Set(local.flatMap(threadDirectories))].sort() : [];
-    const cacheCapacity = Math.min(
+    // All passes share this cache. A narrow read must preserve the capacity
+    // already established by broader inventory scans.
+    this.inventoryCheckoutCapacity = Math.min(
       MAX_INVENTORY_CHECKOUTS_CEILING,
-      Math.max(MAX_INVENTORY_CHECKOUTS, paths.length),
+      Math.max(this.inventoryCheckoutCapacity, paths.length),
     );
     const hinted = new Set<string>();
     const located = new Map<string, Checkout>();
@@ -1100,7 +1101,6 @@ export class StackReader {
             allowUnavailableCache: backgroundNavigation,
             budgetTtlRevalidation: backgroundNavigation,
             hasHints: found !== undefined,
-            cacheCapacity,
           })
         : await observation.checkoutLookup(cwd, inventoryDemand);
       if (checkout === "unavailable") {
@@ -1163,7 +1163,6 @@ export class StackReader {
         ? await this.readInventoryCheckout(cwd, observation, candidates, useWorktreeInventory, {
             allowUnavailableCache: backgroundNavigation,
             budgetTtlRevalidation: backgroundNavigation,
-            cacheCapacity,
           })
         : located.get(cwd);
       if (checkout === "unavailable") {

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import * as gitExecutable from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { StackReader } from "../stacks/stack-reader";
+import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
 let restoreGit: (() => void) | undefined;
@@ -312,8 +312,10 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       const dirs = Array.from({ length: count }, (_, index) =>
         path.join(sandbox, `deleted-${String(index).padStart(4, "0")}`));
       const rows = dirs.map((dir, index) => row(dir, `deleted-${index}`));
+      const preflight = dirs[0]!;
+      let initialized = false;
       const runSpy = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "rev-parse" && cwd.startsWith(sandbox)) {
+        if (args[0] === "rev-parse" && cwd.startsWith(sandbox) && !(initialized && cwd === preflight)) {
           throw Object.assign(new Error("not found"), {
             code: 128,
             killed: false,
@@ -332,6 +334,17 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
 
         // Warm repeat within TTL must keep 100% of the active inventory cached
         // (0 rev-parse spawns), never thrashing FIFO eviction back to 0% hits.
+        runSpy.mockClear();
+        await reader.read(rows, []);
+        expect(revParseCalls()).toBe(0);
+
+        // A checkout appeared since the inventory scan. Its narrow preflight
+        // replaces the cached miss without evicting other fresh checkouts.
+        await mkdir(preflight);
+        initialize(preflight);
+        initialized = true;
+        await reader.preflightCatalogs([preflight], new StackReadObservation());
+        expect(revParseCalls()).toBe(1);
         runSpy.mockClear();
         await reader.read(rows, []);
         expect(revParseCalls()).toBe(0);

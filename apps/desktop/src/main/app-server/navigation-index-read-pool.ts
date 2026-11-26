@@ -41,13 +41,15 @@ function retainedIndexBytes(index: NavigationQueryIndex, sharedRows: number, bud
  * follow-up instead (see `NavigationIndexReadPool`).
  */
 export type NavigationIndexCheckpoint = () => void;
-type Load = (signal: AbortSignal, checkpoint: NavigationIndexCheckpoint, previous: () => NavigationQueryIndex | undefined) => Promise<NavigationQueryIndex>;
+type Load = (signal: AbortSignal, checkpoint: NavigationIndexCheckpoint, previous: () => NavigationQueryIndex | undefined,
+  limitReuseTo: (key: string, index: NavigationQueryIndex) => void) => Promise<NavigationQueryIndex>;
 type Member = { pending: Pending };
 type Pending = {
   projection: boolean;
   controller: AbortController;
   members: Set<Member>;
   version?: string;
+  reuseUntil?: number;
   /** A change landed after this scan began. Its readers still get it. */
   stale: boolean;
   /** It took readers from an overtaken scan, so it finishes no matter what. */
@@ -146,17 +148,19 @@ export class NavigationIndexReadPool {
       } else bytes += auxiliaryBytes;
       backing = { bytes, leases: 0 };
     }
+    const now = Date.now();
+    const expires = Math.min(now + this.retentionMs, owner.reuseUntil ?? Infinity);
+    if (expires <= now) return;
     if (backing.leases++ === 0) this.retainedBytes += backing.bytes;
     if (threads && threads.leases++ === 0) this.retainedBytes += threads.bytes;
     this.evict(key);
-    const now = Date.now();
     while (this.retained.size >= 8 || this.retainedBytes > RETAINED_BYTE_BUDGET) {
       const comparisonOnly = [...this.retained].find(([, entry]) => entry.expires <= now);
       this.evict(comparisonOnly?.[0] ?? this.retained.keys().next().value!);
     }
-    const timer = setTimeout(() => this.stopServing(key), this.retentionMs);
+    const timer = setTimeout(() => this.stopServing(key), expires - now);
     timer.unref?.();
-    this.retained.set(key, { index, backing, threads, expires: now + this.retentionMs,
+    this.retained.set(key, { index, backing, threads, expires,
       discardAt: now + this.revalidationMs, timer, owner });
   }
 
@@ -186,7 +190,12 @@ export class NavigationIndexReadPool {
       const entry = this.retained.get(key);
       if (entry && entry.discardAt > Date.now()) return entry.index;
     };
-    const traced = listingDiagnostics.trace(stage, {}, () => owned.load(owned.controller.signal, checkpoint, previous));
+    // A derived snapshot cannot serve past the lease of the backing it read.
+    const limitReuseTo = (dependencyKey: string, index: NavigationQueryIndex) => {
+      const entry = this.retained.get(dependencyKey);
+      owned.reuseUntil = Math.min(owned.reuseUntil ?? Infinity, entry?.index === index ? entry.expires : 0);
+    };
+    const traced = listingDiagnostics.trace(stage, {}, () => owned.load(owned.controller.signal, checkpoint, previous, limitReuseTo));
     listingDiagnostics.remember(owned.promise, traced);
     traced.then((index) => {
       try {
