@@ -19,12 +19,12 @@
  *   node .agents/skills/managed-review-eval/scripts/isolated-review-controller.mjs \
  *     --verify-isolation --arms codex,neon
  */
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { reviewedMergeBase } from "./review-range.mjs";
 import { checkoutReviewSnapshot, writePinnedReviewPatch } from "./review-workspace.mjs";
@@ -48,6 +48,9 @@ const runFile = promisify(execFile);
 const MANAGED_ARMS = new Set(["codex", "neon"]);
 const ARM_BACKEND = { codex: "codex", neon: "acp:antigravity" };
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
+// Covers runner's 90s backend warmup + 10s turn interrupt + 10s owner shutdown + 10s slack.
+const CONTROLLER_WATCHDOG_SLACK_MS = 120_000;
+const DEFAULT_DOCKER_NODE_PATH = "/opt/outpost-tools/node_modules:/usr/local/lib/node_modules";
 
 function parseArg(argv, name, fallback) {
   const idx = argv.indexOf(name);
@@ -108,17 +111,26 @@ async function ensureCommitPresent(repoCwd, remote, prNumber, sha, env, signal) 
   }
 }
 
+function resolveIsolatedBundleDir(distDir) {
+  const portableSubdir = path.join(distDir, "isolated");
+  if (fs.existsSync(path.join(portableSubdir, "isolated-review-runner.js"))) {
+    return portableSubdir;
+  }
+  return distDir;
+}
+
 function copyRunnerBundle(distDir, targetBundleDir) {
-  const runnerFile = path.join(distDir, "isolated-review-runner.js");
+  const sourceDir = resolveIsolatedBundleDir(distDir);
+  const runnerFile = path.join(sourceDir, "isolated-review-runner.js");
   if (!fs.existsSync(runnerFile)) {
     throw new Error(
       `Isolated runner bundle missing at ${runnerFile}. Build it first with build-eval-driver.mjs.`,
     );
   }
   fs.mkdirSync(targetBundleDir, { recursive: true, mode: 0o700 });
-  for (const entry of fs.readdirSync(distDir)) {
+  for (const entry of fs.readdirSync(sourceDir)) {
     if (!entry.endsWith(".js") || entry === "review-matrix-driver.js") continue;
-    const src = path.join(distDir, entry);
+    const src = path.join(sourceDir, entry);
     if (!fs.statSync(src).isFile()) continue;
     fs.copyFileSync(src, path.join(targetBundleDir, entry));
   }
@@ -126,17 +138,18 @@ function copyRunnerBundle(distDir, targetBundleDir) {
 }
 
 function computeBundleSha256(distDir) {
+  const sourceDir = resolveIsolatedBundleDir(distDir);
   const hash = createHash("sha256");
-  const files = fs.readdirSync(distDir)
+  const files = fs.readdirSync(sourceDir)
     .filter((entry) => entry.endsWith(".js") && entry !== "review-matrix-driver.js")
     .sort();
   if (!files.includes("isolated-review-runner.js")) {
-    throw new Error(`Missing isolated-review-runner.js in ${distDir}.`);
+    throw new Error(`Missing isolated-review-runner.js in ${sourceDir}.`);
   }
   for (const file of files) {
     hash.update(file);
     hash.update("\0");
-    hash.update(fs.readFileSync(path.join(distDir, file)));
+    hash.update(fs.readFileSync(path.join(sourceDir, file)));
   }
   return hash.digest("hex");
 }
@@ -188,11 +201,32 @@ function buildMinimalRunnerJob({
   };
 }
 
-function waitForChild(child, timeoutMs) {
+function terminateLaunchedProcess({ child, detached, containerName }, signal) {
+  if (containerName) {
+    spawnSync("docker", ["rm", "-f", containerName], { stdio: "ignore", timeout: 10_000 });
+  }
+  if (detached && typeof child.pid === "number" && child.pid > 0) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Fall through to direct child signal if process group already exited.
+    }
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    // Process already exited.
+  }
+}
+
+function waitForChild(launched, timeoutMs) {
+  const { child } = launched;
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let killTimer;
     const maxLogBytes = 256 * 1024;
     const appendBounded = (buf, chunk) => {
       if (buf.length >= maxLogBytes) return buf;
@@ -202,15 +236,18 @@ function waitForChild(child, timeoutMs) {
     child.stderr?.on("data", (chunk) => { stderr = appendBounded(stderr, chunk); });
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 5_000).unref();
+      terminateLaunchedProcess(launched, "SIGTERM");
+      killTimer = setTimeout(() => terminateLaunchedProcess(launched, "SIGKILL"), 10_000);
+      killTimer.unref();
     }, timeoutMs);
     child.on("error", (error) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       reject(error);
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      clearTimeout(killTimer);
       resolve({ code, signal, stdout, stderr, timedOut });
     });
   });
@@ -244,6 +281,8 @@ export async function verifyIsolationWithSyntheticCanaries({
   requestedIsolation = "auto",
   runnerParent = defaultRunnerParent(),
   codexCommand,
+  dockerImage,
+  seccompProfile,
   extraDeniedPaths = [],
 } = {}) {
   const controllerTemp = canonicalPath(fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-eval-canary-ctrl-")));
@@ -335,12 +374,21 @@ export async function verifyIsolationWithSyntheticCanaries({
     const canaryFiles = Object.fromEntries(
       Object.entries(canaries).map(([name, entry]) => [name, entry.file]),
     );
+    const deniedWriteDirs = {
+      outDir,
+      cohortDir,
+      repoDir,
+      hostHomeCanaryDir,
+    };
     const canaryCommits = { preMergeBase, futureMain, otherBranch };
     const report = { ok: true, platform: process.platform, arms: {} };
 
     for (const arm of arms) {
       if (!MANAGED_ARMS.has(arm)) throw new Error(`Unsupported managed arm: ${arm}`);
       const isolation = resolveIsolationBackend({ requested: requestedIsolation, arm });
+      if (isolation === "docker" && !dockerImage) {
+        throw new Error("Docker isolation verification requires --docker-image <image>.");
+      }
       const cellToken = `probe-${arm}-${randomBytes(4).toString("hex")}`;
       const cellRoot = path.join(runnerTemp, cellToken);
       fs.mkdirSync(cellRoot, { recursive: true, mode: 0o700 });
@@ -362,14 +410,18 @@ export async function verifyIsolationWithSyntheticCanaries({
         pinnedPatchFile = await writePinnedReviewPatch(workspacePath, mergeBase, headCommit);
       }
 
+      const bundleDir = path.join(cellRoot, "bundle");
       const runnerHome = path.join(cellRoot, "home");
       const pwragentHome = path.join(cellRoot, "pwragent-home");
       const runtimeRoot = path.join(cellRoot, "runtime");
-      const resultPath = path.join(cellRoot, "result", "cell-result.json");
+      const resultDir = path.join(cellRoot, "result");
+      const tmpDir = path.join(cellRoot, "tmp");
+      const resultPath = path.join(resultDir, "cell-result.json");
       const codexHome = arm === "codex" ? path.join(cellRoot, "codex-home") : undefined;
-      fs.mkdirSync(runnerHome, { recursive: true, mode: 0o700 });
-      fs.mkdirSync(pwragentHome, { recursive: true, mode: 0o700 });
-      fs.mkdirSync(runtimeRoot, { recursive: true, mode: 0o700 });
+      for (const dir of [bundleDir, runnerHome, pwragentHome, runtimeRoot, resultDir, tmpDir]) {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      }
+      fs.writeFileSync(path.join(bundleDir, "runner-stub.js"), "// immutable bundle marker\n");
       if (codexHome) stageIsolatedCodexHome({ sourceCodexHome: undefined, targetCodexHome: codexHome });
       if (arm === "neon") {
         stageIsolatedAntigravityHome({ sourceHome: undefined, targetHome: runnerHome, allowMacKeychain: false });
@@ -382,6 +434,18 @@ export async function verifyIsolationWithSyntheticCanaries({
         extraDeniedPaths: [hostHomeCanaryDir, ...extraDeniedPaths],
         runnerRoot: cellRoot,
       });
+      const codexProtectedRoots = [
+        ...deniedRoots,
+        path.join(cellRoot, "job.json"),
+        resultDir,
+        bundleDir,
+        restrictedBinDir,
+      ];
+
+      const useContainerPaths = isolation === "docker";
+      const mapPath = (hostPath) => (useContainerPaths
+        ? path.posix.join("/eval", path.relative(cellRoot, hostPath).split(path.sep).join("/"))
+        : hostPath);
 
       const job = buildMinimalRunnerJob({
         cellToken,
@@ -390,13 +454,13 @@ export async function verifyIsolationWithSyntheticCanaries({
         explicitNeonModel: false,
         reasoningEffort: arm === "codex" ? "xhigh" : "high",
         timeoutMs: 60_000,
-        workspacePath,
-        outputPath: resultPath,
-        pwragentHome,
-        runtimeRoot,
+        workspacePath: mapPath(workspacePath),
+        outputPath: mapPath(resultPath),
+        pwragentHome: mapPath(pwragentHome),
+        runtimeRoot: mapPath(runtimeRoot),
         pinnedPatchFile,
-        codexProtectedRoots: deniedRoots,
-        codexReadOnlyRoots: codexHome ? [codexHome] : undefined,
+        codexProtectedRoots: useContainerPaths ? undefined : codexProtectedRoots,
+        codexReadOnlyRoots: useContainerPaths || !codexHome ? undefined : [codexHome],
         caseData: syntheticCase,
         mergeBaseCommit: mergeBase,
       });
@@ -413,12 +477,13 @@ export async function verifyIsolationWithSyntheticCanaries({
 
       const env = buildIsolatedEnv({
         arm,
-        cellRoot,
-        pwragentHome,
-        runnerHome,
-        codexHome,
-        restrictedBinDir,
-        codexCommand,
+        cellRoot: useContainerPaths ? "/eval" : cellRoot,
+        pwragentHome: mapPath(pwragentHome),
+        runnerHome: mapPath(runnerHome),
+        codexHome: codexHome ? mapPath(codexHome) : undefined,
+        restrictedBinDir: mapPath(restrictedBinDir),
+        codexCommand: useContainerPaths ? undefined : codexCommand,
+        createTmpDir: !useContainerPaths,
       });
 
       const prevCanary = process.env.PWRAGENT_HOLDOUT_CANARY;
@@ -431,13 +496,16 @@ export async function verifyIsolationWithSyntheticCanaries({
           arm,
           cellRoot,
           workspacePath,
-          deniedRoots,
+          deniedRoots: arm === "codex" && isolation === "codex-sandbox" ? codexProtectedRoots : deniedRoots,
           canaryFiles,
+          deniedWriteDirs,
           canaryCommits,
           expectedPatchFile: pinnedPatchFile,
           expectedWorkspaceFile: "src.ts",
           env,
           codexCommand,
+          dockerImage,
+          seccompProfile,
           allowReadSubpaths: [path.dirname(canonicalPath(process.execPath))],
         });
         const summary = assertProbePassed(probe);
@@ -471,6 +539,9 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
   const extraDeniedPaths = parseMultiArg(argv, "--deny-path").map((p) => path.resolve(p));
   const codexBinArg = parseArg(argv, "--codex-bin", "") || undefined;
   const agyBinArg = parseArg(argv, "--agy-bin", "") || undefined;
+  const dockerImage = parseArg(argv, "--docker-image", "") || undefined;
+  const seccompProfile = parseArg(argv, "--seccomp-profile", "") || undefined;
+  const dockerNodePath = parseArg(argv, "--docker-node-path", DEFAULT_DOCKER_NODE_PATH);
 
   if (argv.includes("--verify-isolation")) {
     const report = await verifyIsolationWithSyntheticCanaries({
@@ -478,6 +549,8 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
       requestedIsolation,
       runnerParent,
       codexCommand: codexBinArg,
+      dockerImage,
+      seccompProfile,
       extraDeniedPaths,
     });
     console.log(JSON.stringify(report, null, 2));
@@ -499,7 +572,7 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
   const remote = parseArg(argv, "--remote", "origin");
   const casesArg = parseArg(argv, "--cases", "all");
   const timeoutMs = Number(parseArg(argv, "--timeout-ms", "900000"));
-  const caseConcurrency = Number(parseArg(argv, "--concurrency", "2"));
+  const requestedConcurrency = Number(parseArg(argv, "--concurrency", "2"));
   const codexModel = parseArg(argv, "--codex-model", "gpt-6.2-sol");
   const codexEffort = parseArg(argv, "--codex-effort", "xhigh");
   const neonModel = parseArg(argv, "--neon-model", "gemini-4-neon");
@@ -511,11 +584,9 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
     "--codex-home",
     process.env.CODEX_HOME || path.join(os.homedir(), ".codex"),
   );
-  const dockerImage = parseArg(argv, "--docker-image", "") || undefined;
-  const seccompProfile = parseArg(argv, "--seccomp-profile", "") || undefined;
 
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > 2_147_483_647
-    || !Number.isSafeInteger(caseConcurrency) || caseConcurrency <= 0) {
+    || !Number.isSafeInteger(requestedConcurrency) || requestedConcurrency <= 0) {
     throw new Error("Concurrency and timeout must be positive integers within the supported bounds.");
   }
 
@@ -546,6 +617,22 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
     throw new Error("Docker isolation requires --docker-image <image>.");
   }
 
+  // Validate runnerRoot disjointness from sensitive and platform home/temp roots
+  // before creating directories or launching any cells.
+  resolveDeniedRoots({
+    repoCwd,
+    cohortPath,
+    outDir,
+    extraDeniedPaths,
+    runnerRoot: runnerParent,
+  });
+
+  // Under codex-sandbox on macOS, /private/tmp cannot be denied while a cell
+  // workspace lives in it. Serialize cells to concurrency 1 so no sibling cell
+  // workspace, auth file, or result coexists in /private/tmp.
+  const usesCodexSandbox = Object.values(isolationByArm).includes("codex-sandbox");
+  const caseConcurrency = usesCodexSandbox ? 1 : requestedConcurrency;
+
   const bundleSha256 = computeBundleSha256(distDir);
   const resultsDir = path.join(outDir, "results");
   const rawLogsDir = path.join(outDir, "raw-logs");
@@ -561,16 +648,19 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
   const agyBin = agyBinArg
     || resolveExecutable("agy")
     || resolveExecutable(path.join(os.homedir(), ".local", "bin", "agy"));
-  const repoNodeModules = path.join(repoCwd, "node_modules");
+  const hostNodePaths = [
+    path.join(repoCwd, "apps", "desktop", "node_modules"),
+    path.join(repoCwd, "node_modules"),
+  ].filter((dir) => fs.existsSync(dir));
   const totals = { completed: 0, failed: 0, cancelled: 0, timeout: 0, skipped: 0 };
 
   if (blind) {
     console.log(
-      `[eval] Starting isolated blind matrix (${selectedCases.length} cases x [${requestedArms.join(", ")}], isolation=${JSON.stringify(isolationByArm)}).`,
+      `[eval] Starting isolated blind matrix (${selectedCases.length} cases x [${requestedArms.join(", ")}], concurrency=${caseConcurrency}, isolation=${JSON.stringify(isolationByArm)}).`,
     );
   } else {
     console.log(
-      `[eval] Starting isolated matrix (${selectedCases.length} cases x [${requestedArms.join(", ")}], out=${outDir}, isolation=${JSON.stringify(isolationByArm)}).`,
+      `[eval] Starting isolated matrix (${selectedCases.length} cases x [${requestedArms.join(", ")}], concurrency=${caseConcurrency}, out=${outDir}, isolation=${JSON.stringify(isolationByArm)}).`,
     );
   }
 
@@ -660,7 +750,7 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
       const hostOutputPath = path.join(resultDir, "cell-result.json");
       const codexHome = arm === "codex" ? path.join(cellRoot, "codex-home") : undefined;
 
-      for (const dir of [runnerHome, pwragentHome, runtimeRoot, resultDir, tmpDir]) {
+      for (const dir of [runnerHome, pwragentHome, path.join(runtimeRoot, "resources"), resultDir, tmpDir]) {
         fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       }
       if (codexHome) {
@@ -681,6 +771,17 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
         ? path.posix.join("/eval", path.relative(cellRoot, hostPath).split(path.sep).join("/"))
         : hostPath);
 
+      const hostJobPath = path.join(cellRoot, "job.json");
+      const codexProtectedRoots = useContainerPaths
+        ? undefined
+        : [
+            ...deniedRoots,
+            hostJobPath,
+            resultDir,
+            bundleDir,
+            restrictedBinDir,
+          ];
+
       const runnerJob = buildMinimalRunnerJob({
         cellToken,
         arm,
@@ -693,12 +794,11 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
         pwragentHome: mapPath(pwragentHome),
         runtimeRoot: mapPath(runtimeRoot),
         pinnedPatchFile,
-        codexProtectedRoots: useContainerPaths ? undefined : deniedRoots,
+        codexProtectedRoots,
         codexReadOnlyRoots: useContainerPaths || !codexHome ? undefined : [codexHome],
         caseData: c,
         mergeBaseCommit: mergeBase,
       });
-      const hostJobPath = path.join(cellRoot, "job.json");
       writeAtomicJson(hostJobPath, runnerJob, 0o600);
 
       const env = buildIsolatedEnv({
@@ -710,14 +810,19 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
         restrictedBinDir: mapPath(restrictedBinDir),
         antigravityCliPath: !useContainerPaths && arm === "neon" ? agyBin : undefined,
         codexCommand: !useContainerPaths && arm === "codex" ? codexBin : undefined,
+        nodePaths: useContainerPaths ? dockerNodePath.split(":").filter(Boolean) : hostNodePaths,
         createTmpDir: !useContainerPaths,
       });
 
       const allowReadSubpaths = [];
       const allowReadLiterals = [];
       if (!useContainerPaths) {
-        if (fs.existsSync(repoNodeModules)) allowReadSubpaths.push(repoNodeModules);
+        allowReadSubpaths.push(...hostNodePaths);
         allowReadSubpaths.push(path.dirname(canonicalPath(process.execPath)));
+        if (arm === "codex" && codexBin) {
+          allowReadSubpaths.push(path.dirname(canonicalPath(codexBin)));
+          allowReadLiterals.push(canonicalPath(codexBin));
+        }
         if (arm === "neon" && agyBin) {
           allowReadSubpaths.push(path.dirname(canonicalPath(agyBin)));
           allowReadLiterals.push(canonicalPath(agyBin));
@@ -731,7 +836,7 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
         console.log(`[START] ${c.id} | ${arm} | isolation=${isolation}`);
       }
 
-      const child = spawnIsolatedProcess({
+      const launched = spawnIsolatedProcess({
         isolation,
         command: useContainerPaths ? "node" : process.execPath,
         args: [mapPath(runnerEntry), "--job", mapPath(hostJobPath)],
@@ -743,10 +848,11 @@ export async function runIsolatedMatrix(argv = process.argv.slice(2)) {
         allowReadSubpaths,
         allowReadLiterals,
         dockerImage,
+        dockerContainerName: useContainerPaths ? `pwragent-eval-${cellToken}` : undefined,
         seccompProfile,
       });
 
-      const exitInfo = await waitForChild(child, timeoutMs + 30_000);
+      const exitInfo = await waitForChild(launched, timeoutMs + CONTROLLER_WATCHDOG_SLACK_MS);
       archiveRawHoldoutLog({
         rawLogsDir,
         cellToken,

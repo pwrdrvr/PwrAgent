@@ -285,7 +285,10 @@ async function main(): Promise<void> {
   process.env.PWRAGENT_DISABLE_MESSAGING = "1";
 
   fs.mkdirSync(job.pwragentHome, { recursive: true, mode: 0o700 });
-  fs.mkdirSync(path.join(job.runtimeRoot, "resources"), { recursive: true, mode: 0o700 });
+  const resourcesDir = path.join(job.runtimeRoot, "resources");
+  if (!fs.existsSync(resourcesDir)) {
+    fs.mkdirSync(resourcesDir, { recursive: true, mode: 0o700 });
+  }
 
   const profile = ensureNamedProfileExists("eval", { env: process.env });
   const configPath = path.join(profile.profileDir, "config.toml");
@@ -465,9 +468,27 @@ async function main(): Promise<void> {
     let reviewText: string | undefined;
     const approvals = new Set<string>();
     let resolveTerminal!: (result: Outcome) => void;
+    let terminalSettled = false;
+    const settleTerminal = (result: Outcome) => {
+      if (terminalSettled) return;
+      terminalSettled = true;
+      resolveTerminal(result);
+    };
     const terminal = new Promise<Outcome>((resolve) => { resolveTerminal = resolve; });
     let started: StartReviewResponse | undefined;
     let outcome: Outcome;
+
+    const interrupt = (active: StartReviewResponse) =>
+      registry.interruptTurn({ backend: active.backend, threadId: active.threadId, turnId: active.turnId });
+
+    const onSignal = (sig: NodeJS.Signals) => {
+      if (started) {
+        void interrupt(started).catch(() => {});
+      }
+      settleTerminal({ status: "cancelled", error: `Runner interrupted by ${sig}.` });
+    };
+    process.on("SIGTERM", onSignal);
+    process.on("SIGINT", onSignal);
 
     const matchesSession = (threadId: string, eventTurnId?: string) =>
       (threadId === parentThreadId || threadId === reviewThreadId)
@@ -519,17 +540,14 @@ async function main(): Promise<void> {
         if (data?.reviewOutput) reviewOutput = data.reviewOutput as AppServerReviewOutput;
         if (typeof item.review === "string") reviewText = item.review;
       } else if (method === "turn/failed" || (method === "turn/completed" && turn?.status === "failed")) {
-        resolveTerminal({ status: "failed", error: turn?.error?.message ?? "turn failed" });
+        settleTerminal({ status: "failed", error: turn?.error?.message ?? "turn failed" });
       } else if (method === "turn/cancelled" || (method === "turn/completed"
         && (turn?.status === "cancelled" || turn?.status === "interrupted"))) {
-        resolveTerminal({ status: "cancelled" });
+        settleTerminal({ status: "cancelled" });
       } else if (method === "turn/completed") {
-        resolveTerminal({ status: "completed" });
+        settleTerminal({ status: "completed" });
       }
     });
-
-    const interrupt = (active: StartReviewResponse) =>
-      registry.interruptTurn({ backend: active.backend, threadId: active.threadId, turnId: active.turnId });
 
     const timedOut = (stage: string): Outcome => ({
       status: "timeout",
@@ -640,6 +658,9 @@ async function main(): Promise<void> {
       }
     } catch (error) {
       outcome = { status: "failed", error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      process.off("SIGTERM", onSignal);
+      process.off("SIGINT", onSignal);
     }
 
     const findings = reviewOutput?.findings ?? [];

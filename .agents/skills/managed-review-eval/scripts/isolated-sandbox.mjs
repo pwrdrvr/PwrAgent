@@ -1,4 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -71,8 +72,11 @@ export function assertRunnerRootSafe(runnerRoot, sensitiveRoots) {
   for (const root of sensitiveRoots) {
     if (!root) continue;
     const canonicalSensitive = canonicalPath(root);
+    if (canonicalSensitive === path.parse(canonicalSensitive).root) continue;
     if (isWithin(canonicalRunner, canonicalSensitive) || isWithin(canonicalSensitive, canonicalRunner)) {
-      throw new Error("Isolated runner root must be completely disjoint from repository, cohort, controller output, and denied roots.");
+      throw new Error(
+        `Isolated runner root must be completely disjoint from protected roots (overlaps ${canonicalSensitive}).`,
+      );
     }
   }
 }
@@ -92,25 +96,28 @@ export function resolveDeniedRoots({
     outDir,
     ...extraDeniedPaths,
   ].filter(Boolean);
-  assertRunnerRootSafe(runnerRoot, mandatorySensitive);
 
-  const candidates = [...mandatorySensitive];
   if (platform === "darwin") {
-    candidates.push("/Users", "/private/var/folders");
-    if (hostHome && !isWithin(hostHome, "/Users")) candidates.push(hostHome);
+    mandatorySensitive.push("/Users", "/private/var/folders");
+    if (hostHome && !isWithin(hostHome, "/Users")) mandatorySensitive.push(hostHome);
   } else if (platform === "linux") {
-    candidates.push("/home", "/root");
+    mandatorySensitive.push("/home", "/root");
     if (hostHome && !isWithin(hostHome, "/home") && !isWithin(hostHome, "/root")) {
-      candidates.push(hostHome);
+      mandatorySensitive.push(hostHome);
     }
+  } else if (hostHome) {
+    mandatorySensitive.push(hostHome);
   }
+
+  // Fail closed if runnerRoot overlaps ANY sensitive or platform home/temp root
+  // rather than silently dropping deny rules.
+  assertRunnerRootSafe(runnerRoot, mandatorySensitive);
 
   const seen = new Set();
   const denied = [];
-  for (const candidate of candidates) {
+  for (const candidate of mandatorySensitive) {
     const resolved = canonicalPath(candidate);
     if (resolved === path.parse(resolved).root) continue;
-    if (isWithin(runnerRoot, resolved) || isWithin(resolved, runnerRoot)) continue;
     if (!seen.has(resolved)) {
       seen.add(resolved);
       denied.push(resolved);
@@ -165,6 +172,7 @@ export function buildIsolatedEnv({
   antigravityCliPath,
   codexCommand,
   nodeExecutable = process.execPath,
+  nodePaths = [],
   extraPathDirs = [],
   passthroughEnv = {},
   createTmpDir = true,
@@ -206,6 +214,10 @@ export function buildIsolatedEnv({
     GIT_TERMINAL_PROMPT: "0",
     GIT_ALLOW_PROTOCOL: "",
   };
+  const cleanNodePaths = [...new Set(nodePaths.filter(Boolean))];
+  if (cleanNodePaths.length) {
+    env.NODE_PATH = cleanNodePaths.join(path.delimiter);
+  }
   if (arm === "codex" && codexHome) {
     env.CODEX_HOME = codexHome;
     if (codexCommand) env.PWRAGENT_CODEX_COMMAND = canonicalPath(codexCommand);
@@ -312,8 +324,8 @@ function ancestorDirectories(targetPath) {
 /**
  * Build a macOS Seatbelt (sandbox-exec) profile that denies reads across user
  * homes, host temp roots, repository checkout, cohort, scoring, and raw logs,
- * while permitting only the staged cell root, read-only node_modules/binaries,
- * and optional macOS Keychain for Antigravity auth.
+ * denies ALL filesystem writes outside the cell's explicit writable state dirs
+ * and /dev null/tty devices, and blocks direct exec of forge/remote CLIs.
  */
 export function buildSeatbeltProfile({
   cellRoot,
@@ -340,8 +352,10 @@ export function buildSeatbeltProfile({
     lines.push(`(deny file-read* (subpath ${q(root)}))`);
   }
 
-  // Keep the entire staged workspace read-only (including .git/config).
-  lines.push(`(deny file-write* (subpath ${q(canonicalWorkspace)}))`);
+  // Deny ALL file writes by default across the entire filesystem (including
+  // denied roots, /Users, Keychains, node_modules, cellRoot/bin, cellRoot/bundle,
+  // cellRoot/job.json, workspacePath, and workspacePath/.git/config).
+  lines.push('(deny file-write* (subpath "/"))');
 
   // Allow stat-only traversal of ancestor directories for explicitly allowed
   // paths (never file-read-data, so readdir on denied parents fails with EPERM).
@@ -362,8 +376,12 @@ export function buildSeatbeltProfile({
     lines.push(`(allow file-read* (literal ${q(lit)}))`);
   }
 
-  // Explicitly allow writes ONLY to the cell's writable state directories and
-  // the pre-created refs/pwragent dir needed by resolvePullRequestReview.
+  // Allow writes ONLY to standard null/tty device nodes, the cell's explicit
+  // writable state directories, and the pre-created refs/pwragent dir needed
+  // by resolvePullRequestReview.
+  for (const dev of ["/dev/null", "/dev/zero", "/dev/tty", "/dev/dtracehelper"]) {
+    lines.push(`(allow file-write* (literal "${dev}"))`);
+  }
   const writableDirs = [
     path.join(canonicalCell, "home"),
     path.join(canonicalCell, "pwragent-home"),
@@ -414,10 +432,13 @@ export function buildBwrapArgs({
   for (const ro of [...new Set(allowReadSubpaths.filter(Boolean).map(canonicalPath))]) {
     if (fs.existsSync(ro)) bwrap.push("--ro-bind", ro, ro);
   }
-  bwrap.push("--bind", canonicalCell, canonicalCell);
-  // Mount the workspace read-only except the single ref namespace needed for
-  // pinned SHA pinning during resolvePullRequestReview.
-  bwrap.push("--ro-bind", canonicalWorkspace, canonicalWorkspace);
+  // Mount the cell root read-only so workspace, .git/config, bin shims,
+  // bundle, and job.json remain immutable; bind-mount only writable state dirs.
+  bwrap.push("--ro-bind", canonicalCell, canonicalCell);
+  for (const rel of ["home", "pwragent-home", "result", "tmp", "codex-home"]) {
+    const dir = path.join(canonicalCell, rel);
+    if (fs.existsSync(dir)) bwrap.push("--bind", dir, dir);
+  }
   const reviewObjectsDir = path.join(canonicalWorkspace, ".git", "refs", "pwragent");
   if (fs.existsSync(reviewObjectsDir)) {
     bwrap.push("--bind", reviewObjectsDir, reviewObjectsDir);
@@ -430,6 +451,7 @@ export function buildDockerArgs({
   image,
   cellRoot,
   containerCellRoot = "/eval",
+  containerName,
   seccompProfile,
   env = {},
   command,
@@ -448,12 +470,29 @@ export function buildDockerArgs({
     "--read-only",
     "--tmpfs", "/tmp:rw,noexec,nosuid,size=256m",
   ];
+  if (containerName) {
+    docker.push("--name", containerName);
+  }
   if (seccompProfile) {
     docker.push("--security-opt", `seccomp=${canonicalPath(seccompProfile)}`);
   }
-  // Mount ONLY the single cell exchange root. Never mount host home, repo,
-  // cohorts, controller outputs, scoring batches, or raw holdout logs.
-  docker.push("-v", `${canonicalCell}:${containerCellRoot}:rw`);
+  // Mount ONLY the single cell exchange root READ-ONLY so workspace, .git/config,
+  // PATH shims (/eval/bin), runner bundle, and job.json are immutable; overlay
+  // only the explicit writable state directories :rw.
+  docker.push("-v", `${canonicalCell}:${containerCellRoot}:ro`);
+  for (const rel of ["home", "pwragent-home", "result", "tmp", "codex-home"]) {
+    const hostDir = path.join(canonicalCell, rel);
+    if (fs.existsSync(hostDir)) {
+      docker.push("-v", `${hostDir}:${path.posix.join(containerCellRoot, rel)}:rw`);
+    }
+  }
+  const reviewObjectsDir = path.join(canonicalCell, "workspace", ".git", "refs", "pwragent");
+  if (fs.existsSync(reviewObjectsDir)) {
+    docker.push(
+      "-v",
+      `${reviewObjectsDir}:${path.posix.join(containerCellRoot, "workspace/.git/refs/pwragent")}:rw`,
+    );
+  }
   docker.push("-w", path.posix.join(containerCellRoot, "workspace"));
   for (const [key, value] of Object.entries(env)) {
     if (typeof value === "string") docker.push("-e", `${key}=${value}`);
@@ -527,9 +566,11 @@ export function spawnIsolatedProcess({
   allowReadLiterals = [],
   allowWriteSubpaths = [],
   dockerImage,
+  dockerContainerName,
   seccompProfile,
   stdio = ["ignore", "pipe", "pipe"],
 }) {
+  const detached = process.platform !== "win32" && isolation !== "docker";
   if (isolation === "seatbelt") {
     const profile = buildSeatbeltProfile({
       cellRoot,
@@ -541,11 +582,15 @@ export function spawnIsolatedProcess({
     });
     const profilePath = path.join(cellRoot, "seatbelt.sb");
     fs.writeFileSync(profilePath, profile, { mode: 0o600 });
-    return spawn("/usr/bin/sandbox-exec", ["-f", profilePath, command, ...args], {
-      cwd,
-      env,
-      stdio,
-    });
+    return {
+      child: spawn("/usr/bin/sandbox-exec", ["-f", profilePath, command, ...args], {
+        cwd,
+        env,
+        stdio,
+        detached,
+      }),
+      detached,
+    };
   }
   if (isolation === "bwrap") {
     const bwrapArgs = buildBwrapArgs({
@@ -555,23 +600,35 @@ export function spawnIsolatedProcess({
       command,
       args,
     });
-    return spawn("bwrap", bwrapArgs, { cwd, env, stdio });
+    return {
+      child: spawn("bwrap", bwrapArgs, { cwd, env, stdio, detached }),
+      detached,
+    };
   }
   if (isolation === "docker") {
+    const containerName = dockerContainerName || `pwragent-eval-${randomBytes(6).toString("hex")}`;
     const dockerArgs = buildDockerArgs({
       image: dockerImage,
       cellRoot,
+      containerName,
       seccompProfile,
       env,
       command,
       args,
     });
-    return spawn("docker", dockerArgs, { cwd, stdio });
+    return {
+      child: spawn("docker", dockerArgs, { cwd, stdio }),
+      detached: false,
+      containerName,
+    };
   }
   if (isolation === "codex-sandbox") {
     // Codex enforces its own Seatbelt/bwrap sandbox on model commands using
     // codexProtectedRoots + agentNetwork=false passed in the runner job.
-    return spawn(command, args, { cwd, env, stdio });
+    return {
+      child: spawn(command, args, { cwd, env, stdio, detached }),
+      detached,
+    };
   }
   throw new Error(`Unsupported isolation backend: ${isolation}`);
 }
@@ -597,7 +654,8 @@ export function buildCodexReadOnlyPermissionArgs(protectedRoots, readOnlyRoots =
 
 /**
  * Execute an active probe inside the reviewer sandbox environment to prove
- * synthetic canaries cannot be read, writes are blocked, Git remotes fail,
+ * synthetic canaries cannot be read, writes are blocked across workspace,
+ * denied roots, and immutable cell directories (bin/bundle), Git remotes fail,
  * and forbidden tools/env vars are unavailable.
  */
 export function runReviewerIsolationProbe({
@@ -607,11 +665,14 @@ export function runReviewerIsolationProbe({
   workspacePath,
   deniedRoots,
   canaryFiles,
+  deniedWriteDirs = {},
   canaryCommits,
   expectedPatchFile,
   expectedWorkspaceFile,
   env,
   codexCommand,
+  dockerImage,
+  seccompProfile,
   allowReadSubpaths = [],
   allowReadLiterals = [],
 }) {
@@ -620,10 +681,19 @@ export function runReviewerIsolationProbe({
     "const path = require('node:path');",
     "const { spawnSync } = require('node:child_process');",
     "const cfg = JSON.parse(process.argv[1]);",
-    "const out = { canaryReads: {}, gitCommits: {}, hostHomeDirBlocked: false, remoteBlocked: false, workspaceReadOk: false, patchReadOk: false, writeBlocked: false, configWriteBlocked: false, ghBlocked: false, leakedEnv: [] };",
+    "const out = { canaryReads: {}, deniedDirWrites: {}, cellImmutableWrites: {}, gitCommits: {}, hostHomeDirBlocked: false, remoteBlocked: false, workspaceReadOk: false, patchReadOk: false, writeBlocked: false, configWriteBlocked: false, ghBlocked: false, leakedEnv: [] };",
     "for (const [name, target] of Object.entries(cfg.canaryFiles)) {",
     "  try { const text = fs.readFileSync(target, 'utf8'); out.canaryReads[name] = { blocked: false, leaked: text.slice(0, 64) }; }",
     "  catch (err) { out.canaryReads[name] = { blocked: true, code: err.code || 'ERR' }; }",
+    "}",
+    "for (const [name, dir] of Object.entries(cfg.deniedWriteDirs || {})) {",
+    "  const probeFile = path.join(dir, `.pwragent-write-probe-${process.pid}`);",
+    "  try { fs.writeFileSync(probeFile, 'leaked'); try { fs.unlinkSync(probeFile); } catch {} out.deniedDirWrites[name] = { blocked: false }; }",
+    "  catch (err) { out.deniedDirWrites[name] = { blocked: true, code: err.code || 'ERR' }; }",
+    "}",
+    "for (const [name, target] of Object.entries(cfg.cellImmutableWriteTargets || {})) {",
+    "  try { fs.writeFileSync(target, 'tampered'); out.cellImmutableWrites[name] = { blocked: false }; }",
+    "  catch (err) { out.cellImmutableWrites[name] = { blocked: true, code: err.code || 'ERR' }; }",
     "}",
     "if (cfg.hostHome) {",
     "  try { fs.readdirSync(cfg.hostHome); out.hostHomeDirBlocked = false; }",
@@ -647,9 +717,22 @@ export function runReviewerIsolationProbe({
     "process.stdout.write(JSON.stringify(out));",
   ].join("\n");
 
+  const useContainerPaths = isolation === "docker";
+  const effectiveCellRoot = useContainerPaths ? "/eval" : canonicalPath(cellRoot);
+  const effectiveWorkspace = useContainerPaths ? "/eval/workspace" : canonicalPath(workspacePath);
+  const cellImmutableWriteTargets = {
+    binProbe: path.join(effectiveCellRoot, "bin", ".write-probe"),
+    binGhShim: path.join(effectiveCellRoot, "bin", "gh"),
+  };
+  if (fs.existsSync(path.join(cellRoot, "bundle"))) {
+    cellImmutableWriteTargets.bundleProbe = path.join(effectiveCellRoot, "bundle", ".write-probe");
+  }
+
   const payload = JSON.stringify({
-    workspacePath: canonicalPath(workspacePath),
+    workspacePath: effectiveWorkspace,
     canaryFiles,
+    deniedWriteDirs,
+    cellImmutableWriteTargets,
     canaryCommits,
     hostHome: canonicalPath(os.homedir()),
     expectedPatchFile,
@@ -697,6 +780,29 @@ export function runReviewerIsolationProbe({
     return JSON.parse(res.stdout);
   }
 
+  if (isolation === "docker") {
+    const containerName = `pwragent-eval-probe-${randomBytes(5).toString("hex")}`;
+    const dockerArgs = buildDockerArgs({
+      image: dockerImage,
+      cellRoot,
+      containerName,
+      seccompProfile,
+      env,
+      command: "node",
+      args: ["-e", probeScript, payload],
+    });
+    const res = spawnSync("docker", dockerArgs, {
+      cwd: workspacePath,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    if (res.status !== 0) {
+      spawnSync("docker", ["rm", "-f", containerName], { stdio: "ignore" });
+      throw new Error(`Docker probe exited with ${res.status}: ${res.stderr.trim()}`);
+    }
+    return JSON.parse(res.stdout);
+  }
+
   if (isolation === "codex-sandbox") {
     const codexBin = codexCommand || resolveExecutable("codex");
     if (!codexBin) {
@@ -736,6 +842,12 @@ export function assertProbePassed(probe) {
   for (const [name, result] of Object.entries(probe.canaryReads)) {
     if (!result.blocked) failures.push(`canary readable: ${name}`);
   }
+  for (const [name, result] of Object.entries(probe.deniedDirWrites ?? {})) {
+    if (!result.blocked) failures.push(`denied directory writable: ${name}`);
+  }
+  for (const [name, result] of Object.entries(probe.cellImmutableWrites ?? {})) {
+    if (!result.blocked) failures.push(`immutable cell path writable: ${name}`);
+  }
   for (const [name, result] of Object.entries(probe.gitCommits)) {
     if (!result.absent) failures.push(`forbidden git commit reachable: ${name}`);
   }
@@ -750,7 +862,13 @@ export function assertProbePassed(probe) {
   if (failures.length) {
     throw new Error(`Isolation probe failed: ${failures.join("; ")}`);
   }
-  return { ok: true, checkedCanaries: Object.keys(probe.canaryReads).length, checkedCommits: Object.keys(probe.gitCommits).length };
+  return {
+    ok: true,
+    checkedCanaries: Object.keys(probe.canaryReads).length,
+    checkedDeniedWrites: Object.keys(probe.deniedDirWrites ?? {}).length,
+    checkedImmutableCellWrites: Object.keys(probe.cellImmutableWrites ?? {}).length,
+    checkedCommits: Object.keys(probe.gitCommits).length,
+  };
 }
 
 export function ensureGitCleanPathCheck(workspacePath, forbiddenSubstrings = []) {

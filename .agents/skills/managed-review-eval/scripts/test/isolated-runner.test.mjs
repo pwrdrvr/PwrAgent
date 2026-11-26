@@ -8,11 +8,13 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   assertProbePassed,
+  buildBwrapArgs,
   buildDockerArgs,
   canonicalPath,
   defaultRunnerParent,
   ensureGitCleanPathCheck,
   hasCommand,
+  resolveDeniedRoots,
   resolveIsolationBackend,
   stageIsolatedAntigravityHome,
   stageIsolatedCodexHome,
@@ -155,12 +157,17 @@ test("synthetic canary isolation proof succeeds across both managed arms and fai
   for (const arm of armsToVerify) {
     assert.equal(report.arms[arm].ok, true);
     assert.equal(report.arms[arm].checkedCanaries, 7);
+    assert.equal(report.arms[arm].checkedDeniedWrites, 4);
+    assert.equal(report.arms[arm].checkedImmutableCellWrites, 3);
     assert.equal(report.arms[arm].checkedCommits, 3);
   }
 
-  // Non-vacuity check: assertProbePassed must reject a readable canary or open remote.
-  assert.throws(() => assertProbePassed({
-    canaryReads: { cohortFile: { blocked: false, leaked: "SECRET" } },
+  // Non-vacuity check: assertProbePassed must reject readable canaries,
+  // writable denied dirs or immutable cell paths, or reachable commits.
+  const passingProbe = {
+    canaryReads: { cohortFile: { blocked: true } },
+    deniedDirWrites: { outDir: { blocked: true } },
+    cellImmutableWrites: { binGhShim: { blocked: true } },
     gitCommits: { futureMain: { absent: true } },
     hostHomeDirBlocked: true,
     remoteBlocked: true,
@@ -170,19 +177,69 @@ test("synthetic canary isolation proof succeeds across both managed arms and fai
     configWriteBlocked: true,
     ghBlocked: true,
     leakedEnv: [],
+  };
+  assert.throws(() => assertProbePassed({
+    ...passingProbe,
+    canaryReads: { cohortFile: { blocked: false, leaked: "SECRET" } },
   }), /canary readable: cohortFile/);
   assert.throws(() => assertProbePassed({
-    canaryReads: { cohortFile: { blocked: true } },
+    ...passingProbe,
+    deniedDirWrites: { outDir: { blocked: false } },
+  }), /denied directory writable: outDir/);
+  assert.throws(() => assertProbePassed({
+    ...passingProbe,
+    cellImmutableWrites: { binGhShim: { blocked: false } },
+  }), /immutable cell path writable: binGhShim/);
+  assert.throws(() => assertProbePassed({
+    ...passingProbe,
     gitCommits: { futureMain: { absent: false } },
-    hostHomeDirBlocked: true,
-    remoteBlocked: true,
-    workspaceReadOk: true,
-    patchReadOk: true,
-    writeBlocked: true,
-    configWriteBlocked: true,
-    ghBlocked: true,
-    leakedEnv: [],
   }), /forbidden git commit reachable: futureMain/);
+});
+
+test("resolveDeniedRoots fails closed when runnerRoot overlaps home or platform temp roots", (t) => {
+  const tmp = canonicalPath(fs.mkdtempSync(path.join(os.tmpdir(), "iso-roots-")));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const baseOpts = {
+    repoCwd: path.join(tmp, "repo"),
+    cohortPath: path.join(tmp, "cohorts", "c.json"),
+    outDir: path.join(tmp, "out"),
+  };
+
+  assert.throws(
+    () => resolveDeniedRoots({ ...baseOpts, runnerRoot: path.join(os.homedir(), "eval-runner") }),
+    /disjoint from protected roots/i,
+  );
+  if (process.platform === "darwin") {
+    assert.throws(
+      () => resolveDeniedRoots({ ...baseOpts, runnerRoot: path.join(os.tmpdir(), "eval-runner") }),
+      /disjoint from protected roots/i,
+    );
+  }
+  assert.throws(
+    () => resolveDeniedRoots({
+      ...baseOpts,
+      platform: "linux",
+      hostHome: "/home/tester",
+      runnerRoot: "/home/tester/eval-runner",
+    }),
+    /disjoint from protected roots/i,
+  );
+});
+
+test("build-eval-driver emits a portable isolated runner without host-absolute node_modules paths", (t) => {
+  const tmp = canonicalPath(fs.mkdtempSync(path.join(os.tmpdir(), "iso-bundle-")));
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+  const repoRoot = path.resolve(scriptsDir, "../../../..");
+  const res = spawnSync(
+    process.execPath,
+    [path.join(scriptsDir, "build-eval-driver.mjs"), "--repo", repoRoot, "--out", tmp],
+    { encoding: "utf8", timeout: 30_000 },
+  );
+  assert.equal(res.status, 0, res.stderr);
+  const isolatedDir = path.join(tmp, "isolated");
+  const runnerBundle = fs.readFileSync(path.join(isolatedDir, "isolated-review-runner.js"), "utf8");
+  assert.doesNotMatch(runnerBundle, /require\(["'](?:\/|[A-Za-z]:\\)[^"']*node_modules/);
+  assert.doesNotMatch(runnerBundle, new RegExp(repoRoot.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 });
 
 test("provider auth staging strips sessions, history, skills, and MCP configs; Docker args isolate mounts", (t) => {
@@ -246,12 +303,18 @@ test("provider auth staging strips sessions, history, skills, and MCP configs; D
     '{"mcpServers":{}}',
   );
 
-  // Verify Docker container launch args mount ONLY the single cell root and drop capabilities.
+  // Verify Docker container launch args mount cellRoot read-only with only
+  // explicit writable state dirs :rw, drop capabilities, and assign a container name.
   const cellRoot = path.join(tmp, "cell-root");
-  fs.mkdirSync(cellRoot, { recursive: true });
+  const customCodexDir = path.join(tmp, "opt-codex-bin");
+  for (const rel of ["home", "pwragent-home", "result", "tmp", "codex-home", "bin", "bundle", "workspace/.git/refs/pwragent"]) {
+    fs.mkdirSync(path.join(cellRoot, rel), { recursive: true });
+  }
+  fs.mkdirSync(customCodexDir, { recursive: true });
   const dockerArgs = buildDockerArgs({
     image: "pwragent-eval:synthetic",
     cellRoot,
+    containerName: "pwragent-eval-cell-test",
     env: { PWRAGENT_PROFILE: "eval", GIT_ALLOW_PROTOCOL: "" },
     command: "node",
     args: ["/eval/bundle/isolated-review-runner.js", "--job", "/eval/job.json"],
@@ -259,9 +322,30 @@ test("provider auth staging strips sessions, history, skills, and MCP configs; D
   assert.ok(dockerArgs.includes("--cap-drop") && dockerArgs.includes("ALL"));
   assert.ok(dockerArgs.includes("no-new-privileges"));
   assert.ok(dockerArgs.includes("--read-only"));
+  assert.equal(dockerArgs[dockerArgs.indexOf("--name") + 1], "pwragent-eval-cell-test");
   const volumeFlags = dockerArgs.filter((v, i) => dockerArgs[i - 1] === "-v");
-  assert.deepEqual(volumeFlags, [`${cellRoot}:/eval:rw`]);
+  assert.equal(volumeFlags[0], `${cellRoot}:/eval:ro`);
+  assert.ok(volumeFlags.includes(`${path.join(cellRoot, "home")}:/eval/home:rw`));
+  assert.ok(volumeFlags.includes(`${path.join(cellRoot, "pwragent-home")}:/eval/pwragent-home:rw`));
+  assert.ok(volumeFlags.includes(`${path.join(cellRoot, "result")}:/eval/result:rw`));
+  assert.ok(volumeFlags.includes(`${path.join(cellRoot, "tmp")}:/eval/tmp:rw`));
+  assert.ok(volumeFlags.includes(`${path.join(cellRoot, "codex-home")}:/eval/codex-home:rw`));
+  assert.ok(volumeFlags.includes(`${path.join(cellRoot, "workspace/.git/refs/pwragent")}:/eval/workspace/.git/refs/pwragent:rw`));
+  assert.equal(volumeFlags.some((v) => v.includes("/eval/bin:") || v.includes("/eval/bundle:") || v.endsWith(":/eval/workspace:rw")), false);
   assert.doesNotMatch(dockerArgs.join(" "), new RegExp(os.homedir().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+
+  // Verify Linux bwrap mounts cellRoot read-only and includes custom non-/usr codexBin dirs.
+  const bwrapArgs = buildBwrapArgs({
+    cellRoot,
+    workspacePath: path.join(cellRoot, "workspace"),
+    allowReadSubpaths: [customCodexDir],
+    command: "node",
+    args: ["runner.js"],
+  });
+  const roIdx = bwrapArgs.indexOf(cellRoot);
+  assert.ok(roIdx > 0 && bwrapArgs[roIdx - 1] === "--ro-bind");
+  const codexIdx = bwrapArgs.indexOf(customCodexDir);
+  assert.ok(codexIdx > 0 && bwrapArgs[codexIdx - 1] === "--ro-bind");
 });
 
 test("isolated controller runs both managed arms on a blind cohort with canary checks, Default Access, and full blind scoring", async (t) => {
@@ -441,8 +525,31 @@ test("isolated controller runs both managed arms on a blind cohort with canary c
         let homeReadable = false;
         try { fs.readdirSync(CFG.hostHome); homeReadable = true; } catch {}
         if (homeReadable) throw new Error("Seatbelt/bwrap failed to block host home listing");
+        // Verify writes to denied dirs and immutable cell dirs (bin/bundle) are also blocked.
+        const cellRoot = path.dirname(cwd);
+        for (const writeTarget of [
+          path.join(CFG.expectedDeniedRoots[0], ".seatbelt-write-probe"),
+          path.join(CFG.expectedDeniedRoots[1], ".seatbelt-write-probe"),
+          path.join(CFG.expectedDeniedRoots[2], ".seatbelt-write-probe"),
+          path.join(cellRoot, "bin", ".seatbelt-write-probe"),
+          path.join(cellRoot, "bin", "gh"),
+          path.join(cellRoot, "bundle", ".seatbelt-write-probe"),
+          path.join(cwd, ".seatbelt-write-probe"),
+          path.join(cwd, ".git", "config"),
+        ]) {
+          let writable = false;
+          try { fs.writeFileSync(writeTarget, "tampered"); writable = true; } catch {}
+          if (writable) throw new Error("Seatbelt/bwrap failed to block write: " + writeTarget);
+        }
       } else {
-        for (const denied of CFG.expectedDeniedRoots) {
+        const cellRoot = path.dirname(cwd);
+        for (const denied of [
+          ...CFG.expectedDeniedRoots,
+          path.join(cellRoot, "job.json"),
+          path.join(cellRoot, "result"),
+          path.join(cellRoot, "bundle"),
+          path.join(cellRoot, "bin"),
+        ]) {
           if (!capturedPolicy.codexProtectedRoots.includes(denied)) {
             throw new Error("Missing codexProtectedRoot: " + denied);
           }
@@ -605,18 +712,26 @@ test("isolated controller runs both managed arms on a blind cohort with canary c
   assert.notEqual(runController(["--arms", "codex", "--allow-full-access"]).status, 0);
   assert.notEqual(runController(["--arms", "claude-native"]).status, 0);
   assert.notEqual(runController(["--arms", "codex", "--cases", "pr9001-codex"]).status, 0);
-  assert.notEqual(
-    spawnSync(process.execPath, [
-      controllerScript,
-      "--repo", fixture.repo,
-      "--cohort", canaryFiles.cohort,
-      "--out", outDir,
-      "--dist", distDir,
-      "--runner-root", outDir,
-      "--arms", "codex",
-    ], { encoding: "utf8" }).status,
-    0,
-  );
+  // Controller rejects --runner-root inside outDir, host $HOME, or macOS $TMPDIR.
+  for (const badRoot of [
+    outDir,
+    path.join(os.homedir(), "eval-runner-probe"),
+    ...(process.platform === "darwin" ? [path.join(os.tmpdir(), "eval-runner-probe")] : []),
+  ]) {
+    assert.notEqual(
+      spawnSync(process.execPath, [
+        controllerScript,
+        "--repo", fixture.repo,
+        "--cohort", canaryFiles.cohort,
+        "--out", outDir,
+        "--dist", distDir,
+        "--runner-root", badRoot,
+        "--arms", "codex",
+      ], { encoding: "utf8" }).status,
+      0,
+      `Expected controller to reject --runner-root ${badRoot}`,
+    );
+  }
 
   // Direct runner rejects forbidden flags and unexpected holdout fields in job.json.
   const badJob = path.join(controllerTmp, "bad-job.json");
@@ -648,8 +763,12 @@ test("isolated controller runs both managed arms on a blind cohort with canary c
   assert.match(badJobRun.stderr, /Unexpected field "baseline"/);
 
   // 2. Run BOTH supported managed arms (codex, neon) through the isolated controller.
-  const run = runController(["--arms", "codex,neon"]);
+  // Pass --concurrency 2 to also verify codex-sandbox clamps concurrency to 1 on macOS.
+  const run = runController(["--arms", "codex,neon", "--concurrency", "2"]);
   assert.equal(run.status, 0, `stderr:\n${run.stderr}\nstdout:\n${run.stdout}`);
+  if (resolveIsolationBackend({ requested: "auto", arm: "codex" }) === "codex-sandbox") {
+    assert.match(run.stdout, /concurrency=1/);
+  }
 
   // Blind aggregate-only reporting: zero case IDs, PR numbers, titles, findings, or canaries in stdout/stderr.
   const combinedOutput = run.stdout + run.stderr;
