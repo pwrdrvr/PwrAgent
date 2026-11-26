@@ -58,6 +58,7 @@ export function parseGitRemoteConfigRecords(records: string[], allowSingleBranch
     const value = newline < 0 ? undefined : record.slice(newline + 1);
     if (key.startsWith("includeif.")) hasConditionalIncludes = true;
     if (key.startsWith("url.")) canonicalOrigin = false;
+    if (key === "transfer.credentialsinurl" && value !== "allow" && value !== "warn" && value !== "die") canonicalOrigin = false;
     const rewrite = /^url\.(.*)\.(insteadof|pushinsteadof)$/.exec(key);
     if (rewrite) {
       if (value === undefined) return undefined;
@@ -92,10 +93,13 @@ export function parseGitRemoteConfigRecords(records: string[], allowSingleBranch
     urls.push(value);
   }
 
-  // A standard clone supplies one local URL and one matching fetch refspec.
-  // Leave rewrites, other remote declarations, and legacy URL lookup to Git.
-  if (singleBranchOrigin && (!canonicalOrigin || hasConditionalIncludes || originFetchCount !== 1
-    || fetchUrls.get("origin")?.length !== 1 || fetchUrls.get("origin")?.[0].includes("\uFFFD"))) return undefined;
+  if (singleBranchOrigin) {
+    const urls = fetchUrls.get("origin");
+    // Only accept one local URL and one matching fetch refspec. Native remote
+    // lookup validates URL userinfo against Git's transfer.credentialsInUrl.
+    if (!canonicalOrigin || hasConditionalIncludes || originFetchCount !== 1 || urls?.length !== 1
+      || urls[0].includes("\uFFFD") || /:\/\/[^/?#]*@/.test(urls[0])) return undefined;
+  }
 
   const names = [...fetchUrls.keys()].sort();
   const remotes: GitRemote[] = [];

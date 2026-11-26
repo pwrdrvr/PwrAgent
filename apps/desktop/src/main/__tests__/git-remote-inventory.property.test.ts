@@ -66,7 +66,7 @@ it.skipIf(process.platform === "win32").each(["wrapper", "command override", "re
   },
 );
 
-async function ordinaryWorktrees() {
+async function ordinaryWorktrees(checkoutCount = 6) {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-remote-oracle-")));
   const restoreEnv = isolateProcessGitEnvironment(root);
   onTestFinished(async () => {
@@ -81,13 +81,30 @@ async function ordinaryWorktrees() {
   await git.runGitCommand(clone, ["config", "extensions.worktreeConfig", "true"]);
   await git.runGitCommand(clone, ["remote", "add", "origin", origin]);
   const checkouts: string[] = [];
-  for (let index = 0; index < 6; index++) {
+  for (let index = 0; index < checkoutCount; index++) {
     const checkout = path.join(root, `worktree-${index}`);
     await git.runGitCommand(clone, ["worktree", "add", "--detach", checkout]);
     checkouts.push(checkout);
   }
   return { root, clone, checkouts };
 }
+
+it.skipIf(process.platform === "win32").each([
+  { policy: "die", url: "https://fixture:placeholder@github.com/fixture/original.git", error: /plaintext credentials/ },
+  { policy: "invalid", url: origin, error: /unrecognized value transfer.credentialsInUrl/ },
+])("preserves Git's origin rejection under the $policy credential policy", async ({ policy, url, error }) => {
+  const { clone, checkouts: [linked] } = await ordinaryWorktrees(1);
+  await git.runGitCommand(clone, ["config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main"]);
+  await git.runGitCommand(clone, ["config", "remote.origin.url", url]);
+  await git.runGitCommand(clone, ["config", "transfer.credentialsInUrl", policy]);
+
+  const inventoryConfig = createInventoryRemoteConfigReader();
+  // A failed native URL read cannot establish an owner repository identity.
+  for (const cwd of [clone, linked]) {
+    await expect(git.runGitCommand(cwd, ["remote", "get-url", "--all", "origin"])).rejects.toThrow(error);
+    await expect.soft(resolveGitHubRepoForDirectory(cwd, { inventoryConfig })).resolves.toBeUndefined();
+  }
+});
 
 it.skipIf(process.platform === "win32")("shares a conventional SSH origin's Git config while retaining SSH and action authority", async () => {
   const { clone, checkouts } = await ordinaryWorktrees();

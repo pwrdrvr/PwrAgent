@@ -11,7 +11,7 @@ import { PR_METADATA_PRIORITY, runPrMetadataGit, runPrMetadataProcess, SharedPrM
 
 const execFileAsync = promisify(execFile);
 const GIT_REMOTE_TIMEOUT_MS = 2_000;
-export const REMOTE_CONFIG_KEYS = "^remote\\.|^url\\..*\\.(push)?insteadof$|^branch\\..*\\.(remote|pushremote|merge)$|^includeif\\.";
+export const REMOTE_CONFIG_KEYS = "^remote\\.|^url\\..*\\.(push)?insteadof$|^branch\\..*\\.(remote|pushremote|merge)$|^includeif\\.|^transfer\\.credentialsinurl$";
 /** Remotes change infrequently; re-probing on every PR refresh is wasted work. */
 const REMOTE_CACHE_TTL_MS = 5 * 60_000;
 
