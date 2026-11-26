@@ -781,6 +781,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     setThreadPullRequestCanonicalizer: vi.fn(),
     setPullRequestReferenceResolver: vi.fn(),
     setThreadPrimaryGitRepositoryReader: vi.fn(),
+    setThreadAutoCompactionReader: vi.fn(),
     setThreadProjectRepositoryResolver: vi.fn(),
     setLocalPullRequestAuthorityResolver: vi.fn(),
     setThreadMaintenanceToolHandler: vi.fn(),
@@ -982,7 +983,7 @@ describe("bootstrapApp", () => {
       if (name === "registry.setMessagingAgentToolService") return [name, "registry.setMessagingWorkingUpdatesSettings"];
       return [name];
     });
-    const handlers = [...coreHandlers, "registry.setPwrAgentThreadTodoHandler"];
+    const handlers = [...coreHandlers, "registry.setThreadAutoCompactionReader", "registry.setPwrAgentThreadTodoHandler"];
     expect(events.filter(isHandler)).toEqual(handlers);
     // Core subscribers retain their recorded order.
     const coreSubscriber = /^(maintenance|working|renderer)\.subscribe$/;

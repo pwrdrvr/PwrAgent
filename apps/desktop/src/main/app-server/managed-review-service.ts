@@ -1060,7 +1060,9 @@ export class ManagedReviewService {
           threadId: thread.threadId,
           input: [{
             type: "text",
-            text: buildManagedReviewPrompt(params.target, { candidateLedger }),
+            text: buildManagedReviewPrompt(params.target, {
+              candidateLedger, pinnedPatchFile: params.agentAntigravityAccess?.pinnedPatchFile,
+            }),
           }],
           model: params.modelSettings.model,
           reasoningEffort: params.modelSettings.reasoningEffort,
@@ -2009,7 +2011,6 @@ export class ManagedReviewService {
         backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
         entry,
-        pendingContext: isAcpBackendId(params.record.parentBackend),
       });
       await this.context.emit({
         backend: params.record.parentBackend,

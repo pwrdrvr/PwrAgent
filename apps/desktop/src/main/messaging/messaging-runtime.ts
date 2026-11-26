@@ -3942,9 +3942,8 @@ export function initializeDesktopMessagingRuntime(
       config: config ?? (() => loadDesktopMessagingConfig()),
       readDevelopmentWorkingUpdatesDefault,
       readSavedTelegramConnectionIds: async () => {
-        const { readDesktopSettingsConfig, resolveDesktopConfigPath } = await import("../settings/desktop-config");
-        return (readDesktopSettingsConfig(resolveDesktopConfigPath()).messaging?.telegram?.connections ?? [])
-          .filter((connection) => !connection.legacy).map((connection) => connection.id);
+        const { readSavedTelegramConnectionIds } = await import("../settings/config-store/saved-telegram-connection-ids");
+        return readSavedTelegramConnectionIds();
       },
       automationInboundHandler: (event) =>
         getDesktopAutomationService().handleMessagingInboundEvent(event),

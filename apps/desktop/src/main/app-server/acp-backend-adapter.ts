@@ -1,4 +1,4 @@
-import { buildAgentMemoryStdioServer } from "../agent-tools/agent-memory-mcp-stdio";
+import { buildAgentToolStdioServer } from "../agent-tools/agent-tool-mcp-stdio";
 import { applicationHost as app } from "../owner-host";
 import { ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR, acpSessionHasConversationHistory, projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
 import {
@@ -4109,12 +4109,12 @@ export class AcpBackendAdapter {
             const registration = await this.agentToolMcpServer.registerClient({
               backend: backendId,
               threadId: sessionId,
-              ...(!http ? { memoryOnly: true } : {}),
+              ...(!http ? { stdioFallback: true } : {}),
               ...(http && observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
             });
             const readTool = registration.readTool;
             baseRegistration = {
-              servers: [http ? registration.server : buildAgentMemoryStdioServer(registration.server)],
+              servers: [http ? registration.server : buildAgentToolStdioServer(registration.server)],
               bindThread: registration.bindThread,
               ...(readTool ? {
                 hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {

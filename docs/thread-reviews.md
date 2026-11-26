@@ -341,7 +341,9 @@ agent to weigh whether minor findings are worth a push, because each push
 starts a CI run, and not to decline a correctness bug to avoid one. The
 card's **Auto-fix** sends the same prompt. The transcript folds the message
 to "Auto-fix started for <review>" with its finding count, from the
-`reviewAutoFix` message origin.
+`reviewAutoFix` message origin. Managed ACP reviews keep their result in the
+review card and make tracked findings available through `list_reviews`,
+including through PwrAgent's stdio MCP bridge for ACP providers without HTTP MCP.
 
 Arming and reserving dispatch write nothing to SQLite. The fix follows the
 turn queue's existing lifecycle and hold rules.

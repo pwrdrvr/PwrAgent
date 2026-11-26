@@ -10,6 +10,13 @@ import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
 const CPU_PROFILE_DISMISS_GROUP = { key: "hot-cpu-profile", label: "CPU profile notices" };
 
+/**
+ * The capture toast and the post-cap toast can both offer one batch's Rearm.
+ * Toasts registered under the same offer show the rearmed state together, so
+ * neither is left holding a Rearm the main process will refuse.
+ */
+export type HotCpuRearmGroup = Map<string, Set<() => void>>;
+
 function formatObservationTime(timestamp: string): string {
   return new Date(timestamp).toLocaleString(undefined, {
     year: "numeric",
@@ -26,6 +33,7 @@ export function buildHotCpuCaptureNotice(
   event: HotCpuProfileCapturedEvent | HotCpuFinalCaptureFailedEvent,
   rearm?: (request: RearmHotCpuProfileRequest) => Promise<boolean>,
   updateNotice?: (notice: AppNoticeToastNotice) => void,
+  rearmGroup?: HotCpuRearmGroup,
 ): AppNoticeToastNotice {
   const capture = "profilePath" in event ? event : undefined;
   const heapSnapshotCount = capture?.heapSnapshotArtifacts?.length ?? 0;
@@ -54,21 +62,47 @@ export function buildHotCpuCaptureNotice(
       : `${captureMessage} The capture limit (${captureLimit}) has been reached. CPU sampling continues.`,
   };
   if (captureLimit === undefined || !rearm || !updateNotice) return notice;
+  return withRearmAction(notice, {
+    captureLimit,
+    rearm,
+    rearmedMessage: captureMessage,
+    rearmGroup,
+    request: { sessionDirectoryName: event.sessionDirectoryName, profileFilename: event.profileFilename },
+    updateNotice,
+  });
+}
 
+/** Every CPU profile notice offers Rearm, and reports its progress, the same way. */
+function withRearmAction(notice: AppNoticeToastNotice, options: {
+  captureLimit: number;
+  rearm: (request: RearmHotCpuProfileRequest) => Promise<boolean>;
+  rearmedMessage: string;
+  rearmGroup?: HotCpuRearmGroup;
+  request: RearmHotCpuProfileRequest;
+  updateNotice: (notice: AppNoticeToastNotice) => void;
+}): AppNoticeToastNotice {
+  const { captureLimit, rearm, rearmedMessage, rearmGroup, request, updateNotice } = options;
   const rearmableNotice = { ...notice, revealOnArrival: true };
+  const showRearmed = () => updateNotice({
+    ...rearmableNotice,
+    message: rearmedMessage,
+    status: { label: `Rearmed for up to ${captureLimit} more captures.`, state: "success" },
+  });
+  const offerKey = `${request.sessionDirectoryName}\0${request.profileFilename}`;
+  const siblings = rearmGroup?.get(offerKey) ?? new Set<() => void>();
+  siblings.add(showRearmed);
+  rearmGroup?.set(offerKey, siblings);
   const rearmCapture = async () => {
     updateNotice({ ...rearmableNotice, status: { label: "Rearming CPU profiling…", state: "progress" } });
     try {
-      const rearmed = await rearm({
-        sessionDirectoryName: event.sessionDirectoryName,
-        profileFilename: event.profileFilename,
-      });
+      if (await rearm(request)) {
+        rearmGroup?.delete(offerKey);
+        for (const show of siblings) show();
+        return;
+      }
       updateNotice({
         ...rearmableNotice,
-        message: rearmed ? captureMessage : rearmableNotice.message,
-        status: rearmed
-          ? { label: `Rearmed for up to ${captureLimit} more captures.`, state: "success" }
-          : { label: "This capture can no longer be rearmed.", state: "error" },
+        status: { label: "This capture can no longer be rearmed.", state: "error" },
       });
     } catch {
       updateNotice({
@@ -81,9 +115,16 @@ export function buildHotCpuCaptureNotice(
   return { ...rearmableNotice, actions: [{ label: "Rearm", onClick: rearmCapture }] };
 }
 
-export function buildHotCpuPostCapNotice(event: HotCpuPostCapEvent): AppNoticeToastNotice {
+export function buildHotCpuPostCapNotice(
+  event: HotCpuPostCapEvent,
+  rearm?: (request: RearmHotCpuProfileRequest) => Promise<boolean>,
+  updateNotice?: (notice: AppNoticeToastNotice) => void,
+  rearmGroup?: HotCpuRearmGroup,
+): AppNoticeToastNotice {
   const process = event.target === "main" ? "Main process" : "Renderer";
-  return {
+  const rearmedMessage = "CPU sampling continues.";
+  const message = `${rearmedMessage} This batch reached its capture limit.`;
+  const notice: AppNoticeToastNotice = {
     autoDismiss: false,
     dismissGroup: CPU_PROFILE_DISMISS_GROUP,
     facts: [{ label: "Detected", value: formatObservationTime(event.capturedAt) }],
@@ -91,6 +132,9 @@ export function buildHotCpuPostCapNotice(event: HotCpuPostCapEvent): AppNoticeTo
     revealOnArrival: true,
     tone: "warning",
     title: `${process} high CPU detected after capture limit`,
-    message: "CPU sampling continues. This batch reached its capture limit.",
+    message,
   };
+  if (!event.rearm || !rearm || !updateNotice) return notice;
+  const { captureLimit, ...request } = event.rearm;
+  return withRearmAction(notice, { captureLimit, rearm, rearmedMessage, rearmGroup, request, updateNotice });
 }

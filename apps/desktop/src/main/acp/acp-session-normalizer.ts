@@ -21,7 +21,11 @@ import {
 } from "@pwragent/shared/command-action-labels";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { ACP_WORKSPACE_HISTORY_URI } from "./acp-workspace-history.js";
-import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
+import {
+  MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
+  MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
+  stripManagedReviewContextBlock,
+} from "../../shared/review-command.js";
 import { stripAcpAgentInstructionChunk } from "../../shared/agent-instruction-delivery.js";
 import {
   type AcpProviderTool,
@@ -768,8 +772,7 @@ export class AcpSessionReplayNormalizer {
       } else if (kind === "pwragent_user_prompt") {
         this.recordUserPrompt({
           sessionId: update.sessionId,
-          prompt: readString(update.update, "prompt") ?? "",
-          parts: readMessageParts(update.update),
+          ...readRecordedAcpPrompt(update.update),
           turnId: readString(update.update, "turnId") ?? buildPendingTurnId(update.sessionId),
           receivedAt: createdAt,
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
@@ -871,10 +874,8 @@ export class AcpSessionReplayNormalizer {
     if (fallbackAlt && !this.pendingUserImageAlt) {
       this.pendingUserImageAlts.unshift(fallbackAlt);
     }
-    // PwrAgent prepends the finished managed-review artifact to the next
-    // prompt so the agent can reason about it. The transcript already shows
-    // that review as its own entry, so strip the block back out of the echo
-    // rather than rendering it as something the operator typed.
+    // Older prompts could contain an injected review artifact. The review
+    // has its own transcript entry, so keep the artifact out of the echo.
     // The Agent instruction block PwrAgent puts ahead of a prompt is removed
     // the same way: the operator did not type it.
     // An agent may echo the block in several chunks.
@@ -2316,6 +2317,35 @@ function readMessageParts(
   record: Record<string, unknown>,
 ): AppServerThreadMessagePart[] | undefined {
   return readAcpMessageParts(record, "parts");
+}
+
+function readRecordedAcpPrompt(record: Record<string, unknown>): {
+  prompt: string;
+  parts?: AppServerThreadMessagePart[];
+} {
+  const prompt = readString(record, "prompt") ?? "";
+  const parts = readMessageParts(record);
+  const open = `${MANAGED_REVIEW_CONTEXT_OPEN_MARKER}\n\n`;
+  if (record.reviewContextInjected === false || !prompt.startsWith(open)) return { prompt, parts };
+
+  const close = `\n\n${MANAGED_REVIEW_CONTEXT_CLOSE_MARKER}`;
+  if (parts?.length) {
+    const first = parts[0];
+    // The writer put the entire review in its own first text part. Use that
+    // boundary because a finding can quote the closing marker in its body.
+    if (parts.length > 1 && first?.type === "text"
+      && first.text.startsWith(open) && first.text.endsWith(close)
+      && (prompt === first.text || prompt.startsWith(`${first.text}\n`))) {
+      return { prompt: prompt.slice(first.text.length + 1), parts: parts.slice(1) };
+    }
+    return { prompt, parts };
+  }
+
+  // Older records without parts can only be identified by a complete envelope.
+  const closeAt = prompt.indexOf(close, open.length);
+  if (closeAt < 0) return { prompt, parts };
+  const reply = prompt.slice(closeAt + close.length);
+  return { prompt: !reply || reply.startsWith("\n") ? reply.trimStart() : prompt, parts };
 }
 
 function normalizeUserPrompt(

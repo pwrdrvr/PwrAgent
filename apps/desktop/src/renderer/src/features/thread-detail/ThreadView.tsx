@@ -771,6 +771,7 @@ export type ThreadViewProps = {
   loading: boolean;
   loadingMore: boolean;
   messageCount: number;
+  autoCompaction?: ComposerProps["autoCompaction"];
   contextWindow?: ThreadContextWindowState;
   pricing?: {
     compactions?: ThreadCompactionRecord[];
@@ -3188,6 +3189,7 @@ export function ThreadView(props: ThreadViewProps) {
           onReviewStarted: handleReviewStarted,
           workspaceActionsBlocked: props.workspaceActionsBlocked,
           onEditEnvironments: props.onEditEnvironments,
+          autoCompaction: props.autoCompaction,
           contextWindow: props.contextWindow,
           onActiveTurnIdChange: props.onActiveTurnIdChange,
           onPendingStatusChange: props.onPendingStatusChange,

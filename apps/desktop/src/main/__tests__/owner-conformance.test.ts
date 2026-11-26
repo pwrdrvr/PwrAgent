@@ -2714,12 +2714,14 @@ describe.skipIf(process.platform === "win32")("owner conformance: desktop and th
             .trim().split("\n").map((line) => JSON.parse(line));
           const prompts = requests.filter((request) => request.method === "session/prompt");
           expect(prompts).toHaveLength(index + 1);
-          expect(JSON.stringify(prompts.at(-1).params)).toContain(`Fixture review ${index}`);
-          expect(JSON.stringify(prompts.at(-1).params)).toContain(`Continue ${index}`);
+          expect(prompts.at(-1)?.params.prompt).toEqual([{ type: "text", text: `Continue ${index}` }]);
           expect(desktop.events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
           expect(desktop.events.filter((event) => event.notification.method === "turn/completed"
             && event.notification.params.turnId === turn.turnId)).toHaveLength(1);
           const state = await overlay.getThreadOverlayState({ backend, threadId });
+          expect(state?.managedReviewEntries).toContainEqual(expect.objectContaining({
+            id: entryId, review: `Fixture review ${index}`,
+          }));
           expect(state?.pendingManagedReviewContextEntryIds?.includes(entryId) ?? false).toBe(fails);
         } finally {
           if (fails) db.raw.exec("DROP TRIGGER reject_acp_review");

@@ -41,17 +41,19 @@ export type HotCpuProfileCapturedEvent = {
   triggerThresholdPercent: number;
 };
 
+export type RearmHotCpuProfileRequest = Pick<
+  HotCpuProfileCapturedEvent,
+  "sessionDirectoryName" | "profileFilename"
+>;
+
 export type HotCpuPostCapEvent = {
   captureCount: number;
   capturedAt: string;
   sessionId: string;
   target: "main" | "renderer";
+  /** The batch's current Rearm offer, so this notice can rearm on its own. */
+  rearm?: RearmHotCpuProfileRequest & { captureLimit: number };
 };
-
-export type RearmHotCpuProfileRequest = Pick<
-  HotCpuProfileCapturedEvent,
-  "sessionDirectoryName" | "profileFilename"
->;
 
 export type HotCpuFinalCaptureFailedEvent = RearmHotCpuProfileRequest & {
   capturedAt: string;

@@ -6591,6 +6591,53 @@ describe("Composer", () => {
     expect(commitsPerKey).toEqual(Array.from(message, () => 1));
   });
 
+  it("shows pending context usage after compaction until the provider reports a fresh fill", async () => {
+    const thread = {
+      id: "context-card-compaction",
+      source: "acp:antigravity" as const,
+      title: "Compaction fixture",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const before = {
+      modelContextWindow: 1_048_576,
+      totalTokens: 457_959,
+      usedPercent: 43.67,
+    };
+    const after = { ...before, totalTokens: 21_436, usedPercent: 2.04 };
+    const { rerender } = render(<Composer
+      autoCompaction={{ threadId: thread.id, phase: "compacting" }}
+      contextWindow={before}
+      skills={[]}
+      thread={thread}
+    />);
+    const meter = screen.getByRole("img", { name: /44% full/ });
+    act(() => meter.focus());
+    await flushReactUpdates();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("44% full");
+
+    rerender(<Composer
+      autoCompaction={{ threadId: thread.id, phase: "verifying" }}
+      contextWindow={before}
+      skills={[]}
+      thread={thread}
+    />);
+    expect(screen.getByRole("img", { name: "Context usage pending" })).toBe(meter);
+    expect(meter).toHaveAccessibleDescription(/The context size updates on the next model call\./);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("The context size updates on the next model call.");
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("44% full");
+
+    rerender(<Composer
+      autoCompaction={{ threadId: thread.id, phase: "armed" }}
+      contextWindow={after}
+      skills={[]}
+      thread={thread}
+    />);
+    expect(screen.getByRole("img", { name: /2% full/ })).toBeInTheDocument();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("2% full");
+  });
+
   it("opens Usage Activity from the context moon when the app can", () => {
     const openUsageActivity = vi.fn(async () => undefined);
     render(

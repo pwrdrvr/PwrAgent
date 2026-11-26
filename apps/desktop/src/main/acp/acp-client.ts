@@ -1548,6 +1548,7 @@ export class AcpAgentClient {
     });
     this.appendHistoryUpdate(params.sessionId, receivedAt, {
       kind: "pwragent_user_prompt",
+      reviewContextInjected: false,
       prompt: params.prompt,
       ...(params.parts?.length ? { parts: params.parts } : {}),
       turnId,
@@ -1891,6 +1892,7 @@ export class AcpAgentClient {
         });
         this.appendHistoryUpdate(params.sessionId, receivedAt, {
           kind: "pwragent_user_prompt",
+          reviewContextInjected: false,
           prompt: params.prompt,
           ...(params.parts?.length ? { parts: params.parts } : {}),
           turnId,
