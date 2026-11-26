@@ -194,6 +194,7 @@ import {
   createMainWindow,
   getRendererEntry,
   isFederationWindowWebContents,
+  rearmHotCpuProfile,
   stopWindowDiagnostics,
 } from "./window";
 import { subscribersForChannel } from "./window-channels";
@@ -1449,7 +1450,7 @@ export function bootstrapApp(): void {
     });
     registerAppUpdateNoticeIpcHandlers();
     registerComposerDraftIpcHandlers();
-    registerDiagnosticsIpcHandlers();
+    registerDiagnosticsIpcHandlers(rearmHotCpuProfile);
     registerFederationIpcHandlers();
     registerStarMapIpcHandlers();
     registerImageNormalizationIpcHandlers();

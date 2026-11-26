@@ -26,6 +26,8 @@ export type HotCpuProfileCapturedEvent = {
   appBuildMetadata?: AppBuildMetadata;
   target?: "main" | "renderer";
   capturedAt: string;
+  /** Present on the final capture of a batch that can be rearmed. */
+  captureLimit?: number;
   chromiumTracePath?: string;
   heapSnapshotArtifacts?: HotCpuProfileHeapSnapshotArtifact[];
   profileFilename: string;
@@ -38,6 +40,18 @@ export type HotCpuProfileCapturedEvent = {
   matchedRules?: HotCpuRuleMatch[];
   triggerThresholdPercent: number;
 };
+
+export type HotCpuPostCapEvent = {
+  captureCount: number;
+  capturedAt: string;
+  sessionId: string;
+  target: "main" | "renderer";
+};
+
+export type RearmHotCpuProfileRequest = Pick<
+  HotCpuProfileCapturedEvent,
+  "sessionDirectoryName" | "profileFilename"
+>;
 
 function formatPercent(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);

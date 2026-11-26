@@ -6,6 +6,7 @@ import {
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
   DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
+  HOT_CPU_PROFILE_REARM_CHANNEL,
 } from "../../../shared/ipc";
 import type {
   CaptureHeapSnapshotRequest,
@@ -15,7 +16,7 @@ import { captureHeapSnapshot } from "../diagnostics/manual-heap-snapshot";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { getMainLogger } from "../../log";
 import { resolveActiveProfilePath } from "../../profile";
-import { subscribersForChannel } from "../window-channels";
+import { isLocalMainWindowWebContents, subscribersForChannel } from "../window-channels";
 import { DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, DIAGNOSTICS_STOP_RENDERING_CHANNEL } from "../../../shared/rendering-diagnostics";
 import { captureRenderingDiagnostics, stopRenderingDiagnostics } from "../diagnostics/rendering-capture";
 
@@ -71,7 +72,19 @@ async function runCapture(
   }
 }
 
-export function registerDiagnosticsIpcHandlers(): void {
+export function registerDiagnosticsIpcHandlers(
+  rearmHotCpuProfile?: (sessionDirectoryName: string, profileFilename: string) => boolean,
+): void {
+  ipcMain.removeHandler(HOT_CPU_PROFILE_REARM_CHANNEL);
+  ipcMain.handle(HOT_CPU_PROFILE_REARM_CHANNEL, (event, request?: {
+    sessionDirectoryName?: unknown;
+    profileFilename?: unknown;
+  }) => {
+    if (!isLocalMainWindowWebContents(event.sender)
+      || typeof request?.sessionDirectoryName !== "string"
+      || typeof request.profileFilename !== "string") return false;
+    return rearmHotCpuProfile?.(request.sessionDirectoryName, request.profileFilename) ?? false;
+  });
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_STOP_RENDERING_CHANNEL);
   ipcMain.handle(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, (_event, seconds?: number) =>
@@ -132,6 +145,7 @@ export function registerDiagnosticsIpcHandlers(): void {
 }
 
 export function disposeDiagnosticsIpcHandlers(): void {
+  ipcMain.removeHandler(HOT_CPU_PROFILE_REARM_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_STOP_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL);

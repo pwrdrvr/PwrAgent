@@ -59,6 +59,7 @@ import {
   subscribersForChannel,
 } from "./window-channels";
 import {
+  HOT_CPU_POST_CAP_EVENT_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
   WINDOW_SHOW_THREAD_CHANNEL,
@@ -129,6 +130,12 @@ const MAIN_WINDOW_MIN_HEIGHT = 640;
 const mainLog = getMainLogger("pwragent:main");
 const heapLog = getMainLogger("pwragent:heap");
 const sharedMainHotCpuProfiler = new SharedHotCpuProfiler<HotCpuProfiler>();
+const hotCpuProfilersBySession = new Map<string, HotCpuProfiler>();
+
+export function rearmHotCpuProfile(sessionDirectoryName: string, profileFilename: string): boolean {
+  return hotCpuProfilersBySession.get(sessionDirectoryName)?.rearm(profileFilename) ?? false;
+}
+
 type EnabledHotCpuConfig = Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>;
 type HotCpuProfilerLifecycle = Pick<HotCpuProfiler, "start" | "stop" | "rearmListingDiagnostics"> & {
   updateRules: (config: EnabledHotCpuConfig) => Promise<void>;
@@ -638,7 +645,8 @@ export function createMainWindow(options?: {
       sessionDirectory: created.session.directoryPath,
     });
 
-    return new HotCpuProfiler({
+    const session = created.session;
+    const profiler = new HotCpuProfiler({
       chromiumTrace: trace,
       config: hotCpuConfig,
       getAppMetrics: readAppMetrics,
@@ -646,6 +654,11 @@ export function createMainWindow(options?: {
         await getDesktopSettingsService().writeConfigPatchTargeted({
           general: { hotCpuProfilingCaptureHeapSnapshot: false },
         });
+      },
+      onPostCapHotCpu: (event) => {
+        for (const subscriber of subscribersForChannel(HOT_CPU_POST_CAP_EVENT_CHANNEL)) {
+          subscriber.send(HOT_CPU_POST_CAP_EVENT_CHANNEL, event);
+        }
       },
       onProfileWritten: (event) => {
         for (const subscriber of subscribersForChannel(
@@ -658,7 +671,8 @@ export function createMainWindow(options?: {
           });
         }
       },
-      session: created.session,
+      onStopped: () => { hotCpuProfilersBySession.delete(session.directoryName); },
+      session,
       target: target === "main" ? createMainProcessHotCpuTarget() : {
         debugger: webContents.debugger,
         getOSProcessId: () => webContents.getOSProcessId(),
@@ -669,6 +683,8 @@ export function createMainWindow(options?: {
         setListingDiagnosticsEnabled: (enabled) => setRendererListingDiagnosticsEnabled(webContents, enabled),
       },
     });
+    hotCpuProfilersBySession.set(session.directoryName, profiler);
+    return profiler;
   };
 
   const createHotCpuProfiler = async (

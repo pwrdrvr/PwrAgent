@@ -1,14 +1,74 @@
 import "@testing-library/jest-dom/vitest";
 import { useState } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppNoticeStack } from "../AppNoticeStack";
 import type { AppNoticeToastNotice } from "../AppNoticeToast";
+import { buildHotCpuCaptureNotice, buildHotCpuPostCapNotice } from "../hot-cpu-profile-notice";
 import { buildSpendAlertNotice } from "../spend-alert-notice";
 
 afterEach(cleanup);
 
 describe("AppNoticeStack", () => {
+  it("shows a post-cap CPU notice on arrival and leaves subsequent navigation in the operator's control", () => {
+    const capture = { id: "capture", title: "CPU profile captured", message: "Saved", autoDismiss: false };
+    const postCap = buildHotCpuPostCapNotice({
+      captureCount: 5,
+      capturedAt: "2026-11-25T18:00:00.000Z",
+      sessionId: "test-session",
+      target: "main",
+    });
+    const onDismissDurable = () => {};
+    const { rerender } = render(
+      <AppNoticeStack durableNotices={[capture]} onDismissDurable={onDismissDurable} />,
+    );
+    expect(screen.getByText(capture.title)).toBeInTheDocument();
+
+    rerender(<AppNoticeStack durableNotices={[capture, postCap]} onDismissDurable={onDismissDurable} />);
+    expect(screen.getByText("Main process high CPU detected after capture limit")).toBeInTheDocument();
+    expect(screen.getByText("Detected")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Previous notice" }));
+    rerender(<AppNoticeStack durableNotices={[capture, { ...postCap }]} onDismissDurable={onDismissDurable} />);
+    expect(screen.getByText(capture.title)).toBeInTheDocument();
+  });
+
+  it("offers Rearm on the final capture and confirms the new capture budget", async () => {
+    const event = {
+      capturedAt: "2026-11-25T18:00:00.000Z",
+      profileFilename: "main-hot-0005.cpuprofile",
+      profilePath: "/example/main-hot-0005.cpuprofile",
+      sessionDirectory: "/example",
+      sessionDirectoryName: "hot-cpu-example",
+      target: "main" as const,
+      triggerConsecutiveSamples: 3,
+      triggerCpuPercent: 68,
+      triggerMode: "sustained" as const,
+      triggerThresholdPercent: 50,
+    };
+    const request = Promise.withResolvers<boolean>();
+    const rearm = vi.fn(() => request.promise);
+
+    function Harness() {
+      const [notice, setNotice] = useState(() => buildHotCpuCaptureNotice(
+        { ...event, captureLimit: 5 }, rearm, (updated) => setNotice(updated),
+      ));
+      return <AppNoticeStack durableNotices={[notice]} onDismissDurable={() => {}} />;
+    }
+
+    expect(buildHotCpuCaptureNotice(event, rearm, vi.fn()).actions).toBeUndefined();
+    render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "Rearm" }));
+    expect(rearm).toHaveBeenCalledExactlyOnceWith({
+      sessionDirectoryName: event.sessionDirectoryName,
+      profileFilename: event.profileFilename,
+    });
+    expect(screen.getByText("Rearming CPU profiling…")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Rearm" })).not.toBeInTheDocument();
+    request.resolve(true);
+    expect(await screen.findByText("Rearmed for up to 5 more captures.")).toBeInTheDocument();
+  });
+
   it("navigates durable notices in order and dismisses each one independently", async () => {
     const initial: AppNoticeToastNotice[] = [
       { id: "first", title: "First", message: "One", autoDismiss: false },

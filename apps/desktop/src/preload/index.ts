@@ -848,7 +848,7 @@ import type {
   ImageUploadFallbackResponse,
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
-import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
+import type { HotCpuPostCapEvent, HotCpuProfileCapturedEvent, RearmHotCpuProfileRequest } from "../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
 import type { ManagedRuntimeProgress } from "../shared/managed-runtime-progress";
 import type {
@@ -1165,7 +1165,9 @@ import {
   COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL,
   COMPOSER_DRAFT_SAVE_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  HOT_CPU_POST_CAP_EVENT_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
+  HOT_CPU_PROFILE_REARM_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
@@ -1829,6 +1831,15 @@ const desktopApi = Object.freeze({
   },
   cancelAppUpdateDownload: async (): Promise<AppUpdateCancelResult> =>
     await ipcRenderer.invoke(APP_UPDATE_CANCEL_DOWNLOAD_CHANNEL),
+  rearmHotCpuProfile: (request: RearmHotCpuProfileRequest): Promise<boolean> =>
+    ipcRenderer.invoke(HOT_CPU_PROFILE_REARM_CHANNEL, request),
+  onHotCpuPostCap: (callback: (event: HotCpuPostCapEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: HotCpuPostCapEvent) => callback(payload);
+    ipcRenderer.on(HOT_CPU_POST_CAP_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(HOT_CPU_POST_CAP_EVENT_CHANNEL, listener);
+    };
+  },
   onHotCpuProfileCaptured: (
     callback: (event: HotCpuProfileCapturedEvent) => void,
   ): (() => void) => {

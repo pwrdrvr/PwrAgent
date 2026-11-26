@@ -30,6 +30,8 @@ export type AppNoticeToastNotice = {
     };
   }[];
   autoDismiss?: boolean;
+  /** Select this durable notice when it first enters the stack. */
+  revealOnArrival?: boolean;
   /** Retain only the highest-priority durable notice in this logical slot. */
   coalescing?: {
     key: string;

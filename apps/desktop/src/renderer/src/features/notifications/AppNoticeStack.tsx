@@ -19,6 +19,7 @@ export function AppNoticeStack(props: {
 }) {
   const [activeId, setActiveId] = useState<string>();
   const lastActiveIndexRef = useRef(0);
+  const previousRevealIds = useRef(new Set<string>());
   const stackRef = useRef<HTMLDivElement>(null);
   const placement = useToastStackPlacement(stackRef);
   const durableNotices = props.durableNotices;
@@ -35,6 +36,16 @@ export function AppNoticeStack(props: {
     : [];
 
   useEffect(() => {
+    const revealIds = new Set(durableNotices.filter((notice) => notice.revealOnArrival).map((notice) => notice.id));
+    const arrivalIndex = durableNotices.findLastIndex(
+      (notice) => revealIds.has(notice.id) && !previousRevealIds.current.has(notice.id),
+    );
+    previousRevealIds.current = revealIds;
+    if (arrivalIndex >= 0) {
+      lastActiveIndexRef.current = arrivalIndex;
+      setActiveId(durableNotices[arrivalIndex].id);
+      return;
+    }
     if (durableNotices.length === 0) {
       setActiveId(undefined);
       lastActiveIndexRef.current = 0;
