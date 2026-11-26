@@ -150,6 +150,48 @@ async function checkOverlappingFlushes(retrievedCharacters: number, failFirst: b
 }
 
 describe("Token Miser persistence work budgets", () => {
+  it("looks up each retained thread once per page even when gate IDs interleave and timestamps tie", ownLedgerTest(async () => {
+    const temp = createTempStateDb("pwragent-token-miser-locality-");
+    const db = StateDb.open(temp.dbPath);
+    try {
+      const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+      const tokenMiserStore = new TokenMiserStore(path.join(temp.tempDir, "objects"), { storage });
+      const entries = Array.from({ length: 128 }, (_, index) => ({
+        ...gate(index),
+        objectId: `gate-${String(index).padStart(3, "0")}`,
+        threadId: index % 2 === 0 || index === 127 ? "first" : "second",
+        createdAt: AT,
+        turnId: "retained-turn",
+      }));
+      db.raw.transaction(() => {
+        for (const entry of entries) storage.writeMetadata(entry);
+      })();
+      const { ledger, store } = fixture(db, tokenMiserStore);
+      const pricing = vi.spyOn(store, "readTokenMiserGatePricingLines");
+      const cards = vi.spyOn(store, "getThreadSubAgents");
+
+      await ledger.initializeTokenMiserLedger();
+
+      // The 65th gate from the first thread shares the cursor's timestamp.
+      // It belongs on the second page with all 63 gates from the second thread.
+      const expected = [["first", 64], ["first", 1], ["second", 63]];
+      expect(pricing.mock.calls.map(([request]) => [request.threadId, request.sourceItemIds.length])).toEqual(expected);
+      expect(pricing.mock.calls.map(([request]) => request.turnIds)).toEqual(
+        expected.map(() => ["retained-turn"]),
+      );
+      expect(cards.mock.calls.map(([request]) => [request.threadId, request.monitorIds.length])).toEqual(expected);
+      for (const threadId of ["first", "second"]) {
+        const saved = await store.listThreadSubAgents({ backend: "codex", threadId });
+        expect(saved.map((card) => card.monitorId).sort()).toEqual(entries
+          .filter((entry) => entry.threadId === threadId)
+          .map((entry) => `system:token-miser:${entry.objectId}`));
+      }
+    } finally {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }));
+
   it("restores 65 persisted gates in two pages and skips all writes on the next startup", ownLedgerTest(async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-token-miser-startup-");
@@ -170,7 +212,10 @@ describe("Token Miser persistence work budgets", () => {
         note: "One startup reconciliation of 65 existing gates without ledger rows, in two pages of at most 64.",
         writes: first.writes,
       });
-      expect(read.mock.calls).toEqual([[undefined, 64], ["gate-8", 64]]);
+      expect(read.mock.calls).toEqual([
+        [undefined, 64],
+        [{ threadId: THREAD, createdAt: AT + 63, objectId: "gate-63" }, 64],
+      ]);
       expect(await store.listThreadSubAgents({ backend: "codex", threadId: THREAD })).toHaveLength(65);
       expect(ledger.emitThreadPricingUpdated).toHaveBeenCalledTimes(1);
       const repeat = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());

@@ -7,7 +7,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { mapTokenMiserFiles, withTokenMiserFileOperation } from "./token-miser-file-io";
 import { TokenMiserOutputCache } from "./token-miser-output-cache";
-import type { TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
+import type { TokenMiserObjectRecord, TokenMiserStorage } from "@pwragent/owner-core/token-miser-storage";
 import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_BYTES,
   estimateTokenCount,
@@ -808,13 +808,13 @@ export class TokenMiserStore {
   }
 
   *listMetadataPages(limit: number): Iterable<TokenMiserObjectMetadata[]> {
-    let afterObjectId: string | undefined;
+    let after: TokenMiserObjectRecord | undefined;
     for (;;) {
-      const page = this.storage.readMetadataPage(afterObjectId, limit);
-      if (page.length === 0) return;
-      afterObjectId = page.at(-1)!.objectId;
-      yield page.map((entry) => mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
-      if (page.length < limit) return;
+      const { entries, next } = this.storage.readMetadataPage(after, limit);
+      if (entries.length === 0) return;
+      yield entries.map((entry) => mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
+      if (!next) return;
+      after = next;
     }
   }
 

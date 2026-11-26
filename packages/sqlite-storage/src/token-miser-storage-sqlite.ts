@@ -30,12 +30,36 @@ export class SqliteTokenMiserStorage<
     return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
   }
 
-  readMetadataPage(afterObjectId: string | undefined, limit: number): Metadata[] {
-    const rows = (afterObjectId === undefined
-      ? this.db.prepare("SELECT payload FROM token_miser_objects ORDER BY object_id LIMIT ?").all(limit)
-      : this.db.prepare("SELECT payload FROM token_miser_objects WHERE object_id > ? ORDER BY object_id LIMIT ?")
-          .all(afterObjectId, limit)) as Array<{ payload: string }>;
-    return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
+  readMetadataPage(after: TokenMiserObjectRecord | undefined, limit: number): {
+    entries: Metadata[];
+    next?: TokenMiserObjectRecord;
+  } {
+    // Keep a thread's gates together so pricing and card reads can share
+    // keys within a page. The existing index supplies the first two keys;
+    // SQLite only sorts rows that tie on both.
+    const rows = (after === undefined
+      ? this.db.prepare(`SELECT thread_id, created_at, object_id, payload
+          FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+          ORDER BY thread_id, created_at, object_id LIMIT ?`).all(limit)
+      : this.db.prepare(`SELECT thread_id, created_at, object_id, payload
+          FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+          WHERE (thread_id, created_at, object_id) > (?, ?, ?)
+          ORDER BY thread_id, created_at, object_id LIMIT ?`)
+          .all(after.threadId, after.createdAt, after.objectId, limit)) as Array<{
+      thread_id: string;
+      created_at: number;
+      object_id: string;
+      payload: string;
+    }>;
+    const last = rows.at(-1);
+    return {
+      entries: rows.map(({ payload }) => JSON.parse(payload) as Metadata),
+      // The indexed keys belong to the original insert. Use those keys even
+      // when a newer payload supplies different values.
+      next: last && rows.length === limit
+        ? { threadId: last.thread_id, createdAt: last.created_at, objectId: last.object_id }
+        : undefined,
+    };
   }
 
   writeMetadata(metadata: Metadata): void {
