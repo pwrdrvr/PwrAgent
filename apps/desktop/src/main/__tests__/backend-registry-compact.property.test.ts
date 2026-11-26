@@ -58,7 +58,14 @@ async function readFirstPromptText(prompt: string | AsyncIterable<SDKUserMessage
 }
 
 type ClaudeCommandAvailability = "unobserved" | "with-compact" | "without-compact" | "terminal-only";
-type ThreadBusyKind = "idle" | "active-turn" | "pending-start" | "managed-review" | "claude-rewinding";
+type ThreadBusyKind =
+  | "idle"
+  | "active-turn"
+  | "pending-start"
+  | "managed-review"
+  | "claude-rewinding"
+  | "claude-rewind-query"
+  | "claude-starting";
 
 describe("DesktopBackendRegistry.compactThread routing and admission", () => {
   // Rule: compactThread routes strictly to params.backend, enforces thread locks,
@@ -92,6 +99,9 @@ describe("DesktopBackendRegistry.compactThread routing and admission", () => {
         startTurn: ClaudeBackend["startTurn"];
         commandsByCwd: Map<string, Array<{ name: string; backend: "claude"; scope: "session"; source: "provider" }>>;
         terminalCommands: Set<string>;
+        rewinding: Set<string>;
+        rewindQueries: Map<string, Promise<void>>;
+        starting: Map<string, AbortController>;
       };
       threadStarts: { hasPending: (identity: { backend: AppServerBackendKind; threadId: string }) => boolean };
       managedReviewService: { findReviewForParentTurn: (params: { backend: AppServerBackendKind; parentThreadId: string }) => unknown };
@@ -111,7 +121,15 @@ describe("DesktopBackendRegistry.compactThread routing and admission", () => {
         fc.asyncProperty(
           fc.constantFrom<AppServerBackendKind>("codex", "claude", "acp:kimi", "acp:grok"),
           fc.boolean(),
-          fc.constantFrom<ThreadBusyKind>("idle", "active-turn", "pending-start", "managed-review", "claude-rewinding"),
+          fc.constantFrom<ThreadBusyKind>(
+            "idle",
+            "active-turn",
+            "pending-start",
+            "managed-review",
+            "claude-rewinding",
+            "claude-rewind-query",
+            "claude-starting",
+          ),
           fc.constantFrom<ClaudeCommandAvailability>("unobserved", "with-compact", "without-compact", "terminal-only"),
           async (backend, locked, busyKind, commandAvailability) => {
             const threadId = backend === "claude" ? claudeThreadId : `thread-${backend}`;
@@ -161,23 +179,20 @@ describe("DesktopBackendRegistry.compactThread routing and admission", () => {
             if (busyKind === "active-turn" && (backend === "codex" || backend === "claude")) {
               await emitStartedTurn(registry, backend, threadId, "active-turn-1");
             }
+            if (backend === "claude") {
+              if (busyKind === "claude-rewinding") internal.claudeBackend.rewinding.add(threadId);
+              if (busyKind === "claude-rewind-query") internal.claudeBackend.rewindQueries.set(threadId, new Promise<void>(() => {}));
+              if (busyKind === "claude-starting") internal.claudeBackend.starting.set(threadId, new AbortController());
+            }
 
-            claudeStartTurn.mockImplementation(async (turnParams) => {
-              if (busyKind === "claude-rewinding") {
-                throw new ClaudeTurnActiveError("Claude is rewinding this thread.");
-              }
-              return { backend: "claude", threadId: turnParams.threadId, turnId: "claude-compact-turn" };
-            });
+            claudeStartTurn.mockImplementation(async (turnParams) => ({
+              backend: "claude",
+              threadId: turnParams.threadId,
+              turnId: "claude-compact-turn",
+            }));
 
             try {
               const call = registry.compactThread({ backend, threadId });
-
-              if (backend.startsWith("acp:")) {
-                await expect(call).rejects.toThrow(`ACP backend ${backend} does not support thread compaction`);
-                expect(codexCompact).not.toHaveBeenCalled();
-                expect(claudeStartTurn).not.toHaveBeenCalled();
-                return;
-              }
 
               if (locked) {
                 await expect(call).rejects.toThrow(threadLockRefusalMessage({ note: lockNote }));
@@ -187,22 +202,26 @@ describe("DesktopBackendRegistry.compactThread routing and admission", () => {
               }
 
               const isBusyForBackend =
-                busyKind === "active-turn"
+                (busyKind === "active-turn" && !backend.startsWith("acp:"))
                 || busyKind === "managed-review"
-                || (backend === "claude" && (busyKind === "pending-start" || busyKind === "claude-rewinding"));
+                || (backend === "claude" && (
+                  busyKind === "pending-start"
+                  || busyKind === "claude-rewinding"
+                  || busyKind === "claude-rewind-query"
+                  || busyKind === "claude-starting"
+                ));
 
               if (isBusyForBackend) {
-                if (backend === "claude" && busyKind === "claude-rewinding"
-                  && (commandAvailability === "without-compact" || commandAvailability === "terminal-only")) {
-                  // Command availability check may refuse before reaching ClaudeBackend.startTurn.
-                  await expect(call).rejects.toThrow(/does not support thread compaction|another operation is running/i);
-                } else {
-                  await expect(call).rejects.toThrow("Cannot compact a thread while another operation is running");
-                }
+                await expect(call).rejects.toThrow("Cannot compact a thread while another operation is running");
                 expect(codexCompact).not.toHaveBeenCalled();
-                if (busyKind !== "claude-rewinding") {
-                  expect(claudeStartTurn).not.toHaveBeenCalled();
-                }
+                expect(claudeStartTurn).not.toHaveBeenCalled();
+                return;
+              }
+
+              if (backend.startsWith("acp:")) {
+                await expect(call).rejects.toThrow(`ACP backend ${backend} does not support thread compaction`);
+                expect(codexCompact).not.toHaveBeenCalled();
+                expect(claudeStartTurn).not.toHaveBeenCalled();
                 return;
               }
 
@@ -245,6 +264,9 @@ describe("DesktopBackendRegistry.compactThread routing and admission", () => {
             } finally {
               hasPendingSpy.mockRestore();
               reviewSpy.mockRestore();
+              internal.claudeBackend.rewinding.delete(threadId);
+              internal.claudeBackend.rewindQueries.delete(threadId);
+              internal.claudeBackend.starting.delete(threadId);
               if (busyKind === "active-turn" && (backend === "codex" || backend === "claude")) {
                 await emitCompletedTurn(registry, backend, threadId, "active-turn-1");
               }
@@ -711,6 +733,46 @@ describe("DesktopBackendRegistry.compactThread routing and admission", () => {
         .rejects.toThrow("Desktop backend registry is closed");
     } finally {
       barrier.resolve();
+      await registry.close();
+    }
+  });
+
+  it("maps a racing ClaudeTurnActiveError during compaction start to the busy error", async () => {
+    const root = await makeTempRoot("pwragent-claude-compact-race-");
+    const codexClient = new MockBackendClient({});
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+      pdfToolMcpServer: null,
+      agentToolMcpServer: null,
+      threadTitleGenerationService: null,
+      claudeBackendOptions: {
+        store: new ClaudeSessionStore(path.join(root, "sessions")),
+        getSessionInfo: vi.fn().mockResolvedValue(undefined),
+        inspectInstallation: async () => ({
+          executable: "/fixture/claude",
+          version: "2.1.330",
+          authStatus: "signed-in",
+        }),
+        discoverModels: async () => [],
+      },
+    });
+    const internal = registry as unknown as {
+      claudeBackend: { startTurn: ClaudeBackend["startTurn"] };
+    };
+    const startTurn = vi.spyOn(internal.claudeBackend, "startTurn")
+      .mockRejectedValueOnce(new ClaudeTurnActiveError("A Claude turn is already active for this thread."));
+
+    try {
+      const { threadId } = await registry.startThread({
+        backend: "claude",
+        cwd: root,
+        executionMode: "default",
+      });
+      await expect(registry.compactThread({ backend: "claude", threadId }))
+        .rejects.toThrow("Cannot compact a thread while another operation is running");
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    } finally {
       await registry.close();
     }
   });
