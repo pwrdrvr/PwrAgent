@@ -66,6 +66,9 @@ it("publishes the same seven fixed tools as Codex dynamic tools and on the MCP s
   expect(before.mcp).toHaveLength(7);
   const advertised = JSON.stringify([catalog.dynamicTools, catalog.router.buildMcpTools()]);
   expect(advertised).not.toMatch(/sk-|openaiDecisionsApiKey|Bearer /);
+  expect(advertised).toContain("inputsFile");
+  expect(advertised).toContain("outputFile");
+  expect(advertised).toContain("inlineResults");
 
   // Registering a decision adds a row, never a tool.
   await catalog.router.handleMcpToolCall({

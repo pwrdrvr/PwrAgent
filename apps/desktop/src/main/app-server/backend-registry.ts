@@ -3178,6 +3178,23 @@ export class DesktopBackendRegistry {
   }
 
   /**
+   * Workspace roots the thread works in, used to bound local file I/O for
+   * agent tools such as `decisions_invoke` `inputsFile` and `outputFile`.
+   */
+  async resolveThreadFileAccessRoots(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<string[]> {
+    const [thread, overlay] = await Promise.all([
+      this.resolveThread({ backend, threadId }).catch(() => undefined),
+      this.overlayStore.getThreadOverlayState({ backend, threadId }).catch(() => undefined),
+    ]);
+    return thread
+      ? threadWorkspacePaths(thread, overlay?.extraLinkedDirectories)
+      : threadWorkspacePaths({ linkedDirectories: [] }, overlay?.extraLinkedDirectories);
+  }
+
+  /**
    * A backend's model catalog, awaited rather than read off a summary that
    * may still hold fallback models while discovery runs. Thread to-dos check
    * a handoff card's model against it when the card is written.

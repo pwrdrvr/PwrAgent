@@ -518,6 +518,9 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         await getDesktopBackendRegistry().publishDecisionBatchUpdate(update),
       wakeThread: async (caller, wake) =>
         await getDesktopBackendRegistry().deliverDecisionBatchWakeup({ ...caller, ...wake }),
+      resolveThreadRoots: async (caller) =>
+        await getDesktopBackendRegistry().resolveThreadFileAccessRoots(caller.backend, caller.threadId),
+      privateStorageRoots: () => getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
     }),
   );
   const researchEnabled = () => getDesktopSettingsService().resolveResearchEnabled?.() === true;
