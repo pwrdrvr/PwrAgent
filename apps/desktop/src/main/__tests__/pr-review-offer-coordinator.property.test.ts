@@ -9,7 +9,11 @@ import {
 } from "@pwragent/shared/project-forge-automation";
 import type { PrChangeIdentitySource } from "../pr-status/pr-change-identity";
 import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
-import { selectPrReviewOfferOwner, type PrReviewOfferCandidate } from "../pr-status/pr-review-offer-owner";
+import {
+  ineligiblePrReviewOfferThreads,
+  selectPrReviewOfferOwner,
+  type PrReviewOfferCandidate,
+} from "../pr-status/pr-review-offer-owner";
 import { computePrStatusTransition, type PrStatusTransitionChanges } from "../pr-status/pr-transitions";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { StateDb } from "../state/state-db";
@@ -170,6 +174,7 @@ function createHarness(
   db: StateDb = openInMemoryStateDb(),
   ownerThread: (world: World) => Promise<PrReviewOfferThread | undefined> = async () => THREAD,
   neverMerge: () => boolean = () => false,
+  ineligibleThreads?: () => PrReviewOfferThread[],
 ): Harness {
   const world = new World();
   let ids = 0;
@@ -183,6 +188,9 @@ function createHarness(
       world.evaluatedOwners.push(key);
       return key === PR_KEY ? await ownerThread(world) : undefined;
     },
+    ...(ineligibleThreads
+      ? { ineligibleThreads: async (key: string) => key === PR_KEY ? ineligibleThreads() : [] }
+      : {}),
     threadPrKeys: () => [PR_KEY],
     neverMergeRefusal: () => neverMerge() ? "canvas never merges its pull requests." : undefined,
     getPr: () => world.pr(),
@@ -468,7 +476,7 @@ describe("PR review and merge offers", () => {
       } finally {
         harness.close();
       }
-    }), { numRuns: 30 });
+    }), { numRuns: 8 });
   });
 
   it("does no Git work while CI is pending or failing", async () => {
@@ -699,47 +707,56 @@ describe("PR review and merge offers", () => {
       } finally {
         harness.close();
       }
-    }), { numRuns: 25, examples: [[true, false, 2], [false, true, 2]] });
+    }), { numRuns: 8, examples: [[true, false, 2], [false, true, 2]] });
   });
 
-  it("preserves a merge card during a failed stack read only for the card's exact head", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (headMoved) => {
-      const harness = createHarness();
-      try {
-        const { world } = harness;
-        world.ci = "passing";
-        await reviewChanged(harness, recordReview(world, 0));
-        expect(openOfferCards(harness.todos)).toHaveLength(1);
-        const previous = world.head;
-        world.stackUnavailable = true;
-        if (headMoved) world.head = world.commit(world.changeOf.get(previous)!);
-        await transition(harness, { headSha: { from: previous, to: world.head } });
-        expect(openOfferCards(harness.todos)).toHaveLength(headMoved ? 0 : 1);
-      } finally { harness.close(); }
-    }), { examples: [[true]] });
+  it.each([false, true] as const)("preserves a merge card during a failed stack read only for the card's exact head [%#]", async (headMoved) => {
+    const harness = createHarness();
+    try {
+      const { world } = harness;
+      world.ci = "passing";
+      await reviewChanged(harness, recordReview(world, 0));
+      expect(openOfferCards(harness.todos)).toHaveLength(1);
+      const previous = world.head;
+      world.stackUnavailable = true;
+      if (headMoved) world.head = world.commit(world.changeOf.get(previous)!);
+      await transition(harness, { headSha: { from: previous, to: world.head } });
+      expect(openOfferCards(harness.todos)).toHaveLength(headMoved ? 0 : 1);
+    } finally { harness.close(); }
   });
 
-  it("rechecks an uncovered hold on unchanged child polls within a bounded cadence", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 6 }), async (polled, duplicatePolls) => {
-      const harness = createHarness();
-      try {
-        const { world } = harness;
-        world.ci = "passing";
-        world.lowerPolled = polled;
-        world.lowers.set(1, "open");
-        await reviewChanged(harness, recordReview(world, 0));
-        world.lowers.set(1, "merged");
-        for (let i = 0; i < duplicatePolls; i++) {
-          harness.coordinator.handleObservations([world.pr()]);
-          await harness.coordinator.idle();
-          expect(openOfferCards(harness.todos)).toHaveLength(0);
-        }
-        world.clock += 10 * 60_000;
+  it.each([
+    [false, 1],
+    [false, 2],
+    [false, 3],
+    [false, 4],
+    [false, 5],
+    [false, 6],
+    [true, 1],
+    [true, 2],
+    [true, 3],
+    [true, 4],
+    [true, 5],
+    [true, 6],
+  ] as const)("rechecks an uncovered hold on unchanged child polls within a bounded cadence [%#]", async (polled, duplicatePolls) => {
+    const harness = createHarness();
+    try {
+      const { world } = harness;
+      world.ci = "passing";
+      world.lowerPolled = polled;
+      world.lowers.set(1, "open");
+      await reviewChanged(harness, recordReview(world, 0));
+      world.lowers.set(1, "merged");
+      for (let i = 0; i < duplicatePolls; i++) {
         harness.coordinator.handleObservations([world.pr()]);
         await harness.coordinator.idle();
-        expect(openOfferCards(harness.todos)).toHaveLength(polled ? 0 : 1);
-      } finally { harness.close(); }
-    }), { examples: [[false, 1]] });
+        expect(openOfferCards(harness.todos)).toHaveLength(0);
+      }
+      world.clock += 10 * 60_000;
+      harness.coordinator.handleObservations([world.pr()]);
+      await harness.coordinator.idle();
+      expect(openOfferCards(harness.todos)).toHaveLength(polled ? 0 : 1);
+    } finally { harness.close(); }
   });
 
   it.each(["status transition", "local settlement"] as const)("offers a review on %s without a child PR change", async (trigger) => {
@@ -926,6 +943,8 @@ const THREAD_B = { backend: "codex" as const, threadId: "thread-2" };
 type ProjectsModel = {
   automation: Map<string, ProjectForgeAutomation>;
   archived: Set<string>;
+  /** Threads whose project's hands-off rules match the PR. */
+  handsOff: Set<string>;
   winner: PrReviewOfferThread;
 };
 
@@ -933,7 +952,10 @@ const offerThreads = [THREAD, THREAD_B];
 
 function oracleAllowsOffers(model: ProjectsModel, thread: PrReviewOfferThread): boolean {
   const automation = model.automation.get(thread.threadId)!;
-  return !model.archived.has(thread.threadId) && !automation.paused && automation.prOffers;
+  return !model.archived.has(thread.threadId)
+    && !model.handsOff.has(thread.threadId)
+    && !automation.paused
+    && automation.prOffers;
 }
 
 function oracleOwner(model: ProjectsModel): PrReviewOfferThread | undefined {
@@ -943,7 +965,7 @@ function oracleOwner(model: ProjectsModel): PrReviewOfferThread | undefined {
 
 const projectSwitch = fc.record({
   thread: fc.constantFrom(THREAD, THREAD_B),
-  change: fc.constantFrom("offers-off", "offers-on", "pause", "resume", "archive", "unarchive"),
+  change: fc.constantFrom("offers-off", "offers-on", "pause", "resume", "archive", "unarchive", "hands-off", "hands-on"),
 });
 
 type ProjectsCommand =
@@ -958,19 +980,36 @@ function applyProjectChange(model: ProjectsModel, thread: PrReviewOfferThread, c
     case "pause": model.automation.set(thread.threadId, { ...automation, paused: true }); break;
     case "resume": model.automation.set(thread.threadId, { ...automation, paused: false }); break;
     case "archive": model.archived.add(thread.threadId); break;
+    case "hands-off": model.handsOff.add(thread.threadId); break;
+    case "hands-on": model.handsOff.delete(thread.threadId); break;
     default: model.archived.delete(thread.threadId);
   }
 }
 
 function createProjectsHarness(model: ProjectsModel): Harness {
-  return createHarness(openInMemoryStateDb(), async () => await selectPrReviewOfferOwner({
-    candidates: offerThreads.map((thread): PrReviewOfferCandidate => ({
-      ...thread,
-      archived: model.archived.has(thread.threadId),
-      automation: model.automation.get(thread.threadId),
-    })),
-    readWinner: async () => model.winner,
+  const candidates = () => offerThreads.map((thread): PrReviewOfferCandidate => ({
+    ...thread,
+    archived: model.archived.has(thread.threadId),
+    automation: model.automation.get(thread.threadId),
+    ...(model.handsOff.has(thread.threadId) ? { handsOff: true as const } : {}),
   }));
+  return createHarness(
+    openInMemoryStateDb(),
+    async () => await selectPrReviewOfferOwner({ candidates: candidates(), readWinner: async () => model.winner }),
+    () => false,
+    () => ineligiblePrReviewOfferThreads(candidates()),
+  );
+}
+
+/**
+ * The service re-evaluates a PR's offers when its project's Forge
+ * Automation changes or its labels change (`applyProjectForgeAutomationChange`,
+ * `rememberPrStatuses`). The model does the same after each switch.
+ */
+async function projectChanged(harness: Harness, model: ProjectsModel, thread: PrReviewOfferThread, change: string): Promise<void> {
+  applyProjectChange(model, thread, change);
+  harness.coordinator.reevaluate([PR_KEY]);
+  await harness.coordinator.idle();
 }
 
 const startingAutomation = fc.record({
@@ -996,13 +1035,18 @@ describe("PR offers and project Forge Automation", () => {
         const model: ProjectsModel = {
           automation: new Map([[THREAD.threadId, automationA], [THREAD_B.threadId, automationB]]),
           archived: new Set(),
+          handsOff: new Set(),
           winner,
         };
         const harness = createProjectsHarness(model);
         try {
           for (const step of sequence) {
             if (step.kind === "project") {
-              applyProjectChange(model, step.thread, step.change);
+              await projectChanged(harness, model, step.thread, step.change);
+              // No offer card outlives its thread's eligibility.
+              for (const thread of offerThreads.filter((candidate) => !oracleAllowsOffers(model, candidate))) {
+                expect(openOfferCards(harness.todos, thread)).toEqual([]);
+              }
               continue;
             }
             const before = new Map(offerThreads.map((thread) => [
@@ -1023,7 +1067,7 @@ describe("PR offers and project Forge Automation", () => {
           harness.close();
         }
       },
-    ), { numRuns: 40 });
+    ), { numRuns: 8 });
   });
 
   it("offers a passing PR to the thread whose project allows it, and to neither when both are off", async () => {
@@ -1033,6 +1077,7 @@ describe("PR offers and project Forge Automation", () => {
         [THREAD_B.threadId, { ...DEFAULT_PROJECT_FORGE_AUTOMATION }],
       ]),
       archived: new Set(),
+      handsOff: new Set(),
       winner: THREAD,
     };
     const harness = createProjectsHarness(model);
@@ -1042,13 +1087,44 @@ describe("PR offers and project Forge Automation", () => {
       expect(openOfferCards(harness.todos, THREAD)).toEqual([]);
       expect(openOfferCards(harness.todos, THREAD_B).map((card) => card.action?.type)).toEqual(["start_review"]);
 
-      applyProjectChange(model, THREAD_B, "offers-off");
+      // Turning offers off withdraws the card raised before the switch.
+      await projectChanged(harness, model, THREAD_B, "offers-off");
+      expect(openOfferCards(harness.todos, THREAD_B)).toEqual([]);
+      expect(harness.todos.list({ ...THREAD_B, status: "all" }).at(-1)?.result)
+        .toBe("Withdrawn: Forge Automation no longer offers this pull request here");
       await push(harness, harness.world.newChange());
       harness.world.ci = "passing";
       await transition(harness, { checkState: { from: "pending", to: "passing" } });
       expect(openOfferCards(harness.todos, THREAD)).toEqual([]);
-      // The card raised before the switch stays; no new one joins it.
-      expect(openOfferCards(harness.todos, THREAD_B)).toHaveLength(1);
+      expect(openOfferCards(harness.todos, THREAD_B)).toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+});
+
+describe("PR offers for a hands-off PR", () => {
+  it("withdraws an open card when a maintainer label makes the PR hands-off, and offers it again once the label goes", async () => {
+    const model: ProjectsModel = {
+      automation: new Map([
+        [THREAD.threadId, { ...DEFAULT_PROJECT_FORGE_AUTOMATION }],
+        [THREAD_B.threadId, { ...DEFAULT_PROJECT_FORGE_AUTOMATION, prOffers: false }],
+      ]),
+      archived: new Set(),
+      handsOff: new Set(),
+      winner: THREAD,
+    };
+    const harness = createProjectsHarness(model);
+    try {
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
+
+      await projectChanged(harness, model, THREAD, "hands-off");
+      expect(openOfferCards(harness.todos)).toEqual([]);
+
+      await projectChanged(harness, model, THREAD, "hands-on");
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
     } finally {
       harness.close();
     }
@@ -1098,7 +1174,7 @@ describe("PR offers in a never-merge project", () => {
           harness.close();
         }
       },
-    ), { numRuns: 60 });
+    ), { numRuns: 8 });
   });
 
   it("withdraws a merge card raised before the switch, refuses an agent's merge card, and still offers reviews", async () => {

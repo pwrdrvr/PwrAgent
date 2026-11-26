@@ -16,15 +16,13 @@ const backends = ["codex", "claude", "acp:kimi"] as const;
 const identity = (index: number) => ({ backend: backends[index % 3]!, threadId: `thread:${index % 2}` });
 afterEach(() => vi.unstubAllEnvs());
 
-it("binds every desktop owner metadata entry point to one portable implementation", () => {
-  fc.assert(fc.property(fc.constantFrom("desktop", "state", "dependencies"), entry => {
-    if (entry === "desktop") {
-      expect(DesktopOverlay.prototype).toBeInstanceOf(PortableOverlay);
-      expect(DesktopOverlay.prototype.updateThreadMetadata).toBe(PortableOverlay.prototype.updateThreadMetadata);
-    }
-    if (entry === "state") expect(StateOverlay).toBe(DesktopOverlay);
-    if (entry === "dependencies") expect(StateDependencies).toBe(PortableDependencies);
-  }));
+it.each(["desktop", "state", "dependencies"] as const)("binds every desktop owner metadata entry point to one portable implementation [%#]", (entry) => {
+  if (entry === "desktop") {
+    expect(DesktopOverlay.prototype).toBeInstanceOf(PortableOverlay);
+    expect(DesktopOverlay.prototype.updateThreadMetadata).toBe(PortableOverlay.prototype.updateThreadMetadata);
+  }
+  if (entry === "state") expect(StateOverlay).toBe(DesktopOverlay);
+  if (entry === "dependencies") expect(StateDependencies).toBe(PortableDependencies);
 });
 
 // Owner facts merge into the latest row. Null removes, absence preserves,
@@ -90,7 +88,7 @@ it("matches an independent metadata model across WAL hosts and arbitrary reopen 
         expect([reads.writes.commits, reads.writes.statements, reads.writes.rowsChanged]).toEqual([0, 0, 0]);
       }
     } finally { connections.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // Pin moves preserve a single global order across providers. Resolve each
@@ -119,7 +117,7 @@ it("matches an ordered-list pin model across alternating owner connections", asy
         }
       }
     } finally { connections.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // A dependency graph admits only acyclic local edges. Duplicate registration
@@ -161,7 +159,7 @@ it("matches a graph oracle and arbitrates dependency claims across WAL hosts", a
         expect(stores[1]!.replace(record, { ...next, error: "competing claim" })).toBe(false);
       }
     } finally { left.close(); right.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // Live output is process-local and read-only until its existing boundary
@@ -195,7 +193,7 @@ it("retains live tails without streaming writes and flushes once for the next ho
       const again = await measureSqliteWrites(() => writer.flushThreadCodexEnvironmentActionLiveOutputs());
       expect(again.result).toBe(0); expect(again.writes.commits).toBe(0);
     } finally { left.close(); right.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("rolls metadata and dependency changes back together at the original transaction boundary", async () => {

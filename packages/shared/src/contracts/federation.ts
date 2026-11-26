@@ -154,6 +154,13 @@ export const FEDERATION_CAPABILITIES = [
    */
   "project_forge_automation",
   /**
+   * The owner reads `prKey` on `backend.setThreadPrAutoDispatch` as one
+   * PR's Auto-fix switch, and its navigation rows carry `autoFixOff` on that
+   * PR. An older owner would toggle the whole thread, so a viewer offers no
+   * per-PR switch without it.
+   */
+  "thread_pull_request_auto_fix_v1",
+  /**
    * The owner answers `backend.manageThreadDependencies`: a viewer manages
    * Continue After on the owner's threads, finds the owner's registrations
    * that wait on its own threads, and marks a prerequisite done there. A

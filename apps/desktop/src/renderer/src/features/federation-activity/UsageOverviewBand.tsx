@@ -180,6 +180,15 @@ function filterTooltip(label: string, mode: FilterMode | undefined, hasAnyInclud
   return hasAnyInclude ? `Click to add ${label} to filter` : `Click to show only ${label}`;
 }
 
+/**
+ * `aria-pressed` reports include alone. An excluded row is a third state that
+ * removes its turns from every total, and "mixed" would announce it as
+ * partially pressed, so the exclusion is stated in the row's accessible name.
+ */
+function ExcludedName({ mode }: { mode: FilterMode | undefined }) {
+  return mode === "exclude" ? <span className="usage-sr-only">, excluded</span> : null;
+}
+
 export function UsageOverviewBand({
   groups,
   from,
@@ -367,7 +376,7 @@ export function UsageOverviewBand({
             return <button type="button" key={provider.provider}
               className={`usage-overview__provider${mode === "include" ? " is-included" : mode === "exclude" ? " is-excluded" : ""}${dimmed ? " is-dimmed" : ""}`}
               data-filter-state={mode ?? "none"}
-              aria-pressed={mode === "include" ? "true" : mode === "exclude" ? "mixed" : "false"}
+              aria-pressed={mode === "include"}
               title={filterTooltip(provider.label, mode, hasAnyProviderInclude)}
               onMouseEnter={() => setHoveredProvider(provider.provider)}
               onMouseLeave={() => setHoveredProvider(undefined)}
@@ -389,6 +398,7 @@ export function UsageOverviewBand({
                 </span>
                 <span className="usage-overview__provider-sub">{formatShare(share)}</span>
               </span>
+              <ExcludedName mode={mode} />
             </button>;
           })}
         </div>
@@ -536,7 +546,7 @@ export function UsageOverviewBand({
           return <button type="button" key={`${row.provider}:${row.model}`}
             className={`usage-overview__table-row${mode === "include" ? " is-included" : mode === "exclude" ? " is-excluded" : ""}${dimmed ? " is-dimmed" : ""}`}
             data-filter-state={mode ?? "none"}
-            aria-pressed={mode === "include" ? "true" : mode === "exclude" ? "mixed" : "false"}
+            aria-pressed={mode === "include"}
             title={filterTooltip(row.filterKey, mode, hasAnyModelInclude)}
             onClick={() => onToggleModel(row.filterKey)}>
             <span className="usage-overview__rank">{index + 1}</span>
@@ -552,6 +562,7 @@ export function UsageOverviewBand({
               </span>
             </span>
             {metricCells(row.tokens, row.costMicros, share)}
+            <ExcludedName mode={mode} />
           </button>;
         }) : visibleDays.map((row, index) => {
           const share = metric === "tokens" ? row.tokenShare : row.costShare;

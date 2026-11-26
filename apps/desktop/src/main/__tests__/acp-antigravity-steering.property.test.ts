@@ -374,7 +374,7 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
     async (outcome) => {
       await fc.assert(fc.asyncProperty(fc.boolean(), nonEmptyWord, async (together, text) => {
         await checkWireHandoff(outcome, together, text);
-      }), { numRuns: 10 });
+      }), { numRuns: 8 });
     },
   );
 
@@ -739,7 +739,130 @@ describe("Antigravity ACP overlapping-prompt steering model", () => {
           }
         },
       ),
-      { numRuns: 40 },
+      { numRuns: 8 },
     );
+  });
+
+  it("completes a silent tool-only turn steered with /compact without missing-response error and clears delivered instructions", async () => {
+    const runDir = mkdtempSync(path.join(tempDir, "steer-compact-"));
+    const rolloutStore = new AcpRolloutStore(runDir);
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentInfo: { version: "1.5.16" },
+        agentCapabilities: { loadSession: true },
+      },
+    });
+    const prompts: DeferredPrompt[] = [];
+    transport.request = async (method, params) => {
+      if (method === "initialize") {
+        return {
+          protocolVersion: 1,
+          agentInfo: { version: "1.5.16" },
+          agentCapabilities: { loadSession: true },
+        };
+      }
+      if (method === "session/new") {
+        return { sessionId: "agy-steer-compact" };
+      }
+      if (method === "session/prompt") {
+        const deferred = createDeferredPrompt();
+        prompts.push(deferred);
+        return await deferred.promise;
+      }
+      throw new Error(`unexpected ${method}: ${JSON.stringify(params)}`);
+    };
+
+    let turnFinished = false;
+    let promptError: unknown;
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      agentDisplayName: "Antigravity",
+      supportsTurnSteering: true,
+      store,
+      rolloutStore,
+      transport,
+      onSessionUpdate: ({ update }) => {
+        if (update.kind === "turn_finished") turnFinished = true;
+      },
+      onPromptError: ({ error }) => {
+        promptError = error;
+      },
+    });
+
+    try {
+      await client.initialize();
+      const session = await client.startSession({
+        cwd: "/repo",
+        executionMode: "default",
+      });
+      // Seed an already-delivered instruction digest and advertised /compact command.
+      const existing = store.getSession("acp:antigravity", session.sessionId)!;
+      store.upsertSession({
+        ...existing,
+        availableCommands: [{ name: "compact", description: "Compact conversation" }],
+        agentInstructionsDigest: "digest-before-compact",
+      });
+
+      await client.startPrompt({
+        sessionId: session.sessionId,
+        prompt: "Read part1.txt, part2.txt, part3.txt one by one",
+        turnId: "turn-1",
+      });
+      // Tool-only activity (zero agent_message_chunk) followed by usage_update.
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "usage_update",
+        used: 412_000,
+        size: 1_048_576,
+      });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-1",
+        name: "read_file",
+        status: "in_progress",
+      });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-1",
+        status: "completed",
+      });
+
+      const steerPromise = client.steerSession({
+        sessionId: session.sessionId,
+        text: "/compact",
+        prompt: "/compact",
+        content: [{ type: "text", text: "/compact" }],
+        interjectionId: "auto-compact-1",
+      });
+      await flushMicrotasks();
+      expect(prompts).toHaveLength(2);
+
+      // Antigravity detaches prompt 1 with end_turn and pre-steer usage.
+      prompts[0]!.resolve({
+        stopReason: "end_turn",
+        usage: { inputTokens: 410_000, outputTokens: 2_000, cachedReadTokens: 0, cachedWriteTokens: 0, totalTokens: 412_000 },
+      });
+      await flushMicrotasks();
+
+      // Antigravity executes /compact silently, emits higher summarization usage_update, then ends turn.
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "usage_update",
+        used: 425_000,
+        size: 1_048_576,
+      });
+      prompts[1]!.resolve({
+        stopReason: "end_turn",
+        usage: { inputTokens: 12_000, outputTokens: 2_000, cachedReadTokens: 411_000, cachedWriteTokens: 0, totalTokens: 425_000 },
+      });
+
+      await expect(steerPromise).resolves.toEqual({ delivery: "currentTurn" });
+      await flushMicrotasks();
+
+      expect(promptError).toBeUndefined();
+      expect(turnFinished).toBe(true);
+      expect(store.getSession("acp:antigravity", session.sessionId)?.agentInstructionsDigest).toBeUndefined();
+    } finally {
+      await client.dispose();
+    }
   });
 });

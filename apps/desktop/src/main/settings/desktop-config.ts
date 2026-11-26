@@ -33,6 +33,10 @@ import {
   normalizeTaskMonitorModelChoice,
   type DesktopTaskMonitorModelChoice,
 } from "@pwragent/shared/helper-models";
+import {
+  normalizeAutoCompactionRules,
+  type DesktopAutoCompactionRule,
+} from "@pwragent/shared/auto-compaction";
 import { normalizeModelProviderDefaults, providerPickerValue } from "@pwragent/shared/provider-picker";
 import {
   validateCodexModelProviders,
@@ -395,6 +399,7 @@ export type DesktopSettingsConfig = {
     >;
     helperModels?: DesktopHelperModelSettings;
     taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
+    autoCompaction?: DesktopAutoCompactionRule[];
     decisionModels?: DesktopDecisionModelSettings;
     openaiDecisions?: DesktopOpenAIDecisionsSettings;
     audioTranscriptionEnabled?: boolean;
@@ -2254,6 +2259,21 @@ export function desktopSettingsPatchToEdits(
       ? { op: "setTableArray", path: ["models", "task_monitor_models"], value: entries }
       : { op: "deleteTableArray", path: ["models", "task_monitor_models"] });
   }
+  if (patch.models?.autoCompaction !== undefined) {
+    // `[[models.auto_compaction]]`: a new key with no legacy shape. Only saved
+    // rules are written; the built-in defaults live in code.
+    const entries = normalizeAutoCompactionRules(patch.models.autoCompaction).map((rule) => ({
+      provider: rule.provider,
+      model: rule.model,
+      enabled: rule.enabled,
+      ...(rule.contextWindowTokens !== undefined ? { context_window: rule.contextWindowTokens } : {}),
+      ...(rule.compactAtPercent !== undefined ? { compact_at_percent: rule.compactAtPercent } : {}),
+      ...(rule.duringTurn ? { during_turn: rule.duringTurn } : {}),
+    }));
+    edits.push(entries.length
+      ? { op: "setTableArray", path: ["models", "auto_compaction"], value: entries }
+      : { op: "deleteTableArray", path: ["models", "auto_compaction"] });
+  }
   if (patch.models?.decisionModels !== undefined) {
     // `[models.decision]`: new keys with no legacy shape. A key left at its
     // default is removed rather than written.
@@ -2983,6 +3003,7 @@ function normalizeDesktopConfig(
         models?.helper_models,
       ),
       taskMonitorModels: readTaskMonitorModels(models?.task_monitor_models),
+      autoCompaction: readAutoCompactionRules(models?.auto_compaction),
       decisionModels: normalizeDecisionModelSettings({
         model: decision?.model,
         cameraCues: decision?.camera_cues,
@@ -3506,6 +3527,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const hasTaskMonitorModels = Boolean(
     taskMonitorModels && Object.keys(taskMonitorModels).length > 0,
   );
+  const autoCompaction = config.models?.autoCompaction;
+  const hasAutoCompaction = Boolean(autoCompaction && autoCompaction.length > 0);
   const usageAccountGroups = config.models?.usageAccountGroups;
   const usageAccountNames = config.models?.usageAccountNames;
   const decisionModels = config.models?.decisionModels;
@@ -3528,6 +3551,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     )
     || hasHelperModels
     || hasTaskMonitorModels
+    || hasAutoCompaction
     || (usageAccountGroups && Object.keys(usageAccountGroups).length > 0)
     || (usageAccountNames && Object.keys(usageAccountNames).length > 0)
     || decisionModels
@@ -3539,6 +3563,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
       ...(usageAccountNames && Object.keys(usageAccountNames).length > 0 ? { usageAccountNames } : {}),
       ...(hasHelperModels ? { helperModels } : {}),
       ...(hasTaskMonitorModels ? { taskMonitorModels } : {}),
+      ...(hasAutoCompaction ? { autoCompaction } : {}),
       ...(decisionModels ? { decisionModels } : {}),
       ...(openaiDecisions ? { openaiDecisions } : {}),
       ...(audioTranscriptionEnabled !== undefined ? { audioTranscriptionEnabled } : {}),
@@ -4611,6 +4636,28 @@ function normalizeTaskMonitorModels(
     const normalized = normalizeTaskMonitorModelChoice(choice);
     return normalizedProvider && normalized ? [[normalizedProvider, normalized]] : [];
   }));
+}
+
+/**
+ * `[[models.auto_compaction]]` rows. A new key with no legacy shape: a
+ * malformed row is skipped, never the section.
+ */
+function readAutoCompactionRules(
+  value: TomlScalar | undefined,
+): DesktopAutoCompactionRule[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const rules = normalizeAutoCompactionRules(value.flatMap((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return [];
+    return [{
+      provider: item.provider,
+      model: item.model,
+      enabled: item.enabled,
+      contextWindowTokens: item.context_window,
+      compactAtPercent: item.compact_at_percent,
+      duringTurn: item.during_turn,
+    }];
+  }));
+  return rules.length > 0 ? rules : undefined;
 }
 
 /**

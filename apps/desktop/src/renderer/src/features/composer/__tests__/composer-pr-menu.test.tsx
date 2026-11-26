@@ -9,6 +9,10 @@ import type {
 } from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { ComposerPrMenu } from "../ComposerPrMenu";
+import {
+  ThreadForgeAutomationProvider,
+  usePublishForgeAutomationOpener,
+} from "../../forge-automation/thread-hands-off";
 import { describeMergeBuildWatch, mergeBuildPullRequestUrl } from "../../pr-watches/merge-build-watches";
 
 const PR_URL = "https://github.com/example/app/pull/41";
@@ -66,10 +70,117 @@ describe("composer PR menu", () => {
     await waitFor(() => expect(calls.find((call) => call.action === "cancel")).toMatchObject({ dependencyId: "wait-1" }));
   });
 
+  it("lists the PRs Auto-fix covers and switches one off or back on, leaving a hands-off PR to the project", () => {
+    const onToggle = vi.fn();
+    const onTogglePr = vi.fn();
+    render(
+      <ComposerPrMenu
+        thread={thread}
+        desktopApi={{} as DesktopApi}
+        watchMergeBuildsDefault
+        className="composer__toggle"
+        tooltip="Auto-fix PR"
+        autoFix={{
+          checked: true, available: true, onToggle, onTogglePr,
+          coverage: [
+            { prKey: "github.com/fork/app#3", label: "fork/app#3", state: "on" },
+            { prKey: "github.com/upstream/app#7", label: "upstream/app#7", state: "off" },
+            { prKey: "github.com/upstream/app#9", label: "upstream/app#9", state: "hands-off", reason: "hands-off, labeled takeover:yes" },
+          ],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pull request automation" }));
+    const covers = screen.getByRole("group", { name: "Pull requests Auto-fix covers" });
+    expect(covers).toBeInTheDocument();
+    const on = screen.getByRole("menuitemcheckbox", { name: /fork\/app#3\s*Repairs it/ });
+    expect(on).toHaveAttribute("aria-checked", "true");
+    const handsOff = screen.getByRole("menuitemcheckbox", { name: /upstream\/app#9\s*hands-off, labeled takeover:yes/ });
+    expect(handsOff).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(handsOff);
+    expect(onTogglePr).not.toHaveBeenCalled();
+    fireEvent.click(on);
+    expect(onTogglePr).toHaveBeenCalledWith("github.com/fork/app#3", false);
+    fireEvent.click(screen.getByRole("button", { name: "Pull request automation" }));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /upstream\/app#7\s*Off for this PR/ }));
+    expect(onTogglePr).toHaveBeenLastCalledWith("github.com/upstream/app#7", true);
+    expect(onToggle).not.toHaveBeenCalled();
+  });
+
+  it("lists no PRs for a single covered PR, or where one PR's switch cannot reach the owner", () => {
+    const one = [{ prKey: "github.com/fork/app#3", label: "fork/app#3", state: "on" as const }];
+    const { unmount } = render(
+      <ComposerPrMenu
+        thread={thread} desktopApi={{} as DesktopApi} watchMergeBuildsDefault className="composer__toggle" tooltip="Auto-fix PR"
+        autoFix={{ checked: true, available: true, onToggle: vi.fn(), onTogglePr: vi.fn(), coverage: one }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pull request automation" }));
+    expect(screen.queryByRole("group", { name: "Pull requests Auto-fix covers" })).toBeNull();
+    unmount();
+    render(
+      <ComposerPrMenu
+        thread={thread} desktopApi={{} as DesktopApi} watchMergeBuildsDefault className="composer__toggle" tooltip="Auto-fix PR"
+        autoFix={{ checked: true, available: true, onToggle: vi.fn(), coverage: [...one, { ...one[0]!, prKey: "k2", label: "fork/app#4" }] }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pull request automation" }));
+    expect(screen.queryByRole("group", { name: "Pull requests Auto-fix covers" })).toBeNull();
+  });
+
   it("toggles Auto-fix from the menu", () => {
     const { onToggle } = renderMenu([]);
     fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Auto-fix PR/ }));
     expect(onToggle).toHaveBeenCalledWith(false);
+  });
+
+  it("opens the thread's project's Forge Automation, returning focus to the menu button", () => {
+    const project = {
+      key: "directory:/Users/fixture-user/code/app",
+      kind: "directory" as const,
+      label: "app",
+      path: "/Users/fixture-user/code/app",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1,
+    };
+    const inProject: NavigationThreadSummary = {
+      ...thread,
+      linkedDirectories: [{ id: "dir-1", label: "app", path: project.path, kind: "local" }],
+    };
+    const open = vi.fn();
+    function Sidebar(props: { canOpen?: () => boolean }) {
+      usePublishForgeAutomationOpener([project], props.canOpen, open);
+      return null;
+    }
+    const menu = (canOpen?: () => boolean) => (
+      <ThreadForgeAutomationProvider directories={[project]}>
+        <Sidebar canOpen={canOpen} />
+        <ComposerPrMenu
+          thread={inProject}
+          desktopApi={{} as DesktopApi}
+          watchMergeBuildsDefault
+          className="composer__toggle"
+          tooltip="Auto-fix PR"
+          autoFix={{ checked: true, available: true, onToggle: () => undefined }}
+        />
+      </ThreadForgeAutomationProvider>
+    );
+    const { rerender } = render(menu(() => true));
+    const trigger = screen.getByRole("button", { name: "Pull request automation" });
+    fireEvent.click(trigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Forge Automation for app…/ }));
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(open).toHaveBeenCalledWith(project, expect.objectContaining({ current: trigger }));
+
+    // Only where the sidebar's own project menu would offer it.
+    for (const canOpen of [() => false, undefined]) {
+      rerender(menu(canOpen));
+      fireEvent.click(trigger);
+      expect(screen.getByRole("menu")).toBeInTheDocument();
+      expect(screen.queryByRole("menuitem", { name: /Forge Automation/ })).not.toBeInTheDocument();
+      fireEvent.click(trigger);
+    }
   });
 
   it("names the newest open PR, else the one merged most recently", () => {

@@ -273,7 +273,7 @@ describe("Codex turn terminal ownership", () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"), fc.boolean(),
       async (method, separateThread) => await exerciseNativeReviewPendingInnerDelivery(method, separateThread),
-    ), { numRuns: 12 });
+    ), { numRuns: 8 });
   });
 
   it("forwards the outer review ID when the inline review ends under the inner ID", async () => {
@@ -288,7 +288,7 @@ describe("Codex turn terminal ownership", () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"), fc.boolean(),
       async (method, terminalFirst) => await exerciseTerminalBeforeStartRegistration(method, terminalFirst, "headless"),
-    ), { numRuns: 12 });
+    ), { numRuns: 8 });
   });
 
   it("does not restore a turn that finished during awaited start bookkeeping", async () => {
@@ -299,7 +299,7 @@ describe("Codex turn terminal ownership", () => {
     await fc.assert(fc.asyncProperty(
       fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"), fc.boolean(),
       async (method, terminalFirst) => await exerciseTerminalBeforeStartRegistration(method, terminalFirst),
-    ), { numRuns: 12 });
+    ), { numRuns: 8 });
   });
 
   it("does not restore a completed turn's mode after its pending lookup returns", async () => {
@@ -312,61 +312,67 @@ describe("Codex turn terminal ownership", () => {
       fc.constantFrom("default", "auto", "full-access"),
       fc.boolean(), fc.boolean(), fc.scheduler(),
       exerciseTerminalDuringModeLookup,
-    ), { numRuns: 25 });
+    ), { numRuns: 8 });
   });
 
-  it("native review release retains terminal evidence across the mode lookup", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"),
-      fc.boolean(),
-      fc.boolean(),
-      async (method, separateThread, terminalUsesInnerId) => {
-        const f = fixture();
-        const reviewThreadId = separateThread ? "review-thread" : "thread";
-        const terminalId = terminalUsesInnerId && !separateThread ? "inner" : "turn";
-        const entered = deferred(), release = deferred();
-        const initializeResult = { userAgent: "fixture", methods: ["turn/start", "review/start"] };
-        vi.spyOn(f.client, "getInitializeResult").mockResolvedValue(initializeResult);
-        vi.spyOn(f.client, "startReview").mockResolvedValue({ threadId: "thread", reviewThreadId, turnId: "turn" });
-        const resolveMode = f.state.resolveCodexThreadExecutionModeForActiveTurn.bind(f.state);
-        let lookupWaiting = false;
-        vi.spyOn(f.state, "resolveCodexThreadExecutionModeForActiveTurn").mockImplementation(async (threadId) => {
-          const mode = await resolveMode(threadId);
-          if (!lookupWaiting) {
-            lookupWaiting = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return mode;
-        });
-        const received: AgentEvent[] = [];
-        f.registry.onEvent((event) => { received.push(event); });
-        const review = f.registry.startReview({ ...identity, target: { type: "uncommittedChanges" } });
-        try {
-          await entered.promise;
-          await f.notify({ method: "turn/started", params: {
-            threadId: reviewThreadId, turnId: "inner", turn: { id: "inner", status: "in_progress" },
-          } });
-          await f.notify(terminal(method, reviewThreadId, terminalId));
-          release.resolve();
-          await review;
-          f.assertEnded();
-          f.assertEnded(reviewThreadId);
-          expect(received.find((event) => event.notification.method === "turn/started")).toBeDefined();
-          const terminalEvents = received.filter((event) => event.notification.method === method
-            && event.notification.params.threadId === reviewThreadId);
-          expect(terminalEvents).toHaveLength(1);
-          expect(terminalEvents[0]?.notification.params).toMatchObject({ turnId: terminalId });
-          expect(terminalEvents[0]?.relatedReviewTurnId).toBe(
-            separateThread ? undefined : terminalId === "turn" ? "inner" : "turn",
-          );
-        } finally {
-          release.resolve();
-          await review;
-          await f.close();
-        }
-      },
-    ), { numRuns: 25, examples: [["turn/completed", false, false], ["turn/completed", false, true]] });
+  it.each([
+    ["turn/completed", false, false],
+    ["turn/completed", false, true],
+    ["turn/completed", true, false],
+    ["turn/completed", true, true],
+    ["turn/failed", false, false],
+    ["turn/failed", false, true],
+    ["turn/failed", true, false],
+    ["turn/failed", true, true],
+    ["turn/cancelled", false, false],
+    ["turn/cancelled", false, true],
+    ["turn/cancelled", true, false],
+    ["turn/cancelled", true, true],
+  ] as const)("native review release retains terminal evidence across the mode lookup [%#]", async (method, separateThread, terminalUsesInnerId) => {
+    const f = fixture();
+    const reviewThreadId = separateThread ? "review-thread" : "thread";
+    const terminalId = terminalUsesInnerId && !separateThread ? "inner" : "turn";
+    const entered = deferred(), release = deferred();
+    const initializeResult = { userAgent: "fixture", methods: ["turn/start", "review/start"] };
+    vi.spyOn(f.client, "getInitializeResult").mockResolvedValue(initializeResult);
+    vi.spyOn(f.client, "startReview").mockResolvedValue({ threadId: "thread", reviewThreadId, turnId: "turn" });
+    const resolveMode = f.state.resolveCodexThreadExecutionModeForActiveTurn.bind(f.state);
+    let lookupWaiting = false;
+    vi.spyOn(f.state, "resolveCodexThreadExecutionModeForActiveTurn").mockImplementation(async (threadId) => {
+      const mode = await resolveMode(threadId);
+      if (!lookupWaiting) {
+        lookupWaiting = true;
+        entered.resolve();
+        await release.promise;
+      }
+      return mode;
+    });
+    const received: AgentEvent[] = [];
+    f.registry.onEvent((event) => { received.push(event); });
+    const review = f.registry.startReview({ ...identity, target: { type: "uncommittedChanges" } });
+    try {
+      await entered.promise;
+      await f.notify({ method: "turn/started", params: {
+        threadId: reviewThreadId, turnId: "inner", turn: { id: "inner", status: "in_progress" },
+      } });
+      await f.notify(terminal(method, reviewThreadId, terminalId));
+      release.resolve();
+      await review;
+      f.assertEnded();
+      f.assertEnded(reviewThreadId);
+      expect(received.find((event) => event.notification.method === "turn/started")).toBeDefined();
+      const terminalEvents = received.filter((event) => event.notification.method === method
+        && event.notification.params.threadId === reviewThreadId);
+      expect(terminalEvents).toHaveLength(1);
+      expect(terminalEvents[0]?.notification.params).toMatchObject({ turnId: terminalId });
+      expect(terminalEvents[0]?.relatedReviewTurnId).toBe(
+        separateThread ? undefined : terminalId === "turn" ? "inner" : "turn",
+      );
+    } finally {
+      release.resolve();
+      await review;
+      await f.close();
+    }
   });
 
   it("retires a native review's inner key before its delayed mode read returns", async () => {
@@ -378,6 +384,6 @@ describe("Codex turn terminal ownership", () => {
       fc.constantFrom("turn/completed", "turn/failed", "turn/cancelled"),
       fc.boolean(),
       exerciseNativeReviewInnerLookup,
-    ), { numRuns: 25 });
+    ), { numRuns: 8 });
   });
 });

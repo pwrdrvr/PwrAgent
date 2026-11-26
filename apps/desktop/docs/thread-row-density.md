@@ -34,3 +34,35 @@ Density is `<html data-density>`: absent for Mission Control, `compact`, or
   rule twice: the `:root[data-density="…"] … :not(:is(.density-preview, [data-xray-target]) *)`
   half and the `.density-preview--… ` half.
   `styles/__tests__/density-contract.test.ts` fails when a rule lacks either.
+
+## Working rows hold their progress chips
+
+An agent edits, commits, pushes and adds to-do cards many times a turn. Each
+change resized its row and moved every row below it, including the row under
+the pointer. So while a thread's turn or owned worker runs
+(`isThreadTurnRunning`) and it is not the open thread, its row passes
+`holdWorkProgress` to
+`ThreadMetaChips`, which shows these as they were when the hold began:
+
+- the branch chip (`gitBranch`, `observedGitBranch`);
+- the uncommitted and unpushed chips (`gitWorkingState`);
+- the to-do count's cards.
+
+Opening the thread, or the turn ending, shows the live values at once.
+Background tasks left running after the turn keep the row's working mark but
+not the hold, so a turn's results show when it ends, not when a dev server or
+watcher it started exits. Every
+other chip stays live: approvals, input, questions and held messages wait on
+the operator, PR chips mark a milestone, and drafts are the operator's own.
+A row that mounts mid-turn shows its first values. X-ray and chip tooltips
+show what the row shows.
+
+Rows show no branch-drift chip (`! now <branch>`). Agents switch branches
+mid-turn, so it came and went on rows nobody had open; the open thread's
+`ThreadWarnings` names the drift.
+
+`__tests__/thread-row-work-progress.property.test.ts` checks these rules over
+the pure hold model (`thread-row-work-progress.ts`), and
+`__tests__/thread-row-work-progress.model.test.tsx` ties that model to a
+mounted `ThreadRow` against an idle oracle row alongside the shrunk
+counterexamples.

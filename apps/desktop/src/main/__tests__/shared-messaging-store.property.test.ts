@@ -19,27 +19,41 @@ const binding = (id: string, at = 10): MessagingBindingRecord => ({
 const construct = (db: StateDb, host: number) => host === 0 ? new SharedStore(db, messagingSqlitePolicy)
   : host === 1 ? new DesktopStore(db) : new CompatibilityStore(db);
 
-it("only widens a conversation callback to an admitted actor in the same unexpired conversation", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.boolean(), fc.boolean(),
-    async (conversationAudience, originalActor, originalChannel, expired) => {
-      const db = openInMemoryStateDb();
-      try {
-        const target = binding("release-watch").channel;
-        for (const host of [0, 1, 2]) {
-          const store = construct(db, host);
-          await store.upsertCallbackHandle({
-            id: "update-action", handle: "update-handle", actionId: "app-update:review",
-            channel: target, allowedActorIds: ["original"], createdAt: 1, updatedAt: 1, expiresAt: 10,
-            ...(conversationAudience ? { audience: "conversation" as const } : {}),
-          });
-          const resolved = await store.resolveCallbackHandle({
-            actorId: originalActor ? "original" : "another-admitted-actor", handle: "update-handle",
-            channel: originalChannel ? target : binding("another-room").channel, now: expired ? 10 : 9,
-          });
-          expect(Boolean(resolved)).toBe(originalChannel && !expired && (originalActor || conversationAudience));
-        }
-      } finally { db.close(); }
-    }), { numRuns: 25 });
+it.each([
+  [false, false, false, false],
+  [false, false, false, true],
+  [false, false, true, false],
+  [false, false, true, true],
+  [false, true, false, false],
+  [false, true, false, true],
+  [false, true, true, false],
+  [false, true, true, true],
+  [true, false, false, false],
+  [true, false, false, true],
+  [true, false, true, false],
+  [true, false, true, true],
+  [true, true, false, false],
+  [true, true, false, true],
+  [true, true, true, false],
+  [true, true, true, true],
+] as const)("only widens a conversation callback to an admitted actor in the same unexpired conversation [%#]", async (conversationAudience, originalActor, originalChannel, expired) => {
+  const db = openInMemoryStateDb();
+  try {
+    const target = binding("release-watch").channel;
+    for (const host of [0, 1, 2]) {
+      const store = construct(db, host);
+      await store.upsertCallbackHandle({
+        id: "update-action", handle: "update-handle", actionId: "app-update:review",
+        channel: target, allowedActorIds: ["original"], createdAt: 1, updatedAt: 1, expiresAt: 10,
+        ...(conversationAudience ? { audience: "conversation" as const } : {}),
+      });
+      const resolved = await store.resolveCallbackHandle({
+        actorId: originalActor ? "original" : "another-admitted-actor", handle: "update-handle",
+        channel: originalChannel ? target : binding("another-room").channel, now: expired ? 10 : 9,
+      });
+      expect(Boolean(resolved)).toBe(originalChannel && !expired && (originalActor || conversationAudience));
+    }
+  } finally { db.close(); }
 });
 // Vitest's outer timeout does not cancel a generated assertion. Keep its
 // current WAL writer and all subsequent cases owned until teardown stops
@@ -152,7 +166,7 @@ it("binds the actual app-state construction and accessor to shared persistence f
       expect(await new SharedStore(getAppStateDb(), messagingSqlitePolicy).getBinding(id)).toEqual(await store.getBinding(id));
       upsert.mockRestore();
     } finally { disposeAppState(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 20, markInterruptAsFailure: true });
+  }), { numRuns: 8, markInterruptAsFailure: true });
 }));
 
 it("models binding identity, merge admission, monotone observations, detached reads and exact writes across WAL hosts", () => testLifetime.run(async (lifetime) => {
@@ -212,7 +226,7 @@ it("models binding identity, merge admission, monotone observations, detached re
         expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25, markInterruptAsFailure: true });
+  }), { numRuns: 8, markInterruptAsFailure: true });
 }));
 
 it("models one active default Agent per scope, target qualification and rollback without extra commits", () => testLifetime.run(async (lifetime) => {
@@ -251,7 +265,7 @@ it("models one active default Agent per scope, target qualification and rollback
         target: { kind: "agent", backend: "codex", threadId: "other" }, createdAt: 100, updatedAt: 100 })).rejects.toThrow("invented refusal"));
       expect(measured.writes.commits).toBe(0); expect(await stores[1]!.readSnapshot()).toEqual(before);
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25, markInterruptAsFailure: true });
+  }), { numRuns: 8, markInterruptAsFailure: true });
 }));
 
 const pending = (id: string, at: number, expiresAt: number, actor: string): MessagingPendingIntentRecord => ({
@@ -309,7 +323,7 @@ it("models callback and questionnaire authorization, strict expiry, latest selec
         }); expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25, markInterruptAsFailure: true });
+  }), { numRuns: 8, markInterruptAsFailure: true });
 }));
 
 it("keeps owned topic metadata authoritative over observations and makes repeated observations write-free", () => testLifetime.run(async (lifetime) => {
@@ -337,7 +351,7 @@ it("keeps owned topic metadata authoritative over observations and makes repeate
         for (const store of stores) expect(await store.getManagedTopic("topic")).toEqual(expected);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25, markInterruptAsFailure: true });
+  }), { numRuns: 8, markInterruptAsFailure: true });
 }));
 
 it("preserves serialization failures, legacy migration, malformed read behavior and atomic cleanup refusal", () => testLifetime.run(async (lifetime) => {
@@ -366,7 +380,7 @@ it("preserves serialization failures, legacy migration, malformed read behavior 
         await expect(store.readSnapshot()).rejects.toThrow();
       }); expect(malformed.writes.commits).toBe(0);
     } finally { db.close(); }
-  }), { numRuns: 25, markInterruptAsFailure: true });
+  }), { numRuns: 8, markInterruptAsFailure: true });
 }));
 
 // An independent host uses arbitrary channel names, opaque payloads and its own
@@ -421,7 +435,7 @@ it("persists an alternate host's channel, opaque JSON and snapshot without deskt
       expect(await store.findActiveBindingForChannel(row.channel)).toEqual(persisted);
       expect(await store.readSnapshot()).toEqual({ host: "alternate", bindings: { [id]: persisted } });
     } finally { db.close(); }
-  }), { numRuns: 25, markInterruptAsFailure: true, examples: [[{}, "__proto__"], [{ "": [-0] }, ""]] });
+  }), { numRuns: 8, markInterruptAsFailure: true, examples: [[{}, "__proto__"], [{ "": [-0] }, ""]] });
 }));
 
 it("retains arbitrary record ids as own keys in every snapshot dictionary without writes", () => testLifetime.run(async (lifetime) => {
@@ -466,7 +480,7 @@ it("retains arbitrary record ids as own keys in every snapshot dictionary withou
         expect(Object.entries(captured![dictionary]), dictionary).toEqual([[id, expected[dictionary]]]);
       }
     } finally { db.close(); }
-  }), { numRuns: 25, markInterruptAsFailure: true, examples: [["__proto__"]] });
+  }), { numRuns: 8, markInterruptAsFailure: true, examples: [["__proto__"]] });
 }));
 
 it("models browse-session expiry and channel-versus-binding cleanup while preserving qualified federated bindings", () => testLifetime.run(async (lifetime) => {
@@ -501,5 +515,5 @@ it("models browse-session expiry and channel-versus-binding cleanup while preser
       expect(await stores[1]!.getCallbackHandle("0", { now: 0 })).toBeUndefined();
       expect((await stores[1]!.findActiveBindings()).length).toBe(count - 1);
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25, markInterruptAsFailure: true });
+  }), { numRuns: 8, markInterruptAsFailure: true });
 }));

@@ -1,6 +1,9 @@
+import os from "node:os";
+import path from "node:path";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { resolveDecisionModelSettings } from "@pwragent/shared/decision-models";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { resolveScratchProjectsRoots } from "../app-server/scratch-projects";
 import { threadDecisionBatchDirectory } from "../app-server/thread-assets";
 import {
   isDecisionProviderEnabled,
@@ -10,9 +13,10 @@ import {
 } from "./decision-provider-targets";
 import type { PwrAgentOpenAIDecisionsHandler } from "../agent-tools/pwragent-openai-decisions-agent-tools";
 import { getMainLogger } from "../log";
-import { resolveActiveProfileName } from "../profile";
+import { resolveActiveProfileName, resolvePwragentRoot } from "../profile";
 import type { OpenAIDecisionRegistryStorage } from "../storage/openai-decision-store";
 import { createOpenAIDecisionStorage } from "../storage/desktop-runtime-storage";
+import type { DecisionFileAccess } from "./decision-io-files";
 import { OpenAIDecisionsService, type OpenAIDecisionsServiceOptions } from "./openai-decisions-service";
 
 const openAIDecisionsLog = getMainLogger("pwragent:openai-decisions");
@@ -62,6 +66,10 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
   announceBatch?: OpenAIDecisionsServiceOptions["announceBatch"];
   /** Wakes the calling thread when its background batch ends. */
   wakeThread?: OpenAIDecisionsServiceOptions["wakeThread"];
+  /** Workspace directories linked to the calling thread for `inputsFile`/`outputFile`. */
+  resolveThreadRoots?: (caller: { backend: AppServerBackendKind; threadId: string }) => Promise<readonly string[]>;
+  /** Private storage roots that `inputsFile` and `outputFile` may never touch. */
+  privateStorageRoots?: () => readonly string[];
 }): PwrAgentOpenAIDecisionsHandler {
   // Opened on first tool call, so installing the handler never touches the
   // profile database during boot.
@@ -100,6 +108,27 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
       backend: caller.backend as AppServerBackendKind,
       threadId: caller.threadId,
     }),
+    resolveCallerFileAccess: async (caller): Promise<DecisionFileAccess> => {
+      const threadRoots = params.resolveThreadRoots
+        ? await params.resolveThreadRoots({
+            backend: caller.backend as AppServerBackendKind,
+            threadId: caller.threadId,
+          }).catch(() => [] as readonly string[])
+        : [];
+      const antigravityScratch = antigravityThreadScratchRoot(caller);
+      return {
+        allowedRoots: [
+          ...threadRoots,
+          ...resolveScratchProjectsRoots(),
+          os.tmpdir(),
+          ...(antigravityScratch ? [antigravityScratch] : []),
+        ],
+        privateStorageRoots: [
+          ...(params.privateStorageRoots?.() ?? []),
+          resolvePwragentRoot(),
+        ],
+      };
+    },
     log: {
       info: (message, fields) => openAIDecisionsLog.info(message, fields),
       warn: (message, fields) => openAIDecisionsLog.warn(message, fields),
@@ -124,4 +153,12 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     batchResults: async (caller, args) => await service.batchResults(caller, args),
     cancelBatch: async (caller, args) => await service.cancelBatch(caller, args),
   };
+}
+
+/** Antigravity's per-conversation brain directory, scoped strictly to this thread id. */
+function antigravityThreadScratchRoot(caller: { backend: string; threadId: string }): string | undefined {
+  if (caller.backend !== "acp:antigravity" || !/^[A-Za-z0-9_-]{1,128}$/u.test(caller.threadId)) {
+    return undefined;
+  }
+  return path.join(os.homedir(), ".gemini", "antigravity-cli", "brain", caller.threadId);
 }

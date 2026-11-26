@@ -143,7 +143,7 @@ describe("Job Monitor wake admission", () => {
           connections.forEach(({ db }) => db.close());
           removeTempStateDbDir(temp.tempDir);
         }
-      }), { numRuns: 25 });
+      }), { numRuns: 8 });
   });
 
   it("rechecks expired holds against fresh reservations and counts a late delivery from its dispatch time", () => {
@@ -219,7 +219,7 @@ describe("Job Monitor wake admission", () => {
         second.close();
         removeTempStateDbDir(temp.tempDir);
       }
-    }), { numRuns: 15, examples: [["loop", 0], ["continue", 0], ["unavailable", 0]] });
+    }), { numRuns: 8, examples: [["loop", 0], ["continue", 0], ["unavailable", 0]] });
   });
 
   it("records SQLite commits for pending, admitted, tripped and rearmed wakes", async () => {

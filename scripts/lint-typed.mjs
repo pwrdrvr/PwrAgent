@@ -2,6 +2,7 @@ import { globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSync } from "oxc-parser";
+import { resolveLocalCpuBudget, splitTypedLintBudget } from "./local-cpu-budget.mjs";
 import { runOxlint } from "./oxlint.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -50,8 +51,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     console.error(failures.join("\n"));
     process.exitCode = 1;
   } else {
+    const localBudget = resolveLocalCpuBudget({ cwd: root });
+    const split = localBudget ? splitTypedLintBudget(localBudget.units) : undefined;
     process.exitCode = runOxlint("oxlint.typed.json", [
       "packages", ...globSync("apps/*/src", { cwd: root }),
-    ]);
+    ], split ? {
+      defaultThreads: split.oxlintThreads,
+      env: { ...process.env, GOMAXPROCS: process.env.GOMAXPROCS ?? String(split.goMaxProcs) },
+    } : undefined);
   }
 }

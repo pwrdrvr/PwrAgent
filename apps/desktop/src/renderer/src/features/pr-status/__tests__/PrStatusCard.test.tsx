@@ -1,7 +1,17 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { createRef, type ReactNode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  NavigationDirectorySummary,
+  NavigationThreadSummary,
+  PrSummary,
+} from "@pwragent/shared/contracts/navigation";
+import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
+import {
+  ThreadForgeAutomationProvider,
+  usePublishForgeAutomationOpener,
+} from "../../forge-automation/thread-hands-off";
 import type { PrAutoFixBlock } from "../../pr-watches/useThreadPrWatchIndicators";
 import type { PrBranchDrift } from "../pr-branch-drift";
 import { PrStatusCard } from "../PrStatusCard";
@@ -449,5 +459,102 @@ describe("PrStatusCard local branch", () => {
     cleanup();
     expect(sectionRows(renderWithDrift({ prKey, baseBranch: "main", behind: -1, ahead: Number.NaN })))
       .toEqual([]);
+  });
+});
+
+describe("PrStatusCard Forge Automation", () => {
+  const project: NavigationDirectorySummary = {
+    key: "directory:/Users/fixture-user/code/PwrAgent",
+    kind: "directory",
+    label: "PwrAgent",
+    path: "/Users/fixture-user/code/PwrAgent",
+    threadKeys: [],
+    needsAttentionCount: 0,
+    latestUpdatedAt: 1,
+    forgeAutomation: {
+      ...DEFAULT_PROJECT_FORGE_AUTOMATION,
+      handsOff: [{ repository: "pwrdrvr/PwrAgent", label: "takeover:*" }],
+    },
+  };
+  const thread: NavigationThreadSummary = {
+    id: "thread-1",
+    title: "Widgets",
+    titleSource: "explicit",
+    source: "codex",
+    inbox: { inInbox: false },
+    linkedDirectories: [{ id: "dir-1", label: "PwrAgent", path: project.path!, kind: "local" }],
+  };
+  const open = vi.fn();
+  const canOpen = () => true;
+
+  function Sidebar(props: { canOpen?: () => boolean }) {
+    usePublishForgeAutomationOpener([project], props.canOpen, open);
+    return null;
+  }
+
+  function renderInProject(card: ReactNode, opts: { canOpen?: () => boolean } = { canOpen }) {
+    open.mockReset();
+    return render(
+      <ThreadForgeAutomationProvider directories={[project]}>
+        <Sidebar canOpen={opts.canOpen} />
+        <div className="pr-status-card">{card}</div>
+      </ThreadForgeAutomationProvider>,
+    );
+  }
+
+  it("lists the PR's labels and names the one a hands-off rule matched", () => {
+    renderInProject(
+      <PrStatusCard
+        pr={basePr({ labels: ["bug", "takeover:in-progress"] })}
+        now={NOW}
+        stackThread={thread}
+        watch={{ autoFix: true }}
+      />,
+    );
+    const labels = within(screen.getByRole("list", { name: "Labels" })).getAllByRole("listitem");
+    expect(labels.map((item) => item.textContent)).toEqual(["bug", "takeover:in-progress (hands-off)"]);
+    expect(labels[0]).not.toHaveClass("pr-status-card__label--hands-off");
+    expect(labels[1]).toHaveClass("pr-status-card__label--hands-off");
+  });
+
+  it("shows no labels when the poll did not read them, or the PR has none", () => {
+    renderInProject(<PrStatusCard pr={basePr()} now={NOW} stackThread={thread} />);
+    expect(screen.queryByRole("list", { name: "Labels" })).not.toBeInTheDocument();
+    cleanup();
+    renderInProject(<PrStatusCard pr={basePr({ labels: [] })} now={NOW} stackThread={thread} />);
+    expect(screen.queryByRole("list", { name: "Labels" })).not.toBeInTheDocument();
+  });
+
+  it("links the sidebar card's Auto-fix row to the project's Forge Automation", () => {
+    const onOpen = vi.fn();
+    const returnFocus = createRef<HTMLElement>();
+    renderInProject(
+      <PrStatusCard
+        pr={basePr({ labels: ["takeover:yes"] })}
+        now={NOW}
+        stackThread={thread}
+        watch={{ autoFix: true }}
+        forgeAutomationLink={{ onOpen, returnFocus }}
+      />,
+    );
+    expect(screen.getByText("hands-off")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Forge Automation for PwrAgent…" }));
+    expect(onOpen).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledWith(project, returnFocus);
+  });
+
+  it("offers no link off the sidebar card, without an Auto-fix row, or where the project cannot be edited", () => {
+    const link = { onOpen: () => undefined, returnFocus: createRef<HTMLElement>() };
+    const cases: Array<[ReactNode, { canOpen?: () => boolean }?]> = [
+      [<PrStatusCard pr={basePr()} now={NOW} stackThread={thread} watch={{ autoFix: true }} />],
+      [<PrStatusCard pr={basePr()} now={NOW} stackThread={thread} watch={{ terminal: { createdAt: 1 } }} forgeAutomationLink={link} />],
+      [<PrStatusCard pr={basePr()} now={NOW} stackThread={thread} watch={{ autoFix: true }} forgeAutomationLink={link} />, { canOpen: () => false }],
+      [<PrStatusCard pr={basePr()} now={NOW} stackThread={thread} watch={{ autoFix: true }} forgeAutomationLink={link} />, {}],
+    ];
+    for (const [card, opts] of cases) {
+      renderInProject(card, opts);
+      expect(screen.queryByRole("button", { name: /Forge Automation/ })).not.toBeInTheDocument();
+      cleanup();
+    }
   });
 });

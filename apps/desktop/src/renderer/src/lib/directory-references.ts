@@ -39,7 +39,7 @@ export function findDirectoryReferenceTrigger(
   caret: number,
 ): DirectoryReferenceTrigger | undefined {
   const prefix = text.slice(0, caret);
-  const match = /(?:^|\s)@([A-Za-z0-9._~:/\\-]*)$/.exec(prefix);
+  const match = /(?:^|[\s\p{Ps}\p{Pi}])@([A-Za-z0-9._~:/\\-]*)$/u.exec(prefix);
   if (!match) {
     return undefined;
   }

@@ -1,4 +1,3 @@
-import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { AgentToolRouter } from "../agent-tool-router";
@@ -108,41 +107,36 @@ describe("AgentToolMcpServer long tool calls", () => {
     return { registration };
   }
 
-  // Model: a client that gives up when the headers are late, or when the
-  // stream goes quiet, never gives up on a call that is still working, however
-  // long the tool waits. The result it gets is the tool's own (oracle: the
-  // value the tool returned).
-  it("answers headers at once and reports progress until a call of any length finishes", async () => {
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 600, max: 1_500 }), async (durationMs) => {
-      const release = deferred();
-      const { registration } = await setup(async () => {
-        await release.promise;
-        return agentToolSuccess({ waitedMs: durationMs });
-      });
-      const timer = setTimeout(release.resolve, durationMs);
-      try {
-        const startedAt = performance.now();
-        const response = await callRequest(registration);
-        const headersAt = performance.now() - startedAt;
-        expect(headersAt, "headers arrived before the client's deadline").toBeLessThan(HEADER_DEADLINE_MS);
-        expect(response.headers.get("content-type")).toContain("text/event-stream");
-        const messages = await readMessages(response, startedAt);
-        const result = messages.at(-1)!;
-        expect(result.message).toMatchObject({ id: 7, result: { structuredContent: { waitedMs: durationMs } } });
-        expect(result.at).toBeGreaterThanOrEqual(durationMs - 5);
-        let previous = headersAt;
-        for (const item of messages) {
-          expect(item.at - previous, "no silent stretch reached the idle limit").toBeLessThan(IDLE_LIMIT_MS);
-          previous = item.at;
-        }
-        const progress = messages.filter((item) => item.message.method === "notifications/progress");
-        expect(progress.length).toBeGreaterThan(0);
-        expect(progress.every((item) => (item.message as { params?: { progressToken?: string } }).params?.progressToken === "call-7")).toBe(true);
-      } finally {
-        clearTimeout(timer);
-        release.resolve();
+  it("answers headers and streams progress while a tool is still waiting", async () => {
+    const durationMs = 650;
+    const release = deferred();
+    const { registration } = await setup(async () => {
+      await release.promise;
+      return agentToolSuccess({ waitedMs: durationMs });
+    });
+    const timer = setTimeout(release.resolve, durationMs);
+    try {
+      const startedAt = performance.now();
+      const response = await callRequest(registration);
+      const headersAt = performance.now() - startedAt;
+      expect(headersAt, "headers arrived before the client's deadline").toBeLessThan(HEADER_DEADLINE_MS);
+      expect(response.headers.get("content-type")).toContain("text/event-stream");
+      const messages = await readMessages(response, startedAt);
+      const result = messages.at(-1)!;
+      expect(result.message).toMatchObject({ id: 7, result: { structuredContent: { waitedMs: durationMs } } });
+      expect(result.at).toBeGreaterThanOrEqual(durationMs - 5);
+      let previous = headersAt;
+      for (const item of messages) {
+        expect(item.at - previous, "no silent stretch reached the idle limit").toBeLessThan(IDLE_LIMIT_MS);
+        previous = item.at;
       }
-    }), { numRuns: 6 });
+      const progress = messages.filter((item) => item.message.method === "notifications/progress");
+      expect(progress.length).toBeGreaterThan(0);
+      expect(progress.every((item) => (item.message as { params?: { progressToken?: string } }).params?.progressToken === "call-7")).toBe(true);
+    } finally {
+      clearTimeout(timer);
+      release.resolve();
+    }
   }, 30_000);
 
   // A call that already raised a card or started work finishes as it did

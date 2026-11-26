@@ -10,10 +10,12 @@ import type { ProjectForgeAutomation } from "@pwragent/shared/project-forge-auto
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import { classifyDirectory, orderByHomePreference } from "@pwragent/shared/directory-navigation";
 import {
+  handsOffLabelRepositories,
   isDefaultProjectForgeAutomation,
   resolveProjectForgeAutomation,
 } from "@pwragent/shared/project-forge-automation";
 import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
+import { setHandsOffLabelRepositories } from "../pr-status/hands-off-label-repositories";
 
 /** A thread's Directories project and that project's Forge Automation. */
 export type ProjectForgeAutomationResolution = {
@@ -61,6 +63,13 @@ export class ProjectForgeAutomationIndex {
   private readonly directoryKeyByLabel = new Map<string, string | null>();
   private hydrated = false;
 
+  constructor(
+    private readonly options: {
+      /** Called after the stored settings change, with the index. */
+      onAutomationsChanged?: (index: ProjectForgeAutomationIndex) => void;
+    } = {},
+  ) {}
+
   /** Load every stored setting. Replaces what the index held. */
   hydrate(overlays: Record<string, DirectoryOverlayState | undefined>): void {
     this.automations.clear();
@@ -69,6 +78,7 @@ export class ProjectForgeAutomationIndex {
       this.setStored(directoryKey, resolveProjectForgeAutomation(overlay.forgeAutomation));
     }
     this.hydrated = true;
+    this.changed();
   }
 
   isHydrated(): boolean {
@@ -79,9 +89,10 @@ export class ProjectForgeAutomationIndex {
   set(directoryKey: string, automation: ProjectForgeAutomation | null): void {
     if (!automation) {
       this.automations.delete(directoryKey);
-      return;
+    } else {
+      this.setStored(directoryKey, automation);
     }
-    this.setStored(directoryKey, automation);
+    this.changed();
   }
 
   /** The stored setting, or undefined when the project uses the defaults. */
@@ -91,6 +102,14 @@ export class ProjectForgeAutomationIndex {
 
   hasAny(): boolean {
     return this.automations.size > 0;
+  }
+
+  /**
+   * The repositories whose PR labels a hands-off rule reads, lowercased
+   * `owner/name`. Paused projects count: a resumed project needs them.
+   */
+  handsOffLabelRepositories(): Set<string> {
+    return handsOffLabelRepositories(this.automations.values());
   }
 
   /** Every project with a stored setting. */
@@ -128,6 +147,7 @@ export class ProjectForgeAutomationIndex {
       // best source there is. A hydrate or Save after this replaces it.
       if (!this.hydrated && directory.forgeAutomation) {
         this.setStored(directory.key, directory.forgeAutomation);
+        this.changed();
       }
     }
     for (const [label, keys] of labelPaths) {
@@ -268,6 +288,10 @@ export class ProjectForgeAutomationIndex {
     return match;
   }
 
+  private changed(): void {
+    this.options.onAutomationsChanged?.(this);
+  }
+
   private setStored(directoryKey: string, automation: ProjectForgeAutomation): void {
     if (!directoryKey.startsWith(DIRECTORY_KEY_PREFIX) || isDefaultProjectForgeAutomation(automation)) {
       this.automations.delete(directoryKey);
@@ -300,11 +324,15 @@ let sharedIndex: ProjectForgeAutomationIndex | undefined;
 
 /** The owner's one index, shared by the PR coordinators and the registry. */
 export function getProjectForgeAutomationIndex(): ProjectForgeAutomationIndex {
-  sharedIndex ??= new ProjectForgeAutomationIndex();
+  sharedIndex ??= new ProjectForgeAutomationIndex({
+    // The status poll reads labels only for the repositories a rule names.
+    onAutomationsChanged: (index) => setHandsOffLabelRepositories(index.handsOffLabelRepositories()),
+  });
   return sharedIndex;
 }
 
 /** Tests replace the shared index so settings never leak between cases. */
 export function resetProjectForgeAutomationIndexForTests(): void {
   sharedIndex = undefined;
+  setHandsOffLabelRepositories([]);
 }

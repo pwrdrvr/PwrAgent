@@ -55,8 +55,17 @@ import {
   reviewWorkspacePullRequests,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import { resolveComposerThreadDestinations } from "./composer-thread-references";
 import { contextWindowMoonFace } from "./context-window-moon";
-import { useContextMoonStyle } from "../../lib/context-moon-preferences";
+import {
+  applyContextWindowBudget,
+  autoCompactionStatusLine,
+  isAutoCompactionActive,
+  type ContextWindowBudget,
+  type ThreadAutoCompactionStatus,
+} from "./context-window-budget";
+import { useAutoCompactionRules, useContextMoonStyle } from "../../lib/context-moon-preferences";
+import { useThreadAutoCompaction } from "../../lib/useThreadAutoCompaction";
 import {
   getShortTermRateLimitResetAt,
   getRateLimitResetSendAt,
@@ -85,6 +94,7 @@ import {
 } from "./launchpad-composer-scope";
 import {
   QueuedMessageInspector,
+  QueuedThreadReferencePreview,
   QueuedRowGrip,
   QueuedRowIconButton,
   QueuedRowPausedLabel,
@@ -170,6 +180,7 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { DEFAULT_WATCH_MERGE_BUILDS } from "@pwragent/shared/contracts/settings";
 import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automation";
+import { describeAutoFixCoverage } from "./auto-fix-coverage";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
 import { mergeBuildPullRequestUrl } from "../pr-watches/merge-build-watches";
@@ -292,10 +303,7 @@ import {
   usePullRequestLinks,
 } from "../../lib/pull-request-links";
 import {
-  resolveThreadHref,
-  resolveThreadIdText,
   useThreadLinks,
-  type ResolvedThreadLink,
 } from "../../lib/thread-links";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -366,7 +374,12 @@ import {
 import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./EnvironmentSetupRow";
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
-import { findSlashCommandTrigger } from "./composer-slash-commands";
+import {
+  findComposerCompactCommand,
+  findSlashCommandTrigger,
+  isComposerCompactDraft,
+  isComposerCompactSuggestion,
+} from "./composer-slash-commands";
 import {
   forkCommandCompletion,
   forkCommandHint,
@@ -452,6 +465,7 @@ export type ComposerProps = {
   onOpenCodexSkillProfiles?: () => void;
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage?: (
     text: string,
     imageParts?: AppServerThreadImagePart[],
@@ -797,7 +811,8 @@ export type ComposerProps = {
       >
     >
   ) => Promise<void>;
-  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean, prKey?: string) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
   onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   threadModelSettingsError?: string;
@@ -959,6 +974,8 @@ type QueuedTurnDraft = {
   /** See `ComposerQueuedTurnSnapshot.pendingMove`. */
   pendingMove?: { beforeQueueEntryId?: string; requestId?: number };
   scheduledActionId?: string;
+  /** See `ComposerQueuedTurnSnapshot.reviewTodoId`. */
+  reviewTodoId?: string;
   failedScheduledActionId?: string;
   errorMessage?: string;
   manualReleaseRequired?: boolean;
@@ -3459,7 +3476,7 @@ function useComposerController(props: ComposerProps) {
     terminalTurnKeysRef,
     queuedRowActionIdsRef,
     activeReviewTurnIdRef,
-    inFlightReviewSubmissionKeyRef,
+    inFlightReviewSubmissionRef,
     autocompleteOptionRefs,
     reviewOptionRefs,
     reviewCommitInputRef,
@@ -3696,7 +3713,7 @@ function useComposerController(props: ComposerProps) {
     // waiting.
     const queuedRowActionIdsRef = useRef(new Set<string>());
     const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
-    const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
+    const inFlightReviewSubmissionRef = useRef<{ key: string; scopeKey: string } | undefined>(undefined);
     const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
     const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
     const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
@@ -4192,7 +4209,7 @@ function useComposerController(props: ComposerProps) {
       terminalTurnKeysRef,
       queuedRowActionIdsRef,
       activeReviewTurnIdRef,
-      inFlightReviewSubmissionKeyRef,
+      inFlightReviewSubmissionRef,
       autocompleteOptionRefs,
       reviewOptionRefs,
       reviewCommitInputRef,
@@ -4390,20 +4407,11 @@ function useComposerController(props: ComposerProps) {
     backend?.kind.startsWith("acp:") === true
       ? backend.capabilities.startReview !== false
       : true;
-  const supportsCompactCommand = Boolean(
-    props.providerCommands?.some((command) => {
-      const commandName = command.name.startsWith("/")
-        ? command.name.slice(1)
-        : command.name;
-      // Claude runs `/compact` itself when it arrives as a prompt; the
-      // compaction API below is Codex's.
-      return (
-        commandName === "compact" &&
-        command.backend !== "claude" &&
-        (!props.thread || !command.backend || command.backend === props.thread.source)
-      );
-    })
+  const compactCommand = findComposerCompactCommand(
+    props.providerCommands,
+    props.thread?.source,
   );
+  const supportsCompactCommand = Boolean(compactCommand);
   const supportsForkCommand = Boolean(
     !isLaunchpad
     && props.thread
@@ -6161,7 +6169,11 @@ function useComposerController(props: ComposerProps) {
   };
   const trigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
-  const directoryRefTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
+  const [, setReferenceSelectionRevision] = useState(0);
+  const referenceTriggers = inputRef.current?.getReferenceTriggers();
+  const directoryRefTrigger = referenceTriggers
+    ? referenceTriggers["@"]
+    : findDirectoryReferenceTrigger(draft, selectionStart);
   // `#` is the one trigger whose query spans spaces — thread titles have
   // spaces in them — so unlike `@` and `$` nothing retires it. Left alone,
   // a `#` anywhere in a sentence keeps the picker armed and the federated
@@ -6170,7 +6182,9 @@ function useComposerController(props: ComposerProps) {
   const [coldHashAnchors, setColdHashAnchors] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const rawHashReferenceTrigger = findHashReferenceTrigger(draft, selectionStart);
+  const rawHashReferenceTrigger = referenceTriggers
+    ? referenceTriggers["#"]
+    : findHashReferenceTrigger(draft, selectionStart);
   const rawHashReferenceQuery = rawHashReferenceTrigger?.query;
   const hashReferenceTrigger =
     rawHashReferenceTrigger
@@ -6729,7 +6743,7 @@ function useComposerController(props: ComposerProps) {
   const forkCommand = supportsForkCommand || supportsSubthreadCommand
     ? parseForkCommand(draft)
     : undefined;
-  const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
+  const isCompactCommand = isComposerCompactDraft(draft, compactCommand);
   const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
     supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"
       ? "toolsAndAuthOnly"
@@ -7672,8 +7686,9 @@ function useComposerController(props: ComposerProps) {
         statusRecord?.type === "idle"
       ) {
         if (
-          activeReviewTurnIdRef.current &&
-          activeTurnIdRef.current === activeReviewTurnIdRef.current
+          inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey ||
+          (activeReviewTurnIdRef.current &&
+            activeTurnIdRef.current === activeReviewTurnIdRef.current)
         ) {
           return;
         }
@@ -7767,7 +7782,8 @@ function useComposerController(props: ComposerProps) {
     const submissionKey = reviewSubmissionKey(reviewCommand);
     if (
       sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === submissionKey
+      inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey &&
+      inFlightReviewSubmissionRef.current.key === submissionKey
     ) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -7812,7 +7828,13 @@ function useComposerController(props: ComposerProps) {
     }
 
     setSendError(undefined);
-    inFlightReviewSubmissionKeyRef.current = submissionKey;
+    const submission = { key: submissionKey, scopeKey: composerScopeKey };
+    inFlightReviewSubmissionRef.current = submission;
+    const clearReviewSubmission = () => {
+      if (inFlightReviewSubmissionRef.current === submission) {
+        inFlightReviewSubmissionRef.current = undefined;
+      }
+    };
     updateSending(true);
     props.onPendingStatusChange?.("Reviewing");
 
@@ -7848,7 +7870,6 @@ function useComposerController(props: ComposerProps) {
         } else {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
         }
-        inFlightReviewSubmissionKeyRef.current = undefined;
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
         releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -7856,12 +7877,14 @@ function useComposerController(props: ComposerProps) {
           setSendError(error instanceof Error ? error.message : String(error));
         }
       } finally {
+        clearReviewSubmission();
         updateSending(false);
       }
       return;
     }
 
     if (!props.thread || !props.desktopApi?.startReview) {
+      clearReviewSubmission();
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
@@ -7905,6 +7928,7 @@ function useComposerController(props: ComposerProps) {
       resetComposerDraftAndState(submittedScopeKey);
       setReviewConfig(undefined);
     }
+    const releaseReviewReservation = props.beginReviewSubmission?.();
     try {
       const response = await props.desktopApi.startReview({
         backend: props.thread.source,
@@ -7966,7 +7990,6 @@ function useComposerController(props: ComposerProps) {
           },
         })?.catch(() => undefined);
       }
-      inFlightReviewSubmissionKeyRef.current = undefined;
       props.onReviewStarted?.(threadSummaryIdentityKey(props.thread), submittedReviewRequestId);
       if (updateActiveTurnId(response.turnId, { review: true })) {
         props.onActiveTurnIdChange?.(response.turnId);
@@ -7986,7 +8009,6 @@ function useComposerController(props: ComposerProps) {
       if (optimisticReviewId) {
         props.removeOptimisticMessage?.(optimisticReviewId);
       }
-      inFlightReviewSubmissionKeyRef.current = undefined;
       if (!options?.queued) {
         if (restoreRejectedReviewDraft(submittedScopeKey, submittedSnapshot)) {
           setReviewConfig(submittedReviewConfig ?? createReviewConfig({
@@ -8010,6 +8032,9 @@ function useComposerController(props: ComposerProps) {
         message,
         tone: "error",
       });
+    } finally {
+      clearReviewSubmission();
+      releaseReviewReservation?.();
     }
   };
 
@@ -8643,14 +8668,15 @@ function useComposerController(props: ComposerProps) {
     );
     const build = (
       resolvedInspection: ComposerReferenceInspection,
+      resolvedText: string,
     ): ComposerTurnPayload => {
-      const turnSkills = listMentionedSkills(textDraft, props.skills).filter(({ name }) => !hiddenSkills.has(name));
+      const turnSkills = listMentionedSkills(resolvedText, props.skills).filter(({ name }) => !hiddenSkills.has(name));
       // File-reference pills ride the outgoing text as `[@label](~/path)`
       // markdown appended after the typed draft — part of BOTH the display
       // text and the text input item, so the agent and the transcript see
       // the same message.
       const displayText = appendFileReferenceMarkdown(
-        hydrateSkillLabelsWithMarkdown(textDraft.trim(), turnSkills),
+        hydrateSkillLabelsWithMarkdown(resolvedText.trim(), turnSkills),
         fileRefs,
       );
       const imageParts = attachments.map((attachment, index) => ({
@@ -8674,7 +8700,11 @@ function useComposerController(props: ComposerProps) {
 
       return { displayText, imageParts, input };
     };
-    return isPromiseLike(inspection) ? inspection.then(build) : build(inspection);
+    const resolvedText = resolveComposerThreadDestinations(textDraft, threadLinks);
+    if (isPromiseLike(inspection) || isPromiseLike(resolvedText)) {
+      return Promise.all([inspection, resolvedText]).then(([files, text]) => build(files, text));
+    }
+    return build(inspection, resolvedText);
   };
 
   const buildQueuedTurnPayload = (
@@ -9447,6 +9477,9 @@ function useComposerController(props: ComposerProps) {
         upsertScheduledProjectionInScope(submittedScopeKey, {
           id: `scheduled-projection:${response.action.id}`,
           scheduledActionId: response.action.id,
+          ...(submittedReviewConfig?.reviewTodo
+            ? { reviewTodoId: submittedReviewConfig.reviewTodo.id }
+            : {}),
           text,
           imageAttachments: [],
           fileAttachments: [],
@@ -10327,7 +10360,8 @@ function useComposerController(props: ComposerProps) {
     if (
       reviewCommand &&
       sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === reviewSubmissionKey(reviewCommand)
+      inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey &&
+      inFlightReviewSubmissionRef.current.key === reviewSubmissionKey(reviewCommand)
     ) {
       return;
     }
@@ -10864,137 +10898,16 @@ function useComposerController(props: ComposerProps) {
       shortLabel?: string;
     },
   ): void => {
-    if (!inputRef.current) {
-      return;
-    }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    // Prefer replacing the `@` trigger the popover opened from; when the
-    // reference arrives without one (the "+"-menu picker, or the trigger
-    // vanished while an OS dialog was open) fall back to a zero-width
-    // "trigger" at the current caret so the chip still lands in place.
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-    if (!directory.path) {
-      return;
-    }
-
-    // Mint a durable mention token (the `@label` chip) instead of
-    // splicing path text — mirrors applySkill. The chip is zero-width in
-    // the plain draft; serializeDraftWithSkillTokens splices the markdown
-    // link back in for the outgoing text and launchpad prompt. Like
-    // applySkill, always leave one space after the chip and park the
-    // caret after it.
-    const before = draft.slice(0, refTrigger.start);
-    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${nextAfter}`;
-    const tokenIndex = before.length;
-    const nextSelection = tokenIndex + 1;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      createComposerAtReferenceToken(directory, tokenIndex),
-    ];
-
-    // Same protected-update dance as applySkill: the editability sync in
-    // ComposerTiptapInput re-emits the editor's (still pre-insert) content
-    // through onChange before the external-value sync applies the new
-    // draft. The pending-programmatic guard in handleComposerChange
-    // swallows that stale replay so the two sides can't ping-pong.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
-  };
-
-  const applyThreadReference = (thread: ResolvedThreadLink): void => {
-    if (!inputRef.current) {
-      return;
-    }
-    inputRef.current.insertMentionToken(createComposerThreadToken(thread, 0));
+    if (!directory.path) return;
+    inputRef.current?.replaceReference("@", [createComposerAtReferenceToken(directory, 0)]);
+    setActiveDirectoryRefIndex(0);
   };
 
   const applyHashReference = (
     createToken: (index: number) => ComposerSkillToken,
   ): void => {
-    if (!inputRef.current) {
-      return;
-    }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const referenceTrigger =
-      findHashReferenceTrigger(draft, selectionStart)
-      ?? findHashReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-    const before = draft.slice(0, referenceTrigger.start);
-    const after = draft.slice(Math.max(referenceTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${nextAfter}`;
-    const tokenIndex = before.length;
-    const nextSelection = tokenIndex + 1;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      createToken(tokenIndex),
-    ];
-
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveHashReferenceIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    inputRef.current?.replaceReference("#", [createToken(0)]);
+    setActiveHashReferenceIndex(0);
   };
 
   /**
@@ -11012,118 +10925,19 @@ function useComposerController(props: ComposerProps) {
     applyDirectoryReference(picked);
   };
 
-  /**
-   * Mint file-reference chips at the `@` trigger (or the caret when no
-   * trigger survives) — the multi-token sibling of
-   * `applyDirectoryReference`. The plain draft gets n-1 separator spaces
-   * plus the guaranteed post-chip space, placing the n zero-width tokens
-   * at consecutive indexes so the serialized draft reads
-   * `chip␠chip␠…chip␠after` with exactly one space after every chip.
-   */
   /** Drop the `@query` an autocomplete pick would have replaced. */
   const removeReferenceTrigger = (): void => {
-    if (!inputRef.current) {
-      return;
-    }
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length);
-    if (!refTrigger) {
-      return;
-    }
-    const before = draft.slice(0, refTrigger.start);
-    const nextDraft = `${before}${draft.slice(refTrigger.end)}`;
-    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
-      currentDraft: draft,
-      nextDraft,
-      skillTokens,
-    });
-    // The same protected update as applyFileReferences below.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(before.length, before.length);
-    });
+    inputRef.current?.replaceReference("@", []);
+    setActiveDirectoryRefIndex(0);
   };
 
   const applyFileReferences = (paths: string[]): void => {
-    if (!inputRef.current || paths.length === 0) {
-      return;
-    }
+    if (!inputRef.current || paths.length === 0) return;
 
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-
-    const before = draft.slice(0, refTrigger.start);
-    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${" ".repeat(paths.length - 1)}${nextAfter}`;
-    const nextSelection = before.length + paths.length;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      ...paths.map((path, index) =>
-        createComposerFileToken(
-          { label: fileLabelFromPath(path), path },
-          before.length + index,
-        ),
-      ),
-    ];
-
-    // Same protected-update dance as applySkill / applyDirectoryReference:
-    // the editability sync in ComposerTiptapInput re-emits the editor's
-    // (still pre-insert) content through onChange before the
-    // external-value sync applies the new draft. The pending-programmatic
-    // guard in handleComposerChange swallows that stale replay so the two
-    // sides can't ping-pong.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    inputRef.current.replaceReference("@", paths.map((path) =>
+      createComposerFileToken({ label: fileLabelFromPath(path), path }, 0),
+    ));
+    setActiveDirectoryRefIndex(0);
 
     // Feed the reference picker's Files tab — fire-and-forget.
     void props.desktopApi
@@ -11154,75 +10968,14 @@ function useComposerController(props: ComposerProps) {
     applyFileReferences(result.paths);
   };
 
-  /**
-   * Mint directory-reference chips for a batch of picked directories —
-   * the multi-token sibling of `applyDirectoryReference`, sharing
-   * `applyFileReferences`' token layout (n-1 separator spaces plus the
-   * guaranteed post-chip space). Needed because the single-directory
-   * helper can't be called twice in one tick: each call captures the
-   * pre-insert draft, so the second insert would clobber the first.
-   */
   const applyDirectoryReferenceChips = (
     directories: { label: string; path: string }[],
   ): void => {
-    if (!inputRef.current || directories.length === 0) {
-      return;
-    }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-
-    const before = draft.slice(0, refTrigger.start);
-    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${" ".repeat(directories.length - 1)}${nextAfter}`;
-    const nextSelection = before.length + directories.length;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      ...directories.map((directory, index) =>
-        createComposerDirectoryToken(directory, before.length + index),
-      ),
-    ];
-
-    // Same protected-update dance as applySkill / applyDirectoryReference:
-    // the editability sync in ComposerTiptapInput re-emits the editor's
-    // (still pre-insert) content through onChange before the
-    // external-value sync applies the new draft. The pending-programmatic
-    // guard in handleComposerChange swallows that stale replay so the two
-    // sides can't ping-pong.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    if (directories.length === 0) return;
+    inputRef.current?.replaceReference("@", directories.map((directory) =>
+      createComposerDirectoryToken(directory, 0),
+    ));
+    setActiveDirectoryRefIndex(0);
   };
 
   /**
@@ -11555,15 +11308,6 @@ function useComposerController(props: ComposerProps) {
     const pastedText = typeof event.clipboardData.getData === "function"
       ? event.clipboardData.getData("text/plain").trim()
       : "";
-    const pastedThread =
-      resolveThreadHref(pastedText, threadLinks)
-      ?? resolveThreadIdText(pastedText, threadLinks);
-    if (pastedThread) {
-      event.preventDefault();
-      setSendError(undefined);
-      applyThreadReference(pastedThread);
-      return;
-    }
     if (mayContainLinearPastedImages(pastedText)) {
       // The text pastes as usual; its images follow once they download.
       void attachLinearPastedImages(pastedText);
@@ -12323,6 +12067,7 @@ function useComposerController(props: ComposerProps) {
     turnSendActionsVisible,
     turnBackendLabel,
     steerUnavailableReason,
+    interruptOffered,
     interruptUnavailableReason,
     pendingSteerReason,
     launchpadWorkspaceOptions,
@@ -12344,6 +12089,7 @@ function useComposerController(props: ComposerProps) {
     prAutoDispatchIdleTooltip,
     prAutoDispatchTooltip,
     prAutoDispatchProjectMuted,
+    prAutoDispatchProjectAutomation,
     prMergeBuildWatchDefault,
     prAutoDispatchIdle,
     environmentMenuAction,
@@ -12852,8 +12598,12 @@ function useComposerController(props: ComposerProps) {
       submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
     const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
     // Mid-turn the send menu also names how this message can meet the running
-    // turn. Steer and Interrupt stay listed where the provider or model cannot
-    // do them, dimmed with the reason, so the menu explains the gap.
+    // turn. Steer stays listed where the provider or model cannot do it,
+    // dimmed with the reason, so the menu explains the gap. Interrupt is
+    // listed only for a provider that can cut in at all; where it can but
+    // not right now, it is dimmed with the reason instead. A peer's thread
+    // keeps it: this window cannot see that owner's capabilities, so it
+    // points to the owner's window rather than ruling Interrupt out.
     const turnSendActionsVisible =
       submitButtonLabel === "Queue"
       && Boolean(activeTurnId)
@@ -12868,11 +12618,13 @@ function useComposerController(props: ComposerProps) {
       : backend?.capabilities.steerTurn
         ? `${selectedModelOption?.label ?? selectedModelOption?.id ?? "This model"} can't take messages mid-turn`
         : `${turnBackendLabel} can't take messages mid-turn`;
-    const interruptUnavailableReason = supportsInterruptSteer
-      ? undefined
-      : !backendsDescribeThreadOwner && supportsSteering
-        ? "Open this instance's window to interrupt"
-        : `${turnBackendLabel} can't cut in mid-response`;
+    const interruptOffered = !backendsDescribeThreadOwner
+      || backend?.capabilities.interruptSteerTurn === true;
+    // Interrupt rides the steer path, so whatever blocks Steer blocks it too.
+    const interruptUnavailableReason = steerUnavailableReason
+      ?? (backendsDescribeThreadOwner
+        ? undefined
+        : "Open this instance's window to interrupt");
     // One steer at a time: a second would be dropped while the first waits.
     const pendingSteerReason = pendingSteer
       ? "Another message is already steering in"
@@ -13377,7 +13129,7 @@ function useComposerController(props: ComposerProps) {
         return true;
       }
 
-      if (command.label.toLowerCase() === "/compact") {
+      if (isComposerCompactSuggestion(command, compactCommand)) {
         void submitCompactThread();
         return true;
       }
@@ -13925,6 +13677,7 @@ function useComposerController(props: ComposerProps) {
       turnSendActionsVisible,
       turnBackendLabel,
       steerUnavailableReason,
+      interruptOffered,
       interruptUnavailableReason,
       pendingSteerReason,
       launchpadWorkspaceOptions,
@@ -13946,6 +13699,7 @@ function useComposerController(props: ComposerProps) {
       prAutoDispatchIdleTooltip,
       prAutoDispatchTooltip,
       prAutoDispatchProjectMuted,
+      prAutoDispatchProjectAutomation: prAutoDispatchProject?.forgeAutomation,
       prMergeBuildWatchDefault,
       prAutoDispatchIdle,
       environmentMenuAction,
@@ -14090,7 +13844,7 @@ function useComposerController(props: ComposerProps) {
                     : "Pending steer"}
             </span>
             <span className="composer__queued-text">
-              {formatDraftPreview(pendingSteer)}
+              <QueuedThreadReferencePreview text={formatDraftPreview(pendingSteer)} />
             </span>
           </div>
           <QueuedImageAttachments
@@ -14538,7 +14292,7 @@ function useComposerController(props: ComposerProps) {
                   queued.title ? "" : "composer__queued-text--raw",
                 ].filter(Boolean).join(" ")}
               >
-                {queuedTitle}
+                {queued.title ?? <QueuedThreadReferencePreview text={queuedTitle} />}
               </span>
             </QueuedMessageInspector>
           </div>
@@ -16483,6 +16237,13 @@ function useComposerController(props: ComposerProps) {
                 available: prAutoDispatchAvailable,
                 unavailableDetail: !backgroundPrPollingEnabled ? "PR polling is off" : "Not allowed in Git settings",
                 onToggle: (enabled) => { void props.onSetThreadPrAutoDispatch?.(enabled); },
+                coverage: describeAutoFixCoverage(props.thread, prAutoDispatchProjectAutomation),
+                // A peer that predates one PR's switch would toggle the thread.
+                onTogglePr: props.onSetThreadPrAutoDispatch
+                  && (!props.thread.federation
+                    || props.thread.federation.capabilities?.includes("thread_pull_request_auto_fix_v1") === true)
+                  ? (prKey, enabled) => { void props.onSetThreadPrAutoDispatch?.(enabled, prKey); }
+                  : undefined,
               }}
             />
           ) : null}
@@ -16863,6 +16624,9 @@ function useComposerController(props: ComposerProps) {
           ) : null}
           <ContextWindowMoon
             contextWindow={props.contextWindow}
+            desktopApi={props.desktopApi}
+            model={selectedModelOption?.id ?? currentSettings?.model}
+            thread={props.thread}
             onOpenUsage={props.desktopApi?.openUsageActivity
               ? () => void props.desktopApi?.openUsageActivity?.({
                 provider: usageLimitProviderForBackend(props.thread?.source),
@@ -17055,19 +16819,21 @@ function useComposerController(props: ComposerProps) {
                         void submitTurn("steer", { restoreComposerFocus: true });
                       }}
                     />
-                    <ComposerSendMenuItem
-                      description={
-                        interruptUnavailableReason
-                        ?? pendingSteerReason
-                        ?? "Cut off the current response and send now"
-                      }
-                      disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
-                      label="Interrupt"
-                      onSelect={() => {
-                        setScheduleMenuOpen(false);
-                        void submitTurn("interrupt", { restoreComposerFocus: true });
-                      }}
-                    />
+                    {interruptOffered ? (
+                      <ComposerSendMenuItem
+                        description={
+                          interruptUnavailableReason
+                          ?? pendingSteerReason
+                          ?? "Cut off the current response and send now"
+                        }
+                        disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
+                        label="Interrupt"
+                        onSelect={() => {
+                          setScheduleMenuOpen(false);
+                          void submitTurn("interrupt", { restoreComposerFocus: true });
+                        }}
+                      />
+                    ) : null}
                     <div
                       className="composer__schedule-menu-separator"
                       role="separator"
@@ -17662,6 +17428,7 @@ function useComposerController(props: ComposerProps) {
               value={draft}
               onChange={handleComposerChange}
               onPaste={handlePaste}
+              onReferenceSelectionChange={() => setReferenceSelectionRevision((revision) => revision + 1)}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
               onClick={handleComposerClick}
@@ -18013,10 +17780,17 @@ function AttachmentTooltip({
 }
 
 function ContextWindowMoon({
-  contextWindow,
+  contextWindow: reportedContextWindow,
+  desktopApi,
+  model,
+  thread,
   onOpenUsage,
 }: {
   contextWindow?: ThreadContextWindowState;
+  desktopApi?: DesktopApi;
+  /** The thread's model, matched against auto-compaction rules. */
+  model?: string;
+  thread?: NavigationThreadSummary;
   /** Opens Usage Activity; the moon is a button only when this is given. */
   onOpenUsage?: () => void;
 }) {
@@ -18026,6 +17800,19 @@ function ContextWindowMoon({
   // The card's copy depends on availability, not the callback identity.
   const opensUsage = Boolean(onOpenUsage);
   const moonStyle = useContextMoonStyle();
+  const savedRules = useAutoCompactionRules();
+  const autoCompaction = useThreadAutoCompaction(desktopApi, thread);
+  const backend = thread?.source;
+  const ownedElsewhere = Boolean(thread?.federation?.ref);
+  // A rule's budget, when one matches, is the window the moon measures.
+  const measured = useMemo(
+    () => reportedContextWindow
+      ? applyContextWindowBudget({ contextWindow: reportedContextWindow, savedRules, backend, model, ownedElsewhere })
+      : undefined,
+    [backend, model, ownedElsewhere, reportedContextWindow, savedRules],
+  );
+  const contextWindow = measured?.contextWindow;
+  const budget = measured?.budget;
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
@@ -18044,13 +17831,15 @@ function ContextWindowMoon({
     recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
     update(
       <ContextWindowUsageCard
+        autoCompaction={autoCompaction}
+        budget={budget}
         contextWindow={contextWindow}
         critical={moonFace.critical}
         opensUsage={opensUsage}
         phaseLabel={moonFace.phaseLabel}
       />,
     );
-  }, [contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
+  }, [autoCompaction, budget, contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
 
   if (!contextWindow) {
     return null;
@@ -18062,9 +17851,15 @@ function ContextWindowMoon({
   const tokenLabel = `${formatCompactNumber(
     contextWindow.totalTokens
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
-  const label = `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const compacting = isAutoCompactionActive(autoCompaction);
+  const label = budget
+    ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : phaseLabel}`
+    : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const moonClassName = compacting ? " context-window-moon--compacting" : "";
   const card = (
     <ContextWindowUsageCard
+      autoCompaction={autoCompaction}
+      budget={budget}
       contextWindow={contextWindow}
       critical={moonFace.critical}
       opensUsage={opensUsage}
@@ -18098,7 +17893,7 @@ function ContextWindowMoon({
   return onOpenUsage ? (
     <button
       aria-label={label}
-      className="context-window-moon context-window-moon--button"
+      className={`context-window-moon context-window-moon--button${moonClassName}`}
       type="button"
       onBlur={hide}
       onClick={() => {
@@ -18114,7 +17909,7 @@ function ContextWindowMoon({
   ) : (
     <div
       aria-label={label}
-      className="context-window-moon"
+      className={`context-window-moon${moonClassName}`}
       role="img"
       tabIndex={0}
       onBlur={hide}
@@ -18128,16 +17923,21 @@ function ContextWindowMoon({
 }
 
 function ContextWindowUsageCard({
+  autoCompaction,
+  budget,
   contextWindow,
   critical,
   opensUsage,
   phaseLabel,
 }: {
+  autoCompaction?: ThreadAutoCompactionStatus;
+  budget?: ContextWindowBudget;
   contextWindow: ThreadContextWindowState;
   critical: boolean;
   opensUsage?: boolean;
   phaseLabel: string;
 }) {
+  const statusLine = budget ? autoCompactionStatusLine(autoCompaction, formatCompactNumber) : undefined;
   const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
   const hasBreakdown =
     typeof contextWindow.inputTokens === "number"
@@ -18148,14 +17948,20 @@ function ContextWindowUsageCard({
   return (
     <>
       <div className="context-usage-card__header">
-        <span className="context-usage-card__eyebrow">Context window</span>
+        <span className="context-usage-card__eyebrow">{budget ? "Context budget" : "Context window"}</span>
         <span className="context-usage-card__phase">{phaseLabel}</span>
       </div>
       <div className="context-usage-card__headline">
         <span className="context-usage-card__percent">
           {Math.round(usedPercent)}% full
         </span>
-        {typeof contextWindow.remainingTokens === "number" ? (
+        {budget ? (
+          <span className="context-usage-card__remaining">
+            {budget.tokensToTrigger > 0
+              ? `${formatCompactNumber(budget.tokensToTrigger)} to compaction`
+              : `past ${budget.compactAtPercent}%`}
+          </span>
+        ) : typeof contextWindow.remainingTokens === "number" ? (
           <span className="context-usage-card__remaining">
             {formatCompactNumber(contextWindow.remainingTokens)} left
           </span>
@@ -18170,12 +17976,35 @@ function ContextWindowUsageCard({
           }
           style={{ width: `${usedPercent}%` }}
         />
+        {budget ? (
+          <span
+            className="context-usage-card__meter-mark"
+            style={{ left: `${budget.compactAtPercent}%` }}
+          />
+        ) : null}
       </div>
       <div className="context-usage-card__caption">
         {`${formatCompactNumber(contextWindow.totalTokens)} of ${formatCompactNumber(
           contextWindow.modelContextWindow
-        )} tokens`}
+        )} ${budget ? "budget" : "tokens"}`}
       </div>
+      {budget ? (
+        <div className="context-usage-card__budget">
+          <ContextUsageRow
+            label="Compacts at"
+            value={`${formatCompactNumber(budget.triggerTokens)} · ${budget.compactAtPercent}%`}
+          />
+          {budget.reportedContextWindow !== budget.effectiveContextWindow ? (
+            <ContextUsageRow
+              label="Model window"
+              value={formatCompactNumber(budget.reportedContextWindow)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {statusLine ? (
+        <div className="context-usage-card__status">{statusLine}</div>
+      ) : null}
       {hasBreakdown ? (
         <div className="context-usage-card__section">
           <span className="context-usage-card__section-title">Current request</span>

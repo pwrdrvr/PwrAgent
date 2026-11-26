@@ -1,5 +1,8 @@
-import { useMemo, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
+
+/** How long a successful start stays in the tray, while nothing pauses it. */
+export const THREAD_TODO_LAUNCH_DISMISS_MS = 6_000;
 
 /**
  * A start-thread card the operator started from the stack. The card leaves
@@ -76,13 +79,20 @@ export function followDeckSelection(
   return undefined;
 }
 
-// Module scope, like the stack's collapse memory: a start outlives the
-// stack that began it (thread switches, a search that unmounts the view),
-// and its row is there again when the operator comes back.
-type TrackedLaunch = { launch: ThreadTodoLaunch; returnedToDeck?: true };
+type DismissCountdown = {
+  remainingMs: number;
+  scheduled?: { timer: ReturnType<typeof setTimeout>; expiresAt: number };
+};
+type TrackedLaunch = {
+  launch: ThreadTodoLaunch;
+  returnedToDeck?: true;
+  countdown?: DismissCountdown;
+};
 
+// A start and its dismissal deadline outlive the stack that began it.
 let launches: readonly TrackedLaunch[] = [];
 const listeners = new Set<() => void>();
+const EMPTY_LAUNCH_VIEW = { launches: [], returnedIds: new Set<string>() };
 
 function publish(next: readonly TrackedLaunch[]): void {
   launches = next;
@@ -96,6 +106,48 @@ function subscribe(listener: () => void): () => void {
 
 function snapshot(): readonly TrackedLaunch[] {
   return launches;
+}
+
+function scheduleDismissal(entry: TrackedLaunch, countdown: DismissCountdown): void {
+  countdown.scheduled = {
+    timer: setTimeout(() => dismissThreadTodoLaunch(entry.launch.id), countdown.remainingMs),
+    expiresAt: Date.now() + countdown.remainingMs,
+  };
+}
+
+function remainingDismissMs(countdown: DismissCountdown, now: number): number {
+  return countdown.scheduled
+    ? Math.max(0, countdown.scheduled.expiresAt - now)
+    : countdown.remainingMs;
+}
+
+function stopDismissal(countdown: DismissCountdown | undefined, now = Date.now()): void {
+  if (!countdown?.scheduled) return;
+  clearTimeout(countdown.scheduled.timer);
+  countdown.remainingMs = remainingDismissMs(countdown, now);
+  countdown.scheduled = undefined;
+}
+
+/** Pauses a success while the tray has pointer or keyboard focus. */
+export function pauseThreadTodoLaunchDismissal(launch: ThreadTodoLaunch): (() => void) | undefined {
+  const entry = launches.find((entry) => entry.launch === launch);
+  const countdown = entry?.countdown;
+  if (!entry || !countdown?.scheduled) return undefined;
+  const now = Date.now();
+  if (remainingDismissMs(countdown, now) === 0) {
+    dismissThreadTodoLaunch(launch.id);
+    return undefined;
+  }
+  stopDismissal(countdown, now);
+  return () => {
+    if (launches.includes(entry)) scheduleDismissal(entry, countdown);
+  };
+}
+
+/** Time left when the visual countdown mounts or remounts. */
+export function threadTodoLaunchDismissRemainingMs(launch: ThreadTodoLaunch): number {
+  const countdown = launches.find((entry) => entry.launch === launch)?.countdown;
+  return countdown ? remainingDismissMs(countdown, Date.now()) : 0;
 }
 
 /**
@@ -120,7 +172,9 @@ export function launchThreadTodo(
       startedAt: Date.now(),
       todo: params.todo,
     };
-    publish([...launches.filter((entry) => entry.launch.id !== id), { launch: started }]);
+    const previous = launches.find((entry) => entry.launch.id === id);
+    stopDismissal(previous?.countdown);
+    publish([...launches.filter((entry) => entry !== previous), { launch: started }]);
   };
   const settle = (outcome: Parameters<typeof settleThreadTodoLaunch>[1]): void => {
     // A run that ended without reporting its start still reports how it ended.
@@ -129,9 +183,16 @@ export function launchThreadTodo(
     const current = launches.find((entry) => entry.launch === started);
     if (!current) return;
     const settled = settleThreadTodoLaunch(current.launch, outcome);
-    publish(settled
-      ? launches.map((entry) => (entry === current ? { launch: settled } : entry))
-      : launches.filter((entry) => entry !== current));
+    if (!settled) {
+      publish(launches.filter((entry) => entry !== current));
+      return;
+    }
+    const next: TrackedLaunch = { launch: settled };
+    if (settled.phase === "started") {
+      next.countdown = { remainingMs: THREAD_TODO_LAUNCH_DISMISS_MS };
+      scheduleDismissal(next, next.countdown);
+    }
+    publish(launches.map((entry) => (entry === current ? next : entry)));
   };
   let pending: Promise<ThreadTodo | undefined>;
   try {
@@ -155,8 +216,10 @@ export function showStartingThreadTodoCard(id: string): void {
 
 /** Removes a settled row; a failed card goes back to the deck. */
 export function dismissThreadTodoLaunch(id: string): void {
-  if (!launches.some(({ launch }) => launch.id === id && launch.phase !== "starting")) return;
-  publish(launches.filter(({ launch }) => launch.id !== id));
+  const entry = launches.find(({ launch }) => launch.id === id && launch.phase !== "starting");
+  if (!entry) return;
+  stopDismissal(entry.countdown);
+  publish(launches.filter((current) => current !== entry));
 }
 
 /** The tray rows (oldest first) and pending cards returned to the deck. */
@@ -165,19 +228,21 @@ export function useThreadTodoLaunches(threadKey: string): {
   returnedIds: ReadonlySet<string>;
 } {
   const all = useSyncExternalStore(subscribe, snapshot, snapshot);
-  return useMemo(() => {
-    const launches: ThreadTodoLaunch[] = [];
-    const returnedIds = new Set<string>();
-    for (const { launch, returnedToDeck } of all) {
-      if (launch.threadKey !== threadKey) continue;
-      if (returnedToDeck) returnedIds.add(launch.id);
-      else launches.push(launch);
-    }
-    return { launches, returnedIds };
-  }, [all, threadKey]);
+  if (all.length === 0) return EMPTY_LAUNCH_VIEW;
+  // A render can beat the dismissal callback after the deadline.
+  const now = Date.now();
+  const launches: ThreadTodoLaunch[] = [];
+  const returnedIds = new Set<string>();
+  for (const { launch, returnedToDeck, countdown } of all) {
+    if (launch.threadKey !== threadKey || (countdown && remainingDismissMs(countdown, now) === 0)) continue;
+    if (returnedToDeck) returnedIds.add(launch.id);
+    else launches.push(launch);
+  }
+  return { launches, returnedIds };
 }
 
 /** Test seam: forgets every start. */
 export function resetThreadTodoLaunchesForTests(): void {
+  for (const { countdown } of launches) stopDismissal(countdown);
   publish([]);
 }

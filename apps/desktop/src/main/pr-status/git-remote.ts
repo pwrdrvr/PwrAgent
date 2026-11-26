@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
+import { GitReadCache } from "../git-info/read-cache";
 import { parseGitRemoteConfiguration, type GitRemote, type GitRemoteConfiguration } from "./git-remote-config";
 import { PR_METADATA_PRIORITY, runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
@@ -113,10 +114,13 @@ type RemoteCacheEntry = {
   originSampleOrder?: number;
   fetchedAt: number;
 };
-type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt">;
+type RemoteNamesWitness = (demand: PrMetadataDemand) => Promise<boolean>;
+type ParsedRemoteObservation = Omit<RemoteCacheEntry, "fetchedAt"> & { remoteNamesStillMatch?: RemoteNamesWitness };
 type RemoteRead = { checkout: RemoteCacheEntry; polling?: RemoteCacheEntry };
 
 const remoteCache = new Map<string, RemoteCacheEntry>();
+const MAX_INVENTORY_REMOTE_NAME_WITNESSES = 256;
+const inventoryRemoteNameWitnesses = new Map<RemoteCacheEntry, RemoteNamesWitness>();
 const remoteLookups = new Map<string, SharedPrMetadataRead<RemoteRead>>();
 const inventoryLookups = new Map<string, SharedPrMetadataRead<RemoteRead>>();
 let remoteCacheGeneration = 0;
@@ -138,6 +142,7 @@ let sshLookups = new WeakMap<SshResolver, Map<string, SharedPrMetadataRead<strin
 export function clearGitHubRemoteCache(): void {
   remoteCacheGeneration++;
   remoteCache.clear();
+  inventoryRemoteNameWitnesses.clear();
   // Existing callers may finish, but cannot publish into the new cache.
   remoteLookups.clear();
   inventoryLookups.clear();
@@ -145,7 +150,7 @@ export function clearGitHubRemoteCache(): void {
 }
 
 export type InventoryRemoteConfigReader = (cwd: string, demand: PrMetadataDemand) =>
-  Promise<{ configuration?: GitRemoteConfiguration; sampleOrder?: number } | undefined>;
+  Promise<{ configuration?: GitRemoteConfiguration; sampleOrder?: number; remoteNamesStillMatch?: RemoteNamesWitness } | undefined>;
 
 export type ResolveGitHubRepoOptions = {
   /** Override the git runner — tests inject canned configured remotes. */
@@ -257,15 +262,18 @@ export async function resolveForgeReposForDirectory(
 export async function observeForgeRepositoriesForDirectory(
   cwd: string,
   kind?: ForgeKind,
-  options: ResolveGitHubRepoOptions = {},
+  options: ResolveGitHubRepoOptions & { verifyCachedRemoteNames?: boolean } = {},
 ): Promise<{ repos: GitHubRepoRef[]; refreshedRemoteNames?: string[] }> {
   const previous = remoteCache.get(cwd);
   const observation = await readParsedGitRemotes(cwd, options);
   // Default-branch reads can reuse names sampled by this lookup, while an
-  // older identity cache hit must not extend their separate freshness window.
+  // older identity needs current config evidence. Ref reads stay independent.
+  const verifiedNames = options.verifyCachedRemoteNames && observation === previous
+    && await inventoryRemoteNameWitnesses.get(observation)?.(options.demand ?? {})
+    && remoteCache.get(cwd) === observation;
   return {
     repos: collectForgeRepositories(observation.value, kind),
-    refreshedRemoteNames: observation === previous ? undefined : observation.names,
+    refreshedRemoteNames: observation !== previous || verifiedNames ? observation.names : undefined,
   };
 }
 
@@ -407,6 +415,31 @@ export async function readForgeRepositoryRemotes(cwd: string): Promise<GitHubRep
   return (await readParsedGitRemotes(cwd, {})).value.flatMap(({ repo }) => repo ? [repo] : []);
 }
 
+const fetchRemoteSshHosts = new GitReadCache<string | undefined>({ ttlMs: REMOTE_CACHE_TTL_MS, maxEntries: 512 });
+
+/** The effective fetch URLs (or bare names) from an existing `git remote --verbose` observation. */
+export function parseGitFetchRemotes(output: string): GitRemote[] {
+  return output.split(/\r?\n/).flatMap((line) => {
+    const match = /^([^\t]+)\t(?:(.+) \(fetch\)(?: \[[^\r\n]*\])?)?$/.exec(line);
+    return match ? [{ name: match[1]!, url: match[2] ?? "" }] : [];
+  });
+}
+
+export function readGitHubFetchRemotes(remotes: GitRemote[]): Array<{ name: string; repo: GitHubRepoRef }> {
+  return remotes.flatMap(({ name, url }) => {
+    const repo = parseGitHubRemote(url);
+    if (!repo) return [];
+    if (repo.host === "github.com") return [{ name, repo }];
+    const host = readSshHost(url);
+    if (!host || !/^[\w][\w.-]*$/.test(host) || forgeKindForRemoteHost(repo.host)) return [];
+    const hostname = repo.host === "ssh.github.com" ? repo.host
+      : fetchRemoteSshHosts.readInBackground(host, () => resolveSshHostInFlight(host, defaultResolveSshHostname, {}))
+        ?.toLowerCase();
+    return hostname === "github.com" || hostname === "ssh.github.com"
+      ? [{ name, repo: { ...repo, host: "github.com" } }] : [];
+  });
+}
+
 async function readParsedGitRemotes(
   cwd: string,
   options: ResolveGitHubRepoOptions,
@@ -439,7 +472,7 @@ async function readParsedGitRemotes(
 
   const pending = new SharedPrMetadataRead<RemoteRead>(async (demand) => {
     try {
-      const { observation: loaded } = await loadParsedGitRemotes(cwd, options, demand);
+      const { observation: { remoteNamesStillMatch, ...loaded } } = await loadParsedGitRemotes(cwd, options, demand);
       demand.signal?.throwIfAborted();
       const observation = { ...loaded, fetchedAt: now() };
       if (lookups.get(cwd) === pending) {
@@ -454,7 +487,14 @@ async function readParsedGitRemotes(
             return { checkout: observation, polling: current };
           }
         }
+        if (current) inventoryRemoteNameWitnesses.delete(current);
         remoteCache.set(cwd, observation);
+        if (remoteNamesStillMatch) {
+          if (inventoryRemoteNameWitnesses.size >= MAX_INVENTORY_REMOTE_NAME_WITNESSES) {
+            inventoryRemoteNameWitnesses.delete(inventoryRemoteNameWitnesses.keys().next().value!);
+          }
+          inventoryRemoteNameWitnesses.set(observation, remoteNamesStillMatch);
+        }
       }
       return { checkout: observation };
     } finally {
@@ -524,7 +564,7 @@ async function loadParsedGitRemotes(
     return {
       observation: {
         names, value, unconfirmedEmpty, readWithGitRemote, hasConditionalIncludes, sshResolutionFailed,
-        sampleOrder, originSampleOrder: raw.originSampleOrder,
+        sampleOrder, originSampleOrder: raw.originSampleOrder, remoteNamesStillMatch: raw.remoteNamesStillMatch,
       },
       refreshRemoteNames,
     };
@@ -563,6 +603,7 @@ async function defaultReadRemotes(
 ): Promise<{
   names?: string[]; remotes: GitRemote[]; unconfirmedEmpty?: true; readWithGitRemote?: true;
   hasConditionalIncludes?: true; configSampleOrder?: number; urlSampleOrder?: number; originSampleOrder?: number;
+  remoteNamesStillMatch?: RemoteNamesWitness;
 }> {
   const childEnv = buildPwrAgentChildProcessEnv(process.env);
   const gitOptions = {
@@ -590,7 +631,7 @@ async function defaultReadRemotes(
           { ...gitOptions, beforeSpawn: () => { configSampleOrder = nextRemoteSampleOrder(); } }, demand);
         configuration = parseGitRemoteConfiguration(stdout);
       }
-      if (configuration?.names.length) return { ...configuration, configSampleOrder };
+      if (configuration?.names.length) return { ...configuration, configSampleOrder, remoteNamesStillMatch: inventory?.remoteNamesStillMatch };
       if (configuration && !confirmEmpty) return { remotes: [], unconfirmedEmpty: true, configSampleOrder };
     } catch (error) {
       demand.signal?.throwIfAborted();
@@ -650,7 +691,7 @@ function uniqueNonEmptyLines(value: string): string[] {
   ];
 }
 
-function readSshHost(remoteUrl: string): string | undefined {
+export function readSshHost(remoteUrl: string): string | undefined {
   const url = remoteUrl.trim();
   if (!url || isWindowsFilesystemPath(url)) {
     return undefined;

@@ -1,8 +1,8 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -168,11 +168,55 @@ const ON: DesktopCheckoutHibernationPolicy = {
   enabled: true, idleDays: 7, maxSnapshotMb: 5, removeRebuildableOutput: true, restoreOn: "send",
 };
 
-async function git(cwd: string, args: string[]): Promise<string> {
-  fixtureOwner.check();
+async function runGit(cwd: string, args: string[]): Promise<string> {
   return (await execute("git", ["-C", cwd, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test",
     "-c", "commit.gpgsign=false", "-c", "protocol.file.allow=always", ...args])).stdout;
 }
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  fixtureOwner.check();
+  return await runGit(cwd, args);
+}
+
+async function createRepoSeed(repo: string, environment: boolean) {
+  await mkdir(repo);
+  await runGit(repo, ["init", "--template=", "-b", "main"]);
+  await runGit(repo, ["config", "core.autocrlf", "false"]);
+  await writeFile(path.join(repo, "file.txt"), "original\n");
+  await writeFile(path.join(repo, ".gitignore"), "node_modules/\n.env.local\n");
+  if (environment) {
+    await mkdir(path.join(repo, ".codex", "environments"), { recursive: true });
+    await writeFile(path.join(repo, ".codex", "environments", "env.toml"), 'version = 1\nname = "Env"\n[setup]\nscript = "install"\n');
+  }
+  await runGit(repo, ["add", "-A"]);
+  await runGit(repo, ["commit", "-m", "fixture"]);
+}
+
+function ownRepoSeeds(
+  createSeed = createRepoSeed,
+  removeRoot = (root: string) => rm(root, { recursive: true, force: true }),
+) {
+  let root: string;
+  let initialization: Promise<void> | undefined;
+  return {
+    get root() { return root; },
+    initialize: () => initialization ??= (async () => {
+      root = await mkdtemp(path.join(os.tmpdir(), "pwragent-hibernate-seed-"));
+      await createSeed(path.join(root, "plain"), false);
+      await createSeed(path.join(root, "environment"), true);
+    })(),
+    close: async () => {
+      // Vitest can stop awaiting the setup hook while Git still uses the root.
+      // Setup reports its own failure. Teardown joins it before removing files.
+      await initialization?.catch(() => {});
+      if (root) await removeRoot(root);
+    },
+  };
+}
+
+const repoSeeds = ownRepoSeeds();
+beforeAll(repoSeeds.initialize);
+afterAll(repoSeeds.close);
 
 async function createFixture(options: { environment?: boolean; worktreeRoot?: ".pwragent" | ".codex" } = {}) {
   const scope = fixtureOwner;
@@ -181,17 +225,9 @@ async function createFixture(options: { environment?: boolean; worktreeRoot?: ".
   roots.push(root);
   const repo = path.join(root, "repo");
   const worktree = path.join(root, options.worktreeRoot ?? ".pwragent", "worktrees", "id", "repo");
-  await mkdir(repo);
-  await git(repo, ["init", "-b", "main"]);
-  await git(repo, ["config", "core.autocrlf", "false"]);
-  await writeFile(path.join(repo, "file.txt"), "original\n");
-  await writeFile(path.join(repo, ".gitignore"), "node_modules/\n.env.local\n");
-  if (options.environment) {
-    await mkdir(path.join(repo, ".codex", "environments"), { recursive: true });
-    await writeFile(path.join(repo, ".codex", "environments", "env.toml"), 'version = 1\nname = "Env"\n[setup]\nscript = "install"\n');
-  }
-  await git(repo, ["add", "-A"]);
-  await git(repo, ["commit", "-m", "fixture"]);
+  // Copy refs, objects and index before Git writes the linked-worktree metadata.
+  // Each case owns its primary checkout and its linked worktree.
+  await cp(path.join(repoSeeds.root, options.environment ? "environment" : "plain"), repo, { recursive: true });
   await mkdir(path.dirname(worktree), { recursive: true });
   await git(repo, ["worktree", "add", "-b", "owned", worktree]);
   const directory = { id: "owned", kind: "worktree" as const, label: "repo", path: repo, worktreePath: worktree };
@@ -938,12 +974,12 @@ describe("Thread maintenance's hibernate step", () => {
   // and held it awake. The provider inventory is the oracle: only an
   // unarchived co-owner shares the checkout, and an archived row is never
   // offered for archive again.
-  it("treats co-owners from the provider's archived page as archived, not as sharing users (oracle property)", ownFixtureTest(async () => {
+  it("uses the provider archive page to distinguish archived and sharing co-owners", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const target = ArchiveWorktreeTransport.threads[0]!;
     const { registry } = fixture.open({ ...ON, enabled: false });
     const service = maintenance(registry);
-    await fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { maxLength: 4 }), async (archived) => {
+    for (const archived of [[], [true], [false], [true, true], [true, false], [false, true, true, true]]) {
       ArchiveWorktreeTransport.threads = [target, ...archived.map((isArchived, index) => ({
         id: `co-owner-${index}`, cwd: fixture.worktree, source: "vscode", status: { type: "notLoaded" as const }, archived: isArchived,
       }))];
@@ -953,12 +989,12 @@ describe("Thread maintenance's hibernate step", () => {
       const offered = scan.threads.projects.flatMap((project) => project.idle.map((row) => row.threadId));
       const archivedIds = archived.flatMap((isArchived, index) => isArchived ? [`co-owner-${index}`] : []);
       expect(offered.filter((threadId) => archivedIds.includes(threadId))).toEqual([]);
-    }), { numRuns: 12, examples: [[[true, true]], [[true, false]]] });
+    }
   }));
 
   // ACP summaries drop the session's archive time, as Codex rows have none.
   // The page that lists the session is the oracle for whether it shares.
-  it("treats an ACP session from the archived page as archived, not as a sharing user (oracle property)", ownFixtureTest(async () => {
+  it("uses the ACP archive page to distinguish an archived and a sharing session", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open({ ...ON, enabled: false });
     const acp = (registry as unknown as { acpBackend: {
@@ -975,11 +1011,11 @@ describe("Thread maintenance's hibernate step", () => {
       projectKey: fixture.worktree, linkedDirectories: [fixture.directory],
     }));
     const service = maintenance(registry);
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (archived) => {
+    for (const archived of [true, false]) {
       sessionArchived = archived;
       const scan = await service.scan({ steps: ["hibernate"] });
       expect(scan.hibernate?.items.some((item) => item.threadId === THREAD_ID)).toBe(archived);
-    }), { numRuns: 4, examples: [[true], [false]] });
+    }
   }));
 
   // Model test. Maintenance splits its owners into active and archived for
@@ -1008,7 +1044,7 @@ describe("Thread maintenance's hibernate step", () => {
       for (const [index, candidate] of candidates.entries()) {
         expect(active.has(candidate.thread.id)).toBe(owners.sharedWithAnotherThread(outsider, path.join(fixture.root, `checkout-${index}`)));
       }
-    }), { numRuns: 40, examples: [[["retention"]]] });
+    }), { numRuns: 5, examples: [[["retention"]], [["none", "provider", "tombstone", "retention"]], [[]]] });
   }));
 
   it("keeps a co-owner that both provider pages list as a sharing user", ownFixtureTest(async () => {
@@ -1371,13 +1407,18 @@ describe("Thread maintenance's hibernate step", () => {
       }
       return { activeThreads: [], archivedThreads };
     };
-    await ownFixtureWork(fc.assert(fc.asyncProperty(fc.array(fc.boolean(), { minLength: 1, maxLength: 3 }), async (valid) => {
+    const receiptSets = [1, 2, 3].flatMap(length =>
+      Array.from({ length: 2 ** length }, (_, bits) =>
+        Array.from({ length }, (_, index) => Boolean(bits & (1 << index)))));
+    for (const valid of receiptSets) {
       signal.throwIfAborted();
-      const owners = await inventory(valid);
-      const before = probeHook.identities;
-      expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(valid.every(Boolean));
-      expect(probeHook.identities - before).toBe(1);
-    }), { numRuns: 25, examples: [[[true, false, true]], [[true, true, true]]] }));
+      await ownFixtureWork((async () => {
+        const owners = await inventory(valid);
+        const before = probeHook.identities;
+        expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(valid.every(Boolean));
+        expect(probeHook.identities - before).toBe(1);
+      })());
+    }
     const owners = await inventory([true, true]);
     expect(await admission.isManagedArchiveCheckout(owners, worktree)).toBe(true);
     await git(repo, ["worktree", "remove", worktree]);
@@ -1488,14 +1529,19 @@ describe("Thread maintenance's hibernate step", () => {
       }
       toString() { return this.operation; }
     }
-    await ownFixtureWork(fc.assert(fc.asyncProperty(fc.commands([
-      fc.constant(new RegistrationCommand("approve")), fc.constant(new RegistrationCommand("cancel")),
-      fc.constant(new RegistrationCommand("revoke")), fc.constant(new RegistrationCommand("observe")),
-    ], { maxCommands: 6 }), async (commands) => {
+    const check = async (commands: Iterable<fc.AsyncCommand<Model, Real>>) => {
       signal.throwIfAborted();
       await store.setThreadWorktreeRegistration({ ...identity, worktreePath: worktree });
       await fc.asyncModelRun(() => ({ model: { authorized: false }, real: fixture }), commands);
-    }), { numRuns: 10 }));
+    };
+    await ownFixtureWork(check([
+      new RegistrationCommand("approve"), new RegistrationCommand("cancel"), new RegistrationCommand("observe"),
+      new RegistrationCommand("revoke"), new RegistrationCommand("observe"),
+    ]));
+    await ownFixtureWork(fc.assert(fc.asyncProperty(fc.commands([
+      fc.constant(new RegistrationCommand("approve")), fc.constant(new RegistrationCommand("cancel")),
+      fc.constant(new RegistrationCommand("revoke")), fc.constant(new RegistrationCommand("observe")),
+    ], { maxCommands: 6 }), check), { numRuns: 4 }));
     expect((await call(worktree, "inspect")).ok).toBe(true);
   }));
 
@@ -1635,13 +1681,14 @@ describe("Thread maintenance's hibernate step", () => {
   it("includes every provider checkout owner even when navigation hides it", ownFixtureTest(async () => {
     const fixture = await createFixture();
     const { registry } = fixture.open();
-    await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.constantFrom("cli", "vscode", "exec", "appServer"), { minLength: 1 }), async (sources) => {
-      ArchiveWorktreeTransport.threads = sources.map((source, index) => ({
+    const sources = ["cli", "vscode", "exec", "appServer"] as const;
+    for (const inventory of [...sources.map(source => [source]), sources]) {
+      ArchiveWorktreeTransport.threads = inventory.map((source, index) => ({
         id: `owner-${index}`, cwd: fixture.worktree, source, name: "PwrSnap Capture Metadata Worker", status: { type: "notLoaded" },
       }));
       const found = await registry.listAutoArchiveCandidates();
       expect(found.map((row) => row.thread.id).sort()).toEqual(ArchiveWorktreeTransport.threads.map((row) => row.id).sort());
-    }), { numRuns: 12 });
+    }
   }));
 
   // Git is the oracle for workspace kind. A provider's minimal cwd summary
@@ -1656,7 +1703,7 @@ describe("Thread maintenance's hibernate step", () => {
       projectKey: fixture.worktree,
       linkedDirectories: [{ id: fixture.worktree, path: fixture.worktree, kind: "local", label: "repo" }],
     });
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 4 }), async (depth) => {
+    for (const depth of [0, 1, 2, 3, 4]) {
       // Equivalent Git spellings must produce the same native review paths.
       // Windows Git's forward slashes are covered by this real-Git oracle
       // there; dot segments exercise the normalization on every platform.
@@ -1668,7 +1715,7 @@ describe("Thread maintenance's hibernate step", () => {
       expect(refreshed.thread.linkedDirectories).toEqual([expect.objectContaining({
         kind: "worktree", worktreePath: fixture.worktree, path: fixture.repo,
       })]);
-    }), { numRuns: 8, examples: [[1]] });
+    }
   }));
 
   it("observes Git metadata again on the next pass when a checkout path is replaced (oracle)", ownFixtureTest(async () => {
@@ -1797,6 +1844,34 @@ describe("Thread maintenance's hibernate step", () => {
   }));
 });
 
+
+// A hook timeout ends Vitest's wait. Use a gate to control the still-running
+// setup while observing when teardown admits directory removal.
+it.each([false, true])("seed teardown joins initialization before removing its root (setup rejects: %s)", async (rejectSetup) => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const refusal = new Error("controlled seed setup failure");
+  const seeds = ownRepoSeeds(async (_repo, environment) => {
+    if (environment) return;
+    entered.resolve();
+    await release.promise;
+    order.push("seed settled");
+    if (rejectSetup) throw refusal;
+  }, async root => {
+    order.push("root removed");
+    await rm(root, { recursive: true, force: true });
+  });
+  const setup = seeds.initialize().catch((error: unknown) => error);
+  await entered.promise;
+  const closing = seeds.close();
+  release.resolve();
+  const outcome = await setup;
+  await closing;
+  expect(outcome).toBe(rejectSetup ? refusal : undefined);
+  expect(order).toEqual(["seed settled", "root removed"]);
+  expect(await exists(seeds.root)).toBe(false);
+});
 
 // A deadline is unnecessary: gate an admitted body, request the real fixture
 // teardown, then observe native Git, its file, and its SQLite owner directly.

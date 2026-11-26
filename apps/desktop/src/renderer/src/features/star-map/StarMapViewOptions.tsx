@@ -133,15 +133,15 @@ export function StarMapViewOptions(props: {
           <label className="star-map__view-row">
             <input
               type="checkbox"
-              checked={props.preferences.hideOfflineInstances}
+              checked={!props.preferences.hideOfflineInstances}
               onChange={(event) =>
                 props.onChange({
                   ...props.preferences,
-                  hideOfflineInstances: event.target.checked,
+                  hideOfflineInstances: !event.target.checked,
                 })
               }
             />
-            <span>Hide offline instances</span>
+            <span>Show offline instances</span>
           </label>
         </div>
       ) : null}

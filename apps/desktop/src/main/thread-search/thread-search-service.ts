@@ -8,6 +8,7 @@ import type {
   ThreadSearchFilters,
   ThreadSearchRequest,
   ThreadSearchResponse,
+  ThreadSearchResult,
   ThreadSearchUnavailableScope,
 } from "@pwragent/shared/contracts/thread-search";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
@@ -204,10 +205,16 @@ function buildContentCandidates(params: {
       limit: CONTENT_SEARCH_CANDIDATE_LIMIT,
     })
     .filter((result) => matchesFilters(result, params.filters));
-  return mergeSearchResults(params.metadataResults, recentResults).slice(
-    0,
-    CONTENT_SEARCH_CANDIDATE_LIMIT,
-  );
+  // Preserve the original exact-then-recent window. Relaxed projections can
+  // use spare slots, but cannot displace a transcript-only candidate.
+  const exact = params.metadataResults.filter((result) => result.score >= 0);
+  const relaxed = params.metadataResults.filter((result) => result.score < 0);
+  const candidates = new Map<string, ThreadSearchResult>();
+  for (const result of [...exact, ...recentResults, ...relaxed]) {
+    if (!candidates.has(result.identityKey)) candidates.set(result.identityKey, result);
+    if (candidates.size === CONTENT_SEARCH_CANDIDATE_LIMIT) break;
+  }
+  return [...candidates.values()];
 }
 
 function mergeSearchResults(

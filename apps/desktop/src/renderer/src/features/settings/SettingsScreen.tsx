@@ -1802,6 +1802,9 @@ function SettingsSectionBody(props: {
           models: { taskMonitorModels },
         });
       }}
+      onSaveAutoCompaction={async (autoCompaction) => {
+        return await props.settings.writeConfig({ models: { autoCompaction } });
+      }}
       onSaveUsageAccountGroups={async (usageAccountGroups) => {
         return await props.settings.writeConfig({ models: { usageAccountGroups } });
       }}

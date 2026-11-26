@@ -565,6 +565,9 @@ export type PrLifecycleState = "open" | "merged" | "closed";
 export type PrReviewState = "draft" | "ready_for_review";
 export type PrMergeState = "mergeable" | "conflicting" | "unknown";
 /** A way to land a PR. `ThreadTodoMergeMethod` is the same set. */
+/** A layer of one of GitHub's own stacks: `number` names the stack, `position` counts from 1 at its bottom. */
+export type PrGithubStack = { number: number; position: number; size: number };
+
 export type PrMergeMethod = "squash" | "rebase" | "merge";
 
 /**
@@ -627,6 +630,12 @@ export type PrSummary = {
   /** Last observed pull request title, when the provider returns one. */
   title?: string;
   /**
+   * Label names, read only for a repository that a project's Forge
+   * Automation hands-off rule names with a label pattern
+   * (`handsOffLabelRepositories`). Absent means not read, never "no labels".
+   */
+  labels?: string[];
+  /**
    * Branch the PR is proposing to merge into. Used to default a review to the
    * PR's actual target, including stacked pull requests.
    */
@@ -644,6 +653,12 @@ export type PrSummary = {
   linkedDirectoryPaths?: string[];
   /** Thread-local operator/agent attachment intent; never provider status. */
   explicitlyAttached?: true;
+  /**
+   * Thread-local operator intent: Auto-fix stays off for this one PR while
+   * the thread's Auto-fix is on. Never provider status; every merge of an
+   * attachment list carries it through `pullRequestAttachmentIntent`.
+   */
+  autoFixOff?: true;
   /**
    * Deprecated compatibility alias for `checkState`. New writers keep this
    * check-only so review/lifecycle/mergeability never collide with checks.
@@ -676,6 +691,13 @@ export type PrSummary = {
    * before it existed: treat absence as "not known", never as "none".
    */
   allowedMergeMethods?: PrMergeMethod[];
+  /**
+   * The PR's layer in one of GitHub's own stacks, read with the status poll.
+   * GitHub keeps a layer in its stack after the layers below it merge and it
+   * retargets to trunk, and merges it only through its asynchronous merge.
+   * Absent when the PR is in no stack, and from older builds, peers and GitLab.
+   */
+  githubStack?: PrGithubStack;
   /** Head commit observed with this status snapshot. */
   headSha?: string;
   /** Direct destination for the first failed CI check in this snapshot. */
@@ -822,6 +844,23 @@ export function pullRequestMatchesRepositoryKey(
       .map((part) => part.trim().toLowerCase()).join("/");
   return key(identity.sourceRepository ?? identity) === repositoryKey
     || (pr.explicitlyAttached === true && key(identity) === repositoryKey);
+}
+
+/** Thread-local intent fields that live on an attachment, not provider status. */
+export type PullRequestAttachmentIntent = Pick<PrSummary, "explicitlyAttached" | "autoFixOff">;
+
+/**
+ * The thread-local intent of one or more rows for the same PR, unioned. A
+ * merge that rebuilds an attachment from provider status spreads this so the
+ * thread's own choices survive the refresh.
+ */
+export function pullRequestAttachmentIntent(
+  ...rows: Array<PullRequestAttachmentIntent | undefined>
+): PullRequestAttachmentIntent {
+  return {
+    ...(rows.some((row) => row?.explicitlyAttached === true) ? { explicitlyAttached: true } : {}),
+    ...(rows.some((row) => row?.autoFixOff === true) ? { autoFixOff: true } : {}),
+  };
 }
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
@@ -3502,6 +3541,12 @@ export type ReadThreadPullRequestMergeResponse = {
    * older owner leaves it out.
    */
   neverMergeProject?: string;
+  /**
+   * With `neverMergeProject`, the base branches the project still merges
+   * into: a PR into one of them is offered as in any project. An older
+   * owner leaves it out, and then no PR is offered.
+   */
+  mergeBranches?: string[];
 };
 
 export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {
@@ -3510,6 +3555,14 @@ export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {
   method: PrMergeMethod;
   /** The pick came from the method list, so it becomes the project's. */
   rememberMethod?: boolean;
+  /**
+   * The PR is in a GitHub stack whose layers below it are still open, and the
+   * operator chose to merge those layers with it: their numbers, as the card
+   * listed them. GitHub's asynchronous merge lands every open layer below the
+   * one merged, so main refuses when any other lower layer is open. Local
+   * merges only: a peer's merge request does not carry it.
+   */
+  mergeOpenLayersBelow?: number[];
 };
 
 export type MergeThreadPullRequestResponse = {

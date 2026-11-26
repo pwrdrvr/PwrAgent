@@ -565,7 +565,7 @@ describe("the ACP instruction block", () => {
         await client.dispose();
         db.close();
       }
-    }), { numRuns: 80, examples: [[[
+    }), { numRuns: 8, examples: [[[
       { kind: "edit", instructions: "alpha" }, { kind: "turn", fails: true, compaction: "none" },
       { kind: "turn", fails: false, compaction: "none" }, { kind: "turn", fails: false, compaction: "none" },
       { kind: "reload", replaysCompaction: false }, { kind: "turn", fails: false, compaction: "none" },

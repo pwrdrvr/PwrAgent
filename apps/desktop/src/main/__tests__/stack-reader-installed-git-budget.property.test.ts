@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import * as gitExecutable from "../app-server/git-executable";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
-import { StackReader } from "../stacks/stack-reader";
+import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
 let restoreGit: (() => void) | undefined;
@@ -54,6 +54,47 @@ function row(cwd: string, id: string): NavigationThreadSummary {
 }
 
 describe("StackReader installed-Git and unavailable checkout budgets", () => {
+  it("drops an alias-backed attachment when selected Git rejects changed global config", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-installed-alias-")));
+    restoreGit = isolateProcessGitEnvironment();
+    try {
+      const checkout = path.join(sandbox, "checkout");
+      const alias = path.join(sandbox, "alias");
+      const home = path.join(sandbox, "home");
+      const config = path.join(home, ".gitconfig");
+      await Promise.all([mkdir(checkout), mkdir(home)]);
+      initialize(checkout);
+      await writeCatalog(checkout, "tracked");
+      await symlink(checkout, alias, "junction");
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", home);
+      await writeFile(config, "[user]\n\tname = Fixture\n");
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      const rows: NavigationThreadSummary[] = [{ ...row(checkout, "tracked"), prs: [{
+        number: 1, provider: "github.com", org: "fixture", repo: "tracked", lifecycleState: "open", state: "passing",
+        url: "https://github.com/fixture/tracked/pull/1", headRefName: "feat", linkedDirectoryPaths: [alias],
+        explicitlyAttached: true,
+      }] }];
+      const reader = new StackReader(() => 0);
+      const layer = async () => (await reader.read(rows, [])).stacks[0]?.layers[0];
+      expect((await layer())?.pullRequest?.number).toBe(1);
+
+      await writeFile(config, "[invalid config\n");
+      await expect(gitExecutable.runGitCommand(alias, ["rev-parse", "--show-toplevel"])).rejects.toMatchObject({ code: 128 });
+      // The catalog can still show the layer, but Git no longer corroborates its attachment.
+      const invalid = await layer();
+      expect(invalid).toMatchObject({ branch: "feat" });
+      expect(invalid?.pullRequest).toBeUndefined();
+
+      await writeFile(config, "[user]\n\tname = Fixture\n");
+      expect((await layer())?.pullRequest?.number).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("caches broken .git pointers for background reads while keeping scoped reads live and honoring disk repair", async () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-broken-git-")));
     restoreGit = isolateProcessGitEnvironment();
@@ -215,6 +256,108 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       ), { numRuns: 4 });
     } finally {
       start.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("caches unavailable installed-Git lookup results for hinted directories without enclosing markers", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-hinted-unavail-")));
+    restoreGit = isolateProcessGitEnvironment();
+    const realRunGit = gitExecutable.runGitCommand;
+    try {
+      const plain = path.join(sandbox, "plain");
+      await mkdir(plain, { recursive: true });
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      // Simulate a transient non-128 failure from the configured Git executable
+      // on a directory where filesystem hints found no enclosing .git markers.
+      const runSpy = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (cwd === plain && args[0] === "rev-parse") {
+          throw Object.assign(new Error("transient git failure"), { code: 1, killed: false, stderr: "transient" });
+        }
+        return await realRunGit(cwd, args, options);
+      });
+      try {
+        const now = 0;
+        const reader = new StackReader(() => now);
+        const rows = [row(plain, "plain")];
+        const revParseCalls = () => runSpy.mock.calls.filter(([cwd, args]) => cwd === plain && args[0] === "rev-parse").length;
+
+        await reader.read(rows, []);
+        expect(revParseCalls()).toBe(1);
+
+        // Repeat within the 30s unavailable TTL: must hit cache instead of
+        // re-spawning rev-parse on every background navigation pass.
+        runSpy.mockClear();
+        for (let pass = 0; pass < 3; pass++) {
+          await reader.read(rows, []);
+        }
+        expect(revParseCalls()).toBe(0);
+      } finally {
+        runSpy.mockRestore();
+      }
+    } finally {
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("retains active installed-Git checkouts across repeated passes when directory count exceeds the 2,048 base cap", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-large-cap-")));
+    restoreGit = isolateProcessGitEnvironment();
+    const realRunGit = gitExecutable.runGitCommand;
+    try {
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      // 2,060 distinct missing directories crosses the historic 2,048 FIFO cap
+      // while avoiding real git subprocesses via a fast mocked exit-128 oracle.
+      const count = 2_060;
+      const dirs = Array.from({ length: count }, (_, index) =>
+        path.join(sandbox, `deleted-${String(index).padStart(4, "0")}`));
+      const rows = dirs.map((dir, index) => row(dir, `deleted-${index}`));
+      const preflight = dirs[0]!;
+      let initialized = false;
+      const runSpy = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (args[0] === "rev-parse" && cwd.startsWith(sandbox) && !(initialized && cwd === preflight)) {
+          throw Object.assign(new Error("not found"), {
+            code: 128,
+            killed: false,
+            stderr: `fatal: cannot change to '${cwd}': No such file or directory\n`,
+          });
+        }
+        return await realRunGit(cwd, args, options);
+      });
+      try {
+        let now = 0;
+        const reader = new StackReader(() => now);
+        const revParseCalls = () => runSpy.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
+
+        await reader.read(rows, []);
+        expect(revParseCalls()).toBe(count);
+
+        // Warm repeat within TTL must keep 100% of the active inventory cached
+        // (0 rev-parse spawns), never thrashing FIFO eviction back to 0% hits.
+        runSpy.mockClear();
+        await reader.read(rows, []);
+        expect(revParseCalls()).toBe(0);
+
+        // A checkout appeared since the inventory scan. Its narrow preflight
+        // replaces the cached miss without evicting other fresh checkouts.
+        await mkdir(preflight);
+        initialize(preflight);
+        initialized = true;
+        await reader.preflightCatalogs([preflight], new StackReadObservation());
+        expect(revParseCalls()).toBe(1);
+        runSpy.mockClear();
+        await reader.read(rows, []);
+        expect(revParseCalls()).toBe(0);
+
+        // After TTL expiry, synchronous revalidation stays capped at 16/pass.
+        now += 31_000;
+        runSpy.mockClear();
+        await reader.read(rows, []);
+        expect(revParseCalls()).toBe(16);
+      } finally {
+        runSpy.mockRestore();
+      }
+    } finally {
       await rm(sandbox, { recursive: true, force: true });
     }
   });

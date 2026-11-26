@@ -3,6 +3,16 @@
 Moved from [apps/desktop/AGENTS.md](../AGENTS.md), which keeps a summary and
 says when to read this document. Relative links were updated for this location.
 
+## GitHub merge preflight budget
+
+When the operator runs a merge from a PR card or a to-do card, its stack checks
+use an owner-local reserve of 20 requests that refills at 20 requests per minute.
+When the reserve is empty, the preflight can also spend from the shared PR
+request budget. The owner selects this route when it executes the operator's merge.
+Polling, automated merge offers and agent forge tools keep using the shared
+budget, including agent tool calls that require an approval. Both routes honor
+the forge client's provider cooldown and concurrency limit.
+
 ## Pull-Request Status Source of Truth
 
 There are two stores holding PR data, and they answer **different
@@ -200,6 +210,57 @@ have:
   reports a merge. Only one eligible thread gets the automatic merge-build
   watch. The thread that confirmed the merge gets first choice. Locked
   threads are ineligible, including when the lock lands during registration.
+
+### Hands-off pull requests
+
+A project's Forge Automation can list hands-off rules: a destination
+repository, optionally with a label pattern (`*` matches any text, case is
+ignored). A thread in that project leaves a matching PR to its maintainers:
+Auto-fix neither schedules nor sends a repair for it, and PwrAgent raises no
+Review or Merge card. The rule is read at scheduling, at dispatch, and at turn
+admission, so a label that lands while a repair waits cancels the repair, and
+removing the label lets the next failing observation repair it. The thread's
+automation status tells the agent the PR is hands-off.
+
+Labels cost GraphQL rate-limit points, so the status poll and PR discovery ask
+for them (`...PrLabels`) only for repositories that a label rule names
+(`hands-off-label-repositories.ts`, kept in step by the Forge Automation
+index). A PR whose labels were not read never matches a label rule. A
+repository rule needs no labels. GitLab reads merge request labels under the
+same rule: the REST detail carries them, and the GraphQL poll adds
+`labels(first: 20)` only for those projects, on pages of four merge requests
+so the label connection stays inside GitLab's default complexity budget.
+
+The sidebar's PR card lists a PR's labels when they were read, marking the
+one a rule matched, and its Auto-fix row links to the project's Forge
+Automation; so does the composer's Auto-fix menu. Both open the sidebar's
+one dialog through `ThreadForgeAutomationProvider`, where the sidebar
+publishes its opener (`usePublishForgeAutomationOpener`) for exactly the
+projects its own project menu offers the dialog on.
+
+Agents read the gates through `get_thread_status`
+(`prAutomation.forgeAutomation`) and propose a rule with an add_todo
+`add_forge_hands_off_rule` card; see
+[forge agent tools](../../../docs/forge-agent-tools.md#forge-automation-gates).
+
+### Auto-fix off for one pull request
+
+A thread's Auto-fix can be switched off for one of its PRs while it stays on
+for the rest: Skip This PR in the Pull requests panel, or the PR's row in the
+composer's Auto-fix menu, which lists every PR Auto-fix covers and names a
+hands-off one with its rule. The choice is thread-local intent stored on the
+attachment row (`PrSummary.autoFixOff`, beside `explicitlyAttached`). Every
+path that rebuilds a row from provider status carries both through
+`pullRequestAttachmentIntent`, so a lookup or a status poll never clears it;
+detaching the PR forgets it.
+
+A switched-off PR leaves the thread's Auto-fix candidacy, so the election
+hands it to another thread that holds it, or nobody repairs it; switching it
+off cancels this thread's pending repair for it. The request is
+`setThreadPrAutoDispatch` with a `prKey`. A peer owner must advertise
+`thread_pull_request_auto_fix_v1`: an older one ignores `prKey` and would
+toggle the whole thread, so the viewer refuses to send it and offers no
+per-PR switch.
 
 ### Stack settlement and publishing
 

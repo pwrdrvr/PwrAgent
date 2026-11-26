@@ -42,11 +42,12 @@ For delegated or completion turns without a live inbound origin, use list_messag
 Prefer the causal recommendation over unrelated newer traffic. Sole-surface selection requires complete discovery.
 Send messages or files only when authorized.
 Use decisions_list, then decisions_invoke, to run a registered decision on new evidence. Each entry's inputCapabilities.images gives its configured model's image support and limits.
-decisions_register stores one locally. decisions_invoke also takes an ad hoc definition, and inputs for a batch of up to 500.
-OpenAI Decisions and local Clef accept images. Jev 1.13, 1.14, jev-latest and jev-preview use TypeSafe's experimental image API. For image evidence, pass an item as an array with optional input_text or input_json followed by input_image parts whose image_url is a PNG or JPEG base64 data URL. Up to four images share 512 KiB decoded per item. HTTP MCP caps the full JSON-RPC request at 1 MiB, including the base64, and batches cap the compact inputs JSON at 4 MiB. Set x-pwragent-images to true at the root of inputSchema to require an image on each item. Keep the prefix and instructions as text.
-A batch returns a batchId and compact answers; read more pages, failures, or full bodies with decisions_batch_results, or read its resultsFile (JSONL) directly.
-Wait for a batch expected to finish within a minute (inputs / concurrency x decisions_list timing.p50Ms). Otherwise pass background true and end the turn; PwrAgent starts a turn when it ends.
-Each run bills the operator's provider account. Use one batch call instead of a loop of calls.
+decisions_register stores one locally. decisions_invoke also takes an ad hoc definition (omit provider to use the operator's default, or pick openai, jev, or local), and inputs or inputsFile for a batch of up to 500.
+For large batches or image-heavy evidence, write a JSON array (.json) or JSONL (.jsonl/.ndjson) file in the workspace or temp dir and pass inputsFile instead of inlining inputs, and pass outputFile (or inlineResults false) so bulky responses are written to disk rather than echoed into the transcript.
+OpenAI Decisions and local Clef accept images. Jev 1.13, 1.14, jev-latest and jev-preview use TypeSafe's experimental image API. For image evidence, pass an item as an array with optional input_text or input_json followed by input_image parts whose image_url is a PNG or JPEG base64 data URL. Up to four images share 512 KiB decoded per item. Inline HTTP MCP caps the full JSON-RPC request at 1 MiB, including base64; inputsFile bypasses that transport cap while keeping the 4 MiB compact inputs JSON limit. Set x-pwragent-images to true at the root of inputSchema to require an image on each item. Keep the prefix and instructions as text.
+A batch returns a batchId and compact answers (or just the summary and file paths when outputFile is set or inlineResults is false); read more pages, failures, or full bodies with decisions_batch_results, or read outputFile / resultsFile directly.
+Wait for a batch expected to finish within a minute (inputs / concurrency x decisions_list timing.p50Ms). Otherwise pass background true and end the turn; PwrAgent writes outputFile (if set) and starts a turn when it ends.
+Each run bills the operator's provider account. Use one batch call (with inputsFile + outputFile when large) instead of a loop of calls or subagents.
 Use search_mcp_tools to find tools on selected connections.
 Use call_mcp_tool with the returned identity and schemaRevision.
 Check status before you retry an action that can change state.
@@ -59,6 +60,14 @@ stacks list their branches bottom first, with known PRs, owning threads and
 layer health. Merge a stacked PR only after its lower layers have merged and
 its base is trunk. Follow the thread's `prAutomation.guidance` for its position
 and merge prerequisites.
+
+## Forge Automation gates
+
+`get_thread_status` returns `prAutomation.forgeAutomation`: the project's
+hands-off rules and which attached PRs they match. To leave a repository's
+PRs, or those with a label such as `takeover:*`, to their maintainers, raise
+add_todo with action.type=add_forge_hands_off_rule, a repository and an
+optional label. The operator's click saves it; never change rules yourself.
 
 When guidance names a lower blocker, let that layer settle before rebasing,
 repairing CI or pushing the held layer. PwrAgent advances one tracked layer

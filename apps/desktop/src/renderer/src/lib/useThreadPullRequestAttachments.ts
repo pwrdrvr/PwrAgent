@@ -101,7 +101,9 @@ export function useThreadPullRequestAttachments(thread: PullRequestAttachmentThr
       if (prs && pendingStatuses.size > 0) {
         prs = prs.map((attachment) => {
           const status = pendingStatuses.get(buildPullRequestStatusKey(attachment));
-          return status ? { ...status, explicitlyAttached: attachment.explicitlyAttached } : attachment;
+          return status
+            ? { ...status, explicitlyAttached: attachment.explicitlyAttached, autoFixOff: attachment.autoFixOff }
+            : attachment;
         });
       }
       pendingStatuses.clear();
@@ -122,7 +124,8 @@ export function useThreadPullRequestAttachments(thread: PullRequestAttachmentThr
         if (!currentPrs) return;
         const index = currentPrs.findIndex((attachment) => buildPullRequestStatusKey(attachment) === prKey);
         if (index < 0) return;
-        const updated = { ...pr, explicitlyAttached: currentPrs[index]!.explicitlyAttached };
+        const { explicitlyAttached, autoFixOff } = currentPrs[index]!;
+        const updated = { ...pr, explicitlyAttached, autoFixOff };
         publish(currentPrs.with(index, updated));
       }
     });

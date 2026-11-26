@@ -58,6 +58,11 @@ export type ComposerQueuedTurnSnapshot = {
   pendingMove?: { beforeQueueEntryId?: string; requestId?: number };
   /** Durable main-process scheduled action represented by this renderer chip. */
   scheduledActionId?: string;
+  /**
+   * The review card this queued review completes when it starts. While the
+   * entry waits, the card says so instead of offering Start review again.
+   */
+  reviewTodoId?: string;
   /** Terminal scheduled action converted into a locally recoverable draft. */
   failedScheduledActionId?: string;
   errorMessage?: string;

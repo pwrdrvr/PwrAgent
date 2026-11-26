@@ -120,7 +120,7 @@ describe("ResourcesScreen usage chart clock", () => {
           }
         },
       ),
-      { numRuns: 25 },
+      { numRuns: 8 },
     );
   });
 

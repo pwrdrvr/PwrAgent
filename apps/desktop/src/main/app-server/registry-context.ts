@@ -69,6 +69,7 @@ export type RegistryDirectoryStore = Pick<BackendRegistryOverlayStoreLike,
 
 export type RegistryToolAccountingStore = Pick<BackendRegistryOverlayStoreLike,
   "readThreadToolAccounting" | "persistThreadToolInvocationBoundary"
+  | "readTokenMiserLegacyReplayCounts"
   | "markThreadToolInvocationsNoisy" | "setThreadSpendAlertPending"
   | "claimMonitorJobSuggestion" | "markThreadToolInvocationNoisy" | "readRecentThreadToolInvocations"
   | "upsertThreadToolInvocation" | "upsertThreadToolInvocationAlert"

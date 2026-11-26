@@ -23,6 +23,7 @@ export interface TokenMiserStorage<
 > {
   readMetadata(objectId: string, threadId?: string): Metadata | undefined;
   listMetadata(threadId?: string): Metadata[];
+  readMetadataPage(afterObjectId: string | undefined, limit: number): Metadata[];
   writeMetadata(metadata: Metadata): void;
   removeMetadata(objectId: string): void;
   recordObservation(observation: Observation): void;

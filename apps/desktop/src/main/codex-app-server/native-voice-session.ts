@@ -2,7 +2,7 @@ import { cameraCueText, type VoiceCameraCue } from "../../shared/native-voice-ca
 import type { NativeVoiceEvent, NativeVoiceStart, NativeVoiceTarget, NativeVoiceText } from "../../shared/native-voice";
 import { getMainLogger } from "../log";
 import { describeNativeVoiceAction, type NativeVoiceBackend, type NativeVoiceNotification } from "./native-voice-protocol";
-import { cameraStatusText, NATIVE_VOICE_PROMPTS } from "./native-voice-prompts";
+import { cameraStatusText, NATIVE_VOICE_PROMPTS, typedMessageParts } from "./native-voice-prompts";
 
 export { NATIVE_VOICE_PROMPTS } from "./native-voice-prompts";
 
@@ -22,6 +22,8 @@ type Session = {
   disconnected?: boolean;
   established?: boolean;
   released?: boolean;
+  /** What ended the session, for the stop log. */
+  stopCause?: string;
   start: Promise<void>;
   stop?: Promise<void>;
 };
@@ -57,7 +59,7 @@ export class NativeVoiceSessionManager {
         if (session.cancelled) this.release(session);
         else {
           this.emit(session, { type: "error", message: "Voice backend disconnected." });
-          void this.stop(session.owner, session.request).catch(() => undefined);
+          void this.stop(session.owner, session.request, "backend-disconnected").catch(() => undefined);
         }
       }));
       await backend.start({
@@ -81,7 +83,7 @@ export class NativeVoiceSessionManager {
     } catch (error) {
       this.emit(session, { type: "error", message: error instanceof Error ? error.message : "Voice startup failed." });
       // Do not await stop here: stop waits for this startup promise to settle.
-      void this.stop(session.owner, session.request).catch(() => undefined);
+      void this.stop(session.owner, session.request, "startup-failed").catch(() => undefined);
       throw error;
     }
   }
@@ -108,21 +110,27 @@ export class NativeVoiceSessionManager {
         this.emit(session, { type: "transcript", role: event.params.role, text: event.params.text, done: true });
         break;
       case "thread/realtime/error":
+        log.warn("native voice realtime error", { threadId: session.request.threadId, message: event.params.message.slice(0, 500) });
         this.emit(session, { type: "error", message: event.params.message });
-        void this.stop(session.owner, session.request).catch(() => undefined);
+        void this.stop(session.owner, session.request, "realtime-error").catch(() => undefined);
         break;
       case "thread/realtime/closed":
         this.emit(session, { type: "closed", reason: event.params.reason ?? undefined });
-        void this.stop(session.owner, session.request).catch(() => undefined);
+        void this.stop(session.owner, session.request, `realtime-closed:${(event.params.reason ?? "none").slice(0, 80)}`).catch(() => undefined);
         break;
     }
   }
 
-  stop(owner: number, request: NativeVoiceTarget): Promise<void> {
+  /**
+   * `cause` names what ended the session: the renderer's control or rule, or
+   * main's own reason. The first stop wins; a later one joins it.
+   */
+  stop(owner: number, request: NativeVoiceTarget, cause = "unspecified"): Promise<void> {
     const session = this.session;
     if (!session || session.owner !== owner || session.request.sessionId !== request.sessionId) return Promise.resolve();
     if (session.stop) return session.stop;
     session.cancelled = true;
+    session.stopCause ??= cause;
     session.stop = (async () => {
       try {
         // A late start response must be followed by stop before admitting a
@@ -132,6 +140,7 @@ export class NativeVoiceSessionManager {
         // The record that the billed realtime session ended.
         log.info("native voice session stopped", {
           threadId: session.request.threadId,
+          cause: session.stopCause,
           established: session.established === true,
           disconnected: session.disconnected === true,
         });
@@ -189,9 +198,9 @@ export class NativeVoiceSessionManager {
     return this.allowsMicrophone(owner) && this.session?.cameraEnabled === true;
   }
 
-  stopOwner(owner: number): Promise<void> {
+  stopOwner(owner: number, cause = "unspecified"): Promise<void> {
     const session = this.session;
-    return session?.owner === owner ? this.stop(owner, session.request) : Promise.resolve();
+    return session?.owner === owner ? this.stop(owner, session.request, cause) : Promise.resolve();
   }
 
   async cameraCue(owner: number, request: VoiceCameraCue): Promise<void> {
@@ -216,6 +225,21 @@ export class NativeVoiceSessionManager {
       throw new Error("No voice session is open in this window.");
     }
     await session.start;
-    if (!session.cancelled) await session.backend?.text(session.request.threadId, request.text);
+    // Resolving here would show the line as said; the voice never heard it.
+    const backend = session.backend;
+    if (session.cancelled || !backend) throw new Error("Voice ended before the message was sent.");
+    try {
+      // In order: the voice reads numbered parts as one message.
+      for (const part of typedMessageParts(request.text)) {
+        await backend.text(session.request.threadId, part);
+      }
+    } catch (error) {
+      log.warn("typed voice message was not accepted", {
+        threadId: session.request.threadId,
+        length: request.text.length,
+        error: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+      });
+      throw error;
+    }
   }
 }

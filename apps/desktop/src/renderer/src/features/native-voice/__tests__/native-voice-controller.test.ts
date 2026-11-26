@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NativeVoiceController, type VoiceView, type VoiceBrowser } from "../native-voice-controller";
 import type { NativeVoiceApi, NativeVoiceEvent } from "../../../../../shared/native-voice";
@@ -167,6 +168,66 @@ describe("native voice browser lifecycle", () => {
   });
 });
 
+
+type TypedCommand =
+  | { kind: "speak"; role: "user" | "assistant"; text: string }
+  | { kind: "type"; text: string; accepted: boolean }
+  // Speech that streams in while a typed message is still on its way.
+  | { kind: "type-during-speech"; text: string; accepted: boolean; role: "user" | "assistant"; spoken: string };
+
+const line = fc.stringMatching(/^[a-z]{1,6}( [a-z]{1,6}){0,2}$/);
+const typedCommand: fc.Arbitrary<TypedCommand> = fc.oneof(
+  fc.record({ kind: fc.constant("speak" as const), role: fc.constantFrom("user" as const, "assistant" as const), text: line }),
+  fc.record({ kind: fc.constant("type" as const), text: line, accepted: fc.boolean() }),
+  fc.record({
+    kind: fc.constant("type-during-speech" as const), text: line, accepted: fc.boolean(),
+    role: fc.constantFrom("user" as const, "assistant" as const), spoken: line,
+  }),
+);
+
+describe("typed voice messages", () => {
+  // Codex reports transcripts only for speech. A pasted link went to the
+  // voice eight times and never appeared in the panel, and a send that
+  // failed ended the whole session.
+  it("puts every accepted typed line in the transcript where it was sent, and a failed one nowhere", async () => {
+    await fc.assert(fc.asyncProperty(fc.array(typedCommand, { maxLength: 12 }), async (commands) => {
+      const f = fixture();
+      const start = f.controller.start("fixture-thread", "director");
+      // Poll fast: each run waits twice, and the default interval is 50ms.
+      await vi.waitFor(() => expect(f.api.startNativeVoice).toHaveBeenCalledOnce(), { interval: 1 });
+      f.connect();
+      await start;
+      await vi.waitFor(() => expect(f.views.at(-1)?.status).toBe("listening"), { interval: 1 });
+      const say = (role: string, text: string) => {
+        const [head, ...rest] = text.split(" ");
+        f.send({ sessionId: "fixture-session", type: "transcript", role, text: head!, done: false });
+        for (const word of rest) f.send({ sessionId: "fixture-session", type: "transcript", role, text: ` ${word}`, done: false });
+        f.send({ sessionId: "fixture-session", type: "transcript", role, text, done: true });
+      };
+      const model: Array<[string, string]> = [];
+      for (const command of commands) {
+        if (command.kind === "speak") {
+          say(command.role, command.text);
+          model.push([command.role, command.text]);
+          continue;
+        }
+        let settle!: (accepted: boolean) => void;
+        vi.mocked(f.api.sendNativeVoiceText).mockImplementationOnce(() => new Promise<void>((resolve, reject) => {
+          settle = (accepted) => accepted ? resolve() : reject(new Error("Voice backend did not answer."));
+        }));
+        const sent = f.controller.text(command.text);
+        if (command.kind === "type-during-speech") say(command.role, command.spoken);
+        settle(command.accepted);
+        expect(await sent).toBe(command.accepted ? undefined : "Voice backend did not answer.");
+        if (command.accepted) model.push(["user", command.text]);
+        if (command.kind === "type-during-speech") model.push([command.role, command.spoken]);
+      }
+      expect(f.views.at(-1)?.status).toBe("listening");
+      expect(f.views.at(-1)?.transcript.map((row) => [row.role, row.text])).toEqual(model);
+      await f.controller.stop();
+    }), { numRuns: 60 });
+  });
+});
 
 describe("voice camera ownership", () => {
   async function liveCamera() {

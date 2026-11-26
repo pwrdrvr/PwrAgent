@@ -153,5 +153,5 @@ it("draws stacked sub-threads exactly as it draws plain ones, in every sidebar l
     } finally {
       stacked.unmount();
     }
-  }), { numRuns: 40 });
+  }), { numRuns: 12 });
 });

@@ -114,8 +114,9 @@ it("sizes each immutable transport page once and never serializes unrelated reta
   } finally { queries.dispose(); encode.mockRestore(); }
 });
 
-it("admits exactly the pages allowed by an independent UTF-8 retained-byte oracle", async () => {
-  await fc.assert(fc.asyncProperty(fc.constantFrom("x", "é", "😀"), fc.integer({ min: 235_000, max: 245_000 }), async (glyph, size) => {
+it.each([["x", 235_000], ["é", 240_000], ["😀", 245_000]] as const)(
+  "admits exactly the pages allowed by the UTF-8 retained-byte oracle for %s at %i bytes",
+  async (glyph, size) => {
     const title = glyph.repeat(Math.floor(size / Buffer.byteLength(glyph, "utf8")));
     const accepted: NavigationQueryPage[] = [];
     let bytes = 0;
@@ -134,8 +135,8 @@ it("admits exactly the pages allowed by an independent UTF-8 retained-byte oracl
       expect(resources.flatMap((resource) => resource.state.page ? [resource.state.page] : [])).toEqual(accepted);
       expect(resources.filter((resource) => resource.state.error?.includes("retained-page budget"))).toHaveLength(38 - accepted.length);
     } finally { queries.dispose(); }
-  }), { numRuns: 5 });
-});
+  },
+);
 
 it("retains visible viewer rows before owner proofs and refreshes every tray whose proof was evicted", async () => {
   const trays = 40;

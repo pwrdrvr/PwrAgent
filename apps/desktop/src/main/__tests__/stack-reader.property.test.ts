@@ -1,7 +1,6 @@
 import { cp, lstat, open, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
@@ -9,6 +8,7 @@ import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { PR_METADATA_PRIORITY, runPrMetadataProcess, SharedPrMetadataRead } from "../pr-status/pr-metadata-process";
 import { StackOperationsService } from "../stacks/stack-operations-service";
+import { forgetGithubForgeStacks, parseGithubForgeStack, recordGithubForgeStack } from "../stacks/github-forge-stacks";
 import { StackReader, StackReadObservation, readGhStackCatalog, readStackClones } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
@@ -57,14 +57,20 @@ async function writeCatalog(cwd: string, name: string) {
 
 describe("stack checkout demand", () => {
   it.each([
-    { kind: "attached", worktreeConfig: false },
-    { kind: "detached", worktreeConfig: false },
-    { kind: "attached", worktreeConfig: true },
-    { kind: "detached", worktreeConfig: true },
-  ])("reuses Git's registered inventory for $kind checkouts with worktree config $worktreeConfig", async ({ kind, worktreeConfig }) => {
+    { kind: "attached", worktreeConfig: false, nested: false },
+    { kind: "detached", worktreeConfig: false, nested: false },
+    { kind: "attached", worktreeConfig: true, nested: false },
+    { kind: "detached", worktreeConfig: true, nested: false },
+    { kind: "attached", worktreeConfig: true, nested: true },
+  ])("reuses Git's registered inventory for $kind checkouts with worktree config $worktreeConfig and enclosing checkout $nested", async ({ kind, worktreeConfig, nested }) => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-worktree-inventory-")));
-    const primary = path.join(sandbox, "primary");
+    const fleet = nested ? path.join(sandbox, "outer") : sandbox;
+    const primary = path.join(fleet, "primary");
     try {
+      if (nested) {
+        await mkdir(fleet);
+        initialize(fleet);
+      }
       const home = path.join(sandbox, "home");
       await Promise.all([mkdir(primary), mkdir(home)]);
       vi.stubEnv("HOME", home);
@@ -76,7 +82,7 @@ describe("stack checkout demand", () => {
       await writeCatalog(primary, "registered");
       const worktrees = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
         const branch = `sibling-${index}`;
-        const cwd = path.join(sandbox, branch);
+        const cwd = path.join(fleet, branch);
         if (kind === "detached") git(primary, "worktree", "add", "--detach", cwd);
         else git(primary, "worktree", "add", "-b", branch, cwd);
         const [root, common] = git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split("\n");
@@ -86,16 +92,15 @@ describe("stack checkout demand", () => {
       }));
       const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
       try {
-        await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.integer({ min: 0, max: 6 }), { minLength: 4, maxLength: 7 }),
-          async (indices) => {
-            start.mockClear();
-            const result = await new StackReader().read([row(primary, "tracked"), ...indices.map((index) => worktrees[index]!)], []);
-            expect(result.stacks[0]?.layers[0]?.thread?.key).toBe("codex:tracked");
-            // Once Git has verified a checkout in this clone, its live roster
-            // can corroborate each standard linked checkout's disk identity.
-            expect(start.mock.calls.filter(([, args, purpose]) => args[0] === "rev-parse" && purpose === "stack-checkout").length)
-              .toBeLessThanOrEqual(2);
-          }), { numRuns: 6 });
+        for (const indices of [[6, 4, 1, 3], [6, 5, 4, 3, 2, 1, 0]]) {
+          start.mockClear();
+          const result = await new StackReader().read([row(primary, "tracked"), ...indices.map((index) => worktrees[index]!)], []);
+          expect(result.stacks[0]?.layers[0]?.thread?.key).toBe("codex:tracked");
+          // Once Git has verified a checkout in this clone, its live roster
+          // can corroborate each standard linked checkout's disk identity.
+          expect(start.mock.calls.filter(([, args, purpose]) => args[0] === "rev-parse" && purpose === "stack-checkout").length)
+            .toBeLessThanOrEqual(2);
+        }
       } finally {
         start.mockRestore();
       }
@@ -802,14 +807,15 @@ describe("stack checkout demand", () => {
       };
       const scoped = await run([]);
       expect(scoped.result.stacks[0]?.layers[0]?.thread?.key).toBe("codex:selected");
-      await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.nat({ max: 31 }), { minLength: 2, maxLength: 12 }), async (inventory) => {
+      // Include paths below a different repository, ordinary paths, and missing paths.
+      for (const inventory of [[0, 2], [11, 4, 3, 6, 1, 8, 7, 9, 5, 10, 12, 13]]) {
         const extra = await Promise.all(inventory.map(async (index) => {
           const cwd = path.join(index % 3 === 0 ? unrelated : sandbox, "fixture-" + index);
           if (index % 3 !== 2) await mkdir(cwd, { recursive: true });
           return row(cwd, "fixture-" + index);
         }));
         expect(await run(extra)).toEqual(scoped);
-      }), { numRuns: 12 });
+      }
       const ordinary = path.join(sandbox, "ordinary");
       await mkdir(ordinary);
       expect(await run([row(ordinary, "ordinary")])).toEqual(scoped);
@@ -1103,6 +1109,52 @@ describe("stack checkout demand", () => {
       expect((await reader.read(rows, [])).stacks[0]?.repository).toBe("github.com:fixture/external");
     } finally {
       vi.unstubAllEnvs();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("shows a stack made on github.com, after its lower layer merged and GitHub retargeted the upper one", async () => {
+    // #4387 and #4393 on 2026-11-25: no gh-stack catalog, and the base chain is gone.
+    forgetGithubForgeStacks();
+    onTestFinished(forgetGithubForgeStacks);
+    const sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent-github-stack-"));
+    try {
+      const clone = path.join(sandbox, "clone");
+      await mkdir(clone);
+      initialize(clone);
+      const upper: PrSummary = {
+        ...inferredPr(4393, "topic", "main", clone),
+        githubStack: { number: 4402, position: 2, size: 2 },
+      };
+      const lower: PrSummary = {
+        ...inferredPr(4387, "lower", "main", clone), lifecycleState: "merged", linkedDirectoryPaths: [],
+      };
+      const rows = [{ ...row(clone, "upper"), prs: [upper] }];
+      const reader = new StackReader();
+      // Before PwrAgent has read the stack: one PR on trunk is no stack.
+      expect((await reader.read(rows, [lower, upper])).stacks).toEqual([]);
+
+      recordGithubForgeStack(parseGithubForgeStack({ host: "github.com", owner: "fixture", repo: "shared" }, 4402, {
+        base: { ref: "main" },
+        pull_requests: [
+          { number: 4387, state: "closed", merged_at: "2026-11-25T17:00:55Z", head: { ref: "lower" }, base: { ref: "main" } },
+          { number: 4393, state: "open", merged_at: null, head: { ref: "topic" }, base: { ref: "main" } },
+        ],
+      })!);
+      const { stacks } = await new StackReader().read(rows, [lower, upper]);
+      expect(stacks).toHaveLength(1);
+      expect(stacks[0]).toMatchObject({
+        inferred: false,
+        githubStack: 4402,
+        trunk: "main",
+        layers: [
+          { branch: "lower", pullRequest: { number: 4387, lifecycleState: "merged" } },
+          { branch: "topic", pullRequest: { number: 4393, lifecycleState: "open" }, thread: { key: "codex:upper" } },
+        ],
+      });
+      // A forge stack has no fork points, so it claims no local sync state.
+      for (const layer of stacks[0]!.layers) expect(["parent_merged", "needs_restack"]).not.toContain(layer.health);
+    } finally {
       await rm(sandbox, { recursive: true, force: true });
     }
   });

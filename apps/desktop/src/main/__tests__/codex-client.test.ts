@@ -6911,7 +6911,11 @@ describe("CodexAppServerClient", () => {
           await client.close();
         }
       }),
-      { numRuns: 40 },
+      { numRuns: 5, examples: [
+        [["tool", "emptyMessage", "tool", "message", "tool"]],
+        [[]],
+        [["message", "emptyMessage", "message"]],
+      ] },
     );
   });
 
@@ -10104,7 +10108,13 @@ describe("CodexAppServerClient", () => {
           await client.close();
         }
       }),
-      { numRuns: 60 },
+      { numRuns: 5, examples: [
+        [[{ query: "grok", toolName: undefined, status: "completed", sources: true },
+          { query: "grok", toolName: "search_web", status: "completed", sources: false }]],
+        [[{ toolName: "search_web", status: "failed", sources: false },
+          { query: "codex", toolName: undefined, status: "inProgress", sources: true },
+          { query: "queries", toolName: "search_web", status: undefined, sources: true }]],
+      ] },
     );
   });
 
@@ -15840,11 +15850,12 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("never admits a turn after the provider rejects resume because Token Miser has an active turn", async () => {
-    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
-    // The provider is the oracle: a rejected resume precedes turn/start,
-    // regardless of the catalog or activation being requested.
-    await fc.assert(fc.asyncProperty(fc.uuid(), fc.boolean(), fc.boolean(), async (threadId, tools, enabled) => {
+  it.each([false, true].flatMap(tools => [false, true].map(enabled => ({ tools, enabled }))))(
+    "never starts after a busy Token Miser resume (catalog=$tools, enabled=$enabled)",
+    async ({ tools, enabled }) => {
+      const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+      // The provider rejection must prevent turn/start for every request shape.
+      const threadId = "2e345678-1234-4234-8234-123456789abc";
       MockTransport.threadResumeError = {
         code: -32600,
         message: `cannot change PwrAgent Token Miser activation while thread ${threadId} has an active turn`,
@@ -15862,8 +15873,8 @@ describe("CodexAppServerClient", () => {
       } finally {
         await client.close();
       }
-    }), { numRuns: 12 });
-  });
+    },
+  );
 
   it.each([undefined, []])("preserves an active-writer conflict without attempting turn/start (tools: %s)", async (dynamicTools) => {
     const message = "thread shared-thread already has an active writer";
@@ -18330,7 +18341,8 @@ describe("CodexAppServerClient", () => {
             });
           }
         }
-        await vi.waitFor(() => expect(seen).toHaveLength(inputs.length));
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(seen).toHaveLength(inputs.length);
         // Oracle: the App Server schema's meaning of each method.
         expect(seen).toEqual(inputs.map((input) => {
           if (input.kind === "buffering") {

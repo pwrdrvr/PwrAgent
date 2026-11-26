@@ -62,11 +62,22 @@ export type ComposerInputChangeMetadata = {
   editorDocument?: JSONContent;
 };
 
+export type ComposerReferenceSigil = "#" | "@";
+
+/** Positions in the live editor document. */
+export type ComposerReferenceTrigger = {
+  start: number;
+  end: number;
+  query: string;
+};
+
 export type ComposerInputHandle = {
   appendPlainText: (text: string, options?: { focusEnd?: boolean }) => boolean;
   deleteSelection: () => void;
   focus: (options?: { synchronous?: boolean }) => void;
+  getReferenceTriggers: () => Partial<Record<ComposerReferenceSigil, ComposerReferenceTrigger>>;
   insertMentionToken: (token: ComposerSkillToken) => boolean;
+  replaceReference: (sigil: ComposerReferenceSigil, tokens: ComposerSkillToken[]) => void;
   readonly selectionEnd: number;
   readonly selectionStart: number;
   readonly skillTokenCount: number;

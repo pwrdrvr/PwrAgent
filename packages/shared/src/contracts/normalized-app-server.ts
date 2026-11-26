@@ -747,12 +747,7 @@ export type ThreadGitWorkingState = {
   baseAheadCommitCount?: number;
   /** True when `baseBranch` has commits after `baseCommit`. */
   isBehindBase?: boolean;
-  /**
-   * The `upstream` remote's default branch (`upstream/main`), when the
-   * checkout has one and `baseBranch` was found on another remote: a fork's
-   * own `main` only moves when the operator syncs it, so this is the count
-   * that says how stale the branch is.
-   */
+  /** The matching branch on the fork parent's remote, when it differs from the selected base ref. */
   upstreamBranch?: string;
   /** Commits on `upstreamBranch` that HEAD does not have. */
   upstreamBehindCommitCount?: number;
@@ -842,7 +837,7 @@ export type AppServerThreadMessageOrigin = {
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
   stackNotice?: import("./thread-system-messages").StackNotice;
-  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice";
+  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice" | "auto-compaction";
   /**
    * The operator sent this agent-routed message by acting on a to-do card,
    * so a paused project's refusal of messages from other threads skips it.
@@ -2589,6 +2584,12 @@ export type AppServerNotification =
           type: string;
           text?: string;
           origin?: AppServerThreadMessageOrigin;
+          /**
+           * A `userMessage` the owner accepted into a turn that was already
+           * running. It joins that turn rather than opening it, so it never
+           * stands in for the message that started the turn.
+           */
+          steered?: boolean;
           review?: string;
           command?: string;
           commandAction?: AppServerCommandAction;
@@ -2721,6 +2722,25 @@ export type AppServerNotification =
         turnId?: string;
         usedTokens: number;
         modelContextWindow: number;
+      };
+    }
+  | {
+      /**
+       * The owner's auto-compaction state for a thread. Transient and never
+       * persisted: sent when the phase or the threshold changes, so a view
+       * opened later shows nothing until the next change.
+       */
+      method: "thread/autoCompaction/updated";
+      params: {
+        threadId: string;
+        phase: "armed" | "due" | "steering" | "starting" | "compacting" | "resume" | "verifying" | "held";
+        triggerTokens?: number;
+        effectiveContextWindow?: number;
+        reportedContextWindow?: number;
+        via?: "steer" | "start";
+        /** The fill when PwrAgent asked for the compaction. */
+        dispatchedAtTokens?: number;
+        heldReason?: "no-shrink" | "refused" | "unsupported";
       };
     }
   | {

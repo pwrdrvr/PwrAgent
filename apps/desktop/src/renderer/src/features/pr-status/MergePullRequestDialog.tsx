@@ -7,7 +7,15 @@ import {
 import { PendingSpinner } from "../../components/PendingSpinner";
 import { Select } from "../../components/Select";
 import { useModalDialog } from "../../lib/useModalDialog";
-import { pullRequestMergeCheckWarning, pullRequestMergeQuestion } from "./PrCardMergeControl";
+import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
+import { githubStackMergeNote } from "@pwragent/shared/pull-request-merge-offer";
+import { buildProjectNeverMergeError } from "@pwragent/shared/project-forge-automation";
+import {
+  pullRequestMergeButtonLabel,
+  pullRequestMergeCheckWarning,
+  pullRequestMergeQuestion,
+  pullRequestStackMergePlan,
+} from "./PrCardMergeControl";
 import type { PullRequestMergeService } from "./pull-request-merge-context";
 import { usePullRequestMergeOffer } from "./usePullRequestMergeOffer";
 
@@ -21,6 +29,8 @@ export function MergePullRequestDialog(props: {
   pr: PrSummary;
   thread: ThreadPullRequestMergeTarget;
   service: PullRequestMergeService;
+  /** The PR's stack membership: a GitHub stack's merge can land layers below it. */
+  stack?: CompactStackMembership;
   onClose: () => void;
   returnFocus?: RefObject<HTMLElement | null>;
 }) {
@@ -37,13 +47,18 @@ export function MergePullRequestDialog(props: {
     initialFocus: cancelRef,
     ...(props.returnFocus === undefined ? {} : { returnFocus: props.returnFocus }),
   });
-  const method = offer.kind === "merge"
+  // GitHub's asynchronous merge lands the open layers below, queued or not.
+  const stackPlan = offer.kind === "merge" || offer.kind === "queue"
+    ? pullRequestStackMergePlan(props.stack, props.thread)
+    : undefined;
+  const method = offer.kind === "merge" && stackPlan?.kind !== "merge_below_first"
     ? picked && offer.methods.includes(picked) ? picked : offer.method
     : undefined;
+  const queueable = offer.kind === "queue" && stackPlan?.kind !== "merge_below_first";
   const question = offer.kind === "queue"
-    ? pullRequestMergeQuestion(pr, { queue: offer.noun })
-    : method ? pullRequestMergeQuestion(pr, { method }) : `Merge #${pr.number}?`;
-  const runnable = offer.kind === "queue" || method !== undefined;
+    ? pullRequestMergeQuestion(pr, { queue: offer.noun }, stackPlan)
+    : method ? pullRequestMergeQuestion(pr, { method }, stackPlan) : `Merge #${pr.number}?`;
+  const runnable = queueable || method !== undefined;
   const warning = runnable ? pullRequestMergeCheckWarning(pr) : undefined;
   const merge = (): void => {
     if (running) return;
@@ -53,6 +68,7 @@ export function MergePullRequestDialog(props: {
       pr,
       method: method ?? "squash",
       rememberMethod: offer.kind === "merge" && method !== offer.method,
+      ...(stackPlan?.kind === "with_layers_below" ? { mergeOpenLayersBelow: stackPlan.below } : {}),
     }).finally(props.onClose);
   };
 
@@ -99,13 +115,17 @@ export function MergePullRequestDialog(props: {
           <p role="status">Merge waits for {offer.waitingFor.join("; ")}.</p>
         ) : offer.kind === "never_merge" ? (
           <p role="status">
-            {offer.projectLabel} never merges its pull requests. Change it from the project menu: Forge Automation.
+            {buildProjectNeverMergeError(offer)}
           </p>
         ) : offer.kind === "none" ? (
           <p role="status">This pull request cannot be merged now.</p>
-        ) : warning ? (
-          <p className="pr-merge-dialog__warning">{warning}</p>
+        ) : stackPlan?.kind === "merge_below_first" ? (
+          <p role="status">{githubStackMergeNote(stackPlan, pr.number)}</p>
         ) : null}
+        {stackPlan?.kind === "with_layers_below" ? (
+          <p className="pr-merge-dialog__warning">{githubStackMergeNote(stackPlan, pr.number)}</p>
+        ) : null}
+        {runnable && warning ? <p className="pr-merge-dialog__warning">{warning}</p> : null}
         <div className="pr-detach-warning-dialog__actions">
           {running ? (
             <span className="pr-merge-dialog__running" role="status">
@@ -126,7 +146,10 @@ export function MergePullRequestDialog(props: {
               aria-disabled={running}
               onClick={merge}
             >
-              {offer.kind === "queue" ? "Add to queue" : THREAD_TODO_MERGE_METHOD_LABELS[method!].verb}
+              {offer.kind === "queue"
+                ? stackPlan?.kind === "with_layers_below" ? `Add ${stackPlan.count} PRs to queue` : "Add to queue"
+                : stackPlan?.kind === "with_layers_below" ? pullRequestMergeButtonLabel(method!, stackPlan)
+                : THREAD_TODO_MERGE_METHOD_LABELS[method!].verb}
             </button>
           ) : null}
         </div>

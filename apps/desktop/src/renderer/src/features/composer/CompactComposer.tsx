@@ -947,6 +947,7 @@ export function CompactComposer(props: CompactComposerProps) {
           onDrop={onDrop}
           onKeyDown={onKeyDown}
           onPaste={onPaste}
+          onReferenceSelectionChange={mentions.onReferenceSelectionChange}
           onSkillChipPointerEnter={mentions.onSkillChipPointerEnter}
           onSkillChipPointerLeave={mentions.onSkillChipPointerLeave}
           placeholder={props.placeholder ?? "Reply…"}

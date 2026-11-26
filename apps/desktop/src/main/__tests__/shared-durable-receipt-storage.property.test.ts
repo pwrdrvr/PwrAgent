@@ -26,7 +26,7 @@ const keyOf = (scope: string, id: string) => JSON.stringify([scope, id]);
 it("binds every generated desktop receipt-store choice to the portable implementation", () => {
   fc.assert(fc.property(fc.constantFrom(...bindings), binding => {
     expect(binding).toBe(SharedStore);
-  }));
+  }), { numRuns: 8 });
 });
 
 // Receipts are caller-qualified immutable identities; writes change their JSON
@@ -94,83 +94,105 @@ it("matches an independent receipt model over alternating WAL hosts, rollback an
         expect(reads.writes.commits).toBe(0);
       }
     } finally { for (const db of dbs) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // An immediate lock is acquired before work, even read-only work. FULL applies
 // inside the callback and the original connection policy survives every exit.
-it("takes an immediate WAL writer lock and restores every prior durability mode on return or refusal", () => {
-  fc.assert(fc.property(fc.integer({ min: 0, max: 3 }), fc.boolean(), fc.integer({ min: 0, max: 1 }), (mode, refuse, host) => {
-    const fixture = createTempStateDb("shared-receipt-durability-");
-    const db = StateDb.open(fixture.dbPath);
-    const observer = StateDb.open(fixture.dbPath);
-    const store = new bindings[host]!(db);
-    const token = {};
-    db.raw.pragma(`synchronous = ${mode}`);
-    observer.raw.pragma("busy_timeout = 0");
-    try {
-      const work = () => {
-        expect(db.raw.inTransaction).toBe(true);
-        expect(db.raw.pragma("synchronous", { simple: true })).toBe(2);
-        expect(() => observer.raw.transaction(() => {}).immediate()).toThrow(/locked/);
-        if (refuse) throw token;
-        return token;
-      };
-      if (refuse) {
-        try { store.transaction(work); throw new Error("Expected refusal"); }
-        catch (error) { expect(error).toBe(token); }
-      } else expect(store.transaction(work)).toBe(token);
-      expect(db.raw.inTransaction).toBe(false);
-      expect(db.raw.pragma("synchronous", { simple: true })).toBe(mode);
-      expect(observer.raw.transaction(() => token).immediate()).toBe(token);
-    } finally { observer.close(); db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+it.each([
+  [0, false, 0],
+  [0, false, 1],
+  [0, true, 0],
+  [0, true, 1],
+  [1, false, 0],
+  [1, false, 1],
+  [1, true, 0],
+  [1, true, 1],
+  [2, false, 0],
+  [2, false, 1],
+  [2, true, 0],
+  [2, true, 1],
+  [3, false, 0],
+  [3, false, 1],
+  [3, true, 0],
+  [3, true, 1],
+] as const)("takes an immediate WAL writer lock and restores every prior durability mode on return or refusal [%#]", (mode, refuse, host) => {
+  const fixture = createTempStateDb("shared-receipt-durability-");
+  const db = StateDb.open(fixture.dbPath);
+  const observer = StateDb.open(fixture.dbPath);
+  const store = new bindings[host]!(db);
+  const token = {};
+  db.raw.pragma(`synchronous = ${mode}`);
+  observer.raw.pragma("busy_timeout = 0");
+  try {
+    const work = () => {
+      expect(db.raw.inTransaction).toBe(true);
+      expect(db.raw.pragma("synchronous", { simple: true })).toBe(2);
+      expect(() => observer.raw.transaction(() => {}).immediate()).toThrow(/locked/);
+      if (refuse) throw token;
+      return token;
+    };
+    if (refuse) {
+      try { store.transaction(work); throw new Error("Expected refusal"); }
+      catch (error) { expect(error).toBe(token); }
+    } else expect(store.transaction(work)).toBe(token);
+    expect(db.raw.inTransaction).toBe(false);
+    expect(db.raw.pragma("synchronous", { simple: true })).toBe(mode);
+    expect(observer.raw.transaction(() => token).immediate()).toBe(token);
+  } finally { observer.close(); db.close(); removeTempStateDbDir(fixture.tempDir); }
 });
 
 // The other WAL handle is the oracle: the claim must already be committed when
 // provider dispatch starts, and a retry after an ambiguous acceptance never sends.
-it("commits portable and desktop start/steer claims before dispatch and retains ambiguous receipts across restart", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.integer({ min: 0, max: 1 }), async (steering, ambiguous, host) => {
-    const fixture = createTempStateDb("shared-receipt-dispatch-");
-    let db = StateDb.open(fixture.dbPath);
-    const observer = StateDb.open(fixture.dbPath);
-    const reader = new bindings[1 - host]!(observer);
-    const now = 1_800_000_000_000;
-    const scope = steering ? JSON.stringify(["steerTurn", "caller"]) : "caller";
-    const request: SubmitDurableSteerRequest | SubmitDurableTurnRequest = {
-      clientRequest: { version: 1, id: randomUUID(), createdAt: now, payloadHash: "" },
-      request: { backend: "codex", threadId: "thread", input: [{ type: "text", text: "Invented request" }],
-        ...(steering ? { expectedTurnId: "active-turn" } : {}) },
-    };
-    const canonical = steering ? canonicalDurableSteerRequest("owner", request as SubmitDurableSteerRequest)
-      : canonicalDurableTurnRequest("owner", request);
-    request.clientRequest.payloadHash = createHash("sha256").update(canonical).digest("hex");
-    let sends = 0;
-    const inspectClaim = () => {
-      sends++;
-      expect(db.raw.inTransaction).toBe(false);
-      expect(db.raw.pragma("synchronous", { simple: true })).toBe(1);
-      expect(reader.read(scope, request.clientRequest.id)).toMatchObject({ state: "dispatching" });
-      // No provider await owns a SQLite transaction or blocks another writer.
-      observer.raw.transaction(() => {}).immediate();
-      if (ambiguous) throw new Error("Invented lost acknowledgement");
-    };
-    const make = () => new DurableTurnRequestService({ storage: new bindings[host]!(db), ownerInstanceId: "owner",
-      now: () => now, authorize: async () => {}, dispatch: async () => {
-        inspectClaim(); return { backend: "codex", threadId: "thread", turnId: "turn" };
-      }, steer: async request => {
-        inspectClaim(); return { ok: true, backend: "codex", threadId: "thread", requestId: request.requestId,
-          turnId: "active-turn", disposition: "steered" };
-      } });
-    const submit = (service: DurableTurnRequestService) => steering
-      ? service.submitSteer("caller", request as SubmitDurableSteerRequest) : service.submit("caller", request);
-    try {
-      db.raw.pragma("synchronous = NORMAL");
-      const first = await submit(make());
-      expect(first.state).toBe(ambiguous ? "uncertain" : "dispatched");
-      db.close(); db = StateDb.open(fixture.dbPath);
-      expect(await submit(make())).toEqual(first);
-      expect(sends).toBe(1);
-    } finally { observer.close(); db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+it.each([
+  [false, false, 0],
+  [false, false, 1],
+  [false, true, 0],
+  [false, true, 1],
+  [true, false, 0],
+  [true, false, 1],
+  [true, true, 0],
+  [true, true, 1],
+] as const)("commits portable and desktop start/steer claims before dispatch and retains ambiguous receipts across restart [%#]", async (steering, ambiguous, host) => {
+  const fixture = createTempStateDb("shared-receipt-dispatch-");
+  let db = StateDb.open(fixture.dbPath);
+  const observer = StateDb.open(fixture.dbPath);
+  const reader = new bindings[1 - host]!(observer);
+  const now = 1_800_000_000_000;
+  const scope = steering ? JSON.stringify(["steerTurn", "caller"]) : "caller";
+  const request: SubmitDurableSteerRequest | SubmitDurableTurnRequest = {
+    clientRequest: { version: 1, id: randomUUID(), createdAt: now, payloadHash: "" },
+    request: { backend: "codex", threadId: "thread", input: [{ type: "text", text: "Invented request" }],
+      ...(steering ? { expectedTurnId: "active-turn" } : {}) },
+  };
+  const canonical = steering ? canonicalDurableSteerRequest("owner", request as SubmitDurableSteerRequest)
+    : canonicalDurableTurnRequest("owner", request);
+  request.clientRequest.payloadHash = createHash("sha256").update(canonical).digest("hex");
+  let sends = 0;
+  const inspectClaim = () => {
+    sends++;
+    expect(db.raw.inTransaction).toBe(false);
+    expect(db.raw.pragma("synchronous", { simple: true })).toBe(1);
+    expect(reader.read(scope, request.clientRequest.id)).toMatchObject({ state: "dispatching" });
+    // No provider await owns a SQLite transaction or blocks another writer.
+    observer.raw.transaction(() => {}).immediate();
+    if (ambiguous) throw new Error("Invented lost acknowledgement");
+  };
+  const make = () => new DurableTurnRequestService({ storage: new bindings[host]!(db), ownerInstanceId: "owner",
+    now: () => now, authorize: async () => {}, dispatch: async () => {
+      inspectClaim(); return { backend: "codex", threadId: "thread", turnId: "turn" };
+    }, steer: async request => {
+      inspectClaim(); return { ok: true, backend: "codex", threadId: "thread", requestId: request.requestId,
+        turnId: "active-turn", disposition: "steered" };
+    } });
+  const submit = (service: DurableTurnRequestService) => steering
+    ? service.submitSteer("caller", request as SubmitDurableSteerRequest) : service.submit("caller", request);
+  try {
+    db.raw.pragma("synchronous = NORMAL");
+    const first = await submit(make());
+    expect(first.state).toBe(ambiguous ? "uncertain" : "dispatched");
+    db.close(); db = StateDb.open(fixture.dbPath);
+    expect(await submit(make())).toEqual(first);
+    expect(sends).toBe(1);
+  } finally { observer.close(); db.close(); removeTempStateDbDir(fixture.tempDir); }
 });

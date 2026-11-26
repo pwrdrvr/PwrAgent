@@ -29,12 +29,14 @@ import { accountTokenUsageAccountKey, buildAccountTokenAccounts, type AccountTok
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { summarizeUsageActivity, type OwnedUsageRow, type UsageGroup } from "./usage-activity-summary";
+import { readUsageActivityInPieces } from "./usage-activity-pieces";
 import { buildUsageAccounts, limitUsageAccountKey, usageAccountKey, usageAccountProvider, type UsageAccount } from "./usage-activity-accounts";
 import { USAGE_RESULTS_MAX_HEIGHT, USAGE_RESULTS_MIN_HEIGHT, clampUsageResultsHeight, readStoredUsageResultsHeight,
   writeStoredUsageResultsHeight } from "./usage-activity-layout";
 
 const DAY = 86_400_000;
-const MAX_WINDOW = 31 * DAY;
+// Owners reject windows over 31 days; longer periods are read in pieces.
+const MAX_WINDOW = 90 * DAY;
 /** A focused window rereads when its data is older than this. */
 const STALE_AFTER = 60_000;
 const time = (value: number) => new Date(value).toLocaleString();
@@ -50,7 +52,7 @@ function usageInstanceLabels(peer: Parameters<typeof formatFederationPeerDisplay
   return { label: `${label}${suffix}`, ...(shortLabel ? { shortLabel: `${shortLabel}${suffix}` } : {}) };
 }
 
-type Preset = "reset" | "five" | "today" | "day" | "week" | "month" | "custom";
+type Preset = "reset" | "five" | "today" | "day" | "week" | "month" | "quarter" | "custom";
 type SourceResult = Source & { data?: ReadUsageActivityResponse; error?: string };
 type Snapshot = {
   queryKey: string; from: number; to: number; preset: Preset; readAt: number;
@@ -64,6 +66,7 @@ const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
   { value: "day", label: "24 h", title: "The last 24 hours" },
   { value: "week", label: "7 days", title: "The last 7 days" },
   { value: "month", label: "30 days", title: "The last 30 days" },
+  { value: "quarter", label: "90 days", title: "The last 90 days" },
   { value: "custom", label: "Custom", title: "Choose a start and end" },
 ];
 
@@ -300,18 +303,19 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     ? accounts.filter((account) => accountTokenUsageAccountKey(account) === accountFilter) : accounts;
 
   const readAll = async (targets: Source[], start: number, end: number,
-    includeAccountTokenUsage: (source: Source) => boolean = () => false) => {
+    includeAccountTokenUsage: (source: Source) => boolean, shouldContinue: () => boolean) => {
     const results: SourceResult[] = [];
-    // At most four reads in flight. Each owner enforces a 5,000-row bound.
+    // At most four owners read at once. Each rejects a window over 31 days and
+    // returns at most 5,000 rows, so a long or busy period is read in pieces.
     for (let offset = 0; offset < targets.length; offset += 4) {
       results.push(...await Promise.all(targets.slice(offset, offset + 4).map(async (source) => {
         try {
           return {
             ...source,
-            data: await desktopApi!.readUsageActivity!({
-              from: start, to: end, federationTarget: source.target,
-              ...(includeAccountTokenUsage(source) ? { includeAccountTokenUsage: true } : {}),
-            }),
+            data: await readUsageActivityInPieces((window, includeTokens) => desktopApi!.readUsageActivity!({
+              from: window.from, to: window.to, federationTarget: source.target,
+              ...(includeTokens ? { includeAccountTokenUsage: true } : {}),
+            }), { from: start, to: end }, { includeAccountTokenUsage: includeAccountTokenUsage(source), shouldContinue }),
           };
         } catch (cause) { return { ...source, error: String(cause) }; }
       })));
@@ -341,10 +345,11 @@ export function UsageActivity({ desktopApi, initialProvider }: {
       : preset === "day" ? end - DAY
       : preset === "week" ? end - 7 * DAY
       : preset === "month" ? end - 30 * DAY
+      : preset === "quarter" ? end - 90 * DAY
       : known ?? end - (preset === "five" ? 5 * 3_600_000 : 8 * DAY);
     if (preset !== "custom") start = Math.max(start, end - MAX_WINDOW);
     if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || end - start > MAX_WINDOW) {
-      setError("Choose a start before the end, within 31 days."); return;
+      setError("Choose a start before the end, within 90 days."); return;
     }
     // A refresh of the same selection keeps what the operator was looking at.
     const sameQuery = snapshot?.queryKey === queryKey;
@@ -353,7 +358,9 @@ export function UsageActivity({ desktopApi, initialProvider }: {
       setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setBucket(undefined); setFacet(undefined);
       setProviderFilters({}); setModelFilters({});
     }
-    let results = await readAll(enabledSources, start, end, () => true);
+    // A superseded read stops issuing owner reads; its result is discarded below.
+    const current = () => mounted.current && seq === readSeq.current;
+    let results = await readAll(enabledSources, start, end, () => true, current);
     if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
     // Only owners that answered: one that failed the first read asks again below,
@@ -370,7 +377,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
         // Account-wide daily token history is period-independent, so reuse the
         // first pass rather than polling `account/usage/read` a second time.
         results = (await readAll(enabledSources, bounded, end,
-          (source) => !initialTokenUsageBySource.has(sourceId(source.target)))).map((source) => {
+          (source) => !initialTokenUsageBySource.has(sourceId(source.target)), current)).map((source) => {
           const accountTokenUsage = source.data?.accountTokenUsage ?? initialTokenUsageBySource.get(sourceId(source.target));
           return source.data && accountTokenUsage ? { ...source, data: { ...source.data, accountTokenUsage } } : source;
         });
@@ -482,7 +489,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     outdated.length ? `${nameList(outdated)} ${outdated.length === 1 ? "needs" : "need"} a PwrAgent update to share usage` : "",
     offline.length ? `${nameList(offline)} ${offline.length === 1 ? "is" : "are"} offline` : "",
     failed.length ? `${nameList(failed.map((source) => source.label))} could not be read` : "",
-    capped.length ? `${nameList(capped)} returned only the newest 5,000 rows; choose a shorter period for the rest` : "",
+    capped.length ? `${nameList(capped)} had too much usage to read in full; choose a shorter period for the rest` : "",
   ].filter(Boolean);
   const limitAccounts = scopedLimits(snapshot?.accounts ?? []);
   const tokenAccounts = scopedTokenAccounts(snapshot?.tokenAccounts ?? []);

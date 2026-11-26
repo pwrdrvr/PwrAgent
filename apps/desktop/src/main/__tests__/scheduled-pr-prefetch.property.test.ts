@@ -1,9 +1,8 @@
-import { appendFile, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, cp, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { afterAll, expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitExecutable } from "../bundled-git";
 import { GitSubprocessDiagnostics, gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
@@ -22,6 +21,11 @@ const topics = Array.from({ length: 12 }, (_, index) => `topic-${index}`);
 const remoteHead = (cwd: string, remote: string, branch: string) =>
   readGit(cwd, "symbolic-ref", `refs/remotes/${remote}/HEAD`, `refs/remotes/${remote}/${branch}`);
 
+const fixtureTemplates = new Map<string, string>();
+afterAll(async () => {
+  await Promise.all([...fixtureTemplates.values()].map(root => rm(root, { recursive: true, force: true })));
+});
+
 async function fixture(refFormat = "files", objectFormat = "sha1") {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-scheduled-pr-prefetch-"));
   const restoreEnv = isolateProcessGitEnvironment(cwd);
@@ -30,6 +34,12 @@ async function fixture(refFormat = "files", objectFormat = "sha1") {
     clearGitHubRemoteCache();
     await rm(cwd, { recursive: true, force: true });
   });
+  const format = `${refFormat}:${objectFormat}`;
+  const template = fixtureTemplates.get(format);
+  if (template) {
+    await cp(path.join(template, ".git"), path.join(cwd, ".git"), { recursive: true });
+    return cwd;
+  }
   await readGit(cwd, "init", "-b", "main", `--ref-format=${refFormat}`, `--object-format=${objectFormat}`);
   await readGit(cwd, "-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
     "commit", "--allow-empty", "-m", "fixture");
@@ -43,6 +53,10 @@ async function fixture(refFormat = "files", objectFormat = "sha1") {
   await runGitCommand(cwd, ["update-ref", "--stdin"], { input: refs.map((ref) => `create ${ref} ${oid}\n`).join("") });
   await readGit(cwd, "branch", "--set-upstream-to=origin/main", "tracks-default");
   await readGit(cwd, "branch", "--set-upstream-to=upstream/other", "tracks-other");
+  // Copy the untouched repository before the test changes any refs or config.
+  const templateRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-prefetch-template-"));
+  fixtureTemplates.set(format, templateRoot);
+  await cp(path.join(cwd, ".git"), path.join(templateRoot, ".git"), { recursive: true });
   return cwd;
 }
 
@@ -156,13 +170,17 @@ it.skipIf(process.platform === "win32")("shares checkout metadata between an eli
   expect(starts.calls.map(([, args]) => args[0])).toEqual(["config", "rev-parse", "for-each-ref", "for-each-ref"]);
 });
 
-it.skipIf(process.platform === "win32")("keeps Git eligibility and constant checkout probes for generated serial branch sets", async () => {
+it.skipIf(process.platform === "win32")("keeps Git eligibility and constant checkout probes for serial branch sets", async () => {
   const cwd = await fixture();
   const expected = await oracle(cwd);
   const starts = recordPrefetchStarts();
-  await fc.assert(fc.asyncProperty(fc.shuffledSubarray([...topics, "main", "tracks-default", "tracks-other"], {
-    minLength: 2,
-  }), async (branches) => {
+  const ineligibleAndRenamed = ["main", "tracks-default", "tracks-other"];
+  const branchSets = [
+    ["main", "tracks-default"],
+    ["tracks-other", "topic-2"],
+    [...ineligibleAndRenamed, ...topics.toReversed()],
+  ];
+  for (const branches of branchSets) {
     clearGitHubRemoteCache();
     starts.clear();
     const resolve = createScheduledPrPrefetchRepoResolver();
@@ -171,7 +189,7 @@ it.skipIf(process.platform === "win32")("keeps Git eligibility and constant chec
     // The number of metadata launches depends on checkout observations, independent of branch order or count.
     expect(starts.calls.filter(([, args]) => args[0] !== "for-each-ref").map(([, args]) => args[0]))
       .toEqual(["config", "rev-parse"]);
-  }), { numRuns: 12 });
+  }
 });
 
 it("uses the existing Git remote HEAD fallback with one configured remote", async () => {

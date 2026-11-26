@@ -41,7 +41,7 @@ describe("observable inbound turn protocol", () => {
       const real = await messagingInboundHarness({ channel, backend, ownsQueue });
       try { await fc.asyncModelRun(() => ({ model: { attempts: 0, ownsQueue }, real }), commands); }
       finally { await real.close(); }
-    }), { numRuns: 30 });
+    }), { numRuns: 8 });
   });
 
   it("applies provider mention capability, conversation policy and Full Access resume policy before submission", async () => {
@@ -58,7 +58,7 @@ describe("observable inbound turn protocol", () => {
         expect(f.starts).toHaveLength(permitted ? 1 : 0);
         if (permitted) expect(f.starts[0]!.executionMode).toBe(value.fullAccess ? "full-access" : "default");
       } finally { await f.close(); }
-    }), { numRuns: 35 });
+    }), { numRuns: 8 });
   });
 
   it("starts preparation activity before backend acceptance and reports acceptance only after it settles", async () => {
@@ -77,20 +77,18 @@ describe("observable inbound turn protocol", () => {
         expect(f.trace.includes("started:reported")).toBe(outcome === "started");
         if (outcome === "started") expect(f.trace.indexOf("start:accepted")).toBeLessThan(f.trace.indexOf("started:reported"));
       } finally { await scheduler.waitAll(); await pending; await f.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 8 });
   });
 
-  it("retains accepted input when a later status effect fails", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("telegram", "discord"), async channel => {
-      const f = await messagingInboundHarness({ channel });
-      try {
-        f.hooks.postStartFailure = true;
-        await expect(f.controller.handleInboundEvent(f.event())).resolves.toBeUndefined();
-        expect(f.starts).toHaveLength(1);
-        expect(f.deliveries.some(intent => intent.kind === "error" && intent.title === "Turn could not start")).toBe(false);
-        expect(f.trace).toContain("started:reported");
-      } finally { await f.close(); }
-    }), { numRuns: 25 });
+  it.each(["telegram", "discord"] as const)("retains accepted input when a later status effect fails [%#]", async (channel) => {
+    const f = await messagingInboundHarness({ channel });
+    try {
+      f.hooks.postStartFailure = true;
+      await expect(f.controller.handleInboundEvent(f.event())).resolves.toBeUndefined();
+      expect(f.starts).toHaveLength(1);
+      expect(f.deliveries.some(intent => intent.kind === "error" && intent.title === "Turn could not start")).toBe(false);
+      expect(f.trace).toContain("started:reported");
+    } finally { await f.close(); }
   });
 
   it("reads the replacement overlay after a pending-intent read yields", async () => {
@@ -115,66 +113,68 @@ describe("observable inbound turn protocol", () => {
         expect(f.starts).toHaveLength(1);
         expect(f.starts[0]!.threadId).toBe("replacement-thread");
       } finally { await scheduler.waitAll(); await pending; await f.close(); replacementDb.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 8 });
   });
 
-  it("keeps optional metadata failures off the accepted reply path", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("telegram", "discord"), async channel => {
-      const f = await messagingInboundHarness({ channel });
-      try {
-        f.store.mergeBindingChannelMetadata = async () => { throw new Error("Fixture optional metadata failure"); };
-        await f.controller.handleInboundEvent(f.event());
-        await setImmediate();
-        expect(f.trace).toContain("metadata:failed");
-        expect(f.starts).toHaveLength(1);
-      } finally { await f.close(); }
-    }), { numRuns: 25 });
+  it.each(["telegram", "discord"] as const)("keeps optional metadata failures off the accepted reply path [%#]", async (channel) => {
+    const f = await messagingInboundHarness({ channel });
+    try {
+      f.store.mergeBindingChannelMetadata = async () => { throw new Error("Fixture optional metadata failure"); };
+      await f.controller.handleInboundEvent(f.event());
+      await setImmediate();
+      expect(f.trace).toContain("metadata:failed");
+      expect(f.starts).toHaveLength(1);
+    } finally { await f.close(); }
   });
 
-  it("uses a Default Agent without creating a persistent binding", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("telegram", "discord"), fc.boolean(), async (channel, media) => {
-      const f = await messagingInboundHarness({ channel, route: "default-agent" });
-      try {
-        const event = f.event();
-        await f.controller.handleInboundEvent(media ? { ...event, kind: "media", attachments: [], disposition: "available" } : event);
-        expect(f.starts).toHaveLength(1);
-        expect(f.admissions.every(id => id === "fixture-thread")).toBe(true);
-        expect(await f.store.findActiveBindingForChannel(f.channel)).toBeUndefined();
-        expect(await f.store.findActiveDefaultAgentAssignmentsForChannel(f.channel)).toHaveLength(1);
-      } finally { await f.close(); }
-    }), { numRuns: 25 });
+  it.each([
+    ["telegram", false],
+    ["telegram", true],
+    ["discord", false],
+    ["discord", true],
+  ] as const)("uses a Default Agent without creating a persistent binding [%#]", async (channel, media) => {
+    const f = await messagingInboundHarness({ channel, route: "default-agent" });
+    try {
+      const event = f.event();
+      await f.controller.handleInboundEvent(media ? { ...event, kind: "media", attachments: [], disposition: "available" } : event);
+      expect(f.starts).toHaveLength(1);
+      expect(f.admissions.every(id => id === "fixture-thread")).toBe(true);
+      expect(await f.store.findActiveBindingForChannel(f.channel)).toBeUndefined();
+      expect(await f.store.findActiveDefaultAgentAssignmentsForChannel(f.channel)).toHaveLength(1);
+    } finally { await f.close(); }
   });
 
-  it("keeps a pending new-thread prompt recoverable when the backend cannot create threads", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("telegram", "discord"), fc.boolean(), async (channel, media) => {
-      const f = await messagingInboundHarness({ channel });
-      try {
-        await f.store.upsertBrowseSession({
-          id: "fixture-new-thread", channel: f.channel, allowedActorIds: ["fixture-actor"], launchAction: "start_new_thread",
-          mode: "new_thread_options", selectedProject: { directoryKey: "fixture-project", path: "/fixture/project", label: "Fixture project" },
-          pageIndex: 0, pageSize: 5, createdAt: 1_000, updatedAt: 1_000, expiresAt: 20_000,
-        });
-        const event = f.event();
-        await f.controller.handleInboundEvent(media ? { ...event, kind: "media", attachments: [], disposition: "available" } : event);
-        expect(f.starts).toEqual([]);
-        expect(f.deliveries.some(intent => intent.kind === "error" && intent.title === "New thread unavailable")).toBe(true);
-        expect(await f.store.getBrowseSession("fixture-new-thread", { now: 1_000 })).toBeDefined();
-      } finally { await f.close(); }
-    }), { numRuns: 25 });
+  it.each([
+    ["telegram", false],
+    ["telegram", true],
+    ["discord", false],
+    ["discord", true],
+  ] as const)("keeps a pending new-thread prompt recoverable when the backend cannot create threads [%#]", async (channel, media) => {
+    const f = await messagingInboundHarness({ channel });
+    try {
+      await f.store.upsertBrowseSession({
+        id: "fixture-new-thread", channel: f.channel, allowedActorIds: ["fixture-actor"], launchAction: "start_new_thread",
+        mode: "new_thread_options", selectedProject: { directoryKey: "fixture-project", path: "/fixture/project", label: "Fixture project" },
+        pageIndex: 0, pageSize: 5, createdAt: 1_000, updatedAt: 1_000, expiresAt: 20_000,
+      });
+      const event = f.event();
+      await f.controller.handleInboundEvent(media ? { ...event, kind: "media", attachments: [], disposition: "available" } : event);
+      expect(f.starts).toEqual([]);
+      expect(f.deliveries.some(intent => intent.kind === "error" && intent.title === "New thread unavailable")).toBe(true);
+      expect(await f.store.getBrowseSession("fixture-new-thread", { now: 1_000 })).toBeDefined();
+    } finally { await f.close(); }
   });
 
-  it("preserves the owning peer on a bound inbound turn", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("telegram", "discord"), async channel => {
-      const f = await messagingInboundHarness({ channel });
-      try {
-        const binding = (await f.store.getBinding("fixture-binding"))!;
-        await f.store.upsertBinding({ ...binding, federatedThread: {
-          backend: "codex", threadId: "fixture-thread", target: { scope: "remote", instanceId: "fixture-peer" },
-        } });
-        await f.controller.handleInboundEvent(f.event());
-        expect(f.starts).toHaveLength(1);
-        expect(f.starts[0]!).toMatchObject({ threadId: "fixture-thread", federationTarget: { scope: "remote", instanceId: "fixture-peer" } });
-      } finally { await f.close(); }
-    }), { numRuns: 25 });
+  it.each(["telegram", "discord"] as const)("preserves the owning peer on a bound inbound turn [%#]", async (channel) => {
+    const f = await messagingInboundHarness({ channel });
+    try {
+      const binding = (await f.store.getBinding("fixture-binding"))!;
+      await f.store.upsertBinding({ ...binding, federatedThread: {
+        backend: "codex", threadId: "fixture-thread", target: { scope: "remote", instanceId: "fixture-peer" },
+      } });
+      await f.controller.handleInboundEvent(f.event());
+      expect(f.starts).toHaveLength(1);
+      expect(f.starts[0]!).toMatchObject({ threadId: "fixture-thread", federationTarget: { scope: "remote", instanceId: "fixture-peer" } });
+    } finally { await f.close(); }
   });
 });

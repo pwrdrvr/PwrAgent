@@ -26,12 +26,15 @@ describe("archive retention persistence", () => {
     const records = Array.from({ length: 100 }, (_, i) => ({ backend: providers[i % providers.length]!, threadId: `archive-${i}` }));
     const { writes } = await measureSqliteWrites(async () => { await store.observeArchivedThreads(records, 1000); });
     expectSqliteWriteBudget({ scenario: "archive-retention-initial-batch", note: "One discovery transaction for 100 existing archives; no per-item commits.", writes });
+    const readOverlay = vi.spyOn(store as unknown as { readStoredThread(key: string): unknown }, "readStoredThread");
     const idle = await measureSqliteWrites(async () => {
       for (let hour = 0; hour < 24; hour++) {
         await store.observeArchivedThreads(records, 1000 + hour * 3_600_000);
         expect((await store.listThreadArchiveStates()).every((state) => state.archiveRetentionStartedAt === 1000)).toBe(true);
       }
     });
+    expect(readOverlay).not.toHaveBeenCalled();
+    readOverlay.mockRestore();
     expectSqliteWriteBudget({ scenario: "archive-retention-idle-day", note: "24 hourly retention observations and reads after initial discovery: zero commits, 0 MB/day.", writes: idle.writes });
     const deleted = await measureSqliteWrites(async () => { await store.forgetThreadArchiveStates(records); });
     expectSqliteWriteBudget({ scenario: "archive-retention-delete-batch", note: "One transaction releases 100 overlays after permanent provider deletion, plus one statement each clearing their sub-agent cards and card counters.", writes: deleted.writes });

@@ -99,6 +99,7 @@ export function stripPrLinkedDirectoryPaths(pr: PrSummary): PrSummary {
   const normalized = normalizePrSummary(pr);
   delete normalized.linkedDirectoryPaths;
   delete normalized.explicitlyAttached;
+  delete normalized.autoFixOff;
   return normalized;
 }
 
@@ -184,6 +185,7 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       candidate.sourceRepository?.org === pr.sourceRepository?.org &&
       candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
       candidate.title === pr.title &&
+      JSON.stringify(candidate.labels ?? null) === JSON.stringify(pr.labels ?? null) &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
       candidate.checksStillRunning === pr.checksStillRunning &&
@@ -194,12 +196,14 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       JSON.stringify(candidate.mergeQueue ?? null) === JSON.stringify(pr.mergeQueue ?? null) &&
       JSON.stringify(candidate.allowedMergeMethods ?? null)
         === JSON.stringify(pr.allowedMergeMethods ?? null) &&
+      JSON.stringify(candidate.githubStack ?? null) === JSON.stringify(pr.githubStack ?? null) &&
       candidate.baseRefName === pr.baseRefName &&
       candidate.headRefName === pr.headRefName &&
       candidate.headSha === pr.headSha &&
       JSON.stringify(candidate.linkedDirectoryPaths ?? [])
         === JSON.stringify(pr.linkedDirectoryPaths ?? []) &&
       candidate.explicitlyAttached === pr.explicitlyAttached &&
+      candidate.autoFixOff === pr.autoFixOff &&
       JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
       // Hover-card fields. They belong here for the same reason as every field
       // above: this comparison decides whether a snapshot is republished, so a

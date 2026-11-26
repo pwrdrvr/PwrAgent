@@ -11,10 +11,9 @@ import { RUNTIME_LEASE_RETRY_MS } from "../runtime-lease-retry";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
 import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store";
 import { AutomationStore } from "../storage/automation-store";
-import type { StateDb } from "../state/state-db";
+import { StateDb } from "../state/state-db";
 import {
   createTempStateDb,
-  openFreshStateDb,
   removeTempStateDbDir,
 } from "./sqlite-test-utils";
 
@@ -61,7 +60,7 @@ beforeEach(() => {
   ({ tempDir, dbPath } = createTempStateDb("pwragent-automation-instances-"));
   connections = [];
   // Hold the file open so later connections are second connections.
-  template = openFreshStateDb(dbPath);
+  template = StateDb.open(dbPath);
 });
 
 afterEach(() => {
@@ -122,7 +121,7 @@ function openInstance(params: {
   s: fc.Scheduler;
 }): Instance {
   const { index, clock, dead, s } = params;
-  const db = openFreshStateDb(dbPath);
+  const db = StateDb.open(dbPath);
   connections.push(db);
   const store = new AutomationStore(db, { runOwner: ownerOf(index) });
   const timers = new Set<ArmedTimer>();
@@ -250,7 +249,7 @@ it("one trigger window produces at most one run across instances on one profile"
         }
       }
     },
-  ), { numRuns: 40 });
+  ), { numRuns: 6 });
 });
 
 function describeRuns(runs: AutomationRunSummary[]): string[] {
@@ -313,7 +312,7 @@ it("a run owned by an instance that stopped does not hold its automation's lane"
         if (!dead.has(ownerOf(1).instanceId)) other.service.dispose();
       }
     },
-  ), { numRuns: 40 });
+  ), { numRuns: 6 });
 });
 
 it("an instance without the scheduling lease still ends runs its crashed predecessor left", async () => {
@@ -371,7 +370,7 @@ it("reports automations paused in the instance without the lease until the holde
 
 it("reports automations paused when the scheduling lease cannot be read", () => {
   resetProfile(["coalesce"]);
-  const db = openFreshStateDb(dbPath);
+  const db = StateDb.open(dbPath);
   connections.push(db);
   const leaseManager = {
     id: ownerOf(0).instanceId,

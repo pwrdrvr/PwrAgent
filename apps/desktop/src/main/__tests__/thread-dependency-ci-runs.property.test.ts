@@ -1,6 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setImmediate } from "node:timers/promises";
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
@@ -295,22 +296,22 @@ describe("CI run URLs", () => {
     })).toThrow(/up to 16 distinct hosts/);
   });
 
-  it("rejects a draft that would restore a host removed on disk", () => {
+  it.each([
+    { name: "the last host was revoked", retained: [] },
+    { name: "an unrelated host remains", retained: ["retained.example.com"] },
+  ])("rejects a stale settings draft when $name", ({ retained }) => {
     const dir = mkdtempSync(join(tmpdir(), "pwragent-ci-run-conflict-"));
     try {
       const configPath = join(dir, "config.toml");
-      fc.assert(fc.property(fc.uniqueArray(fc.nat(), { minLength: 2, maxLength: 3 }), (ids) => {
-        const [revoked, added, retained] = ids.map((id) => `ghe${id}.example.com`);
-        const saved = retained ? [revoked!, retained] : [revoked!];
-        writeFileSync(configPath, `[git]\ngithub_enterprise_hosts = ${JSON.stringify(saved)}\n`);
-        const expectedRevision = readDesktopSettingsConfig(configPath).git!.githubEnterpriseHosts!.revision;
-        const changed = `[git]\ngithub_enterprise_hosts = ${JSON.stringify(saved.slice(1))}\n`;
-        writeFileSync(configPath, changed);
-        expect(() => applyDesktopSettingsPatch(configPath, {
-          git: { githubEnterpriseHosts: { hosts: [...saved, added!], expectedRevision } },
-        })).toThrow(/GitHub Enterprise hosts changed/);
-        expect(readFileSync(configPath, "utf8")).toBe(changed);
-      }), { numRuns: 30 });
+      const saved = ["revoked.example.com", ...retained];
+      writeFileSync(configPath, `[git]\ngithub_enterprise_hosts = ${JSON.stringify(saved)}\n`);
+      const expectedRevision = readDesktopSettingsConfig(configPath).git!.githubEnterpriseHosts!.revision;
+      const changed = `[git]\ngithub_enterprise_hosts = ${JSON.stringify(retained)}\n`;
+      writeFileSync(configPath, changed);
+      expect(() => applyDesktopSettingsPatch(configPath, {
+        git: { githubEnterpriseHosts: { hosts: [...saved, "added.example.com"], expectedRevision } },
+      })).toThrow(/GitHub Enterprise hosts changed/);
+      expect(readFileSync(configPath, "utf8")).toBe(changed);
     } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -568,15 +569,18 @@ describe("CI run poller", () => {
       const next = timers.shift()!;
       now = next.at;
       next.fn();
-      await vi.waitFor(() => expect(timers.length).toBeGreaterThan(0));
+      // The read and observation ports settle in memory. Yield once so the
+      // poll can rearm without adding a wall-clock interval to every check.
+      await setImmediate();
+      expect(timers).toHaveLength(1);
     };
     poller.sync();
     expect(timers).toHaveLength(1);
     for (let index = 0; index < 25; index++) await fire();
     const gaps = reads.slice(1).map((at, index) => at - reads[index]!);
     expect(reads[0]).toBe(0);
-    expect(gaps.slice(0, 20).every((gap) => gap === 30_000)).toBe(true);
-    expect(gaps.at(-1)).toBe(120_000);
+    expect(gaps.slice(0, 20)).toEqual(Array<number>(20).fill(30_000));
+    expect(gaps.slice(20)).toEqual(Array<number>(4).fill(120_000));
     urls = [];
     poller.sync();
     expect(timers).toHaveLength(0);
