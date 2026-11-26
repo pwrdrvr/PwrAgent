@@ -45,6 +45,8 @@ const KNOWN_BROWSER_SURFACE_LABELS: Readonly<Record<string, string>> = {
   dot: "In-app browser",
 };
 
+const BROWSER_REPL_SERVER_NAMES = new Set(["cua_repl", "node_repl"]);
+const BROWSER_REPL_QUALIFIED_TOOL_PATTERN = /(?:^|\/)(?:cua_repl|node_repl)\/js$/iu;
 const BROWSER_BATCH_AUXILIARY_TOOL_PATTERN =
   /(?:^|\/)(?:(?:cua_repl|node_repl)\/js|codex_app\/update_running_summary)$/iu;
 
@@ -54,37 +56,60 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function isCodexBrowserReplMcpItem(item: Record<string, unknown>): boolean {
+  const server = (
+    readString(item, "server")
+    ?? readString(item, "serverName")
+    ?? readString(item, "server_name")
+  )?.toLowerCase();
+  const tool = (
+    readString(item, "tool")
+    ?? readString(item, "toolName")
+    ?? readString(item, "tool_name")
+    ?? readString(item, "name")
+  )?.toLowerCase();
+  if (!tool) return false;
+  if (server) {
+    return BROWSER_REPL_SERVER_NAMES.has(server) && tool === "js";
+  }
+  return BROWSER_REPL_QUALIFIED_TOOL_PATTERN.test(tool);
+}
+
 function readWrappedCallToolResultMeta(
+  item: Record<string, unknown>,
   result: Record<string, unknown> | undefined,
 ): Record<string, unknown> | undefined {
   const direct = asRecord(result?._meta);
   if (direct) return direct;
+  // Replay from `codex app-server` `thread/read` can serialize a complete
+  // `CallToolResult` into a single `result.content[0].text` block on Codex's
+  // own browser REPL tools. Restrict this fallback strictly to those tools and
+  // a single wrapped text block so untrusted third-party MCP text payloads
+  // cannot spoof Browser Use protocol metadata.
+  if (!isCodexBrowserReplMcpItem(item)) return undefined;
   const content = result?.content;
-  if (!Array.isArray(content)) return undefined;
-  for (const block of content) {
-    const text = typeof block === "string"
-      ? block
-      : readString(asRecord(block), "text");
-    if (!text) continue;
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch {
-      continue;
-    }
-    const wrapper = asRecord(parsed);
-    if (
-      !wrapper
-      || (!Array.isArray(wrapper.content) && typeof wrapper.isError !== "boolean")
-    ) {
-      continue;
-    }
-    const nestedMeta = asRecord(wrapper._meta);
-    if (nestedMeta) return nestedMeta;
+  if (!Array.isArray(content) || content.length !== 1) return undefined;
+  const block = content[0];
+  const text = typeof block === "string"
+    ? block
+    : readString(asRecord(block), "text");
+  if (!text) return undefined;
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return undefined;
   }
-  return undefined;
+  const wrapper = asRecord(parsed);
+  if (
+    !wrapper
+    || (!Array.isArray(wrapper.content) && typeof wrapper.isError !== "boolean")
+  ) {
+    return undefined;
+  }
+  return asRecord(wrapper._meta);
 }
 
 /**
@@ -213,7 +238,7 @@ export function extractCodexBrowserUseDetail(
   item: Record<string, unknown>,
 ): AppServerThreadBrowserUseDetail | undefined {
   const result = asRecord(item.result);
-  const meta = readWrappedCallToolResultMeta(result);
+  const meta = readWrappedCallToolResultMeta(item, result);
   if (!meta) return undefined;
 
   const hasToolSurfaceField = Object.prototype.hasOwnProperty.call(
@@ -355,7 +380,11 @@ export function formatBrowserUrlHost(url: string): string | undefined {
 /**
  * Canonical surface identity key for checking whether multiple browser tool
  * calls target the same browser session. Returns `undefined` when neither
- * backend nor browserId is present.
+ * backend, browserId, nor browserFamily is present.
+ *
+ * When `browserId` is present, identity is keyed by `[backend, browserId]` so
+ * steps in the same Chrome/Edge session agree whether or not an individual
+ * step repeats optional `browserFamily` / `history.provider` metadata.
  */
 export function browserUseSurfaceKey(
   detail: Pick<AppServerThreadBrowserUseDetail, "backend" | "browserFamily" | "browserId">,
@@ -364,7 +393,10 @@ export function browserUseSurfaceKey(
   const browserId = detail.browserId?.trim() ?? "";
   const family = detail.browserFamily?.trim().toLowerCase() ?? "";
   if (!backend && !browserId && !family) return undefined;
-  return JSON.stringify([backend, browserId, family]);
+  if (browserId) {
+    return JSON.stringify([backend, browserId]);
+  }
+  return JSON.stringify([backend, family || backend]);
 }
 
 export function formatCodexBrowserUseDetailLabel(

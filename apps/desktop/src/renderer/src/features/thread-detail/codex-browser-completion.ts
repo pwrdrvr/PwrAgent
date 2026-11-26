@@ -112,6 +112,8 @@ export function buildBrowserUsePresentation(
   if (browserDetails.length === 0) return entry.browserUse;
 
   const surfaceKeys = new Set<string>();
+  let latestSurfaceMeta: AppServerThreadBrowserUseDetail | undefined;
+  let latestBrowserFamily: string | undefined;
   let latestUrl: string | undefined;
   let latestScreenshotUrl: string | undefined;
   let cloudHandoff = false;
@@ -121,7 +123,11 @@ export function buildBrowserUsePresentation(
   for (const detail of browserDetails) {
     const meta = detail.browserUse;
     const surfaceKey = browserUseSurfaceKey(meta);
-    if (surfaceKey) surfaceKeys.add(surfaceKey);
+    if (surfaceKey) {
+      surfaceKeys.add(surfaceKey);
+      latestSurfaceMeta = meta;
+    }
+    if (meta.browserFamily) latestBrowserFamily = meta.browserFamily;
     if (meta.url) latestUrl = meta.url;
     if (meta.screenshotUrl) latestScreenshotUrl = meta.screenshotUrl;
     if (meta.cloudHandoff) cloudHandoff = true;
@@ -136,6 +142,8 @@ export function buildBrowserUsePresentation(
 
   const ambiguousSurface = surfaceKeys.size > 1;
   const latestMeta = browserDetails[browserDetails.length - 1]!.browserUse;
+  const surfaceMeta = latestSurfaceMeta ?? latestMeta;
+  const resolvedBrowserFamily = surfaceMeta.browserFamily ?? latestBrowserFamily;
   const hasNonBrowserDetails = browserDetails.length < entry.details.length;
   const title = summarizeCodexBrowserUseDetails(entry.details) ?? entry.summary;
 
@@ -144,15 +152,15 @@ export function buildBrowserUsePresentation(
     surfaceLabel: ambiguousSurface
       ? "Multiple browsers"
       : formatBrowserSurfaceLabel({
-          backend: latestMeta.backend,
-          browserFamily: latestMeta.browserFamily,
-          cloudHandoff: cloudHandoff || latestMeta.cloudHandoff,
+          backend: surfaceMeta.backend,
+          browserFamily: resolvedBrowserFamily,
+          cloudHandoff: cloudHandoff || surfaceMeta.cloudHandoff,
         }),
-    ...(!ambiguousSurface && latestMeta.backend ? { backend: latestMeta.backend } : {}),
-    ...(!ambiguousSurface && latestMeta.browserFamily
-      ? { browserFamily: latestMeta.browserFamily }
+    ...(!ambiguousSurface && surfaceMeta.backend ? { backend: surfaceMeta.backend } : {}),
+    ...(!ambiguousSurface && resolvedBrowserFamily
+      ? { browserFamily: resolvedBrowserFamily }
       : {}),
-    ...(!ambiguousSurface && latestMeta.browserId ? { browserId: latestMeta.browserId } : {}),
+    ...(!ambiguousSurface && surfaceMeta.browserId ? { browserId: surfaceMeta.browserId } : {}),
     ...(latestUrl ? { url: latestUrl } : {}),
     ...(latestMeta.handoffReason ? { handoffReason: latestMeta.handoffReason } : {}),
     ...(cloudHandoff ? { cloudHandoff: true } : {}),
@@ -173,9 +181,11 @@ function applyMatchedTitleToSummary(
   if (!presentation.hasNonBrowserDetails) {
     return matchedTitle;
   }
-  const previousSuffix = ` · ${presentation.title}`;
-  if (entry.summary.endsWith(previousSuffix)) {
-    return `${entry.summary.slice(0, -previousSuffix.length)} · ${matchedTitle}`;
+  const segments = entry.summary.split(" · ");
+  const matchIndex = segments.lastIndexOf(presentation.title);
+  if (matchIndex !== -1) {
+    segments[matchIndex] = matchedTitle;
+    return segments.join(" · ");
   }
   return entry.summary === presentation.title
     ? matchedTitle

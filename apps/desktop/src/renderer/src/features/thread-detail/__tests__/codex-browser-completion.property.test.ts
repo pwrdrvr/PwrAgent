@@ -232,3 +232,144 @@ it("never associates a ::browser-complete marker across turn, user, final-answer
   expect(duplicateMarkers.map((entry) => entry.id)).toEqual(["act-1", "bc-2"]);
   expect((duplicateMarkers[0] as AppServerThreadActivityEntry).summary).toBe("Opened login page");
 });
+
+it("keeps same-session Chrome steps unambiguous when browserFamily is omitted on a later step", () => {
+  const activity: AppServerThreadActivityEntry = {
+    type: "activity",
+    id: "act-chrome",
+    summary: "Browsed example.com",
+    status: "completed",
+    turn: { id: "turn-chrome", status: "completed" },
+    details: [
+      {
+        id: "step-1",
+        kind: "command",
+        label: "Open page",
+        status: "completed",
+        browserUse: {
+          backend: "chrome",
+          browserFamily: "chrome",
+          browserId: "chrome-ext-1",
+          url: "https://example.com/start",
+        },
+      },
+      {
+        id: "step-2",
+        kind: "command",
+        label: "Verify heading",
+        status: "completed",
+        browserUse: {
+          backend: "chrome",
+          browserId: "chrome-ext-1",
+          url: "https://example.com/done",
+        },
+      },
+    ],
+  };
+
+  const projected = projectCodexBrowserUseEntries(
+    [activity, commentary(directive("Verified example.com"), "bc-chrome", "turn-chrome")],
+    "codex",
+  );
+  expect(projected).toHaveLength(1);
+  const enriched = projected[0] as AppServerThreadActivityEntry;
+  expect(enriched.summary).toBe("Verified example.com");
+  expect(enriched.browserUse?.ambiguousSurface).toBeUndefined();
+  expect(enriched.browserUse?.surfaceLabel).toBe("Chrome");
+  expect(enriched.browserUse?.browserFamily).toBe("chrome");
+  expect(enriched.browserUse?.browserId).toBe("chrome-ext-1");
+});
+
+it("preserves unambiguous batch surface identity when the final browser step omits toolSurface fields", () => {
+  const activity: AppServerThreadActivityEntry = {
+    type: "activity",
+    id: "act-iab-minimal-tail",
+    summary: "Browsed localhost:3000",
+    status: "completed",
+    turn: { id: "turn-iab", status: "completed" },
+    details: [
+      {
+        id: "step-1",
+        kind: "command",
+        label: "Open checkout",
+        status: "completed",
+        browserUse: {
+          backend: "iab",
+          browserId: "iab",
+          url: "http://localhost:3000/cart",
+        },
+      },
+      {
+        id: "step-2",
+        kind: "command",
+        label: "Read confirmation",
+        status: "completed",
+        browserUse: {
+          url: "http://localhost:3000/confirmation",
+        },
+      },
+    ],
+  };
+
+  const projected = projectCodexBrowserUseEntries(
+    [activity, commentary(directive("Verified order confirmation"), "bc-iab", "turn-iab")],
+    "codex",
+  );
+  expect(projected).toHaveLength(1);
+  const enriched = projected[0] as AppServerThreadActivityEntry;
+  expect(enriched.summary).toBe("Verified order confirmation");
+  expect(enriched.browserUse?.ambiguousSurface).toBeUndefined();
+  expect(enriched.browserUse?.surfaceLabel).toBe("In-app browser");
+  expect(enriched.browserUse?.backend).toBe("iab");
+  expect(enriched.browserUse?.browserId).toBe("iab");
+  expect(enriched.browserUse?.url).toBe("http://localhost:3000/confirmation");
+});
+
+it("replaces the browser summary segment anywhere in a mixed activity summary without duplication", () => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.constantFrom("Ran 1 command", "Read 2 files", "Used 1 tool"), { maxLength: 2 }),
+      fc.array(fc.constantFrom("Spawned 1 agent", "Waited on 1 agent"), { minLength: 1, maxLength: 2 }),
+      (prefixParts, suffixParts) => {
+        const browserTitle = "Browsed localhost:3000";
+        const matchedTitle = "Verified checkout";
+        const summary = [...prefixParts, browserTitle, ...suffixParts].join(" · ");
+        const activity: AppServerThreadActivityEntry = {
+          type: "activity",
+          id: "act-mixed-collab",
+          summary,
+          status: "completed",
+          turn: { id: "turn-mixed", status: "completed" },
+          details: [
+            {
+              id: "browser-1",
+              kind: "command",
+              label: "In-app browser · localhost:3000",
+              status: "completed",
+              browserUse: {
+                backend: "iab",
+                browserId: "iab",
+                url: "http://localhost:3000",
+              },
+            },
+            {
+              id: "collab-1",
+              kind: "command",
+              label: "Spawned helper agent",
+              status: "completed",
+            },
+          ],
+        };
+
+        const projected = projectCodexBrowserUseEntries(
+          [activity, commentary(directive(matchedTitle), "bc-mixed", "turn-mixed")],
+          "codex",
+        );
+        expect(projected).toHaveLength(1);
+        const enriched = projected[0] as AppServerThreadActivityEntry;
+        expect(enriched.summary).toBe([...prefixParts, matchedTitle, ...suffixParts].join(" · "));
+        expect(enriched.summary).not.toContain(browserTitle);
+      },
+    ),
+  );
+});
