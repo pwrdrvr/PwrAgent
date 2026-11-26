@@ -29,6 +29,12 @@ questions**. Do not treat them as interchangeable:
   writes here and here only, then emits `pullRequest/status/updated`.
   It never writes back into the overlay.
 
+For open GitHub PRs, the registry keeps the last confirmed mergeability
+while the forge recalculates it for the same head and base refs and commits.
+Branch discovery and by-number polling use the same rule. When a poll
+confirms the same mergeability for a new base commit, the registry persists
+the new baseline without publishing a status event.
+
 **Every path that serves PR chips to a client MUST canonicalize the
 overlay rows through the status registry.** The seam is the injected
 `ThreadPullRequestCanonicalizer` (`setThreadPullRequestCanonicalizer`,
