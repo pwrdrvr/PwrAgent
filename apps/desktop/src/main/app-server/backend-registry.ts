@@ -426,7 +426,7 @@ import { classifyDirectory, navigationPathIdentity, orderByHomePreference } from
 import { mergeThreadLinkedDirectories } from "@pwragent/shared/navigation-state";
 import { isToolManagedWorktreePath } from "@pwragent/shared/worktree-paths";
 import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
-import { parseClaudeSubAgentTranscriptThreadId } from "@pwragent/shared/subagent-kind";
+import { isTokenMiserSubAgent, parseClaudeSubAgentTranscriptThreadId } from "@pwragent/shared/subagent-kind";
 import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import { type FederationInstanceId, federatedThreadIdentityKey } from "@pwragent/shared/contracts/federation";
 import {
@@ -2266,7 +2266,6 @@ export class DesktopBackendRegistry {
       handoffThreadWorkspace: (...args: Parameters<ThreadWorkspaceService["handoffThreadWorkspace"]>) => this.threadWorkspaceService.handoffThreadWorkspace(...args),
       hasActiveCodexWork: (...args: Parameters<typeof this.hasActiveCodexWork>) => this.hasActiveCodexWork(...args),
       holdBackendSelfStartedTurn: (...args: Parameters<typeof this.holdBackendSelfStartedTurn>) => this.holdBackendSelfStartedTurn(...args),
-      initializeTokenMiserLedger: (...args: Parameters<ThreadUsageLedger["initializeTokenMiserLedger"]>) => this.threadUsageLedger.initializeTokenMiserLedger(...args),
       interruptTurn: (...args: Parameters<typeof this.interruptTurn>) => this.interruptTurn(...args),
       invalidateProviderRuntimeSelections: (...args: Parameters<typeof this.invalidateProviderRuntimeSelections>) => this.invalidateProviderRuntimeSelections(...args),
       invalidateThreadListCache: (...args: Parameters<typeof this.invalidateThreadListCache>) => this.invalidateThreadListCache(...args),
@@ -5243,8 +5242,8 @@ export class DesktopBackendRegistry {
     // could be followed by a fresh Codex child process and writes to a store
     // `close()` already finalized. `maybeRestartCodexForManagedRuntimeChange`
     // guards on `closed` for the same reason.
-    if (this.closed) return;
-    await this.threadUsageLedger.currentTokenMiserLedgerReconciliation;
+    if (this.closed || !this.resolveTokenMiserEnabledFn()) return;
+    await this.threadUsageLedger.prepareTokenMiserStorage();
     if (this.closed || !this.resolveTokenMiserEnabledFn()) return;
     await this.prepareTokenMiserRuntime();
   }
@@ -7836,6 +7835,13 @@ export class DesktopBackendRegistry {
         : display;
     }
     this.assertNotBootstrap("readThread");
+    const { resource, monitorId } = request.display;
+    if (backend === "codex" && (
+      resource === "pricing" || resource === "subagents"
+      || (resource === "subagent" && monitorId && isTokenMiserSubAgent({ monitorId }))
+    )) {
+      await this.threadUsageLedger.repairTokenMiserHistory(request.threadId);
+    }
     const pricing = await this.threadUsageLedger.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
     if (backend === "codex" && request.display.resource === "pricing"
       && pricing.summaries.length === 0 && !pricing.lines.some((line) => line.status !== "superseded")) {
@@ -7855,7 +7861,6 @@ export class DesktopBackendRegistry {
       ...(request.display.resource === "tools" || request.display.resource === "incident" ? { includeAllInvocations: true } : {}),
     });
     const toolAccounting = stored ? await this.threadUsageLedger.withTokenMiserAccounting({ accounting: stored, backend, threadId: request.threadId }) : undefined;
-    const monitorId = request.display.monitorId;
     // Pricing includes in-memory gates; their parent links and accounting
     // must come from the same live view before grouping and pagination.
     const pricingCards = await this.threadUsageLedger.readPricingSubAgents({ backend, threadId: request.threadId, pricing });
@@ -8250,7 +8255,12 @@ export class DesktopBackendRegistry {
         })
       : Promise.resolve(undefined);
     const [activity, codexAccountTokenUsage] = await Promise.all([
-      this.overlayStore.readUsageActivity(request),
+      (async () => {
+        // The sidebar pace probe reads committed usage only. A full activity
+        // view can recover historical charges from gates left by a crash.
+        if (includeAccountTokenUsage) await this.threadUsageLedger.repairTokenMiserHistory();
+        return await this.overlayStore.readUsageActivity!(request);
+      })(),
       accountTokenUsagePromise,
     ]);
     const codex = this.codexLimitObservation();
@@ -17078,7 +17088,7 @@ export class DesktopBackendRegistry {
     // in memory. `closed` prevents either drain from re-arming its timer; the
     // serialized flush chains ensure no write survives close().
     await liveThreadUsageEmitBarrier;
-    await this.threadUsageLedger.currentTokenMiserLedgerReconciliation;
+    await this.threadUsageLedger.drainTokenMiserLedgerWork();
     this.subAgentMonitorService.clearCompletedTaskMonitors();
     await this.threadUsageLedger.flushLiveThreadUsageLines();
     await this.subAgentMonitorService.persistLiveCodexNativeSubAgentUsage();
@@ -17807,7 +17817,8 @@ export class DesktopBackendRegistry {
     }
     this.assertThreadOwnership();
     try {
-      await this.threadUsageLedger.currentTokenMiserLedgerReconciliation;
+      await this.threadUsageLedger.prepareTokenMiserStorage();
+      if (this.closed) return;
       await this.tokenMiserHookBridge.start();
       const capabilities = await this.readTokenMiserServerCapabilities(
         this.codexClient,
@@ -18251,7 +18262,7 @@ export class DesktopBackendRegistry {
           ) {
             await this.recordObservedCodexSettings(notification);
           }
-          if (this.shouldInvalidateThreadListCacheForNotification(notification.method)) {
+          if (this.shouldInvalidateThreadListCacheForNotification(notification)) {
             this.invalidateThreadListCache(backend);
           }
           if (notification.method === "thread/archived") {
@@ -18575,7 +18586,9 @@ export class DesktopBackendRegistry {
     return this.threadDirectoryService.refreshThreadDirectoryRelationship(params);
   }
 
-  private shouldInvalidateThreadListCacheForNotification(method: string): boolean {
+  private shouldInvalidateThreadListCacheForNotification(notification: AppServerNotification): boolean {
+    const { method } = notification;
+    if (method === "thread/subAgents/updated") return notification.params.navigationChanged !== false;
     return (
       method === "navigation/threadDirectories/updated" ||
       method === "thread/branch/updated" ||
@@ -18590,7 +18603,6 @@ export class DesktopBackendRegistry {
       method === "thread/rewound" ||
       method === "thread/started" ||
       method === "thread/status/changed" ||
-      method === "thread/subAgents/updated" ||
       method === "thread/subthreadOrder/updated" ||
       method === "thread/subthreadsCollapsed/updated" ||
       method === "thread/unarchived" ||
@@ -23321,7 +23333,7 @@ export class DesktopBackendRegistry {
       }
     }
     this.rememberThreadTitleFromEvent(event);
-    if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
+    if (this.shouldInvalidateThreadListCacheForNotification(event.notification)) {
       // Reconciled turn status does not certify the provider's activity timestamp.
       this.invalidateThreadListCache(event.backend);
     }

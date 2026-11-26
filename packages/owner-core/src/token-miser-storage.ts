@@ -24,7 +24,7 @@ export interface TokenMiserStorage<
   readMetadata(objectId: string, threadId?: string): Metadata | undefined;
   listMetadata(threadId?: string): Metadata[];
   /** Keyset page over the stored (threadId, createdAt, objectId) keys. */
-  readMetadataPage(after: TokenMiserObjectRecord | undefined, limit: number): {
+  readMetadataPage(after: TokenMiserObjectRecord | undefined, limit: number, threadId?: string): {
     entries: Metadata[];
     next?: TokenMiserObjectRecord;
   };

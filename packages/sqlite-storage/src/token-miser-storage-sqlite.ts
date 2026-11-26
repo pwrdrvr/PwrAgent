@@ -6,6 +6,8 @@ import type {
 } from "@pwragent/owner-core/token-miser-storage";
 import type { StateDb } from "./state-db";
 
+type MetadataPageRow = { thread_id: string; created_at: number; object_id: string; payload: string };
+
 export class SqliteTokenMiserStorage<
   Metadata extends TokenMiserObjectRecord,
   Observation extends TokenMiserObservationRecord,
@@ -30,27 +32,14 @@ export class SqliteTokenMiserStorage<
     return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
   }
 
-  readMetadataPage(after: TokenMiserObjectRecord | undefined, limit: number): {
+  readMetadataPage(after: TokenMiserObjectRecord | undefined, limit: number, threadId?: string): {
     entries: Metadata[];
     next?: TokenMiserObjectRecord;
   } {
     // Keep a thread's gates together so pricing and card reads can share
     // keys within a page. The existing index supplies the first two keys;
     // SQLite only sorts rows that tie on both.
-    const rows = (after === undefined
-      ? this.db.prepare(`SELECT thread_id, created_at, object_id, payload
-          FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
-          ORDER BY thread_id, created_at, object_id LIMIT ?`).all(limit)
-      : this.db.prepare(`SELECT thread_id, created_at, object_id, payload
-          FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
-          WHERE (thread_id, created_at, object_id) > (?, ?, ?)
-          ORDER BY thread_id, created_at, object_id LIMIT ?`)
-          .all(after.threadId, after.createdAt, after.objectId, limit)) as Array<{
-      thread_id: string;
-      created_at: number;
-      object_id: string;
-      payload: string;
-    }>;
+    const rows = this.readMetadataPageRows(after, limit, threadId);
     const last = rows.at(-1);
     return {
       entries: rows.map(({ payload }) => JSON.parse(payload) as Metadata),
@@ -60,6 +49,29 @@ export class SqliteTokenMiserStorage<
         ? { threadId: last.thread_id, createdAt: last.created_at, objectId: last.object_id }
         : undefined,
     };
+  }
+
+  private readMetadataPageRows(after: TokenMiserObjectRecord | undefined, limit: number, threadId?: string): MetadataPageRow[] {
+    const db = this.db;
+    if (threadId !== undefined) {
+      return (after === undefined
+        ? db.prepare(`SELECT thread_id, created_at, object_id, payload
+            FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+            WHERE thread_id = ? ORDER BY created_at, object_id LIMIT ?`).all(threadId, limit)
+        : db.prepare(`SELECT thread_id, created_at, object_id, payload
+            FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+            WHERE thread_id = ? AND (created_at, object_id) > (?, ?)
+            ORDER BY created_at, object_id LIMIT ?`).all(threadId, after.createdAt, after.objectId, limit)) as MetadataPageRow[];
+    }
+    return (after === undefined
+      ? db.prepare(`SELECT thread_id, created_at, object_id, payload
+          FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+          ORDER BY thread_id, created_at, object_id LIMIT ?`).all(limit)
+      : db.prepare(`SELECT thread_id, created_at, object_id, payload
+          FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
+          WHERE (thread_id, created_at, object_id) > (?, ?, ?)
+          ORDER BY thread_id, created_at, object_id LIMIT ?`)
+          .all(after.threadId, after.createdAt, after.objectId, limit)) as MetadataPageRow[];
   }
 
   writeMetadata(metadata: Metadata): void {

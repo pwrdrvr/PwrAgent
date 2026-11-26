@@ -170,7 +170,7 @@ describe("Token Miser persistence work budgets", () => {
       const pricing = vi.spyOn(store, "readTokenMiserGatePricingLines");
       const cards = vi.spyOn(store, "getThreadSubAgents");
 
-      await ledger.initializeTokenMiserLedger();
+      await ledger.repairTokenMiserHistory();
 
       // The 65th gate from the first thread shares the cursor's timestamp.
       // It belongs on the second page with all 63 gates from the second thread.
@@ -192,7 +192,35 @@ describe("Token Miser persistence work budgets", () => {
     }
   }));
 
-  it("restores 65 persisted gates in two pages and skips all writes on the next startup", ownLedgerTest(async () => {
+  it("repairs cold gates without draining or retiring a live gate's usage batch", ownLedgerTest(async () => {
+    const temp = createTempStateDb("pwragent-token-miser-live-history-");
+    const db = StateDb.open(temp.dbPath);
+    try {
+      const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+      const tokenMiserStore = new TokenMiserStore(path.join(temp.tempDir, "objects"), { storage });
+      const [cold, live] = [gate(0), gate(1)] as const;
+      storage.writeMetadata(cold);
+      storage.writeMetadata(live);
+      const { ledger, store, internals } = fixture(db, tokenMiserStore);
+      const drain = vi.spyOn(ledger, "flushLiveThreadUsageLines");
+      ledger.rememberPendingTokenMiserInterception(live);
+
+      await ledger.repairTokenMiserHistory(THREAD);
+      expect(drain).not.toHaveBeenCalled();
+      expect(internals.pendingTokenMiserInterceptions.get(live.objectId)).toBe(live);
+      const cards = () => store.listThreadSubAgents({ backend: "codex", threadId: THREAD });
+      expect((await cards()).map((card) => card.monitorId)).toEqual(["system:token-miser:gate-0"]);
+
+      await ledger.flushPendingTokenMiserLedger({ threadId: THREAD });
+      expect(drain).toHaveBeenCalledOnce();
+      expect((await cards()).map((card) => card.monitorId)).toEqual(["system:token-miser:gate-1", "system:token-miser:gate-0"]);
+    } finally {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }));
+
+  it("repairs 65 persisted gates in two pages and skips all writes in the next owner", ownLedgerTest(async () => {
     vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
     const temp = createTempStateDb("pwragent-token-miser-startup-");
     const db = StateDb.open(temp.dbPath);
@@ -206,25 +234,26 @@ describe("Token Miser persistence work budgets", () => {
       })();
       const read = vi.spyOn(storage, "readMetadataPage");
       const { ledger, store } = fixture(db, tokenMiserStore);
-      const first = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      const first = await measureSqliteWrites(() => ledger.repairTokenMiserHistory(THREAD));
       expectSqliteWriteBudget({
-        scenario: "token-miser-startup-backfill",
-        note: "One startup reconciliation of 65 existing gates without ledger rows, in two pages of at most 64.",
+        scenario: "token-miser-history-backfill",
+        note: "Historical accounting for 65 existing gates without ledger rows, in two pages of at most 64.",
         writes: first.writes,
       });
       expect(read.mock.calls).toEqual([
-        [undefined, 64],
-        [{ threadId: THREAD, createdAt: AT + 63, objectId: "gate-63" }, 64],
+        [undefined, 64, THREAD],
+        [{ threadId: THREAD, createdAt: AT + 63, objectId: "gate-63" }, 64, THREAD],
       ]);
       expect(await store.listThreadSubAgents({ backend: "codex", threadId: THREAD })).toHaveLength(65);
       expect(ledger.emitThreadPricingUpdated).toHaveBeenCalledTimes(1);
-      const repeat = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      const repeatOwner = fixture(db, tokenMiserStore).ledger;
+      const repeat = await measureSqliteWrites(() => repeatOwner.repairTokenMiserHistory(THREAD));
       expectSqliteWriteBudget({
-        scenario: "token-miser-startup-repeat",
-        note: "Startup reconciliation of 65 unchanged gates after backfill. Zero recurring writes and 0 MB/day.",
+        scenario: "token-miser-history-repeat",
+        note: "A new owner reads 65 unchanged gates after backfill. Zero recurring writes and 0 MB/day.",
         writes: repeat.writes,
       });
-      expect(ledger.emitThreadPricingUpdated).toHaveBeenCalledTimes(1);
+      expect(repeatOwner.emitThreadPricingUpdated).not.toHaveBeenCalled();
     } finally {
       db.close();
       removeTempStateDbDir(temp.tempDir);

@@ -165,6 +165,8 @@ import { isDevelopment, logDebug } from "./registry-debug-log";
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const TOKEN_MISER_LEDGER_BATCH_SIZE = 64;
 
+type TokenMiserLedgerWriteOptions = { publishPricing?: boolean; historical?: boolean };
+
 /** Collaborators the composition root builds for this module. */
 export interface ThreadUsageLedgerDependencies {
   readonly managedReviewService: ManagedReviewService;
@@ -178,7 +180,7 @@ export interface ThreadUsageLedgerDependencies {
  * the Codex account summary: capturing a turn's usage account can update it.
  */
 export interface ThreadUsageLedgerHost extends Pick<RegistryHostPorts,
-  "getActiveTurnForThread" | "invalidateThreadListCache" | "liveProfileRuntimeInstanceIds"
+  "getActiveTurnForThread" | "liveProfileRuntimeInstanceIds"
   | "liveSubAgentMonitorIds"
   | "turnLimitObservation"
 > {
@@ -370,11 +372,6 @@ export class ThreadUsageLedger {
     return this.liveTokenMiserSubAgents;
   }
 
-  /** The latest Token Miser ledger reconciliation; the registry waits on it. */
-  get currentTokenMiserLedgerReconciliation(): Promise<void> {
-    return this.tokenMiserLedgerReconciliation;
-  }
-
   /** Replaces a pending live usage line; the hub stamps a terminal turn's end on it. */
   setPendingLiveThreadUsageLine(usageKey: string, line: PendingLiveThreadUsageLine): void {
     this.pendingLiveThreadUsageLines.set(usageKey, line);
@@ -511,7 +508,7 @@ export class ThreadUsageLedger {
     Map<string, ThreadUsageLineRecord>
   >();
 
-  private tokenMiserStoragePreparation: Promise<void> = Promise.resolve();
+  private tokenMiserStoragePreparation?: Promise<void>;
 
   /**
    * The settlement of the last queued live gate publish. Each publish waits
@@ -520,8 +517,11 @@ export class ThreadUsageLedger {
   private tokenMiserLivePublishChain: Promise<void> = Promise.resolve();
   private tokenMiserLedgerPersistenceChain: Promise<void> = Promise.resolve();
 
-  private tokenMiserLedgerReconciliation: Promise<void> = Promise.resolve();
-  private tokenMiserRestoreCompactionBoundaries?: Map<string, number | undefined>;
+  private readonly tokenMiserHistoryRepairs = new Map<string | undefined, Promise<void>>();
+  private readonly repairedTokenMiserHistory = new Set<string | undefined>();
+  private readonly tokenMiserReplayRestorations = new Map<string, Promise<void>>();
+  private readonly restoredTokenMiserReplayThreads = new Set<string>();
+  private readonly tokenMiserLiveCompactionBoundaries = new Map<string, number>();
 
   private liveThreadUsageObservationSequence = 0;
 
@@ -1060,7 +1060,7 @@ export class ThreadUsageLedger {
       return params.accounting;
     }
     try {
-      await this.tokenMiserStoragePreparation;
+      await this.prepareTokenMiserStorage();
       const metadata = await host.tokenMiserStore.listMetadata(params.threadId);
       const tokenMiser = await host.tokenMiserStore.summarizeThreadUsage(
         params.threadId,
@@ -2850,114 +2850,111 @@ export class ThreadUsageLedger {
     await this.emitThreadPricingUpdated({ backend: "codex", threadId });
   }
 
-  initializeTokenMiserLedger(): Promise<void> {
-    this.tokenMiserStoragePreparation = this.tokenMiserStoragePreparation
-      .catch(() => undefined)
-      .then(async () => {
-        await this.host().tokenMiserStore?.prune({
-          maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
-          maxBytes: 512 * 1024 * 1024,
-        });
-      });
-    this.tokenMiserLedgerReconciliation = Promise.all([
+  /** Import old storage before the first actual consumer. The owner always
+   * has a store so it can still display historical accounting when off. */
+  prepareTokenMiserStorage(): Promise<void> {
+    const store = this.host().tokenMiserStore;
+    if (!store || this.context.lifecycle.closed) return Promise.resolve();
+    return this.tokenMiserStoragePreparation ??= store.prune({
+      maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
+      maxBytes: 512 * 1024 * 1024,
+    }).catch((error) => {
+      this.tokenMiserStoragePreparation = undefined;
+      throw error;
+    });
+  }
+
+  async drainTokenMiserLedgerWork(): Promise<void> {
+    await Promise.allSettled([
       this.tokenMiserStoragePreparation,
-      this.tokenMiserLedgerReconciliation,
-    ])
-      .then(async () => await this.reconcileTokenMiserLedger())
-      .catch((error) => {
-        backendRegistryLog.warn("Token Miser ledger reconciliation failed", {
+      ...this.tokenMiserHistoryRepairs.values(),
+      ...this.tokenMiserReplayRestorations.values(),
+    ]);
+  }
+
+  /** Backfill derived pricing and cards only when their historical view is
+   * requested. Replay observations have their own thread-scoped restore. */
+  repairTokenMiserHistory(threadId?: string): Promise<void> {
+    const store = this.host().tokenMiserStore;
+    if (!store || this.context.lifecycle.closed || this.repairedTokenMiserHistory.has(threadId)
+      || this.repairedTokenMiserHistory.has(undefined)) return Promise.resolve();
+    const pending = this.tokenMiserHistoryRepairs.get(threadId);
+    if (pending) return pending;
+    const repair = this.repairTokenMiserLedgerPages(store, threadId).then((complete) => {
+      if (complete) this.repairedTokenMiserHistory.add(threadId);
+    }).catch((error) => {
+      backendRegistryLog.warn("Token Miser ledger reconciliation failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }).finally(() => { this.tokenMiserHistoryRepairs.delete(threadId); });
+    this.tokenMiserHistoryRepairs.set(threadId, repair);
+    return repair;
+  }
+
+  private async repairTokenMiserLedgerPages(store: TokenMiserStore, threadId?: string): Promise<boolean> {
+    await this.prepareTokenMiserStorage();
+    const pricingChanged = new Set<string>();
+    let complete = true;
+    await yieldToEventLoop();
+    for (const page of store.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE, threadId)) {
+      if (this.context.lifecycle.closed) return false;
+      try {
+        const changed = await this.persistTokenMiserLedgerEntries(page, { historical: true, publishPricing: false });
+        for (const id of changed) pricingChanged.add(id);
+      } catch (error) {
+        complete = false;
+        backendRegistryLog.warn("Token Miser ledger page persistence failed", {
           error: error instanceof Error ? error.message : String(error),
         });
-      });
-    return this.tokenMiserLedgerReconciliation;
-  }
-
-  private async reconcileTokenMiserLedger(): Promise<void> {
-    const host = this.host();
-    if (!host.tokenMiserStore) {
-      return;
-    }
-    const compactedAtByThread = new Map<string, number | undefined>();
-    const pricingChanged = new Set<string>();
-    this.tokenMiserRestoreCompactionBoundaries = compactedAtByThread;
-    try {
-      await yieldToEventLoop();
-      for (const page of host.tokenMiserStore.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE)) {
-        const metadata = await this.restoreTokenMiserLedgerPage(host.tokenMiserStore, page, compactedAtByThread);
-        try {
-          const changed = await this.persistTokenMiserLedgerEntries(metadata, { publishPricing: false });
-          for (const threadId of changed) pricingChanged.add(threadId);
-        } catch (error) {
-          // A failed historical write must not block replay tracking for
-          // gates on later pages.
-          backendRegistryLog.warn("Token Miser ledger page persistence failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-        await yieldToEventLoop();
       }
-    } finally {
-      this.tokenMiserRestoreCompactionBoundaries = undefined;
-    }
-    for (const threadId of pricingChanged) {
-      await this.emitThreadPricingUpdated({ backend: "codex", threadId });
       await yieldToEventLoop();
     }
+    for (const id of pricingChanged) {
+      if (this.context.lifecycle.closed) return false;
+      await this.emitThreadPricingUpdated({ backend: "codex", threadId: id });
+      await yieldToEventLoop();
+    }
+    return complete;
   }
 
-  private async restoreTokenMiserLedgerPage(
-    store: TokenMiserStore,
-    metadata: readonly TokenMiserObjectMetadata[],
-    compactedAtByThread: Map<string, number | undefined>,
-  ): Promise<TokenMiserObjectMetadata[]> {
-    const restored: TokenMiserObjectMetadata[] = [];
-    for (const entry of metadata) {
-      let current: TokenMiserObjectMetadata | undefined = entry;
-      if (entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined) {
-        if (!compactedAtByThread.has(entry.threadId)) {
-          const compactions = await this.context.stores.usage.listThreadCompactions?.({
-            backend: "codex", threadId: entry.threadId,
-          });
-          const persistedAt = compactions?.at(-1)?.observedAt;
-          const liveAt = compactedAtByThread.get(entry.threadId);
-          compactedAtByThread.set(entry.threadId,
-            liveAt === undefined || (persistedAt !== undefined && persistedAt > liveAt) ? persistedAt : liveAt);
-        }
-        const compactedAt = compactedAtByThread.get(entry.threadId);
-        if (compactedAt !== undefined && compactedAt > entry.createdAt) {
-          // Publish from the reconciled page. A peer may have already
-          // stopped or removed this gate since the page read.
+  restoreTokenMiserReplayForThread(threadId: string): Promise<void> {
+    const store = this.host().tokenMiserStore;
+    if (!store || this.context.lifecycle.closed || this.restoredTokenMiserReplayThreads.has(threadId)) return Promise.resolve();
+    const pending = this.tokenMiserReplayRestorations.get(threadId);
+    if (pending) return pending;
+    const restore = this.restoreTokenMiserReplayPages(store, threadId).then(() => {
+      this.restoredTokenMiserReplayThreads.add(threadId);
+      this.tokenMiserLiveCompactionBoundaries.delete(threadId);
+    }).finally(() => { this.tokenMiserReplayRestorations.delete(threadId); });
+    this.tokenMiserReplayRestorations.set(threadId, restore);
+    return restore;
+  }
+
+  private async restoreTokenMiserReplayPages(store: TokenMiserStore, threadId: string): Promise<void> {
+    await this.prepareTokenMiserStorage();
+    // The request cursor belongs to this Codex session. Only the gate
+    // records survive a restart.
+    let persistedBoundary: Promise<number> | undefined;
+    for (const page of store.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE, threadId)) {
+      if (this.context.lifecycle.closed) return;
+      for (const entry of page) {
+        if (entry.replayTrackingVersion !== 2 || entry.replayTrackingStoppedAt !== undefined) continue;
+        persistedBoundary ??= Promise.resolve(this.context.stores.usage.listThreadCompactions?.({
+          backend: "codex", threadId,
+        })).then((compactions) => compactions?.at(-1)?.observedAt ?? -Infinity);
+        const compactedAt = Math.max(await persistedBoundary, this.tokenMiserLiveCompactionBoundaries.get(threadId) ?? -Infinity);
+        if (compactedAt > entry.createdAt) {
           const stopped = await store.stopReplayTracking({
             objectId: entry.objectId, stoppedAt: compactedAt, restoring: true,
           });
-          current = stopped ?? await store.readMetadata(entry.objectId, entry.threadId);
+          const current = stopped ?? await store.readMetadata(entry.objectId, threadId);
+          if (current) this.rememberActiveTokenMiserReplayEntry(current);
+        } else {
+          this.rememberActiveTokenMiserReplayEntry(entry);
         }
       }
-      if (!current) continue;
-      // Register immediately so the live handler can stop this gate even if
-      // a later entry on the same page awaits a compaction lookup.
-      this.rememberActiveTokenMiserReplayEntry(current);
-      this.seedTokenMiserRequestCursor(current);
-      restored.push(current);
+      await yieldToEventLoop();
     }
-    return restored;
-  }
-
-  /**
-   * Restore the thread's request boundary from stored gate marks.
-   *
-   * Codex reports `total.inputTokens` cumulatively for the thread, so it
-   * survives a restart — but the in-memory cursor does not. Without seeding,
-   * the first usage event after a relaunch would look like a new request to
-   * every gate and credit a replay that already happened.
-   */
-  private seedTokenMiserRequestCursor(_metadata: TokenMiserObjectMetadata): void {
-    // Intentionally does not seed. `total.inputTokens` is cumulative for the
-    // Codex *session*, not the thread's lifetime (see acp-usage.ts), so a mark
-    // persisted by the previous process sits above everything the new session
-    // reports. Seeding from it made every later event fail the advance test and
-    // froze replay counting for the life of the process. The sibling
-    // observed-context-replay fold re-seeds per process for the same reason.
   }
 
   rememberActiveTokenMiserReplayEntry(
@@ -3054,6 +3051,7 @@ export class ThreadUsageLedger {
       this.logTokenMiserReplaySkip("no-cumulative-input", threadId);
       return;
     }
+    await this.restoreTokenMiserReplayForThread(threadId);
     // One request boundary per thread, decided here.
     //
     // Each gate used to compare this cumulative high-water mark against its own
@@ -3422,29 +3420,26 @@ export class ThreadUsageLedger {
     if (params.backend !== "codex" || !this.host().tokenMiserStore) {
       return;
     }
-    const restoreBoundaries = this.tokenMiserRestoreCompactionBoundaries;
-    if (restoreBoundaries) {
-      const previous = restoreBoundaries.get(params.threadId);
-      if (previous === undefined || params.observedAt > previous) {
-        restoreBoundaries.set(params.threadId, params.observedAt);
-      }
+    const needsRestore = !this.restoredTokenMiserReplayThreads.has(params.threadId);
+    if (needsRestore) {
+      const previous = this.tokenMiserLiveCompactionBoundaries.get(params.threadId) ?? -Infinity;
+      this.tokenMiserLiveCompactionBoundaries.set(params.threadId, Math.max(previous, params.observedAt));
     }
-    const entries = this.activeTokenMiserReplayEntries.get(params.threadId);
-    if (!entries || entries.size === 0) {
-      return;
-    }
+    const entries = this.activeTokenMiserReplayEntries.get(params.threadId) ?? [];
     const stopped = await Promise.all(
-      [...entries.keys()].map((objectId) =>
-        this.host().tokenMiserStore!.stopReplayTracking({ objectId })
+      [...entries].filter(([, entry]) => entry.createdAt <= params.observedAt).map(([objectId]) =>
+        this.host().tokenMiserStore!.stopReplayTracking({ objectId, stoppedAt: params.observedAt })
       ),
     );
-    if (!stopped.some(Boolean)) {
-      return;
+    // A restore already in flight will see this boundary on its next
+    // continuation. A cold thread can apply it without pricing its history.
+    if (needsRestore && !this.tokenMiserReplayRestorations.has(params.threadId)) {
+      await this.runTokenMiserSideEffect("restoreReplayAtCompaction", () =>
+        this.restoreTokenMiserReplayForThread(params.threadId));
     }
-    await this.emitThreadToolAccountingUpdated({
-      backend: "codex",
-      threadId: params.threadId,
-    });
+    if (stopped.some(Boolean)) {
+      await this.emitThreadToolAccountingUpdated({ backend: "codex", threadId: params.threadId });
+    }
   }
 
   async handleThreadCompactionReplayBoundary(
@@ -3874,7 +3869,6 @@ export class ThreadUsageLedger {
     publishPricing?: boolean;
     threadId: string;
   }): Promise<boolean> {
-    await this.tokenMiserLedgerReconciliation;
     const metadata = Array.from(this.pendingTokenMiserInterceptions.values())
       .filter((entry) =>
         entry.threadId === params.threadId,
@@ -3892,7 +3886,7 @@ export class ThreadUsageLedger {
    */
   private persistTokenMiserLedgerEntries(
     metadata: readonly TokenMiserObjectMetadata[],
-    options: { publishPricing?: boolean } = {},
+    options: TokenMiserLedgerWriteOptions = {},
   ): Promise<string[]> {
     // Pacing lets later flushes arrive before an earlier batch writes. Keep
     // their database writes in call order, independently of the live publish
@@ -3906,14 +3900,17 @@ export class ThreadUsageLedger {
 
   private async writeTokenMiserLedgerEntries(
     metadata: readonly TokenMiserObjectMetadata[],
-    options: { publishPricing?: boolean },
+    options: TokenMiserLedgerWriteOptions,
   ): Promise<string[]> {
     // Finalized helper usage joins the same one-second bulk-write window as
     // parent usage. Drain that window before terminal reconciliation so the
     // stable helper line is found instead of inserted a second time.
-    await this.flushLiveThreadUsageLines();
+    // A historical read can arrive mid-turn. Leave that window alone and
+    // let the live owner settle its own gates at the terminal boundary.
+    if (!options.historical) await this.flushLiveThreadUsageLines();
     const byThread = new Map<string, TokenMiserObjectMetadata[]>();
     for (const entry of metadata) {
+      if (options.historical && this.pendingTokenMiserInterceptions.has(entry.objectId)) continue;
       const entries = byThread.get(entry.threadId) ?? [];
       entries.push(entry);
       byThread.set(entry.threadId, entries);
@@ -3965,6 +3962,7 @@ export class ThreadUsageLedger {
           })
         ).map((card) => [card.monitorId, card]));
         for (const entry of batch) {
+          if (options.historical && this.pendingTokenMiserInterceptions.has(entry.objectId)) continue;
           const accounting = resolveTokenMiserGateAccounting({
             entry, indexes,
             helperUsage: () => entry.helperUsage?.tokenUsage
@@ -4014,7 +4012,6 @@ export class ThreadUsageLedger {
             });
           }
         }
-        this.host().invalidateThreadListCache("codex");
       }
       if (usageLines.length > 0) {
         if (typeof this.context.stores.usage.upsertThreadUsageLines === "function") {
@@ -4028,7 +4025,7 @@ export class ThreadUsageLedger {
       // A paced bulk flush can overlap a newer metadata callback. Retire
       // only the version we persisted; its replacement stays live and pending
       // until a later flush records it.
-      const settledEntries = entries.filter((entry) => {
+      const settledEntries = options.historical ? [] : entries.filter((entry) => {
         const pending = this.pendingTokenMiserInterceptions.get(entry.objectId);
         return pending === undefined || pending === entry;
       });

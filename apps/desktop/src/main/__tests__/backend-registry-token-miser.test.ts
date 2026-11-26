@@ -21,6 +21,10 @@ import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { indexTokenMiserCachedReplays, indexTokenMiserPricingLines } from "../app-server/token-miser-ledger-index";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { disposeAppState, initializeAppState } from "../state/app-state";
+import { disposeDesktopSettingsService, initializeDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import { initializeDesktopConfigStore } from "../settings/config-store/desktop-config-store-singleton";
+import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
 import { TestTokenMiserStore as TokenMiserStore } from "./token-miser-test-store";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 import { diagnosticExcerpt, TokenMiserDiagnostics } from "../token-miser/token-miser-diagnostics";
@@ -47,6 +51,59 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       } as never,
       overlayStore: store,
     });
+  });
+
+  it.each([false, true])("does zero Token Miser history work at startup (enabled=%s)", async (enabled) => {
+    await registry.close();
+    const profile = initializeAppState();
+    const { stateDb: profileDb, overlayStore } = profile;
+    const storage = new SqliteTokenMiserStorage(profileDb);
+    const threadId = enabled ? "enabled-history" : "disabled-history";
+    const gate = { ...metadata(`${threadId}-gate`, `${threadId}-helper`), threadId, replayTrackingVersion: 2 } as TokenMiserObjectMetadata;
+    storage.writeMetadata(gate);
+    storage.writeMetadata({ ...gate, objectId: `${threadId}-other-gate`, threadId: "other-thread" });
+    const pages = vi.spyOn(SqliteTokenMiserStorage.prototype, "readMetadataPage");
+    const legacy = vi.spyOn(SqliteTokenMiserStorage.prototype, "hasLegacyMigration");
+    const pricing = vi.spyOn(overlayStore, "readTokenMiserGatePricingLines");
+    const cards = vi.spyOn(overlayStore, "getThreadSubAgents");
+    try {
+      initializeDesktopConfigStore();
+      initializeDesktopSettingsService();
+      registry = createDesktopBackendRegistry({ overlayStore, mcpConnectionService: null, resolveTokenMiserEnabled: () => enabled });
+      const prepareRuntime = vi.spyOn(registry as unknown as { prepareTokenMiserRuntime(): Promise<void> },
+        "prepareTokenMiserRuntime").mockResolvedValue();
+      await registry.prepareTokenMiserRuntimeAtStartup();
+      // Drain any constructor-scheduled work through its first yield.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await registry.readUsageActivity({ from: gate.createdAt - 1, to: gate.createdAt + 1000 });
+      expect(pages).not.toHaveBeenCalled();
+      expect(pricing).not.toHaveBeenCalled();
+      expect(cards).not.toHaveBeenCalled();
+      expect(prepareRuntime).toHaveBeenCalledTimes(enabled ? 1 : 0);
+      if (!enabled) expect(legacy).not.toHaveBeenCalled();
+
+      await registry.readThread({ backend: "codex", threadId, display: { resource: "incident" } });
+      expect(pages).not.toHaveBeenCalled();
+      expect(pricing).not.toHaveBeenCalled();
+      cards.mockClear();
+
+      const invalidateNavigation = vi.spyOn(registry as unknown as { invalidateThreadListCache(): void }, "invalidateThreadListCache");
+      await registry.readThread({ backend: "codex", threadId, display: { resource: "pricing" } });
+      expect(pages.mock.calls).toEqual([[undefined, 64, threadId]]);
+      expect(pricing.mock.calls.map(([request]) => request.threadId)).toEqual([threadId]);
+      expect(cards.mock.calls.length).toBeGreaterThan(0);
+      expect(cards.mock.calls.every(([request]) => request.threadId === threadId)).toBe(true);
+      expect(invalidateNavigation).not.toHaveBeenCalled();
+    } finally {
+      try { await registry.close(); } finally {
+        pages.mockRestore();
+        legacy.mockRestore();
+        pricing.mockRestore();
+        cards.mockRestore();
+        disposeDesktopSettingsService();
+        disposeAppState();
+      }
+    }
   });
 
   afterEach(async () => {
@@ -180,7 +237,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(await tokenMiserStore.readAll({ objectId: entry.objectId, threadId: entry.threadId })).toBeUndefined();
   });
 
-  it.each([true, false])("migrates history before reconciliation and accounting reads (enabled=%s)", async (enabled) => {
+  it.each([true, false])("migrates on historical demand and restores replay before first usage (enabled=%s)", async (enabled) => {
     const root = path.join(directory, "legacy-objects");
     await fs.mkdir(root);
     const legacy = { ...metadata(randomUUID(), "helper-legacy"), replayTrackingVersion: 2 as const };
@@ -188,7 +245,6 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await fs.writeFile(path.join(root, `${legacy.objectId}.txt`), "contrived private output");
     const tokenMiserStore = new TokenMiserStore(root);
     const internals = registryModules(registry).threadUsageLedger as unknown as {
-      initializeTokenMiserLedger(): Promise<void>;
       recordTokenMiserParentModelRequest(event: AgentEvent): Promise<void>;
       activeTokenMiserReplayEntries: Map<string, Map<string, unknown>>;
       withTokenMiserAccounting(params: { backend: "codex"; threadId: string; accounting: ThreadToolAccounting }): Promise<ThreadToolAccounting>;
@@ -205,15 +261,15 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       await barrier;
       await prune(options);
     });
-    const initialized = internals.initializeTokenMiserLedger();
     const startup = registry.prepareTokenMiserRuntimeAtStartup();
     const read = internals.withTokenMiserAccounting({ backend: "codex", threadId: legacy.threadId, accounting: await store.readThreadToolAccounting({ backend: "codex", threadId: legacy.threadId }) });
     release();
-    await Promise.all([initialized, startup]);
+    await startup;
     expect((await read).tokenMiser?.interceptionCount).toBe(1);
-    expect(internals.activeTokenMiserReplayEntries.get(legacy.threadId)?.has(legacy.objectId)).toBe(true);
+    expect(internals.activeTokenMiserReplayEntries.has(legacy.threadId)).toBe(false);
     expect(prepareRuntime).toHaveBeenCalledTimes(enabled ? 1 : 0);
     for (const tokens of [100, 200, 300]) await internals.recordTokenMiserParentModelRequest(parentUsageEvent(tokens));
+    expect(internals.activeTokenMiserReplayEntries.get(legacy.threadId)?.has(legacy.objectId)).toBe(true);
     expect((await tokenMiserStore.readMetadata(legacy.objectId))?.cachedReplayCount).toBe(1);
     await expect(fs.stat(path.join(root, `${legacy.objectId}.txt`))).rejects.toMatchObject({ code: "ENOENT" });
   });

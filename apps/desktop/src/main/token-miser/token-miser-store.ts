@@ -203,7 +203,7 @@ export type TokenMiserMetadataUpdateReason =
   | "replay"
   | "retrieval"
   | "stopped"
-  | "startup-stop"
+  | "restore-stop"
   | "stored"
   | "flushed";
 
@@ -807,10 +807,10 @@ export class TokenMiserStore {
       mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
   }
 
-  *listMetadataPages(limit: number): Iterable<TokenMiserObjectMetadata[]> {
+  *listMetadataPages(limit: number, threadId?: string): Iterable<TokenMiserObjectMetadata[]> {
     let after: TokenMiserObjectRecord | undefined;
     for (;;) {
-      const { entries, next } = this.storage.readMetadataPage(after, limit);
+      const { entries, next } = this.storage.readMetadataPage(after, limit, threadId);
       if (entries.length === 0) return;
       yield entries.map((entry) => mergeReplayUpdate(entry, this.replayUpdates.get(entry.objectId)));
       if (!next) return;
@@ -1292,7 +1292,7 @@ export class TokenMiserStore {
       }
       metadata.replayTrackingStoppedAt = params.stoppedAt ?? Date.now();
       return true;
-    }, params.restoring ? "startup-stop" : "stopped");
+    }, params.restoring ? "restore-stop" : "stopped");
   }
 
   private async updateMetadata(
