@@ -100,6 +100,17 @@ const QUICK_BY_KEY = new Map<string, ReactionEmojiEntry>(
   QUICK_REACTIONS.map((entry) => [normalizeEmojiKey(entry.emoji), entry]),
 );
 
+const EXTRA_SHORTCODE_ALIASES_BY_KEY = new Map<string, string[]>();
+for (const [alias, emoji] of Object.entries(EXTRA_SHORTCODE_ALIASES)) {
+  const key = normalizeEmojiKey(emoji);
+  const existing = EXTRA_SHORTCODE_ALIASES_BY_KEY.get(key);
+  if (existing) {
+    existing.push(alias);
+  } else {
+    EXTRA_SHORTCODE_ALIASES_BY_KEY.set(key, [alias]);
+  }
+}
+
 function dedupeKeywords(keywords: readonly string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -188,9 +199,11 @@ export function buildReactionEmojiCatalog(): ReactionEmojiCatalog {
         EXTRA_DEVELOPER_KEYWORDS[item.emoji]
         ?? EXTRA_DEVELOPER_KEYWORDS[key]
         ?? [];
+      const extraAliases = EXTRA_SHORTCODE_ALIASES_BY_KEY.get(key) ?? [];
       const shortcode = quickOverride?.shortcode ?? item.slug;
       const keywords = dedupeKeywords([
         ...(quickOverride?.keywords ?? []),
+        ...extraAliases,
         ...extraKeywords,
         ...libKeywords,
         item.slug,

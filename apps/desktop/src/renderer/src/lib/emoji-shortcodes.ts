@@ -261,7 +261,11 @@ function hasValidTrailingBoundary(
 export function findEmojiShortcodeTrigger(
   text: string,
   caret: number,
-  options?: { atLineStart?: boolean; priorText?: string },
+  options?: {
+    atLineStart?: boolean;
+    getPriorText?: () => string | undefined;
+    priorText?: string;
+  },
 ): EmojiShortcodeTrigger | undefined {
   const safeCaret = Math.max(0, Math.min(caret, text.length));
   const prefix = text.slice(0, safeCaret);
@@ -274,8 +278,9 @@ export function findEmojiShortcodeTrigger(
   if (!hasValidLeadingBoundary(prefix, start, allowStart, false)) {
     return undefined;
   }
-  const codeContextText = options?.priorText
-    ? `${options.priorText}\n${prefix}`
+  const priorText = options?.priorText ?? options?.getPriorText?.();
+  const codeContextText = priorText
+    ? `${priorText}\n${prefix}`
     : prefix;
   if (isInsideUnclosedCodeContext(codeContextText, codeContextText.length)) {
     return undefined;
@@ -297,6 +302,7 @@ export function findExactEmojiShortcodeBeforeColon(
   options?: {
     atLineStart?: boolean;
     catalog?: ReactionEmojiCatalog;
+    getPriorText?: () => string | undefined;
     priorText?: string;
   },
 ): EmojiShortcodeMatch | undefined {
@@ -312,15 +318,16 @@ export function findExactEmojiShortcodeBeforeColon(
   if (!hasValidTrailingBoundary(suffix, 0, true)) {
     return undefined;
   }
-  const codeContextText = options?.priorText
-    ? `${options.priorText}\n${prefix}`
-    : prefix;
-  if (isInsideUnclosedCodeContext(codeContextText, codeContextText.length)) {
-    return undefined;
-  }
   const shortcode = match[1]!;
   const entry = resolveEmojiShortcode(shortcode, options?.catalog);
   if (!entry) {
+    return undefined;
+  }
+  const priorText = options?.priorText ?? options?.getPriorText?.();
+  const codeContextText = priorText
+    ? `${priorText}\n${prefix}`
+    : prefix;
+  if (isInsideUnclosedCodeContext(codeContextText, codeContextText.length)) {
     return undefined;
   }
   return {

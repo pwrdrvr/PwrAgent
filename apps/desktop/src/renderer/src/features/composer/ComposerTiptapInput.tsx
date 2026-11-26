@@ -2636,10 +2636,28 @@ function getSelectionDraftRange(
   };
 }
 
+function serializeTextblockForFenceCheck(block: ProseMirrorNode): string {
+  let line = "";
+  block.forEach((child) => {
+    if (child.type.name === "hardBreak") {
+      line += "\n";
+    } else if (child.isText && !child.marks.some((mark) => mark.type.spec.code)) {
+      line += child.text!;
+    } else {
+      line += "x";
+    }
+  });
+  return line;
+}
+
 function readContiguousPlainTextBeforeCaret(
   doc: ProseMirrorNode,
   pos: number,
-): { atLineStart: boolean; prefix: string; priorText: string } | undefined {
+): {
+  atLineStart: boolean;
+  prefix: string;
+  getPriorText: () => string | undefined;
+} | undefined {
   const $pos = doc.resolve(pos);
   if (!$pos.parent.inlineContent || $pos.parent.type.spec.code) {
     return undefined;
@@ -2650,34 +2668,57 @@ function readContiguousPlainTextBeforeCaret(
 
   let prefix = "";
   let atLineStart = true;
+  let currentLine = "";
+  const parentPriorLines: string[] = [];
   $pos.parent.nodesBetween(0, $pos.parentOffset, (node, position) => {
     if (node.isText && !node.marks.some((mark) => mark.type.spec.code)) {
-      prefix += node.text!.slice(0, $pos.parentOffset - position);
+      const slice = node.text!.slice(0, $pos.parentOffset - position);
+      prefix += slice;
+      currentLine += slice;
     } else if (node.type.name === "hardBreak") {
+      parentPriorLines.push(currentLine);
+      currentLine = "";
       prefix = "";
       atLineStart = true;
     } else {
+      currentLine += "x";
       prefix = "";
       atLineStart = false;
     }
   });
 
-  const priorLines: string[] = [];
   const blockStart = $pos.before($pos.depth);
-  if (blockStart > 0) {
-    doc.nodesBetween(0, blockStart, (node) => {
-      if (node.isTextblock) {
-        priorLines.push(node.textContent);
-        return false;
-      }
-      return undefined;
-    });
-  }
+  let cachedPriorText: string | undefined;
+  let computedPriorText = false;
+  const getPriorText = (): string | undefined => {
+    if (computedPriorText) {
+      return cachedPriorText;
+    }
+    computedPriorText = true;
+    const priorLines: string[] = [];
+    if (blockStart > 0) {
+      doc.nodesBetween(0, blockStart, (node) => {
+        if (node.type.spec.code) {
+          return false;
+        }
+        if (node.isTextblock) {
+          priorLines.push(serializeTextblockForFenceCheck(node));
+          return false;
+        }
+        return undefined;
+      });
+    }
+    if (parentPriorLines.length > 0) {
+      priorLines.push(...parentPriorLines);
+    }
+    cachedPriorText = priorLines.length > 0 ? priorLines.join("\n") : undefined;
+    return cachedPriorText;
+  };
 
   return {
     atLineStart,
     prefix,
-    priorText: priorLines.join("\n"),
+    getPriorText,
   };
 }
 
@@ -2709,7 +2750,7 @@ function readEmojiTrigger(
   }
   const trigger = findEmojiShortcodeTrigger(context.prefix, context.prefix.length, {
     atLineStart: context.atLineStart,
-    priorText: context.priorText || undefined,
+    getPriorText: context.getPriorText,
   });
   if (!trigger) {
     return undefined;
@@ -3238,7 +3279,7 @@ export const ComposerTiptapInput = forwardRef<
                 const suffix = readFollowingBoundaryText(view.state.doc, to);
                 const match = findExactEmojiShortcodeBeforeColon(context.prefix, suffix, {
                   atLineStart: context.atLineStart,
-                  priorText: context.priorText || undefined,
+                  getPriorText: context.getPriorText,
                 });
                 if (!match) {
                   return false;
@@ -3461,6 +3502,9 @@ export const ComposerTiptapInput = forwardRef<
           // commands (including undo and the composer's submit shortcuts).
           if (propsRef.current.readOnly) return true;
           imeComposingKeyRef.current = event.isComposing || event.keyCode === 229;
+          if (imeComposingKeyRef.current) {
+            return true;
+          }
           const currentEditorForHint = editorRef.current;
           if (
             currentEditorForHint &&
@@ -3642,9 +3686,6 @@ export const ComposerTiptapInput = forwardRef<
             return event.altKey
               ? insertWysiwygSoftBreak(currentEditor)
               : insertWysiwygLineBreak(currentEditor);
-          }
-          if (event.isComposing || event.keyCode === 229) {
-            return true;
           }
           propsRef.current.onKeyDown?.(event as unknown as KeyboardEvent<HTMLDivElement>);
           return event.defaultPrevented;

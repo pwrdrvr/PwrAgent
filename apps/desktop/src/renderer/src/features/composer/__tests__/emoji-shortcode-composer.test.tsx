@@ -114,6 +114,61 @@ describe("ComposerTiptapInput :shortcode: auto-expansion", () => {
     expect(textbox.textContent).not.toContain("👍");
   });
 
+  it("tracks fenced code across hardBreak lines and ignores literal fences inside prior codeBlock nodes", async () => {
+    await loadEmojiCatalog();
+    const { textbox, editor, unmount } = renderControlledTiptap({ markdownConversion: false });
+
+    // 1. Opening fence followed by Shift+Enter (hardBreak) in the same paragraph suppresses expansion.
+    act(() => {
+      editor.commands.setContent("<p>```ts<br></p>");
+      editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+      typeTextIntoEditor(editor, ":+1:");
+    });
+    expect(textbox.textContent).toContain(":+1:");
+    expect(textbox.textContent).not.toContain("👍");
+
+    // 2. Prior paragraph containing a hardBreak before an opening fence suppresses expansion in the next paragraph.
+    act(() => {
+      editor.commands.setContent("<p>intro<br>```ts</p><p></p>");
+      editor.commands.setTextSelection(editor.state.doc.content.size - 1);
+      typeTextIntoEditor(editor, ":rocket:");
+    });
+    expect(textbox.textContent).toContain(":rocket:");
+    expect(textbox.textContent).not.toContain("🚀");
+
+    unmount();
+
+    // 3. Prior closed codeBlock with an odd number of literal fence lines does NOT disable expansion afterward.
+    const markdownView = renderControlledTiptap({ markdownConversion: true });
+    act(() => {
+      markdownView.editor.commands.setContent(
+        "<pre><code>```md\nexample</code></pre><p></p>",
+      );
+      markdownView.editor.commands.setTextSelection(
+        markdownView.editor.state.doc.content.size - 1,
+      );
+      typeTextIntoEditor(markdownView.editor, ":+1:");
+    });
+    expect(markdownView.textbox.textContent).toContain("👍");
+  });
+
+  it("skips full-document traversal on caret moves when no emoji trigger exists", async () => {
+    await loadEmojiCatalog();
+    const { editor } = renderControlledTiptap({
+      value: "First paragraph\n\nSecond paragraph\n\nThird paragraph",
+    });
+
+    const nodesBetweenSpy = vi.spyOn(editor.state.doc, "nodesBetween");
+    act(() => {
+      const end = editor.state.doc.content.size - 1;
+      editor.commands.setTextSelection(end - 5);
+      editor.commands.setTextSelection(end - 2);
+      editor.commands.setTextSelection(end);
+    });
+    expect(nodesBetweenSpy).not.toHaveBeenCalled();
+    nodesBetweenSpy.mockRestore();
+  });
+
   it("respects active IME composition (isComposing, keyCode 229, compositionstart)", () => {
     const { textbox, editor } = renderControlledTiptap();
 
@@ -127,6 +182,20 @@ describe("ComposerTiptapInput :shortcode: auto-expansion", () => {
       typeTextIntoEditor(editor, ":");
     });
     expect(textbox.textContent).toBe(":+1:");
+
+    // IME composition guard must also skip editor shortcuts like Shift+Enter without preventDefault.
+    const shiftEnterEvent = new KeyboardEvent("keydown", {
+      key: "Enter",
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(shiftEnterEvent, "isComposing", { value: true });
+    act(() => {
+      textbox.dispatchEvent(shiftEnterEvent);
+    });
+    expect(shiftEnterEvent.defaultPrevented).toBe(false);
+    expect(textbox.querySelector("br")).toBeNull();
 
     // Reset and test keyCode 229.
     act(() => {
@@ -202,6 +271,30 @@ describe("CompactComposer :emoji: autocomplete", () => {
     expect(textbox.textContent).toBe("Looks great 👍 ");
     expect(onSend).not.toHaveBeenCalled();
 
+    // Tab commits the active option.
+    act(() => {
+      typeTextIntoEditor(editor, ":fire");
+    });
+    expect(await screen.findByRole("listbox", { name: "Emoji" })).toBeInTheDocument();
+    fireEvent.keyDown(textbox, { key: "Tab" });
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox", { name: "Emoji" })).toBeNull();
+    });
+    expect(textbox.textContent).toBe("Looks great 👍 🔥 ");
+
+    // Pointer click (mouseDown) selects a clicked option (including alias search).
+    act(() => {
+      typeTextIntoEditor(editor, ":rotating_ligh");
+    });
+    const aliasListbox = await screen.findByRole("listbox", { name: "Emoji" });
+    const aliasOption = within(aliasListbox).getAllByRole("option")[0]!;
+    expect(aliasOption).toHaveTextContent("🚨");
+    fireEvent.mouseDown(aliasOption);
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox", { name: "Emoji" })).toBeNull();
+    });
+    expect(textbox.textContent).toBe("Looks great 👍 🔥 🚨 ");
+
     // Escape dismisses without inserting.
     act(() => {
       typeTextIntoEditor(editor, ":rocket");
@@ -211,7 +304,7 @@ describe("CompactComposer :emoji: autocomplete", () => {
     await waitFor(() => {
       expect(screen.queryByRole("listbox", { name: "Emoji" })).toBeNull();
     });
-    expect(textbox.textContent).toBe("Looks great 👍 :rocket");
+    expect(textbox.textContent).toBe("Looks great 👍 🔥 🚨 :rocket");
   });
 
   it("auto-expands :+1: on closing colon and closes the autocomplete popup", async () => {
@@ -237,7 +330,7 @@ describe("CompactComposer :emoji: autocomplete", () => {
 });
 
 describe("Composer :emoji: autocomplete", () => {
-  it("opens EmojiAutocompleteList on :prefix, navigates with keyboard, and inserts the chosen emoji", async () => {
+  it("opens EmojiAutocompleteList on :prefix, navigates with keyboard, and inserts via Enter, Tab, and click", async () => {
     await loadEmojiCatalog();
     const desktopApi: DesktopApi = {
       getNavigationQueryPage: async (request) =>
@@ -284,5 +377,41 @@ describe("Composer :emoji: autocomplete", () => {
       expect(screen.queryByRole("listbox", { name: "Emoji" })).toBeNull();
     });
     expect(textbox.textContent).toBe("Ready to ship 🚀 ");
+
+    // Tab commits the active option in Composer.
+    act(() => {
+      typeTextIntoEditor(editor, ":avocad");
+    });
+    expect(await screen.findByRole("listbox", { name: "Emoji" })).toBeInTheDocument();
+    fireEvent.keyDown(textbox, { key: "Tab" });
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox", { name: "Emoji" })).toBeNull();
+    });
+    expect(textbox.textContent).toBe("Ready to ship 🚀 🥑 ");
+
+    // Pointer click (mouseDown + click) selects an option in EmojiAutocompleteList.
+    act(() => {
+      typeTextIntoEditor(editor, ":thumbs");
+    });
+    const thumbsListbox = await screen.findByRole("listbox", { name: "Emoji" });
+    const thumbsDownOption = within(thumbsListbox).getAllByRole("option")[1]!;
+    expect(thumbsDownOption).toHaveTextContent(":-1:");
+    fireEvent.mouseDown(thumbsDownOption);
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox", { name: "Emoji" })).toBeNull();
+    });
+    expect(textbox.textContent).toBe("Ready to ship 🚀 🥑 👎 ");
+
+    // Synthetic click (e.g. keyboard activation on focused option) also selects.
+    act(() => {
+      typeTextIntoEditor(editor, ":tada");
+    });
+    const tadaListbox = await screen.findByRole("listbox", { name: "Emoji" });
+    const tadaOption = within(tadaListbox).getAllByRole("option")[0]!;
+    fireEvent.click(tadaOption);
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox", { name: "Emoji" })).toBeNull();
+    });
+    expect(textbox.textContent).toBe("Ready to ship 🚀 🥑 👎 🎉 ");
   });
 });

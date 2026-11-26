@@ -56,8 +56,34 @@ describe("emoji shortcode catalog lookup", () => {
     expect(searchEmojiShortcodes("thumbs", catalog)[0]?.emoji).toBe("👍");
     expect(searchEmojiShortcodes("rocket", catalog)[0]?.emoji).toBe("🚀");
     expect(searchEmojiShortcodes("avocado", catalog)[0]?.emoji).toBe("🥑");
+    expect(searchEmojiShortcodes("rotating_light", catalog)[0]?.emoji).toBe("🚨");
+    expect(searchEmojiShortcodes("heavy_check_mark", catalog)[0]?.emoji).toBe("✔️");
+    expect(searchEmojiShortcodes("ballot_box_with_check", catalog)[0]?.emoji).toBe("☑️");
+    expect(searchEmojiShortcodes("raised_hands", catalog)[0]?.emoji).toBe("🙌");
+    expect(searchEmojiShortcodes("no_entry_sign", catalog)[0]?.emoji).toBe("🚫");
     expect(searchEmojiShortcodes("_", catalog)).toEqual([]);
     expect(searchEmojiShortcodes("--", catalog)).toEqual([]);
+  });
+
+  it("defers getPriorText until a boundary-safe shortcode candidate exists", () => {
+    let priorCalls = 0;
+    const getPriorText = () => {
+      priorCalls += 1;
+      return "```ts";
+    };
+
+    expect(findEmojiShortcodeTrigger("plain prose without colon", 25, { getPriorText })).toBeUndefined();
+    expect(findEmojiShortcodeTrigger("12:30", 5, { getPriorText })).toBeUndefined();
+    expect(findEmojiShortcodeTrigger("std::vec", 8, { getPriorText })).toBeUndefined();
+    expect(findExactEmojiShortcodeBeforeColon("plain", "", { catalog, getPriorText })).toBeUndefined();
+    expect(findExactEmojiShortcodeBeforeColon(":not_real", "", { catalog, getPriorText })).toBeUndefined();
+    expect(priorCalls).toBe(0);
+
+    expect(findEmojiShortcodeTrigger(":+1", 3, { getPriorText })).toBeUndefined();
+    expect(priorCalls).toBe(1);
+
+    expect(findExactEmojiShortcodeBeforeColon(":+1", "", { catalog, getPriorText })).toBeUndefined();
+    expect(priorCalls).toBe(2);
   });
 });
 
