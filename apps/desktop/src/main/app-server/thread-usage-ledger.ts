@@ -2915,10 +2915,11 @@ export class ThreadUsageLedger {
       let current: TokenMiserObjectMetadata | undefined = entry;
       if (entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined) {
         if (!compactedAtByThread.has(entry.threadId)) {
-          const compactions = await this.context.stores.usage.listThreadCompactions?.({
-            backend: "codex", threadId: entry.threadId,
-          });
-          const persistedAt = compactions?.at(-1)?.observedAt;
+          const usage = this.context.stores.usage;
+          const thread = { backend: "codex" as const, threadId: entry.threadId };
+          const persistedAt = usage.readLatestThreadCompactionAt
+            ? await usage.readLatestThreadCompactionAt(thread)
+            : (await usage.listThreadCompactions?.(thread))?.at(-1)?.observedAt;
           const liveAt = compactedAtByThread.get(entry.threadId);
           compactedAtByThread.set(entry.threadId,
             liveAt === undefined || (persistedAt !== undefined && persistedAt > liveAt) ? persistedAt : liveAt);

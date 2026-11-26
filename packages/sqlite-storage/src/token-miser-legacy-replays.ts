@@ -1,4 +1,5 @@
 import type BetterSqlite3 from "better-sqlite3";
+import { prepareSqliteRead } from "./sqlite-prepared-read";
 
 type Invocation = { observed_at: number; invocation_id: string; item_id: string };
 type InvocationId = Pick<Invocation, "invocation_id">;
@@ -55,10 +56,10 @@ export function readTokenMiserLegacyReplayCounts(
     turn.set(toolUseId, 0);
     counts.set(turnId, turn);
   }
-  const invocations = db.prepare(`SELECT observed_at, invocation_id, item_id
+  const invocations = prepareSqliteRead(db, `SELECT observed_at, invocation_id, item_id
     FROM thread_tool_invocations WHERE backend = ? AND thread_id = ? AND turn_id = ?
     ORDER BY observed_at ASC`);
-  const tied = db.prepare(`SELECT invocation_id FROM thread_tool_invocations
+  const tied = prepareSqliteRead(db, `SELECT invocation_id FROM thread_tool_invocations
     WHERE backend = ? AND thread_id = ? AND turn_id = ? AND observed_at = ?`);
   // Both passes see the same read snapshot, even when another profile
   // process writes while the cursor is open.

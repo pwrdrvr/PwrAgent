@@ -9,6 +9,7 @@ import { type FailedSubAgentAttempt } from "@pwragent/shared/contracts/agent";
 import { type SubAgentLens } from "@pwragent/shared/subagent-kind";
 import { type TokenMiserGateAccountingTotals } from "@pwragent/shared/token-miser-savings-summary";
 import { LegacyPayloadArrayMove } from "./legacy-payload-array-move";
+import { prepareSqliteRead } from "./sqlite-prepared-read";
 
 /**
  * Durable sub-agent and Token Miser gate cards, one row per card.
@@ -516,7 +517,7 @@ export class ThreadSubAgentTable {
   /** The named cards that exist, in no particular order. */
   getMany(storageKey: string, monitorIds: readonly string[]): ThreadSubAgentSummary[] {
     if (monitorIds.length === 0) return [];
-    return parseCards(this.db.prepare(`SELECT card FROM thread_sub_agents
+    return parseCards(prepareSqliteRead(this.db, `SELECT card FROM thread_sub_agents
       WHERE thread_id = ? AND monitor_id IN (SELECT value FROM json_each(?))`)
       .all(storageKey, JSON.stringify([...new Set(monitorIds)])) as CardRow[]);
   }
