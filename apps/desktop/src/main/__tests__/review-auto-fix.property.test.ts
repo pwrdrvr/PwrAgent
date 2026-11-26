@@ -22,7 +22,7 @@ import {
  * thread's only pending start.
  */
 
-type Phase = "pending" | "running" | "over";
+type Phase = "pending" | "running" | "endedBeforeAccept" | "over";
 type Review = { id: number; thread: string; turnId: string; autoFix: boolean; phase: Phase };
 type Model = { reviews: Review[]; nextId: number };
 type Real = {
@@ -37,6 +37,8 @@ type Real = {
 const thread = (id: string) => ({ backend: "codex" as const, threadId: id });
 const onThread = (model: Model, id: string, phase: Phase) =>
   model.reviews.filter((review) => review.thread === id && review.phase === phase);
+const inFlightOnThread = (model: Model, id: string) =>
+  model.reviews.filter((review) => review.thread === id && (review.phase === "pending" || review.phase === "endedBeforeAccept"));
 
 class Begin implements fc.Command<Model, Real> {
   constructor(readonly thread: string, readonly autoFix: boolean) {}
@@ -53,12 +55,12 @@ class Begin implements fc.Command<Model, Real> {
 class Accept implements fc.Command<Model, Real> {
   constructor(readonly thread: string) {}
   check(model: Readonly<Model>): boolean {
-    return onThread(model, this.thread, "pending").length > 0
-      && onThread(model, this.thread, "running").length === 0;
+    return inFlightOnThread(model as Model, this.thread).length > 0
+      && onThread(model as Model, this.thread, "running").length === 0;
   }
   run(model: Model, real: Real): void {
-    const review = onThread(model, this.thread, "pending")[0]!;
-    review.phase = "running";
+    const review = inFlightOnThread(model, this.thread)[0]!;
+    review.phase = review.phase === "endedBeforeAccept" ? "over" : "running";
     real.handles.get(review.id)!.accepted(review.turnId);
   }
   toString(): string { return `accept(${this.thread})`; }
@@ -66,9 +68,9 @@ class Accept implements fc.Command<Model, Real> {
 
 class Refuse implements fc.Command<Model, Real> {
   constructor(readonly thread: string) {}
-  check(model: Readonly<Model>): boolean { return onThread(model, this.thread, "pending").length > 0; }
+  check(model: Readonly<Model>): boolean { return inFlightOnThread(model as Model, this.thread).length > 0; }
   run(model: Model, real: Real): void {
-    const review = onThread(model, this.thread, "pending")[0]!;
+    const review = inFlightOnThread(model, this.thread)[0]!;
     review.phase = "over";
     real.handles.get(review.id)!.refused();
   }
@@ -81,7 +83,7 @@ class Land implements fc.Command<Model, Real> {
   private target(model: Readonly<Model>): Review | undefined {
     const pending = onThread(model as Model, this.thread, "pending");
     return onThread(model as Model, this.thread, "running")[0]
-      ?? (pending.length === 1 ? pending[0] : undefined);
+      ?? (pending.length === 1 && inFlightOnThread(model as Model, this.thread).length === 1 ? pending[0] : undefined);
   }
   check(model: Readonly<Model>): boolean { return this.target(model) !== undefined; }
   run(model: Model, real: Real): void {
@@ -92,6 +94,24 @@ class Land implements fc.Command<Model, Real> {
     expect(real.arming.takeOnCompletion(thread(this.thread), review.turnId)).toBe(expected);
   }
   toString(): string { return `land(${this.thread})`; }
+}
+
+/** The sole pending review's turn ends before its start response returns. */
+class EarlyEndTurn implements fc.Command<Model, Real> {
+  constructor(readonly thread: string) {}
+  check(model: Readonly<Model>): boolean {
+    const pending = onThread(model as Model, this.thread, "pending");
+    return pending.length === 1
+      && inFlightOnThread(model as Model, this.thread).length === 1
+      && onThread(model as Model, this.thread, "running").length === 0;
+  }
+  run(model: Model, real: Real): void {
+    const review = onThread(model, this.thread, "pending")[0]!;
+    review.phase = "endedBeforeAccept";
+    review.autoFix = false;
+    real.arming.turnEnded(thread(this.thread), review.turnId);
+  }
+  toString(): string { return `earlyEndTurn(${this.thread})`; }
 }
 
 /** The running review's turn ends, with or without an artifact. */
@@ -110,7 +130,7 @@ class EndTurn implements fc.Command<Model, Real> {
 class ForeignLand implements fc.Command<Model, Real> {
   constructor(readonly thread: string) {}
   check(model: Readonly<Model>): boolean {
-    return onThread(model as Model, this.thread, "pending").length === 0
+    return inFlightOnThread(model as Model, this.thread).length === 0
       && onThread(model as Model, this.thread, "running").length === 0;
   }
   run(model: Model, real: Real): void {
@@ -159,6 +179,7 @@ const commands = fc.commands([
   threadArb.map((id) => new Accept(id)),
   threadArb.map((id) => new Refuse(id)),
   threadArb.map((id) => new Land(id)),
+  threadArb.map((id) => new EarlyEndTurn(id)),
   threadArb.map((id) => new EndTurn(id)),
   threadArb.map((id) => new ForeignLand(id)),
   threadArb.map((id) => new Disarm(id)),
@@ -199,5 +220,21 @@ describe("review auto-fix arming", () => {
     expect(arming.takeOnCompletion(thread("a"), "turn-1")).toBe(false);
     second.refused();
     expect(arming.takeOnCompletion(thread("a"), undefined)).toBe(false);
+  });
+
+  it("does not leave a dead review armed when turnEnded arrives before accepted", () => {
+    const arming = new ReviewAutoFixArming();
+    const start = arming.starting(thread("a"), "auto-fix");
+    arming.turnEnded(thread("a"), "turn-early");
+    start.accepted("turn-early");
+    expect(arming.armedTurnIds(thread("a"))).toEqual([]);
+    expect(arming.takeOnCompletion(thread("a"), "turn-early")).toBe(false);
+  });
+
+  it("matches a landed review via relatedReviewTurnId when Codex emits a mismatched inner turn id", () => {
+    const arming = new ReviewAutoFixArming();
+    arming.starting(thread("a"), "auto-fix").accepted("review-turn-outer");
+    expect(arming.takeOnCompletion(thread("a"), "review-turn-inner", "review-turn-outer")).toBe(true);
+    expect(arming.takeOnCompletion(thread("a"), "review-turn-inner", "review-turn-outer")).toBe(false);
   });
 });

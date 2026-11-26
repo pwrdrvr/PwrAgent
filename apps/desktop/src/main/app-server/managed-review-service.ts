@@ -2632,6 +2632,23 @@ export class ManagedReviewService {
   }
 
   /**
+   * Resolve the owner's review turn ID for an active or recently started review
+   * when Codex emits a review item on a mismatched inner turn ID.
+   */
+  resolveReviewTurnId(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): string | undefined {
+    const reviewKey = buildReviewSubAgentKey(params.backend, params.threadId, params.turnId);
+    const record =
+      this.context.turnState.liveReviewRecords().get(reviewKey)
+      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey)
+      ?? this.findActiveReviewSubAgentForTerminal(params)?.record;
+    return record?.turnId;
+  }
+
+  /**
    * Provider transcripts do not attach model settings to review-mode items.
    * The registry owns that association for the review's lifetime, so include
    * it in the live item as well as the durable review artifact. Also propagate
@@ -2713,7 +2730,12 @@ export class ManagedReviewService {
     const reviewKey = buildReviewSubAgentKey(event.backend, threadId, turnId);
     const record =
       this.context.turnState.liveReviewRecords().get(reviewKey)
-      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey);
+      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey)
+      ?? this.findActiveReviewSubAgentForTerminal({
+        backend: event.backend,
+        threadId,
+        turnId,
+      })?.record;
     if (!record) {
       return event;
     }
