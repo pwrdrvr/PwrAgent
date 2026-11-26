@@ -4271,7 +4271,7 @@ describe("DesktopBackendRegistry", () => {
         ],
         parts: [
           { type: "text", text: "What's in this image?" },
-          { type: "image", url: imageUrl },
+          { type: "image", url: expect.stringMatching(/^pwragent-image:\/\/file\//) },
         ],
         turnId: imageTurn.turnId,
         agentInstructions: "",
