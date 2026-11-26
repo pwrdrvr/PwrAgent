@@ -1,5 +1,7 @@
 import { useId, useState, type FormEvent } from "react";
+import type { DecisionProvidersReadiness } from "@pwragent/shared/decision-models";
 import { RESEARCH_MAX_WORKERS, type ResearchPendingRequest } from "@pwragent/shared/research";
+import { ResearchDecisionsReadinessBanner } from "./ResearchDecisionsView";
 import { ResearchLimitField, researchLimitDraft, researchLimitMinutes, type ResearchLimitDraft } from "./ResearchLimitField";
 import { formatClock, formatResearchDuration, plural, researchLimitsLabel, type ResearchLimits } from "./research-view-model";
 
@@ -10,8 +12,10 @@ export type ResearchStartValues = ResearchLimits & { objective: string; workers:
  * theirs to choose: the form proposes three workers and no limits, and says
  * what each limit set, or left unset, means for spend.
  */
-export function ResearchStartForm({ firstRun, busy, disabled, replacesPending, onSubmit, onCancel }: {
+export function ResearchStartForm({ firstRun, busy, disabled, replacesPending, decisionsReadiness, onOpenDecisionSettings, onSubmit, onCancel }: {
   firstRun: boolean; busy: boolean; disabled: boolean; replacesPending: boolean;
+  decisionsReadiness?: DecisionProvidersReadiness;
+  onOpenDecisionSettings?: (focus?: string) => void;
   onSubmit: (values: ResearchStartValues) => Promise<boolean>; onCancel?: () => void;
 }) {
   const id = useId();
@@ -48,6 +52,7 @@ export function ResearchStartForm({ firstRun, busy, disabled, replacesPending, o
       {turnMinutes !== undefined && ` A worker whose turn runs past ${formatResearchDuration(turnMinutes)} is stopped; the run continues.`}
       {totalWorkerMinutes !== undefined && ` The run ends once its workers’ turns add up to ${formatResearchDuration(totalWorkerMinutes)}.`}
     </>} At most {plural(workers, "worker")} run at once. There is no token or dollar cap.</p>
+    <ResearchDecisionsReadinessBanner readiness={decisionsReadiness} onOpenSettings={onOpenDecisionSettings} />
     {replacesPending && <p className="research-muted">This replaces the request that is waiting to start.</p>}
     <div className="research-actions">
       <button className="research-button research-button--primary" type="submit" disabled={busy || disabled || !objective.trim() || !validLimits}>Request research</button>

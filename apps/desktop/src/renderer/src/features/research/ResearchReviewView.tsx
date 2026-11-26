@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
-import type { ResearchSubmission } from "@pwragent/shared/research";
+import type { ResearchDecisionBatchSummary, ResearchSubmission } from "@pwragent/shared/research";
+import { ResearchDecisionEvidenceList } from "./ResearchDecisionsView";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
 import { approachTitle, researchReviewStatusLabel, researchRevisionBlocker, type ResearchRunView } from "./research-view-model";
@@ -7,15 +8,17 @@ import { ResearchSourceTag } from "./ResearchSourceTag";
 
 type Decision = NonNullable<ResearchSubmission["review"]>["decision"];
 
-export function ResearchReviewView({ run, live, canReview, busy, evidenceAvailable, onReview, onOpenItem, onOpenEvidence }: {
+export function ResearchReviewView({ run, live, canReview, busy, evidenceAvailable, batchesById, onOpenBatch, onReview, onOpenItem, onOpenEvidence }: {
   run: ResearchRunView; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
+  batchesById?: ReadonlyMap<string, ResearchDecisionBatchSummary>;
+  onOpenBatch?: (batchId: string) => void;
   onReview: (submissionId: string, decision: Decision, reason: string) => Promise<boolean>;
   onOpenItem: (itemId: string) => void; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
   const waiting = [...run.submissions].reverse().filter((s) => !s.review);
   const reviewed = [...run.submissions].reverse().filter((s) => s.review);
   const card = (submission: ResearchSubmission) => <CandidateCard key={submission.id} run={run} submission={submission} live={live} canReview={canReview} busy={busy}
-    evidenceAvailable={evidenceAvailable} onReview={onReview} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} />;
+    evidenceAvailable={evidenceAvailable} batchesById={batchesById} onOpenBatch={onOpenBatch} onReview={onReview} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} />;
   return <div className="research-list" aria-label="Research candidates">
     <p className="research-muted">Accepting records a reviewer’s judgment. It is not formal verification.</p>
     {run.harness && <p className="research-muted">Source records retain their original content. PwrAgent records acceptance or rejection; revision feedback requires the source service.</p>}
@@ -25,8 +28,10 @@ export function ResearchReviewView({ run, live, canReview, busy, evidenceAvailab
   </div>;
 }
 
-function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailable, onReview, onOpenItem, onOpenEvidence }: {
+function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailable, batchesById, onOpenBatch, onReview, onOpenItem, onOpenEvidence }: {
   run: ResearchRunView; submission: ResearchSubmission; live: boolean; canReview: boolean; busy: boolean; evidenceAvailable: boolean;
+  batchesById?: ReadonlyMap<string, ResearchDecisionBatchSummary>;
+  onOpenBatch?: (batchId: string) => void;
   onReview: (submissionId: string, decision: Decision, reason: string) => Promise<boolean>;
   onOpenItem: (itemId: string) => void; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
@@ -39,6 +44,7 @@ function CandidateCard({ run, submission, live, canReview, busy, evidenceAvailab
     <button type="button" className="research-entry__open" onClick={() => onOpenItem(submission.id)}>{submission.text}</button>
     {run.harness && <ResearchSourceTag run={run} itemId={submission.id} />}
     {submission.paths.length > 0 && <EvidenceList paths={submission.paths} available={evidenceAvailable} onOpen={(index) => onOpenEvidence(submission.id, index)} />}
+    <ResearchDecisionEvidenceList text={submission.text} paths={submission.paths} batchesById={batchesById} onOpenBatch={onOpenBatch} />
     {submission.author && <ResearchThreadButton thread={submission.author} title="Open source thread" label={`Open source thread: ${title}`} />}
     <CandidateDecision run={run} submission={submission} live={live} canReview={canReview} busy={busy} onReview={onReview} />
   </article>;

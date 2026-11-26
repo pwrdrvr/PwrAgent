@@ -1,6 +1,8 @@
 import { isPendingTurnId } from "./turn-placeholder";
 import type { FederationRemoteTarget } from "./contracts/federation";
 import type { AppServerBackendKind } from "./contracts/normalized-app-server";
+import { decisionRunProviderName, type DecisionProvidersReadiness, type DecisionRunProvider } from "./decision-models";
+import type { DecisionsRailBatch, DecisionsRailDecision, DecisionsRailItemFilter } from "./decisions-rail";
 import type { ResearchHarnessState, ResearchProvenance } from "./research-harness";
 
 export type ResearchThread = { backend: AppServerBackendKind; threadId: string };
@@ -813,3 +815,84 @@ export function researchDeadlinePassed(run: { deadlineAt?: number }, now: number
  */
 export const RESEARCH_MAX_EVENTS = 100_000;
 export const RESEARCH_FINDING_KINDS: ResearchFindingKind[] = ["lemma", "partial", "counterexample", "dead_end", "experiment", "file", "note"];
+
+/** A decision batch run by the coordinator or a worker inside a research run. */
+export type ResearchDecisionBatchSummary = DecisionsRailBatch & {
+  caller: ResearchThread;
+  role: "coordinator" | "worker";
+  approachId?: string;
+  approachTitle?: string;
+};
+
+/** Run-scoped decisions, all member batches, and provider readiness for one research run. */
+export type ResearchDecisionsSnapshot = {
+  runId: string;
+  readiness: DecisionProvidersReadiness;
+  decisions: DecisionsRailDecision[];
+  /** Newest first, across the coordinator and all workers of this run. */
+  batches: ResearchDecisionBatchSummary[];
+  now: number;
+};
+
+export type ResearchDecisionsRequest = ResearchThread & { runId: string };
+export type ResearchDecisionBatchRequest = ResearchThread & {
+  runId: string;
+  batchId: string;
+  status: DecisionsRailItemFilter;
+  from: number;
+  limit: number;
+};
+export type ResearchDecisionBatchActionRequest = ResearchThread & {
+  runId: string;
+  batchId: string;
+  action: "stop" | "cancel";
+};
+export type ResearchDecisionOpenResultsRequest = ResearchThread & {
+  runId: string;
+  batchId: string;
+};
+
+export type ResearchDecisionsPromptRole = "coordinator" | "worker" | "resume" | "item";
+
+/**
+ * Concise Decisions guidance appended to Research prompts ONLY when at least
+ * one decision provider (OpenAI, Jev, or local Clef) is enabled and ready.
+ * Returns undefined when no provider is ready so unconfigured setups stay silent.
+ */
+export function researchDecisionsPromptGuidance(
+  readyProviders: readonly DecisionRunProvider[],
+  role: ResearchDecisionsPromptRole,
+  runId?: string,
+): string | undefined {
+  const unique = [...new Set(readyProviders)];
+  if (unique.length === 0) return undefined;
+  const names = unique.map(decisionRunProviderName).join(", ");
+  const runRef = runId ? ` (researchRunId=${runId})` : "";
+  switch (role) {
+    case "coordinator":
+      return `Decision models are ready (${names}). For high-volume triage, rubric scoring, or screening many candidates or pages in batch, you may register a shared run-scoped decision after research_start using decisions_register (scope="research_run", researchRunId="<runId>") so workers can discover and invoke it with decisions_list / decisions_invoke, and inspect worker batches with decisions_batch_results (researchRunId="<runId>"). Instruct workers to prepare inputsFile with a script (in the workspace or $TMPDIR, not /tmp on macOS) and write outputFile instead of reading source text into context or copying it inline; if using workspaceMode="none", include absolute source paths in worker tasks. After registering rubrics, end your turn and wait for worker submissions instead of polling or reading source files yourself.`;
+    case "worker":
+      return `Decision models are ready (${names}). For bulk scoring, rubric checks, claim triage, or screening many candidates/pages, call decisions_list${runRef} to discover run-scoped decisions. Avoid reading raw source text into context or copying it into inline inputs: generate a JSON/JSONL inputsFile via a script (in the workspace or $TMPDIR, not /tmp on macOS), call decisions_invoke with inputsFile and outputFile (use background=true for large batches), filter scores via a script, and read source text only for flagged items. Cite the batchId or output path in your findings.`;
+    case "resume":
+      return `Decision models are ready (${names}). Call decisions_list${runRef} and decisions_batch_results${runRef} to inspect any run-scoped decisions or completed batches before re-running batch evaluations. Prefer script-generated inputsFile and outputFile (in the workspace or $TMPDIR) over inline payloads.`;
+    case "item":
+      return `Decision models are ready (${names}). If evaluating many candidates or rubric checks for this item, call decisions_list${runRef} to reuse run-scoped decisions, prepare inputsFile via a script (in the workspace or $TMPDIR, not /tmp on macOS), call decisions_invoke with inputsFile and outputFile, filter scores with a script, and read only flagged source text; cite any batchId in your findings.`;
+  }
+}
+
+const DECISION_BATCH_ID_REF_PATTERN = /(?<![A-Za-z0-9_-])batch_[A-Za-z0-9-]{1,80}(?![A-Za-z0-9_-])/gu;
+
+/**
+ * Extracts unique decision batch IDs cited in a finding or submission's text
+ * or evidence paths, preserving first-seen order.
+ */
+export function extractDecisionBatchIds(text: string, paths: readonly string[] = []): string[] {
+  const seen = new Set<string>();
+  const sources = [text, ...paths];
+  for (const source of sources) {
+    for (const match of source.matchAll(DECISION_BATCH_ID_REF_PATTERN)) {
+      seen.add(match[0]);
+    }
+  }
+  return [...seen];
+}

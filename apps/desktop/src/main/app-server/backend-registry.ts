@@ -1405,6 +1405,8 @@ export class DesktopBackendRegistry {
   private hasCheckoutToCleanUp?: (backend: AppServerBackendKind, threadId: string) => boolean;
   private prepareCheckoutWakeup?: (entry: ThreadTurnQueueEntry, dependencyId: string) => Promise<AppServerTurnInputItem[]>;
   private researchEnabled: () => boolean = () => false;
+  private researchDecisionsReady?: () => Promise<boolean>;
+  private lastResearchDecisionsReady = false;
   private researchWorkerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean;
   private agentThreadActions?: AgentThreadActions;
   private messagingAgentToolService?: MessagingAgentToolService;
@@ -2434,6 +2436,7 @@ export class DesktopBackendRegistry {
       get checkoutHandler() { return current().checkoutHandler; },
       resourceCheckoutToolMode: (thread: { backend: AppServerBackendKind; threadId?: string }) => this.resourceCheckoutToolMode(thread),
       get mcpResearchHandler() { return current().mcpResearchHandler; },
+      isResearchDecisionsReady: () => current().isResearchDecisionsReady(),
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
       set tokenMiserCodeModeGroupingVersion(value) { current().tokenMiserCodeModeGroupingVersion = value; },
@@ -3091,10 +3094,32 @@ export class DesktopBackendRegistry {
     return controller;
   }
 
-  setResearchHandler(handler: ResearchAgentHandler | undefined, workerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean, enabled: () => boolean = () => false): void {
+  setResearchHandler(
+    handler: ResearchAgentHandler | undefined,
+    workerCheck?: (thread: { backend: AppServerBackendKind; threadId: string }) => boolean,
+    enabled: () => boolean = () => false,
+    decisionsReady?: () => Promise<boolean>,
+  ): void {
     this.researchHandler = handler;
     this.researchWorkerCheck = workerCheck;
     this.researchEnabled = enabled;
+    this.researchDecisionsReady = decisionsReady;
+    if (decisionsReady) {
+      void decisionsReady().then((ready) => { this.lastResearchDecisionsReady = ready; }).catch(() => {});
+    } else {
+      this.lastResearchDecisionsReady = false;
+    }
+  }
+
+  private async isResearchDecisionsReady(): Promise<boolean> {
+    if (!this.researchDecisionsReady) return false;
+    try {
+      const ready = await this.researchDecisionsReady();
+      this.lastResearchDecisionsReady = ready;
+      return ready;
+    } catch {
+      return this.lastResearchDecisionsReady;
+    }
   }
 
   private researchOffered(surface: ResearchToolSurface): boolean {
@@ -9254,6 +9279,7 @@ export class DesktopBackendRegistry {
       threadTodoHandler: this.threadTodoHandler,
       openAIDecisionsHandler: this.openAIDecisionsHandler,
       researchHandler: this.advertisedResearchHandler,
+      researchDecisionsReady: await this.isResearchDecisionsReady(),
       checkoutHandler: this.checkoutHandler,
       checkoutMode: this.resourceCheckoutToolMode(),
     });
@@ -17696,6 +17722,7 @@ export class DesktopBackendRegistry {
     const jobMonitorCreationEnabled = options.jobMonitorCreationEnabled ?? (caller?.threadId
       ? await this.isJobMonitorCreationEnabled({ backend: "codex", threadId: caller.threadId, turnId: caller.turnId })
       : true);
+    const researchDecisionsReady = await this.isResearchDecisionsReady();
     const tools = withPwrAgentToolDiscovery(buildCodexParentDynamicToolSpecs(
       resolveAgentToolCatalogs({
         currentTurnInputSource: this.currentTurnInputSource,
@@ -17720,6 +17747,7 @@ export class DesktopBackendRegistry {
         threadTodoHandler: this.threadTodoHandler,
         openAIDecisionsHandler: this.openAIDecisionsHandler,
         researchHandler: this.advertisedResearchHandler,
+        researchDecisionsReady,
         checkoutHandler: this.checkoutHandler,
         checkoutMode: this.resourceCheckoutToolMode({ backend: "codex", threadId: caller?.threadId }),
       }, { jobMonitorCreationEnabled }),

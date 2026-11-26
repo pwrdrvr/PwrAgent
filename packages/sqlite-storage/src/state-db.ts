@@ -3133,7 +3133,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(OPERATOR_REQUEST_SCHEMA);
     db.exec(OPERATOR_REQUEST_SCOPE_INDEXES);
     ensureThreadReviewFindingStatusNames(db);
-    db.exec(OPENAI_DECISION_VERSIONS_SCHEMA);
+    ensureOpenAIDecisionResearchScopeSchema(db);
     db.exec(RESEARCH_SCHEMA);
     ensureResearchProjections(db);
     // Profiles that created the table before decisions could run on Jev or a
@@ -4706,6 +4706,74 @@ function tableColumnExists(
 ): boolean {
   const rows = readTableInfo(db, tableName);
   return rows.some((row) => row.name === columnName);
+}
+
+function ensureOpenAIDecisionResearchScopeSchema(db: BetterSqlite3.Database): void {
+  const table = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'openai_decision_versions'")
+    .get() as { sql: string | null } | undefined;
+  if (!table) {
+    db.exec(OPENAI_DECISION_VERSIONS_SCHEMA);
+    return;
+  }
+  const hasProvider = tableColumnExists(db, "openai_decision_versions", "provider");
+  const hasResearchRunId = tableColumnExists(db, "openai_decision_versions", "research_run_id");
+  const allowsResearchRun = typeof table.sql === "string" && table.sql.includes("'research_run'");
+  if (hasProvider && hasResearchRunId && allowsResearchRun) {
+    db.exec(OPENAI_DECISION_VERSIONS_SCHEMA);
+    return;
+  }
+  const copyLegacyRowsSql = hasProvider && hasResearchRunId
+    ? `
+INSERT INTO openai_decision_versions (
+  decision_id, version, name, scope, owner_backend, owner_thread_id, research_run_id,
+  status, provider, questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
+)
+SELECT
+  decision_id, version, name, scope, owner_backend, owner_thread_id, research_run_id,
+  status, provider, questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
+FROM openai_decision_versions_legacy;
+`
+    : hasProvider
+      ? `
+INSERT INTO openai_decision_versions (
+  decision_id, version, name, scope, owner_backend, owner_thread_id, research_run_id,
+  status, provider, questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
+)
+SELECT
+  decision_id, version, name, scope, owner_backend, owner_thread_id, NULL,
+  status, provider, questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
+FROM openai_decision_versions_legacy;
+`
+      : hasResearchRunId
+        ? `
+INSERT INTO openai_decision_versions (
+  decision_id, version, name, scope, owner_backend, owner_thread_id, research_run_id,
+  status, provider, questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
+)
+SELECT
+  decision_id, version, name, scope, owner_backend, owner_thread_id, research_run_id,
+  status, 'openai', questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
+FROM openai_decision_versions_legacy;
+`
+        : `
+INSERT INTO openai_decision_versions (
+  decision_id, version, name, scope, owner_backend, owner_thread_id, research_run_id,
+  status, provider, questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
+)
+SELECT
+  decision_id, version, name, scope, owner_backend, owner_thread_id, NULL,
+  status, 'openai', questions_json, prefix_text, input_schema_json, prompt_cache_key, created_at
+FROM openai_decision_versions_legacy;
+`;
+  const migrate = db.transaction(() => {
+    db.exec("DROP INDEX IF EXISTS idx_openai_decision_versions_active_name;");
+    db.exec("ALTER TABLE openai_decision_versions RENAME TO openai_decision_versions_legacy;");
+    db.exec(OPENAI_DECISION_VERSIONS_SCHEMA);
+    db.exec(copyLegacyRowsSql);
+    db.exec("DROP TABLE openai_decision_versions_legacy;");
+  });
+  migrate();
 }
 
 function ensureThreadMessageOriginSchema(db: BetterSqlite3.Database): void {
