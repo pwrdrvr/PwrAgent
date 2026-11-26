@@ -613,4 +613,255 @@ describe("ACP registry cache fallback and shared /compact dispatch", () => {
     ).resolves.toEqual({ status: "busy" });
     expect(archivedPrompt).not.toHaveBeenCalled();
   });
+
+  it("steers the resolved alias-matched ACP compact command mid-turn instead of hardcoded /compact", async () => {
+    const startPrompt = vi.fn(() => ({ sessionId: SESSION_ID, turnId: "active-turn-1" }));
+    const steerSession = vi.fn(async () => ({ delivery: "currentTurn" as const }));
+    const availableCommandsStore = createAcpAvailableCommandsStoreMock([
+      {
+        backendId: ANTIGRAVITY,
+        repositoryPath: toTestRepositoryPath(CWD),
+        observedAt: 1000,
+        commands: [
+          {
+            name: "summarize",
+            aliases: ["compact"],
+            backend: ANTIGRAVITY,
+            scope: "session",
+            source: "provider",
+          },
+        ],
+      },
+    ]);
+    const fixture = createKimiAcpRegistry({
+      acpBackendId: ANTIGRAVITY,
+      sessionId: SESSION_ID,
+      sessions: [acpSession({ availableCommands: [], status: "active" })],
+      acpAvailableCommandsStore: availableCommandsStore,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          [`${ANTIGRAVITY}:${SESSION_ID}`]: {
+            backend: ANTIGRAVITY,
+            threadId: SESSION_ID,
+            executionMode: "default",
+            model: "gemini-4-neon-high",
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+      startPrompt,
+      steerSession,
+      supportsTurnSteering: true,
+    });
+    registries.push(fixture.registry);
+
+    await fixture.registry.submitTurn({
+      backend: ANTIGRAVITY,
+      threadId: SESSION_ID,
+      input: [{ type: "text", text: "Start long work" }],
+    });
+    const emitEvent = (event: AgentEvent) =>
+      (fixture.registry as unknown as {
+        emit(next: AgentEvent): Promise<void>;
+      }).emit(event);
+    const pendingTurn = fixture.registry.getActiveTurnForThread({
+      backend: ANTIGRAVITY,
+      threadId: SESSION_ID,
+    });
+    if (pendingTurn) {
+      await emitEvent({
+        backend: ANTIGRAVITY,
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: SESSION_ID,
+            turnId: pendingTurn.turnId,
+            turn: { id: pendingTurn.turnId, status: "completed", output: [] },
+          },
+        },
+      });
+    }
+    await emitEvent({
+      backend: ANTIGRAVITY,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: SESSION_ID,
+          turnId: "active-turn-1",
+          turn: { id: "active-turn-1", status: "in_progress" },
+        },
+      },
+    });
+
+    const monitor = createRegistryAutoCompactionMonitor({
+      registry: fixture.registry,
+      resolveSavedRules: () => [],
+      log: { info: () => {}, warn: () => {} },
+    });
+    monitor.start();
+    try {
+      await fixture.registry.publishLocalEvent({
+        backend: ANTIGRAVITY,
+        notification: {
+          method: "thread/contextWindow/updated",
+          params: { threadId: SESSION_ID, usedTokens: 450_000, modelContextWindow: NEON_WINDOW },
+        },
+      });
+      await monitor.idle();
+
+      expect(steerSession).toHaveBeenCalledTimes(1);
+      expect(steerSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: SESSION_ID,
+          text: "/summarize",
+        }),
+      );
+      expect(monitor.stateFor(ANTIGRAVITY, SESSION_ID)).toMatchObject({
+        phase: "compacting",
+        via: "steer",
+      });
+    } finally {
+      monitor.dispose();
+    }
+  });
+
+  it("queues a concurrent submitTurn behind an in-flight ACP startAutoCompaction instead of racing it", async () => {
+    let releaseCompact!: () => void;
+    const compactStarted = new Promise<void>((resolve) => {
+      releaseCompact = resolve;
+    });
+    let compactInFlight!: () => void;
+    const reachedStartPrompt = new Promise<void>((resolve) => {
+      compactInFlight = resolve;
+    });
+    const startPrompt = vi.fn(async (params: { prompt?: string }) => {
+      if (params.prompt === "/compact") {
+        compactInFlight();
+        await compactStarted;
+        return { sessionId: SESSION_ID, turnId: "compact-turn-race" };
+      }
+      return { sessionId: SESSION_ID, turnId: "user-turn-after-compact" };
+    });
+    const fixture = createKimiAcpRegistry({
+      acpBackendId: ANTIGRAVITY,
+      sessionId: SESSION_ID,
+      sessions: [
+        acpSession({
+          availableCommands: [
+            { name: "compact", backend: ANTIGRAVITY, scope: "session", source: "provider" },
+          ],
+        }),
+      ],
+      startPrompt: startPrompt as never,
+    });
+    registries.push(fixture.registry);
+
+    const compactPromise = fixture.registry.startAutoCompaction({
+      backend: ANTIGRAVITY,
+      threadId: SESSION_ID,
+      messageOrigin: AUTO_COMPACTION_ORIGIN,
+    });
+    await reachedStartPrompt;
+
+    const concurrentSubmit = await fixture.registry.submitTurn({
+      backend: ANTIGRAVITY,
+      threadId: SESSION_ID,
+      input: [{ type: "text", text: "Follow-up while compacting" }],
+    });
+    expect(concurrentSubmit).toMatchObject({ status: "queued" });
+
+    releaseCompact();
+    await expect(compactPromise).resolves.toEqual({
+      status: "started",
+      turnId: "compact-turn-race",
+    });
+  });
+
+  it("skips async autoCompactionSupport I/O on fills below threshold or when no rule matches", async () => {
+    const availableCommandsStore = createAcpAvailableCommandsStoreMock([]);
+    const acpWorktreeRepositoryResolver = vi.fn(async () => undefined);
+    const fixture = createKimiAcpRegistry({
+      acpBackendId: ANTIGRAVITY,
+      sessionId: SESSION_ID,
+      sessions: [acpSession({ availableCommands: [] })],
+      acpAvailableCommandsStore: availableCommandsStore,
+      acpWorktreeRepositoryResolver,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          [`${ANTIGRAVITY}:${SESSION_ID}`]: {
+            backend: ANTIGRAVITY,
+            threadId: SESSION_ID,
+            executionMode: "default",
+            model: "gemini-4-neon-high",
+            extraLinkedDirectories: [],
+          },
+        },
+      }),
+    });
+    registries.push(fixture.registry);
+
+    const monitor = createRegistryAutoCompactionMonitor({
+      registry: fixture.registry,
+      resolveSavedRules: () => [],
+      log: { info: () => {}, warn: () => {} },
+    });
+    monitor.start();
+    try {
+      await fixture.registry.publishLocalEvent({
+        backend: ANTIGRAVITY,
+        notification: {
+          method: "thread/contextWindow/updated",
+          params: { threadId: SESSION_ID, usedTokens: 100_000, modelContextWindow: NEON_WINDOW },
+        },
+      });
+      await fixture.registry.publishLocalEvent({
+        backend: ANTIGRAVITY,
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: SESSION_ID,
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: [] },
+          },
+        },
+      });
+      await monitor.idle();
+
+      expect(availableCommandsStore.get).not.toHaveBeenCalled();
+      expect(acpWorktreeRepositoryResolver).not.toHaveBeenCalled();
+    } finally {
+      monitor.dispose();
+    }
+  });
+
+  it("does not misclassify accepted compactions or strand in-flight phases when support() rejects", async () => {
+    const world = fakeRegistry({ canSteer: false });
+    world.registry.autoCompactionSupport
+      .mockResolvedValueOnce({ canSteer: false, canStart: "yes" } as never)
+      .mockRejectedValue(new Error("store closed"));
+    const monitor = start(world);
+    world.fill(450_000);
+    await monitor.idle();
+    expect(monitor.stateFor(world.backend, "thread-1")).toMatchObject({
+      phase: "compacting",
+      via: "start",
+      turnId: "turn-compact",
+    });
+    expect(monitor.stateFor(world.backend, "thread-1")?.refusals).toBeUndefined();
+    monitor.dispose();
+
+    const refusedWorld = fakeRegistry({ canSteer: false });
+    refusedWorld.registry.autoCompactionSupport
+      .mockResolvedValueOnce({ canSteer: false, canStart: "yes" } as never)
+      .mockRejectedValue(new Error("store closed"));
+    refusedWorld.registry.startAutoCompaction.mockRejectedValueOnce(new Error("provider refused"));
+    const refusedMonitor = start(refusedWorld);
+    refusedWorld.fill(450_000);
+    await refusedMonitor.idle();
+    expect(refusedMonitor.stateFor(refusedWorld.backend, "thread-1")).toMatchObject({
+      phase: "due",
+      refusals: 1,
+    });
+    refusedMonitor.dispose();
+  });
 });

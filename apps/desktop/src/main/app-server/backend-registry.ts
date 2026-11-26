@@ -1042,6 +1042,7 @@ type IdleSubmission = {
   input: AppServerTurnInputItem[];
   origin?: ThreadTurnQueueOrigin;
   messageOrigin?: AppServerThreadMessageOrigin;
+  isCompactCommand?: boolean;
   canAdmit?: () => boolean | Promise<boolean>;
 };
 
@@ -13507,18 +13508,10 @@ export class DesktopBackendRegistry {
     itemId?: string;
   }> {
     if (isAcpBackendId(params.backend)) {
-      const result = await this.compactAcpThread({
+      return await this.compactAcpThread({
         backend: params.backend,
         threadId: params.threadId,
       });
-      if (result.status === "busy") {
-        throw new Error("Cannot compact a thread while another operation is running");
-      }
-      return {
-        backend: result.backend,
-        threadId: result.threadId,
-        turnId: result.turnId,
-      };
     }
     await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
     return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
@@ -13552,42 +13545,20 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async compactAcpThread(params: {
+  private async prepareAcpCompaction(params: {
     backend: AcpBackendId;
     threadId: string;
-    messageOrigin?: AppServerThreadMessageOrigin;
-    allowProbe?: boolean;
-    wakeArchivedCheckout?: boolean;
-    idleOnly?: boolean;
-  }): Promise<
-    | { status: "started"; backend: AppServerBackendKind; threadId: string; turnId: string }
-    | { status: "busy" }
-  > {
-    if (params.idleOnly) {
-      if (await this.hasAutoCompactionHold(params)) {
-        return { status: "busy" };
-      }
-      this.assertThreadOwnership();
-    } else {
-      if (this.closed) {
-        throw new Error("Desktop backend registry is closed");
-      }
-      this.assertThreadOwnership();
-      await this.assertThreadNotLocked(params.backend, params.threadId);
-      if (
-        this.reservedAcpStartThreadKeys.has(
-          buildTurnStartReservationKey(params.backend, params.threadId),
-        )
-        || this.threadHasActiveTurn(params.threadId, params.backend)
-      ) {
-        throw new Error("Cannot compact a thread while another operation is running");
-      }
-    }
+    allowProbe: boolean;
+    wakeArchivedCheckout: boolean;
+  }): Promise<{
+    input: [{ type: "text"; text: string }];
+    isCompactCommand: true;
+  }> {
     const commands = await this.resolveAcpThreadAvailableCommands({
       backend: params.backend,
       threadId: params.threadId,
-      allowProbe: params.allowProbe ?? true,
-      wakeArchivedCheckout: params.wakeArchivedCheckout ?? true,
+      allowProbe: params.allowProbe,
+      wakeArchivedCheckout: params.wakeArchivedCheckout,
     });
     const compactCommand = findAdvertisedAcpCompactCommand(commands);
     if (!compactCommand) {
@@ -13596,28 +13567,53 @@ export class DesktopBackendRegistry {
       );
     }
     await this.threadModelSettings.assertRequestedThreadModelAvailable(params);
-    if (params.idleOnly && await this.hasAutoCompactionHold(params)) {
-      return { status: "busy" };
+    return {
+      input: [
+        {
+          type: "text",
+          text: formatAcpCompactCommandPrompt(compactCommand),
+        },
+      ],
+      isCompactCommand: true,
+    };
+  }
+
+  private async compactAcpThread(params: {
+    backend: AcpBackendId;
+    threadId: string;
+  }): Promise<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }> {
+    if (this.closed) {
+      throw new Error("Desktop backend registry is closed");
     }
+    this.assertThreadOwnership();
+    await this.assertThreadNotLocked(params.backend, params.threadId);
+    if (
+      this.reservedAcpStartThreadKeys.has(
+        buildTurnStartReservationKey(params.backend, params.threadId),
+      )
+      || this.threadHasActiveTurn(params.threadId, params.backend)
+    ) {
+      throw new Error("Cannot compact a thread while another operation is running");
+    }
+    const prepared = await this.prepareAcpCompaction({
+      backend: params.backend,
+      threadId: params.threadId,
+      allowProbe: true,
+      wakeArchivedCheckout: true,
+    });
     try {
-      const started = await this.startTurnNow({
+      return await this.startTurnNow({
         backend: params.backend,
         threadId: params.threadId,
-        input: [
-          {
-            type: "text",
-            text: formatAcpCompactCommandPrompt(compactCommand),
-          },
-        ],
-        ...(params.messageOrigin ? { messageOrigin: params.messageOrigin } : {}),
-        isCompactCommand: true,
+        input: prepared.input,
+        isCompactCommand: prepared.isCompactCommand,
       });
-      return { status: "started", ...started };
     } catch (error) {
       if (error instanceof ThreadAlreadyActiveError) {
-        if (params.idleOnly) {
-          return { status: "busy" };
-        }
         throw new Error("Cannot compact a thread while another operation is running");
       }
       throw error;
@@ -13639,11 +13635,18 @@ export class DesktopBackendRegistry {
     if (this.closed) return { canSteer: false, canStart: "blocked" };
     const gate = this.isRestartGateClosed() ? "blocked" as const : "yes" as const;
     if (!isAcpBackendId(params.backend)) return { canSteer: false, canStart: gate };
-    const commands = await this.resolveAcpThreadAvailableCommands({
-      backend: params.backend,
-      threadId: params.threadId,
-      allowProbe: false,
-    });
+    let commands: AppServerAvailableCommandSummary[];
+    try {
+      commands = await this.resolveAcpThreadAvailableCommands({
+        backend: params.backend,
+        threadId: params.threadId,
+        allowProbe: false,
+      });
+    } catch (error) {
+      if (this.closed) return { canSteer: false, canStart: "blocked" };
+      throw error;
+    }
+    if (this.closed) return { canSteer: false, canStart: "blocked" };
     if (!commands.length) return { canSteer: false, canStart: "blocked" };
     if (!findAdvertisedAcpCompactCommand(commands)) {
       return { canSteer: false, canStart: "unsupported" };
@@ -13651,7 +13654,7 @@ export class DesktopBackendRegistry {
     return {
       canSteer: params.backend === "acp:antigravity"
         && this.acpBackend.supportsActiveAntigravitySteering(params.threadId),
-      canStart: gate,
+      canStart: this.isRestartGateClosed() ? "blocked" : "yes",
     };
   }
 
@@ -13662,6 +13665,41 @@ export class DesktopBackendRegistry {
   }): Promise<string | undefined> {
     const overlay = await this.overlayStore.getThreadOverlayState(params);
     return overlay?.model ?? this.getCachedThreadSummary(params)?.model;
+  }
+
+  /**
+   * Steers an owner-requested compaction into a running turn, formatting the
+   * thread's advertised or cached ACP compact command when applicable.
+   */
+  async steerAutoCompaction(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    expectedTurnId: string;
+    requestId: string;
+    messageOrigin: AppServerThreadMessageOrigin;
+  }): Promise<unknown> {
+    let promptText = "/compact";
+    if (isAcpBackendId(params.backend)) {
+      const commands = await this.resolveAcpThreadAvailableCommands({
+        backend: params.backend,
+        threadId: params.threadId,
+        allowProbe: false,
+      });
+      const compactCommand = findAdvertisedAcpCompactCommand(commands);
+      if (!compactCommand) {
+        throw new Error(
+          "ACP backend " + params.backend + " does not support thread compaction",
+        );
+      }
+      promptText = formatAcpCompactCommandPrompt(compactCommand);
+    }
+    return await this.steerTurn({
+      backend: params.backend,
+      threadId: params.threadId,
+      expectedTurnId: params.expectedTurnId,
+      requestId: params.requestId,
+      input: [{ type: "text", text: promptText }],
+    }, params.messageOrigin);
   }
 
   /**
@@ -13686,13 +13724,25 @@ export class DesktopBackendRegistry {
       return { status: "started", turnId: result.turnId };
     }
     if (isAcpBackendId(params.backend)) {
-      const result = await this.compactAcpThread({
+      if (await this.hasAutoCompactionHold(params)) {
+        return { status: "busy" };
+      }
+      const prepared = await this.prepareAcpCompaction({
         backend: params.backend,
         threadId: params.threadId,
-        messageOrigin: params.messageOrigin,
         allowProbe: false,
         wakeArchivedCheckout: false,
-        idleOnly: true,
+      });
+      if (await this.hasAutoCompactionHold(params)) {
+        return { status: "busy" };
+      }
+      const result = await this.submitTurnIfIdle({
+        backend: params.backend,
+        threadId: params.threadId,
+        input: prepared.input,
+        isCompactCommand: prepared.isCompactCommand,
+        messageOrigin: params.messageOrigin,
+        canAdmit: async () => !(await this.hasAutoCompactionHold(params)),
       });
       return result.status === "started"
         ? { status: "started", turnId: result.turnId }
