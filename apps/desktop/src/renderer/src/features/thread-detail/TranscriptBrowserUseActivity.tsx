@@ -28,6 +28,13 @@ type TranscriptBrowserUseActivityProps = {
   onToggleExpanded: () => void;
 };
 
+const TIMESTAMP_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 function isHttpUrl(url: string | undefined): url is string {
   return Boolean(url && /^https?:\/\//i.test(url));
 }
@@ -69,11 +76,14 @@ export function TranscriptBrowserUseActivity(props: TranscriptBrowserUseActivity
     || browserUse.stepCount > 1
     || webMcpTools?.length,
   );
-  const existingImageUrls = new Set(
-    entry.details.flatMap((detail) => (detail.images ?? []).map((image) => image.url)),
+  const hasExistingScreenshot = Boolean(
+    browserUse.screenshotUrl
+    && entry.details.some((detail) =>
+      detail.images?.some((image) => image.url === browserUse.screenshotUrl),
+    ),
   );
   const previewImage: AppServerThreadImagePart | undefined =
-    browserUse.screenshotUrl && !existingImageUrls.has(browserUse.screenshotUrl)
+    browserUse.screenshotUrl && !hasExistingScreenshot
       ? {
           type: "image",
           url: browserUse.screenshotUrl,
@@ -125,12 +135,7 @@ export function TranscriptBrowserUseActivity(props: TranscriptBrowserUseActivity
               dateTime={new Date(entry.createdAt).toISOString()}
               data-tooltip={new Date(entry.createdAt).toISOString()}
             >
-              {new Intl.DateTimeFormat(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-              }).format(entry.createdAt)}
+              {TIMESTAMP_FORMATTER.format(entry.createdAt)}
             </time>
           ) : null}
         </span>

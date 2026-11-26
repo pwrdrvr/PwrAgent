@@ -458,4 +458,22 @@ describe("extractCodexBrowserUseDetail", () => {
       }),
     );
   });
+
+  it("produces injective browserUseSurfaceKey values across arbitrary backend/browserId strings", () => {
+    fc.assert(
+      fc.property(
+        fc.string({ maxLength: 24 }),
+        fc.string({ minLength: 1, maxLength: 24 }).filter((s) => s.trim().length > 0),
+        fc.string({ maxLength: 24 }),
+        fc.string({ minLength: 1, maxLength: 24 }).filter((s) => s.trim().length > 0),
+        (b1, id1, b2, id2) => {
+          const same = b1.trim().toLowerCase() === b2.trim().toLowerCase() && id1.trim() === id2.trim();
+          expect(
+            browserUseSurfaceKey({ backend: b1, browserId: id1 })
+              === browserUseSurfaceKey({ backend: b2, browserId: id2 }),
+          ).toBe(same);
+        },
+      ),
+    );
+  });
 });

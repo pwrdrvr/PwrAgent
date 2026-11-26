@@ -49,6 +49,10 @@ const BROWSER_REPL_SERVER_NAMES = new Set(["cua_repl", "node_repl"]);
 const BROWSER_REPL_QUALIFIED_TOOL_PATTERN = /(?:^|\/)(?:cua_repl|node_repl)\/js$/iu;
 const BROWSER_BATCH_AUXILIARY_TOOL_PATTERN =
   /(?:^|\/)(?:(?:cua_repl|node_repl)\/js|codex_app\/update_running_summary)$/iu;
+// Upper bound on a serialized CallToolResult JSON string we are willing to
+// JSON.parse in the replay fallback (comfortably covers a 768 KiB screenshot
+// plus DOM/text payload while rejecting multi-megabyte DOM dumps in O(1)).
+const MAX_WRAPPED_CALL_TOOL_RESULT_CHARS = 2_000_000;
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -75,6 +79,18 @@ function isCodexBrowserReplMcpItem(item: Record<string, unknown>): boolean {
   return BROWSER_REPL_QUALIFIED_TOOL_PATTERN.test(tool);
 }
 
+function isAsciiWhitespace(code: number): boolean {
+  return code === 32 || code === 9 || code === 10 || code === 13;
+}
+
+function isWrappedJsonObjectString(text: string): boolean {
+  let start = 0;
+  let end = text.length - 1;
+  while (start <= end && isAsciiWhitespace(text.charCodeAt(start))) start += 1;
+  while (end >= start && isAsciiWhitespace(text.charCodeAt(end))) end -= 1;
+  return start < end && text.charCodeAt(start) === 123 && text.charCodeAt(end) === 125;
+}
+
 function readWrappedCallToolResultMeta(
   item: Record<string, unknown>,
   result: Record<string, unknown> | undefined,
@@ -90,15 +106,24 @@ function readWrappedCallToolResultMeta(
   const content = result?.content;
   if (!Array.isArray(content) || content.length !== 1) return undefined;
   const block = content[0];
-  const text = typeof block === "string"
+  // Avoid `readString` / `.trim()` here so large JSON DOM payloads do not
+  // allocate a full string copy before our cheap substring pre-checks bail out.
+  const rawBlockText = typeof block === "string"
     ? block
-    : readString(asRecord(block), "text");
-  if (!text) return undefined;
-  const trimmed = text.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return undefined;
+    : asRecord(block)?.text;
+  const text = typeof rawBlockText === "string" ? rawBlockText : undefined;
+  if (
+    !text
+    || text.length > MAX_WRAPPED_CALL_TOOL_RESULT_CHARS
+    || !isWrappedJsonObjectString(text)
+    || !text.includes('"_meta"')
+    || (!text.includes('"codex/toolSurface"') && !text.includes('"codex/browserUse"'))
+  ) {
+    return undefined;
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(trimmed);
+    parsed = JSON.parse(text);
   } catch {
     return undefined;
   }
@@ -394,9 +419,9 @@ export function browserUseSurfaceKey(
   const family = detail.browserFamily?.trim().toLowerCase() ?? "";
   if (!backend && !browserId && !family) return undefined;
   if (browserId) {
-    return JSON.stringify([backend, browserId]);
+    return `id:${backend.length}:${backend}:${browserId}`;
   }
-  return JSON.stringify([backend, family || backend]);
+  return `fam:${backend.length}:${backend}:${family || backend}`;
 }
 
 export function formatCodexBrowserUseDetailLabel(

@@ -373,3 +373,161 @@ it("replaces the browser summary segment anywhere in a mixed activity summary wi
     ),
   );
 });
+
+it("is strictly idempotent across re-projection, including handoff titles and duplicate standalone markers (MBT shrunk counterexamples)", () => {
+  // Counterexample 1: re-projecting a claimed handoff activity must preserve the matched title.
+  const handoffActivity: AppServerThreadActivityEntry = {
+    type: "activity",
+    id: "act-handoff",
+    summary: "Paused for sign-in",
+    status: "completed",
+    turn: { id: "turn-1", status: "completed" },
+    details: [
+      {
+        id: "step-1",
+        kind: "command",
+        label: "In-app browser · example.com/a",
+        status: "completed",
+        browserUse: {
+          backend: "iab",
+          browserId: "iab",
+          url: "https://example.com/a",
+          handoffReason: "authentication",
+        },
+      },
+    ],
+  };
+  const pass1 = projectCodexBrowserUseEntries(
+    [
+      handoffActivity,
+      commentary(directive("Verified page"), "bc-1", "turn-1"),
+      commentary(directive("Verified page"), "bc-2", "turn-1"),
+    ],
+    "codex",
+  );
+  // First marker claims the activity; second marker stays standalone.
+  expect(pass1.map((entry) => entry.id)).toEqual(["act-handoff", "bc-2"]);
+  expect((pass1[0] as AppServerThreadActivityEntry).browserUse?.title).toBe("Verified page");
+
+  // Counterexample 2: a second pass must neither revert browserUse.title nor swallow bc-2.
+  const pass2 = projectCodexBrowserUseEntries(pass1, "codex");
+  expect(pass2).toEqual(pass1);
+});
+
+it("preserves exact object references for unchanged historical Browser Use cards across streaming deltas", () => {
+  const historical: AppServerThreadEntry[] = [
+    browserActivity("act-1", "turn-1", {
+      backend: "iab",
+      browserId: "iab",
+      url: "https://example.com/1",
+    }),
+    commentary(directive("Checked page 1"), "bc-1", "turn-1"),
+    browserActivity("act-2", "turn-2", {
+      backend: "chrome",
+      browserId: "chrome-1",
+      url: "https://example.com/2",
+    }),
+  ];
+
+  const first = projectCodexBrowserUseEntries(
+    [...historical, commentary("Streaming chunk 1", "live-1", "turn-3")],
+    "codex",
+  );
+  const second = projectCodexBrowserUseEntries(
+    [...historical, commentary("Streaming chunk 1 + chunk 2", "live-1", "turn-3")],
+    "codex",
+  );
+
+  expect(second[0]).toBe(first[0]);
+  expect(second[1]).toBe(first[1]);
+});
+
+it("handles Unicode whitespace around ::browser-complete and bounds runaway open markers", () => {
+  // MBT shrunk counterexample: trailing EM SPACE (\u2003) around a valid directive.
+  const unicodeMsg = commentary('\u2003::browser-complete{title="a"}\u2003', "bc-uni", "turn-1");
+  expect(isPendingCodexBrowserCompletion(unicodeMsg, "codex")).toBe(true);
+  expect(codexBrowserCompletionActivity(unicodeMsg, "codex")?.summary).toBe("a");
+
+  // Runaway unclosed directive beyond MAX_BROWSER_COMPLETION_CHARS stops buffering
+  // instead of holding indefinitely or scanning quadratically on every delta.
+  const runaway = commentary(`::browser-complete{title="${"a".repeat(2_100)}`, "bc-huge", "turn-1");
+  expect(isPendingCodexBrowserCompletion(runaway, "codex")).toBe(false);
+});
+
+it("keeps projectCodexBrowserUseEntries idempotent and deferred-replay-equivalent across generated turns", () => {
+  const stepArb = fc.record({
+    backend: fc.constantFrom("iab", "chrome", "edge"),
+    browserId: fc.constantFrom("iab", "c1", "c2"),
+    url: fc.constantFrom("https://example.com/a", "http://localhost:3000/b"),
+    handoffReason: fc.constantFrom("authentication" as const, undefined),
+  });
+  const opArb = fc.oneof(
+    fc.record({ kind: fc.constant("browser" as const), steps: fc.array(stepArb, { minLength: 1, maxLength: 3 }) }),
+    fc.record({ kind: fc.constant("marker" as const), title: fc.constantFrom("Verified page", "Signed in") }),
+    fc.record({ kind: fc.constant("commentary" as const) }),
+    fc.record({ kind: fc.constant("final" as const) }),
+  );
+
+  fc.assert(
+    fc.property(fc.array(opArb, { minLength: 1, maxLength: 12 }), (ops) => {
+      const entries: AppServerThreadEntry[] = ops.map((op, index) => {
+        if (op.kind === "marker") return commentary(directive(op.title), `m-${index}`, "turn-1");
+        if (op.kind === "commentary") return commentary("Working...", `c-${index}`, "turn-1");
+        if (op.kind === "final") {
+          return {
+            type: "message",
+            id: `f-${index}`,
+            role: "assistant",
+            phase: "final",
+            text: "Done.",
+            turn: { id: "turn-1", status: "completed" },
+          };
+        }
+        return {
+          type: "activity",
+          id: `b-${index}`,
+          summary: "Browsed example.com",
+          status: "completed",
+          turn: { id: "turn-1", status: "completed" },
+          details: op.steps.map((step, si) => ({
+            id: `d-${index}-${si}`,
+            kind: "command" as const,
+            label: "Browser step",
+            status: "completed" as const,
+            command: { displayCommand: "cua_repl/js", rawCommand: "cua_repl/js", source: "tool" as const },
+            browserUse: {
+              backend: step.backend,
+              browserId: step.browserId,
+              url: step.url,
+              ...(step.handoffReason ? { handoffReason: step.handoffReason } : {}),
+            },
+          })),
+        };
+      });
+
+      const projected1 = projectCodexBrowserUseEntries(entries, "codex");
+      const projected2 = projectCodexBrowserUseEntries(projected1, "codex");
+      expect(projected2).toEqual(projected1);
+
+      const deferred = entries.map((entry) =>
+        entry.type === "activity"
+          ? {
+              ...entry,
+              details: entry.details.map((detail) => ({
+                ...detail,
+                command: detail.command
+                  ? { ...detail.command, displayCommand: "", rawCommand: undefined, output: undefined }
+                  : undefined,
+              })),
+            }
+          : entry,
+      );
+      const projectedDeferred = projectCodexBrowserUseEntries(deferred, "codex");
+      expect(
+        projectedDeferred.map((e) => (e.type === "activity" ? { id: e.id, summary: e.summary, browserUse: e.browserUse } : { id: e.id })),
+      ).toEqual(
+        projected1.map((e) => (e.type === "activity" ? { id: e.id, summary: e.summary, browserUse: e.browserUse } : { id: e.id })),
+      );
+    }),
+  );
+});

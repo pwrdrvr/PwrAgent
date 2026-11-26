@@ -15,24 +15,103 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 
 const COMPLETION_PREFIX = "::browser-complete{title=";
-const JSON_STRING_CONTENT = String.raw`(?:[^"\\\u0000-\u001f]|\\(?:["\\/bfnrt]|u[\da-fA-F]{4}))*`;
-const CLOSED_TITLE = new RegExp('^"' + JSON_STRING_CONTENT + '"');
-const OPEN_TITLE = new RegExp('^"' + JSON_STRING_CONTENT + String.raw`(?:\\(?:u[\da-fA-F]{0,3})?)?`);
 const BROWSER_REPL_TOOL = /(?:^|\/)(?:node_repl|cua_repl)\/js$/i;
+// Compact browser completion headlines are short one-line summaries. Bounding
+// the directive scanner prevents quadratic work and unbounded buffering if a
+// commentary stream starts with `::browser-complete{title=` and never closes.
+const MAX_BROWSER_COMPLETION_CHARS = 2_048;
 
-function commentaryText(
+type CompletionScanResult =
+  | { kind: "none" }
+  | { kind: "pending" }
+  | { kind: "complete"; title: string };
+
+type CachedPresentation = {
+  details: AppServerThreadActivityEntry["details"];
+  summary: string;
+  inputBrowserUse: AppServerThreadActivityEntry["browserUse"];
+  presentation: AppServerThreadBrowserUsePresentation | undefined;
+  enriched: AppServerThreadActivityEntry;
+  hasTrailingUnresolved: boolean;
+  claimedMarker: boolean;
+  matchedTitle?: string;
+  matchedEntry?: AppServerThreadActivityEntry;
+};
+
+const presentationCache = new WeakMap<AppServerThreadActivityEntry, CachedPresentation>();
+
+const UNICODE_WHITESPACE_CHAR = /^\s$/u;
+
+function isWhitespaceAt(text: string, index: number): boolean {
+  const code = text.charCodeAt(index);
+  if (code < 0x80) {
+    return (
+      code === 32
+      || code === 9
+      || code === 10
+      || code === 13
+      || code === 11
+      || code === 12
+    );
+  }
+  return UNICODE_WHITESPACE_CHAR.test(text[index]!);
+}
+
+function isHexDigit(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57)
+    || (code >= 65 && code <= 70)
+    || (code >= 97 && code <= 102)
+  );
+}
+
+function firstNonWhitespaceIndex(text: string): number {
+  let index = 0;
+  while (index < text.length && isWhitespaceAt(text, index)) {
+    index += 1;
+  }
+  return index;
+}
+
+function lastNonWhitespaceIndex(text: string, start: number): number {
+  let end = text.length;
+  while (end > start && isWhitespaceAt(text, end - 1)) {
+    end -= 1;
+  }
+  return end;
+}
+
+function commentarySlice(
   message: AppServerThreadMessageEntry,
   backend: AppServerBackendKind | undefined,
-): string | undefined {
-  if (backend !== "codex" || message.role !== "assistant" || message.phase !== "commentary"
-    || message.delivery) {
+): { raw: string; start: number } | undefined {
+  if (
+    backend !== "codex"
+    || message.role !== "assistant"
+    || message.phase !== "commentary"
+    || message.delivery
+  ) {
     return undefined;
   }
-  const text = message.text.trimStart();
-  if (message.parts?.some((part) => part.type !== "text" || part.text.trim() !== text.trimEnd())) {
+  const raw = message.text;
+  if (raw.length > MAX_BROWSER_COMPLETION_CHARS) {
     return undefined;
   }
-  return text;
+  const start = firstNonWhitespaceIndex(raw);
+  // Fast O(1) bailout: any commentary whose first non-whitespace character is
+  // not `:` can never be a `::browser-complete{...}` directive or prefix of
+  // one, so skip `message.parts` inspection and string allocations entirely.
+  if (start < raw.length && raw.charCodeAt(start) !== 58 /* ':' */) {
+    return undefined;
+  }
+  if (message.parts) {
+    const end = lastNonWhitespaceIndex(raw, start);
+    const trimmed = raw.slice(start, end);
+    if (message.parts.some((part) => part.type !== "text" || part.text.trim() !== trimmed)) {
+      return undefined;
+    }
+  }
+  return { raw, start };
 }
 
 function readTitle(quotedTitle: string): string | undefined {
@@ -40,16 +119,111 @@ function readTitle(quotedTitle: string): string | undefined {
   return title && !/[\r\n]/.test(title) ? title : undefined;
 }
 
+/**
+ * Single-pass, zero-backtracking scanner for `::browser-complete{title="..."}`
+ * and its valid streaming prefixes. Runs in O(1) on ordinary commentary and
+ * O(length <= MAX_BROWSER_COMPLETION_CHARS) on candidate directives.
+ */
+function scanCodexBrowserCompletion(
+  message: AppServerThreadMessageEntry,
+  backend: AppServerBackendKind | undefined,
+): CompletionScanResult {
+  const slice = commentarySlice(message, backend);
+  if (!slice) return { kind: "none" };
+  const { raw, start } = slice;
+  const remaining = raw.length - start;
+  if (remaining === 0) {
+    return { kind: "pending" };
+  }
+  if (remaining <= COMPLETION_PREFIX.length) {
+    for (let index = 0; index < remaining; index += 1) {
+      if (raw.charCodeAt(start + index) !== COMPLETION_PREFIX.charCodeAt(index)) {
+        return { kind: "none" };
+      }
+    }
+    return { kind: "pending" };
+  }
+  for (let index = 0; index < COMPLETION_PREFIX.length; index += 1) {
+    if (raw.charCodeAt(start + index) !== COMPLETION_PREFIX.charCodeAt(index)) {
+      return { kind: "none" };
+    }
+  }
+
+  let cursor = start + COMPLETION_PREFIX.length;
+  if (raw.charCodeAt(cursor) !== 34 /* '"' */) {
+    return { kind: "none" };
+  }
+  const quoteStart = cursor;
+  cursor += 1;
+
+  while (cursor < raw.length) {
+    const code = raw.charCodeAt(cursor);
+    if (code === 34 /* '"' */) {
+      const quotedTitle = raw.slice(quoteStart, cursor + 1);
+      const title = readTitle(quotedTitle);
+      if (!title) return { kind: "none" };
+      const afterQuote = cursor + 1;
+      if (afterQuote === raw.length) {
+        return { kind: "pending" };
+      }
+      if (raw.charCodeAt(afterQuote) !== 125 /* '}' */) {
+        return { kind: "none" };
+      }
+      for (let tail = afterQuote + 1; tail < raw.length; tail += 1) {
+        if (!isWhitespaceAt(raw, tail)) {
+          return { kind: "none" };
+        }
+      }
+      return { kind: "complete", title };
+    }
+    if (code < 0x20) {
+      return { kind: "none" };
+    }
+    if (code === 92 /* '\\' */) {
+      cursor += 1;
+      if (cursor === raw.length) {
+        return { kind: "pending" };
+      }
+      const escaped = raw.charCodeAt(cursor);
+      if (escaped === 117 /* 'u' */) {
+        cursor += 1;
+        const hexAvailable = Math.min(4, raw.length - cursor);
+        for (let hex = 0; hex < hexAvailable; hex += 1) {
+          if (!isHexDigit(raw.charCodeAt(cursor + hex))) {
+            return { kind: "none" };
+          }
+        }
+        if (hexAvailable < 4) {
+          return { kind: "pending" };
+        }
+        cursor += 4;
+        continue;
+      }
+      if (
+        escaped !== 34 /* '"' */
+        && escaped !== 92 /* '\\' */
+        && escaped !== 47 /* '/' */
+        && escaped !== 98 /* 'b' */
+        && escaped !== 102 /* 'f' */
+        && escaped !== 110 /* 'n' */
+        && escaped !== 114 /* 'r' */
+        && escaped !== 116 /* 't' */
+      ) {
+        return { kind: "none" };
+      }
+    }
+    cursor += 1;
+  }
+
+  return { kind: "pending" };
+}
+
 export function parseCodexBrowserCompletionTitle(
   message: AppServerThreadMessageEntry,
   backend: AppServerBackendKind | undefined,
 ): string | undefined {
-  const text = commentaryText(message, backend);
-  if (!text?.startsWith(COMPLETION_PREFIX)) return undefined;
-  const payload = text.slice(COMPLETION_PREFIX.length).trimEnd();
-  const quotedTitle = CLOSED_TITLE.exec(payload)?.[0];
-  if (!quotedTitle || payload.slice(quotedTitle.length) !== "}") return undefined;
-  return readTitle(quotedTitle);
+  const scanned = scanCodexBrowserCompletion(message, backend);
+  return scanned.kind === "complete" ? scanned.title : undefined;
 }
 
 export function codexBrowserCompletionActivity(
@@ -77,15 +251,7 @@ export function isPendingCodexBrowserCompletion(
   message: AppServerThreadMessageEntry,
   backend: AppServerBackendKind | undefined,
 ): boolean {
-  const text = commentaryText(message, backend);
-  if (text === undefined) return false;
-  if (COMPLETION_PREFIX.startsWith(text)) return true;
-  if (!text.startsWith(COMPLETION_PREFIX)) return false;
-  const payload = text.slice(COMPLETION_PREFIX.length);
-  const quotedTitle = CLOSED_TITLE.exec(payload)?.[0];
-  if (!quotedTitle) return OPEN_TITLE.exec(payload)?.[0] === payload;
-  const suffix = payload.slice(quotedTitle.length);
-  return (suffix === "" || suffix.trimEnd() === "}") && Boolean(readTitle(quotedTitle));
+  return scanCodexBrowserCompletion(message, backend).kind !== "none";
 }
 
 function isUnresolvedBrowserReplDetail(detail: AppServerThreadActivityDetail): boolean {
@@ -105,7 +271,7 @@ function collectBrowserDetails(
   );
 }
 
-export function buildBrowserUsePresentation(
+function computeBrowserUsePresentation(
   entry: AppServerThreadActivityEntry,
 ): AppServerThreadBrowserUsePresentation | undefined {
   const browserDetails = collectBrowserDetails(entry);
@@ -145,7 +311,12 @@ export function buildBrowserUsePresentation(
   const surfaceMeta = latestSurfaceMeta ?? latestMeta;
   const resolvedBrowserFamily = surfaceMeta.browserFamily ?? latestBrowserFamily;
   const hasNonBrowserDetails = browserDetails.length < entry.details.length;
-  const title = summarizeCodexBrowserUseDetails(entry.details) ?? entry.summary;
+  // Preserve an already-associated non-standalone title so re-projecting an
+  // already-projected entry is strictly idempotent.
+  const title =
+    entry.browserUse && !entry.browserUse.standalone && entry.browserUse.title
+      ? entry.browserUse.title
+      : summarizeCodexBrowserUseDetails(entry.details) ?? entry.summary;
 
   return {
     title,
@@ -171,6 +342,51 @@ export function buildBrowserUsePresentation(
     ...(hasNonBrowserDetails ? { hasNonBrowserDetails: true } : {}),
     ...(ambiguousSurface ? { ambiguousSurface: true } : {}),
   };
+}
+
+function getCachedBrowserEntry(entry: AppServerThreadActivityEntry): CachedPresentation {
+  const cached = presentationCache.get(entry);
+  if (
+    cached
+    && cached.details === entry.details
+    && cached.summary === entry.summary
+    && cached.inputBrowserUse === entry.browserUse
+  ) {
+    return cached;
+  }
+  const presentation = computeBrowserUsePresentation(entry);
+  const enriched: AppServerThreadActivityEntry =
+    !presentation || entry.browserUse === presentation
+      ? entry
+      : { ...entry, browserUse: presentation };
+  const record: CachedPresentation = {
+    details: entry.details,
+    summary: entry.summary,
+    inputBrowserUse: entry.browserUse,
+    presentation,
+    enriched,
+    hasTrailingUnresolved: presentation ? hasTrailingUnresolvedBrowserCall(enriched) : false,
+    claimedMarker: false,
+  };
+  presentationCache.set(entry, record);
+  if (enriched !== entry) {
+    presentationCache.set(enriched, {
+      details: enriched.details,
+      summary: enriched.summary,
+      inputBrowserUse: enriched.browserUse,
+      presentation,
+      enriched,
+      hasTrailingUnresolved: record.hasTrailingUnresolved,
+      claimedMarker: false,
+    });
+  }
+  return record;
+}
+
+export function buildBrowserUsePresentation(
+  entry: AppServerThreadActivityEntry,
+): AppServerThreadBrowserUsePresentation | undefined {
+  return getCachedBrowserEntry(entry).presentation;
 }
 
 function applyMatchedTitleToSummary(
@@ -235,12 +451,14 @@ export function projectCodexBrowserUseEntries(
   let segmentTurnId: string | undefined;
   let hasSegmentTurn = false;
   let candidateIndex: number | undefined;
+  let candidateCache: CachedPresentation | undefined;
   let hasUnresolvedLaterBrowserCall = false;
 
   const resetSegment = (nextTurnId?: string, trackTurn = false): void => {
     segmentTurnId = nextTurnId;
     hasSegmentTurn = trackTurn;
     candidateIndex = undefined;
+    candidateCache = undefined;
     hasUnresolvedLaterBrowserCall = false;
   };
 
@@ -279,23 +497,47 @@ export function projectCodexBrowserUseEntries(
           && candidate.status !== "in_progress"
           && !hasUnresolvedLaterBrowserCall
         ) {
-          const updatedPresentation: AppServerThreadBrowserUsePresentation = {
-            ...candidate.browserUse,
-            title: completionTitle,
-          };
-          result[candidateIndex!] = {
-            ...candidate,
-            summary: applyMatchedTitleToSummary(
-              candidate,
-              candidate.browserUse,
-              completionTitle,
-            ),
-            browserUse: updatedPresentation,
-          };
+          let matchedEntry: AppServerThreadActivityEntry;
+          if (
+            candidateCache
+            && candidateCache.matchedTitle === completionTitle
+            && candidateCache.matchedEntry
+          ) {
+            matchedEntry = candidateCache.matchedEntry;
+          } else {
+            const updatedPresentation: AppServerThreadBrowserUsePresentation = {
+              ...candidate.browserUse,
+              title: completionTitle,
+            };
+            matchedEntry = {
+              ...candidate,
+              summary: applyMatchedTitleToSummary(
+                candidate,
+                candidate.browserUse,
+                completionTitle,
+              ),
+              browserUse: updatedPresentation,
+            };
+            if (candidateCache) {
+              candidateCache.matchedTitle = completionTitle;
+              candidateCache.matchedEntry = matchedEntry;
+              presentationCache.set(matchedEntry, {
+                details: matchedEntry.details,
+                summary: matchedEntry.summary,
+                inputBrowserUse: matchedEntry.browserUse,
+                presentation: updatedPresentation,
+                enriched: matchedEntry,
+                hasTrailingUnresolved: false,
+                claimedMarker: true,
+              });
+            }
+          }
+          result[candidateIndex!] = matchedEntry;
           changed = true;
           // One marker claims one browser segment; a second marker without new
           // browser work stays standalone in place.
           candidateIndex = undefined;
+          candidateCache = undefined;
           hasUnresolvedLaterBrowserCall = false;
           continue;
         }
@@ -303,6 +545,7 @@ export function projectCodexBrowserUseEntries(
         // Missing or ambiguous metadata: keep the standalone marker in place
         // and end the current browser segment.
         candidateIndex = undefined;
+        candidateCache = undefined;
         hasUnresolvedLaterBrowserCall = false;
         result.push(entry);
         continue;
@@ -313,15 +556,19 @@ export function projectCodexBrowserUseEntries(
     }
 
     if (entry.type === "activity") {
-      const presentation = buildBrowserUsePresentation(entry);
-      if (presentation) {
-        const enriched: AppServerThreadActivityEntry =
-          entry.browserUse === presentation
-            ? entry
-            : { ...entry, browserUse: presentation };
+      const cached = getCachedBrowserEntry(entry);
+      if (cached.presentation) {
+        const enriched = cached.enriched;
         if (enriched !== entry) changed = true;
-        candidateIndex = result.length;
-        hasUnresolvedLaterBrowserCall = hasTrailingUnresolvedBrowserCall(enriched);
+        if (cached.claimedMarker) {
+          candidateIndex = undefined;
+          candidateCache = undefined;
+          hasUnresolvedLaterBrowserCall = false;
+        } else {
+          candidateIndex = result.length;
+          candidateCache = cached;
+          hasUnresolvedLaterBrowserCall = cached.hasTrailingUnresolved;
+        }
         result.push(enriched);
         continue;
       }
