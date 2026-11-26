@@ -56,6 +56,9 @@ describe("Research Decisions shared rules", () => {
           }
         }
         expect(guidance).toContain("decisions_list");
+        expect(guidance).toContain("inputsFile");
+        expect(guidance).toContain("outputFile");
+        expect(guidance).toContain("$TMPDIR");
         if (role !== "coordinator") {
           expect(guidance).toContain(`researchRunId=${runId}`);
         } else {

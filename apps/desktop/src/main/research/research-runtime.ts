@@ -277,7 +277,7 @@ function boardView(
   const hasDecisionsActivity = (decisions?.runDecisions ?? 0) > 0 || (decisions?.runBatches ?? 0) > 0;
   const showDecisions = readyProviders.length > 0 || hasDecisionsActivity;
   const decisionsGuidance = readyProviders.length > 0
-    ? ` Decision models are ready (${readyProviders.map(decisionRunProviderName).join(", ")}): register run-scoped rubrics with decisions_register (scope="research_run", researchRunId="${run.id}"), discover them with decisions_list (researchRunId="${run.id}"), run batch evaluations with decisions_invoke, and inspect run batches with decisions_batch_results (researchRunId="${run.id}").`
+    ? ` Decision models are ready (${readyProviders.map(decisionRunProviderName).join(", ")}): register run-scoped rubrics with decisions_register (scope="research_run", researchRunId="${run.id}"), discover them with decisions_list (researchRunId="${run.id}"), prepare batch inputsFile with a script (in the workspace or $TMPDIR, not /tmp on macOS) and run decisions_invoke with inputsFile and outputFile instead of copying text inline, and inspect run batches with decisions_batch_results (researchRunId="${run.id}"). After registering rubrics, end your turn and wait for worker submissions instead of polling or reading source files in the coordinator.`
     : "";
   return {
     id: run.id, objective: run.objective, revision: run.revision, status: run.status, reason: run.reason,
