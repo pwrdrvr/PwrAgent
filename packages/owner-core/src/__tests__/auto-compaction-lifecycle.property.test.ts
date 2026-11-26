@@ -338,9 +338,37 @@ describe("auto-compaction lifecycle", () => {
 
   it("never sends a continuation when a steered turn was cancelled or failed", () => {
     fc.assert(fc.property(opsArb, (ops) => {
+      let abortedSteer = false;
       for (const trace of run(ops)) {
-        if (trace.input.kind === "turn-ended" && trace.input.outcome !== "completed") {
+        if (trace.before.phase === "armed") {
+          abortedSteer = false;
+        }
+        if (
+          trace.before.via === "steer"
+          && trace.input.kind === "turn-ended"
+          && trace.input.outcome !== "completed"
+          && (trace.input.turnId === undefined || trace.before.turnId === undefined || trace.input.turnId === trace.before.turnId)
+        ) {
+          abortedSteer = true;
+        }
+        if (abortedSteer) {
           expect(trace.command?.kind).not.toBe("start-continuation");
+        }
+      }
+    }));
+  });
+
+  it("clears compacting immediately without retry or false no-shrink hold when a compaction turn is cancelled or fails", () => {
+    fc.assert(fc.property(opsArb, (ops) => {
+      for (const trace of run(ops)) {
+        if (
+          trace.before.phase === "compacting"
+          && trace.input.kind === "turn-ended"
+          && trace.input.outcome !== "completed"
+          && (trace.input.turnId === undefined || trace.before.turnId === undefined || trace.input.turnId === trace.before.turnId)
+        ) {
+          expect(trace.after.phase).toBe("armed");
+          expect(trace.command).toBeUndefined();
         }
       }
     }));
@@ -544,7 +572,7 @@ describe("auto-compaction lifecycle examples", () => {
     expect(step.state.phase).toBe("armed");
   });
 
-  it("does not send a continuation when a steered Antigravity /compact turn is cancelled or fails", () => {
+  it("does not send a continuation, retry idle /compact, or hold when a steered Antigravity /compact turn is cancelled or fails", () => {
     const agyRunning: AutoCompactionContext = { ...running, reportsFillOnNextTurn: true };
     const agyIdle: AutoCompactionContext = { ...idle, reportsFillOnNextTurn: true };
     for (const outcome of ["cancelled", "failed"] as const) {
@@ -554,7 +582,45 @@ describe("auto-compaction lifecycle examples", () => {
       step = stepAutoCompaction(step.state, { kind: "dispatch-accepted", context: agyRunning });
       step = stepAutoCompaction(step.state, { kind: "turn-ended", turnId: "t1", outcome, context: agyIdle });
       expect(step.command).toBeUndefined();
-      expect(step.state.phase).toBe("compacting");
+      expect(step.state.phase).toBe("armed");
+      // Neither a settle timeout nor a later compaction signal sends a continuation or idle retry.
+      step = stepAutoCompaction(step.state, { kind: "settle-timeout", context: agyIdle });
+      expect(step.command).toBeUndefined();
+      expect(step.state.phase).toBe("armed");
+      step = stepAutoCompaction(step.state, { kind: "compaction-observed", context: agyIdle });
+      expect(step.command).toBeUndefined();
+      expect(step.state.phase).toBe("armed");
     }
+  });
+
+  it("suppresses start-continuation in completed() when evidence arrived before dispatch-accepted on a cancelled steered turn", () => {
+    let step = stepAutoCompaction(INITIAL_AUTO_COMPACTION_STATE, {
+      kind: "fill", usedTokens: 412_000, threshold, context: running,
+    });
+    step = stepAutoCompaction(step.state, { kind: "compaction-observed", context: running });
+    step = stepAutoCompaction(step.state, { kind: "turn-ended", turnId: "t1", outcome: "cancelled", context: idle });
+    step = stepAutoCompaction(step.state, { kind: "dispatch-accepted", context: idle });
+    expect(step.command).toBeUndefined();
+    expect(step.state.phase).toBe("armed");
+  });
+
+  it("does not inherit turnEnded from a different turn when dispatch-accepted arrives for an idle compaction", () => {
+    const agyIdle: AutoCompactionContext = { ...idle, reportsFillOnNextTurn: true };
+    const agyRunningT3: AutoCompactionContext = { ...running, turnId: "t3", reportsFillOnNextTurn: true };
+    let step = stepAutoCompaction(INITIAL_AUTO_COMPACTION_STATE, {
+      kind: "fill", usedTokens: 412_000, threshold, context: agyIdle,
+    });
+    expect(step.command?.kind).toBe("start-compact");
+    // Unrelated turn t2 runs and completes while start-compact is still awaiting its turnId.
+    step = stepAutoCompaction(step.state, { kind: "turn-started", turnId: "t2" });
+    step = stepAutoCompaction(step.state, { kind: "turn-ended", turnId: "t2", outcome: "completed", context: agyIdle });
+    // Now start-compact resolves with its own turnId t3 while t3 is running.
+    step = stepAutoCompaction(step.state, { kind: "dispatch-accepted", turnId: "t3", context: agyRunningT3 });
+    expect(step.state.phase).toBe("compacting");
+    expect(step.state.turnId).toBe("t3");
+    expect(step.state.turnEnded).toBe(false);
+    // t3's own summarization fill must not falsely transition to held("no-shrink").
+    step = stepAutoCompaction(step.state, { kind: "fill", usedTokens: 425_000, threshold, context: agyRunningT3 });
+    expect(step.state.phase).toBe("compacting");
   });
 });

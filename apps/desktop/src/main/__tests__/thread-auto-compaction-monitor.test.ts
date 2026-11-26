@@ -259,17 +259,29 @@ describe("ThreadAutoCompactionMonitor", () => {
     monitor.dispose();
   });
 
-  it("does not send a continuation when a steered Antigravity /compact turn is cancelled", async () => {
-    const world = fakeRegistry({ reportsFillOnNextTurn: true });
-    const monitor = start(world);
-    world.turnStarted("turn-1");
-    world.fill(412_000);
-    await monitor.idle();
-    world.turnCancelled("turn-1");
-    await monitor.idle();
+  it("clears compacting immediately without a continuation or delayed idle retry when a steered Antigravity /compact turn is cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      const world = fakeRegistry({ reportsFillOnNextTurn: true });
+      const monitor = start(world);
+      world.turnStarted("turn-1");
+      world.fill(412_000);
+      await monitor.idle();
+      world.turnCancelled("turn-1");
+      await monitor.idle();
 
-    expect(world.registry.submitTurnIfIdle).not.toHaveBeenCalled();
-    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("compacting");
-    monitor.dispose();
+      expect(world.registry.submitTurnIfIdle).not.toHaveBeenCalled();
+      expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("armed");
+
+      // Advancing past the 15s settle timeout must not start an unrequested idle /compact.
+      await vi.advanceTimersByTimeAsync(20_000);
+      await monitor.idle();
+      expect(world.registry.startAutoCompaction).not.toHaveBeenCalled();
+      expect(world.registry.submitTurnIfIdle).not.toHaveBeenCalled();
+      expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("armed");
+      monitor.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

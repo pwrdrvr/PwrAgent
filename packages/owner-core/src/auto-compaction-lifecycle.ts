@@ -218,6 +218,9 @@ function dispatch(state: AutoCompactionState, context: AutoCompactionContext): A
 /** The fill came down, or the provider reported a compaction. */
 function completed(state: AutoCompactionState, context: AutoCompactionContext): AutoCompactionStep {
   if (state.via !== "steer") return { state: armed(state) };
+  if (state.turnEnded && state.turnEndOutcome !== undefined && state.turnEndOutcome !== "completed") {
+    return { state: armed(state) };
+  }
   if (!context.turnRunning) {
     return { state: armed(state), command: { kind: "start-continuation" } };
   }
@@ -342,12 +345,13 @@ export function stepAutoCompaction(
             || state.turnId === undefined
             || input.turnId === state.turnId;
           if (!sameTurn) return { state };
-          if (
-            state.phase === "compacting"
-            && outcome === "completed"
-            && input.context.reportsFillOnNextTurn
-          ) {
-            return finishDeferredCompaction(state, input.context);
+          if (state.phase === "compacting") {
+            if (outcome !== "completed") {
+              return { state: armed(state) };
+            }
+            if (input.context.reportsFillOnNextTurn) {
+              return finishDeferredCompaction(state, input.context);
+            }
           }
           return { state: { ...state, turnEnded: true, turnEndOutcome: outcome } };
         }
@@ -375,26 +379,30 @@ export function stepAutoCompaction(
 
     case "dispatch-accepted": {
       if (state.phase !== "steering" && state.phase !== "starting") return { state };
-      const turnEnded = state.via === "steer"
-        ? state.turnEnded === true
-        : state.turnId !== undefined && state.turnEnded === true;
+      const sameTurn = state.via === "steer"
+        ? true
+        : state.turnId !== undefined
+          && (input.turnId === undefined || input.turnId === state.turnId);
+      const turnEnded = sameTurn && state.turnEnded === true;
+      const turnEndOutcome = turnEnded ? state.turnEndOutcome : undefined;
       const accepted: AutoCompactionState = {
         ...state,
         phase: "compacting",
         ...(state.via === "steer" ? { steerUsed: true } : { startUsed: true }),
         ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
         turnEnded,
-        ...(turnEnded && state.turnEndOutcome ? { turnEndOutcome: state.turnEndOutcome } : { turnEndOutcome: undefined }),
+        turnEndOutcome,
         evidence: undefined,
       };
       // Evidence that came first settles it now.
       if (state.evidence) return completed(accepted, input.context);
-      if (
-        accepted.turnEnded
-        && accepted.turnEndOutcome === "completed"
-        && input.context.reportsFillOnNextTurn
-      ) {
-        return finishDeferredCompaction(accepted, input.context);
+      if (accepted.turnEnded) {
+        if (accepted.turnEndOutcome !== undefined && accepted.turnEndOutcome !== "completed") {
+          return { state: armed(accepted) };
+        }
+        if (accepted.turnEndOutcome === "completed" && input.context.reportsFillOnNextTurn) {
+          return finishDeferredCompaction(accepted, input.context);
+        }
       }
       return { state: accepted };
     }
@@ -424,6 +432,7 @@ export function stepAutoCompaction(
           via: undefined,
           turnId: undefined,
           turnEnded: undefined,
+          turnEndOutcome: undefined,
           dispatchedAtTokens: undefined,
         },
       };
