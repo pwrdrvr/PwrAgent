@@ -19412,3 +19412,74 @@ it("refreshes a mounted remote transcript without event subscriptions, including
   expect(readThread).toHaveBeenCalledTimes(2);
   unmount();
 });
+
+it("promotes a sole pre-tool ACP partial reply on turn/completed to match replay visibility", async () => {
+  const { buildTranscriptRenderItems } = await import(
+    "../../features/thread-detail/transcript-render-items"
+  );
+  let emit: (event: AgentEvent) => void = () => undefined;
+  const desktopApi: DesktopApi = {
+    onAgentEvent: (listener) => { emit = listener; return () => undefined; },
+    readThread: vi.fn().mockResolvedValue({
+      ...readThreadResponse({ entries: [], hasPreviousPage: false }),
+      backend: "acp:antigravity",
+      threadId: "acp-1",
+    }),
+  };
+  const { result } = renderHook(() => useThreadSessionState({
+    desktopApi,
+    thread: { ...buildThread({ id: "acp-1", updatedAt: 1_000 }), source: "acp:antigravity" },
+  }));
+  await waitForThreadHydration(result, "acp-1");
+
+  act(() => emit({
+    backend: "acp:antigravity",
+    notification: {
+      method: "turn/started",
+      params: { threadId: "acp-1", turn: { id: "turn-1", status: "in_progress" } },
+    },
+  }));
+  act(() => emit({
+    backend: "acp:antigravity",
+    notification: {
+      method: "item/completed",
+      params: {
+        threadId: "acp-1",
+        turnId: "turn-1",
+        item: { id: "a1", type: "agentMessage", phase: "partial", text: "Here is the screenshot." },
+      },
+    },
+  }));
+  act(() => emit({
+    backend: "acp:antigravity",
+    notification: {
+      method: "item/completed",
+      params: {
+        threadId: "acp-1",
+        turnId: "turn-1",
+        item: { id: "t1", type: "commandExecution", command: "false", status: "failed" },
+      },
+    },
+  }));
+  act(() => emit({
+    backend: "acp:antigravity",
+    notification: {
+      method: "turn/completed",
+      params: {
+        threadId: "acp-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", output: [{ type: "text", text: "Here is the screenshot." }] },
+      },
+    },
+  }));
+
+  const reply = result.current.entries.find((entry) => entry.id === "a1");
+  expect(reply).toMatchObject({ type: "message", phase: "final", text: "Here is the screenshot." });
+
+  // Live render items keep the sole reply visible outside collapsed groups, matching replay.
+  const rendered = buildTranscriptRenderItems({
+    backend: "acp:antigravity",
+    entries: result.current.entries,
+  });
+  expect(rendered.some((item) => item.type === "entry" && item.entry.id === "a1")).toBe(true);
+});

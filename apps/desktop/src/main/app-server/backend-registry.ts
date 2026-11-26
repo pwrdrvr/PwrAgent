@@ -212,7 +212,11 @@ import type {
   ArchivedThreadAutomationRetirement,
   WorktreeGitWorkingStateCacheEntry,
 } from "../storage/desktop-overlay-store";
-import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../transcript-images";
+import {
+  antigravityThreadBrainRoots,
+  materializeTranscriptImageEventForRenderer,
+  toTranscriptImageProtocolUrl,
+} from "../transcript-images";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { isGoalActivationEntry, ThreadGoalControl, type ThreadGoalGate } from "./thread-goal-control";
 import type { ThreadGoalRequest, ThreadGoalState } from "@pwragent/shared/contracts/thread-goal";
@@ -8584,6 +8588,17 @@ export class DesktopBackendRegistry {
         if (trimmed) {
           roots.add(path.resolve(trimmed));
         }
+      }
+    }
+
+    if (params.backend === "acp:antigravity") {
+      const session = this.acpBackend.getSession("acp:antigravity", params.threadId);
+      for (const brainRoot of antigravityThreadBrainRoots({
+        backend: params.backend,
+        threadId: params.threadId,
+        agentSessionId: session?.agentSessionId,
+      })) {
+        roots.add(brainRoot);
       }
     }
 
@@ -23008,7 +23023,8 @@ export class DesktopBackendRegistry {
     const previous = this.transcriptImageWork.get(key);
     const item = notification.method === "item/completed" ? readRecord(notification.params.item) : undefined;
     const materializeImages = item?.type === "agentMessage" || item?.type === "imageView"
-      || item?.type === "mcpToolCall" || item?.type === "dynamicToolCall";
+      || item?.type === "mcpToolCall" || item?.type === "dynamicToolCall"
+      || (item?.type === "commandExecution" && Array.isArray(item.images) && item.images.length > 0);
     // Keep lifecycle bookkeeping (including queue release) and subsequent
     // transcript events behind image work, in arrival order. Extend the chain
     // through delivery, so idle or the next turn cannot overtake a held terminal.

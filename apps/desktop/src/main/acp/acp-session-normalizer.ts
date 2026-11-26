@@ -1,17 +1,18 @@
 import { createHash } from "node:crypto";
 import type { AcpSessionNormalizer } from "@pwrdrvr/agent-acp";
-import type {
-  AppServerThreadActivityEntry,
-  AppServerThreadCommandDetail,
-  AppServerThreadEntry,
-  AppServerThreadImagePart,
-  AppServerThreadMessage,
-  AppServerThreadMessagePart,
-  AppServerThreadPlanEntry,
-  AppServerThreadReplay,
-  AppServerThreadStatus,
-  AppServerThreadTurnStatus,
-  AppServerTranscriptPhase,
+import {
+  type AppServerThreadActivityEntry,
+  type AppServerThreadCommandDetail,
+  type AppServerThreadEntry,
+  type AppServerThreadImagePart,
+  type AppServerThreadMessage,
+  type AppServerThreadMessageEntry,
+  type AppServerThreadMessagePart,
+  type AppServerThreadPlanEntry,
+  type AppServerThreadReplay,
+  type AppServerThreadStatus,
+  type AppServerThreadTurnStatus,
+  type AppServerTranscriptPhase,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import {
@@ -53,6 +54,7 @@ import {
   readAcpFileRead,
 } from "./acp-file-read.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
+import { extractAcpContentImageParts, extractAcpToolImageParts } from "./acp-tool-images.js";
 import { reduceNormalizedThread } from "./normalized-thread-reducer.js";
 import { normalizedThreadToReplay, normalizedToolCallToReplayDetail } from "./normalized-thread-to-replay.js";
 
@@ -838,11 +840,11 @@ export class AcpSessionReplayNormalizer {
       readContentText(update.update, "content") ??
       readString(update.update, "text") ??
       "";
-    if (
-      !text
-      || isModeUpdateMarker(text)
-      || (!this.activeAssistantMessageId && !text.trim())
-    ) {
+    const imageParts = extractAcpContentImageParts(update.update.content);
+    const hasText = Boolean(text)
+      && !isModeUpdateMarker(text)
+      && (Boolean(this.activeAssistantMessageId) || Boolean(text.trim()));
+    if (!hasText && imageParts.length === 0) {
       return;
     }
     const id = this.assistantMessageIdForChunk(update);
@@ -850,7 +852,8 @@ export class AcpSessionReplayNormalizer {
       id,
       phase: "final",
       role: "assistant",
-      text,
+      text: hasText ? text : "",
+      ...(imageParts.length > 0 ? { parts: imageParts } : {}),
       createdAt,
     });
   }
@@ -1445,6 +1448,13 @@ export class AcpSessionReplayNormalizer {
     return this.activeAssistantMessageId;
   }
 
+  /** Read a message entry by its replay id so live completions match replay. */
+  readMessageEntry(id: string): AppServerThreadMessageEntry | undefined {
+    const entryIndex = this.typedEntryIndexes.get(`message:${id}`);
+    const entry = entryIndex === undefined ? undefined : this.entries[entryIndex];
+    return entry?.type === "message" ? entry : undefined;
+  }
+
   private assistantMessageIdForChunk(update: AcpSessionUpdate): string {
     const explicitId =
       readString(update.update, "messageId") ??
@@ -1909,20 +1919,21 @@ export class AcpSessionReplayNormalizer {
     const existingMessage = messageIndex === undefined
       ? undefined : this.messages[messageIndex];
     if (existingMessage) {
-      existingMessage.text = appendAcpTranscriptChunk(
-        existingMessage.text,
-        params.text,
-        params.phase,
-      );
-      if (params.parts?.length && !existingMessage.parts?.length) {
-        existingMessage.parts = params.parts;
+      const nextText = params.text
+        ? appendAcpTranscriptChunk(existingMessage.text, params.text, params.phase)
+        : existingMessage.text;
+      existingMessage.text = nextText;
+      const mergedParts = mergeMessageChunkParts(existingMessage.parts, nextText, params.parts);
+      if (mergedParts) {
+        existingMessage.parts = mergedParts;
       }
     } else {
+      const initialParts = initialMessageChunkParts(params.text, params.parts);
       this.appendMessage({
         id: params.id,
         role: params.role,
         text: params.text,
-        ...(params.parts?.length ? { parts: params.parts } : {}),
+        ...(initialParts?.length ? { parts: initialParts } : {}),
         createdAt: params.createdAt,
       });
     }
@@ -1931,22 +1942,23 @@ export class AcpSessionReplayNormalizer {
     const existingEntry = entryIndex === undefined
       ? undefined : this.entries[entryIndex];
     if (existingEntry?.type === "message") {
-      existingEntry.text = appendAcpTranscriptChunk(
-        existingEntry.text,
-        params.text,
-        params.phase,
-      );
-      if (params.parts?.length && !existingEntry.parts?.length) {
-        existingEntry.parts = params.parts;
+      const nextText = params.text
+        ? appendAcpTranscriptChunk(existingEntry.text, params.text, params.phase)
+        : existingEntry.text;
+      existingEntry.text = nextText;
+      const mergedParts = mergeMessageChunkParts(existingEntry.parts, nextText, params.parts);
+      if (mergedParts) {
+        existingEntry.parts = mergedParts;
       }
     } else {
+      const initialParts = initialMessageChunkParts(params.text, params.parts);
       this.appendEntry(this.withCurrentTurn({
         type: "message",
         id: params.id,
         phase: params.phase,
         role: params.role,
         text: params.text,
-        ...(params.parts?.length ? { parts: params.parts } : {}),
+        ...(initialParts?.length ? { parts: initialParts } : {}),
         createdAt: params.createdAt,
       }));
     }
@@ -2655,6 +2667,7 @@ function toolActivity(
     : webFetchUrl || fileRead
       ? "read"
       : toolDetailKind(readString(update.update, "kind"), path);
+  const images = extractAcpToolImageParts(update.update, label);
 
   return {
     type: "activity",
@@ -2668,6 +2681,7 @@ function toolActivity(
         kind: detailKind,
         label,
         path,
+        ...(images.length > 0 ? { images } : {}),
         command:
           displayCommand || output !== undefined || exitCode !== undefined
             ? {
@@ -2843,9 +2857,153 @@ function mergeActivityEntryDetails(
             }
           : undefined,
       fileDiff: incomingDetail.fileDiff ?? existingDetail.fileDiff,
+      ...(() => {
+        const mergedImages = mergeActivityDetailImages(existingDetail.images, incomingDetail.images);
+        return mergedImages?.length ? { images: mergedImages } : {};
+      })(),
     };
   }
   return merged;
+}
+
+const seenActivityDetailImageUrls = new WeakMap<AppServerThreadImagePart[], Set<string>>();
+
+function mergeActivityDetailImages(
+  existing: AppServerThreadImagePart[] | undefined,
+  incoming: AppServerThreadImagePart[] | undefined,
+): AppServerThreadImagePart[] | undefined {
+  if (!incoming?.length) {
+    return existing?.length ? existing : undefined;
+  }
+  if (!existing?.length) {
+    const seen = new Set<string>();
+    const combined: AppServerThreadImagePart[] = [];
+    for (const image of incoming) {
+      if (seen.has(image.url)) {
+        continue;
+      }
+      seen.add(image.url);
+      combined.push(image);
+    }
+    seenActivityDetailImageUrls.set(combined, seen);
+    return combined;
+  }
+  let seen = seenActivityDetailImageUrls.get(existing);
+  if (!seen) {
+    seen = new Set(existing.map((image) => image.url));
+    seenActivityDetailImageUrls.set(existing, seen);
+  }
+  let appended = false;
+  for (const image of incoming) {
+    if (seen.has(image.url)) {
+      continue;
+    }
+    seen.add(image.url);
+    existing.push(image);
+    appended = true;
+  }
+  return appended ? existing : existing;
+}
+
+const seenMessagePartImageUrls = new WeakMap<AppServerThreadMessagePart[], Set<string>>();
+
+function initialMessageChunkParts(
+  text: string,
+  parts: AppServerThreadMessagePart[] | undefined,
+): AppServerThreadMessagePart[] | undefined {
+  if (!parts?.length) {
+    return undefined;
+  }
+  const initial: AppServerThreadMessagePart[] =
+    text && !parts.some((part) => part.type === "text")
+      ? [{ type: "text", text }, ...parts]
+      : parts.map((part) => (part.type === "text" ? { ...part } : part));
+  return initial;
+}
+
+function mergeMessageChunkParts(
+  existingParts: AppServerThreadMessagePart[] | undefined,
+  nextText: string,
+  incomingParts: AppServerThreadMessagePart[] | undefined,
+): AppServerThreadMessagePart[] | undefined {
+  if (!existingParts?.length && !incomingParts?.length) {
+    return undefined;
+  }
+  if (existingParts?.length && !incomingParts?.length) {
+    // Fast path for streaming text deltas after an image part: update the
+    // leading text part in O(1) instead of rebuilding a Set and array per chunk.
+    const first = existingParts[0];
+    if (first?.type === "text") {
+      first.text = nextText;
+      return existingParts;
+    }
+    if (nextText) {
+      const next: AppServerThreadMessagePart[] = [{ type: "text", text: nextText }, ...existingParts];
+      const seen = seenMessagePartImageUrls.get(existingParts);
+      if (seen) {
+        seenMessagePartImageUrls.set(next, seen);
+      }
+      return next;
+    }
+    return existingParts;
+  }
+  if (!existingParts?.length) {
+    const seen = new Set<string>();
+    const nonText: AppServerThreadMessagePart[] = [];
+    for (const part of incomingParts ?? []) {
+      if (part.type === "text") {
+        continue;
+      }
+      if (part.type === "image") {
+        if (seen.has(part.url)) {
+          continue;
+        }
+        seen.add(part.url);
+      }
+      nonText.push(part);
+    }
+    if (nonText.length === 0) {
+      return undefined;
+    }
+    const created: AppServerThreadMessagePart[] = [
+      ...(nextText ? [{ type: "text" as const, text: nextText }] : []),
+      ...nonText,
+    ];
+    seenMessagePartImageUrls.set(created, seen);
+    return created;
+  }
+
+  let seen = seenMessagePartImageUrls.get(existingParts);
+  if (!seen) {
+    seen = new Set<string>();
+    for (const part of existingParts) {
+      if (part.type === "image") {
+        seen.add(part.url);
+      }
+    }
+    seenMessagePartImageUrls.set(existingParts, seen);
+  }
+  let target = existingParts;
+  const first = target[0];
+  if (first?.type === "text") {
+    first.text = nextText;
+  } else if (nextText) {
+    target = [{ type: "text", text: nextText }, ...target];
+    seenMessagePartImageUrls.set(target, seen);
+  }
+  for (const part of incomingParts ?? []) {
+    if (part.type === "text") {
+      continue;
+    }
+    if (part.type === "image") {
+      if (seen.has(part.url)) {
+        continue;
+      }
+      seen.add(part.url);
+    }
+    target.push(part);
+  }
+  return target;
 }
 
 function preferSpecificLabel(

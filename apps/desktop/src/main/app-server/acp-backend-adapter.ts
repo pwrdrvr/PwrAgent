@@ -18,6 +18,8 @@ import {
   type AppServerBackendKind,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
+  type AppServerThreadImagePart,
+  type AppServerThreadMessageEntry,
   type AppServerThreadMessagePart,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
@@ -511,6 +513,33 @@ function liveToolNotificationKey(
     : undefined;
 }
 
+const cachedToolImageFingerprints = new WeakMap<
+  object,
+  { url: string | undefined; alt: string | undefined; summary: { urlHash?: string; urlLength?: number; alt?: string } }
+>();
+
+function liveToolImageFingerprintSummary(
+  image: unknown,
+): { urlHash?: string; urlLength?: number; alt?: string } | undefined {
+  const record = asPlainRecord(image);
+  if (!record) {
+    return undefined;
+  }
+  const url = typeof record.url === "string" ? record.url : undefined;
+  const alt = typeof record.alt === "string" ? record.alt : undefined;
+  const cached = cachedToolImageFingerprints.get(record);
+  if (cached && cached.url === url && cached.alt === alt) {
+    return cached.summary;
+  }
+  const summary = {
+    urlHash: url ? hashString(url) : undefined,
+    urlLength: url?.length,
+    alt,
+  };
+  cachedToolImageFingerprints.set(record, { url, alt, summary });
+  return summary;
+}
+
 function liveToolNotificationFingerprint(
   notification: AppServerNotification,
 ): string | undefined {
@@ -523,6 +552,9 @@ function liveToolNotificationFingerprint(
   const output = readNonEmptyString(data, "output") ?? "";
   const fileDiff = asPlainRecord(item.fileDiff);
   const diff = typeof fileDiff?.diff === "string" ? fileDiff.diff : undefined;
+  const images = Array.isArray(item.images)
+    ? item.images.map(liveToolImageFingerprintSummary)
+    : undefined;
   return JSON.stringify({
     method: notification.method,
     type: item.type,
@@ -535,7 +567,18 @@ function liveToolNotificationFingerprint(
     title: item.title,
     path: item.path,
     fileDiff: fileDiff && { ...fileDiff, diff: diff && hashString(diff), diffLength: diff?.length },
+    ...(images?.length ? { images } : {}),
   });
+}
+
+function acpCompletedAssistantMessagePhase(
+  phase: AppServerThreadMessageEntry["phase"] | undefined,
+  isTerminalSuccess: boolean,
+): AppServerThreadMessageEntry["phase"] | undefined {
+  if (phase === "commentary") {
+    return "commentary";
+  }
+  return isTerminalSuccess ? phase : "partial";
 }
 
 function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
@@ -3599,6 +3642,7 @@ export class AcpBackendAdapter {
         }),
       onSessionUpdate: async ({
         assistantMessageItemId,
+        completedAssistantMessage,
         fromSessionLoad,
         sessionId,
         replay,
@@ -3790,6 +3834,35 @@ export class AcpBackendAdapter {
             });
           }
         }
+        if (turnId && !fromSessionLoad && completedAssistantMessage) {
+          const completedImages = completedAssistantMessage.parts?.filter(
+            (part): part is AppServerThreadImagePart => part.type === "image",
+          ) ?? [];
+          if (completedAssistantMessage.text.trim() || completedImages.length > 0) {
+            const completedPhase = acpCompletedAssistantMessagePhase(
+              completedAssistantMessage.phase,
+              (promptSettledTurnFinished && update.stopReason !== "cancelled")
+                || updateKind === "pwragent_steered_user_prompt",
+            );
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "item/completed",
+                params: {
+                  threadId: sessionId,
+                  turnId,
+                  item: {
+                    id: completedAssistantMessage.id,
+                    type: "agentMessage",
+                    text: completedAssistantMessage.text,
+                    ...(completedPhase ? { phase: completedPhase } : {}),
+                    ...(completedImages.length > 0 ? { content: completedImages } : {}),
+                  },
+                },
+              },
+            });
+          }
+        }
         if (
           updateKind === "pwragent_steered_user_prompt"
           && turnId
@@ -3889,7 +3962,11 @@ export class AcpBackendAdapter {
             threadId: sessionId,
             turnId,
           });
-          const outputText = readAcpUpdateText(update);
+          const completedFinalText =
+            completedAssistantMessage?.phase === "final"
+              ? completedAssistantMessage.text.trim()
+              : "";
+          const outputText = completedFinalText || readAcpUpdateText(update);
           // session/cancel settles the prompt with stopReason cancelled: the
           // turn stopped, it did not complete. An operator stop has already
           // emitted turn/cancelled as it sent the cancel, so this repeats it;
@@ -3930,7 +4007,35 @@ export class AcpBackendAdapter {
         // that running turn. Live lifecycle is owned by turn/started and the
         // prompt-settled terminal events, not transcript replay snapshots.
       },
-      onPromptError: async ({ sessionId, turnId, error, usage }) => {
+      onPromptError: async ({ completedAssistantMessage, sessionId, turnId, error, usage }) => {
+        if (completedAssistantMessage) {
+          const completedImages = completedAssistantMessage.parts?.filter(
+            (part): part is AppServerThreadImagePart => part.type === "image",
+          ) ?? [];
+          if (completedAssistantMessage.text.trim() || completedImages.length > 0) {
+            const completedPhase = acpCompletedAssistantMessagePhase(
+              completedAssistantMessage.phase,
+              false,
+            );
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "item/completed",
+                params: {
+                  threadId: sessionId,
+                  turnId,
+                  item: {
+                    id: completedAssistantMessage.id,
+                    type: "agentMessage",
+                    text: completedAssistantMessage.text,
+                    ...(completedPhase ? { phase: completedPhase } : {}),
+                    ...(completedImages.length > 0 ? { content: completedImages } : {}),
+                  },
+                },
+              },
+            }).catch(() => undefined);
+          }
+        }
         this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),

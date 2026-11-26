@@ -2073,20 +2073,6 @@ describe("AcpBackendAdapter", () => {
       content: { type: "text", text: "Build succeeded" },
     });
 
-    const completedToolEvents = events.filter(
-      (event) => event.notification.method === "item/completed",
-    );
-    expect(completedToolEvents).toHaveLength(1);
-    expect(completedToolEvents[0]).toMatchObject({
-      notification: {
-        params: {
-          item: {
-            command: "pnpm build",
-          },
-        },
-      },
-    });
-
     transport.emitSessionUpdate(session.sessionId, {
       sessionUpdate: "turn_completed",
       outputText: "Build succeeded",
@@ -2106,6 +2092,19 @@ describe("AcpBackendAdapter", () => {
     });
 
     await vi.waitFor(() => {
+      const completedToolEvents = events.filter(
+        (event) => event.notification.method === "item/completed",
+      );
+      expect(completedToolEvents).toHaveLength(1);
+      expect(completedToolEvents[0]).toMatchObject({
+        notification: {
+          params: {
+            item: {
+              command: "pnpm build",
+            },
+          },
+        },
+      });
       expect(events).toContainEqual({
         backend: backendId,
         notification: {
@@ -2510,7 +2509,9 @@ describe("AcpBackendAdapter", () => {
     ).toHaveLength(1);
     expect(
       events.filter(
-        (event) => event.notification.method === "item/completed",
+        (event) =>
+          event.notification.method === "item/completed"
+          && (event.notification.params as { item?: { type?: string } }).item?.type !== "agentMessage",
       ),
     ).toHaveLength(1);
     expect(client.readReplay(session.sessionId).messages).toEqual([

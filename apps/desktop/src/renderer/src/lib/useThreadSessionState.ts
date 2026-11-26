@@ -3951,6 +3951,7 @@ function withCompletedResponseTurnMetadata(
   turn: AppServerThreadTurnMetadata | undefined,
   unphasedAssistantPhase?: AppServerThreadMessageEntry["phase"],
   liveToolItemIds?: ReadonlySet<string>,
+  promotedFinalMessageId?: string,
 ): AppServerReadThreadResponse | undefined {
   if (!response || !turn) {
     return response;
@@ -3963,12 +3964,58 @@ function withCompletedResponseTurnMetadata(
       entries: response.replay.entries.map((entry) =>
         entry.turn?.id === turn.id
           ? entry.type === "message"
-            ? withTurnMetadataAndPhase(entry, turn, unphasedAssistantPhase)
+            ? promotedFinalMessageId && entry.id === promotedFinalMessageId
+              ? { ...withTurnMetadata(entry, turn), phase: "final" as const }
+              : withTurnMetadataAndPhase(entry, turn, unphasedAssistantPhase)
             : settleTurnActivity(entry, turn, liveToolItemIds)
           : entry
       ),
     },
   };
+}
+
+/**
+ * When a live ACP turn finishes without a post-tool final reply, its sole
+ * pre-tool bubble arrived as `phase: "partial"` (to keep messaging quiet mid-turn)
+ * even though replay records it as `phase: "final"`. Promote that trailing
+ * partial reply back to `"final"` on turn completion so desktop grouping matches
+ * replay (e.g., staying visible when followed only by failed tools).
+ */
+function findPromotableAcpPartialReplyId(params: {
+  backend: AppServerBackendKind;
+  completedTurn: AppServerThreadTurnMetadata | undefined;
+  entries: readonly AppServerThreadEntry[];
+  shouldAppendFinalMessage: boolean;
+}): string | undefined {
+  if (
+    !params.backend.startsWith("acp:")
+    || params.completedTurn?.status !== "completed"
+    || params.shouldAppendFinalMessage
+  ) {
+    return undefined;
+  }
+  const turnId = params.completedTurn.id;
+  let lastPartialId: string | undefined;
+  let sawFinal = false;
+  for (const entry of params.entries) {
+    if (entry.turn?.id !== turnId || entry.type !== "message") {
+      continue;
+    }
+    if (entry.role === "user") {
+      lastPartialId = undefined;
+      sawFinal = false;
+      continue;
+    }
+    if (entry.role === "assistant") {
+      if (entry.phase === "final") {
+        sawFinal = true;
+        lastPartialId = undefined;
+      } else if (entry.phase === "partial") {
+        lastPartialId = entry.id;
+      }
+    }
+  }
+  return sawFinal ? undefined : lastPartialId;
 }
 
 function normalizeLiveAssistantMessagePhase(
@@ -5378,6 +5425,7 @@ function isMessagingConversationKind(
 }
 
 function assistantMessageEntryFromCompletedItem(params: {
+  hasRendererImages?: boolean;
   itemParams: AppServerNotification["params"];
   turn: AppServerThreadTurnMetadata | undefined;
 }): AppServerThreadMessageEntry | undefined {
@@ -5401,7 +5449,7 @@ function assistantMessageEntryFromCompletedItem(params: {
   }
 
   const text = typeof record.text === "string" ? record.text.trim() : "";
-  if (!text) {
+  if (!text && !params.hasRendererImages) {
     return undefined;
   }
 
@@ -5511,7 +5559,7 @@ function hasCompletedAssistantMessageForTurn(
   ].filter((entry) => entry.phase !== "commentary");
   const withoutWhitespace = (value: string) => value.replace(/\s+/g, "");
   return (
-    replies.length > 1
+    replies.length > 0
     && withoutWhitespace(replies.map((entry) => entry.text).join(""))
       === withoutWhitespace(text)
   );
@@ -7721,12 +7769,15 @@ export function useThreadSessionState(params: {
           const assistantMessageEntry = !retainTranscript || transientTaskMonitorItem
             ? undefined
             : assistantMessageEntryFromCompletedItem({
+                hasRendererImages: Boolean(event.rendererImageParts?.length),
                 itemParams: event.notification.params,
                 turn: assistantTurn,
               });
           if (assistantMessageEntry && event.rendererImageParts?.length) {
             assistantMessageEntry.parts = [
-              { type: "text", text: assistantMessageEntry.text },
+              ...(assistantMessageEntry.text
+                ? [{ type: "text" as const, text: assistantMessageEntry.text }]
+                : []),
               ...event.rendererImageParts,
             ];
           }
@@ -8011,7 +8062,8 @@ export function useThreadSessionState(params: {
           const storedFinalText = current.response?.replay.entries.findLast(
             (entry): entry is AppServerThreadMessageEntry =>
               entry.type === "message" && entry.role === "assistant"
-              && entry.phase === "final"
+              && (entry.phase === "final"
+                || (event.backend.startsWith("acp:") && entry.phase === "partial"))
               && Boolean(completedTurn?.id) && entry.turn?.id === completedTurn?.id,
           )?.text;
           const completedText =
@@ -8109,21 +8161,39 @@ export function useThreadSessionState(params: {
             );
           }
 
+          const promotedFinalMessageId = findPromotableAcpPartialReplyId({
+            backend: event.backend,
+            completedTurn,
+            entries: [
+              ...(current.response?.replay.entries ?? []),
+              ...nextEntries,
+            ],
+            shouldAppendFinalMessage,
+          });
+          const settledNextEntries = promotedFinalMessageId
+            ? nextEntries.map((entry) =>
+                entry.id === promotedFinalMessageId
+                  ? { ...entry, phase: "final" as const }
+                  : entry
+              )
+            : nextEntries;
+
           const responseWithCompletedTurn = withCompletedResponseTurnMetadata(
             current.response,
             completedTurn,
             unphasedAssistantCompletionPhase,
             liveToolItemIds,
+            promotedFinalMessageId,
           );
           const nextResponse =
-            nextEntries.length > 0
+            settledNextEntries.length > 0
               ? appendMessageEntries(
                   responseWithCompletedTurn,
                   {
                     backend: event.backend,
                     threadId: notificationThreadId,
                   },
-                  nextEntries
+                  settledNextEntries
                 )
               : responseWithCompletedTurn ?? current.response;
           const shouldInvalidateHydration =
