@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as acpKit from "@pwrdrvr/agent-acp";
 import { AcpRolloutStore } from "../acp/acp-rollout-store";
 import { loadAcpReplayKit } from "../acp/acp-session-normalizer";
+import { mergeAcpSyntheticHistory } from "../acp/acp-workspace-history";
 import type { AcpBackendId } from "@pwragent/shared/contracts/normalized-app-server";
 
 vi.mock(import("@pwrdrvr/agent-acp"), async (importOriginal) => {
@@ -909,5 +910,163 @@ describe("AcpRolloutStore", () => {
     expect(
       replay.messages.some((message) => message.text.includes("system-reminder")),
     ).toBe(false);
+  });
+
+  it("flushes buffered thought chunks before a long final reply exceeds the chunk threshold", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:antigravity" as AcpBackendId;
+    const thought = "T".repeat(1_200);
+    const finalPart1 = "A".repeat(2_200);
+    const finalPart2 = "B".repeat(500);
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: { kind: "pwragent_user_prompt", prompt: "hello", turnId: "turn-1" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1001,
+      update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: thought } },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1002,
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: finalPart1 } },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1003,
+      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: finalPart2 } },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-1",
+      receivedAt: 1004,
+      update: { kind: "turn_finished", turnId: "turn-1" },
+    });
+
+    const replay = store.readReplay({ backendId, sessionId: "session-1" });
+    expect(
+      replay.entries.map((entry) =>
+        entry.type === "message" ? { role: entry.role, phase: entry.phase, text: entry.text } : entry.type,
+      ),
+    ).toEqual([
+      { role: "user", phase: undefined, text: "hello" },
+      { role: "assistant", phase: "commentary", text: thought },
+      { role: "assistant", phase: "final", text: `${finalPart1}${finalPart2}` },
+    ]);
+  });
+
+  it("does not drop a repeated tool_call after an intervening tool_call_update within the same turn", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:antigravity" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-same-turn",
+      receivedAt: 1000,
+      update: { kind: "pwragent_user_prompt", prompt: "turn 1", turnId: "turn-1" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-same-turn",
+      receivedAt: 1001,
+      update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read a.ts", kind: "execute", status: "completed" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-same-turn",
+      receivedAt: 1002,
+      update: { sessionUpdate: "tool_call_update", toolCallId: "tc-1", status: "in_progress" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-same-turn",
+      receivedAt: 1003,
+      update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read a.ts", kind: "execute", status: "completed" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-same-turn",
+      receivedAt: 1004,
+      update: { kind: "turn_finished", turnId: "turn-1" },
+    });
+
+    const replay = store.readReplay({ backendId, sessionId: "session-same-turn" });
+    const activities = replay.entries.filter((entry) => entry.type === "activity");
+    expect(activities).toHaveLength(1);
+    expect(activities[0]?.status).toBe("completed");
+  });
+
+  it("does not drop a repeated tool_call across a turn boundary without an intervening tool_call_update", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:antigravity" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-cross-turn",
+      receivedAt: 1000,
+      update: { kind: "pwragent_user_prompt", prompt: "turn 1", turnId: "turn-1" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-cross-turn",
+      receivedAt: 1001,
+      update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read a.ts", kind: "execute", status: "completed" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-cross-turn",
+      receivedAt: 1002,
+      update: { kind: "turn_finished", turnId: "turn-1" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-cross-turn",
+      receivedAt: 2000,
+      update: { kind: "pwragent_user_prompt", prompt: "turn 2", turnId: "turn-2" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-cross-turn",
+      receivedAt: 2001,
+      update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read a.ts", kind: "execute", status: "completed" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-cross-turn",
+      receivedAt: 2002,
+      update: { kind: "turn_finished", turnId: "turn-2" },
+    });
+
+    const toolCallUpdates = store
+      .readUpdates({ backendId, sessionId: "session-cross-turn" })
+      .filter((record) => record.update.sessionUpdate === "tool_call");
+    expect(toolCallUpdates).toHaveLength(2);
+  });
+
+  it("keeps untimed synthetic workspace entries after timed provider entries", () => {
+    const merged = mergeAcpSyntheticHistory(
+      {
+        entries: [{ type: "message", id: "prov-0", role: "user", text: "hello", createdAt: 1 }],
+        messages: [{ id: "prov-0", role: "user", text: "hello", createdAt: 1 }],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      },
+      {
+        entries: [{ type: "message", id: "synth-0", role: "assistant", text: "note" }],
+        messages: [{ id: "synth-0", role: "assistant", text: "note" }],
+        pagination: { supportsPagination: false, hasPreviousPage: false },
+        threadStatus: "idle",
+      },
+    );
+
+    expect(merged.entries.map((entry) => entry.id)).toEqual(["prov-0", "synth-0"]);
+    expect(merged.messages.map((message) => message.id)).toEqual(["prov-0", "synth-0"]);
   });
 });

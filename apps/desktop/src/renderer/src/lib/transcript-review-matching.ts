@@ -2,6 +2,36 @@ import type { AppServerThreadEntry, AppServerThreadReviewEntry } from "@pwragent
 import { normalizeReviewDisplayText } from "../../../shared/review-command";
 import { isPendingEntryId } from "./pending-entry-id";
 
+function reviewStartTimestamp(entry: AppServerThreadReviewEntry): number | undefined {
+  let latest: number | undefined;
+  for (const candidate of [
+    entry.turn?.completedAt,
+    entry.createdAt,
+    entry.turn?.startedAt,
+  ]) {
+    if (typeof candidate === "number" && (latest === undefined || candidate > latest)) {
+      latest = candidate;
+    }
+  }
+  return latest;
+}
+
+function reviewStartMatchesUnboundHeader(
+  authoritative: AppServerThreadReviewEntry,
+  unbound: AppServerThreadReviewEntry,
+): boolean {
+  if (authoritative.turn?.status === "in_progress") {
+    return true;
+  }
+  const unboundAt = unbound.createdAt;
+  const authoritativeAt = reviewStartTimestamp(authoritative);
+  return (
+    typeof unboundAt === "number"
+    && typeof authoritativeAt === "number"
+    && authoritativeAt >= unboundAt
+  );
+}
+
 export function reviewEntriesMatch(
   candidate: AppServerThreadReviewEntry,
   optimisticEntry: AppServerThreadReviewEntry
@@ -32,7 +62,8 @@ export function reviewEntriesMatch(
 
   if (candidateIsStart && (candidateTurnId || optimisticTurnId)) {
     const authoritativeEntry = candidateTurnId ? candidate : optimisticEntry;
-    if (authoritativeEntry.turn?.status !== "in_progress") {
+    const unboundEntry = candidateTurnId ? optimisticEntry : candidate;
+    if (!reviewStartMatchesUnboundHeader(authoritativeEntry, unboundEntry)) {
       return false;
     }
   }
@@ -69,8 +100,28 @@ export function reviewEntryLabels(entry: AppServerThreadReviewEntry): string[] {
     .map((value) => normalizeReviewDisplayText(value).toLocaleLowerCase());
 }
 
-type ReplayReviewKeys = { all: Set<string>; settled: Set<string> };
+type ReplayReviewKeys = {
+  all: Set<string>;
+  settled: Set<string>;
+  settledBoundStartMaxAt: Map<string, number>;
+  unboundStartMinAtAll: Map<string, number>;
+  unboundStartMinAtSettled: Map<string, number>;
+};
 const replayReviewIndexes = new WeakMap<AppServerThreadEntry[], ReplayReviewKeys>();
+
+function recordMaxTime(map: Map<string, number>, key: string, time: number): void {
+  const existing = map.get(key);
+  if (existing === undefined || time > existing) {
+    map.set(key, time);
+  }
+}
+
+function recordMinTime(map: Map<string, number>, key: string, time: number): void {
+  const existing = map.get(key);
+  if (existing === undefined || time < existing) {
+    map.set(key, time);
+  }
+}
 
 function buildReplayReviewKeys(entry: AppServerThreadReviewEntry, lookup: boolean): string[] {
   const turnId = entry.turn?.id;
@@ -136,12 +187,38 @@ export function hasMatchingReplayReview(
 ): boolean {
   let index = replayReviewIndexes.get(entries);
   if (!index) {
-    index = { all: new Set(), settled: new Set() };
+    index = {
+      all: new Set(),
+      settled: new Set(),
+      settledBoundStartMaxAt: new Map(),
+      unboundStartMinAtAll: new Map(),
+      unboundStartMinAtSettled: new Map(),
+    };
     for (const entry of entries) {
       if (entry.type !== "review") continue;
+      const isSettled = entry.turn?.status !== "in_progress";
       for (const key of replayReviewKeys(entry, false)) {
         index.all.add(key);
-        if (entry.turn?.status !== "in_progress") index.settled.add(key);
+        if (isSettled) index.settled.add(key);
+      }
+      if (isReviewStartEntry(entry)) {
+        const ownership = isPendingEntryId(entry.id) ? "pending" : "authoritative";
+        const labels = reviewEntryLabels(entry);
+        if (entry.turn?.id && isSettled) {
+          const at = reviewStartTimestamp(entry);
+          if (typeof at === "number") {
+            for (const label of labels) {
+              recordMaxTime(index.settledBoundStartMaxAt, `${ownership}:${label}`, at);
+            }
+          }
+        } else if (!entry.turn?.id && typeof entry.createdAt === "number") {
+          for (const label of labels) {
+            recordMinTime(index.unboundStartMinAtAll, `${ownership}:${label}`, entry.createdAt);
+            if (isSettled) {
+              recordMinTime(index.unboundStartMinAtSettled, `${ownership}:${label}`, entry.createdAt);
+            }
+          }
+        }
       }
     }
     replayReviewIndexes.set(entries, index);
@@ -149,5 +226,44 @@ export function hasMatchingReplayReview(
   // Running snapshots can regress. Keep the live fallback until a terminal
   // snapshot acknowledges it when requested by the hydration path.
   const keys = retainInProgress ? index.settled : index.all;
-  return replayReviewKeys(review, true).some((key) => keys.has(key));
+  if (replayReviewKeys(review, true).some((key) => keys.has(key))) {
+    return true;
+  }
+  if (!isReviewStartEntry(review)) {
+    return false;
+  }
+  const pending = isPendingEntryId(review.id);
+  const labels = reviewEntryLabels(review);
+  if (!review.turn?.id && typeof review.createdAt === "number") {
+    for (const label of labels) {
+      const authMax = index.settledBoundStartMaxAt.get(`authoritative:${label}`);
+      if (authMax !== undefined && authMax >= review.createdAt) {
+        return true;
+      }
+      if (!pending) {
+        const pendingMax = index.settledBoundStartMaxAt.get(`pending:${label}`);
+        if (pendingMax !== undefined && pendingMax >= review.createdAt) {
+          return true;
+        }
+      }
+    }
+  } else if (review.turn?.id && review.turn.status !== "in_progress") {
+    const at = reviewStartTimestamp(review);
+    if (typeof at === "number") {
+      const unboundMin = retainInProgress ? index.unboundStartMinAtSettled : index.unboundStartMinAtAll;
+      for (const label of labels) {
+        const authMin = unboundMin.get(`authoritative:${label}`);
+        if (authMin !== undefined && authMin <= at) {
+          return true;
+        }
+        if (!pending) {
+          const pendingMin = unboundMin.get(`pending:${label}`);
+          if (pendingMin !== undefined && pendingMin <= at) {
+            return true;
+          }
+        }
+      }
+    }
+  }
+  return false;
 }
