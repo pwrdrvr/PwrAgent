@@ -1243,6 +1243,12 @@ export type PendingThreadMessageContext = {
   imageParts?: AppServerThreadImagePart[];
   retainedInput?: AppServerTurnInputItem[];
   origin?: AppServerThreadMessageOrigin;
+  /**
+   * Registered by an ACP turn start for its prompt. The prompt's own user
+   * item (`user:<turnId>`) claims it by turn, and the start writes its origin
+   * as that row, so the item carries the origin without writing it again.
+   */
+  turnStartPrompt?: true;
   text?: string;
   threadId: string;
   turnId?: string;

@@ -953,7 +953,10 @@ describe("DesktopBackendRegistry", () => {
       expect(events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
       expect(registryModules(registry).turnState.startingOrigins().length).toBe(0);
       expect(internal.reservedAcpStartThreadKeys.size).toBe(0);
-      expect(forgot).toHaveBeenCalledExactlyOnceWith("accepted-context");
+      // A context bound to the accepted turn waits for the prompt's own item
+      // to claim it; only a start that could not bind one forgets it here.
+      if (failure === "context") expect(forgot).toHaveBeenCalledExactlyOnceWith("accepted-context");
+      else expect(forgot).not.toHaveBeenCalled();
       for (const effect of [review, origin, title, context, attachments]) expect(effect).toHaveBeenCalledOnce();
     } finally {
       await registry.close();
