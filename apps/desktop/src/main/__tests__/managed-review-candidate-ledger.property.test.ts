@@ -1,65 +1,35 @@
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { resolve } from "node:path";
 import fc from "fast-check";
-import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
-import { AgentToolMcpServer, type AgentToolHttpMcpServerConfig } from "../agent-tools/agent-tool-mcp-server";
-import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
+import type {
+  AppServerBackendKind,
+  AppServerReviewFinding,
+  AppServerReviewOutput,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { describe, expect, it } from "vitest";
 import {
-  buildManagedReviewLedgerToolRouter,
-  MANAGED_REVIEW_LEDGER_TOOL_NAMES,
-} from "../agent-tools/pwragent-managed-review-ledger-tools";
-import { pwragentToolSkipsAgentApproval } from "../app-server/acp-host-tool-approval";
-import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
+  idleCodexThreadActivity,
+  transition as transitionCodexThreadActivity,
+} from "../app-server/codex-thread-activity";
 import {
+  buildReviewOutputFromCandidateLedger,
   MANAGED_REVIEW_CANDIDATE_CATEGORIES,
   MANAGED_REVIEW_CANDIDATE_MAX_FIELD_LENGTH,
   MANAGED_REVIEW_CANDIDATE_MAX_PER_TURN,
   MANAGED_REVIEW_OUTPUT_MAX_FINDINGS,
   ManagedReviewCandidateLedger,
+  type ManagedReviewCandidate,
   type ManagedReviewCandidateCategory,
   type ManagedReviewCandidatePriority,
   type ManagedReviewCandidateTurnKey,
+  type ManagedReviewWorkspace,
 } from "../app-server/managed-review-candidate-ledger";
-import type { AppServerReviewOutput } from "@pwragent/shared/contracts/normalized-app-server";
-import type { AgentEvent } from "@pwragent/shared/contracts/agent";
-import type { StateDb } from "../state/state-db";
-import { AcpAgentStore } from "../storage/acp-agent-store";
-import { AcpSessionStore } from "../storage/acp-session-store";
-import { createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
-import { runIsolatedGit } from "./helpers/isolated-git";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
-
-const { registryLogInfo } = vi.hoisted(() => ({ registryLogInfo: vi.fn() }));
-vi.mock("../log", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../log")>();
-  return {
-    ...actual,
-    getMainLogger: (scope: string) => {
-      const logger = actual.getMainLogger(scope);
-      return scope === "pwragent:backend-registry" ? { ...logger, info: registryLogInfo } : logger;
-    },
-  };
-});
+import {
+  formatReviewOutputText,
+  parseReviewOutputText,
+} from "../../shared/review-output";
 
 const BACKENDS: readonly AppServerBackendKind[] = ["codex", "acp:antigravity", "acp:grok"];
 const ABSOLUTE_FINDING_PATH = resolve("/repo/a.ts");
-
-async function createNestedReviewCheckout() {
-  const scratch = await mkdtemp(join(tmpdir(), "pwragent-review-ledger-"));
-  onTestFinished(async () => await rm(scratch, { recursive: true, force: true }));
-  const root = await realpath(scratch);
-  const cwd = join(root, "packages", "app");
-  await mkdir(cwd, { recursive: true });
-  await runIsolatedGit(root, ["init", "-b", "main"]);
-  const { stdout } = await runIsolatedGit(cwd, ["rev-parse", "--show-toplevel"]);
-  return { cwd, root: resolve(stdout.trim()) };
-}
 
 const turnKeyArb: fc.Arbitrary<ManagedReviewCandidateTurnKey> = fc.record({
   backend: fc.constantFrom(...BACKENDS),
@@ -555,1030 +525,417 @@ describe("ManagedReviewCandidateLedger model properties", () => {
       ledger.list(turn).candidates.map(({ summary }) => summary),
     );
   });
-
 });
 
-describe("managed review ledger MCP isolation and approval", () => {
-  it("exposes only the 4 auto-approved managed review tools to managedReview Antigravity clients and hides them from normal clients", async () => {
-    const ledger = new ManagedReviewCandidateLedger();
-    const reviewRouter = buildManagedReviewLedgerToolRouter(ledger);
-    let retireAtDispatch = false;
-    const server = new AgentToolMcpServer({
-      resolveCatalogs: (context) =>
-        context.managedReview
-          ? [{ id: "managed_review", router: reviewRouter }]
-          : resolveAgentToolCatalogs({}, { taskMonitorRole: "all", antigravityMcpContext: true }),
-      resolveCallContext: (context) =>
-        context.threadId
-          ? { backend: context.backend, threadId: context.threadId, turnId: "active-turn" }
-          : undefined,
-      authorizeToolCall: async (turn) => {
-        if (retireAtDispatch) ledger.retireToolTurn(turn);
-        return null;
-      },
-    });
+type WorkspaceScenario = {
+  style: "posix" | "win32";
+  workspace: ManagedReviewWorkspace;
+  joinedRoot?: string;
+  separator: "/" | "\\";
+  files: readonly { file: string; resolved?: string }[];
+};
 
-    try {
-      const reviewReg = await server.registerClient({
-        backend: "acp:antigravity",
-        managedReview: true,
-      });
-      const normalReg = await server.registerClient({
-        backend: "acp:antigravity",
-        threadId: "normal-thread",
-      });
+const WORKSPACE_SCENARIOS: readonly WorkspaceScenario[] = [
+  {
+    style: "posix",
+    workspace: { worktreeRoot: "/repo", cwd: "/repo/packages/app" },
+    joinedRoot: "/repo",
+    separator: "/",
+    files: [
+      { file: "src/a.ts", resolved: "/repo/src/a.ts" },
+      { file: "packages/shared/b.ts", resolved: "/repo/packages/shared/b.ts" },
+      { file: "/abs/x.ts", resolved: "/abs/x.ts" },
+    ],
+  },
+  {
+    style: "win32",
+    workspace: { worktreeRoot: "C:\\work\\repo", cwd: "C:\\work\\repo\\packages\\app" },
+    joinedRoot: "C:\\work\\repo",
+    separator: "\\",
+    files: [
+      { file: "src/a.ts", resolved: "C:\\work\\repo\\src\\a.ts" },
+      { file: "src\\win-rel.ts", resolved: "C:\\work\\repo\\src\\win-rel.ts" },
+      { file: "D:\\abs\\z.ts", resolved: "D:\\abs\\z.ts" },
+      { file: "D:/abs/w.ts", resolved: "D:/abs/w.ts" },
+      { file: "/src/partial.ts", resolved: undefined },
+      { file: "C:src\\drive-rel.ts", resolved: undefined },
+    ],
+  },
+  {
+    style: "win32",
+    workspace: { worktreeRoot: "C:/work/repo", cwd: "C:/work/repo/packages/app" },
+    joinedRoot: "C:\\work\\repo",
+    separator: "\\",
+    files: [
+      { file: "src/a.ts", resolved: "C:\\work\\repo\\src\\a.ts" },
+      { file: "D:/abs/w.ts", resolved: "D:/abs/w.ts" },
+      { file: "/src/partial.ts", resolved: undefined },
+      { file: "C:src\\drive-rel.ts", resolved: undefined },
+    ],
+  },
+  {
+    style: "win32",
+    workspace: { worktreeRoot: "\\\\server\\share\\repo" },
+    joinedRoot: "\\\\server\\share\\repo",
+    separator: "\\",
+    files: [
+      { file: "src/a.ts", resolved: "\\\\server\\share\\repo\\src\\a.ts" },
+      { file: "/src/partial.ts", resolved: undefined },
+    ],
+  },
+  {
+    style: "win32",
+    workspace: { worktreeRoot: "//server/share/repo" },
+    joinedRoot: "\\\\server\\share\\repo",
+    separator: "\\",
+    files: [
+      { file: "src/a.ts", resolved: "\\\\server\\share\\repo\\src\\a.ts" },
+      { file: "C:src\\drive-rel.ts", resolved: undefined },
+    ],
+  },
+  {
+    style: "posix",
+    workspace: { cwd: "/remote/repo/packages/app" },
+    separator: "/",
+    files: [
+      { file: "packages/app/src/a.ts", resolved: undefined },
+      { file: "/remote/repo/packages/app/src/a.ts", resolved: "/remote/repo/packages/app/src/a.ts" },
+    ],
+  },
+  {
+    style: "win32",
+    workspace: { cwd: "D:\\remote\\repo\\packages\\app" },
+    separator: "\\",
+    files: [
+      { file: "packages/app/src/a.ts", resolved: undefined },
+      { file: "D:\\remote\\repo\\packages\\app\\src\\a.ts", resolved: "D:\\remote\\repo\\packages\\app\\src\\a.ts" },
+      { file: "/src/partial.ts", resolved: undefined },
+      { file: "C:src\\drive-rel.ts", resolved: undefined },
+    ],
+  },
+  {
+    style: "win32",
+    workspace: { cwd: "D:/remote/repo/packages/app" },
+    separator: "\\",
+    files: [
+      { file: "packages/app/src/a.ts", resolved: undefined },
+      { file: "D:/remote/repo/packages/app/src/a.ts", resolved: "D:/remote/repo/packages/app/src/a.ts" },
+      { file: "/src/partial.ts", resolved: undefined },
+    ],
+  },
+];
 
-      const reviewClient = new Client({ name: "review-agent", version: "1.0.0" });
-      const normalClient = new Client({ name: "normal-agent", version: "1.0.0" });
-      await reviewClient.connect(
-        new StreamableHTTPClientTransport(new URL(reviewReg.server.url), {
-          requestInit: {
-            headers: Object.fromEntries(
-              reviewReg.server.headers.map(({ name, value }) => [name, value]),
-            ),
-          },
-        }),
-      );
-      await normalClient.connect(
-        new StreamableHTTPClientTransport(new URL(normalReg.server.url), {
-          requestInit: {
-            headers: Object.fromEntries(
-              normalReg.server.headers.map(({ name, value }) => [name, value]),
-            ),
-          },
-        }),
-      );
-
-      try {
-        // Before bindThread (session/new timing), tools/list already returns only the ledger tools.
-        const reviewTools = await reviewClient.listTools();
-        expect(reviewTools.tools.map((tool) => tool.name).sort()).toEqual(
-          [...MANAGED_REVIEW_LEDGER_TOOL_NAMES].sort(),
-        );
-        expect(reviewTools.tools.map((tool) => tool.name)).not.toContain("tool_search");
-        expect(reviewTools.tools.map((tool) => tool.name)).not.toContain("call_pwragent_tool");
-
-        // Every ledger tool skips operator approval in ACP.
-        for (const name of MANAGED_REVIEW_LEDGER_TOOL_NAMES) {
-          expect(pwragentToolSkipsAgentApproval(await reviewReg.readTool?.(name))).toBe(true);
-        }
-
-        // Normal Antigravity threads never see any ledger tool.
-        const normalTools = await normalClient.listTools();
-        for (const name of MANAGED_REVIEW_LEDGER_TOOL_NAMES) {
-          expect(normalTools.tools.map((tool) => tool.name)).not.toContain(name);
-        }
-        await expect(
-          normalClient.callTool({ name: "list_review_candidates", arguments: {} }),
-        ).resolves.toMatchObject({ isError: true });
-
-        // Bind review thread and execute Pass 1 -> Pass 2 calls.
-        reviewReg.bindThread("review-child-thread");
-        const turn = { backend: "acp:antigravity", threadId: "review-child-thread", turnId: "active-turn" } as const;
-        ledger.armToolTurn(turn, turn.turnId, { worktreeRoot: resolve("/repo") });
-        const recorded = await reviewClient.callTool({
-          name: "record_review_candidate",
-          arguments: {
-            file: "apps/desktop/src/main/app-server/acp-backend-adapter.ts",
-            start_line: 3585,
-            end_line: 3586,
-            category: "performance",
-            summary: "Keep session database reads off the ACP streaming path",
-            mechanism: "Calls synchronous getSession() on every streamed assistant chunk.",
-          },
-        });
-        expect(recorded.isError).not.toBe(true);
-        expect(recorded.structuredContent).toMatchObject({
-          id: "C1",
-          total_candidates: 1,
-        });
-
-        const listed = await reviewClient.callTool({
-          name: "list_review_candidates",
-          arguments: {},
-        });
-        expect(listed.isError).not.toBe(true);
-        expect(listed.structuredContent).toMatchObject({
-          total: 1,
-          counts: { pending: 1, keep: 0, drop: 0 },
-        });
-
-        const verdict = {
-          use_ledger: true,
-          overall_correctness: "patch is incorrect",
-          overall_explanation: "Synchronous database read on streaming path.",
-          overall_confidence_score: 0.95,
-        };
-        await expect(reviewClient.callTool({
-          name: "submit_review_output",
-          arguments: verdict,
-        })).resolves.toMatchObject({ isError: true });
-        expect(ledger.submittedOutput(turn)).toBeUndefined();
-
-        const beforeRefining = ledger.list(turn);
-        await expect(reviewClient.callTool({
-          name: "dispose_review_candidate",
-          arguments: {
-            id: "C1",
-            disposition: "keep",
-            priority: 2,
-            reason: "Verified on the streaming path.",
-            summary: "Invalid attempted replacement",
-            start_line: 3587,
-          },
-        })).resolves.toMatchObject({ isError: true });
-        expect(ledger.list(turn)).toEqual(beforeRefining);
-
-        const disposed = await reviewClient.callTool({
-          name: "dispose_review_candidate",
-          arguments: {
-            id: "C1",
-            disposition: "keep",
-            priority: 2,
-            reason: "Verified on every non-tool assistant_message_chunk.",
-            mechanism: 'Calls synchronous `getSession()` on `"agent_message_chunk"` updates.',
-            start_line: 3586,
-            confidence_score: 0.96,
-          },
-        });
-        expect(disposed.isError).not.toBe(true);
-        expect(disposed.structuredContent).toMatchObject({
-          updated: { id: "C1", disposition: "keep", priority: 2 },
-          summary: { pending: 0, keep: 1, drop: 0 },
-        });
-        const submitted = await reviewClient.callTool({
-          name: "submit_review_output",
-          arguments: verdict,
-        });
-        expect(submitted.isError).not.toBe(true);
-        const receipt = {
-          finding_count: 1,
-          ledger_summary: { total: 1, pending: 0, keep: 1, drop: 0 },
-        };
-        expect(submitted.structuredContent).toEqual(receipt);
-        expect(JSON.stringify(submitted.content)).not.toContain("Calls synchronous");
-        expect(ledger.submittedOutput(turn)?.findings).toEqual([{
-          title: "Keep session database reads off the ACP streaming path",
-          body: 'Calls synchronous `getSession()` on `"agent_message_chunk"` updates.',
-          confidence_score: 0.96,
-          priority: 2,
-          category: "performance",
-          code_location: {
-            absolute_file_path: resolve("/repo/apps/desktop/src/main/app-server/acp-backend-adapter.ts"),
-            line_range: { start: 3586, end: 3586 },
-          },
-        }]);
-        retireAtDispatch = true;
-        await expect(reviewClient.callTool({
-          name: "dispose_review_candidate",
-          arguments: { id: "C1", disposition: "drop", reason: "Arrived after terminal" },
-        })).resolves.toMatchObject({ isError: true });
-        await expect(reviewClient.callTool({
-          name: "submit_review_output",
-          arguments: verdict,
-        })).resolves.toMatchObject({ isError: true });
-        expect(ledger.snapshot(turn)).toMatchObject({ keep: 1, drop: 0 });
-        expect(ledger.submittedOutput(turn)?.findings).toHaveLength(1);
-
-        // General tools remain unreachable from a managed review client.
-        await expect(
-          reviewClient.callTool({ name: "handoff_task", arguments: { task: "nope" } }),
-        ).resolves.toMatchObject({ isError: true });
-      } finally {
-        await reviewClient.close();
-        await normalClient.close();
-      }
-    } finally {
-      await server.close();
-    }
-  });
-});
-
-class ReviewListingAcpTransport extends FakeAcpAgentTransport {
-  readonly sessions = new Map<string, { client?: Client; tools: string[]; serverNames: string[] }>();
-  readonly prompts: string[] = [];
-  private nextSession = 0;
-  private readonly onPrompt?: (params: {
-    sessionId: string;
-    client?: Client;
-    emitText: (text: string) => void;
-  }) => Promise<void>;
-
-  constructor(
-    options?: ConstructorParameters<typeof FakeAcpAgentTransport>[0],
-    onPrompt?: (params: {
-      sessionId: string;
-      client?: Client;
-      emitText: (text: string) => void;
-    }) => Promise<void>,
-  ) {
-    super(options);
-    this.onPrompt = onPrompt;
-  }
-
-  override async request(
-    method: string,
-    params?: Record<string, unknown>,
-    timeoutMs?: number,
-  ): Promise<unknown> {
-    if (method === "session/new") {
-      this.requests.push({ method, params });
-      const sessionId = `review-acp-${++this.nextSession}`;
-      const servers = (params?.mcpServers ?? []) as AgentToolHttpMcpServerConfig[];
-      const httpServer = servers.find((candidate) => candidate.type === "http");
-      if (httpServer) {
-        const client = new Client({ name: "acp-review-agent", version: "1.0.0" });
-        await client.connect(
-          new StreamableHTTPClientTransport(new URL(httpServer.url), {
-            requestInit: {
-              headers: Object.fromEntries(
-                httpServer.headers.map(({ name, value }) => [name, value]),
-              ),
-            },
+describe("buildReviewOutputFromCandidateLedger", () => {
+  it("recovers only resolvable kept entries sorted stably by priority with category and confidenceScore preserved", () => {
+    const scenarioWithCandidatesArb = fc.constantFrom(...WORKSPACE_SCENARIOS).chain((scenario) =>
+      fc.record({
+        scenario: fc.constant(scenario),
+        entries: fc.array(
+          fc.record({
+            fileCase: fc.constantFrom(...scenario.files),
+            startLine: fc.integer({ min: 1, max: 500 }),
+            endSpan: fc.integer({ min: 0, max: 40 }),
+            category: categoryArb,
+            summary: nonEmptyTextArb,
+            mechanism: nonEmptyTextArb,
+            disposition: fc.constantFrom<"pending" | "keep" | "drop">("pending", "keep", "drop"),
+            priority: priorityArb,
+            confidenceScore: fc.option(fc.constantFrom(0, 0.25, 0.72, 0.96), { nil: undefined }),
           }),
-        );
-        const { tools } = await client.listTools();
-        this.sessions.set(sessionId, {
-          client,
-          tools: tools.map((tool) => tool.name).sort(),
-          serverNames: servers.map((server) => server.name),
-        });
-      } else {
-        this.sessions.set(sessionId, {
-          tools: [],
-          serverNames: servers.map((server) => server.name),
-        });
-      }
-      return { sessionId };
-    }
-    if (method === "session/prompt") {
-      const sessionId = String(params?.sessionId);
-      const promptBlocks = (params?.prompt ?? []) as Array<{ text?: string }>;
-      this.prompts.push(promptBlocks.map((block) => block.text ?? "").join("\n"));
-      const session = this.sessions.get(sessionId);
-      const emitText = (text: string) => {
-        this.emitSessionUpdate(sessionId, {
-          sessionUpdate: "agent_message_chunk",
-          content: { type: "text", text },
-        });
-      };
-      if (this.onPrompt) {
-        await this.onPrompt({ sessionId, client: session?.client, emitText });
-      } else {
-        if (session?.client) {
-          const recorded = await session.client.callTool({
-            name: "record_review_candidate",
-            arguments: {
-              file: "/repo/src/main.ts",
-              start_line: 10,
-              end_line: 12,
-              category: "correctness",
-              summary: "Guard null path",
-              mechanism: "Throws when input is empty.",
-            },
-          });
-          expect(recorded.isError).not.toBe(true);
-          const disposed = await session.client.callTool({
-            name: "dispose_review_candidate",
-            arguments: {
-              id: "C1",
-              disposition: "keep",
-              priority: 2,
-              reason: "Reproducible on empty input.",
-            },
-          });
-          expect(disposed.isError).not.toBe(true);
-        }
-        emitText(JSON.stringify({
-          findings: [
-            {
-              title: "[P2] Guard null path",
-              body: "Throws when input is empty.",
-              confidence_score: 0.95,
-              priority: 2,
-              code_location: {
-                absolute_file_path: "/repo/src/main.ts",
-                line_range: { start: 10, end: 12 },
-              },
-            },
-          ],
-          overall_correctness: "patch is incorrect",
-          overall_explanation: "Missing null guard.",
-          overall_confidence_score: 0.95,
+          { maxLength: 15 },
+        ),
+      }),
+    );
+
+    fc.assert(
+      fc.property(scenarioWithCandidatesArb, ({ scenario, entries }) => {
+        const candidates: ManagedReviewCandidate[] = entries.map((entry, idx) => ({
+          id: `C${idx + 1}`,
+          file: entry.fileCase.file,
+          startLine: entry.startLine,
+          endLine: entry.startLine + entry.endSpan,
+          category: entry.category,
+          summary: entry.summary,
+          mechanism: entry.mechanism,
+          disposition: entry.disposition,
+          ...(entry.disposition === "keep" ? { priority: entry.priority } : {}),
+          ...(entry.confidenceScore !== undefined ? { confidenceScore: entry.confidenceScore } : {}),
         }));
-      }
-      this.requests.push({ method, params });
-      return { stopReason: "end_turn" };
-    }
-    return await super.request(method, params, timeoutMs);
-  }
 
-  async closeAll(): Promise<void> {
-    await Promise.all(
-      [...this.sessions.values()].map((session) => session.client?.close()),
-    );
-    this.sessions.clear();
-  }
-}
+        const expectedEntries = entries
+          .map((entry, idx) => ({ candidate: candidates[idx]!, resolved: entry.fileCase.resolved }))
+          .filter(
+            (item): item is { candidate: ManagedReviewCandidate; resolved: string } =>
+              item.candidate.disposition === "keep" && item.resolved !== undefined,
+          );
 
-describe("ManagedReviewService candidate ledger lifecycle integration", () => {
-  let stateDb: StateDb;
+        const recovered = buildReviewOutputFromCandidateLedger(candidates, scenario.workspace);
 
-  beforeEach(() => {
-    registryLogInfo.mockClear();
-    stateDb = openInMemoryStateDb();
-  }, 60_000);
+        if (expectedEntries.length === 0) {
+          expect(recovered).toBeUndefined();
+          return;
+        }
 
-  afterEach(() => {
-    stateDb.close();
-  }, 60_000);
-
-  it.each([false, true])("fences ACP ledger calls and clears candidates at terminal (card write fails: %s)", async (cardWriteFails) => {
-    const backend = "acp:antigravity";
-    const agentStore = new AcpAgentStore(stateDb);
-    const sessionStore = new AcpSessionStore(stateDb);
-    agentStore.upsertInstalledAgent({
-      backendId: backend,
-      registryId: "antigravity",
-      name: "Antigravity",
-      version: "1.5.15",
-      distributionKind: "local",
-      distributionSource: "antigravity",
-      installStatus: "installed",
-      authStatus: "not-required",
-      verificationStatus: "not-applicable",
-      allowlistRuleId: "fixture-antigravity",
-      installedAt: 1,
-      updatedAt: 1,
-      launchDescriptor: {
-        backendId: backend,
-        registryId: "antigravity",
-        distributionKind: "local",
-        command: "/fixture/agy",
-        args: ["acp"],
-        env: {},
-      },
-    });
-    const transport = new ReviewListingAcpTransport({
-      initialize: {
-        protocolVersion: 1,
-        agentCapabilities: {
-          loadSession: true,
-          mcpCapabilities: { http: true },
-        },
-      },
-    });
-    const overlayStore = createOverlayStoreMock();
-    const upsert = overlayStore.upsertThreadSubAgent.bind(overlayStore);
-    const lateCall = Promise.withResolvers<boolean>();
-    vi.spyOn(overlayStore, "upsertThreadSubAgent").mockImplementation(async (params) => {
-      if (params.subAgent.status === "success") {
-        const reviewClient = [...transport.sessions.values()]
-          .find((session) => session.tools.includes("record_review_candidate"))?.client;
-        const response = await reviewClient!.callTool({
-          name: "record_review_candidate",
-          arguments: {
-            file: "/repo/src/late.ts", start_line: 1, end_line: 1,
-            category: "correctness", summary: "Late candidate", mechanism: "Terminal already arrived.",
-          },
-        });
-        lateCall.resolve(response.isError === true);
-        if (cardWriteFails) throw new Error("fixture terminal review card write failed");
-      }
-      return await upsert(params);
-    });
-    const registry = createDesktopBackendRegistry({
-      codexClient: new MockBackendClient({}),
-      acpAgentStore: agentStore,
-      acpSessionStore: sessionStore,
-      createAcpTransport: () => transport,
-      overlayStore,
-      createScratchProjectDirectory: async () => "/tmp/pwragent-review-ledger",
-      threadTitleGenerationService: null,
-    });
-    try {
-      const parent = await registry.startThread({ backend, cwd: "/repo" });
-      const review = await registry.startReview({
-        backend,
-        threadId: parent.threadId,
-        target: { type: "uncommittedChanges" },
-      });
-
-      const reviewSession = transport.sessions.get(review.reviewThreadId);
-      expect(reviewSession?.serverNames).toEqual([PWRAGENT_TOOL_NAMESPACE]);
-      expect(reviewSession?.tools).toEqual(
-        [...MANAGED_REVIEW_LEDGER_TOOL_NAMES].sort(),
-      );
-      expect(transport.prompts.at(-1)).toContain("record_review_candidate");
-      expect(transport.prompts.at(-1)).toContain("list_review_candidates");
-      expect(transport.prompts.at(-1)).toContain("dispose_review_candidate");
-      expect(transport.prompts.at(-1)).toContain("submit_review_output");
-
-      expect.soft(await lateCall.promise).toBe(true);
-      await vi.waitFor(() => {
-        expect(
-          registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
-        ).toBe(0);
-      });
-    } finally {
-      await transport.closeAll();
-      await registry.close();
-    }
-  });
-
-  it("falls back to the static prompt when an ACP reviewer lacks HTTP MCP support", async () => {
-    const backend = "acp:grok";
-    const agentStore = new AcpAgentStore(stateDb);
-    const sessionStore = new AcpSessionStore(stateDb);
-    agentStore.upsertInstalledAgent({
-      backendId: backend,
-      registryId: "grok",
-      name: "Grok",
-      version: "1.0.77",
-      distributionKind: "local",
-      distributionSource: "grok",
-      installStatus: "installed",
-      authStatus: "not-required",
-      verificationStatus: "not-applicable",
-      allowlistRuleId: "fixture-grok",
-      installedAt: 1,
-      updatedAt: 1,
-      launchDescriptor: {
-        backendId: backend,
-        registryId: "grok",
-        distributionKind: "local",
-        command: "/fixture/grok",
-        args: ["acp"],
-        env: {},
-      },
-    });
-    const transport = new ReviewListingAcpTransport({
-      initialize: {
-        protocolVersion: 1,
-        agentCapabilities: {
-          loadSession: true,
-          mcpCapabilities: { http: false },
-        },
-      },
-    });
-    const registry = createDesktopBackendRegistry({
-      codexClient: new MockBackendClient({}),
-      acpAgentStore: agentStore,
-      acpSessionStore: sessionStore,
-      createAcpTransport: () => transport,
-      overlayStore: createOverlayStoreMock(),
-      createScratchProjectDirectory: async () => "/tmp/pwragent-review-static",
-      threadTitleGenerationService: null,
-    });
-    try {
-      const parent = await registry.startThread({ backend, cwd: "/repo" });
-      const review = await registry.startReview({
-        backend,
-        threadId: parent.threadId,
-        target: { type: "uncommittedChanges" },
-      });
-
-      const reviewSession = transport.sessions.get(review.reviewThreadId);
-      expect(reviewSession?.serverNames).toEqual([]);
-      expect(reviewSession?.tools).toEqual([]);
-      expect(transport.prompts.at(-1)).not.toContain("record_review_candidate");
-      expect(transport.prompts.at(-1)).not.toContain("list_review_candidates");
-      expect(transport.prompts.at(-1)).not.toContain("dispose_review_candidate");
-      expect(transport.prompts.at(-1)).not.toContain("submit_review_output");
-    } finally {
-      await transport.closeAll();
-      await registry.close();
-    }
-  });
-
-  it("accepts only the provider-confirmed Codex review turn before startTurn returns", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (holdStartedDelivery) => {
-      const child = "codex-review-starting";
-      const providerTurn = "provider-turn";
-      const client = new MockBackendClient({
-        initializeResult: { methods: ["thread/start", "turn/start"] },
-        startThreadResult: { threadId: child },
-      });
-      const registry = createDesktopBackendRegistry({
-        codexClient: client, overlayStore: createOverlayStoreMock(), threadTitleGenerationService: null,
-      });
-      const { threadArchiveCoordinator, turnState } = registryModules(registry);
-      const gate = Promise.withResolvers<void>();
-      const prepareArchive = threadArchiveCoordinator.prepareArchiveReferenceChanges.bind(threadArchiveCoordinator);
-      vi.spyOn(threadArchiveCoordinator, "prepareArchiveReferenceChanges").mockImplementation((backend, notification) =>
-        holdStartedDelivery && notification.method === "turn/started" && notification.params.threadId === child
-          ? gate.promise
-          : prepareArchive(backend, notification));
-      const outcomes: boolean[] = [];
-      vi.spyOn(client, "startTurn").mockImplementation(async () => {
-        const delivery = client.emit({
-          method: "turn/started",
-          params: { threadId: child, turnId: providerTurn, turn: { id: providerTurn } },
-        });
-        try {
-          if (holdStartedDelivery) {
-            expect(turnState.pendingStartedTurnId(child)).toBe(providerTurn);
-          } else {
-            await delivery;
-          }
-          for (const turnId of ["unrelated-turn", providerTurn]) {
-            const result = await client.emitRequest({
-              method: "item/tool/call",
-              params: {
-                threadId: child, turnId, requestId: turnId, callId: turnId,
-                namespace: PWRAGENT_TOOL_NAMESPACE, tool: "list_review_candidates", arguments: {},
+        // Read each priority bucket in capture order, including same-file findings.
+        const expectedFindings: AppServerReviewFinding[] = [0, 1, 2, 3].flatMap((priority) =>
+          expectedEntries
+            .filter(({ candidate }) => candidate.priority === priority)
+            .map(({ candidate, resolved }) => ({
+              title: candidate.summary,
+              body: candidate.mechanism,
+              confidence_score: candidate.confidenceScore ?? 0,
+              priority,
+              category: candidate.category,
+              code_location: {
+                absolute_file_path: resolved,
+                line_range: { start: candidate.startLine, end: candidate.endLine },
               },
-            }) as { success: boolean };
-            outcomes.push(result.success);
-          }
-        } finally {
-          gate.resolve();
-          await delivery;
-        }
-        return { threadId: child, turnId: providerTurn };
-      });
-      try {
-        await registry.startReview({
-          backend: "codex", threadId: "parent", target: { type: "uncommittedChanges" },
-          runMode: "pwragent-sub-agent",
+            })),
+        );
+
+        const count = expectedFindings.length;
+        expect(recovered).toEqual({
+          findings: expectedFindings,
+          overall_correctness: "patch is incorrect",
+          overall_explanation: `Recovered ${count} kept ${count === 1 ? "finding" : "findings"} from the managed review candidate ledger because no valid final review report was submitted or parsed.`,
         });
-        expect(outcomes).toEqual([false, true]);
-      } finally {
-        await registry.close();
-      }
-    }), { numRuns: 2, examples: [[true], [false]] });
-  });
+        expect(recovered!.overall_explanation).not.toContain("malformed review JSON");
 
-  it("attaches dynamic ledger tools to Codex managed review children, refuses non-review threads, and clears on terminal", async () => {
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/start", "turn/start"] },
-      models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
-    });
-    let nextThreadNumber = 0;
-    const startThreadSpy = vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
-      threadId: `codex-thread-${++nextThreadNumber}`,
-    }));
-    const startTurnSpy = vi.spyOn(codexClient, "startTurn");
-    const overlayStore = createOverlayStoreMock();
-    const upsertReview = vi.spyOn(overlayStore, "upsertManagedReviewEntry");
-    const registry = createDesktopBackendRegistry({
-      codexClient,
-      acpAgentStore: new AcpAgentStore(stateDb),
-      acpSessionStore: new AcpSessionStore(stateDb),
-      overlayStore,
-      threadTitleGenerationService: null,
-    });
-    const onEvent = vi.fn<(event: AgentEvent) => void>();
-    const unsubscribe = registry.onEvent(onEvent);
-
-    try {
-      const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
-      const review = await registry.startReview({
-        backend: "codex",
-        threadId: parent.threadId,
-        target: { type: "uncommittedChanges" },
-        runMode: "pwragent-sub-agent",
-      });
-      expect(review.reviewThreadId).not.toBe(parent.threadId);
-
-      const childStartCall = startThreadSpy.mock.calls.at(-1)?.[0];
-      const dynamicSpecs = (childStartCall?.dynamicTools ?? []) as Array<
-        { type?: string; name: string; tools?: Array<{ name: string }> }
-      >;
-      const dynamicNames = dynamicSpecs.flatMap((spec) =>
-        spec.type === "namespace" && Array.isArray(spec.tools)
-          ? spec.tools.map((tool) => tool.name)
-          : [spec.name],
-      );
-      expect(dynamicNames).toEqual(
-        expect.arrayContaining([...MANAGED_REVIEW_LEDGER_TOOL_NAMES]),
-      );
-
-      const childPrompt = startTurnSpy.mock.calls.at(-1)?.[0]?.input?.[0];
-      expect(childPrompt && "text" in childPrompt ? childPrompt.text : "").toContain(
-        "record_review_candidate",
-      );
-
-      // Active managed review child can call the ledger tools.
-      const recordResponse = await codexClient.emitRequest({
-        method: "item/tool/call",
-        params: {
-          threadId: review.reviewThreadId,
-          turnId: review.turnId,
-          requestId: "req-1",
-          callId: "call-1",
-          namespace: PWRAGENT_TOOL_NAMESPACE,
-          tool: "record_review_candidate",
-          arguments: {
-            file: "/repo/a.ts",
-            start_line: 1,
-            end_line: 3,
-            category: "correctness",
-            summary: "Fix leak",
-            mechanism: "Timer is never cleared.",
-          },
-        },
-      }) as { success: boolean };
-      expect(recordResponse.success).toBe(true);
-      expect(
-        registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
-      ).toBe(1);
-
-      // A normal non-review Codex thread cannot call the ledger tools.
-      registryModules(registry).turnState.registerTurn({
-        backend: "codex",
-        threadId: parent.threadId,
-        turnId: "normal-turn",
-      });
-      const refused = await codexClient.emitRequest({
-        method: "item/tool/call",
-        params: {
-          threadId: parent.threadId,
-          turnId: "normal-turn",
-          requestId: "req-2",
-          callId: "call-2",
-          namespace: PWRAGENT_TOOL_NAMESPACE,
-          tool: "list_review_candidates",
-          arguments: {},
-        },
-      }) as { success: boolean; contentItems?: Array<{ text?: string }> };
-      expect(refused.success).toBe(false);
-      expect(refused.contentItems?.[0]?.text).toContain("forbidden");
-
-      // Active managed review child can also call submit_review_output, and a
-      // failed terminal discards it without publishing.
-      const submitResponse = await codexClient.emitRequest({
-        method: "item/tool/call",
-        params: {
-          threadId: review.reviewThreadId,
-          turnId: review.turnId,
-          requestId: "req-submit",
-          callId: "call-submit",
-          namespace: PWRAGENT_TOOL_NAMESPACE,
-          tool: "submit_review_output",
-          arguments: {
-            findings: [],
-            overall_correctness: "patch is correct",
-            overall_explanation: "No defects found before failure.",
-          },
-        },
-      }) as { success: boolean };
-      expect(submitResponse.success).toBe(true);
-      expect(
-        registryModules(registry).managedReviewService.candidateLedger.submittedOutput({
-          backend: "codex",
-          threadId: review.reviewThreadId,
-          turnId: review.turnId,
-        }),
-      ).toMatchObject({ overall_correctness: "patch is correct" });
-
-      // A failed provider turn must forward the failure and discard the submission.
-      await codexClient.emit({
-        method: "turn/failed",
-        params: {
-          threadId: review.reviewThreadId,
-          turnId: review.turnId,
-          turn: {
-            id: review.turnId,
-            status: "failed",
-            error: { message: "cancelled fixture" },
-          },
-        },
-      });
-      const parentReviewEvents = onEvent.mock.calls.map(([event]) => event.notification)
-        .filter(({ params }) => "threadId" in params && params.threadId === parent.threadId
-          && "turnId" in params && params.turnId === review.turnId);
-      expect(parentReviewEvents.filter(({ method }) => method === "turn/failed")).toHaveLength(1);
-      const resultId = `managed-review:${review.turnId}:result`;
-      expect(parentReviewEvents).not.toContainEqual(expect.objectContaining({ method: "turn/completed" }));
-      expect(parentReviewEvents).not.toContainEqual(expect.objectContaining({
-        method: "item/completed",
-        params: expect.objectContaining({ item: expect.objectContaining({ id: resultId }) }),
-      }));
-      expect(upsertReview).not.toHaveBeenCalledWith(expect.objectContaining({
-        threadId: parent.threadId,
-        entry: expect.objectContaining({ id: resultId }),
-      }));
-      expect(registryModules(registry).managedReviewService.candidateLedger.activeTurnCount).toBe(0);
-      expect(
-        registryModules(registry).managedReviewService.candidateLedger.submittedOutput({
-          backend: "codex",
-          threadId: review.reviewThreadId,
-          turnId: review.turnId,
-        }),
-      ).toBeUndefined();
-    } finally {
-      unsubscribe();
-      await registry.close();
-    }
-  });
-
-  it.each(["explicit", "ledger"])("publishes %s ACP findings even when the terminal text is invalid JSON", async (mode) => {
-    const { cwd, root } = await createNestedReviewCheckout();
-    const backend = "acp:antigravity";
-    const agentStore = new AcpAgentStore(stateDb);
-    const sessionStore = new AcpSessionStore(stateDb);
-    agentStore.upsertInstalledAgent({
-      backendId: backend,
-      registryId: "antigravity",
-      name: "Antigravity",
-      version: "1.5.15",
-      distributionKind: "local",
-      distributionSource: "antigravity",
-      installStatus: "installed",
-      authStatus: "not-required",
-      verificationStatus: "not-applicable",
-      allowlistRuleId: "fixture-antigravity",
-      installedAt: 1,
-      updatedAt: 1,
-      launchDescriptor: {
-        backendId: backend,
-        registryId: "antigravity",
-        distributionKind: "local",
-        command: "/fixture/agy",
-        args: ["acp"],
-        env: {},
-      },
-    });
-    const findingBody = 'The `"remote-pin"` step and `"local-name"` step omit version checks.';
-    const explicitFinding = {
-      title: "Remote-pin test leaves owner-version wiring unfalsified",
-      body: findingBody,
-      confidence_score: 0.94,
-      priority: 2,
-      code_location: {
-        absolute_file_path: resolve("/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts"),
-        line_range: { start: 1260, end: 1342 },
-      },
-    };
-    const useLedger = mode === "ledger";
-    let submitResult: { isError?: boolean; structuredContent?: unknown } | undefined;
-    const transport = new ReviewListingAcpTransport(
-      {
-        initialize: {
-          protocolVersion: 1,
-          agentCapabilities: {
-            loadSession: true,
-            mcpCapabilities: { http: true },
-          },
-        },
-      },
-      async ({ client, emitText }) => {
-        if (!client) throw new Error("Managed review MCP tools were not attached.");
-        if (useLedger) {
-          expect((await client.callTool({
-            name: "record_review_candidate",
-            arguments: {
-              file: "packages/app/src/disconnect.ts",
-              start_line: 10,
-              end_line: 11,
-              category: "lifecycle",
-              summary: "Unsubscribe on disconnect",
-              mechanism: "The listener remains active after disconnect.",
-            },
-          })).isError).not.toBe(true);
-          expect((await client.callTool({
-            name: "dispose_review_candidate",
-            arguments: { id: "C1", disposition: "keep", priority: 1, reason: "Disconnect skips cleanup." },
-          })).isError).not.toBe(true);
-        }
-        submitResult = await client.callTool({
-          name: "submit_review_output",
-          arguments: {
-            ...(useLedger ? { use_ledger: true } : {}),
-            findings: [explicitFinding],
-            overall_correctness: "patch is incorrect",
-            overall_explanation: "Verified actionable defects.",
-            overall_confidence_score: 0.93,
-          },
-        }) as { isError?: boolean; structuredContent?: unknown };
-        // Even if the model also emits invalid JSON with unescaped quotes (the
-        // real PR #4453 failure mode) or a short confirmation, the structured
-        // tool submission wins.
-        emitText('{"findings":[{"body":"broken `"remote-pin"` json"}]}');
-      },
+        const roundTripped = parseReviewOutputText(JSON.stringify(recovered));
+        expect(roundTripped).toEqual(recovered);
+        expect(formatReviewOutputText(recovered!)).toContain(recovered!.findings[0]!.title);
+      }),
     );
-    const overlayStore = createOverlayStoreMock();
-    const publishedEntries: Array<{ id: string; review: string; output?: unknown }> = [];
-    const upsertReview = overlayStore.upsertManagedReviewEntry.bind(overlayStore);
-    vi.spyOn(overlayStore, "upsertManagedReviewEntry").mockImplementation(async (params) => {
-      if (params.entry.id.endsWith(":result")) {
-        publishedEntries.push(params.entry);
-      }
-      return await upsertReview(params);
-    });
-    const registry = createDesktopBackendRegistry({
-      codexClient: new MockBackendClient({}),
-      acpAgentStore: agentStore,
-      acpSessionStore: sessionStore,
-      createAcpTransport: () => transport,
-      overlayStore,
-      createScratchProjectDirectory: async () => "/tmp/pwragent-review-submit-tool",
-      threadTitleGenerationService: null,
-    });
-    try {
-      const parent = await registry.startThread({ backend, cwd });
-      await registry.startReview({
-        backend,
-        threadId: parent.threadId,
-        target: { type: "uncommittedChanges" },
-      });
-
-      await vi.waitFor(() => {
-        expect(publishedEntries).toHaveLength(1);
-      });
-      expect(submitResult?.isError).not.toBe(true);
-      expect(publishedEntries[0]?.output).toEqual({
-        findings: [
-          ...(useLedger ? [{
-            title: "Unsubscribe on disconnect",
-            body: "The listener remains active after disconnect.",
-            category: "lifecycle",
-            confidence_score: 0,
-            priority: 1,
-            code_location: {
-              absolute_file_path: join(root, "packages", "app", "src", "disconnect.ts"),
-              line_range: { start: 10, end: 11 },
-            },
-          }] : []),
-          explicitFinding,
-        ],
-        overall_correctness: "patch is incorrect",
-        overall_explanation: "Verified actionable defects.",
-        overall_confidence_score: 0.93,
-      });
-      expect(publishedEntries[0]?.review).toContain("[P2] Remote-pin test leaves owner-version wiring unfalsified");
-      expect(publishedEntries[0]?.review).not.toContain('{"findings"');
-      await vi.waitFor(() => {
-        expect(
-          registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
-        ).toBe(0);
-      });
-    } finally {
-      await transport.closeAll();
-      await registry.close();
-    }
   });
 
-  it.each(["keep", "drop"] as const)("publishes a Codex ledger batch with a %s disposition and empty terminal text", async (disposition) => {
-    const { cwd, root } = await createNestedReviewCheckout();
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/start", "turn/start"] },
-      models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
-    });
-    let nextThreadNumber = 0;
-    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
-      threadId: `codex-submit-thread-${++nextThreadNumber}`,
-    }));
-    const overlayStore = createOverlayStoreMock();
-    const publishedEntries: Array<{ id: string; review: string; output?: unknown }> = [];
-    const upsertReview = overlayStore.upsertManagedReviewEntry.bind(overlayStore);
-    vi.spyOn(overlayStore, "upsertManagedReviewEntry").mockImplementation(async (params) => {
-      if (params.entry.id.endsWith(":result")) {
-        publishedEntries.push(params.entry);
-      }
-      return await upsertReview(params);
-    });
-    const registry = createDesktopBackendRegistry({
-      codexClient,
-      acpAgentStore: new AcpAgentStore(stateDb),
-      acpSessionStore: new AcpSessionStore(stateDb),
-      overlayStore,
-      threadTitleGenerationService: null,
-    });
-    try {
-      const parent = await registry.startThread({ backend: "codex", cwd });
-      const review = await registry.startReview({
-        backend: "codex",
-        threadId: parent.threadId,
-        cwd,
-        target: { type: "uncommittedChanges" },
-        runMode: "pwragent-sub-agent",
-      });
-
-      const call = async (tool: string, args: Record<string, unknown>) => await codexClient.emitRequest({
-        method: "item/tool/call",
-        params: {
-          threadId: review.reviewThreadId,
-          turnId: review.turnId,
-          requestId: `req-${tool}`,
-          callId: `call-${tool}`,
-          namespace: PWRAGENT_TOOL_NAMESPACE,
-          tool,
-          arguments: args,
-        },
-      }) as { success: boolean };
-      expect((await call("record_review_candidate", {
-        summary: "Preserve quoted code span",
-        mechanism: 'Keeps `"remote-pin"` intact.',
-        category: "correctness",
-        file: "packages/app/src/review.ts",
-        start_line: 5,
-        end_line: 9,
-      })).success).toBe(true);
-      const keep = disposition === "keep";
-      expect((await call("dispose_review_candidate", {
+  it("keeps capture order for same-file findings at the same priority and preserves category and confidenceScore", () => {
+    const candidates: ManagedReviewCandidate[] = [
+      {
         id: "C1",
-        disposition,
-        reason: keep ? "Verified for malformed input." : "The caller preserves the span.",
-        ...(keep ? { priority: 1 } : {}),
-      })).success).toBe(true);
-      const verdict = {
-        overall_correctness: keep ? "patch is incorrect" : "patch is correct",
-        overall_explanation: keep ? "One defect found." : "No actionable defects.",
-      };
-      expect((await call("submit_review_output", { use_ledger: true, ...verdict })).success).toBe(true);
-      expect(publishedEntries).toHaveLength(0);
+        file: "src/a.ts",
+        startLine: 20,
+        endLine: 25,
+        category: "lifecycle",
+        summary: "Preserve the retry",
+        mechanism: "Verified defect.",
+        disposition: "keep",
+        priority: 2,
+        confidenceScore: 0.92,
+      },
+      {
+        id: "C2",
+        file: "src/a.ts",
+        startLine: 2,
+        endLine: 4,
+        category: "correctness",
+        summary: "Release the queue",
+        mechanism: "Verified defect.",
+        disposition: "keep",
+        priority: 2,
+      },
+    ];
 
-      await codexClient.emit({
-        method: "turn/completed",
-        params: {
-          threadId: review.reviewThreadId,
-          turnId: review.turnId,
-          turn: {
-            id: review.turnId,
-            status: "completed",
-            output: [],
+    const recovered = buildReviewOutputFromCandidateLedger(candidates, { worktreeRoot: "/repo" });
+    expect(recovered).toEqual({
+      findings: [
+        {
+          title: "Preserve the retry",
+          body: "Verified defect.",
+          confidence_score: 0.92,
+          priority: 2,
+          category: "lifecycle",
+          code_location: {
+            absolute_file_path: "/repo/src/a.ts",
+            line_range: { start: 20, end: 25 },
           },
         },
-      });
-
-      await vi.waitFor(() => {
-        expect(publishedEntries).toHaveLength(1);
-      });
-      expect(publishedEntries[0]?.output).toMatchObject({
-        ...verdict,
-        findings: keep ? [
-          {
-            title: "Preserve quoted code span",
-            body: 'Keeps `"remote-pin"` intact.',
-            priority: 1,
-            code_location: {
-              absolute_file_path: join(root, "packages", "app", "src", "review.ts"),
-              line_range: { start: 5, end: 9 },
-            },
+        {
+          title: "Release the queue",
+          body: "Verified defect.",
+          confidence_score: 0,
+          priority: 2,
+          category: "correctness",
+          code_location: {
+            absolute_file_path: "/repo/src/a.ts",
+            line_range: { start: 2, end: 4 },
           },
-        ] : [],
-      });
-      expect(publishedEntries[0]?.review).toContain(
-        keep ? "[P1] Preserve quoted code span" : "No findings.",
-      );
-      expect(
-        registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
-      ).toBe(0);
-    } finally {
-      await registry.close();
-    }
+        },
+      ],
+      overall_correctness: "patch is incorrect",
+      overall_explanation: "Recovered 2 kept findings from the managed review candidate ledger because no valid final review report was submitted or parsed.",
+    });
   });
 
   it.each([
-    { source: "text", text: '{"findings":[', published: '{"findings":[' },
-    { source: "none", text: "  ", published: "Review completed without output." },
-  ])("attributes unstructured fallback reviews to $source", async ({ source, text, published }) => {
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/start", "turn/start"] },
-      models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
-    });
-    let nextThreadNumber = 0;
-    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
-      threadId: `codex-fallback-thread-${++nextThreadNumber}`,
-    }));
-    const overlayStore = createOverlayStoreMock();
-    const upsertReview = vi.spyOn(overlayStore, "upsertManagedReviewEntry");
-    const registry = createDesktopBackendRegistry({
-      codexClient,
-      acpAgentStore: new AcpAgentStore(stateDb),
-      acpSessionStore: new AcpSessionStore(stateDb),
-      overlayStore,
-      threadTitleGenerationService: null,
-    });
-    try {
-      const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
-      const review = await registry.startReview({
-        backend: "codex",
-        threadId: parent.threadId,
-        target: { type: "uncommittedChanges" },
-        runMode: "pwragent-sub-agent",
-      });
-      await codexClient.emit({
-        method: "turn/completed",
-        params: {
-          threadId: review.reviewThreadId,
-          turnId: review.turnId,
-          turn: { id: review.turnId, status: "completed", output: [{ type: "text", text }] },
-        },
-      });
-      expect(upsertReview).toHaveBeenCalledWith(expect.objectContaining({
-        threadId: parent.threadId,
-        entry: expect.objectContaining({ id: `managed-review:${review.turnId}:result`, review: published }),
-      }));
-      expect(registryLogInfo).toHaveBeenCalledWith("managed review artifact published", expect.objectContaining({
-        turnId: review.turnId,
-        structured: false,
-        outputSource: source,
-      }));
-    } finally {
-      await registry.close();
+    ["POSIX worktreeRoot + relative", { worktreeRoot: "/repo" }, "src/a.ts", "/repo/src/a.ts"],
+    ["POSIX worktreeRoot + absolute", { worktreeRoot: "/repo" }, "/abs/x.ts", "/abs/x.ts"],
+    ["Windows backslash worktreeRoot + relative", { worktreeRoot: "C:\\work\\repo" }, "src/a.ts", "C:\\work\\repo\\src\\a.ts"],
+    ["Windows forward-slash toDirectoryId worktreeRoot + relative", { worktreeRoot: "C:/work/repo" }, "src/a.ts", "C:\\work\\repo\\src\\a.ts"],
+    ["Windows UNC backslash worktreeRoot + relative", { worktreeRoot: "\\\\server\\share\\repo" }, "src/a.ts", "\\\\server\\share\\repo\\src\\a.ts"],
+    ["Windows UNC forward-slash worktreeRoot + relative", { worktreeRoot: "//server/share/repo" }, "src/a.ts", "\\\\server\\share\\repo\\src\\a.ts"],
+    ["Windows worktreeRoot + already-absolute", { worktreeRoot: "C:/work/repo" }, "D:\\abs\\z.ts", "D:\\abs\\z.ts"],
+    ["Windows worktreeRoot + root-relative /src/a.ts", { worktreeRoot: "C:\\work\\repo" }, "/src/a.ts", undefined],
+    ["Windows worktreeRoot + drive-relative C:src\\a.ts", { worktreeRoot: "C:\\work\\repo" }, "C:src\\a.ts", undefined],
+    ["Remote POSIX cwd without worktreeRoot + relative", { cwd: "/remote/repo/packages/app" }, "packages/app/src/a.ts", undefined],
+    ["Remote POSIX cwd without worktreeRoot + absolute", { cwd: "/remote/repo/packages/app" }, "/remote/repo/packages/app/src/a.ts", "/remote/repo/packages/app/src/a.ts"],
+    ["Remote Windows cwd without worktreeRoot + relative", { cwd: "D:\\remote\\repo\\packages\\app" }, "packages/app/src/a.ts", undefined],
+    ["Remote Windows forward-slash cwd without worktreeRoot + absolute", { cwd: "D:/remote/repo/packages/app" }, "D:/remote/repo/packages/app/src/a.ts", "D:/remote/repo/packages/app/src/a.ts"],
+    ["Remote Windows cwd without worktreeRoot + root-relative", { cwd: "D:\\remote\\repo\\packages\\app" }, "/src/a.ts", undefined],
+    ["Remote Windows cwd without worktreeRoot + drive-relative", { cwd: "D:\\remote\\repo\\packages\\app" }, "C:src\\a.ts", undefined],
+  ] as const)("handles %s (%j, %s)", (_label, workspace, file, expectedPath) => {
+    const candidate: ManagedReviewCandidate = {
+      id: "C1",
+      file,
+      startLine: 2,
+      endLine: 4,
+      category: "correctness",
+      summary: "Release the queue",
+      mechanism: "Verified defect.",
+      disposition: "keep",
+      priority: 2,
+    };
+
+    const output = buildReviewOutputFromCandidateLedger([candidate], workspace);
+    if (expectedPath === undefined) {
+      expect(output).toBeUndefined();
+    } else {
+      expect(output?.findings).toHaveLength(1);
+      expect(output?.findings[0]?.code_location.absolute_file_path).toBe(expectedPath);
+      expect(parseReviewOutputText(JSON.stringify(output))).toEqual(output);
     }
+  });
+
+  it("skips unresolvable kept entries while keeping resolvable ones with an accurate explanation count", () => {
+    const candidates: ManagedReviewCandidate[] = [
+      {
+        id: "C1",
+        file: "packages/app/src/relative.ts",
+        startLine: 1,
+        endLine: 2,
+        category: "correctness",
+        summary: "Relative path on remote workspace",
+        mechanism: "Cannot be resolved without checkoutRoot.",
+        disposition: "keep",
+        priority: 1,
+      },
+      {
+        id: "C2",
+        file: "/remote/repo/packages/app/src/absolute.ts",
+        startLine: 10,
+        endLine: 12,
+        category: "security",
+        summary: "Absolute path on remote workspace",
+        mechanism: "Already absolute and safe to recover.",
+        disposition: "keep",
+        priority: 2,
+        confidenceScore: 0.88,
+      },
+    ];
+
+    const recovered = buildReviewOutputFromCandidateLedger(candidates, {
+      cwd: "/remote/repo/packages/app",
+    });
+    expect(recovered).toEqual({
+      findings: [
+        {
+          title: "Absolute path on remote workspace",
+          body: "Already absolute and safe to recover.",
+          confidence_score: 0.88,
+          priority: 2,
+          category: "security",
+          code_location: {
+            absolute_file_path: "/remote/repo/packages/app/src/absolute.ts",
+            line_range: { start: 10, end: 12 },
+          },
+        },
+      ],
+      overall_correctness: "patch is incorrect",
+      overall_explanation: "Recovered 1 kept finding from the managed review candidate ledger because no valid final review report was submitted or parsed.",
+    });
+    expect(parseReviewOutputText(JSON.stringify(recovered))).toEqual(recovered);
+  });
+});
+
+describe("CodexThreadActivity reviewTerminal redelivery preservation", () => {
+  it("preserves candidateLedgerSnapshot and submittedOutput across duplicate turn/completed deliveries", () => {
+    const owner = {};
+    const snapshot = {
+      total: 1,
+      counts: { pending: 0, keep: 1, drop: 0 },
+      candidates: [
+        {
+          id: "C1",
+          file: "src/review.ts",
+          startLine: 5,
+          endLine: 8,
+          category: "correctness" as const,
+          summary: "Preserve the guard",
+          mechanism: "The retry bypasses the guard.",
+          disposition: "keep" as const,
+          priority: 2 as const,
+        },
+      ],
+    };
+    const submittedOutput: AppServerReviewOutput = {
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "Submitted explicitly.",
+    };
+
+    let state = transitionCodexThreadActivity(idleCodexThreadActivity(), {
+      type: "reviewStartOpened",
+      owner,
+    });
+    state = transitionCodexThreadActivity(state, {
+      type: "reviewTerminal",
+      terminal: {
+        backend: "codex",
+        threadId: "review-child",
+        turnId: "review-turn",
+        method: "turn/completed",
+        candidateLedgerSnapshot: snapshot,
+      },
+    });
+    // Redelivery after the ledger is already cleared carries no snapshot.
+    state = transitionCodexThreadActivity(state, {
+      type: "reviewTerminal",
+      terminal: {
+        backend: "codex",
+        threadId: "review-child",
+        turnId: "review-turn",
+        method: "turn/completed",
+      },
+    });
+    expect(state.reviewStarts[0]?.terminals).toEqual([
+      {
+        backend: "codex",
+        threadId: "review-child",
+        turnId: "review-turn",
+        method: "turn/completed",
+        candidateLedgerSnapshot: snapshot,
+      },
+    ]);
+
+    // A later redelivery with submittedOutput preserves both fields without dropping the snapshot.
+    state = transitionCodexThreadActivity(state, {
+      type: "reviewTerminal",
+      terminal: {
+        backend: "codex",
+        threadId: "review-child",
+        turnId: "review-turn",
+        method: "turn/completed",
+        submittedOutput,
+      },
+    });
+    expect(state.reviewStarts[0]?.terminals).toEqual([
+      {
+        backend: "codex",
+        threadId: "review-child",
+        turnId: "review-turn",
+        method: "turn/completed",
+        submittedOutput,
+        candidateLedgerSnapshot: snapshot,
+      },
+    ]);
   });
 });

@@ -3920,6 +3920,58 @@ describe("DesktopBackendRegistry", () => {
     ]);
   });
 
+  it.each([1, 2])("recovers kept candidates after %i early managed completion deliveries", async (deliveries) => {
+    const { registry, codexClient, request } = await prReviewStartFixture();
+    const checkoutRoot = await git(request.cwd, ["rev-parse", "--show-toplevel"]);
+    const ledger = registryModules(registry).managedReviewService.candidateLedger;
+    const events: AgentEvent[] = [];
+    onTestFinished(registry.onEvent((event) => { events.push(event); }));
+
+    const start = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementationOnce(async (params) => {
+      const response = await start(params);
+      const turn = { backend: "codex" as const, ...response };
+      expect(ledger.record(turn, {
+        file: "src/review.ts",
+        start_line: 5,
+        end_line: 8,
+        category: "correctness",
+        summary: "Preserve the guard",
+        mechanism: "The retry bypasses the guard.",
+      }).ok).toBe(true);
+      expect(ledger.dispose(turn, {
+        id: "C1", disposition: "keep", priority: 2, confidence_score: 0.91, reason: "Verified retry path.",
+      }).ok).toBe(true);
+      const terminal = reviewTerminal("completed", { reviewThreadId: response.threadId, turnId: response.turnId });
+      for (let index = 0; index < deliveries; index += 1) await codexClient.emit(terminal);
+      return response;
+    });
+
+    await registry.startReview({ ...request, threadId: "independent" }, true);
+    expect(events.filter((event) => isCompletedItemType(event, "exitedReviewMode"))).toEqual([
+      expect.objectContaining({ notification: expect.objectContaining({
+        params: expect.objectContaining({ item: expect.objectContaining({
+          data: expect.objectContaining({ reviewOutput: {
+            overall_correctness: "patch is incorrect",
+            overall_explanation: "Recovered 1 kept finding from the managed review candidate ledger because no valid final review report was submitted or parsed.",
+            findings: [{
+              title: "Preserve the guard",
+              body: "The retry bypasses the guard.",
+              category: "correctness",
+              confidence_score: 0.91,
+              priority: 2,
+              code_location: {
+                absolute_file_path: path.join(checkoutRoot, "src", "review.ts"),
+                line_range: { start: 5, end: 8 },
+              },
+            }],
+          } }),
+        }) }),
+      }) }),
+    ]);
+    expect(ledger.activeTurnCount).toBe(0);
+  });
+
   it("fingerprints failed review starts by target and error, not snapshot time", () => {
     // Each scheduled pull request review captures a new snapshot. Comparing
     // whole targets let every retry of a failing PR review send a new notice.
