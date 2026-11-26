@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.5.2 - 2026-11-26
+
+- Composer and Reactions - Autocomplete and expand emoji shortcodes in the composer, render them in Markdown, and search the emoji catalog when adding a reaction. Improve Markdown table wrapping, alignment, and copying, including tables pasted without a delimiter row.
+- Research - View and manage a remote thread's Research runs from a Federation viewer. The thread's owner runs the work and uses its own MathOS settings. Improve recovery and cancel stale queued coordinator reviews.
+- Reviews and CI - Prevent repeated review and Auto-fix cycles, recover findings from the candidate ledger when review output is unreadable, and fix merge-build watches and Federation wake settings.
+- Tool Approvals and Messaging - Show the underlying tool on MCP approval cards. Scope conversation grants to the specific verified tool, and refresh messaging permission decisions when policy changes.
+- Antigravity and ACP - Show five-hour limits and pending context usage, group completed edits and progress, and preserve attached images through session setup and reloads. Quota checks no longer open a sign-in browser for unauthenticated users.
+- Desktop Responsiveness - Repair stale thread-search results and reduce repeated layout, navigation, and Git work. Keep the composer actions and popovers usable when content wraps.
+
 ## v1.5.1 - 2026-11-26
 
 - Auto-compaction - Set context thresholds per provider and model in Settings. PwrAgent compacts eligible threads at the configured threshold. Claude Code and supported ACP backends also handle manual `/compact` through their own sessions.
