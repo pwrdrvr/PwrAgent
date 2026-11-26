@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import type { AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { StateDb } from "../state/state-db";
@@ -338,6 +339,72 @@ it.each([
     expect(commitPeerChange).toHaveBeenCalledTimes(4);
     expect(search).toHaveBeenCalledOnce();
   } finally { search.mockRestore(); peer.close(); db.close(); removeTempStateDbDir(temp.tempDir); vi.unstubAllEnvs(); }
+});
+
+it.each([
+  { change: "new", peerRepairs: false },
+  { change: "renamed", peerRepairs: false },
+  { change: "renamed", peerRepairs: true },
+])("reconciles a $change projection under repeated peer commits (peer repairs: $peerRepairs)", async ({ change, peerRepairs }) => {
+  const temp = createTempStateDb("search-stale-writer-");
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, undefined);
+  const peer = StateDb.open(temp.dbPath);
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const db = StateDb.open(temp.dbPath);
+  try {
+    db.raw.pragma("busy_timeout = 75");
+    const afterVersionRead = interceptProjectionVersion(db);
+    const previous = Array.from({ length: 64 }, (_, index) => summary("row-" + index));
+    const target = { ...previous[63], title: "Quasar request" };
+    const listed = [...previous.slice(0, 63), target];
+    const store = new ThreadSearchStore(db);
+    const peerStore = new ThreadSearchStore(peer);
+    store.upsertThreads(change === "new" ? previous.slice(0, 63) : previous);
+
+    const touchMetadata = peer.raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
+    const walPath = temp.dbPath + "-wal";
+    let peerCommits = 0;
+    let walBeforeRecovery = 0;
+    const advancePeer = () => {
+      peerCommits++;
+      if (peerCommits < 4) {
+        touchMetadata.run("contrived-search-peer", String(peerCommits));
+        afterVersionRead(advancePeer);
+      } else {
+        if (peerRepairs) {
+          peerStore.upsertThread(target);
+          peer.raw.exec("BEGIN IMMEDIATE");
+        } else {
+          touchMetadata.run("contrived-search-peer", String(peerCommits));
+        }
+        // Sample after the last peer commit to isolate the recovery's WAL.
+        walBeforeRecovery = statSync(walPath).size;
+      }
+    };
+    afterVersionRead(advancePeer);
+
+    const service = new ThreadSearchService(store, async () => listed);
+    const { result, writes } = await measureSqliteWrites(() => service.search({ query: "Quasar", contentMode: "metadata" }));
+    const expected = listed.filter((row) => row.title.includes("Quasar")).map((row) => [row.id, row.title]);
+    expect(result.results.map((row) => [row.threadId, row.title])).toEqual(expected);
+    expect(peerCommits).toBe(4);
+    expect(peer.raw.inTransaction).toBe(peerRepairs);
+    expect(db.raw.pragma("busy_timeout", { simple: true })).toBe(75);
+    expect(writes.commits).toBe(peerRepairs ? 0 : 1);
+    if (change === "renamed" && !peerRepairs) {
+      expectSqliteWriteBudget({
+        scenario: "thread-search-contended-projection-repair",
+        writes: { ...writes, walBytes: statSync(walPath).size - walBeforeRecovery },
+        note: "One commit applies a confirmed rename after repeated unrelated WAL commits. At 10 recoveries/day, 41,200 bytes × 10 gives 0.412 MB/day; 0 MB/day when the peer already repaired it.",
+      });
+    }
+  } finally {
+    if (peer.raw.inTransaction) peer.raw.exec("ROLLBACK");
+    peer.close();
+    db.close();
+    removeTempStateDbDir(temp.tempDir);
+    vi.unstubAllEnvs();
+  }
 });
 
 it("cancels snapshot verification between slices before running MATCH", async () => {

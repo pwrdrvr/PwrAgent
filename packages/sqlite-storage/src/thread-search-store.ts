@@ -124,7 +124,6 @@ export class ThreadSearchStore implements ThreadSearchStorage {
       };
     });
 
-    let busyError: Error | undefined;
     for (let attempt = 0; attempt < MAX_PROJECTION_WRITE_ATTEMPTS; attempt++) {
       snapshot = undefined;
       let checked: ReturnType<typeof reconcile> | undefined;
@@ -136,13 +135,9 @@ export class ThreadSearchStore implements ThreadSearchStorage {
       } catch (error) {
         if (this.db.inTransaction || !snapshot || !(error instanceof BetterSqlite3.SqliteError)
           || (error.code !== "SQLITE_BUSY_SNAPSHOT" && error.code !== "SQLITE_BUSY")) throw error;
-        busyError = error;
       }
       if (checked?.written) {
-        // FTS can flush shadow changes during commit. Preserve the external
-        // version from the snapshot and sample our own count after commit.
-        cache.version = { external: checked.version.external, local: this.readLocalChanges.get()! };
-        for (const projection of checked.written.values()) rememberProjection(cache, projection);
+        this.rememberCommittedProjections(checked.version, checked.written);
         return false;
       }
       // A read-only pass only proves currency if its generation still
@@ -153,11 +148,45 @@ export class ThreadSearchStore implements ThreadSearchStorage {
       }
     }
 
-    // A peer can finish a repair and keep the writer lock. Give the newest
-    // snapshot one read-only check before reporting persistent contention.
+    // Unrelated commits can starve a real refresh of a write snapshot.
+    // Confirm the stale rows before trying the writer lock once.
     const finalCheck = reconcile.deferred(false);
     if (finalCheck.current) return this.refreshProjectionCache() !== finalCheck.version;
-    throw busyError ?? new BetterSqlite3.SqliteError("Thread search projection changed during verification", "SQLITE_BUSY");
+
+    let locked: ReturnType<typeof reconcile>;
+    try {
+      locked = this.withoutBusyWait(() => reconcile.immediate(true));
+    } catch (error) {
+      if (this.db.inTransaction || !(error instanceof BetterSqlite3.SqliteError) || error.code !== "SQLITE_BUSY") throw error;
+      // The lock holder may already have committed the repair.
+      const latest = reconcile.deferred(false);
+      if (latest.current) return this.refreshProjectionCache() !== latest.version;
+      throw error;
+    }
+    if (!locked.written) return this.refreshProjectionCache() !== locked.version;
+    this.rememberCommittedProjections(locked.version, locked.written);
+    return false;
+  }
+
+  private withoutBusyWait<T>(operation: () => T): T {
+    // This synchronous retry must leave the normal timeout in place for
+    // other operations sharing the connection.
+    const timeout = this.db.pragma("busy_timeout", { simple: true }) as number;
+    if (timeout === 0) return operation();
+    this.db.pragma("busy_timeout = 0");
+    try {
+      return operation();
+    } finally {
+      this.db.pragma(`busy_timeout = ${timeout}`);
+    }
+  }
+
+  private rememberCommittedProjections(version: ProjectionVersion, written: ReadonlyMap<string, SearchProjection>): void {
+    // FTS can flush shadow changes during commit. Preserve the external
+    // version from the snapshot and sample our own count after commit.
+    const cache = this.projectionCache;
+    cache.version = { external: version.external, local: this.readLocalChanges.get()! };
+    for (const projection of written.values()) rememberProjection(cache, projection);
   }
 
   async searchInVerifiedSnapshot(
