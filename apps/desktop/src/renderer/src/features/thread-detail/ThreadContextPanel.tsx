@@ -919,6 +919,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             desktopApi={props.desktopApi}
             thread={props.thread}
             onOpenSettings={ownerTarget ? undefined : props.onOpenResearchSettings}
+            decisionSettings={ownerTarget ? undefined : props.decisionSettings}
+            onOpenDecisionSettings={ownerTarget ? undefined : props.onOpenDecisionSettings}
           />
         );
       }

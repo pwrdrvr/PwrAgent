@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { RESEARCH_HARNESS_RECONCILABLE } from "@pwragent/shared/research-harness";
-import { researchHarnessEffectiveState } from "@pwragent/shared/research";
+import { researchHarnessEffectiveState, type ResearchDecisionsSnapshot } from "@pwragent/shared/research";
+import { isDecisionBatchRunning } from "../thread-detail/context-panels/decisions-format";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { ResearchBoundsEditor, type ResearchBoundsChange } from "./ResearchBoundsEditor";
 import { formatClock, formatResearchDuration, isResearchRunLive, plural, researchWorkerMinutesUsed, researchCutOffWorkers, researchFinishBlocker, researchHarnessOutcome, researchHarnessTime, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";
 
-export function ResearchRunCard({ run, now, coordinator, writable, readOnlyNote, busy, onStop, onFinish, onReconcile, onResume, onChangeBounds }: {
+export function ResearchRunCard({ run, now, coordinator, writable, readOnlyNote, busy, decisions, onOpenDecisions, onStop, onFinish, onReconcile, onResume, onChangeBounds }: {
   run: ResearchRunView; now: number; coordinator: boolean; writable: boolean;
   /** Shown in place of the multi-process ownership notice when the run is read-only for another reason (e.g. peer lacks turn_control). */
   readOnlyNote?: string;
   busy: boolean;
+  decisions?: ResearchDecisionsSnapshot;
+  onOpenDecisions?: () => void;
   onStop: () => void; onFinish: () => void; onReconcile?: () => void; onResume?: () => void;
   /** The operator's change to a running run's bounds. Resolves true once the owner records it. */
   onChangeBounds?: (change: ResearchBoundsChange) => Promise<boolean>;
@@ -58,6 +61,17 @@ export function ResearchRunCard({ run, now, coordinator, writable, readOnlyNote,
       {run.totalWorkerMinutes !== undefined && <div><dt>Worker time</dt><dd>{formatResearchDuration(workerUsed)} of {formatResearchDuration(run.totalWorkerMinutes)}
         <span className="research-bar research-bar--wide" aria-hidden="true"><i style={{ width: `${Math.min(100, Math.round(workerUsed / run.totalWorkerMinutes * 100))}%` }} /></span></dd></div>}
     </dl>}
+    {!harness && decisions && (decisions.decisions.length > 0 || decisions.batches.length > 0) && (() => {
+      const runningBatches = decisions.batches.filter(isDecisionBatchRunning).length;
+      const parts = [
+        ...(decisions.decisions.length > 0 ? [plural(decisions.decisions.length, "run decision")] : []),
+        ...(decisions.batches.length > 0 ? [`${plural(decisions.batches.length, "decision batch")}${runningBatches > 0 ? ` (${runningBatches} running)` : ""}`] : []),
+      ];
+      return <div className="research-card__decisions">
+        <span className="research-muted">Decisions: {parts.join(" · ")}</span>
+        {onOpenDecisions && <button type="button" className="research-link" onClick={onOpenDecisions}>View</button>}
+      </div>;
+    })()}
     {outcome && <div className="research-callout" role="group" aria-label="Unresolved source outcome">
       <strong>{outcome.title}</strong>
       <p className="research-muted">{outcome.body}</p>

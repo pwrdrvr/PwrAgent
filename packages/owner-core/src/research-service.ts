@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { DecisionRunProvider } from "@pwragent/shared/decision-models";
 import {
-  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchApproachResumable, researchDeadlinePassed, validResearchMinutes, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, researchTurnIsPlaceholder,
+  RESEARCH_FINDING_KINDS, RESEARCH_MAX_EVENTS, RESEARCH_MAX_WORKERS, researchApproachResumable, researchDeadlinePassed, researchDecisionsPromptGuidance, validResearchMinutes, RESEARCH_WORK_TRANSITIONS, sameResearchThread, researchApproachOccupiesSlot, researchTurnIsPlaceholder,
   type ResearchActor, type ResearchApproach, type ResearchCommand, type ResearchEventData, type ResearchDelivery,
-  type ResearchRun, type ResearchSnapshot, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
+  type ResearchRun, type ResearchSnapshot, type ResearchStatus, type ResearchThread, type StartResearchRequest, type PrepareResearchRequest,
   type ResearchRunHeader, type ResearchItem, type ResearchItemContext, type ResearchSearchQuery, type ResearchSearchPage,
   type ResearchAssignRequest, type ResearchWorkCommand, type ResearchItemWork, type ResearchPendingRequest,
   type ResearchSnapshotRequest, type ResearchEventRange, type ResearchEventPage, type ResearchChange, type ResearchChanges,
@@ -42,6 +43,36 @@ export type ResearchPorts = {
   now?: () => number;
   schedule?: (callback: () => void, delay: number) => () => void;
   onError: (error: unknown) => void;
+  /** Decision providers currently configured and ready. Empty/absent omits Decisions guidance from prompts. */
+  readyDecisionProviders?: () => Promise<readonly DecisionRunProvider[]> | readonly DecisionRunProvider[];
+  /** Cancel active/queued decision batches (blocking and background) owned by `thread`. */
+  cancelDecisionBatches?: (
+    thread: ResearchThread,
+    reason: string,
+    options?: { researchRunId?: string },
+  ) => Promise<void>;
+};
+
+export type ResearchMemberRunSummary = {
+  runId: string;
+  status: ResearchStatus;
+  createdAt: number;
+  isCoordinator: boolean;
+};
+
+export type ResearchRunParticipant = {
+  thread: ResearchThread;
+  role: "coordinator" | "worker";
+  approachId?: string;
+  approachTitle?: string;
+};
+
+export type ResearchRunParticipantsContext = {
+  runId: string;
+  createdAt: number;
+  status: ResearchStatus;
+  isCoordinator: boolean;
+  participants: ResearchRunParticipant[];
 };
 
 /**
@@ -238,6 +269,53 @@ export class ResearchService {
       ...(run.turnMinutes !== undefined ? { turnMinutes: run.turnMinutes } : {}), ...(run.totalWorkerMinutes !== undefined ? { totalWorkerMinutes: run.totalWorkerMinutes } : {}) }));
   }
 
+  /** Research runs `thread` belongs to (as coordinator or worker), newest first. */
+  memberRuns(thread: ResearchThread): ResearchMemberRunSummary[] {
+    return this.storage.summaries(thread).map((run) => ({
+      runId: run.id,
+      status: run.status,
+      createdAt: run.createdAt,
+      isCoordinator: sameResearchThread(run.coordinator, thread),
+    }));
+  }
+
+  /**
+   * Participant threads (coordinator + all workers) for `id`, only when `actor`
+   * is a member of `id`. Returns undefined for unknown runs or non-members.
+   */
+  runParticipants(id: string, actor: ResearchThread): ResearchRunParticipantsContext | undefined {
+    const header = this.storage.header(id);
+    if (!header || !this.storage.isMember(id, actor)) return undefined;
+    const participants: ResearchRunParticipant[] = [{ thread: header.coordinator, role: "coordinator" }];
+    const seen = new Set<string>([`${header.coordinator.backend}\0${header.coordinator.threadId}`]);
+    for (const approach of this.storage.approaches(id, { all: true })) {
+      if (!approach.worker) continue;
+      const workerThread = { backend: approach.worker.backend, threadId: approach.worker.threadId };
+      const key = `${workerThread.backend}\0${workerThread.threadId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      participants.push({
+        thread: workerThread,
+        role: "worker",
+        approachId: approach.id,
+        approachTitle: approach.title,
+      });
+    }
+    for (const member of this.storage.members(id)) {
+      const key = `${member.backend}\0${member.threadId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      participants.push({ thread: member, role: "worker" });
+    }
+    return {
+      runId: header.id,
+      createdAt: header.createdAt,
+      status: header.status,
+      isCoordinator: sameResearchThread(header.coordinator, actor),
+      participants,
+    };
+  }
+
   /** Replays the whole journal. For recovery and tests: no command, observer or view reads this way. */
   read(id: string, actor: ResearchActor): ResearchRun {
     const run = this.storage.get(id);
@@ -399,7 +477,20 @@ export class ResearchService {
       for (const delivery of this.storage.deliveries(id, { open: true })) {
         if (delivery.approachId && targetSet.has(delivery.approachId)) await this.cancelDelivery(id, delivery, actor);
       }
+      const cancelledThreads = new Set<string>();
       for (const target of targets) {
+        const targetWorker = this.approach(id, target)?.worker
+          ?? (target === cancellation ? assigned ?? originalWorker : undefined);
+        if (targetWorker && this.ports.cancelDecisionBatches) {
+          const threadKey = `${targetWorker.backend}:${targetWorker.threadId}`;
+          if (!cancelledThreads.has(threadKey)) {
+            cancelledThreads.add(threadKey);
+            await this.cancelDecisions(
+              { backend: targetWorker.backend, threadId: targetWorker.threadId },
+              command.reason || "Research assignment cancelled",
+            );
+          }
+        }
         if (!(this.pendingStarts.get(id)?.has(target) && this.approach(id, target)?.state === "starting")) {
           if (this.queuedResumes.get(id)?.has(target)) await this.withdrawResume(id, target, actor);
           else if (target === cancellation || !["ended", "stopped", "failed"].includes(this.approach(id, target)?.state ?? "")) await this.stopWorker(id, target, actor);
@@ -520,8 +611,13 @@ export class ResearchService {
     this.pendingStarts.set(id, starting.add(approach.id));
     this.append(this.requireHeader(id), `starting:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting" });
     try {
+      const readyRaw = this.readyDecisionsRaw();
+      const readyDecisions = isPromiseLike(readyRaw) ? await readyRaw : readyRaw;
       const worker = await this.ports.spawn({ ...context, callId: `${context.callId}:${approach.id}` },
-        approach.itemId ? researchItemWorkerPrompt(id, approach) : researchWorkerPrompt(id, run.objective, approach), approach.title, run.workspaceMode,
+        approach.itemId
+          ? researchItemWorkerPrompt(id, approach, readyDecisions)
+          : researchWorkerPrompt(id, run.objective, approach, readyDecisions),
+        approach.title, run.workspaceMode,
         (created) => {
           this.append(this.requireHeader(id), `bound:${approach.id}`, context, { type: "worker", approachId: approach.id, state: "starting", worker: created });
           if (!this.canAdmitApproach(this.requireHeader(id), approach)) throw new ResearchAdmissionRefused("Research assignment stopped before worker admission");
@@ -734,6 +830,9 @@ export class ResearchService {
     const pending = this.stops.get(id);
     if (pending) return pending;
     if (!["running", "stopping"].includes(run.status)) {
+      if (this.ports.cancelDecisionBatches) {
+        await this.cancelRunDecisions(id, run, reason);
+      }
       // A run that ended without being finished, as every live run does when PwrAgent quits, can still be
       // completed once a candidate is accepted. Nothing is running, so this records the outcome and stops nothing.
       if (outcome === "completed" && ["interrupted", "exhausted"].includes(run.status)) {
@@ -754,6 +853,7 @@ export class ResearchService {
 
   private async performStop(id: string, actor: ResearchActor): Promise<ResearchRunHeader> {
     const run = this.requireHeader(id);
+    const stopReason = run.reason ?? "Research run stopped";
     const underway = this.storage.underwayItems(id);
     const deliveries = this.storage.deliveries(id, { open: true });
     for (const item of underway) {
@@ -764,6 +864,12 @@ export class ResearchService {
     }
     for (const approachId of [...this.queuedResumes.get(id)?.keys() ?? []]) await this.withdrawResume(id, approachId, actor);
     await this.cancelCoordinatorReviewNotices(id);
+    // Cancel active/background decision batches for every worker of this run (including
+    // workers whose model turn already ended while a background batch kept running) and
+    // any run-scoped batches started by the coordinator.
+    if (this.ports.cancelDecisionBatches) {
+      await this.cancelRunDecisions(id, run, stopReason);
+    }
     // An approach that holds no slot has ended, stopped or failed with no revision pending. A start or
     // resume still in flight checks the run itself once it settles; its worker's recorded turn may be stale.
     for (const approach of this.storage.approaches(id, { occupying: true })) {
@@ -789,6 +895,9 @@ export class ResearchService {
         if (!approach) throw new Error("Revision worker is unavailable");
         const ended = this.turnEnded(id, approach.id, receipt.turnId);
         if (!ended && (approach.worker?.turnId !== receipt.turnId || !["ended", "stopped", "failed"].includes(approach.state))) {
+          if (this.ports.cancelDecisionBatches) {
+            await this.cancelDecisions(delivery.target, "Research revision cancelled");
+          }
           await this.ports.stop({ ...delivery.target, turnId: receipt.turnId });
           const current = this.requireHeader(id);
           if (this.requireApproach(id, approach.id).worker?.turnId === receipt.turnId) this.append(current, `revision-stopped:${delivery.id}:${receipt.turnId}`, actor, { type: "worker", approachId: approach.id, state: "stopped" });
@@ -824,6 +933,12 @@ export class ResearchService {
     try {
       const before = this.requireApproach(id, approachId);
       if (before.worker?.turnId !== worker.turnId || ["ended", "stopped", "failed"].includes(before.state)) return;
+      if (this.ports.cancelDecisionBatches) {
+        await this.cancelDecisions(
+          { backend: worker.backend, threadId: worker.threadId },
+          note ?? "Research worker stopped",
+        );
+      }
       await this.ports.stop(worker);
       const current = this.requireHeader(id);
       if (this.requireApproach(id, approachId).worker?.turnId !== worker.turnId) return;
@@ -984,11 +1099,13 @@ export class ResearchService {
     const starting = this.pendingStarts.get(id) ?? new Set<string>();
     this.pendingStarts.set(id, starting);
     for (const approach of targets) starting.add(approach.id);
+    const readyRaw = this.readyDecisionsRaw();
+    const readyDecisions = isPromiseLike(readyRaw) ? await readyRaw : readyRaw;
     await Promise.all(targets.map(async (approach) => {
       const worker = approach.worker!;
       const thread = { backend: worker.backend, threadId: worker.threadId };
       try {
-        const receipt = await this.ports.notify(actor, thread, researchResumePrompt(id, approach));
+        const receipt = await this.ports.notify(actor, thread, researchResumePrompt(id, approach, readyDecisions));
         const current = this.requireApproach(id, approach.id);
         // A trusted provider event can precede the reply. It already owns this transition.
         if (receipt.turnId && current.state === "starting" && current.worker?.turnId === worker.turnId) {
@@ -1238,6 +1355,50 @@ export class ResearchService {
   private approach(id: string, approachId: string): ResearchApproach | undefined { const item = this.storage.readItem(id, approachId); return item?.type === "approach" ? item.record : undefined; }
   private requireApproach(id: string, approachId: string): ResearchApproach { const approach = this.approach(id, approachId); if (!approach) throw new Error("Research approach not found"); return approach; }
   private operator(run: Pick<ResearchRunHeader, "coordinator">): ResearchActor { return { ...run.coordinator, kind: "operator" }; }
+
+  private readyDecisionsRaw(): readonly DecisionRunProvider[] | Promise<readonly DecisionRunProvider[]> {
+    if (!this.ports.readyDecisionProviders) return [];
+    try {
+      const value = this.ports.readyDecisionProviders();
+      if (isPromiseLike(value)) {
+        return Promise.resolve(value).catch((error) => {
+          this.ports.onError(error);
+          return [];
+        });
+      }
+      return value;
+    } catch (error) {
+      this.ports.onError(error);
+      return [];
+    }
+  }
+
+  private async cancelRunDecisions(id: string, run: Pick<ResearchRunHeader, "coordinator">, reason: string): Promise<void> {
+    for (const member of this.storage.members(id)) {
+      if (sameResearchThread(member, run.coordinator)) {
+        await this.cancelDecisions(member, reason, { researchRunId: id });
+      } else {
+        await this.cancelDecisions(member, reason);
+      }
+    }
+  }
+
+  private async cancelDecisions(
+    thread: ResearchThread,
+    reason: string,
+    options?: { researchRunId?: string },
+  ): Promise<void> {
+    if (!this.ports.cancelDecisionBatches) return;
+    try {
+      await this.ports.cancelDecisionBatches(thread, reason, options);
+    } catch (error) {
+      this.ports.onError(error);
+    }
+  }
+}
+
+function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
+  return typeof value === "object" && value !== null && "then" in value && typeof (value as PromiseLike<T>).then === "function";
 }
 
 export function validateStartResearch(request: StartResearchRequest): void {
@@ -1266,12 +1427,28 @@ function validatePaths(paths: string[]): void {
 function message(error: unknown): string { return (error instanceof Error ? error.message : String(error)).slice(0, 2000); }
 /** Whole minutes, rounded down, for a refusal that says how much time has gone. */
 function minutesText(ms: number): string { const minutes = Math.floor(ms / MINUTE); return minutes === 1 ? "1 minute" : `${minutes} minutes`; }
-function researchWorkerPrompt(id: string, objective: string, approach: ResearchApproach): string {
-  return `Participate in research run ${id}, approach ${approach.id}: ${approach.title}.\nObjective: ${objective}\nAssignment: ${approach.task}\nUse research_read to inspect the shared board. Use research_update to post typed findings under approachId=${approach.id}, cite evidence paths relative to your workspace, and link other findings explicitly. Record counterexamples and dead ends. Submit a concise candidate with action=submit. Findings are proposals, not verified facts. The coordinator reviews submissions and may request revision. Do not start additional workers, change the objective, or claim formal verification. Stop when the run stops or its deadline is reached.`;
+export function researchWorkerPrompt(
+  id: string,
+  objective: string,
+  approach: ResearchApproach,
+  readyDecisions: readonly DecisionRunProvider[] = [],
+): string {
+  const decisionsNote = researchDecisionsPromptGuidance(readyDecisions, "worker", id);
+  return `Participate in research run ${id}, approach ${approach.id}: ${approach.title}.\nObjective: ${objective}\nAssignment: ${approach.task}\nUse research_read to inspect the shared board. Use research_update to post typed findings under approachId=${approach.id}, cite evidence paths relative to your workspace, and link other findings explicitly. Record counterexamples and dead ends. Submit a concise candidate with action=submit. Findings are proposals, not verified facts. The coordinator reviews submissions and may request revision. Do not start additional workers, change the objective, or claim formal verification. Stop when the run stops or its deadline is reached.${decisionsNote ? `\n${decisionsNote}` : ""}`;
 }
-function researchResumePrompt(id: string, approach: ResearchApproach): string {
-  return `PwrAgent was closed while you were working on research run ${id}, approach ${approach.id}: ${approach.title}. The run is still open and you are being asked to continue. Call research_read with runId=${id}${approach.itemId ? `, itemId=${approach.itemId}` : ""} to see what is already recorded, then carry on from where you stopped. Do not repeat findings you already posted. The run's worker limit, any time limit and cancellation still apply to you.`;
+export function researchResumePrompt(
+  id: string,
+  approach: ResearchApproach,
+  readyDecisions: readonly DecisionRunProvider[] = [],
+): string {
+  const decisionsNote = researchDecisionsPromptGuidance(readyDecisions, "resume", id);
+  return `PwrAgent was closed while you were working on research run ${id}, approach ${approach.id}: ${approach.title}. The run is still open and you are being asked to continue. Call research_read with runId=${id}${approach.itemId ? `, itemId=${approach.itemId}` : ""} to see what is already recorded, then carry on from where you stopped. Do not repeat findings you already posted. The run's worker limit, any time limit and cancellation still apply to you.${decisionsNote ? `\n${decisionsNote}` : ""}`;
 }
-function researchItemWorkerPrompt(id: string, approach: ResearchApproach): string {
-  return `Handle one research item. Run ID: ${id}. Item ID: ${approach.itemId}. Your approach/assignment ID: ${approach.id}.\nTask: ${approach.task}\nCall research_read with runId=${id}, itemId=${approach.itemId} to load this item's context and current version. Claim it using research_update action=work, itemId, expectedVersion, state=claimed and a reason. Update to in_progress, blocked or completed as appropriate, reading the latest version before each change. Post evidence or a candidate under approachId=${approach.id}; link the source finding when applicable. Use research_search only for additional evidence you need. Do not load the entire board or start other workers. A work item marked completed is not formally verified. The run's original deadline and cancellation apply to you.`;
+export function researchItemWorkerPrompt(
+  id: string,
+  approach: ResearchApproach,
+  readyDecisions: readonly DecisionRunProvider[] = [],
+): string {
+  const decisionsNote = researchDecisionsPromptGuidance(readyDecisions, "item", id);
+  return `Handle one research item. Run ID: ${id}. Item ID: ${approach.itemId}. Your approach/assignment ID: ${approach.id}.\nTask: ${approach.task}\nCall research_read with runId=${id}, itemId=${approach.itemId} to load this item's context and current version. Claim it using research_update action=work, itemId, expectedVersion, state=claimed and a reason. Update to in_progress, blocked or completed as appropriate, reading the latest version before each change. Post evidence or a candidate under approachId=${approach.id}; link the source finding when applicable. Use research_search only for additional evidence you need. Do not load the entire board or start other workers. A work item marked completed is not formally verified. The run's original deadline and cancellation apply to you.${decisionsNote ? `\n${decisionsNote}` : ""}`;
 }

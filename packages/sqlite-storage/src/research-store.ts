@@ -248,18 +248,20 @@ export class ResearchStore implements ResearchStorage {
   readItem(id: string, itemId: string): ResearchItem | undefined {
     return readProjectedItem(this.stateDb.raw, id, itemId);
   }
-  approaches(id: string, filter: { worker: ResearchThread } | { occupying: true } | { interrupted: true }): ResearchApproach[] {
+  approaches(id: string, filter: { all: true } | { worker: ResearchThread } | { occupying: true } | { interrupted: true }): ResearchApproach[] {
     const db = this.stateDb.raw;
-    const rows = "interrupted" in filter
-      // Only approaches can be cut off, and a run has few: the type index bounds the read without one of its own.
-      ? db.prepare(`SELECT payload FROM research_items WHERE run_id = ? AND item_type = 'approach' AND json_extract(payload, '$.record.interrupted') = 1
-          ORDER BY created_seq, item_id`).all(id)
-      : "worker" in filter
-      // The unary plus keeps the planner on the worker index: without it, it walks the whole run in creation
-      // order to avoid a sort of what is a handful of rows.
-      ? db.prepare(`SELECT payload FROM research_items WHERE worker_backend = ? AND worker_thread_id = ? AND run_id = ?
-          ORDER BY +created_seq, +item_id`).all(filter.worker.backend, filter.worker.threadId, id)
-      : db.prepare("SELECT payload FROM research_items WHERE run_id = ? AND occupies_slot = 1 ORDER BY created_seq, item_id").all(id);
+    const rows = "all" in filter
+      ? db.prepare("SELECT payload FROM research_items WHERE run_id = ? AND item_type = 'approach' ORDER BY created_seq, item_id").all(id)
+      : "interrupted" in filter
+        // Only approaches can be cut off, and a run has few: the type index bounds the read without one of its own.
+        ? db.prepare(`SELECT payload FROM research_items WHERE run_id = ? AND item_type = 'approach' AND json_extract(payload, '$.record.interrupted') = 1
+            ORDER BY created_seq, item_id`).all(id)
+        : "worker" in filter
+          // The unary plus keeps the planner on the worker index: without it, it walks the whole run in creation
+          // order to avoid a sort of what is a handful of rows.
+          ? db.prepare(`SELECT payload FROM research_items WHERE worker_backend = ? AND worker_thread_id = ? AND run_id = ?
+              ORDER BY +created_seq, +item_id`).all(filter.worker.backend, filter.worker.threadId, id)
+          : db.prepare("SELECT payload FROM research_items WHERE run_id = ? AND occupies_slot = 1 ORDER BY created_seq, item_id").all(id);
     return (rows as { payload: string }[]).flatMap((row) => {
       const item = JSON.parse(row.payload) as ResearchItem;
       return item.type === "approach" ? [item.record] : [];

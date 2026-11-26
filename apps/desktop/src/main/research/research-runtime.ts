@@ -16,6 +16,7 @@ import {
   type MathosTeamsResult,
   type ResearchHarnessStatus,
 } from "@pwragent/shared/research-harness";
+import { decisionRunProviderName, type DecisionRunProvider } from "@pwragent/shared/decision-models";
 import { RESEARCH_BOARD_PAGE, researchDeadlinePassed } from "@pwragent/shared/research";
 import type {
   ResearchActor,
@@ -24,6 +25,7 @@ import type {
   ResearchAssignRequest,
   ResearchSearchQuery,
   ResearchItem,
+  ResearchThread,
 } from "@pwragent/shared/research";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { ResearchAgentHandler } from "../agent-tools/pwragent-research-agent-tools";
@@ -174,12 +176,45 @@ export async function closeResearchRuntime(): Promise<void> {
   await closing;
 }
 
-export function createResearchAgentHandler(current: ResearchService, isLive: (context: AgentToolCallContext) => boolean, enabled: () => boolean = () => false): ResearchAgentHandler {
+export type ResearchBoardDecisionsContext = {
+  readyProviders: readonly DecisionRunProvider[];
+  runDecisions?: number;
+  runBatches?: number;
+  activeBatches?: number;
+};
+
+export type ResearchAgentDecisionsAdapter = {
+  readBoardDecisions: (actor: ResearchThread, runId: string) => Promise<ResearchBoardDecisionsContext>;
+};
+
+export function createResearchAgentHandler(
+  current: ResearchService,
+  isLive: (context: AgentToolCallContext) => boolean,
+  enabled: () => boolean = () => false,
+  decisions?: ResearchAgentDecisionsAdapter,
+): ResearchAgentHandler {
+  const readDecisions = async (actor: ResearchThread, runId: string): Promise<ResearchBoardDecisionsContext | undefined> => {
+    if (!decisions) return undefined;
+    try {
+      return await decisions.readBoardDecisions(actor, runId);
+    } catch {
+      return undefined;
+    }
+  };
   return async (name, args, context) => {
     if (!enabled()) throw new Error("Research runs are disabled. Enable Research runs in Settings → Experimental.");
     if (!isLive(context) || !context.turnId || !context.callId) throw new Error("Research tools require a live turn on the owning instance. In Codex threads they also require Codex Tool Discovery.");
     const actor: ResearchActor & { kind: "agent"; turnId: string; callId: string } = { backend: context.backend, threadId: context.threadId, kind: "agent", turnId: context.turnId, callId: context.callId };
-    if (name === "research_start") return boardView(current.readBoard((await current.start(args as unknown as StartResearchRequest, actor)).id, { approachOffset: 0, findingOffset: 0, submissionOffset: 0 }, actor));
+    if (name === "research_start") {
+      const started = await current.start(args as unknown as StartResearchRequest, actor);
+      return boardView(
+        current.readBoard(started.id, { approachOffset: 0, findingOffset: 0, submissionOffset: 0 }, actor),
+        0,
+        0,
+        0,
+        await readDecisions(actor, started.id),
+      );
+    }
     if (name === "research_assign") return await current.assign(args as unknown as ResearchAssignRequest, actor);
     if (name === "research_search") {
       if (typeof args.runId !== "string") throw new Error("Supply a runId");
@@ -214,7 +249,13 @@ export function createResearchAgentHandler(current: ResearchService, isLive: (co
     if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0
       || typeof submissionOffset !== "number" || !Number.isSafeInteger(submissionOffset) || submissionOffset < 0
       || typeof approachOffset !== "number" || !Number.isSafeInteger(approachOffset) || approachOffset < 0) throw new Error("Offsets must be nonnegative integers");
-    return boardView(current.readBoard(args.runId, { approachOffset, findingOffset: offset, submissionOffset }, actor), offset, submissionOffset, approachOffset);
+    return boardView(
+      current.readBoard(args.runId, { approachOffset, findingOffset: offset, submissionOffset }, actor),
+      offset,
+      submissionOffset,
+      approachOffset,
+      await readDecisions(actor, args.runId),
+    );
   };
 }
 
@@ -224,8 +265,20 @@ function itemReceipt(item: ResearchItem) {
 }
 
 /** One page of the board, ten of each list, read from stored projections rather than the journal. */
-function boardView(board: ReturnType<ResearchService["readBoard"]>, offset = 0, submissionOffset = 0, approachOffset = 0) {
+function boardView(
+  board: ReturnType<ResearchService["readBoard"]>,
+  offset = 0,
+  submissionOffset = 0,
+  approachOffset = 0,
+  decisions?: ResearchBoardDecisionsContext,
+) {
   const { run } = board;
+  const readyProviders = decisions?.readyProviders ?? [];
+  const hasDecisionsActivity = (decisions?.runDecisions ?? 0) > 0 || (decisions?.runBatches ?? 0) > 0;
+  const showDecisions = readyProviders.length > 0 || hasDecisionsActivity;
+  const decisionsGuidance = readyProviders.length > 0
+    ? ` Decision models are ready (${readyProviders.map(decisionRunProviderName).join(", ")}): register run-scoped rubrics with decisions_register (scope="research_run", researchRunId="${run.id}"), discover them with decisions_list (researchRunId="${run.id}"), run batch evaluations with decisions_invoke, and inspect run batches with decisions_batch_results (researchRunId="${run.id}").`
+    : "";
   return {
     id: run.id, objective: run.objective, revision: run.revision, status: run.status, reason: run.reason,
     coordinator: run.coordinator, deadlineAt: run.deadlineAt,
@@ -241,6 +294,16 @@ function boardView(board: ReturnType<ResearchService["readBoard"]>, offset = 0, 
     latestSubmissionId: board.latestSubmissionId,
     deliveries: board.deliveries,
     deliveryFailures: board.deliveryFailures,
-    guidance: "Accepted means reviewed by the named reviewer, never formally verified. Evidence paths are relative to the originating author's workspace. Report revision feedback as delivered only after a started or queued receipt; unknown outcomes must not be retried blindly. Read another page or a specific finding/submission when needed.",
+    ...(showDecisions
+      ? {
+          decisions: {
+            readyProviders: [...readyProviders],
+            ...(decisions?.runDecisions !== undefined ? { runDecisions: decisions.runDecisions } : {}),
+            ...(decisions?.runBatches !== undefined ? { runBatches: decisions.runBatches } : {}),
+            ...(decisions?.activeBatches !== undefined ? { activeBatches: decisions.activeBatches } : {}),
+          },
+        }
+      : {}),
+    guidance: `Accepted means reviewed by the named reviewer, never formally verified. Evidence paths are relative to the originating author's workspace. Report revision feedback as delivered only after a started or queued receipt; unknown outcomes must not be retried blindly. Read another page or a specific finding/submission when needed.${decisionsGuidance}`,
   };
 }

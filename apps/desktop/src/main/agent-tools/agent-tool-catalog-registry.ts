@@ -90,6 +90,7 @@ export function resolveAgentToolCatalogs(params: {
   threadTodoHandler?: PwrAgentThreadTodoHandler;
   openAIDecisionsHandler?: PwrAgentOpenAIDecisionsHandler;
   researchHandler?: ResearchAgentHandler;
+  researchDecisionsReady?: boolean;
   checkoutHandler?: CheckoutToolHandler;
   checkoutMode?: CheckoutToolMode;
 }, options?: {
@@ -129,7 +130,10 @@ export function resolveAgentToolCatalogs(params: {
         options?.taskMonitorRole === "monitor" ? undefined : params.checkoutHandler,
         params.checkoutMode,
       ),
-      ...buildResearchToolDefinitions(options?.taskMonitorRole === "monitor" ? undefined : params.researchHandler),
+      ...buildResearchToolDefinitions(
+        options?.taskMonitorRole === "monitor" ? undefined : params.researchHandler,
+        { decisionsReady: params.researchDecisionsReady === true },
+      ),
       ...buildPwrAgentTaskMonitorToolDefinitions(
         params.taskMonitorHandler,
         options?.taskMonitorRole,

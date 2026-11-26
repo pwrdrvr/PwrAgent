@@ -36,6 +36,11 @@ export type OpenAIDecisionsRail = Pick<
   | "railResultsFile"
   | "profileDecisions"
   | "deleteProfileDecision"
+  | "cancelThreadBatches"
+  | "researchRunDecisionsSnapshot"
+  | "researchRunBatchPage"
+  | "researchRunBatchAction"
+  | "researchRunResultsFile"
 >;
 
 let rail: OpenAIDecisionsRail | undefined;
@@ -70,6 +75,10 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
   resolveThreadRoots?: (caller: { backend: AppServerBackendKind; threadId: string }) => Promise<readonly string[]>;
   /** Private storage roots that `inputsFile` and `outputFile` may never touch. */
   privateStorageRoots?: () => readonly string[];
+  /** Research runs a thread belongs to, for research_run-scoped decisions and batch visibility. */
+  resolveCallerResearchRuns?: OpenAIDecisionsServiceOptions["resolveCallerResearchRuns"];
+  /** Research run participant lookup when the caller is a member. */
+  resolveResearchRunContext?: OpenAIDecisionsServiceOptions["resolveResearchRunContext"];
 }): PwrAgentOpenAIDecisionsHandler {
   // Opened on first tool call, so installing the handler never touches the
   // profile database during boot.
@@ -84,6 +93,7 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
       getActive: (decisionId) => lazyStore().getActive(decisionId),
       findActiveByName: (name, caller) => lazyStore().findActiveByName(name, caller),
       listVisible: (caller) => lazyStore().listVisible(caller),
+      listActiveForResearchRun: (researchRunId) => lazyStore().listActiveForResearchRun?.(researchRunId) ?? [],
       listActiveProfile: () => lazyStore().listActiveProfile(),
       hasDeletedName: (name, caller) => lazyStore().hasDeletedName(name, caller),
     },
@@ -103,6 +113,8 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     recordUsageLines: params.recordUsageLines,
     ...(params.announceBatch ? { announceBatch: params.announceBatch } : {}),
     ...(params.wakeThread ? { wakeThread: params.wakeThread } : {}),
+    ...(params.resolveCallerResearchRuns ? { resolveCallerResearchRuns: params.resolveCallerResearchRuns } : {}),
+    ...(params.resolveResearchRunContext ? { resolveResearchRunContext: params.resolveResearchRunContext } : {}),
     // Each batch's answers as JSONL in its thread's storage, removed with the thread.
     batchResultsDirectory: (caller) => threadDecisionBatchDirectory({
       backend: caller.backend as AppServerBackendKind,
@@ -143,6 +155,11 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     railResultsFile: async (caller, batchId) => await service.railResultsFile(caller, batchId),
     profileDecisions: () => service.profileDecisions(),
     deleteProfileDecision: (decisionId) => service.deleteProfileDecision(decisionId),
+    cancelThreadBatches: async (caller, reason, options) => await service.cancelThreadBatches(caller, reason, options),
+    researchRunDecisionsSnapshot: async (ctx, readiness) => await service.researchRunDecisionsSnapshot(ctx, readiness),
+    researchRunBatchPage: async (ctx, params) => await service.researchRunBatchPage(ctx, params),
+    researchRunBatchAction: async (ctx, batchId, action) => await service.researchRunBatchAction(ctx, batchId, action),
+    researchRunResultsFile: async (ctx, batchId) => await service.researchRunResultsFile(ctx, batchId),
   };
   return {
     register: (caller, args) => service.register(caller, args),

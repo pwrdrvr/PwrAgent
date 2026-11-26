@@ -152,9 +152,10 @@ CREATE TABLE IF NOT EXISTS openai_decision_versions (
   decision_id       TEXT NOT NULL,
   version           INTEGER NOT NULL,
   name              TEXT NOT NULL,
-  scope             TEXT NOT NULL CHECK (scope IN ('profile', 'thread')),
+  scope             TEXT NOT NULL CHECK (scope IN ('profile', 'thread', 'research_run')),
   owner_backend     TEXT NOT NULL,
   owner_thread_id   TEXT,
+  research_run_id   TEXT,
   status            TEXT NOT NULL CHECK (status IN ('active', 'superseded', 'deleted')),
   provider          TEXT NOT NULL DEFAULT 'openai',
   questions_json    TEXT NOT NULL,
@@ -163,14 +164,18 @@ CREATE TABLE IF NOT EXISTS openai_decision_versions (
   prompt_cache_key  TEXT NOT NULL,
   created_at        INTEGER NOT NULL,
   PRIMARY KEY (decision_id, version),
-  CHECK (scope = 'profile' OR owner_thread_id IS NOT NULL)
+  CHECK (
+    (scope = 'profile' AND research_run_id IS NULL)
+    OR (scope = 'thread' AND owner_thread_id IS NOT NULL AND research_run_id IS NULL)
+    OR (scope = 'research_run' AND research_run_id IS NOT NULL)
+  )
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_openai_decision_versions_active_name
   ON openai_decision_versions(
     name,
     scope,
     CASE scope WHEN 'thread' THEN owner_backend ELSE '' END,
-    CASE scope WHEN 'thread' THEN owner_thread_id ELSE '' END
+    CASE scope WHEN 'thread' THEN owner_thread_id WHEN 'research_run' THEN research_run_id ELSE '' END
   )
   WHERE status = 'active';
 `;

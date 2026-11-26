@@ -138,6 +138,8 @@ export type DecisionBatchRecord = {
   outputDetail?: DecisionBatchDetail;
   /** Error message when writing `outputFile` failed after the batch finished. */
   outputFileError?: string;
+  /** Research run this batch belongs to, when invoked in a run context. */
+  researchRunId?: string;
   /** The prompt every item shared. Absent in a file written before it was kept. */
   definition?: DecisionsRailDefinition;
 };
@@ -409,6 +411,7 @@ export function summarizeBatch(record: DecisionBatchRecord) {
     ...(record.resultsFile ? { resultsFile: record.resultsFile } : {}),
     ...(record.outputFile ? { outputFile: record.outputFile } : {}),
     ...(record.outputFileError ? { outputFileError: record.outputFileError } : {}),
+    ...(record.researchRunId ? { researchRunId: record.researchRunId } : {}),
   };
 }
 

@@ -1014,6 +1014,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               threadTodoHandler: ports.threadTodoHandler,
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
               researchHandler: ports.mcpResearchHandler,
+              researchDecisionsReady: ports.researchDecisionsReady,
               checkoutHandler: ports.checkoutHandler,
               checkoutMode: ports.resourceCheckoutToolMode(context),
             }, {

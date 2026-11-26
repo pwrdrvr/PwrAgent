@@ -127,11 +127,13 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "An active name in the same scope fails with decision_name_taken.",
     "Scope profile, the default, reaches every thread in this profile.",
     "Scope thread reaches only the registering thread.",
+    "Scope research_run shares the decision across the coordinator and every worker of one research run (pass researchRunId or omit it when this thread belongs to a single active run) without leaking to unrelated threads.",
     "Never pass a key. PwrAgent attaches the operator's OpenAI key.",
     "Call decisions_list to see what exists.",
   ].join(" "),
   decisions_list: [
-    "List registered decisions visible to this thread.",
+    "List registered decisions visible to this thread (profile, thread, and any research runs this thread belongs to).",
+    "Pass researchRunId to list only decisions registered for that research run.",
     "Each entry has its id, name, version, scope, provider, questions, choice values or score labels, and input schema.",
     "inputCapabilities.images reports support for its configured model, including experimental status, formats and limits.",
     "inputCapabilities also reports the encoded HTTP MCP request and compact batch input byte limits.",
@@ -190,18 +192,19 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "The name can then be registered again as a new decision.",
   ].join(" "),
   decisions_batch_results: [
-    "Read a decisions_invoke batch this thread started, while it runs or after it ends.",
+    "Read a decisions_invoke batch this thread started, or any batch run by a member of a research run this thread belongs to, while it runs or after it ends.",
     "Pass batchId for its state, totals, and a page of finished items in input order.",
+    "Pass researchRunId without batchId to list batches across the coordinator and all workers of that research run.",
     "status picks succeeded, failed (skipped included), or skipped items. The default is all.",
     "from is the first input index and limit the most items, 100 by default and 500 at most.",
     "A page also stops at 64 KiB. Pass nextFrom back as from for the rest.",
     "Items are compact, answers and confidence only. Pass detail full for response bodies and per-item usage.",
-    "Without batchId, lists this thread's batches, newest first.",
+    "Without batchId or researchRunId, lists this thread's batches, newest first.",
     "Batches survive a restart: each is a JSONL file in the thread's storage, and the latest 20 are kept.",
     "Reading makes no API call.",
   ].join(" "),
   decisions_batch_cancel: [
-    "Cancel a running decisions_invoke batch this thread started.",
+    "Cancel a running decisions_invoke batch this thread started (or, for a research run coordinator passing researchRunId, a worker's batch in that run).",
     "Requests in flight are aborted and unsent items are skipped.",
     "Finished answers stay readable with decisions_batch_results.",
     "No wake-up turn follows a cancel.",
@@ -282,7 +285,13 @@ const DEFINITION_PROPERTIES = {
     enum: ["openai", "jev", "local"],
     description: "Which decision model runs it. Omit to use the one the operator set up.",
   },
-  scope: { type: "string", enum: ["profile", "thread"] },
+  scope: { type: "string", enum: ["profile", "thread", "research_run"] },
+  researchRunId: {
+    type: "string",
+    minLength: 1,
+    maxLength: 300,
+    description: "Research run id for research_run-scoped decisions. Optional when scope is research_run and this thread belongs to one active run.",
+  },
   instructions: {
     type: "string",
     maxLength: OPENAI_DECISION_BOUNDS.instructionsMaxLength,
@@ -323,6 +332,12 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
     additionalProperties: false,
     properties: {
       includeInstructions: { type: "boolean" },
+      researchRunId: {
+        type: "string",
+        minLength: 1,
+        maxLength: 300,
+        description: "Filter to research_run-scoped decisions registered for this research run.",
+      },
     },
   },
   decisions_invoke: {
@@ -332,6 +347,12 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
       name: NAME_SCHEMA,
       decisionId: { type: "string" },
       version: { type: "integer", minimum: 1 },
+      researchRunId: {
+        type: "string",
+        minLength: 1,
+        maxLength: 300,
+        description: "Optional research run id to disambiguate a research_run-scoped decision name or tag an ad hoc batch with the run.",
+      },
       definition: {
         type: "object",
         description: "An ad hoc decision instead of name: provider, instructions, question or questions, prefix, optional inputSchema. Nothing is stored.",
@@ -394,13 +415,20 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
     properties: {
       name: NAME_SCHEMA,
       decisionId: { type: "string" },
+      researchRunId: { type: "string", minLength: 1, maxLength: 300 },
     },
   },
   decisions_batch_results: {
     type: "object",
     additionalProperties: false,
     properties: {
-      batchId: { type: "string", description: "From decisions_invoke. Omit to list this thread's batches." },
+      batchId: { type: "string", description: "From decisions_invoke. Omit to list this thread's batches (or all batches in researchRunId)." },
+      researchRunId: {
+        type: "string",
+        minLength: 1,
+        maxLength: 300,
+        description: "Research run id to list or inspect batches across the coordinator and workers of that run.",
+      },
       status: {
         type: "string",
         enum: ["all", "succeeded", "failed", "skipped"],
@@ -422,6 +450,12 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
     required: ["batchId"],
     properties: {
       batchId: { type: "string" },
+      researchRunId: {
+        type: "string",
+        minLength: 1,
+        maxLength: 300,
+        description: "Coordinator only: research run id when cancelling a worker's running batch.",
+      },
     },
   },
 };
