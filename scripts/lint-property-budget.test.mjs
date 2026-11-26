@@ -14,7 +14,7 @@ import {
   RULE_HIGH_NUM_RUNS_COMMENT,
   analyzePropertyBudgetSource,
   evaluatePropertyBudgetBaseline,
-  scanRepository,
+  listTestFiles,
   shrinkPropertyBudgetBaseline,
   validateBaselineObject,
 } from "./lint-property-budget.mjs";
@@ -398,13 +398,17 @@ describe("property budget baseline ratchet", () => {
     );
   });
 
-  it("matches the checked-in repository baseline with zero regressions", () => {
+  // The repository scan itself runs as `pnpm lint:property-budget` in the
+  // Lint job. It parses every fast-check test file, about 950 of them, and
+  // takes 5-10 s on CI runners, past the default 5 s unit test timeout.
+  it("keeps the checked-in baseline well formed", () => {
     const baseline = JSON.parse(readFileSync(resolve(REPO_ROOT, BASELINE_REL_PATH), "utf8"));
     expect(validateBaselineObject(baseline)).toEqual([]);
+  });
 
-    const { violationsByFile } = scanRepository(REPO_ROOT);
-    const evaluation = evaluatePropertyBudgetBaseline(violationsByFile, baseline);
-    expect(evaluation.ok).toBe(true);
-    expect(evaluation.regressions).toEqual([]);
+  it("lists repository test files by POSIX path, as baseline keys name them", () => {
+    const files = listTestFiles(REPO_ROOT);
+    expect(files).toContain("scripts/lint-property-budget.test.mjs");
+    expect(files.filter((file) => file.includes("\\"))).toEqual([]);
   });
 });
