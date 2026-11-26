@@ -276,6 +276,10 @@ jobs:
         timeout-minutes: 10
         run: pnpm lint:electron-version
 
+      - name: Property test CI budget
+        timeout-minutes: 5
+        run: pnpm lint:property-budget
+
       - name: Release publication time budget and isolation
         timeout-minutes: 1
         run: node scripts/check-release-publication-workflow.mjs
@@ -1654,6 +1658,17 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
+      - name: Download macOS unit timing artifacts
+        if: ${{ !cancelled() && needs.changes.outputs.full_platforms == 'true' }}
+        continue-on-error: true
+        uses: actions/download-artifact@v8
+        with:
+          pattern: macos-unit-timings-lane-*
+          path: .local/ci/macos-unit-timings
+      - name: Report property test timings
+        if: ${{ !cancelled() && needs.changes.outputs.full_platforms == 'true' }}
+        continue-on-error: true
+        run: node scripts/ci/report-property-timings.mjs .local/ci/macos-unit-timings
 
   pr-test-impact-plan:
     name: Test plan

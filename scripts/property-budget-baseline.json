@@ -1,0 +1,1471 @@
+{
+  "schemaVersion": 1,
+  "rules": {
+    "heavyFixtureMaxNumRuns": 5,
+    "highNumRunsCommentThreshold": 100
+  },
+  "files": {
+    "apps/desktop/e2e/archive-group-dialog-layout.spec.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/e2e/todo-destination-layout.spec.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/scripts/check-main-bundle-boundary.test.mjs": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/scripts/ensure-electron-runtime.test.mjs": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/scripts/native-helper-cache.oracle.test.mjs": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/scripts/stage-runtime.property.test.mjs": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/acp-antigravity-steering.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/acp-backend-adapter.test.ts": {
+      "heavyFixture": 8
+    },
+    "apps/desktop/src/main/__tests__/acp-client-idle-session-close.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/acp-client.test.ts": {
+      "heavyFixture": 7
+    },
+    "apps/desktop/src/main/__tests__/acp-file-read.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/acp-grok-tool-activity.property.test.ts": {
+      "highNumRunsWithoutComment": 5
+    },
+    "apps/desktop/src/main/__tests__/acp-runtime-selection.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/acp-storage-binding.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/acp-storage.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/acp-whole-file-edit.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/agent-follow-up.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/agent-instruction-delivery.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/agent-preset-store.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/agent-update-notices.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/antigravity-access.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/antigravity-managed-review.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/antigravity-managed-runtime.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/antigravity-session-mode.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/antigravity-sign-in.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/antigravity-workspace.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/app-server-ipc.test.ts": {
+      "heavyFixture": 8
+    },
+    "apps/desktop/src/main/__tests__/archive-candidate-storage.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/archive-cleanup-discovery.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/archive-cleanup-fleet.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/archive-cleanup-fleet.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/archive-cleanup-pipeline.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/archive-cleanup-terminal.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/archive-worktree-references.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/archive-worktree-restart.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/archived-thread-git-read.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/archived-thread-message.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/automatic-turn-archive.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/automation-daily-run-limit.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/automation-scheduler-instances.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/automation-scheduler.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/automation-startup-reconcile.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/automation-storage-binding.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/automation-store.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/automation-throttle-marker-flush.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/backend-registry-agent-tools.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/backend-registry-dynamic-tool-dispatch.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/backend-registry-forge-tools.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/backend-registry-provider-discovery.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/backend-registry-turn-queue.test.ts": {
+      "heavyFixture": 7
+    },
+    "apps/desktop/src/main/__tests__/backend-registry.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/backend-registry.test.ts": {
+      "heavyFixture": 15
+    },
+    "apps/desktop/src/main/__tests__/boat-port-forward.property.test.ts": {
+      "highNumRunsWithoutComment": 4
+    },
+    "apps/desktop/src/main/__tests__/boat-tools.property.test.ts": {
+      "highNumRunsWithoutComment": 3
+    },
+    "apps/desktop/src/main/__tests__/boat-workspace.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/bootstrap-storage.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/bundled-git.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/checkout-git-spawn-guard.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/checkout-hibernation-target.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/checkout-hibernation.property.test.ts": {
+      "highNumRunsWithoutComment": 3
+    },
+    "apps/desktop/src/main/__tests__/checkout-hibernation.test.ts": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/main/__tests__/checkout-path-owners.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/ci-deployment-review.property.test.ts": {
+      "heavyFixture": 4,
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/claude-gateway.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/claude-owner-cli-fixture.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/claude-subagent-cards.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/codex-app-server-generation-pool.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/codex-app-server-installation.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/codex-app-server-restart-policy.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/codex-client.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/codex-model-provider-efforts.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/codex-model-provider-error-redaction.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/codex-runtime-supervisor.test.ts": {
+      "heavyFixture": 9,
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/codex-turn-terminal-ordering.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/composer-bytecode.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/composer-draft-service.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/contained-agent-tool-catalog.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/contained-messaging.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/created-thread-visibility.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/decision-provider-enabled.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/decision-providers-readiness.property.test.ts": {
+      "highNumRunsWithoutComment": 3
+    },
+    "apps/desktop/src/main/__tests__/desktop-config-member-role.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/desktop-config-onboarding.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/desktop-config-store.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/desktop-messaging-storage.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/desktop-owner-boundaries.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/desktop-storage-services.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/durable-federation-turn-input.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/durable-turn-request-storage.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/federation-assigned-member-role.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/federation-contained-desktop.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/federation-directory-pins.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/federation-member-role-declaration.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/federation-peer-role.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/federation-reconnect-backoff.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/federation-runtime.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/federation-stream-recovery.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/forge-tool-bridge-integration.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/git-head-branch-environment.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/git-working-state-service.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/github-mcp-account.model.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/github-stack-lifecycle.model.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/headless-concurrency.oracle.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/heap-monitor-cooldown.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/job-monitor-creation.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/launchpad-sticky-defaults.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/line-rich-menu-setup-storage.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/live-outpost-adoption.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/local-responses-discovery.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/maintenance-cargo-output.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/maintenance-checkout-owners.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/maintenance-pr-watches.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/maintenance-workspace-git.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/managed-git-selection.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/managed-git-verify.oracle.test.ts": {
+      "heavyFixture": 3,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/managed-git-verify.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/managed-review-candidate-ledger.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/managed-review-service-integration.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/managed-review-service.test.ts": {
+      "heavyFixture": 4,
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/mathos-platform-connection.oracle.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/mcp-gateway-skills.property.test.ts": {
+      "highNumRunsWithoutComment": 3
+    },
+    "apps/desktop/src/main/__tests__/mcp-relay-session-pool.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/mcp-storage-binding.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/merge-queue.property.test.ts": {
+      "heavyFixture": 10,
+      "highNumRunsWithoutComment": 3
+    },
+    "apps/desktop/src/main/__tests__/messaging-access-control.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/messaging-access-observable.property.test.ts": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/main/__tests__/messaging-agent-tools-observable.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/messaging-approval-callback.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/messaging-assistant-streams.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/messaging-backend-observable.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/messaging-binding-observable.property.test.ts": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/main/__tests__/messaging-binding-retirement-metadata.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-binding-retirement-store.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-binding-retirement.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-binding-service.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/messaging-callback-handlers.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-callback-observable.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/messaging-canonical-queue-counterexample.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/messaging-canonical-queue-observable.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/messaging-claude-recovery.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-command-handlers.property.test.ts": {
+      "heavyFixture": 7
+    },
+    "apps/desktop/src/main/__tests__/messaging-command-helpers.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/messaging-command-observable.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/messaging-connection-routing.property.test.ts": {
+      "heavyFixture": 7
+    },
+    "apps/desktop/src/main/__tests__/messaging-controller.test.ts": {
+      "heavyFixture": 8
+    },
+    "apps/desktop/src/main/__tests__/messaging-delivery-budget.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-delivery-budget.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-first-typing.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/messaging-inbound-helpers.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/messaging-inbound-observable.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/messaging-inbound-turns.property.test.ts": {
+      "heavyFixture": 7
+    },
+    "apps/desktop/src/main/__tests__/messaging-monitor-observable.property.test.ts": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/main/__tests__/messaging-monitor-settlement.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-new-thread-observable.property.test.ts": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/main/__tests__/messaging-new-thread-workflow.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-pending-request-observable.property.test.ts": {
+      "heavyFixture": 12
+    },
+    "apps/desktop/src/main/__tests__/messaging-private-response-observable.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/messaging-queue-recoveries.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/messaging-rate-limit-restart.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-recovery-notice.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-reply-delivery.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-review-claude-code.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/messaging-review-observable.property.test.ts": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/main/__tests__/messaging-settings-parity.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/messaging-single-connection.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-storage.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/messaging-turn-late-acceptance.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/messaging-turn-observable.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/native-title-storage-cost.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/native-voice-session.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/navigation-archived-detail.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/navigation-directory-enrichment.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/navigation-group-archive.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/navigation-managed-membership.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/navigation-query-source.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/navigation-viewer-pass.property.test.ts": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/main/__tests__/openai-decisions-batch-delivery.test.ts": {
+      "heavyFixture": 4,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/openai-decisions-batch.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/openai-decisions-profile.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/openai-decisions-usage-batcher.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/operator-request-storage.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/operator-review-retention.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/outpost-container-restart.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/outpost-model-key-proxy.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/outpost-profile-runtime.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/overlay-store-archive-retention.test.ts": {
+      "heavyFixture": 1,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/overlay-store-pricing-summary-work.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/overlay-store-pricing-turn-metadata.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/overlay-store-usage-pricing.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/owner-conformance.test.ts": {
+      "heavyFixture": 8
+    },
+    "apps/desktop/src/main/__tests__/owner-metadata-no-op-writes.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/owner-thread-storage.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/pr-auto-dispatch-limits.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/pr-auto-dispatch-scheduled-row.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/pr-review-offer-coordinator.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/pr-status-storage.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/pr-status-watch-attempts.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/pr-status-watch.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/pr-terminal-retirement.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/pr-watch-archive.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/pr-watch-recovery.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/primary-thread-repository.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/profile-secret-storage.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/profiles-ipc.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/project-checkout-groups.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/pwragent-thread-todo-agent-tools.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/pwrsnap-media-links.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/queue-agent-replacement-bundle.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/registry-turn-state.property.test.ts": {
+      "heavyFixture": 7
+    },
+    "apps/desktop/src/main/__tests__/research-harness-discovery.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/research-harness-members.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/research-harness-reconcile.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/research-harness-settings.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/research-harness.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/research-profile-runs.differential.property.test.ts": {
+      "heavyFixture": 1,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/research-projections.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/research-run-bounds-restart.model.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/research-run-ownership.model.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/research-run-restart.model.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/research-service-sqlite.differential.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/research-store.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/resource-checkout-key.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/retained-owner-listing.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/retained-owner-read.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/review-arguments.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/review-auto-fix-handoff.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/review-auto-fix-runs.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/review-auto-fix.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/review-submission.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/review-target-routing.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/runtime-lease-manager.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/runtime-lease-manager.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/runtime-lease-storage.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/sandboxer-pr-cleanup.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/scheduled-action-projection.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/scheduled-thread-action-storage.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/settings-storage.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/shared-acp-agent-storage.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/shared-acp-session-storage.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/shared-automation-storage.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/shared-durable-receipt-storage.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/shared-federation-storage.property.test.ts": {
+      "heavyFixture": 8
+    },
+    "apps/desktop/src/main/__tests__/shared-inventory-search-storage.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/shared-messaging-request-storage.property.test.ts": {
+      "heavyFixture": 7
+    },
+    "apps/desktop/src/main/__tests__/shared-messaging-storage.property.test.ts": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/main/__tests__/shared-messaging-store.property.test.ts": {
+      "heavyFixture": 9
+    },
+    "apps/desktop/src/main/__tests__/shared-operator-request-storage.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/shared-owner-metadata-storage.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/shared-runtime-lease-storage.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/shared-scheduled-action-storage.property.test.ts": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/main/__tests__/shared-thread-resource-storage.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/shared-todo-review-storage.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/shared-token-miser-storage.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/sqlite-write-metrics.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/stack-detail-reuse.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/stack-reader.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/stack-recovery.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/starting-thread-placement.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/steer-turn-fallback-replay.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/storage-maintenance-storage.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/stream-notice-owner.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/sub-agent-failure-dismissal.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/subagent-monitor-service.test.ts": {
+      "heavyFixture": 8,
+      "highNumRunsWithoutComment": 6
+    },
+    "apps/desktop/src/main/__tests__/subthread-forest.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/subthread-order-actions.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/subthread-order-read-budget.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/task-monitor-wake-store.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/telegram-connection-migration.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/telegram-pairing-grants.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-accounting-display.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/thread-archive-coordinator.test.ts": {
+      "heavyFixture": 6,
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/thread-archive-retention.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/thread-archive-sweeper.never-archives.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-card-storage.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/thread-compaction-recovery.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/thread-dependencies.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-dependency-ci-runs.property.test.ts": {
+      "heavyFixture": 8
+    },
+    "apps/desktop/src/main/__tests__/thread-dependency-local-files.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/thread-dependency-merge-builds.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/thread-dependency-registration.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/thread-dependency-rolling-workers.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-directory-service.test.ts": {
+      "heavyFixture": 4,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-feature-storage.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/thread-linked-workspace.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-maintenance-scan-progress.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-maintenance-service.test.ts": {
+      "heavyFixture": 23
+    },
+    "apps/desktop/src/main/__tests__/thread-naming-lifecycle.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-owned-checkouts.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-owner-admission.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/thread-search-fixture.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-search-maintenance.property.test.ts": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/main/__tests__/thread-search-ranked.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/thread-sub-agents-store.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-todo-dispatch.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-todo-managed-membership.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/thread-todo-models.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-todo-provider.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/thread-usage-ledger.test.ts": {
+      "heavyFixture": 6,
+      "highNumRunsWithoutComment": 5
+    },
+    "apps/desktop/src/main/__tests__/thread-usage-math.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/thread-workspace-service.test.ts": {
+      "heavyFixture": 5,
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/main/__tests__/token-miser-gate-pricing-read.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/token-miser-ledger-persistence.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/turn-event-observable.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/turn-event-observer.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/wake-registration-provenance.property.test.ts": {
+      "heavyFixture": 5
+    },
+    "apps/desktop/src/main/__tests__/window-activation-restore.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/worktree-archive-git.property.test.ts": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/main/__tests__/worktree-base-directory.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/main/__tests__/worktree-lock-approval.property.test.ts": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/main/__tests__/worktree-maintenance-registration.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/__tests__/worktree-volume-lock.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/main/agent-tools/__tests__/thread-maintenance-tool-scans.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/__tests__/active-thread.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/automations/__tests__/automation-agent-inventory.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/automations/__tests__/automation-editor.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/chrome/__tests__/federation-thread-targets.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/ComposerTiptapInput.property.test.tsx": {
+      "heavyFixture": 7
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/ModelSettingsPicker.name.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/ReviewPullRequestPicker.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/access-mode-single-control.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/composer-command-tooltip.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/composer-editor-options.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/composer-formatting.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/composer-model-pickers.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/composer-reference-autocomplete.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/composer-steer-fallback.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/composer.test.tsx": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/launchpad-composer-draft.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/review-request-pull-request.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/composer/__tests__/useComposerDictation.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/federation-activity/__tests__/usage-overview-filter-names.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/federation/__tests__/thread-handoff-transfer.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/features/maintenance/__tests__/ThreadMaintenanceDialog.test.tsx": {
+      "heavyFixture": 4,
+      "highNumRunsWithoutComment": 3
+    },
+    "apps/desktop/src/renderer/src/features/maintenance/__tests__/thread-maintenance-build-output.test.tsx": {
+      "heavyFixture": 1,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/features/maintenance/__tests__/thread-maintenance-ignored-files.test.tsx": {
+      "heavyFixture": 2,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/features/maintenance/__tests__/thread-maintenance-output-class.test.tsx": {
+      "heavyFixture": 2,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/features/maintenance/__tests__/thread-maintenance-run-view.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/maintenance/__tests__/thread-maintenance-space.test.tsx": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/renderer/src/features/maintenance/__tests__/thread-maintenance-unlock-remove.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/bulk-mark-read.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/directory-disclosure-lifetime.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/directory-jump-tail.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/directory-projection-budget.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/draft-row-render-budget.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/pinned-group.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/project-index-jump-readiness.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/project-index-scroll.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/project-jump-under-dock.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/selected-thread-dock-work.property.test.tsx": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/sidebar-remote-removal.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/sidebar-shell-isolation.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/sidebar.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/stack-membership-sidebar-order.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-item-identities.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-meta-items.model.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-meta-tooltips.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-meta-wait-scope.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-row-work-progress.model.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/notifications/__tests__/thread-action-error-notice.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/onboarding/__tests__/GetStarted.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrChip.held-card.model.test.tsx": {
+      "heavyFixture": 1,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrChip.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrRollupChip.card-aim.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrRollupChip.card-path.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrRollupChip.detach.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrRollupChip.menus.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrRollupChip.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrRollupChip.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/transcript-pr-status.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/pr-status/__tests__/usePullRequestRefresh.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/pr-watches/__tests__/merge-build-watches.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/research/__tests__/ResearchDiscoveryPanel.test.tsx": {
+      "heavyFixture": 1,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/features/research/__tests__/ResearchPanel.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/research/__tests__/research-harness-phase.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/renderer/src/features/resources/__tests__/ResourcesScreen.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/resources/__tests__/useResourceCheckouts.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/settings/__tests__/ForgeProjectRules.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/settings/__tests__/HelperModelSettings.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/settings/__tests__/TaskMonitorModelSettings.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/settings/__tests__/acp-grok-authentication.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/settings/__tests__/secret-field.property.test.tsx": {
+      "heavyFixture": 6
+    },
+    "apps/desktop/src/renderer/src/features/settings/__tests__/secret-inputs.property.test.tsx": {
+      "heavyFixture": 7
+    },
+    "apps/desktop/src/renderer/src/features/settings/__tests__/settings-screen.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/settings/guided-setup/__tests__/messaging-setup-flow.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/features/settings/guided-setup/__tests__/secret-field-row.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/stacks/__tests__/stack-detail-cache.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/stacks/__tests__/stack-display.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/star-map/__tests__/StarMapChatCard.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-dependencies/__tests__/ContinueAfterDialog.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-dependencies/__tests__/thread-dependency-indicators.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/ThreadBoatSandboxes.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/ActiveSubAgentsStrip.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/BackgroundTerminalsView.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/PricingPanel.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/SubAgentTranscriptWindow.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/activity-path-display.property.test.ts": {
+      "highNumRunsWithoutComment": 3
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/document-connection-stability.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/markdown-files-window.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/project-crumb-fit.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/pull-request-number-scope.property.test.tsx": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/remark-pull-request-references.property.test.tsx": {
+      "heavyFixture": 2,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/remote-review.property.test.tsx": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/thread-link-hover-target.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/thread-link-viewer-frame.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/transcript-file-opener.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/transcript-thread-isolation.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/use-file-preview-read.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/__tests__/work-phase-activity-runs.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/context-panels/__tests__/LinkedProjectsPanel.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/context-panels/__tests__/ProviderStatusPanel.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/context-panels/__tests__/UsagePaceCard.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-detail/context-panels/__tests__/decision-input-preview.property.test.ts": {
+      "highNumRunsWithoutComment": 3
+    },
+    "apps/desktop/src/renderer/src/features/thread-todos/__tests__/ThreadTodoCard.resting-height.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-todos/__tests__/ThreadTodoStack.launch.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-todos/__tests__/TodoModelPicker.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-todos/__tests__/queued-review-card.property.test.tsx": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/renderer/src/features/thread-todos/__tests__/thread-todo-groups.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-todos/__tests__/thread-todo-launches.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/features/thread-todos/__tests__/thread-todo-provenance.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/thread-todos/__tests__/todo-pull-request-scope.property.test.tsx": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/archive-cleanup-notice.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/data-tooltip-content.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/execution-mode-todo-access.property.test.ts": {
+      "highNumRunsWithoutComment": 4
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/hover-card-bridge.model.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/locked-worktree-notice.property.test.tsx": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/model-settings-recents.property.test.ts": {
+      "highNumRunsWithoutComment": 2
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/navigation-selection-descriptor.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/observe-tooltip-anchor.property.test.tsx": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/pointer-aim.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/review-run-mode.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/safety-buffering-session.model.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/session-navigation-indicators.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/single-visible-tooltip.property.test.tsx": {
+      "heavyFixture": 1,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/thread-item-groups.concurrent.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/thread-link-membership.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/thread-link-metadata.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/tooltip-bridge.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/transcript-review-matching.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useFederationThreadEventSubscriptions.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useNavigationHistory.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useRecentRemoteThreads.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadNavigation.archive-plan.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadNavigation.bounded.test.tsx": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadNavigation.cleanup-error.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadNavigation.cleanup-reporting.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadNavigation.directory-pins.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadPullRequestAttachments.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.failed-refresh.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.pending-requests.property.test.tsx": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.property.test.tsx": {
+      "heavyFixture": 4
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.review-lifecycle.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.review-order.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.sent-message-echo.property.test.tsx": {
+      "heavyFixture": 1,
+      "highNumRunsWithoutComment": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.steer-echo.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.unopened-transcript.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSessionState.usage-ownership.property.test.tsx": {
+      "heavyFixture": 2
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/useThreadSkills.property.test.tsx": {
+      "heavyFixture": 3
+    },
+    "apps/desktop/src/renderer/src/lib/__tests__/user-message-timestamps.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/test/editor-teardown.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/shared/__tests__/path-within.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/owner-core/src/__tests__/navigation-attention-scope.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/owner-core/src/__tests__/navigation-directory-counts.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/owner-core/src/__tests__/navigation-provider-identities.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/owner-core/src/__tests__/queue-notice-lifecycle.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/owner-core/src/__tests__/research-service.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/owner-core/src/__tests__/thread-turn-queue-access.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/owner-core/src/__tests__/thread-turn-queue-event-loop.property.test.ts": {
+      "heavyFixture": 1
+    },
+    "packages/owner-core/src/__tests__/thread-turn-queue.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/shared/src/__tests__/acp-mirrored-mode.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/shared/src/__tests__/codex-hardware-key-reauthentication.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/shared/src/__tests__/decision-model-options.property.test.ts": {
+      "highNumRunsWithoutComment": 3
+    },
+    "packages/shared/src/__tests__/model-defaults.property.test.ts": {
+      "highNumRunsWithoutComment": 4
+    },
+    "packages/shared/src/__tests__/provider-access-mode.property.test.ts": {
+      "highNumRunsWithoutComment": 3
+    },
+    "packages/shared/src/__tests__/pull-request-merge-route.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/shared/src/__tests__/pull-request-set-review.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/shared/src/__tests__/skill-origin-bundled-root.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/shared/src/__tests__/thread-todo-access.property.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "packages/shared/src/__tests__/worktree-paths.test.ts": {
+      "highNumRunsWithoutComment": 1
+    },
+    "scripts/check-agent-instructions-size.test.mjs": {
+      "heavyFixture": 2
+    },
+    "scripts/main-bytecode.property.test.mjs": {
+      "heavyFixture": 1
+    }
+  }
+}
