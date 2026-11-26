@@ -646,6 +646,7 @@ function isWorkPhaseEntry(
       !isTerminalTurnFailureActivity(entry) &&
       !isRewindMarkerEntry(entry) &&
       !isFileDiffActivity(entry) &&
+      !isRichBrowserUseActivity(entry) &&
       !isTokenUsageActivity(entry)
     );
   }
@@ -670,6 +671,7 @@ export function isConcreteWorkEntry(
       !isTerminalTurnFailureActivity(entry) &&
       !isRewindMarkerEntry(entry) &&
       !isFileDiffActivity(entry) &&
+      !isRichBrowserUseActivity(entry) &&
       !isTokenUsageActivity(entry))
   );
 }
@@ -694,6 +696,10 @@ function isTerminalTurnFailureActivity(
 
 function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
   return entry.details.some(hasTranscriptFileDiff);
+}
+
+function isRichBrowserUseActivity(entry: AppServerThreadActivityEntry): boolean {
+  return Boolean(entry.browserUse && !entry.browserUse.standalone);
 }
 
 function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {

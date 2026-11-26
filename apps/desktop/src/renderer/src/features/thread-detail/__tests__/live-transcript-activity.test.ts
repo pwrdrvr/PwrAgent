@@ -1192,4 +1192,25 @@ it("extracts and preserves Codex Browser Use metadata across live MCP tool updat
     { id: "browser-live-1", kind: "command", label: "Check pricing page", status: "completed" },
   ]);
   expect(afterLateUpdate[0]?.browserUse).toEqual(merged[0]?.browserUse);
+
+  // Auxiliary codex_app/update_running_summary and sibling cua_repl/js calls
+  // inside a verified browser batch do not prepend a noisy "Used N tools · " prefix,
+  // while a batch without browserUse evidence still counts them normally.
+  const runningSummary = buildLiveToolDetails({
+    type: "mcpToolCall",
+    id: "summary-live-1",
+    server: "codex_app",
+    tool: "update_running_summary",
+    status: "completed",
+  }, undefined, "item/completed");
+  const failedProbe = buildLiveToolDetails({
+    type: "mcpToolCall",
+    id: "probe-live-1",
+    server: "cua_repl",
+    tool: "js",
+    status: "failed",
+    arguments: { title: "Opening Example Domain" },
+  }, undefined, "item/completed");
+  expect(summarizeLiveActivity([...runningSummary, ...failedProbe])).toBe("Used 2 tools");
+  expect(summarizeLiveActivity([...runningSummary, ...failedProbe, ...completed])).toBe("Check pricing page");
 });

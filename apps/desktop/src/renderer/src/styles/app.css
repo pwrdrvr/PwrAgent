@@ -37355,6 +37355,14 @@ div.composer-error-row__toggle {
   color: var(--accent-bright);
 }
 
+.transcript-browser-use:not([data-browser-standalone="true"]) {
+  width: min(100%, 760px);
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
 .transcript-browser-use__headline {
   display: inline-flex;
   min-width: 0;
@@ -37405,7 +37413,7 @@ div.composer-error-row__toggle {
 .transcript-browser-use__url,
 .transcript-browser-use__detail-url {
   min-width: 0;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-family: var(--font-mono);
   font-size: 12px;
   text-decoration: none;

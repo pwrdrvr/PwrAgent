@@ -403,7 +403,9 @@ it("preserves non-browser work in mixed batches and keeps 1-step browser cards i
     <TranscriptList {...listProps} entries={entries} parentThreadBackend="codex" />,
   );
   try {
-    fireEvent.click(view.getByRole("button", { name: "Previous work" }));
+    // Rich Browser Use cards stay visible directly in the transcript (like file diffs),
+    // never buried behind "Previous work".
+    expect(view.queryByRole("button", { name: "Previous work" })).toBeNull();
     expect(view.getByText("Ran 1 command · Verified preview")).toHaveClass("transcript-activity__label");
     expect(view.getByText("In-app browser")).toBeInTheDocument();
     expect(view.getByRole("link", { name: "localhost:3000/preview" })).toBeInTheDocument();
@@ -489,7 +491,7 @@ it("keeps browser context visible on deferred detailsRef activities and loads fu
     />,
   );
   try {
-    fireEvent.click(view.getByRole("button", { name: "Previous work" }));
+    expect(view.queryByRole("button", { name: "Previous work" })).toBeNull();
     expect(view.getByText("Verified checkout form")).toHaveClass("transcript-activity__label");
     expect(view.getByText("In-app browser")).toBeInTheDocument();
     expect(view.getByRole("link", { name: "localhost:3000/checkout" })).toBeInTheDocument();
@@ -499,6 +501,93 @@ it("keeps browser context visible on deferred detailsRef activities and loads fu
       expect(readThread).toHaveBeenCalledTimes(1);
       expect(view.getByText("Inspect checkout form")).toBeInTheDocument();
     });
+  } finally {
+    view.unmount();
+  }
+});
+
+it("keeps a completed turn's Browser Use card visible between folded commentary and final answer", () => {
+  const entries: AppServerThreadEntry[] = [
+    {
+      type: "message",
+      id: "user-example",
+      role: "user",
+      text: "Inspect https://example.com",
+      turn: { id: "turn-example", status: "completed" },
+    },
+    {
+      type: "message",
+      id: "commentary-example",
+      role: "assistant",
+      phase: "commentary",
+      text: "I'll open example.com and capture a screenshot.",
+      turn: { id: "turn-example", status: "completed" },
+    },
+    {
+      type: "activity",
+      id: "activity-example",
+      summary: "Browsed example.com",
+      status: "completed",
+      turn: { id: "turn-example", status: "completed" },
+      details: [
+        {
+          id: "summary-call",
+          kind: "command",
+          label: "Used MCP codex_app/update_running_summary",
+          status: "completed",
+        },
+        {
+          id: "iab-1",
+          kind: "command",
+          label: "Opening page in browser",
+          status: "failed",
+          browserUse: { backend: "iab", browserId: "3", url: "https://example.com/" },
+        },
+        {
+          id: "iab-2",
+          kind: "command",
+          label: "Inspecting page content",
+          status: "completed",
+          browserUse: {
+            backend: "iab",
+            browserId: "3",
+            url: "https://example.com/",
+            screenshotUrl: SAMPLE_SCREENSHOT,
+          },
+        },
+      ],
+    },
+    {
+      type: "message",
+      id: "bc-example",
+      role: "assistant",
+      phase: "commentary",
+      text: '::browser-complete{title="Inspected Example Domain page"}',
+      turn: { id: "turn-example", status: "completed" },
+    },
+    {
+      type: "message",
+      id: "final-example",
+      role: "assistant",
+      phase: "final",
+      text: "Opened example.com in the in-app browser.",
+      turn: { id: "turn-example", status: "completed" },
+    },
+  ];
+
+  const view = render(
+    <TranscriptList {...listProps} entries={entries} parentThreadBackend="codex" />,
+  );
+  try {
+    expect(view.getByRole("button", { name: "1 previous message" })).toBeInTheDocument();
+    expect(view.getByText("Inspected Example Domain page")).toHaveClass("transcript-activity__label");
+    expect(view.getByText("In-app browser")).toBeInTheDocument();
+    expect(view.getByRole("link", { name: "example.com" })).toHaveAttribute("href", "https://example.com/");
+    expect(view.getByText("2 steps")).toBeInTheDocument();
+    expect(
+      view.getByRole("button", { name: "Expand browser preview for Inspected Example Domain page" }),
+    ).toBeInTheDocument();
+    expect(view.getByText("Opened example.com in the in-app browser.")).toBeInTheDocument();
   } finally {
     view.unmount();
   }

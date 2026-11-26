@@ -289,4 +289,65 @@ describe("extractCodexBrowserUseDetail", () => {
     ).toBe("Browsed localhost:3000");
     expect(browserUseSurfaceKey(meta)).toBe(browserUseSurfaceKey({ backend: "IAB", browserId: "iab" }));
   });
+
+  it("extracts browserUse metadata and screenshot from a JSON-wrapped CallToolResult text block when top-level _meta is null", () => {
+    const detail = extractCodexBrowserUseDetail({
+      type: "mcpToolCall",
+      server: "cua_repl",
+      tool: "js",
+      status: "completed",
+      result: {
+        _meta: null,
+        structuredContent: null,
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              content: [{ type: "text", text: "Browser tab: 1" }],
+              isError: false,
+              _meta: {
+                "codex/browserUse": true,
+                "codex/toolSurface": {
+                  kind: "browserUse",
+                  backend: "iab",
+                  browserId: "3",
+                  history: { provider: "iab", browser_id: "3", screenshot: true },
+                  screenshot: {
+                    canPersist: true,
+                    pageUrl: "https://example.com",
+                    tabId: "1",
+                    url: SAMPLE_JPEG_DATA_URL,
+                  },
+                },
+                browser_use: { url: "https://example.com/" },
+              },
+            }),
+          },
+        ],
+      },
+    });
+
+    expect(detail).toEqual({
+      backend: "iab",
+      browserId: "3",
+      url: "https://example.com/",
+      tabId: "1",
+      screenshotUrl: SAMPLE_JPEG_DATA_URL,
+    });
+  });
+
+  it("ignores truncated or non-CallToolResult JSON inside result.content", () => {
+    expect(
+      extractCodexBrowserUseDetail({
+        type: "mcpToolCall",
+        result: {
+          _meta: null,
+          content: [
+            { type: "text", text: '{"content":[{"type":"text","text":"cut off' },
+            { type: "text", text: JSON.stringify({ _meta: { "codex/browserUse": true } }) },
+          ],
+        },
+      }),
+    ).toBeUndefined();
+  });
 });

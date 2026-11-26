@@ -37,6 +37,7 @@ import {
 import {
   extractCodexBrowserUseDetail,
   formatCodexBrowserUseDetailLabel,
+  isCodexBrowserBatchAuxiliaryTool,
   summarizeCodexBrowserUseDetails,
 } from "@pwragent/shared/codex-browser-use";
 import {
@@ -948,10 +949,15 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
     return directDetail?.label ?? formatFileEditActivitySummary(details);
   }
   const browserSummary = summarizeCodexBrowserUseDetails(primaryDetails);
+  const isBrowserBatchDetail = (detail: AppServerThreadActivityDetail): boolean =>
+    Boolean(
+      detail.browserUse
+      || (browserSummary && isCodexBrowserBatchAuxiliaryTool(detail.command?.rawCommand)),
+    );
   if (
     browserSummary
     && subAgentActivityParts.length === 0
-    && primaryDetails.every((detail) => Boolean(detail.browserUse))
+    && primaryDetails.every(isBrowserBatchDetail)
   ) {
     return browserSummary;
   }
@@ -977,7 +983,7 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
   const commandLabels = [
     ...new Set(
       primaryDetails
-        .filter((detail) => detail.kind !== "read" && !detail.browserUse)
+        .filter((detail) => detail.kind !== "read" && !isBrowserBatchDetail(detail))
         .map((detail) => commandSummaryName(detail.label))
         .filter(Boolean)
     ),

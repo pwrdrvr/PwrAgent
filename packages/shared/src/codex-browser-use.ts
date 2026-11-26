@@ -45,10 +45,63 @@ const KNOWN_BROWSER_SURFACE_LABELS: Readonly<Record<string, string>> = {
   dot: "In-app browser",
 };
 
+const BROWSER_BATCH_AUXILIARY_TOOL_PATTERN =
+  /(?:^|\/)(?:(?:cua_repl|node_repl)\/js|codex_app\/update_running_summary)$/iu;
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
     : undefined;
+}
+
+function readWrappedCallToolResultMeta(
+  result: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const direct = asRecord(result?._meta);
+  if (direct) return direct;
+  const content = result?.content;
+  if (!Array.isArray(content)) return undefined;
+  for (const block of content) {
+    const text = typeof block === "string"
+      ? block
+      : readString(asRecord(block), "text");
+    if (!text) continue;
+    const trimmed = text.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      continue;
+    }
+    const wrapper = asRecord(parsed);
+    if (
+      !wrapper
+      || (!Array.isArray(wrapper.content) && typeof wrapper.isError !== "boolean")
+    ) {
+      continue;
+    }
+    const nestedMeta = asRecord(wrapper._meta);
+    if (nestedMeta) return nestedMeta;
+  }
+  return undefined;
+}
+
+/**
+ * Identifies sibling Codex Browser/App bookkeeping MCP calls that routinely
+ * appear inside a Browser Use activity batch (for example a pre-connect
+ * `cua_repl/js` probe, a truncated screenshot `cua_repl/js` result, or
+ * `codex_app/update_running_summary`). When a batch already carries verified
+ * Browser Use metadata, these auxiliary calls should not prepend a noisy
+ * `"Used N tools · "` prefix onto the browser card headline.
+ */
+export function isCodexBrowserBatchAuxiliaryTool(
+  toolIdentifier: string | undefined,
+): boolean {
+  return Boolean(
+    toolIdentifier
+    && BROWSER_BATCH_AUXILIARY_TOOL_PATTERN.test(toolIdentifier.trim()),
+  );
 }
 
 function readString(
@@ -160,7 +213,7 @@ export function extractCodexBrowserUseDetail(
   item: Record<string, unknown>,
 ): AppServerThreadBrowserUseDetail | undefined {
   const result = asRecord(item.result);
-  const meta = asRecord(result?._meta);
+  const meta = readWrappedCallToolResultMeta(result);
   if (!meta) return undefined;
 
   const hasToolSurfaceField = Object.prototype.hasOwnProperty.call(
