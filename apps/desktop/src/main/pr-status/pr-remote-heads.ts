@@ -1,5 +1,5 @@
 import { constants, type BigIntStats } from "node:fs";
-import { lstat, open, realpath } from "node:fs/promises";
+import { access, lstat, open, realpath } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { getConfiguredGitCommand, getSelectedManagedGit } from "../git-command";
@@ -188,7 +188,7 @@ async function locateRefs(cwd: string, files: RefFiles): Promise<CheckoutLocatio
 }
 
 /** Observe the inputs to Git's checkout discovery and config hierarchy. */
-export async function observePrCheckoutConfigFiles(cwd: string, configPaths: string[]) {
+export async function observePrCheckoutConfigFiles(cwd: string, configPaths: string[], demand?: PrMetadataDemand) {
   return await runPrMetadataFileProbe(async (signal) => {
     const files = new RefFiles(signal);
     const location = await locateRefs(cwd, files);
@@ -208,8 +208,49 @@ export async function observePrCheckoutConfigFiles(cwd: string, configPaths: str
       const info = await files.status(file);
       if (info && !info.isFile()) return undefined;
     }
-    return { ...location, paths, unchanged: () => runPrMetadataFileProbe((currentSignal) => files.unchanged(currentSignal)) };
-  });
+    return { ...location, paths, unchanged: (currentDemand: PrMetadataDemand | undefined = demand) =>
+      runPrMetadataFileProbe((currentSignal) => files.unchanged(currentSignal), currentDemand) };
+  }, demand);
+}
+
+/** An ordinary linked worktree can borrow a sibling's config only after its
+ * own Git discovery inputs and the absence of worktree config are proved. */
+export async function observeLinkedPrCheckout(cwd: string, demand: PrMetadataDemand) {
+  return await runPrMetadataFileProbe(async (signal) => {
+    const files = new RefFiles(signal);
+    const location = await locateRefs(cwd, files);
+    if (!location || location.gitDirLink !== location.gitDir) return undefined;
+    const { directory, commonDir, gitDir } = location;
+    const dotGit = path.join(directory, ".git");
+    const owner = process.getuid?.();
+    if (owner === undefined || owner !== process.geteuid?.()) return undefined;
+    for (const file of [directory, dotGit, gitDir]) {
+      if ((await files.status(file))?.uid !== BigInt(owner)) return undefined;
+    }
+    const backlink = path.join(gitDir, "gitdir");
+    const backlinkInfo = await files.status(backlink);
+    if (!backlinkInfo || (await files.text(backlink, backlinkInfo)).replace(/\r?\n$/, "") !== dotGit) return undefined;
+    const head = path.join(gitDir, "HEAD");
+    const headInfo = await files.status(head);
+    if (!headInfo) return undefined;
+    const headText = (await files.text(head, headInfo)).replace(/\r?\n$/, "");
+    if (!/^[0-9a-f]{40}$/.test(headText) && !(headText.startsWith("ref: refs/heads/") && safeRef(headText.slice(5)))) return undefined;
+    for (const name of ["objects", "refs"]) {
+      signal.throwIfAborted();
+      const directory = path.join(commonDir, name);
+      if (!(await files.status(directory))?.isDirectory()) return undefined;
+      await access(directory, constants.X_OK);
+    }
+    for (const missing of [path.join(gitDir, "config.worktree"), path.join(commonDir, "remotes"), path.join(commonDir, "branches")]) {
+      if (await files.status(missing)) return undefined;
+    }
+    if (!(await files.status(path.join(commonDir, "config")))?.isFile()) return undefined;
+    return {
+      ...location,
+      unchanged: (currentDemand: PrMetadataDemand = demand) =>
+        runPrMetadataFileProbe((currentSignal) => files.unchanged(currentSignal), currentDemand),
+    };
+  }, demand);
 }
 
 async function readPackedNames(commonDir: string, files: RefFiles): Promise<Set<string> | undefined> {

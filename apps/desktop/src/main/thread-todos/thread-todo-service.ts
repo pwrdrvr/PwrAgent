@@ -44,6 +44,7 @@ import {
   threadTodoStartAccessChanged,
   threadTodoSteps,
 } from "@pwragent/shared/contracts/thread-todos";
+import { PR_OFFER_RETIRE_RESULTS } from "../pr-status/pr-review-readiness";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
 import {
   THREAD_TODO_PLAN_DETAIL,
@@ -74,6 +75,13 @@ export type ThreadTodoActionRunners = {
     cwd?: string;
     pullRequest: string;
     method: ThreadTodoMergeMethod;
+  }) => Promise<{ summary: string }>;
+  /** Saves a proposed hands-off rule to the raising thread's project. */
+  addForgeHandsOffRule?: (params: {
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    repository: string;
+    label?: string;
   }) => Promise<{ summary: string }>;
   /**
    * `crossProject` is true when the card is for a project other than the
@@ -448,6 +456,11 @@ export class ThreadTodoService {
     }).todo;
   }
 
+  /** The card automation raised for this dependency, including withdrawn cards. */
+  findByDependency(dependencyId: string): ThreadTodo | undefined {
+    return this.store.findByDependency(dependencyId);
+  }
+
   /** The open card a thread holds under `key`, if any. */
   findOpenByKey(params: {
     backend: AppServerBackendKind;
@@ -717,7 +730,7 @@ export class ThreadTodoService {
     });
   }
 
-  /** A scheduled review can complete only its own open review card. */
+  /** A scheduled review completes its source card after provider acceptance. */
   resolveStartedReview(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -725,7 +738,8 @@ export class ThreadTodoService {
     allowOpenItems?: boolean;
   }): void {
     const todo = this.findForThread(params);
-    if (todo.status !== "open" || todo.action?.type !== "start_review") return;
+    const suppressed = todo.status === "dismissed" && todo.result === PR_OFFER_RETIRE_RESULTS.review_running;
+    if ((todo.status !== "open" && !suppressed) || todo.action?.type !== "start_review") return;
     this.resolve({ id: todo.id, status: "done", allowOpenItems: params.allowOpenItems });
   }
 
@@ -1071,6 +1085,15 @@ export class ThreadTodoService {
         });
         return this.finish(id, { result: merged.summary });
       }
+      if (action.type === "add_forge_hands_off_rule") {
+        if (!runners.addForgeHandsOffRule) throw new Error("Forge Automation is not available here.");
+        const added = await runners.addForgeHandsOffRule({
+          sourceBackend: todo.backend, sourceThreadId: todo.threadId,
+          repository: action.repository,
+          ...(action.label ? { label: action.label } : {}),
+        });
+        return this.finish(id, { result: added.summary });
+      }
       if (action.type !== "start_thread") throw new Error("Unsupported to-do action.");
       const choices: ThreadTodoStartChoices = {
         ...(options.workMode ? { workMode: options.workMode } : {}),
@@ -1255,6 +1278,15 @@ function patchAction(
       throw new ThreadTodoError("invalid_arguments", "A message card takes only prompt updates. Raise it again with the same key to change its destination.");
     }
     return patch.prompt ? { ...action, prompt: patch.prompt } : action;
+  }
+  if (action?.type === "add_forge_hands_off_rule") {
+    if (fields.length > 0) {
+      throw new ThreadTodoError(
+        "invalid_arguments",
+        "A hands-off rule card cannot be edited. Raise it again with the same key to change the rule.",
+      );
+    }
+    return action;
   }
   if (action?.type === "merge_pull_request") {
     const misplaced = fields.filter((field) => field !== "pullRequest");

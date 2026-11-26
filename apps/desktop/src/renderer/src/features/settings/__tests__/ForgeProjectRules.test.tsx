@@ -18,9 +18,14 @@ import {
   SUPERSEDED_CODEX_MODEL_LABELS,
   codexCatalogArbitrary,
   codexCatalogModels,
-  expectedModelSelectSections,
-  selectSections,
+  expectModelSettingsToList,
+  expectedModelDropdown,
 } from "../../../test/model-catalog";
+import {
+  chooseModelSettingsOption,
+  modelSettingsOptionNames,
+  openModelSettings,
+} from "../../../test/model-settings";
 import { ForgeProjectRules } from "../ForgeProjectRules";
 import { decodeForgeRulesRoute, encodeForgeRulesRoute } from "../forge-rules-route";
 
@@ -206,7 +211,7 @@ describe("ForgeProjectRules", () => {
       .toHaveClass("is-risk");
   });
 
-  it("lists Codex models the way the composer does: current first, superseded under Other models", async () => {
+  it("lists Codex models the way the composer does: current first, superseded under Other", async () => {
     const { onRulesChange } = renderRules(policyWith([ALL_AGENTS_RULE]), {
       backends: [{
         kind: "codex",
@@ -218,13 +223,16 @@ describe("ForgeProjectRules", () => {
     fireEvent.click(screen.getByRole("button", { name: "+ Add agent" }));
     const picker = screen.getByRole("group", { name: "Add an agent" });
     chooseSelectOption(within(picker).getByRole("combobox", { name: "Agent" }), "Codex");
-    const model = within(picker).getByRole("combobox", { name: "Model" });
-    expect(selectSections(model)).toEqual([
-      { labels: ["Any model", ...CURRENT_CODEX_MODEL_LABELS] },
-      { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
-      { labels: ["Another model…"] },
+    expect(modelSettingsOptionNames("Model", "Model", within(picker))).toEqual([
+      "Any model",
+      "Another model…",
+      ...CURRENT_CODEX_MODEL_LABELS,
     ]);
-    chooseSelectOption(model, "GPT-5.6-Sol");
+    const panel = openModelSettings("Model", within(picker));
+    fireEvent.click(within(panel).getByRole("button", { name: "Other" }));
+    expect(within(within(panel).getByRole("listbox", { name: "Model: Other" }))
+      .getAllByRole("option").map((option) => option.textContent)).toEqual(SUPERSEDED_CODEX_MODEL_LABELS);
+    chooseModelSettingsOption("Model", "GPT-5.6-Sol", "Model", within(picker));
     fireEvent.click(within(picker).getByRole("button", { name: "Add agent" }));
     await waitFor(() => expect(onRulesChange).toHaveBeenCalledWith([
       ALL_AGENTS_RULE,
@@ -248,11 +256,12 @@ describe("ForgeProjectRules", () => {
         chooseSelectOption(within(picker).getByRole("combobox", { name: "Agent" }), "Codex");
         // The Codex agent offers Codex's own models; each provider is its own agent.
         const own = models.filter((model) => !model.providerId);
-        const expected = expectedModelSelectSections({ kind: "codex", models: own, leading: ["Any model"] });
-        const last = expected.at(-1);
-        if (last && last.group === undefined) last.labels.push("Another model…");
-        else expected.push({ labels: ["Another model…"] });
-        expect(selectSections(within(picker).getByRole("combobox", { name: "Model" }))).toEqual(expected);
+        expectModelSettingsToList(openModelSettings("Model", within(picker)), expectedModelDropdown({
+          kind: "codex",
+          models: own,
+          leading: ["Any model", "Another model…"],
+          otherInline: true,
+        }));
       } finally {
         cleanup();
       }
@@ -266,7 +275,7 @@ describe("ForgeProjectRules", () => {
     const agentSelect = within(picker).getByRole("combobox", { name: "Agent" });
     expect(selectOptionLabels(agentSelect)).toEqual(["Claude", "Codex", "Codex · Local llama", "Grok"]);
     chooseSelectOption(agentSelect, "Codex · Local llama");
-    chooseSelectOption(within(picker).getByRole("combobox", { name: "Model" }), "qwen3-abliterated");
+    chooseModelSettingsOption("Model", "qwen3-abliterated", "Model", within(picker));
     fireEvent.click(within(picker).getByRole("button", { name: "Add agent" }));
     await waitFor(() => expect(onRulesChange).toHaveBeenCalledWith([
       ALL_AGENTS_RULE,
@@ -277,6 +286,31 @@ describe("ForgeProjectRules", () => {
       },
     ]));
     await waitFor(() => expect(screen.queryByRole("group", { name: "Add an agent" })).toBeNull());
+  });
+
+  it("adds a model the catalog does not list through Another model", async () => {
+    const { onRulesChange } = renderRules(policyWith([ALL_AGENTS_RULE]), {
+      backends: [{
+        kind: "codex",
+        label: "Codex",
+        available: true,
+        launchpadOptions: { models: codexCatalogModels() },
+      } as unknown as BackendSummary],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "+ Add agent" }));
+    const picker = screen.getByRole("group", { name: "Add an agent" });
+    chooseSelectOption(within(picker).getByRole("combobox", { name: "Agent" }), "Codex");
+    chooseModelSettingsOption("Model", "Another model…", "Model", within(picker));
+    const add = within(picker).getByRole("button", { name: "Add agent" });
+    expect(add).toBeDisabled();
+    fireEvent.change(within(picker).getByRole("textbox", { name: "Model id" }), {
+      target: { value: "gpt-7-preview" },
+    });
+    fireEvent.click(add);
+    await waitFor(() => expect(onRulesChange).toHaveBeenCalledWith([
+      ALL_AGENTS_RULE,
+      { repository: REPOSITORY, agent: { backend: "codex", model: "gpt-7-preview" }, access: {} },
+    ]));
   });
 
   it("refuses a second row for the same agent", () => {

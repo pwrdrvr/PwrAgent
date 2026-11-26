@@ -722,6 +722,8 @@ export function serializeNavigationSnapshotForHash(params: {
         org: pr.org,
         repo: pr.repo,
         title: pr.title ?? null,
+        labels: pr.labels ?? null,
+        autoFixOff: pr.autoFixOff ?? null,
         additions: pr.additions ?? null,
         deletions: pr.deletions ?? null,
         changedFiles: pr.changedFiles ?? null,
@@ -737,6 +739,7 @@ export function serializeNavigationSnapshotForHash(params: {
         mergeState: pr.mergeState ?? null,
         mergeQueue: pr.mergeQueue ?? null,
         allowedMergeMethods: pr.allowedMergeMethods ?? null,
+        githubStack: pr.githubStack ?? null,
         url: pr.url,
       })),
       // Include the breadcrumb fields (parentTitle / ancestorTitle) in

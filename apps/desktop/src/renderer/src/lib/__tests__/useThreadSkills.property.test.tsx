@@ -268,3 +268,215 @@ describe("skill picker catalog freshness", () => {
     ), { numRuns: 25 });
   });
 });
+
+it.each([
+  { order: "before", commandsArriveFirst: true },
+  { order: "after", commandsArriveFirst: false },
+])("keeps both Antigravity catalogs when commands arrive $order skills", async ({ commandsArriveFirst }) => {
+  const thread: NavigationThreadSummary = {
+    id: "agy-session", source: "acp:antigravity", title: "Garden release", titleSource: "explicit",
+    inbox: { inInbox: false },
+    linkedDirectories: [{ id: "repo", path: "/repo", label: "Repo", kind: "local" }],
+  };
+  const skill = { name: "release", path: "/repo/.agents/skills/release/SKILL.md" };
+  const response = { backend: "acp:antigravity" as const, fetchedAt: 1, data: [{ skills: [skill] }] };
+  let finish!: (value: typeof response) => void;
+  const pending = new Promise<typeof response>((resolve) => { finish = resolve; });
+  let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+  const { result, unmount } = renderHook(() => useThreadSkills({
+    thread,
+    desktopApi: {
+      listSkills: () => pending,
+      onAgentEvent: (listener) => {
+        emit = listener;
+        return () => {};
+      },
+    },
+  }));
+  try {
+    const commands = [{ name: "compact" }];
+    const advertise = () => emit({
+      backend: "acp:antigravity",
+      notification: {
+        method: "thread/availableCommands/updated",
+        params: { threadId: thread.id, commands },
+      },
+    });
+    let request!: Promise<void>;
+    await act(async () => { request = result.current.ensureLoaded(); });
+    if (commandsArriveFirst) await act(async () => { advertise(); });
+    await act(async () => { finish(response); await request; });
+    if (!commandsArriveFirst) await act(async () => { advertise(); });
+    expect(result.current.skills).toEqual([expect.objectContaining(skill)]);
+    expect(result.current.providerCommands).toEqual(commands);
+  } finally {
+    unmount();
+  }
+});
+
+it("loads Antigravity skills while an unopened launchpad's slash-command probe is pending", async () => {
+  const draft = { ...launchpad(0, false), backend: "acp:antigravity" as const };
+  const skill = { name: "prepare", path: "/project-0/.agents/skills/prepare/SKILL.md" };
+  const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>((request) =>
+    request?.catalog === "commands"
+      ? new Promise(() => {})
+      : Promise.resolve({ backend: draft.backend, fetchedAt: 1, data: [{ skills: [skill] }] }));
+  const { result, unmount } = renderHook(() => useThreadSkills({
+    desktopApi: { listSkills }, launchpad: draft,
+  }));
+  try {
+    await act(async () => { void result.current.ensureLoaded({ includeCommands: true }); });
+    expect(listSkills.mock.calls.map(([request]) => request?.catalog)).toEqual(["skills", "commands"]);
+    expect(result.current.loading).toBe(false);
+    expect(result.current.skills).toEqual([expect.objectContaining(skill)]);
+  } finally {
+    unmount();
+  }
+});
+
+it.each([1, 2, 3, 4])(
+  "retries after %i empty Antigravity command lookups and reuses the first successful result",
+  async (misses) => {
+    const draft = { ...launchpad(0, false), backend: "acp:antigravity" as const };
+    const commands = [{ name: "compact" }];
+    let attempts = 0;
+    const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>(async (request) => ({
+      backend: draft.backend,
+      fetchedAt: 1,
+      data: [{ skills: [], commands: request?.catalog === "commands" && ++attempts > misses ? commands : [] }],
+    }));
+    const { result, unmount } = renderHook(() => useThreadSkills({
+      desktopApi: { listSkills }, launchpad: draft, now: () => 1,
+    }));
+    try {
+      for (let attempt = 0; attempt < misses + 2; attempt += 1) {
+        await act(async () => { await result.current.ensureLoaded({ includeCommands: true }); });
+        expect(result.current.providerCommands).toEqual(attempt < misses ? [] : commands);
+      }
+      expect(attempts).toBe(misses + 1);
+      expect(listSkills.mock.calls.filter(([request]) => request?.catalog === "skills")).toHaveLength(1);
+    } finally {
+      unmount();
+    }
+  },
+);
+
+it.each([
+  ["commands", "local"],
+  ["commands", "remote"],
+  ["skills", "local"],
+  ["skills", "remote"],
+] as const)(
+  "attributes only unique Antigravity slash skill matches with %s first on a %s launchpad",
+  async (first, owner) => {
+    const draft = { ...launchpad(0, owner === "remote"), backend: "acp:antigravity" as const };
+    const backend = draft.backend;
+    type Catalog = Awaited<ReturnType<NonNullable<DesktopApi["listSkills"]>>>;
+    const commands = Promise.withResolvers<Catalog>();
+    const skills = Promise.withResolvers<Catalog>();
+    const slashRows = [
+      { name: "/release", description: "Prepare the\nrelease." },
+      { name: "compact", description: "Compact this session." },
+      { name: "check", description: "Check the project." },
+      { name: "unknown" },
+      { name: "plugin-extra", description: "Check the plugin." },
+    ];
+    const releasePath = "/project-0/.agents/skills/release/SKILL.md";
+    const listSkills: NonNullable<DesktopApi["listSkills"]> = (request) =>
+      request?.catalog === "commands" ? commands.promise : skills.promise;
+    const { result, unmount } = renderHook(() => useThreadSkills({ desktopApi: { listSkills }, launchpad: draft }));
+    try {
+      await act(async () => { void result.current.ensureLoaded({ includeCommands: true }); });
+      const resolveCommands = async () => {
+        await act(async () => {
+          commands.resolve({ backend, fetchedAt: 1, data: [{ cwd: draft.directoryPath, commands: slashRows, skills: [] }] });
+        });
+      };
+      if (first === "commands") {
+        await resolveCommands();
+        expect(result.current.providerCommands).toHaveLength(slashRows.length);
+        expect(result.current.providerCommands.every((command) => !("skill" in command))).toBe(true);
+      }
+      await act(async () => {
+        skills.resolve({ backend, fetchedAt: 1, data: [{ cwd: draft.directoryPath, skills: [
+          { name: "release", description: "Prepare the release.", path: releasePath },
+          { name: "compact", description: "Compact images.", path: "/project-0/.agents/skills/compact/SKILL.md" },
+          { name: "check", description: "Check the project.", path: "/project-0/.agents/skills/check/SKILL.md" },
+          { name: "check", description: "Check the project.", path: "/another-project/.agents/skills/check/SKILL.md" },
+          { name: "unknown", path: "/project-0/.agents/skills/unknown/SKILL.md" },
+          {
+            name: "garden:plugin-extra", pluginId: "garden", description: "Check the plugin.",
+            path: "/project-0/.agents/plugins/garden/more/extra/SKILL.md",
+          },
+        ] }] });
+      });
+      if (first === "skills") await resolveCommands();
+      expect(result.current.providerCommands.find(({ name }) => name === "/release")).toMatchObject({
+        name: "/release",
+        skill: { path: releasePath, origin: { kind: "project", label: "project-0" } },
+      });
+      expect(result.current.providerCommands.find(({ name }) => name === "plugin-extra")).toMatchObject({
+        skill: { name: "garden:plugin-extra", origin: { kind: "plugin", label: "garden" } },
+      });
+      for (const command of result.current.providerCommands.filter(({ name }) => name !== "/release" && name !== "plugin-extra")) {
+        expect(command).not.toHaveProperty("skill");
+      }
+    } finally {
+      unmount();
+    }
+  },
+);
+
+it.each([
+  { workspace: "/primary", skillIsKnown: false },
+  { workspace: undefined, skillIsKnown: false },
+  { workspace: "/secondary", skillIsKnown: true },
+])("matches slash provenance only in its reported workspace $workspace", async ({ workspace, skillIsKnown }) => {
+  const thread: NavigationThreadSummary = {
+    id: "multi-workspace", source: "acp:antigravity", title: "Release", titleSource: "explicit",
+    inbox: { inInbox: false },
+    linkedDirectories: ["primary", "secondary"].map((id) => ({ id, path: `/${id}`, label: id, kind: "local" })),
+  };
+  const command = { name: "release", description: "Prepare the release." };
+  const skill = { ...command, path: "/secondary/.agents/skills/release/SKILL.md" };
+  const desktopApi: DesktopApi = {
+    listSkills: async (request) => ({
+      backend: thread.source, fetchedAt: 1,
+      data: request?.catalog === "commands"
+        ? [{ cwd: workspace, commands: [command], skills: [] }]
+        : [{ cwd: "/primary", skills: [] }, { cwd: "/secondary", skills: [skill] }],
+    }),
+  };
+  const { result, unmount } = renderHook(() => useThreadSkills({ desktopApi, thread }));
+  try {
+    await act(async () => { await result.current.ensureLoaded({ includeCommands: true }); });
+    expect(result.current.skills).toEqual([expect.objectContaining(skill)]);
+    expect(result.current.providerCommands).toEqual([
+      skillIsKnown ? { ...command, skill: expect.objectContaining(skill) } : command,
+    ]);
+  } finally {
+    unmount();
+  }
+});
+
+it("leaves slash provenance unknown when the matching skill is available only as a mention", async () => {
+  const draft = { ...launchpad(0, false), backend: "acp:antigravity" as const };
+  const command = { name: "compact", description: "Compact this session." };
+  const fallback = { ...command, path: "/fixture/.agents/skills/compact/SKILL.md", scope: "antigravity-user", mentionOnly: true };
+  const desktopApi: DesktopApi = {
+    listSkills: async (request) => ({
+      backend: draft.backend, fetchedAt: 1,
+      data: request?.catalog === "commands"
+        ? [{ cwd: draft.directoryPath, commands: [command], skills: [] }]
+        : [{ cwd: draft.directoryPath, skills: [fallback] }],
+    }),
+  };
+  const { result, unmount } = renderHook(() => useThreadSkills({ desktopApi, launchpad: draft }));
+  try {
+    await act(async () => { await result.current.ensureLoaded({ includeCommands: true }); });
+    expect(result.current.skills).toEqual([expect.objectContaining(fallback)]);
+    expect(result.current.providerCommands).toEqual([command]);
+  } finally {
+    unmount();
+  }
+});

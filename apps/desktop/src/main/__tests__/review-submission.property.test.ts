@@ -184,24 +184,22 @@ describe("agent review submission", () => {
     const restoreGitEnvironment = isolateProcessGitEnvironment();
     const runGit = vi.spyOn(gitExecutable, "runGitCommand");
     try {
-      await fc.assert(fc.asyncProperty(
-        fc.integer({ min: 1, max: 100 }), fc.boolean(),
-        async (value, explicitFirst) => {
-          await withReviewOwner(async (owner) => {
-            const first = await owner.start("automation");
-            expect(await owner.ask(first, commit(value), "first", explicitFirst ? cwd : undefined)).toBe(true);
-            await owner.complete(first);
-            await owner.complete("review-1");
-            const later = await owner.start("automation");
-            const duplicate = await owner.ask(later, commit(value), "duplicate", explicitFirst ? undefined : cwd);
-            await owner.complete(later);
-            if (duplicate) await owner.complete("review-2");
-            expect(duplicate).toBe(false);
-            expect(owner.providerStarts()).toBe(1);
-          }, { cwd });
-          expect(runGit).not.toHaveBeenCalled();
-        },
-      ), { numRuns: 12, examples: [[1, false], [1, true]] });
+      for (const explicitFirst of [false, true]) {
+        const value = 1;
+        await withReviewOwner(async (owner) => {
+          const first = await owner.start("automation");
+          expect(await owner.ask(first, commit(value), "first", explicitFirst ? cwd : undefined)).toBe(true);
+          await owner.complete(first);
+          await owner.complete("review-1");
+          const later = await owner.start("automation");
+          const duplicate = await owner.ask(later, commit(value), "duplicate", explicitFirst ? undefined : cwd);
+          await owner.complete(later);
+          if (duplicate) await owner.complete("review-2");
+          expect(duplicate).toBe(false);
+          expect(owner.providerStarts()).toBe(1);
+        }, { cwd });
+        expect(runGit).not.toHaveBeenCalled();
+      }
     } finally {
       runGit.mockRestore();
       restoreGitEnvironment();

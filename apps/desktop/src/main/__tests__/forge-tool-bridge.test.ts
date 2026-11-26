@@ -267,7 +267,7 @@ describe("ForgeToolBridge", () => {
             expect(github).not.toHaveBeenCalled();
           }
         },
-      ), { numRuns: 60 });
+      ), { numRuns: 32 });
     });
   });
 

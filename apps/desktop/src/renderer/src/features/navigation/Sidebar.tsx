@@ -7,6 +7,8 @@ import {
   type ThreadWorktreeAvailability,
 } from "../../lib/subthread-launchpads";
 import { readNavigationPresentationOrder } from "./navigation-presentation-order";
+import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
+import { stackMembershipForPr } from "../stacks/stack-pr-data";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { isNavigationPeerUnavailable, navigationThreadSelectionKey } from "../../lib/navigation-query-state";
 import { PINNED_GROUP_RESOURCE_ID, lensHasPinnedGroup } from "../../lib/navigation-window-demand";
@@ -83,6 +85,7 @@ import {
   isFederationViewerWindow,
   readRendererFederationLabel,
   readRendererFederationTarget,
+  resolveThreadOwnerFederationTarget,
 } from "../../lib/federation-window";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { countArchiveGroup } from "./archive-group-counts";
@@ -147,6 +150,7 @@ import {
   shouldShowDetachPullRequestWarning,
 } from "../pr-status/DetachPullRequestWarning";
 import { resolvePullRequestMergeOffer } from "@pwragent/shared/pull-request-merge-offer";
+import { projectMergesPullRequest } from "@pwragent/shared/project-forge-automation";
 import { MergePullRequestDialog } from "../pr-status/MergePullRequestDialog";
 import {
   threadPullRequestMergeTarget,
@@ -169,8 +173,10 @@ import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
 import { projectTurnMarks } from "./project-index";
 import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog";
 import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
+import { usePublishForgeAutomationOpener } from "../forge-automation/thread-hands-off";
 import {
   canEditProjectForgeAutomation,
+  findThreadProjectDirectory,
   isProjectForgeActivityPaused,
   withProjectForgePause,
 } from "../forge-automation/forge-automation-view";
@@ -843,6 +849,11 @@ function SidebarContent(props: SidebarProps) {
     : undefined;
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
+  const copyableThreadUrl = (thread: NavigationThreadSummary): string => buildThreadUrl({
+    backend: thread.source,
+    threadId: thread.id,
+    instanceId: resolveThreadOwnerFederationTarget(thread, federationTarget?.instanceId)?.instanceId,
+  });
   const openThreadMaintenance = useContext(ThreadMaintenanceLauncherContext);
   const dependencyIndicators = useThreadDependencyIndicatorsContext();
   const contextMenuRef = useRef<HTMLDivElement>(null);
@@ -879,22 +890,24 @@ function SidebarContent(props: SidebarProps) {
   };
   const sidebarRef = useRef<HTMLElement>(null);
   const handledRevealRequestRef = useRef(0);
+  const selectedItemKey = props.selectedItemKey;
   const selectionAnchorKeyRef = useRef<string | undefined>(
-    props.selectedItemKey,
+    selectedItemKey,
   );
   const selectionAnchorDirectoryKeyRef = useRef<string | undefined>(undefined);
   const directorySelectionAnchorKeyRef = useRef<string | undefined>(undefined);
   const previousSelectedItemKeyRef = useRef<string | undefined>(
-    props.selectedItemKey,
+    selectedItemKey,
   );
   const [projectReveal, setProjectReveal] = useState<ProjectRevealRequest>();
   const [directoryRevealRequest, setDirectoryRevealRequest] = useState(0);
-  const [selectedThreadKeys, setSelectedThreadKeys] = useState<Set<string>>(
-    () =>
-      props.selectedItemKey
-        ? new Set([props.selectedItemKey])
-        : new Set<string>(),
+  const [threadBatch, setThreadBatch] = useState<{ itemKey?: string; keys: ReadonlySet<string> }>();
+  const batchThreadKeys = threadBatch && threadBatch.itemKey === selectedItemKey ? threadBatch.keys : undefined;
+  const defaultThreadActionKeys = useMemo(
+    () => new Set(selectedItemKey ? [selectedItemKey] : []),
+    [selectedItemKey],
   );
+  const threadActionKeys = batchThreadKeys ?? defaultThreadActionKeys;
   const [selectedDirectoryKeys, setSelectedDirectoryKeys] = useState<Set<string>>(
     () => new Set<string>(),
   );
@@ -928,7 +941,7 @@ function SidebarContent(props: SidebarProps) {
   const [projectCheckoutsDirectory, setProjectCheckoutsDirectory] = useState<NavigationDirectorySummary>();
   /** The project whose Forge Automation dialog is open. */
   const [forgeAutomationDialog, setForgeAutomationDialog] = useState<
-    { directory: NavigationDirectorySummary } | undefined
+    { directory: NavigationDirectorySummary; returnFocus?: RefObject<HTMLElement | null> } | undefined
   >();
   /** Projects whose menu pause toggle is still saving or reading held wake-ups. */
   const forgePauseInFlightRef = useRef(new Set<string>());
@@ -990,7 +1003,7 @@ function SidebarContent(props: SidebarProps) {
   >();
   const pullRequestMerge = usePullRequestMergeService();
   const [mergingPullRequest, setMergingPullRequest] = useState<
-    { thread: ThreadPullRequestMergeTarget; pr: PrSummary } | undefined
+    { thread: ThreadPullRequestMergeTarget; pr: PrSummary; stack?: CompactStackMembership } | undefined
   >();
   const [renamingRow, setRenamingRow] = useState<RenamingThreadRow>();
   // Another lens unmounts the field without a commit; forget the edit, or it
@@ -1389,7 +1402,6 @@ function SidebarContent(props: SidebarProps) {
     attentionCounts.activeRemote,
   );
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
-  const selectedItemKey = props.selectedItemKey;
   const navigationThreads = props.threads;
   const navigationThreadByKey = useMemo(
     () => new Map(
@@ -1464,11 +1476,8 @@ function SidebarContent(props: SidebarProps) {
     revealSelectedThread?.();
   });
 
-  // A direct navigation change (history, search, a thread link, etc.) starts a
-  // fresh selection. Modified clicks deliberately do not navigate, so they can
-  // build a batch without making the detail pane jump around. Keep this in a
-  // layout effect so a launchpad cannot paint once with the previous thread's
-  // local batch-selection highlight still visible.
+  // A new destination starts a fresh batch. The render above scopes batch
+  // paint to its originating destination, even before this effect resets it.
   useLayoutEffect(() => {
     if (selectedItemKey === previousSelectedItemKeyRef.current) {
       return;
@@ -1481,9 +1490,7 @@ function SidebarContent(props: SidebarProps) {
     }
     selectionAnchorKeyRef.current = selectedItemKey;
     directorySelectionAnchorKeyRef.current = undefined;
-    setSelectedThreadKeys(
-      selectedItemKey ? new Set([selectedItemKey]) : new Set<string>(),
-    );
+    setThreadBatch(undefined);
     setSelectedDirectoryKeys((current) =>
       current.size === 0 ? current : new Set<string>(),
     );
@@ -1533,13 +1540,20 @@ function SidebarContent(props: SidebarProps) {
       focusOrigin?.focus({ preventScroll: true });
       selectionAnchorKeyRef.current = threadKey;
       selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
-      setSelectedThreadKeys(new Set([threadKey]));
+      setThreadBatch(undefined);
       props.onSelectThread(thread, {
         focusComposer: Boolean(focusOrigin),
         ...(focusOrigin ? { focusOrigin } : {}),
       });
       return;
     }
+
+    const updateBatch = (update: (current: ReadonlySet<string>) => Set<string>) => {
+      setThreadBatch((current) => ({
+        itemKey: selectedItemKey,
+        keys: update(current && current.itemKey === selectedItemKey ? current.keys : defaultThreadActionKeys),
+      }));
+    };
 
     if (event.shiftKey) {
       const anchorKey = selectionAnchorKeyRef.current;
@@ -1550,7 +1564,7 @@ function SidebarContent(props: SidebarProps) {
       if (anchorIndex < 0 || targetIndex < 0) {
         selectionAnchorKeyRef.current = threadKey;
         selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
-        setSelectedThreadKeys((current) => {
+        updateBatch((current) => {
           const next = event.metaKey ? new Set(current) : new Set<string>();
           next.add(threadKey);
           return next;
@@ -1562,7 +1576,7 @@ function SidebarContent(props: SidebarProps) {
       const rangeEnd = Math.max(anchorIndex, targetIndex);
       // Resolve row occurrences first; only the final selected identities deduplicate.
       const range = occurrences.slice(rangeStart, rangeEnd + 1);
-      setSelectedThreadKeys((current) => {
+      updateBatch((current) => {
         const next = event.metaKey ? new Set(current) : new Set<string>();
         for (const entry of range) {
           next.add(entry.threadKey);
@@ -1574,7 +1588,7 @@ function SidebarContent(props: SidebarProps) {
 
     selectionAnchorKeyRef.current = threadKey;
     selectionAnchorDirectoryKeyRef.current = row?.directoryKey;
-    setSelectedThreadKeys((current) => {
+    updateBatch((current) => {
       const next = new Set(current);
       if (next.has(threadKey)) {
         next.delete(threadKey);
@@ -1985,15 +1999,16 @@ function SidebarContent(props: SidebarProps) {
     thread: NavigationThreadSummary,
   ): NavigationThreadSummary[] => {
     const threadKey = threadSummaryIdentityKey(thread);
-    if (!selectedThreadKeys.has(threadKey)) {
+    if (!threadActionKeys.has(threadKey)) {
       selectionAnchorKeyRef.current = threadKey;
       selectionAnchorDirectoryKeyRef.current = undefined;
-      setSelectedThreadKeys(new Set([threadKey]));
+      // Modified clicks after closing the menu start from the row it targeted.
+      setThreadBatch({ itemKey: selectedItemKey, keys: new Set([threadKey]) });
       return [thread];
     }
 
     const selectedThreads = props.threads.filter((candidate) =>
-      selectedThreadKeys.has(
+      threadActionKeys.has(
         threadSummaryIdentityKey(candidate),
       ),
     );
@@ -2246,6 +2261,28 @@ function SidebarContent(props: SidebarProps) {
   const peerAdvertisesForgeAutomation = useCallback(
     (instanceId: string): boolean => peerForgeAutomationInstanceIds?.has(instanceId) === true,
     [peerForgeAutomationInstanceIds],
+  );
+  // The composer's Auto-fix menu and this sidebar's PR card open this
+  // sidebar's dialog, for the projects its own menu offers it on.
+  const federationOwnerForgeAutomation = props.federationOwnerForgeAutomation === true;
+  const inFederationWindow = federationTarget !== undefined;
+  const canOpenForgeAutomation = useCallback(
+    (directory: NavigationDirectorySummary): boolean => canEditProjectForgeAutomation(
+      directory,
+      inFederationWindow,
+      federationOwnerForgeAutomation,
+      peerAdvertisesForgeAutomation,
+    ),
+    [inFederationWindow, federationOwnerForgeAutomation, peerAdvertisesForgeAutomation],
+  );
+  const openForgeAutomationForThread = useEventCallback((
+    directory: NavigationDirectorySummary,
+    returnFocus?: RefObject<HTMLElement | null>,
+  ) => setForgeAutomationDialog({ directory, ...(returnFocus ? { returnFocus } : {}) }));
+  usePublishForgeAutomationOpener(
+    props.directories,
+    props.onSetProjectForgeAutomation ? canOpenForgeAutomation : undefined,
+    openForgeAutomationForThread,
   );
   // A placeholder row opens the project menu only for its peer project's
   // Forge Automation items. DirectoriesList asks during render, so this is
@@ -2754,7 +2791,7 @@ function SidebarContent(props: SidebarProps) {
     if (action === null) return;
     const targets = resolveThreadHotkeyTargets({
       focusedRowKey: focusedThreadRowKey(event),
-      selectedKeys: selectedThreadKeys,
+      selectedKeys: threadActionKeys,
       openThreadKey: props.selectedItemKey,
     });
     const threads = (targets?.keys ?? [])
@@ -2845,8 +2882,7 @@ function SidebarContent(props: SidebarProps) {
         }
         break;
       case "threads.copy_link":
-        void copyText(uniqueContextMenuValues(threads.map((candidate) =>
-          buildThreadUrl({ backend: candidate.source, threadId: candidate.id }))).join("\n"));
+        void copyText(uniqueContextMenuValues(threads.map(copyableThreadUrl)).join("\n"));
         break;
     }
     if (handled) event.preventDefault();
@@ -3061,7 +3097,12 @@ function SidebarContent(props: SidebarProps) {
     contextMenuHasLocalWorkspace || contextMenuHasWorktreeWorkspace;
   const contextMenuBranchName = contextMenu?.thread.gitBranch;
   const contextMenuPullRequest = contextMenu?.pullRequest;
+  // A project that never merges this PR's base offers no merge here.
   const contextMenuMergeTarget = contextMenuPullRequest && pullRequestMerge
+    && projectMergesPullRequest(
+      findThreadProjectDirectory(contextMenu.thread, props.directories)?.forgeAutomation,
+      contextMenuPullRequest.baseRefName,
+    )
     ? threadPullRequestMergeTarget(contextMenu.thread)
     : undefined;
   // Opened from the row, not a chip: one item detaches the thread's PRs.
@@ -3411,12 +3452,7 @@ function SidebarContent(props: SidebarProps) {
       bulkCanMarkRead,
   );
   const bulkThreadLinks = uniqueContextMenuValues(
-    contextMenuThreads.map((thread) =>
-      buildThreadUrl({
-        backend: thread.source,
-        threadId: thread.id,
-      }),
-    ),
+    contextMenuThreads.map(copyableThreadUrl),
   );
   const bulkThreadIds = uniqueContextMenuValues(
     contextMenuThreads.map((thread) => thread.id),
@@ -3912,7 +3948,7 @@ function SidebarContent(props: SidebarProps) {
                 revealSelectedThreadRequest={directoryRevealRequest}
                 selectedItemKey={props.selectedItemKey}
                 selectedDirectoryKeys={selectedDirectoryKeys}
-                selectedThreadKeys={selectedThreadKeys}
+                batchThreadKeys={batchThreadKeys}
                 thinkingThreadKeys={props.thinkingThreadKeys}
                 agentCommandThreadKeys={props.agentCommandThreadKeys}
                 threads={renderedThreads}
@@ -4002,7 +4038,7 @@ function SidebarContent(props: SidebarProps) {
                   onCommitRenameThread={commitRenameFromRow}
                   revealSelectedThreadRequest={revealSelectedThreadRequest}
                   selectedThreadKey={props.selectedItemKey}
-                  selectedThreadKeys={selectedThreadKeys}
+                  batchThreadKeys={batchThreadKeys}
                   thinkingThreadKeys={props.thinkingThreadKeys}
                   agentCommandThreadKeys={props.agentCommandThreadKeys}
                   threads={renderedThreads}
@@ -4619,7 +4655,10 @@ function SidebarContent(props: SidebarProps) {
                               role="menuitem"
                               type="button"
                               onClick={() => {
-                                setMergingPullRequest({ thread: contextMenuMergeTarget, pr: contextMenuPullRequest });
+                                const stack = stackMembershipForPr(contextMenu.thread, contextMenuPullRequest);
+                                setMergingPullRequest({
+                                  thread: contextMenuMergeTarget, pr: contextMenuPullRequest, ...(stack ? { stack } : {}),
+                                });
                                 setContextMenu(undefined);
                               }}
                             >
@@ -4665,12 +4704,7 @@ function SidebarContent(props: SidebarProps) {
                         role="menuitem"
                         type="button"
                         onClick={() =>
-                          copyFromContextMenu(
-                            buildThreadUrl({
-                              backend: contextMenu.thread.source,
-                              threadId: contextMenu.thread.id,
-                            }),
-                          )
+                          copyFromContextMenu(copyableThreadUrl(contextMenu.thread))
                         }
                         aria-keyshortcuts={ariaKeyShortcutsFor(keybindings, "threads.copy_link")}
                       >
@@ -4736,6 +4770,7 @@ function SidebarContent(props: SidebarProps) {
           <MergePullRequestDialog
             pr={mergingPullRequest.pr}
             thread={mergingPullRequest.thread}
+            {...(mergingPullRequest.stack ? { stack: mergingPullRequest.stack } : {})}
             service={pullRequestMerge}
             returnFocus={contextMenuOpenerRef}
             onClose={() => setMergingPullRequest(undefined)}
@@ -5113,9 +5148,10 @@ function SidebarContent(props: SidebarProps) {
               listHeldWakeups={props.onListProjectHeldWakeups
                 ? () => props.onListProjectHeldWakeups!(directory)
                 : undefined}
+              repositorySuggestions={projectRemoteRepositories(directory)}
               projectDetail={directory.repositoryKey ?? directory.path}
               projectLabel={directory.label}
-              returnFocus={directoryContextMenuOpenerRef}
+              returnFocus={forgeAutomationDialog.returnFocus ?? directoryContextMenuOpenerRef}
               onCancel={() => setForgeAutomationDialog(undefined)}
               onSubmit={async (automation) => {
                 if (directory.forgeAutomation?.paused && !automation.paused) {
@@ -5679,4 +5715,22 @@ function RuntimeIdentityButton(props: {
       {tooltip.tooltipNode}
     </>
   );
+}
+
+/**
+ * The project's fetch remotes as `owner/name`, origin first: a fork lists
+ * its upstream too, for the Forge Automation hands-off picks. Keys read
+ * `host/owner/name`.
+ */
+function projectRemoteRepositories(
+  directory: Pick<NavigationDirectorySummary, "repositoryKey" | "repositoryKeys">,
+): string[] {
+  const repositories = new Map<string, string>();
+  for (const key of [directory.repositoryKey, ...(directory.repositoryKeys ?? [])]) {
+    const repository = key?.split("/").slice(1).join("/");
+    if (repository?.includes("/") && !repositories.has(repository.toLowerCase())) {
+      repositories.set(repository.toLowerCase(), repository);
+    }
+  }
+  return [...repositories.values()].slice(0, 6);
 }

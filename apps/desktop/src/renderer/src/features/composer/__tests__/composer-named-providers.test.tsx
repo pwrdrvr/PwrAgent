@@ -10,6 +10,7 @@ import { type BackendModelOption, type BackendSummary } from "@pwragent/shared/c
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import { composerDropdownOptionLabels } from "../../../test/model-catalog";
+import { chooseEffort, effortStops, modelSettingsPill, openModelSettings } from "../../../test/model-settings";
 import { Composer as ProductionComposer } from "../Composer";
 
 /**
@@ -109,13 +110,13 @@ const initialLaunchpad: NavigationLaunchpadDraft = {
   updatedAt: 1,
 } as NavigationLaunchpadDraft;
 
-function openDropdown(label: string): HTMLElement {
-  fireEvent.click(screen.getByRole("button", { name: new RegExp(`^${label}(?::|$)`) }));
-  return screen.getByRole("listbox", { name: label });
+/** The Provider rail or the Model list in the model pill's panel. */
+function openDropdown(label: "Provider" | "Model"): HTMLElement {
+  return within(openModelSettings()).getByRole("listbox", { name: label });
 }
 
-function openUnavailableProviders(list: HTMLElement): HTMLElement {
-  fireEvent.click(within(list).getByRole("option", { name: "Unavailable" }));
+function openUnavailableProviders(): HTMLElement {
+  fireEvent.click(within(openModelSettings()).getByRole("button", { name: "Unavailable" }));
   return screen.getByRole("listbox", { name: "Provider: Unavailable" });
 }
 
@@ -149,11 +150,11 @@ describe("named Codex model providers in the composer", () => {
   it("lists each provider by its own name in the Provider picker, and says why one offers nothing", () => {
     renderLaunchpad();
     const list = openDropdown("Provider");
-    // The main list holds the providers that work now. The rest wait one level
-    // down, at the end of the menu farthest from the trigger.
-    expect(composerDropdownOptionLabels(list)).toEqual(["Unavailable", "OpenAI", "MathOS"]);
+    // The rail holds the providers that work now. The rest wait behind an
+    // Unavailable disclosure at its end.
+    expect(composerDropdownOptionLabels(list)).toEqual(["OpenAI", "MathOS"]);
     expect(within(list).getByRole("option", { name: /MathOS/ })).toHaveTextContent("Runs on Codex · 301 models");
-    const unavailable = openUnavailableProviders(list);
+    const unavailable = openUnavailableProviders();
     expect(composerDropdownOptionLabels(unavailable)).toEqual(["Refuseless", "Acme Lab", "Flint"]);
     expect(within(unavailable).getByRole("option", { name: /Refuseless/ }))
       .toHaveTextContent("Runs on Codex · 1 model · catalog unavailable");
@@ -181,10 +182,10 @@ describe("named Codex model providers in the composer", () => {
         },
       },
     });
-    expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "gpt-6-sol");
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-6-sol");
     fireEvent.click(within(openDropdown("Provider")).getByRole("option", { name: /MathOS/ }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Provider(?::|$)/ })).toHaveTextContent("MathOS");
+      expect(modelSettingsPill()).toHaveTextContent("MathOS");
     });
     expect(patches.at(-1)).toMatchObject({
       backend: "codex",
@@ -193,18 +194,19 @@ describe("named Codex model providers in the composer", () => {
       fastMode: undefined,
       serviceTier: undefined,
     });
-    expect(screen.queryByRole("button", { name: /^Reasoning(?::|$)/ })).not.toBeInTheDocument();
+    expect(modelSettingsPill()).not.toHaveAttribute("data-effort");
+    expect(effortStops()).toEqual([]);
     const modelList = openDropdown("Model");
     // The same upstream id, served by MathOS, and every model MathOS lists.
     expect(composerDropdownOptionLabels(modelList)).toEqual(["gpt-oss-120b", ...MATHOS_MODELS]);
     fireEvent.click(within(modelList).getByRole("option", { name: "mathos-model-299" }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "@mathos/mathos-model-299");
+      expect(modelSettingsPill()).toHaveAttribute("data-model", "@mathos/mathos-model-299");
     });
     // Back to OpenAI: OpenAI's model, never a MathOS id on an OpenAI thread.
     fireEvent.click(within(openDropdown("Provider")).getByRole("option", { name: "OpenAI" }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "gpt-6-sol");
+      expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-6-sol");
     });
     expect(composerDropdownOptionLabels(openDropdown("Model"))).toEqual(["GPT-6-Sol", "gpt-oss-120b"]);
     // Resolve the model and its supported settings together. MathOS has no
@@ -216,7 +218,7 @@ describe("named Codex model providers in the composer", () => {
       fastMode: undefined,
       serviceTier: undefined,
     });
-    expect(screen.getByRole("button", { name: /^Reasoning(?::|$)/ })).toHaveAttribute("data-value", "high");
+    expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
   });
 
   it("offers a MathOS model's own effort levels, starting on its default, and sends the one chosen", async () => {
@@ -236,15 +238,14 @@ describe("named Codex model providers in the composer", () => {
       },
     } as BackendSummary;
     const patches = renderLaunchpad(withEfforts, { ...initialLaunchpad, model: "@mathos/mathos-model-7" });
-    const reasoning = await screen.findByRole("button", { name: /^Reasoning(?::|$)/ });
-    expect(reasoning).toHaveAttribute("data-value", "high");
-    expect(composerDropdownOptionLabels(openDropdown("Reasoning"))).toEqual(["low", "high", "max", "ultramath"]);
-    fireEvent.click(within(screen.getByRole("listbox", { name: "Reasoning" })).getByRole("option", { name: "ultramath" }));
+    await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-effort", "high"));
+    expect(effortStops()).toEqual(["low", "high", "max", "ultramath"]);
+    chooseEffort("ultramath");
     await waitFor(() => expect(patches.at(-1)).toMatchObject({ reasoningEffort: "ultramath" }));
-    // A MathOS model whose endpoint names no levels has no Reasoning chip.
+    // A MathOS model whose endpoint names no levels has no effort bar.
     fireEvent.click(within(openDropdown("Model")).getByRole("option", { name: "mathos-model-8" }));
     await waitFor(() => {
-      expect(screen.queryByRole("button", { name: /^Reasoning(?::|$)/ })).not.toBeInTheDocument();
+      expect(effortStops()).toEqual([]);
     });
   });
 
@@ -265,8 +266,8 @@ describe("named Codex model providers in the composer", () => {
         skills={[]}
       />,
     );
-    expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveAttribute("data-value", "gpt-6-sol");
-    expect(screen.getByRole("button", { name: /^Provider(?::|$)/ })).toHaveTextContent("OpenAI");
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-6-sol");
+    expect(modelSettingsPill()).toHaveTextContent("OpenAI");
   });
 
   it("restores endpoint defaults and access independently of OpenAI", async () => {
@@ -288,20 +289,20 @@ describe("named Codex model providers in the composer", () => {
 
   it("keeps an endpoint selected after its model default is reset", () => {
     renderLaunchpad(codex, { ...initialLaunchpad, codexModelProviderId: "mathos", model: undefined });
-    expect(screen.getByRole("button", { name: /^Provider(?::|$)/ })).toHaveTextContent("MathOS");
+    expect(modelSettingsPill()).toHaveTextContent("MathOS");
     expect(composerDropdownOptionLabels(openDropdown("Model"))).toEqual(["gpt-oss-120b", ...MATHOS_MODELS]);
   });
 
   it("keeps Refuseless's identical model id apart from MathOS's", async () => {
     const patches = renderLaunchpad();
-    fireEvent.click(within(openUnavailableProviders(openDropdown("Provider")))
+    fireEvent.click(within(openUnavailableProviders())
       .getByRole("option", { name: /Refuseless/ }));
     await waitFor(() => {
       expect(patches.at(-1)).toMatchObject({ backend: "codex", model: "@refuseless/gpt-oss-120b" });
     });
     expect(composerDropdownOptionLabels(openDropdown("Model"))).toEqual(["gpt-oss-120b"]);
     expect(screen.getByText("Catalog unavailable: HTTP 503. Showing the models listed in Settings."))
-      .toHaveClass("composer-dropdown__footnote");
+      .toHaveClass("model-settings__footnote");
   });
 
   it("names an existing MathOS thread's provider MathOS, not OpenAI", async () => {
@@ -326,8 +327,10 @@ describe("named Codex model providers in the composer", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(screen.getByLabelText("Provider")).toHaveTextContent("MathOS");
-    expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).toHaveTextContent("gpt-oss-120b");
-    expect(screen.getByRole("button", { name: /^Model(?::|$)/ })).not.toHaveTextContent("MathOS ·");
+    // The panel names the thread's provider; the pill names its model alone.
+    const panel = openModelSettings();
+    expect(panel.querySelector(".model-settings__head-name")).toHaveTextContent("MathOS");
+    expect(modelSettingsPill()).toHaveTextContent("gpt-oss-120b");
+    expect(modelSettingsPill()).not.toHaveTextContent("MathOS");
   });
 });

@@ -463,7 +463,7 @@ async function sampleStoredDiscoveryContext(cwd: string, demand?: PrMetadataDema
   return await prGitSubprocessCaller.run("pr-stored-attachment-validation", async () => {
     const { repos, refreshedRemoteNames } = await (fresh
       ? sampleForgeRepositoriesForDirectory(cwd, demand)
-      : observeForgeRepositoriesForDirectory(cwd, undefined, { demand }));
+      : observeForgeRepositoriesForDirectory(cwd, undefined, { demand, verifyCachedRemoteNames: true }));
     const defaults = repos.length > 0
       ? await readDefaultBranchInfo(cwd, demand, refreshedRemoteNames)
       : { defaultsByRemote: new Map<string, string>(), names: new Set<string>(), remotes: new Set<string>() };

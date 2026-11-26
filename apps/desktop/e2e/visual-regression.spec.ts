@@ -13,10 +13,11 @@
 // what it guards and merges as text.
 //
 // The reference images are lossless WebP generated on the matching Tart VM
-// runner and stored in Git LFS. Playwright infers WebP from the extension and
-// uses its lossless default at quality 100. Use workspace/MCP tools to locate
-// the separately managed PwrSuiteLab checkout, then run from a clean committed
-// worktree. See CONTRIBUTING.md for the checkpoint/promotion workflow:
+// runner and stored as ordinary Git binary blobs. Playwright infers WebP from
+// the extension and uses its lossless default at quality 100. Use workspace/MCP
+// tools to locate the separately managed PwrSuiteLab checkout, then run from a
+// clean committed worktree. See CONTRIBUTING.md for the checkpoint/promotion
+// workflow:
 //
 //   suite_lab_root="<discovered PwrSuiteLab checkout>"
 //   "$suite_lab_root/macos-tart/run-e2e.sh" --confirm-live-run \

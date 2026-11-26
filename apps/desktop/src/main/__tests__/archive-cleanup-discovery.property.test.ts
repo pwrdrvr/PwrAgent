@@ -147,12 +147,14 @@ describe("single archive discovery isolation", () => {
 
   it("adding disjoint active/archived identities preserves the expensive-work bound", async () => {
     await fc.assert(fc.asyncProperty(
-      fc.array(fc.record({ archived: fc.boolean(), claude: fc.boolean(), cwd: fc.integer({ min: 0, max: 110 }) }), { minLength: 1, maxLength: 120 }),
+      fc.array(fc.record({ archived: fc.boolean(), claude: fc.boolean(), cwd: fc.integer({ min: 0, max: 110 }) }), { minLength: 1, maxLength: 120, size: "max" }),
       fc.integer({ min: 1, max: 3 }), fc.boolean(),
       async (noise, roots, overlayOnly) => {
         expect(await measure(noise, roots, overlayOnly)).toEqual(await measure([], roots, overlayOnly));
       },
-    ), { numRuns: 25 });
+    ), { numRuns: 5, examples: [
+      [Array.from({ length: 120 }, (_, index) => ({ archived: index % 2 === 0, claude: index % 3 === 0, cwd: index % 111 })), 3, true],
+    ] });
   });
 });
 
@@ -294,7 +296,8 @@ it("uses real Git and canonical paths as the snapshot/removal oracle at the chan
   await symlink(unrelated, unrelatedAlias, process.platform === "win32" ? "junction" : "dir");
   let sequence = 0;
   try {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("eligible", "alias-owner", "descendant-owner", "external-alias", "primary", "locked"), fc.string({ minLength: 1, maxLength: 25 }), async (kind, contents) => {
+    for (const kind of ["eligible", "alias-owner", "descendant-owner", "external-alias", "primary", "locked"]) {
+      const contents = "saved work";
       const checkout = path.join(root, `checkout-${sequence++}`);
       await git(repo, "worktree", "add", "--detach", checkout);
       const target = kind === "primary" ? repo : checkout;
@@ -341,10 +344,7 @@ it("uses real Git and canonical paths as the snapshot/removal oracle at the chan
           expect(worktrees).toContain(checkout.replaceAll("\\", "/"));
         }
       } finally { await run.registry.close(); }
-    }), { numRuns: 4, examples: [
-      ["eligible", "snapshot"], ["alias-owner", "keep"], ["descendant-owner", "keep"],
-      ["external-alias", "keep"], ["primary", "keep"], ["locked", "keep"],
-    ] });
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

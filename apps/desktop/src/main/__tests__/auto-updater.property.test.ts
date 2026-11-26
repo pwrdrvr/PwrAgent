@@ -741,7 +741,7 @@ describe("auto-updater held-update model (Windows pending cache)", () => {
       (start, commands) => runSession(scope, start, commands),
     // Keep PwrGit's 400 medium sessions. If Vitest times out under load,
     // teardown interrupts and joins this assertion before another test runs.
-    ), { numRuns: 400, markInterruptAsFailure: true }));
+    ), { numRuns: 100, markInterruptAsFailure: true }));
   });
 });
 

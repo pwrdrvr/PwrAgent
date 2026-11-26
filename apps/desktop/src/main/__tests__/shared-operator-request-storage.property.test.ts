@@ -29,20 +29,18 @@ type Question = { record: OperatorAsyncQuestion; status: AsyncQuestionStatus; re
 type Card = { id: string; kind: "todo" | "review"; backend: AppServerBackendKind; threadId: string; open: boolean; exists: boolean };
 const cardKey = (card: Card) => card.kind === "review" ? `todo:review:${card.id}` : `todo:${card.id}`;
 
-it("binds generated concrete and actual profile factory choices to one portable implementation", () => {
-  fc.assert(fc.property(fc.integer({ min: 0, max: 1 }), fc.boolean(), (host, useFactory) => {
-    const db = openInMemoryStateDb();
-    try {
-      active.db = db;
-      const store = useFactory ? createOperatorRequestStorage() : new bindings[host]!(db);
-      expect(Object.getPrototypeOf(store)).toBe(SharedStore.prototype);
-      // A factory captures its selected profile, rather than consulting it on
-      // every later operation or exposing the database on its public port.
-      active.db = undefined;
-      expect(store.markSeen(["invented-portable-key"], 42)).toBe(1);
-      expect(new SharedStore(db).listSeenKeys()).toEqual(["invented-portable-key"]);
-    } finally { db.close(); }
-  }));
+it.each([[0, false], [0, true], [1, false], [1, true]] as const)("binds generated concrete and actual profile factory choices to one portable implementation [%#]", (host, useFactory) => {
+  const db = openInMemoryStateDb();
+  try {
+    active.db = db;
+    const store = useFactory ? createOperatorRequestStorage() : new bindings[host]!(db);
+    expect(Object.getPrototypeOf(store)).toBe(SharedStore.prototype);
+    // A factory captures its selected profile, rather than consulting it on
+    // every later operation or exposing the database on its public port.
+    active.db = undefined;
+    expect(store.markSeen(["invented-portable-key"], 42)).toBe(1);
+    expect(new SharedStore(db).listSeenKeys()).toEqual(["invented-portable-key"]);
+  } finally { db.close(); }
 });
 
 // The oracle is a map of first records and first-seen times. Closed text is
@@ -185,7 +183,7 @@ it("matches independent question, seen and open-work retention models across WAL
         expect(reads.writes.commits).toBe(0);
       }
     } finally { for (const db of dbs) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("retains exact deadlines and first-seen identity for every generated open review and to-do", () => {
@@ -208,68 +206,75 @@ it("retains exact deadlines and first-seen identity for every generated open rev
       store.prune(at + retention + 1);
       expect(store.listSeenKeys()).toEqual([]);
     } finally { db.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
-it("publishes question and batched seen changes atomically, rolling back refused writes on either host", async () => {
+it.each([[0, false], [0, true], [1, false], [1, true]] as const)("publishes question and batched seen changes atomically, rolling back refused writes on either host [%#]", async (host, failSeen) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 1 }), fc.boolean(), async (host, failSeen) => {
-    const fixture = createTempStateDb("shared-operator-atomic-");
-    const db = StateDb.open(fixture.dbPath);
-    const observer = StateDb.open(fixture.dbPath);
-    const writer = new bindings[host]!(db);
-    const reader = new bindings[1 - host]!(observer);
-    try {
-      const identity = { backend: "codex" as const, threadId: "same", messageId: "same" };
-      const question = { ...identity, questions: [{ title: "Invented pending text", options: null }], now: 1 };
-      db.raw.prepare(`CREATE TRIGGER refuse_seen BEFORE INSERT ON operator_seen_items
-        WHEN NEW.item_key = 'refuse' BEGIN SELECT RAISE(ABORT, 'Invented seen refusal'); END`).run();
-      const writes = await measureSqliteWrites(() => {
-        expect(() => db.raw.transaction(() => {
-          writer.insertQuestion(question);
-          writer.markSeen(["first", ...(failSeen ? ["refuse"] : [])], 2);
-          expect(reader.listOpenQuestions()).toEqual([]);
-          expect(reader.listSeenKeys()).toEqual([]);
-          if (!failSeen) throw new Error("Invented outer refusal");
-        })()).toThrow(/Invented/);
-      });
-      expect(writes.writes.commits).toBe(0);
-      expect(writer.listOpenQuestions()).toEqual([]);
-      expect(reader.listSeenKeys()).toEqual([]);
-      writer.insertQuestion(question);
+  const fixture = createTempStateDb("shared-operator-atomic-");
+  const db = StateDb.open(fixture.dbPath);
+  const observer = StateDb.open(fixture.dbPath);
+  const writer = new bindings[host]!(db);
+  const reader = new bindings[1 - host]!(observer);
+  try {
+    const identity = { backend: "codex" as const, threadId: "same", messageId: "same" };
+    const question = { ...identity, questions: [{ title: "Invented pending text", options: null }], now: 1 };
+    db.raw.prepare(`CREATE TRIGGER refuse_seen BEFORE INSERT ON operator_seen_items
+      WHEN NEW.item_key = 'refuse' BEGIN SELECT RAISE(ABORT, 'Invented seen refusal'); END`).run();
+    const writes = await measureSqliteWrites(() => {
       expect(() => db.raw.transaction(() => {
-        writer.dismissQuestion({ ...identity, now: 3 });
-        expect(reader.listOpenQuestions()[0]!.questions).toEqual(question.questions);
-        throw new Error("Invented closure refusal");
-      })()).toThrow("Invented closure refusal");
+        writer.insertQuestion(question);
+        writer.markSeen(["first", ...(failSeen ? ["refuse"] : [])], 2);
+        expect(reader.listOpenQuestions()).toEqual([]);
+        expect(reader.listSeenKeys()).toEqual([]);
+        if (!failSeen) throw new Error("Invented outer refusal");
+      })()).toThrow(/Invented/);
+    });
+    expect(writes.writes.commits).toBe(0);
+    expect(writer.listOpenQuestions()).toEqual([]);
+    expect(reader.listSeenKeys()).toEqual([]);
+    writer.insertQuestion(question);
+    expect(() => db.raw.transaction(() => {
+      writer.dismissQuestion({ ...identity, now: 3 });
       expect(reader.listOpenQuestions()[0]!.questions).toEqual(question.questions);
-      writer.dismissQuestion({ ...identity, now: 4 });
-      expect(reader.listOpenQuestions()).toEqual([]);
-      expect(observer.raw.prepare("SELECT questions_json FROM operator_async_questions").pluck().get()).toBe("[]");
-    } finally { observer.close(); db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+      throw new Error("Invented closure refusal");
+    })()).toThrow("Invented closure refusal");
+    expect(reader.listOpenQuestions()[0]!.questions).toEqual(question.questions);
+    writer.dismissQuestion({ ...identity, now: 4 });
+    expect(reader.listOpenQuestions()).toEqual([]);
+    expect(observer.raw.prepare("SELECT questions_json FROM operator_async_questions").pluck().get()).toBe("[]");
+  } finally { observer.close(); db.close(); removeTempStateDbDir(fixture.tempDir); }
 });
 
-it("skips malformed question payloads without repair writes and returns detached normalized questions", async () => {
+it.each([
+  [0, "{"],
+  [0, "null"],
+  [0, "{}"],
+  [0, "[]"],
+  [0, "[false]"],
+  [1, "{"],
+  [1, "null"],
+  [1, "{}"],
+  [1, "[]"],
+  [1, "[false]"],
+] as const)("skips malformed question payloads without repair writes and returns detached normalized questions [%#]", async (host, payload) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 1 }), fc.constantFrom("{", "null", "{}", "[]", "[false]"), async (host, payload) => {
-    const db = openInMemoryStateDb();
-    const store = new bindings[host]!(db);
-    try {
-      db.raw.prepare(`INSERT INTO operator_async_questions
-        (backend, thread_id, message_id, questions_json, status, created_at, resolved_at)
-        VALUES ('codex', 't', 'bad', ?, 'open', 1, NULL)`).run(payload);
-      store.insertQuestion({ backend: "codex", threadId: "t", messageId: "good",
-        questions: [{ title: "Invented valid question", options: ["Yes", "No"] }], now: 2 });
-      const reads = await measureSqliteWrites(() => {
-        const first = store.listOpenQuestions();
-        expect(first.map(entry => entry.messageId)).toEqual(["good"]);
-        first[0]!.questions[0]!.title = "Changed outside storage";
-        first[0]!.questions[0]!.options?.push("Changed option");
-        expect(store.listOpenQuestions()[0]!.questions).toEqual([{ title: "Invented valid question", options: ["Yes", "No"] }]);
-      });
-      expect(reads.writes.commits).toBe(0);
-      expect(db.raw.prepare("SELECT questions_json FROM operator_async_questions WHERE message_id = 'bad'").pluck().get()).toBe(payload);
-    } finally { db.close(); }
-  }), { numRuns: 25 });
+  const db = openInMemoryStateDb();
+  const store = new bindings[host]!(db);
+  try {
+    db.raw.prepare(`INSERT INTO operator_async_questions
+      (backend, thread_id, message_id, questions_json, status, created_at, resolved_at)
+      VALUES ('codex', 't', 'bad', ?, 'open', 1, NULL)`).run(payload);
+    store.insertQuestion({ backend: "codex", threadId: "t", messageId: "good",
+      questions: [{ title: "Invented valid question", options: ["Yes", "No"] }], now: 2 });
+    const reads = await measureSqliteWrites(() => {
+      const first = store.listOpenQuestions();
+      expect(first.map(entry => entry.messageId)).toEqual(["good"]);
+      first[0]!.questions[0]!.title = "Changed outside storage";
+      first[0]!.questions[0]!.options?.push("Changed option");
+      expect(store.listOpenQuestions()[0]!.questions).toEqual([{ title: "Invented valid question", options: ["Yes", "No"] }]);
+    });
+    expect(reads.writes.commits).toBe(0);
+    expect(db.raw.prepare("SELECT questions_json FROM operator_async_questions WHERE message_id = 'bad'").pluck().get()).toBe(payload);
+  } finally { db.close(); }
 });

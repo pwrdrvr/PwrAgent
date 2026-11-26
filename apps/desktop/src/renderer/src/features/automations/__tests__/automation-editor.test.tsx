@@ -29,6 +29,14 @@ import {
   codexCatalogModels,
   composerDropdownOptionLabels,
 } from "../../../test/model-catalog";
+import {
+  chooseEffort,
+  chooseModelSettingsOption,
+  effortStops,
+  modelSettingsOptionNames,
+  modelSettingsPill,
+  openModelSettings,
+} from "../../../test/model-settings";
 import { AutomationEditor, INBOUND_PROVIDER_LABELS } from "../AutomationEditor";
 
 afterEach(() => {
@@ -162,26 +170,57 @@ describe("AutomationEditor", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /^Automation model(?::|$)/ }));
+    const panel = openModelSettings("Automation model");
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "GPT-6.1-Sol" })).toBeInTheDocument(),
+      expect(within(panel).getByRole("option", { name: "GPT-6.1-Sol" })).toBeInTheDocument(),
     );
-    const list = screen.getByRole("listbox", { name: /^Automation model/ });
-    expect(composerDropdownOptionLabels(list)).toEqual([
-      "Other",
+    expect(modelSettingsOptionNames("Model", "Automation model")).toEqual([
       "Inherit Agent model",
       ...CURRENT_CODEX_MODEL_LABELS,
       "Ternary-Bonsai-27B",
     ]);
+    const list = within(panel).getByRole("listbox", { name: "Model" });
     expect(within(list).getByRole("group", { name: "PrismML Bonsai (local)" }))
       .toBeInTheDocument();
-    fireEvent.click(within(list).getByRole("option", { name: "Other" }));
-    const other = screen.getByRole("listbox", { name: "Automation model: Other" });
+    fireEvent.click(within(panel).getByRole("button", { name: "Other" }));
+    const other = within(panel).getByRole("listbox", { name: "Model: Other" });
     expect(composerDropdownOptionLabels(other)).toEqual(SUPERSEDED_CODEX_MODEL_LABELS);
     fireEvent.click(within(other).getByRole("option", { name: "GPT-5.6-Luna" }));
-    expect(
-      screen.getByRole("button", { name: /^Automation model(?::|$)/ }),
-    ).toHaveAttribute("data-value", "gpt-5.6-luna");
+    expect(modelSettingsPill("Automation model")).toHaveAttribute("data-model", "gpt-5.6-luna");
+  });
+
+  it("picks the run provider in the model pill and drops a model the new catalog lacks", async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <AutomationEditor
+        desktopApi={fakeDesktopApi(fakeSettings({ enabled: {} }), codexCatalogModels())}
+        mode={{
+          assignment: { backend: "codex", threadId: "thread-1" },
+          kind: "create",
+        }}
+        onCancel={() => undefined}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const panel = openModelSettings("Automation model");
+    await waitFor(() =>
+      expect(within(panel).getByRole("option", { name: "GPT-6.1-Sol" })).toBeInTheDocument(),
+    );
+    expect(modelSettingsOptionNames("Provider", "Automation model")[0])
+      .toBe("Inherit Agent provider (Codex)");
+    chooseModelSettingsOption("Model", "GPT-6.1-Sol", "Automation model");
+    chooseEffort("high", "Automation model");
+    expect(effortStops("Automation model")).toEqual(["low", "medium", "high"]);
+    // Inherit is the effort bar's default chip.
+    chooseEffort("Inherit", "Automation model");
+    expect(modelSettingsPill("Automation model")).not.toHaveAttribute("data-effort");
+    chooseEffort("high", "Automation model");
+    chooseModelSettingsOption("Provider", "Codex", "Automation model");
+    expect(modelSettingsPill("Automation model")).toHaveAttribute("data-provider", "codex");
+    // Codex still lists the model, so both choices stay.
+    expect(modelSettingsPill("Automation model")).toHaveAttribute("data-model", "gpt-6.1-sol");
+    expect(modelSettingsPill("Automation model")).toHaveAttribute("data-effort", "high");
   });
 
   it("submits an inbound Slack trigger with execution overrides and source reply output", async () => {
@@ -222,13 +261,13 @@ describe("AutomationEditor", () => {
     // pick an option from its listbox.
     fireEvent.click(screen.getByRole("button", { name: /^Automation access(?::|$)/ }));
     fireEvent.click(screen.getByRole("option", { name: "Full Access" }));
-    fireEvent.click(screen.getByRole("button", { name: /^Automation model(?::|$)/ }));
+    const panel = openModelSettings("Automation model");
     await waitFor(() =>
-      expect(screen.getByRole("option", { name: "gpt-5" })).toBeInTheDocument(),
+      expect(within(panel).getByRole("option", { name: "gpt-5" })).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole("option", { name: "gpt-5" }));
-    fireEvent.click(screen.getByRole("button", { name: /^Automation reasoning(?::|$)/ }));
-    fireEvent.click(screen.getByRole("option", { name: "high" }));
+    chooseModelSettingsOption("Model", "gpt-5", "Automation model");
+    chooseEffort("high", "Automation model");
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     chooseSelectOption(screen.getByLabelText("Max runs per hour"), "5/hr");
     fireEvent.click(screen.getByRole("button", { name: "Create" }));
 

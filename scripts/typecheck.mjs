@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { totalmem } from "node:os";
 import { fileURLToPath } from "node:url";
+import { hasCliFlag, resolveLocalCpuBudget } from "./local-cpu-budget.mjs";
 import { invalidateTypecheckCaches } from "./typecheck-cache.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -24,36 +25,40 @@ if (!desktopWatch && !enabledOption("--clean") && !enabledOption("--dry", "-d")
   invalidateTypecheckCaches(repositoryRoot);
 }
 
-const compilerEnv = { ...process.env, GOMAXPROCS: process.env.GOMAXPROCS ?? "4" };
+const localBudget = resolveLocalCpuBudget({ cwd: repositoryRoot });
+const budgetLimit = localBudget ? Math.min(4, localBudget.units) : 4;
+const compilerEnv = { ...process.env, GOMAXPROCS: process.env.GOMAXPROCS ?? String(budgetLimit) };
 const lowMemory = totalmem() < 32 * 1024 ** 3;
-const desktopCheckers = lowMemory ? "2" : "4";
+const defaultCheckers = String(budgetLimit);
+const desktopCheckers = String(Math.min(lowMemory ? 2 : 4, budgetLimit));
 const desktopTestEnv = lowMemory
   ? { ...compilerEnv, GOMEMLIMIT: compilerEnv.GOMEMLIMIT ?? "4608MiB" }
   : compilerEnv;
 let projects;
 if (scope === "--package") {
-  projects = [{ config: "tsconfig.json", checkers: "4", env: compilerEnv }];
+  projects = [{ config: "tsconfig.json", checkers: defaultCheckers, env: compilerEnv }];
 } else if (desktopWatch) {
   projects = [{ config: "apps/desktop/tsconfig.json", checkers: desktopCheckers, env: desktopTestEnv }];
 } else {
   projects = [
     {
       config: scope === "--desktop" ? "apps/desktop/tsconfig.production.json" : "tsconfig.typecheck.json",
-      checkers: "4",
+      checkers: defaultCheckers,
       env: compilerEnv,
     },
     { config: "apps/desktop/tsconfig.tests.json", checkers: desktopCheckers, env: desktopTestEnv },
-    { config: "apps/desktop/tsconfig.renderer.json", checkers: "4", env: compilerEnv },
+    { config: "apps/desktop/tsconfig.renderer.json", checkers: defaultCheckers, env: compilerEnv },
   ];
 }
 
 const cwd = scope === "--package" ? process.cwd() : repositoryRoot;
+const explicitCheckers = hasCliFlag(options, ["--checkers"]);
 
 // Each compiler process releases its heap before the next desktop slice.
 for (const { config, checkers, env } of projects) {
   const projectArgs = desktopWatch ? ["--project", config] : ["--build", config, "--stopBuildOnErrors"];
   const result = spawnSync(process.execPath, [
-    compiler, ...projectArgs, "--checkers", checkers, ...options,
+    compiler, ...projectArgs, ...(explicitCheckers ? [] : ["--checkers", checkers]), ...options,
   ], {
     cwd,
     env,

@@ -1,16 +1,19 @@
 import type { AgentMcpTool } from "../agent-tools/agent-tool-router";
+import { MANAGED_REVIEW_LEDGER_TOOL_NAMES } from "../agent-tools/pwragent-managed-review-ledger-tools";
 import { FORGE_PR_TOOL_OPERATIONS } from "../pr-status/forge-pr-tool-contract";
 import { FORGE_READ_OPERATIONS } from "../pr-status/forge-tool-contract";
 
 /**
  * PwrAgent tools whose calls PwrAgent approves itself: the MCP gateway asks
- * under the connection's tool-approval policy, and forge writes show their
- * own card under the project's forge rules. An ACP agent's prompt for these
- * would be a second card for the same call. Claude pre-allows the same set
+ * under the connection's tool-approval policy, forge writes show their own
+ * card under the project's forge rules, and the managed-review candidate
+ * ledger mutates only an in-memory per-turn scratchpad. An ACP agent's prompt
+ * for these would be redundant. Claude pre-allows the gateway/forge set
  * through `allowedTools`.
  */
 const HOST_APPROVED_TOOLS: ReadonlySet<string> = new Set([
   "call_mcp_tool",
+  ...MANAGED_REVIEW_LEDGER_TOOL_NAMES,
   ...FORGE_READ_OPERATIONS,
   ...FORGE_PR_TOOL_OPERATIONS,
 ]);

@@ -33,17 +33,52 @@ function createEmptySkillState(): SkillState {
   return { loading: false };
 }
 
+type EnsureSkillsOptions = { force?: boolean; includeCommands?: boolean };
+
+export type ThreadProviderCommand = AppServerAvailableCommandSummary & {
+  /** Renderer-only match against the owning workspace's Antigravity catalog. */
+  skill?: AppServerSkillSummary;
+};
+
+function slashSkillKey(name: string, description: string | undefined): string | undefined {
+  const summary = description?.replace(/\s+/g, " ").trim();
+  return summary ? `${name.replace(/^\//, "")}\0${summary}` : undefined;
+}
+
+function indexAntigravitySlashSkills(
+  skills: AppServerSkillSummary[],
+): Map<string, AppServerSkillSummary | undefined> {
+  const matches = new Map<string, AppServerSkillSummary | undefined>();
+  for (const skill of skills) {
+    if (!skill.path || !skill.origin || skill.enabled === false || skill.mentionOnly) continue;
+    const prefix = skill.pluginId ? `${skill.pluginId}:` : undefined;
+    const names = prefix && skill.name.startsWith(prefix)
+      ? [skill.name, skill.name.slice(prefix.length)]
+      : [skill.name];
+    for (const name of names) {
+      const key = slashSkillKey(name, skill.description);
+      // ACP doesn't identify the selected file. Multiple distinct paths with
+      // the same advertisement leave provenance unknown.
+      if (key && matches.get(key)?.path !== skill.path) {
+        matches.set(key, matches.has(key) ? undefined : skill);
+      }
+    }
+  }
+  return matches;
+}
+
 export function useThreadSkills(params: {
   desktopApi?: DesktopApi;
   launchpad?: NavigationLaunchpadDraft;
   thread?: NavigationThreadSummary;
   now?: () => number;
 }): {
-  ensureLoaded: (options?: { force?: boolean }) => Promise<void>;
+  ensureLoaded: (options?: EnsureSkillsOptions) => Promise<void>;
   error?: string;
   loading: boolean;
-  providerCommands: AppServerAvailableCommandSummary[];
+  providerCommands: ThreadProviderCommand[];
   response?: AppServerListSkillsResponse;
+  skillCatalogTargetKey?: string;
   skills: AppServerSkillSummary[];
 } {
   const { desktopApi, launchpad, thread } = params;
@@ -65,7 +100,9 @@ export function useThreadSkills(params: {
         backend: thread.source,
         cwds,
         federationTarget: thread.federation?.ref.target,
-        key: threadSummaryIdentityKey(thread),
+        key: thread.source === "acp:antigravity"
+          ? `${threadSummaryIdentityKey(thread)}:${JSON.stringify(cwds)}`
+          : threadSummaryIdentityKey(thread),
         threadId: thread.id,
       };
     }
@@ -83,7 +120,8 @@ export function useThreadSkills(params: {
         backend: launchpad.backend,
         cwds,
         federationTarget: launchpad.federationTarget,
-        key: `launchpad:${launchpad.backend}:${targetKey}${launchpad.directoryKey}`,
+        key: `launchpad:${launchpad.backend}:${targetKey}${launchpad.directoryKey}`
+          + (launchpad.backend === "acp:antigravity" ? `:${JSON.stringify(cwds)}` : ""),
         threadId: undefined,
       };
     }
@@ -91,6 +129,10 @@ export function useThreadSkills(params: {
     return undefined;
   }, [launchpad, thread]);
   const state = skillTarget ? stateByThreadKey[skillTarget.key] : undefined;
+  const separateCommands = skillTarget?.backend === "acp:antigravity";
+  const commandState = separateCommands && skillTarget
+    ? stateByThreadKey[`${skillTarget.key}:commands`]
+    : state;
 
   useEffect(() => {
     stateByThreadKeyRef.current = stateByThreadKey;
@@ -113,15 +155,16 @@ export function useThreadSkills(params: {
   );
 
   const loadTarget = useCallback(
-    async (options: { force?: boolean; replacePending?: boolean } = {}): Promise<void> => {
+    async (options: { force?: boolean; replacePending?: boolean; commandsOnly?: boolean } = {}): Promise<void> => {
       if (!skillTarget) {
         return;
       }
 
+      const key = options.commandsOnly ? `${skillTarget.key}:commands` : skillTarget.key;
       if (!desktopApi?.listSkills) {
         commitState((current) => ({
           ...current,
-          [skillTarget.key]: {
+          [key]: {
             error: "Desktop bridge is missing listSkills().",
             loading: false,
             response: undefined,
@@ -130,19 +173,23 @@ export function useThreadSkills(params: {
         return;
       }
 
-      const currentState = stateByThreadKeyRef.current[skillTarget.key];
-      if ((currentState?.loading && !options.replacePending) || (!options.force && currentState?.response)) {
+      const currentState = stateByThreadKeyRef.current[key];
+      // An empty slash response can be a timed-out or cooling-down owner
+      // probe. Reopening the picker should ask again after the owner recovers.
+      const hasCachedResult = currentState?.response && (!options.commandsOnly
+        || currentState.response.data.some(({ commands }) => commands?.length));
+      if ((currentState?.loading && !options.replacePending) || (!options.force && hasCachedResult)) {
         return;
       }
 
       const requestVersion =
-        (requestVersionsRef.current[skillTarget.key] ?? 0) + 1;
-      requestVersionsRef.current[skillTarget.key] = requestVersion;
+        (requestVersionsRef.current[key] ?? 0) + 1;
+      requestVersionsRef.current[key] = requestVersion;
       const cwds = skillTarget.cwds;
 
       commitState((current) => ({
         ...current,
-        [skillTarget.key]: {
+        [key]: {
           ...(currentState ?? createEmptySkillState()),
           error: undefined,
           loading: true,
@@ -152,6 +199,9 @@ export function useThreadSkills(params: {
       try {
         const response = await desktopApi.listSkills({
           backend: skillTarget.backend,
+          ...(skillTarget.backend === "acp:antigravity"
+            ? { catalog: options.commandsOnly ? "commands" : "skills" }
+            : {}),
           ...(cwds.length === 1 ? { cwd: cwds[0] } : {}),
           ...(cwds.length > 0 ? { cwds } : {}),
           ...(skillTarget.federationTarget
@@ -160,13 +210,13 @@ export function useThreadSkills(params: {
           ...(skillTarget.threadId ? { threadId: skillTarget.threadId } : {}),
         });
 
-        if (requestVersionsRef.current[skillTarget.key] !== requestVersion) {
+        if (requestVersionsRef.current[key] !== requestVersion) {
           return;
         }
 
         commitState((current) => ({
           ...current,
-          [skillTarget.key]: {
+          [key]: {
             error: undefined,
             loadedAt: now(),
             loading: false,
@@ -174,13 +224,13 @@ export function useThreadSkills(params: {
           },
         }));
       } catch (error) {
-        if (requestVersionsRef.current[skillTarget.key] !== requestVersion) {
+        if (requestVersionsRef.current[key] !== requestVersion) {
           return;
         }
 
         commitState((current) => ({
           ...current,
-          [skillTarget.key]: {
+          [key]: {
             error: error instanceof Error ? error.message : String(error),
             loading: false,
             response: undefined,
@@ -240,18 +290,14 @@ export function useThreadSkills(params: {
         return;
       }
 
-      const commands = Array.isArray(
-        (event.notification.params as { commands?: unknown }).commands,
-      )
-        ? ((event.notification.params as {
-            commands: AppServerAvailableCommandSummary[];
-          }).commands)
-        : [];
-      requestVersionsRef.current[key] =
-        (requestVersionsRef.current[key] ?? 0) + 1;
+      const { cwd, commands: incoming } = event.notification.params;
+      const commands = Array.isArray(incoming) ? incoming : [];
+      const commandKey = backend === "acp:antigravity" ? `${key}:commands` : key;
+      requestVersionsRef.current[commandKey] =
+        (requestVersionsRef.current[commandKey] ?? 0) + 1;
       commitState((current) => ({
         ...current,
-        [key]: {
+        [commandKey]: {
           error: undefined,
           loading: false,
           response: {
@@ -259,6 +305,7 @@ export function useThreadSkills(params: {
             fetchedAt: Date.now(),
             data: [
               {
+                ...(typeof cwd === "string" ? { cwd } : {}),
                 commands,
                 skills: [],
               },
@@ -269,16 +316,21 @@ export function useThreadSkills(params: {
     });
   }, [commitState, desktopApi, loadTarget, skillTarget, thread]);
 
-  const ensureLoaded = useCallback(async (options?: { force?: boolean }): Promise<void> => {
+  const ensureLoaded = useCallback(async (options?: EnsureSkillsOptions): Promise<void> => {
     // Reuse recent results across picker openings. Freshness uses this
     // renderer's clock, not a remote owner's fetchedAt. Explicit Refresh
     // bypasses the window; nothing polls while the picker is closed.
     const loadedAt = skillTarget ? stateByThreadKeyRef.current[skillTarget.key]?.loadedAt : undefined;
     const age = loadedAt === undefined ? undefined : now() - loadedAt;
-    const stale = skillTarget?.backend === "codex"
+    const stale = (skillTarget?.backend === "codex" || separateCommands)
       && (age === undefined || age >= SKILL_CATALOG_FRESH_MS || age < 0);
-    await loadTarget({ force: options?.force || stale });
-  }, [loadTarget, now, skillTarget]);
+    await Promise.all([
+      loadTarget({ force: options?.force || stale }),
+      separateCommands && options?.includeCommands
+        ? loadTarget({ force: options.force, commandsOnly: true })
+        : undefined,
+    ]);
+  }, [loadTarget, now, separateCommands, skillTarget]);
 
   // Keyed on the directories' content, not the thread's identity: the summary
   // is replaced on every streamed item, and `skills` feeds memoized transcript
@@ -364,22 +416,32 @@ export function useThreadSkills(params: {
     );
   }, [bundledSkillRoots, originDirectories, state?.response?.data]);
 
+  const antigravityCatalog = separateCommands ? state?.response?.data : undefined;
   const providerCommands = useMemo(() => {
-    const deduped = new Map<string, AppServerAvailableCommandSummary>();
+    const deduped = new Map<string, ThreadProviderCommand>();
+    const matchesByWorkspace = new Map<string, ReturnType<typeof indexAntigravitySlashSkills>>();
 
-    for (const entry of state?.response?.data ?? []) {
+    for (const entry of commandState?.response?.data ?? []) {
+      let matches = entry.cwd ? matchesByWorkspace.get(entry.cwd) : undefined;
+      if (!matches && entry.cwd && entry.commands?.length && antigravityCatalog) {
+        const workspaceSkills = antigravityCatalog.flatMap(({ cwd, skills }) => cwd === entry.cwd ? skills : []);
+        matches = indexAntigravitySlashSkills(withSkillOrigins(workspaceSkills, originDirectories));
+        matchesByWorkspace.set(entry.cwd, matches);
+      }
       for (const command of entry.commands ?? []) {
-        deduped.set(
-          `${command.backend ?? skillTarget?.backend ?? "unknown"}:${command.name}`,
-          command,
-        );
+        const backend = command.backend ?? skillTarget?.backend;
+        const skillKey = backend === "acp:antigravity" && !command.argumentHint
+          ? slashSkillKey(command.name, command.description)
+          : undefined;
+        const skill = skillKey ? matches?.get(skillKey) : undefined;
+        deduped.set(`${backend ?? "unknown"}:${command.name}`, skill ? { ...command, skill } : command);
       }
     }
 
     return [...deduped.values()].sort((left, right) =>
       left.name.localeCompare(right.name)
     );
-  }, [skillTarget?.backend, state?.response?.data]);
+  }, [antigravityCatalog, originDirectories, skillTarget?.backend, commandState?.response?.data]);
 
   return {
     ensureLoaded,
@@ -387,6 +449,7 @@ export function useThreadSkills(params: {
     loading: state?.loading ?? false,
     providerCommands,
     response: state?.response,
+    skillCatalogTargetKey: separateCommands ? skillTarget.key : undefined,
     skills,
   };
 }

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ProcessMetric } from "electron";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import type { HotCpuProfileCapturedEvent } from "../../shared/hot-cpu-profile";
 import type { HotCpuTarget } from "../diagnostics/hot-cpu-target";
 import type { HotCpuProfileEvent, HotCpuProfileSample, HotCpuProfileSession } from "../diagnostics/hot-cpu-profile-session";
 import { HotCpuProfiler } from "../shell/diagnostics/hot-cpu-profiler";
@@ -214,13 +215,16 @@ it("uses application CPU over the actual sample interval across recorder rotatio
   }), exerciseRotation), { numRuns: 30 });
 });
 
-it("still emits throttled hot-CPU warnings after maxProfiles is reached", async () => {
+it.each(["written", "start fails", "stop fails", "write fails"] as const)(
+  "keeps the attempt cap and allows one rearm after a final capture (%s)", async (outcome) => {
   vi.useFakeTimers();
   const samples: HotCpuProfileSample[] = [];
   const events: HotCpuProfileEvent[] = [];
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   let processCpuMs = 0;
   let attached = false;
+  let attemptStarted = false;
+  const firstFailure = Promise.withResolvers<void>();
   const session: HotCpuProfileSession = {
     target: "main",
     id: "cap-warn",
@@ -229,8 +233,19 @@ it("still emits throttled hot-CPU warnings after maxProfiles is reached", async 
     samplesPath: "",
     eventsPath: "",
     appendSample: async (sample) => { samples.push(sample); },
-    appendEvent: async (event) => { events.push(event); },
-    createProfilePath: (index) => path.join(workspace.path, `profile-${index}.cpuprofile`),
+    appendEvent: async (event) => {
+      if (event.type === "profile-started" && !attemptStarted) {
+        attemptStarted = true;
+        if (outcome === "start fails") throw new Error("fixture start failure");
+      }
+      events.push(event);
+      if (event.type === "profile-start-failed" || event.type === "profile-stop-failed") {
+        firstFailure.resolve();
+      }
+    },
+    createProfilePath: (index) => path.join(
+      workspace.path, index === 1 && outcome === "write fails" ? "missing" : "", `profile-${index}.cpuprofile`,
+    ),
     createHeapSnapshotPath: () => "",
     registerArtifact: async () => {},
   };
@@ -242,15 +257,19 @@ it("still emits throttled hot-CPU warnings after maxProfiles is reached", async 
       isAttached: () => attached,
       on: () => {},
       off: () => {},
-      sendCommand: async (method) => method === "Profiler.stop"
-        ? { profile: { nodes: [{ id: 1, callFrame: { functionName: "(root)" } }], startTime: 0, endTime: 1000, samples: [], timeDeltas: [] } }
-        : {},
+      sendCommand: async (method) => {
+        if (method !== "Profiler.stop") return {};
+        if (outcome === "stop fails" && !events.some((event) => event.type === "profile-stop-failed")) {
+          throw new Error("fixture stop failure");
+        }
+        return { profile: { nodes: [{ id: 1, callFrame: { functionName: "(root)" } }], startTime: 0, endTime: 1000, samples: [], timeDeltas: [] } };
+      },
     },
   };
-  let resolveProfileWritten: (() => void) | undefined;
-  const profileWritten = new Promise<void>((resolve) => {
-    resolveProfileWritten = resolve;
-  });
+  const profileWritten = Promise.withResolvers<HotCpuProfileCapturedEvent>();
+  const nextProfileWritten = Promise.withResolvers<HotCpuProfileCapturedEvent>();
+  const onPostCapHotCpu = vi.fn();
+  const onFinalCaptureFailed = vi.fn();
   const profiler = new HotCpuProfiler({
     config: {
       enabled: true, repoRoot: workspace.path, outputRoot: workspace.path,
@@ -263,7 +282,11 @@ it("still emits throttled hot-CPU warnings after maxProfiles is reached", async 
     target,
     session,
     logger,
-    onProfileWritten: async () => { resolveProfileWritten?.(); },
+    onProfileWritten: (event) => {
+      (event.profileFilename === "profile-1.cpuprofile" ? profileWritten : nextProfileWritten).resolve(event);
+    },
+    onPostCapHotCpu,
+    onFinalCaptureFailed,
     now: () => new Date(Date.now()),
     sampleNow: () => Date.now(),
     getAppMetrics: () => [{
@@ -274,15 +297,26 @@ it("still emits throttled hot-CPU warnings after maxProfiles is reached", async 
   });
   try {
     await profiler.start();
+    expect(profiler.rearm("profile-1.cpuprofile")).toBe(false);
     // Baseline sample.
     await vi.advanceTimersByTimeAsync(SAMPLE_MS);
     // First spike consumes maxProfiles (1).
     processCpuMs += 1_800;
     await vi.advanceTimersByTimeAsync(SAMPLE_MS);
     await vi.advanceTimersByTimeAsync(100);
-    await profileWritten;
+    const firstWrittenCount = outcome === "written" ? 1 : 0;
+    const expectedOffer = { captureLimit: 1, profileFilename: "profile-1.cpuprofile", target: "main" };
+    if (outcome === "written") {
+      expect(await profileWritten.promise).toMatchObject(expectedOffer);
+      expect(onFinalCaptureFailed).not.toHaveBeenCalled();
+    } else {
+      await firstFailure.promise;
+      expect(onFinalCaptureFailed).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(expectedOffer));
+      expect(onFinalCaptureFailed.mock.calls[0][0]).not.toHaveProperty("profilePath");
+    }
+    expect(profiler.rearmableCapture).toMatchObject(expectedOffer);
     await Promise.resolve();
-    expect(events.filter((event) => event.type === "profile-written")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "profile-written")).toHaveLength(firstWrittenCount);
 
     // Baseline sample after profile completion resets the delta window.
     await vi.advanceTimersByTimeAsync(SAMPLE_MS);
@@ -292,21 +326,63 @@ it("still emits throttled hot-CPU warnings after maxProfiles is reached", async 
     processCpuMs += 1_800;
     await vi.advanceTimersByTimeAsync(SAMPLE_MS);
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(onPostCapHotCpu).not.toHaveBeenCalled();
 
-    // Past cooldown: hot CPU still logs a throttled warning even though maxProfiles was reached.
+    // Cool samples after the cooldown are not evidence of high CPU.
     await vi.advanceTimersByTimeAsync(60_000);
+    expect(onPostCapHotCpu).not.toHaveBeenCalled();
+
+    // The first qualifying observation after the cap produces one notice and one diagnostic.
     processCpuMs += 1_800;
     await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+    expect(onPostCapHotCpu).toHaveBeenCalledExactlyOnceWith({
+      captureCount: 1,
+      capturedAt: samples.at(-1)?.capturedAt,
+      sessionId: "cap-warn",
+      target: "main",
+    });
     expect(logger.warn).toHaveBeenCalledWith(
       "[pwragent:hot-cpu] hot CPU detected after profile cap reached",
       expect.objectContaining({ target: "main", profileCount: 1, maxProfiles: 1 }),
     );
     expect(events.filter((event) => event.type === "profile-cap-warning")).toHaveLength(1);
-    // Throttled again on the immediately following sample.
-    logger.warn.mockClear();
+    // Later matches across several more cooldowns cannot produce any more notices,
+    // diagnostic warnings, or profiles in this session.
+    for (let i = 0; i < 3; i += 1) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      processCpuMs += 1_800;
+      await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+    }
+    expect(onPostCapHotCpu).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(events.filter((event) => event.type === "profile-cap-warning")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "profile-written")).toHaveLength(firstWrittenCount);
+    expect(profiler.rearmableCapture).toMatchObject(expectedOffer);
+
+    // Only the final capture can be used to rearm, and a duplicate click
+    // cannot grant a third batch.
+    expect(profiler.rearm("profile-2.cpuprofile")).toBe(false);
+    expect(profiler.rearm("profile-1.cpuprofile")).toBe(true);
+    expect(profiler.rearmableCapture).toBeUndefined();
+    expect(profiler.rearm("profile-1.cpuprofile")).toBe(false);
+    await vi.advanceTimersByTimeAsync(SAMPLE_MS);
+    processCpuMs += 1_800;
+    await vi.advanceTimersByTimeAsync(SAMPLE_MS + 100);
+    expect(await nextProfileWritten.promise).toMatchObject({
+      captureLimit: 1,
+      profileFilename: "profile-2.cpuprofile",
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
     processCpuMs += 1_800;
     await vi.advanceTimersByTimeAsync(SAMPLE_MS);
-    expect(logger.warn).not.toHaveBeenCalled();
+    expect(events.filter((event) => event.type === "profile-written")).toHaveLength(firstWrittenCount + 1);
+    expect(events.filter((event) => event.type === "profile-cap-rearmed")).toHaveLength(1);
+    expect(onPostCapHotCpu).toHaveBeenCalledTimes(2);
+    expect(onPostCapHotCpu).toHaveBeenLastCalledWith(expect.objectContaining({ captureCount: 2 }));
+    expect(profiler.rearm("profile-1.cpuprofile")).toBe(false);
+    await profiler.stop();
+    expect(profiler.rearmableCapture).toBeUndefined();
+    expect(profiler.rearm("profile-2.cpuprofile")).toBe(false);
   } finally {
     await profiler.stop();
     vi.useRealTimers();

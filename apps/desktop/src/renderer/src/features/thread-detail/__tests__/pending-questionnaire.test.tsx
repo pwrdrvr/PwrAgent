@@ -89,6 +89,47 @@ function buildFreeformState(): PendingQuestionnaireState {
 }
 
 describe("PendingQuestionnaire", () => {
+  it("lets a multi-select question take several options and Other before moving on", () => {
+    const onSubmit = vi.fn();
+    let state: PendingQuestionnaireState = {
+      ...buildState(),
+      questions: [{
+        id: "fruits",
+        header: "",
+        question: "Pick fruits",
+        options: ["Apple", "Pear", "Plum"].map((label, index) => ({
+          key: String.fromCharCode(65 + index), label, description: "", recommended: false,
+        })),
+        allowFreeform: true,
+        multiSelect: true,
+        secret: false,
+      }],
+      answers: [null],
+    };
+    const view = () => (
+      <PendingQuestionnaire state={state} onChange={(next) => { state = next; }} onSubmit={onSubmit} />
+    );
+    const { rerender } = render(view());
+
+    expect(screen.getByText("Choose any that apply.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Submit" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: /Apple/ }));
+    rerender(view());
+    fireEvent.click(screen.getByRole("button", { name: /Plum/ }));
+    rerender(view());
+    fireEvent.change(screen.getByRole("textbox", { name: "Other answer" }), { target: { value: "Kiwi" } });
+    rerender(view());
+
+    // Choosing never submitted the last question on the operator's behalf.
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Apple/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Pear/ })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: /Plum/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("textbox", { name: "Other answer" })).toHaveValue("Kiwi");
+    fireEvent.click(screen.getByRole("button", { name: "Submit" }));
+    expect(onSubmit).toHaveBeenCalledWith(state);
+  });
+
   it("renders plan questions without approval controls", () => {
     render(
       <PendingQuestionnaire
@@ -100,8 +141,10 @@ describe("PendingQuestionnaire", () => {
 
     expect(screen.getByRole("group", { name: "Pending input" })).toBeInTheDocument();
     expect(screen.getByText("Question 1 of 2")).toBeInTheDocument();
-    expect(screen.getByText("Small patch (Recommended)")).toBeInTheDocument();
+    // The badge marks the recommendation once; the label drops the marker.
+    expect(screen.getByText("Small patch")).toBeInTheDocument();
     expect(screen.getByText("Recommended")).toBeInTheDocument();
+    expect(screen.queryByText(/\(Recommended\)/)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Decline" })).not.toBeInTheDocument();
   });

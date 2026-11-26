@@ -7,6 +7,8 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useCloseOnOutsidePointer, useTodoFactMenuPlacement } from "../thread-todos/TodoFactMenu";
 import { useThreadDependencyList } from "../thread-dependencies/useThreadDependencyList";
+import type { AutoFixCoverageEntry } from "./auto-fix-coverage";
+import { useForgeAutomationOpener } from "../forge-automation/thread-hands-off";
 import {
   cancelMergeBuildWatches,
   createMergeBuildWatch,
@@ -36,6 +38,13 @@ export function ComposerPrMenu(props: {
     /** Why Auto-fix cannot change, when it cannot. */
     unavailableDetail?: string;
     onToggle: (enabled: boolean) => void;
+    /**
+     * The PRs Auto-fix covers (`describeAutoFixCoverage`), listed while it is
+     * on and covers more than one. Absent where one PR's switch cannot reach
+     * the thread's owner.
+     */
+    coverage?: readonly AutoFixCoverageEntry[];
+    onTogglePr?: (prKey: string, enabled: boolean) => void;
   };
 }) {
   const [open, setOpen] = useState(false);
@@ -55,6 +64,16 @@ export function ComposerPrMenu(props: {
   const waits = ownMergeBuildWaits(list.data?.dependencies ?? [], target);
   const mergeBuild = describeMergeBuildWatch({ waits, defaultOn: props.watchMergeBuildsDefault, prUrl: props.prUrl });
   const canManage = Boolean(props.desktopApi?.manageThreadDependencies) && list.ready && Boolean(list.data);
+  // One PR's switch means something only beside another PR Auto-fix covers,
+  // or to undo one already made.
+  // The thread's project's rules decide which PRs Auto-fix leaves alone.
+  const forgeAutomation = useForgeAutomationOpener();
+  const forgeProject = open ? forgeAutomation?.projectFor(props.thread) : undefined;
+  const togglePr = props.autoFix.onTogglePr;
+  const coverage = togglePr && props.autoFix.checked && props.autoFix.available && props.autoFix.coverage
+    && (props.autoFix.coverage.length > 1 || props.autoFix.coverage.some((entry) => entry.state !== "on"))
+    ? props.autoFix.coverage
+    : [];
 
   /** True when the change went through; a refusal stays on screen. */
   const toggleMergeBuild = async (): Promise<boolean> => {
@@ -118,6 +137,51 @@ export function ComposerPrMenu(props: {
               {props.autoFix.available ? "Repairs failing CI and conflicts" : props.autoFix.unavailableDetail ?? "Unavailable"}
             </span>
           </button>
+          {coverage.length > 0 ? (
+            <div role="group" aria-label="Pull requests Auto-fix covers">
+              <p className="composer-dropdown__group-label" aria-hidden="true">Covers</p>
+              {coverage.map((entry) => (
+                <button
+                  key={entry.prKey}
+                  type="button"
+                  role="menuitemcheckbox"
+                  className="todo-split__item composer-pr-menu__pr"
+                  aria-checked={entry.state === "on"}
+                  // A hands-off PR changes only through the project's rules.
+                  aria-disabled={entry.state === "hands-off" ? true : undefined}
+                  onClick={() => {
+                    if (entry.state === "hands-off") return;
+                    togglePr!(entry.prKey, entry.state === "off");
+                    close();
+                  }}
+                >
+                  <span className="todo-split__item-check" aria-hidden="true">
+                    {entry.state === "on" ? <CheckIcon size={12} /> : null}
+                  </span>
+                  <span className="todo-split__item-label composer-pr-menu__pr-label">{entry.label}</span>
+                  <span className="todo-model-picker__detail">
+                    {entry.state === "hands-off" ? entry.reason : entry.state === "off" ? "Off for this PR" : "Repairs it"}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {forgeProject ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="todo-split__item composer-pr-menu__pr"
+              data-testid="composer-pr-menu-forge-automation"
+              onClick={() => {
+                close();
+                forgeAutomation!.open(props.thread, triggerRef);
+              }}
+            >
+              <span className="todo-split__item-check" aria-hidden="true" />
+              <span className="todo-split__item-label">{`Forge Automation for ${forgeProject}…`}</span>
+              <span className="todo-model-picker__detail">Hands-off rules and pause</span>
+            </button>
+          ) : null}
           <button
             type="button"
             role="menuitemcheckbox"

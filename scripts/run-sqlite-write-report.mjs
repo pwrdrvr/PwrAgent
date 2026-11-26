@@ -12,6 +12,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildBudgetThreadEnv, resolveLocalCpuBudget } from "./local-cpu-budget.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = path.join(tmpdir(), "pwragent-sqlite-write-metrics");
@@ -20,6 +21,9 @@ const metricsFile = path.join(outDir, `run-${process.pid}.jsonl`);
 rmSync(metricsFile, { force: true });
 mkdirSync(outDir, { recursive: true });
 
+const localBudget = resolveLocalCpuBudget({ cwd: repoRoot });
+const budgetEnv = localBudget ? buildBudgetThreadEnv(localBudget.units, process.env) : {};
+
 const vitest = spawnSync(
   "pnpm",
   ["exec", "vitest", "run", "--config", "vitest.workspace.mts", ...process.argv.slice(2)],
@@ -27,6 +31,7 @@ const vitest = spawnSync(
     cwd: repoRoot,
     env: {
       ...process.env,
+      ...budgetEnv,
       PWRAGENT_DEV_SQLITE_WRITE_METRICS: "1",
       PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE: metricsFile,
     },

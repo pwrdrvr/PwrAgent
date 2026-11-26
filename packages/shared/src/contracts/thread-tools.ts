@@ -509,7 +509,32 @@ export type ThreadPullRequestAutomationStatus = {
    * docs/pr-review-readiness.md.
    */
   reviewReadiness?: ThreadPullRequestReviewReadiness[];
+  /**
+   * The thread's project Forge Automation gates, when the thread files
+   * under a Directories project. Read-only: an agent proposes a hands-off
+   * rule with an add_todo `add_forge_hands_off_rule` card.
+   */
+  forgeAutomation?: ThreadForgeAutomationGates;
   guidance: string;
+};
+
+export type ThreadForgeAutomationGates = {
+  project: string;
+  /** Destination repository (`owner/name`), with an optional label pattern. */
+  handsOff: Array<{ repository: string; label?: string }>;
+  /** The thread's primary PRs, each with what the gates make of it. */
+  pullRequests: Array<{
+    url: string;
+    /**
+     * Labels as last read. Absent means not read: labels are read only for
+     * a repository a label rule names, so a label rule cannot match yet.
+     */
+    labels?: string[];
+    /** The rule that leaves it to its maintainers, and the label that matched. */
+    handsOff?: { repository: string; label?: string; matchedLabel?: string };
+    /** The operator switched Auto-fix off for this PR in this thread. */
+    autoFixOff?: true;
+  }>;
 };
 
 export type ThreadPullRequestReviewReadiness = {

@@ -63,7 +63,7 @@ function respondWorkingState(args: string[]): string | undefined {
   if (args.includes("status")) {
     return " M src/a.ts\n?? scratch/new.txt\n?? scratch/other.txt\n";
   }
-  if (args[args.length - 1] === "remote") {
+  if (args[args.length - 1] === "--verbose") {
     return "origin\n";
   }
   if (args.includes("rev-list")) {
@@ -96,7 +96,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit, calls } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "";
+      if (args[args.length - 1] === "--verbose") return "";
       if (args.includes("rev-list")) return "9\n";
       return undefined;
     });
@@ -120,7 +120,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit, calls } = fakeGit((args, input) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-list")) {
         return input?.includes(mergedPrHeadSha)
           ? "1\n"
@@ -253,7 +253,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit, calls } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-list")) {
         return args.includes("--stdin") ? undefined : "3\n";
       }
@@ -278,9 +278,9 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-parse") && args.includes("--verify")) {
-        const target = args[args.length - 1];
+        const target = args[args.length - 1]?.replace(/refs\/(heads|remotes)\//g, "");
         if (target === "HEAD^{commit}") return `${headCommit}\n`;
         if (target === "origin/main^{commit}") return `${mainTip}\n`;
         if (target === "main^{commit}") return `${mainTip}\n`;
@@ -291,25 +291,25 @@ describe("probeWorktreeWorkingState", () => {
         return "feature/work\n";
       }
       if (args.includes("config")) return "";
-      if (args.includes("symbolic-ref")) return "origin/main\n";
+      if (args.includes("symbolic-ref")) return "refs/remotes/origin/main\n";
       if (args.includes("for-each-ref")) {
         return [
-          "main",
-          "releases/4.3",
-          "feature/work",
-          "origin/main",
-          "origin/releases/4.3",
+          "refs/heads/main",
+          "refs/heads/releases/4.3",
+          "refs/heads/feature/work",
+          "refs/remotes/origin/main",
+          "refs/remotes/origin/releases/4.3",
         ].join("\n");
       }
       if (args.includes("merge-base")) {
-        const target = args[args.length - 1];
+        const target = args[args.length - 1]?.replace(/refs\/(heads|remotes)\//g, "");
         if (target === "origin/main" || target === "main") return `${mainBase}\n`;
         if (target === "releases/4.3" || target === "origin/releases/4.3") {
           return `${releaseBase}\n`;
         }
       }
       if (args.includes("rev-list") && args.includes("--count")) {
-        const range = args[args.length - 1];
+        const range = args[args.length - 1]?.replace(/refs\/(heads|remotes)\//g, "");
         if (range === "HEAD") return "0\n";
         if (range === `${mainBase}..origin/main` || range === `${mainBase}..main`) {
           return "7\n";
@@ -338,6 +338,58 @@ describe("probeWorktreeWorkingState", () => {
     });
   });
 
+  it("counts a fork branch's distance from the upstream default branch without another Git process", async () => {
+    const headCommit = "a".repeat(40);
+    const baseCommit = "b".repeat(40);
+    const probe = async (refs: string[], remoteHead = "refs/remotes/origin/main\n") => {
+      const { runGit, calls } = fakeGit((args) => {
+        if (args.includes("--numstat")) return "";
+        if (args.includes("status")) return "";
+        if (args[args.length - 1] === "--verbose") return "origin\nupstream\n";
+        if (args.includes("rev-parse") && args.includes("--verify")) return `${headCommit}\n`;
+        if (args.includes("rev-parse") && args.includes("--abbrev-ref")) return "test/benchmark\n";
+        if (args.includes("config")) return "";
+        if (args.includes("symbolic-ref")) return remoteHead;
+        if (args.includes("for-each-ref")) return refs.join("\n");
+        if (args.includes("merge-base")) return `${baseCommit}\n`;
+        if (args.includes("rev-list") && args.includes("--count")) return "0\n";
+        return undefined;
+      });
+      return { state: await probeWorktreeWorkingState("/repo/wt", { runGit }), calls };
+    };
+    // The fork's main is synced and current; the upstream has moved on.
+    const fork = `refs/remotes/origin/main\0${"1".repeat(40)}\x000 3`;
+    const upstream = `refs/remotes/upstream/main\0${"2".repeat(40)}\x0037 3`;
+    const withUpstream = await probe([upstream, fork]);
+    expect(withUpstream.state).toMatchObject({
+      baseBranch: "main",
+      baseBehindCommitCount: 0,
+      baseAheadCommitCount: 3,
+      upstreamBranch: "upstream/main",
+      upstreamBehindCommitCount: 37,
+    });
+    const forkOnly = await probe([fork]);
+    expect(forkOnly.state).not.toHaveProperty("upstreamBranch");
+    expect(withUpstream.calls).toHaveLength(forkOnly.calls.length);
+    // The upstream row compares like with like: a release base is never
+    // measured against upstream's main.
+    const release = await probe([
+      `refs/remotes/origin/release/4.3\0${"3".repeat(40)}\x002 1`,
+      upstream,
+    ], "");
+    expect(release.state).toMatchObject({ baseBranch: "release/4.3" });
+    expect(release.state).not.toHaveProperty("upstreamBranch");
+    const releaseUpstream = await probe([
+      `refs/remotes/origin/release/4.3\0${"3".repeat(40)}\x002 1`,
+      `refs/remotes/upstream/release/4.3\0${"4".repeat(40)}\x005 1`,
+    ], "");
+    expect(releaseUpstream.state).toMatchObject({
+      baseBranch: "release/4.3",
+      upstreamBranch: "upstream/release/4.3",
+      upstreamBehindCommitCount: 5,
+    });
+  });
+
   it("keeps cold base inference inside the fixed Git subprocess budget", async () => {
     const headCommit = "a".repeat(40);
     const baseCommit = "b".repeat(40);
@@ -355,7 +407,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit, calls } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-parse") && args.includes("--verify")) {
         return `${headCommit}\n`;
       }
@@ -363,12 +415,12 @@ describe("probeWorktreeWorkingState", () => {
         return "feature/fixed-budget\n";
       }
       if (args.includes("config")) return "";
-      if (args.includes("symbolic-ref")) return "origin/main\n";
+      if (args.includes("symbolic-ref")) return "refs/remotes/origin/main\n";
       if (args.includes("for-each-ref")) {
         return candidateNames.map((name, index) => {
           const ahead = name === "release/0" ? 1 : index + 10;
           const behind = name === "release/0" ? 2 : index + 20;
-          return `origin/${name}\0${String(index + 1).padStart(40, "0")}\0${ahead} ${behind}`;
+          return `refs/remotes/origin/${name}\0${String(index + 1).padStart(40, "0")}\0${ahead} ${behind}`;
         }).join("\n");
       }
       if (args.includes("merge-base")) return `${baseCommit}\n`;
@@ -401,7 +453,7 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "origin\n";
+      if (args[args.length - 1] === "--verbose") return "origin\n";
       if (args.includes("rev-parse") && args.includes("--verify")) {
         const target = args[args.length - 1];
         if (target === "HEAD^{commit}") return `${mainTip}\n`;
@@ -438,17 +490,17 @@ describe("probeWorktreeWorkingState", () => {
     const { runGit } = fakeGit((args) => {
       if (args.includes("--numstat")) return "";
       if (args.includes("status")) return "";
-      if (args[args.length - 1] === "remote") return "";
+      if (args[args.length - 1] === "--verbose") return "";
       if (args.includes("rev-parse") && args.includes("--verify")) {
         const target = args[args.length - 1];
         if (target === "HEAD^{commit}") return `${baseTip}\n`;
-        if (target === "main^{commit}") return `${baseTip}\n`;
+        if (target === "refs/heads/main^{commit}") return `${baseTip}\n`;
       }
       if (args.includes("rev-parse") && args.includes("--abbrev-ref")) {
         return "HEAD\n";
       }
       if (args.includes("symbolic-ref")) return "";
-      if (args.includes("for-each-ref")) return "main\n";
+      if (args.includes("for-each-ref")) return "refs/heads/main\n";
       if (args.includes("merge-base")) return `${baseTip}\n`;
       if (args.includes("rev-list") && args.includes("--count")) return "0\n";
       return undefined;
@@ -481,7 +533,7 @@ describe("probeWorktreeWorkingState", () => {
         if (args.includes("status")) {
           return " M src/a.ts\0?? note.txt\0?? archive.zip\0?? scratch/\0";
         }
-        if (args[args.length - 1] === "remote") return "";
+        if (args[args.length - 1] === "--verbose") return "";
         return undefined;
       });
 
@@ -522,7 +574,7 @@ describe("probeWorktreeWorkingState", () => {
             ".codex/skills/diagnose-jvm-memory/references/example-jvm-memory.md",
           ].join("\0");
         }
-        if (args[args.length - 1] === "remote") return "";
+        if (args[args.length - 1] === "--verbose") return "";
         return undefined;
       });
 

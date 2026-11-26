@@ -162,8 +162,10 @@ export async function fetchGitHubReleaseMetadata(
     const attempts = state.automaticAttempts.filter((at) => at > now - RELEASE_AUTOMATIC_TTL_MS);
     const budgetUntil = attempts.length >= RELEASE_AUTOMATIC_HOURLY_BUDGET
       ? Math.min(...attempts) + RELEASE_AUTOMATIC_TTL_MS : 0;
+    // A failed manual refresh updates nextAttempt but leaves the last good list fresh.
+    const freshUntil = entry.lastSuccess === undefined ? 0 : entry.lastSuccess + ttl;
     const blockedUntil = Math.max(state.rateLimitUntil ?? 0, entry.pendingUntil ?? 0,
-      options.manual ? 0 : Math.max(freshRootDelay(state, now), entry.nextAttempt ?? 0, budgetUntil));
+      options.manual ? 0 : Math.max(freshRootDelay(state, now), freshUntil, entry.nextAttempt ?? 0, budgetUntil));
     if (now < blockedUntil) {
       const rateLimited = now < (state.rateLimitUntil ?? 0);
       const pending = now < (entry.pendingUntil ?? 0);

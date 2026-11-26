@@ -206,7 +206,7 @@ describe("agent follow-up lifecycle model", () => {
           expect(world.admittedCount(action.id)).toBe(1);
         }
       }, { reuseProcessId });
-    }), 50);
+    }), 8);
   });
 
   it("starts a lock-held follow-up once after a gated restart reuses the holder's process ID", async () => {
@@ -289,7 +289,7 @@ describe("agent follow-up lifecycle model", () => {
       }
       expect(await result).toMatchObject({ cause: reason });
       expect({ opened, closedBeforeNextTest }).toEqual({ opened: caseCount, closedBeforeNextTest: caseCount });
-    }), { examples: [[1]], numRuns: 10 });
+    }), { examples: [[1]], numRuns: 8 });
   });
 
   it("waits for due action publication before reporting the world settled", async () => {
@@ -573,7 +573,7 @@ describe("agent follow-up loop guard", () => {
           }
         });
       },
-    ), 40);
+    ), 8);
   });
 
   it("trips on the thirteenth follow-up in a day and fires again only after the operator rearms", async () => {

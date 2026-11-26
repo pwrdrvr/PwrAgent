@@ -9,9 +9,9 @@ import type { StateDb } from "./state-db.js";
  * schema migration is needed. Most-recent-first, deduped by the whole
  * combination, capped per scope.
  *
- * Scoped rather than review-specific because the composer's own model-settings
- * row is the intended second consumer, and one store keeps both honest about
- * the shape they persist.
+ * Scoped: "review" holds reviewer picks, "todo-dispatch" a to-do card's
+ * custom starts, and "composer" the settings each new thread started with.
+ * One store keeps them honest about the shape they persist.
  */
 const MODEL_SETTINGS_RECENTS_META_KEY = "modelSettingsRecents";
 const MODEL_SETTINGS_RECENTS_CAP = 10;
@@ -102,6 +102,12 @@ export function recordModelSettingsRecent(
     return;
   }
   const scopes = readAllScopes(stateDb);
+  const front = scopes[scope]?.[0];
+  // Running the newest combination again changes nothing, so it writes
+  // nothing: a new thread records its settings on every start.
+  if (front && recentKey(front) === recentKey(incoming)) {
+    return;
+  }
   const merged: ModelSettingsRecent[] = [];
   const seen = new Set<string>();
   for (const entry of [incoming, ...(scopes[scope] ?? [])]) {

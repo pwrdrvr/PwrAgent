@@ -1,3 +1,4 @@
+import { discoverAntigravitySkillCatalog } from "../acp/antigravity-skills";
 import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import { isResourceCheckoutCleanupCall, type CheckoutToolHandler, type CheckoutToolMode } from "../agent-tools/pwragent-resource-checkout-agent-tools";
@@ -23,6 +24,8 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
+import type { AgentToolMcpCatalogId } from "../agent-tools/agent-tool-mcp-server";
+import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
 import { isOnlyTaskMonitorWake, type SubAgentMonitorService } from "./subagent-monitor-service";
 import type { ThreadUsageLedger } from "./thread-usage-ledger";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
@@ -62,6 +65,11 @@ import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 import type { ThreadTodoMessageTarget } from "@pwragent/shared/contracts/thread-todos";
 import { ClaudeBackend, ClaudeTurnActiveError } from "../claude/claude-backend";
+import {
+  findAdvertisedAcpCompactCommand,
+  formatAcpCompactCommandPrompt,
+  isAcpCompactTurnInput,
+} from "../acp/acp-compact";
 import { checkAgentAccessRequest, isAgentAccessRefusalMessage } from "../agent-tools/agent-access-ceiling";
 
 
@@ -100,6 +108,7 @@ import type { StoredRestartContinuation } from "../storage/desktop-runtime-stora
 import type { RestartGateStatus } from "../../shared/restart-gate";
 import {
   OPEN_RESTART_GATE,
+  RESTART_DISPATCH_DEFAULTS,
   planRestartDispatch,
   restartContinuationSettles,
   transitionRestartGate,
@@ -110,6 +119,7 @@ import {
 import { supportsNativeVoice, type NativeVoiceBackend, type NativeVoiceToolCall } from "../codex-app-server/native-voice-protocol";
 import type { NativeVoiceCapability } from "../../shared/native-voice";
 import { analyzeUsageActivity, usageAnalysisModelBackend } from "./usage-activity-analysis";
+import { readCodexAccountTokenUsage } from "./codex-account-token-usage";
 import { codexModelProviderAccountKey, usageAccountKey } from "../usage-account-identity";
 
 import { CodexModelProviderCatalog } from "./codex-model-provider-catalog";
@@ -222,6 +232,7 @@ import {
   type ArchiveWorktreeResponse,
   type ArchiveThreadRequest,
   type ArchiveThreadResponse,
+  type AppServerListSkillsRequest,
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingThreadStart,
@@ -845,6 +856,7 @@ import {
   buildTurnStartReservationKey,
   executionModeQueueKey,
   formatQuitThreadKey,
+  isAcpPromptTurnId,
   parseActiveTurnKey,
   parseReservedAcpStartThreadKey,
   parseThreadIdFromThreadTurnKeyBody,
@@ -879,8 +891,8 @@ import {
 } from "./backend-registry-notification-values";
 import {
   TOKEN_MISER_MANAGED_CAPABILITY_REASON,
+  buildClaudeConnectionMcpServerName,
   buildCodexConnectionMcpConfig,
-  buildCodexConnectionMcpServerName,
   buildCodexParentDynamicToolSpecs,
   buildCodexPdfMcpConfig,
   buildCodexPdfMcpDisabledConfig,
@@ -1033,6 +1045,7 @@ type IdleSubmission = {
   input: AppServerTurnInputItem[];
   origin?: ThreadTurnQueueOrigin;
   messageOrigin?: AppServerThreadMessageOrigin;
+  isCompactCommand?: boolean;
   canAdmit?: () => boolean | Promise<boolean>;
 };
 
@@ -1175,6 +1188,7 @@ export class DesktopBackendRegistry {
   private readonly restartGateTimers = new Set<ReturnType<typeof setTimeout>>();
   private readonly restartGateListeners = new Set<(closed: boolean) => void>();
   private readonly restartGateStatusListeners = new Set<(status: RestartGateStatus) => void>();
+  private restartDispatchReady = false;
   private restartDispatchStarted = false;
   private readonly restartDispatchPlanOptions: Omit<RestartDispatchPlanOptions, "now">;
   private readonly reportedCodexForks = new Map<BackendClient, Set<Promise<void>>>();
@@ -1305,6 +1319,7 @@ export class DesktopBackendRegistry {
     assertUnlocked: ({ backend, threadId }) => this.assertThreadNotLocked(backend, threadId),
     wake: (identity) => this.threadArchiveCoordinator.ensureCheckoutAwake(identity),
   });
+  private readonly pendingClaudeCompactions = new Set<string>();
   private readonly transcriptRepairs = new Map<string, Promise<void>>();
   private readonly pendingTranscriptRepairReplays = new Map<string, AppServerThreadReplay>();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
@@ -3165,6 +3180,23 @@ export class DesktopBackendRegistry {
   ): Promise<string | undefined> {
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId });
     return await this.resolveThreadEnvironmentCwd(backend, threadId, overlay);
+  }
+
+  /**
+   * Workspace roots the thread works in, used to bound local file I/O for
+   * agent tools such as `decisions_invoke` `inputsFile` and `outputFile`.
+   */
+  async resolveThreadFileAccessRoots(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<string[]> {
+    const [thread, overlay] = await Promise.all([
+      this.resolveThread({ backend, threadId }).catch(() => undefined),
+      this.overlayStore.getThreadOverlayState({ backend, threadId }).catch(() => undefined),
+    ]);
+    return thread
+      ? threadWorkspacePaths(thread, overlay?.extraLinkedDirectories)
+      : threadWorkspacePaths({ linkedDirectories: [] }, overlay?.extraLinkedDirectories);
   }
 
   /**
@@ -5530,6 +5562,14 @@ export class DesktopBackendRegistry {
     return resolved;
   }
 
+  private async resolveAcpAvailableCommands(params: {
+    backend: AcpBackendId;
+    cwds: Array<string | undefined>;
+    allowProbe?: boolean;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    return (await this.resolveAcpAvailableCommandCatalog(params)).commands;
+  }
+
   /**
    * Serve an ACP agent's slash commands for a request with no session behind
    * it. Cache first (free, and kept fresh by every real session's
@@ -5543,10 +5583,11 @@ export class DesktopBackendRegistry {
    * any more, and ignoring the ones already on disk lets an affected profile
    * heal on the next request.
    */
-  private async resolveAcpAvailableCommands(params: {
+  private async resolveAcpAvailableCommandCatalog(params: {
     backend: AcpBackendId;
     cwds: Array<string | undefined>;
-  }): Promise<AppServerAvailableCommandSummary[]> {
+    allowProbe?: boolean;
+  }): Promise<{ commands: AppServerAvailableCommandSummary[]; cwd?: string }> {
     const repositoryPaths = await this.resolveAcpCommandRepositoryPaths(
       params.cwds,
     );
@@ -5556,17 +5597,63 @@ export class DesktopBackendRegistry {
         repositoryPath,
       );
       if (cached && cached.commands.length > 0) {
-        return cached.commands;
+        return {
+          commands: cached.commands,
+          ...(params.backend === "acp:antigravity" && cached.workspaceCwd ? { cwd: cached.workspaceCwd } : {}),
+        };
       }
     }
 
     const probeTarget = repositoryPaths[0];
-    if (!probeTarget) {
-      return [];
+    if (params.allowProbe === false || !probeTarget) {
+      return { commands: [] };
     }
-    return await this.probeAcpAvailableCommands({
+    const commands = await this.probeAcpAvailableCommands({
       backend: params.backend,
       repositoryPath: probeTarget,
+    });
+    return {
+      commands,
+      ...(params.backend === "acp:antigravity" ? { cwd: path.resolve(probeTarget) } : {}),
+    };
+  }
+
+  /**
+   * Resolve slash commands for an existing ACP thread: prefer the session's
+   * live advertised commands, falling back to the repo command cache (and
+   * optionally probing) when the session has not advertised any yet.
+   */
+  private async resolveAcpThreadAvailableCommands(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    allowProbe: boolean;
+    wakeArchivedCheckout?: boolean;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    if (session?.availableCommands?.length) {
+      return session.availableCommands;
+    }
+    if (params.wakeArchivedCheckout) {
+      // Wake an archived worktree before resolving its repository path so
+      // repo-level command caching and probing operate on the restored checkout.
+      await this.threadArchiveCoordinator.ensureCheckoutAwake(params);
+    }
+    const refreshedSession =
+      this.acpBackend.getSession(params.backend, params.threadId) ?? session;
+    if (refreshedSession?.availableCommands?.length) {
+      return refreshedSession.availableCommands;
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    return await this.resolveAcpAvailableCommands({
+      backend: params.backend,
+      cwds: [
+        refreshedSession?.cwd,
+        ...(overlay?.extraLinkedDirectories ?? []).flatMap((directory) => [
+          directory.worktreePath,
+          directory.path,
+        ]),
+      ],
+      allowProbe: params.allowProbe,
     });
   }
 
@@ -5690,6 +5777,7 @@ export class DesktopBackendRegistry {
           backendId: params.backend,
           repositoryPath: params.repositoryPath,
           commands,
+          ...(params.backend === "acp:antigravity" ? { workspaceCwd: path.resolve(params.repositoryPath) } : {}),
           observedAt: Date.now(),
         });
         return commands;
@@ -5772,7 +5860,7 @@ export class DesktopBackendRegistry {
     }
 
     const backend = event.backend;
-    const { commands, threadId } = event.notification.params;
+    const { commands, threadId, cwd: workspaceCwd } = event.notification.params;
     // An empty update is treated as "no news", not as "this repo has no
     // commands": agents emit one during session setup before their command
     // registry is populated, and letting that clobber a good cache would empty
@@ -5802,6 +5890,9 @@ export class DesktopBackendRegistry {
           backendId: backend,
           repositoryPath,
           commands,
+          ...(backend === "acp:antigravity" && typeof workspaceCwd === "string" && path.isAbsolute(workspaceCwd)
+            ? { workspaceCwd }
+            : {}),
           observedAt: Date.now(),
         });
       })
@@ -5816,29 +5907,71 @@ export class DesktopBackendRegistry {
 
   async listSkills(params: {
     backend?: AppServerBackendKind;
+    catalog?: AppServerListSkillsRequest["catalog"];
     cwd?: string;
     cwds?: string[];
     threadId?: string;
+    antigravityWorkspace?: {
+      cwds: string[];
+      resolvePath?: (file: string) => Promise<string | undefined>;
+    };
   } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
     const backend = params.backend ?? "codex";
     if (isAcpBackendId(backend)) {
       const session = params.threadId
         ? this.acpBackend.getSession(backend, params.threadId)
         : undefined;
-      const sessionCommands = session?.availableCommands ?? [];
-      if (sessionCommands.length > 0) {
-        return { data: [{ commands: sessionCommands, skills: [] }] };
+      const authorized = backend === "acp:antigravity" ? params.antigravityWorkspace : undefined;
+      let cwds: Array<string | undefined> = authorized?.cwds ?? [session?.cwd, params.cwd, ...(params.cwds ?? [])];
+      let commandSession = session;
+      if (backend === "acp:antigravity" && params.threadId) {
+        const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: params.threadId });
+        const directories = overlay?.extraLinkedDirectories;
+        const workspaceCwd = resolveThreadWorkspaceCwd(session && acpSessionToThreadSummary(session), directories);
+        if (directories?.some(isHandoffDirectory)) {
+          // The owner’s handoff supersedes both a stale provider session and
+          // any pre-handoff paths sent by a viewer.
+          if (!authorized) {
+            cwds = [workspaceCwd, ...directories.filter((directory) => !isHandoffDirectory(directory))
+              .map(({ worktreePath, path }) => worktreePath ?? path)];
+          }
+          const providerCwd = session?.antigravityPrimaryCwd ?? session?.cwd;
+          if (session?.requiresAgentSessionRebind || !providerCwd || !workspaceCwd
+            || path.resolve(providerCwd) !== path.resolve(workspaceCwd)) {
+            commandSession = undefined;
+          }
+        } else if (!authorized) {
+          cwds[0] = workspaceCwd ?? session?.cwd;
+        }
+      }
+      const readCommands = async (): Promise<AppServerListSkillsResponse["data"][number]> => {
+        if (!commandSession?.availableCommands?.length) {
+          // The provider's own loader cannot honor a directory-limited file
+          // pull. A remote restricted request may only use live commands.
+          if (authorized?.resolvePath) return { commands: [], skills: [] };
+          if (backend === "acp:antigravity") {
+            return { ...await this.resolveAcpAvailableCommandCatalog({ backend, cwds }), skills: [] };
+          }
+          return { commands: await this.resolveAcpAvailableCommands({ backend, cwds }), skills: [] };
+        }
+        const cwd = backend === "acp:antigravity" && !commandSession.requiresAgentSessionRebind
+          ? commandSession.antigravityPrimaryCwd ?? commandSession.cwd
+          : undefined;
+        if (cwd && authorized?.resolvePath && !await authorized.resolvePath(cwd)) {
+          return { commands: [], skills: [] };
+        }
+        return { commands: commandSession.availableCommands, skills: [], ...(cwd ? { cwd: path.resolve(cwd) } : {}) };
+      };
+
+      if (backend !== "acp:antigravity" || params.catalog === "commands") {
+        return { data: [await readCommands()] };
       }
 
-      // No live session has reported commands for this request — either it is a
-      // launchpad draft (no thread id at all) or a session that has not yet
-      // advertised. Fall back to what the repo last told us, and probe for it
-      // when we have never seen this repo/agent pair.
-      const commands = await this.resolveAcpAvailableCommands({
-        backend,
-        cwds: [session?.cwd, params.cwd, ...(params.cwds ?? [])],
-      });
-      return { data: [{ commands, skills: [] }] };
+      // Use the worktree itself for skills. The slash-command cache uses the
+      // common repository and can cost an ACP startup on a miss.
+      const data = await discoverAntigravitySkillCatalog(cwds, authorized?.resolvePath);
+      const commands = params.catalog === "skills" ? undefined : await readCommands();
+      return { data: commands ? [commands, ...data] : data };
     }
 
     if (backend === "claude") {
@@ -6234,8 +6367,13 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpRegistrationSource;
     hidden?: boolean;
+    managedReview?: boolean;
     requiredAntigravityMode?: string;
-  }): Promise<{ threadId: string; executionMode: ThreadExecutionMode }> {
+  }): Promise<{
+    threadId: string;
+    executionMode: ThreadExecutionMode;
+    managedReviewLedgerAvailable?: boolean;
+  }> {
     if (params.executionMode === "auto") {
       throw new Error("Auto access is supported only by Codex.");
     }
@@ -6255,6 +6393,7 @@ export class DesktopBackendRegistry {
       acpRuntime: effectiveAcpRuntime,
       additionalMcpRegistration: params.mcpRegistration,
       ...(params.hidden ? { hidden: true } : {}),
+      ...(params.managedReview ? { managedReview: true } : {}),
       requiredAntigravityMode: params.requiredAntigravityMode,
     }));
     if (
@@ -6281,6 +6420,9 @@ export class DesktopBackendRegistry {
         session.sessionId,
         params.executionMode,
       ),
+      ...(client.sessionSupportsManagedReviewLedger?.(session.sessionId)
+        ? { managedReviewLedgerAvailable: true }
+        : {}),
     };
   }
 
@@ -6338,14 +6480,9 @@ export class DesktopBackendRegistry {
     );
   }
 
-  private async startAcpTurnLocked(params: {
-    backend: AcpBackendId;
-    threadId: string;
-    input: AppServerTurnInputItem[];
-    model?: string;
-    reasoningEffort?: string;
-    requiredAntigravityMode?: string;
-  }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+  private async startAcpTurnLocked(
+    params: Parameters<RegistryHostPorts["startAcpTurn"]>[0],
+  ): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const promptPayload = await inputToAcpPrompt(params.input, {
       owner: { backend: params.backend, threadId: params.threadId },
       privateStorageRoots: this.localFilePrivateStorageRoots,
@@ -6452,6 +6589,9 @@ export class DesktopBackendRegistry {
       }
     }
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
+    if (params.managedReviewLedger) {
+      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId);
+    }
     await this.emit({
       backend: params.backend,
       notification: {
@@ -6468,8 +6608,10 @@ export class DesktopBackendRegistry {
       },
     });
 
+    let result: Awaited<ReturnType<typeof client.startPrompt>>;
+    const promptSentAt = Date.now();
     try {
-      const result = await client.startPrompt({
+      result = await client.startPrompt({
         sessionId: params.threadId,
         prompt: promptPayload.prompt,
         promptContent: promptPayload.promptContent,
@@ -6479,13 +6621,8 @@ export class DesktopBackendRegistry {
         // prompt when the agent session has not been sent this text.
         agentInstructions: providerDeliveredAgentInstructions(overlay?.agent) ?? "",
         ...(overlay?.agent ? { readAgentMemory: () => this.readAgentMemoryContext(params) } : {}),
+        ...(params.isCompactCommand ? { isCompactCommand: true } : {}),
       });
-      this.invalidateThreadListCache(params.backend);
-      return {
-        backend: params.backend,
-        threadId: result.sessionId,
-        turnId: result.turnId,
-      };
     } catch (error) {
       await this.emit({
         backend: params.backend,
@@ -6507,6 +6644,48 @@ export class DesktopBackendRegistry {
       });
       throw error;
     }
+    this.invalidateThreadListCache(params.backend);
+    // ACP agents report no user item for the prompt itself. Publish the copy
+    // the owner just recorded, under the replay's id, so a window that holds
+    // no pending copy shows it live: a steer that fell back to a new turn, a
+    // queued release, or a send from another surface.
+    //
+    // Not awaited: callers act on this start before the turn's first events.
+    // A managed review registers the parent's review turn only after this
+    // returns; held back by the publish, a fast child's terminal arrived
+    // first and the parent turn never ended. The prompt is already
+    // dispatched, so a failed publish is logged and the replay still holds it.
+    // The agent's first replies can reach the window before this copy, so it
+    // carries the send time and still draws above them.
+    void this.emit({
+      backend: params.backend,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: result.sessionId,
+          turnId: result.turnId,
+          item: {
+            id: `user:${result.turnId}`,
+            type: "userMessage",
+            text: promptPayload.prompt,
+            ...(promptPayload.parts?.length ? { content: promptPayload.parts } : {}),
+            createdAt: promptSentAt,
+          },
+        },
+      },
+    }).catch((error: unknown) => {
+      backendRegistryLog.warn("Could not publish the ACP turn's prompt", {
+        backend: params.backend,
+        threadId: result.sessionId,
+        turnId: result.turnId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+    return {
+      backend: params.backend,
+      threadId: result.sessionId,
+      turnId: result.turnId,
+    };
   }
 
   private async applyAcpRuntimeSelection(
@@ -7976,7 +8155,33 @@ export class DesktopBackendRegistry {
 
   async readUsageActivity(request: ReadUsageActivityRequest): Promise<ReadUsageActivityResponse> {
     if (!this.overlayStore.readUsageActivity) throw new Error("Usage ledger unavailable.");
-    const activity = await this.overlayStore.readUsageActivity(request);
+    const includeAccountTokenUsage = request.includeAccountTokenUsage === true;
+    const policy = getOwnerHostServices().runtimePolicy;
+    const codexSummary = includeAccountTokenUsage && !this.closed ? this.readCodexBackendSummary() : undefined;
+    const codexAvailable = Boolean(
+      codexSummary?.available
+      || (codexSummary && !this.codexBackendSummary && codexSummary.discoveryPending
+        && !this.readCodexProvider().provider?.validation.error),
+    );
+    let usageAccountGroup: string | undefined;
+    if (includeAccountTokenUsage) {
+      // A Settings failure leaves the series owner-scoped; it must not fail
+      // the ledger read this response carries.
+      try { usageAccountGroup = this.resolveUsageAccountGroupsFn().codex; } catch { /* Owner-scoped. */ }
+    }
+    const accountTokenUsagePromise = includeAccountTokenUsage && !this.closed
+      ? readCodexAccountTokenUsage({
+          client: this.codexClient,
+          openAiProviderEnabled: (!policy || policy.enabledBackends.includes("codex")) && this.codexOpenAiProviderEnabled,
+          codexAvailable,
+          cachedAccount: this.codexBackendSummary?.account,
+          usageAccountGroup,
+        })
+      : Promise.resolve(undefined);
+    const [activity, codexAccountTokenUsage] = await Promise.all([
+      this.overlayStore.readUsageActivity(request),
+      accountTokenUsagePromise,
+    ]);
     const codex = this.codexLimitObservation();
     return { ...activity,
       // Navigation indexing can lag a live thread or rename. The information
@@ -8000,7 +8205,10 @@ export class DesktopBackendRegistry {
       ],
       providerLimitHistory: activity.limitHistory.filter((reading) => !isCodexLimitObservation(reading)),
       analysisModelBackends: USAGE_ANALYSIS_MODEL_BACKENDS.filter((backend) =>
-        backend === "codex" || hasAcpStructuredHelper(backend)) };
+        backend === "codex" || hasAcpStructuredHelper(backend)),
+      ...(includeAccountTokenUsage
+        ? { accountTokenUsage: codexAccountTokenUsage ? [codexAccountTokenUsage] : [] }
+        : {}) };
   }
 
   /**
@@ -10251,6 +10459,96 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private clearRestartGateTimers(): void {
+    for (const timer of this.restartGateTimers) clearTimeout(timer);
+    this.restartGateTimers.clear();
+  }
+
+  private scheduleRestartGateContinuation(entryId: string, threadKey: string, dispatchAt: number): void {
+    const parsed = parseThreadIdentityKey(threadKey);
+    if (!parsed) return;
+    const remaining = dispatchAt - Date.now();
+    if (remaining <= 0) {
+      this.threadTurnQueue.scheduleThreadDrain(parsed);
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.restartGateTimers.delete(timer);
+      if (this.restartGate.phase !== "resuming") return;
+      const current = this.restartGate.scheduled.get(entryId);
+      if (!current) return;
+      if (Date.now() < current.dispatchAt) {
+        this.scheduleRestartGateContinuation(entryId, current.threadKey, current.dispatchAt);
+        return;
+      }
+      this.threadTurnQueue.scheduleThreadDrain(parsed);
+    }, remaining);
+    timer.unref?.();
+    this.restartGateTimers.add(timer);
+  }
+
+  private openRestartGateAtDeadline(): void {
+    if (this.restartGate.phase !== "resuming") return;
+    const now = Date.now();
+    if (now < this.restartGate.releaseBy) {
+      this.scheduleRestartGateDeadline(this.restartGate.releaseBy);
+      return;
+    }
+    backendRegistryLog.warn("restart gate opened at its deadline", {
+      pending: [...this.restartGate.pending.keys()],
+    });
+    this.applyRestartGate({ type: "deadline", at: now });
+  }
+
+  private scheduleRestartGateDeadline(releaseBy: number): void {
+    if (!Number.isFinite(releaseBy)) return;
+    const remaining = releaseBy - Date.now();
+    if (remaining <= 0) {
+      this.openRestartGateAtDeadline();
+      return;
+    }
+    const timer = setTimeout(() => {
+      this.restartGateTimers.delete(timer);
+      if (this.restartGate.phase !== "resuming") return;
+      if (Date.now() < this.restartGate.releaseBy) {
+        this.scheduleRestartGateDeadline(this.restartGate.releaseBy);
+        return;
+      }
+      this.openRestartGateAtDeadline();
+    }, remaining);
+    timer.unref?.();
+    this.restartGateTimers.add(timer);
+  }
+
+  private armRestartGateTimers(): void {
+    this.clearRestartGateTimers();
+    if (this.restartGate.phase !== "resuming") return;
+    if (!this.restartDispatchStarted) {
+      if (this.restartDispatchReady) {
+        this.beginRestartContinuationDispatch();
+        return;
+      }
+      const fallback = setTimeout(() => {
+        this.restartGateTimers.delete(fallback);
+        this.beginRestartContinuationDispatch();
+      }, RESTART_DISPATCH_FALLBACK_MS);
+      fallback.unref?.();
+      this.restartGateTimers.add(fallback);
+      return;
+    }
+    const { releaseBy } = this.restartGate;
+    if (Number.isFinite(releaseBy) && Date.now() >= releaseBy) {
+      this.openRestartGateAtDeadline();
+      return;
+    }
+    const queued = new Set(this.threadTurnQueue.getAllQueuedEntries().map((entry) => entry.id));
+    const items = [...this.restartGate.scheduled.values()].filter((item) => queued.has(item.entryId));
+    for (const item of items) {
+      this.scheduleRestartGateContinuation(item.entryId, item.threadKey, item.dispatchAt);
+    }
+    this.scheduleRestartGateDeadline(releaseBy);
+  }
+
   private applyRestartGate(event: RestartGateEvent): void {
     const wasClosed = this.isRestartGateClosed();
     const previous = this.restartGate;
@@ -10259,8 +10557,7 @@ export class DesktopBackendRegistry {
     const closed = this.isRestartGateClosed();
     if (wasClosed === closed) return;
     if (!closed) {
-      for (const timer of this.restartGateTimers) clearTimeout(timer);
-      this.restartGateTimers.clear();
+      this.clearRestartGateTimers();
       backendRegistryLog.info("restart gate opened", { event: event.type });
       // Everything the gate held waits in its FIFO; start what can start.
       this.threadTurnQueue.drainAll();
@@ -10306,6 +10603,7 @@ export class DesktopBackendRegistry {
     if (this.restartGate.phase !== "quieting") {
       this.beforeQuietRestartGate = this.restartGate;
       this.quietRestartCheckpoint.clear();
+      this.clearRestartGateTimers();
     }
     this.applyRestartGate({ type: "quiet", at: Date.now() });
     return this.listQuietRestartTargets();
@@ -10334,6 +10632,7 @@ export class DesktopBackendRegistry {
 
   /** Restore admission, and recover checkpointed work if preparation had already quieted it. */
   cancelQuietRestart(resumeCheckpoint = false): void {
+    let restoredFromCheckpoint: ThreadTurnQueueEntry[] = [];
     if (resumeCheckpoint) {
       const saved = [...this.quietRestartCheckpoint.values()].map((entry) => entry.kind === undefined
         ? { ...entry, input: [{ type: "text" as const, text: "The PwrAgent restart was cancelled after quieting. Resume the preserved task, checking its current progress before repeating any action." }] }
@@ -10343,15 +10642,24 @@ export class DesktopBackendRegistry {
       catch (error) { backendRegistryLog.warn("cancelled restart receipt could not be updated", { error: String(error) }); }
       for (const entry of saved) this.durableRestartContinuations.set(entry.id, entry);
       this.threadTurnQueue.restoreQueued(receipts.map((entry) => restartQueuedEntry(entry)));
-      this.threadTurnQueue.restoreRestartContinuations(saved.filter((entry) => entry.kind === undefined).map((entry) => ({
+      restoredFromCheckpoint = this.threadTurnQueue.restoreRestartContinuations(saved.filter((entry) => entry.kind === undefined).map((entry) => ({
         id: entry.id, backend: entry.backend, threadId: entry.threadId, origin: "scheduled" as const,
         input: entry.input, messageOrigin: entry.messageOrigin, createdAt: entry.createdAt,
       })));
     }
     this.quietRestartCheckpoint.clear();
-    const previous = this.beforeQuietRestartGate ?? OPEN_RESTART_GATE;
+    const previous = transitionRestartGate(
+      this.beforeQuietRestartGate ?? OPEN_RESTART_GATE,
+      { type: "deadline", at: Date.now() },
+    );
     this.beforeQuietRestartGate = undefined;
-    this.applyRestartGate({ type: "cancel-quiet", previous: transitionRestartGate(previous, { type: "deadline", at: Date.now() }) });
+    this.applyRestartGate({ type: "cancel-quiet", previous });
+    if (this.restartGate.phase === "resuming") {
+      this.armRestartGateTimers();
+      for (const entry of restoredFromCheckpoint) {
+        this.threadTurnQueue.scheduleThreadDrain(entry);
+      }
+    }
   }
 
   /**
@@ -10525,9 +10833,7 @@ export class DesktopBackendRegistry {
       count: restored.length,
       entryIds: restored.map((entry) => entry.id),
     });
-    const fallback = setTimeout(() => this.beginRestartContinuationDispatch(), RESTART_DISPATCH_FALLBACK_MS);
-    fallback.unref?.();
-    this.restartGateTimers.add(fallback);
+    this.armRestartGateTimers();
   }
 
   /**
@@ -10535,6 +10841,7 @@ export class DesktopBackendRegistry {
    * batches, once providers can take a turn. Runs once; the first call wins.
    */
   beginRestartContinuationDispatch(): void {
+    this.restartDispatchReady = true;
     if (this.restartDispatchStarted) return;
     if (this.restartGate.phase !== "resuming") {
       // A caller can finish during quieting, leaving only queued input or
@@ -10547,52 +10854,44 @@ export class DesktopBackendRegistry {
       return;
     }
     this.restartDispatchStarted = true;
-    // Every restored continuation still in a queue gets a time, settled ones
-    // too: one a lock held before dispatch began still waits its turn once
-    // unlocked. One that was discarded takes no place in the stagger.
+    // Pending continuations take the earliest batch slots. Held ones keep a
+    // staggered slot behind them so unlocking cannot jump ahead, without
+    // stealing batch-0 slots or inflating the gate's deadline.
     const { pending } = this.restartGate;
     const queued = new Set(this.threadTurnQueue.getAllQueuedEntries().map((entry) => entry.id));
+    const pendingItems = [...this.restartGate.scheduled.values()]
+      .filter((item) => pending.has(item.entryId) && queued.has(item.entryId));
+    if (pendingItems.length === 0) {
+      this.applyRestartGate({ type: "release" });
+      return;
+    }
+    const heldItems = [...this.restartGate.scheduled.values()]
+      .filter((item) => !pending.has(item.entryId) && queued.has(item.entryId));
     const now = Date.now();
-    const plan = planRestartDispatch([...this.restartGate.scheduled.values()]
-      .filter((item) => pending.has(item.entryId) || queued.has(item.entryId)), {
+    const plan = planRestartDispatch([...pendingItems, ...heldItems], {
       ...this.restartDispatchPlanOptions,
       now,
     });
+    const pendingSchedule = plan.schedule.slice(0, pendingItems.length);
+    const releaseGraceMs = this.restartDispatchPlanOptions.releaseGraceMs !== undefined
+      && Number.isFinite(this.restartDispatchPlanOptions.releaseGraceMs)
+      ? Math.max(0, this.restartDispatchPlanOptions.releaseGraceMs)
+      : RESTART_DISPATCH_DEFAULTS.releaseGraceMs;
+    const lastPending = pendingSchedule.reduce((latest, item) => Math.max(latest, item.dispatchAt), now);
+    const releaseBy = lastPending + releaseGraceMs;
     this.restartGate = {
       phase: "resuming",
-      pending: new Map(plan.schedule
-        .filter((item) => pending.has(item.entryId))
-        .map((item) => [item.entryId, item])),
+      pending: new Map(pendingSchedule.map((item) => [item.entryId, item])),
       scheduled: new Map(plan.schedule.map((item) => [item.entryId, item])),
-      releaseBy: plan.releaseBy,
+      releaseBy,
     };
     this.publishRestartGateStatus();
     backendRegistryLog.info("restart continuation dispatch scheduled", {
       count: plan.schedule.length,
-      firstAt: Math.min(...plan.schedule.map((item) => item.dispatchAt)),
-      releaseBy: plan.releaseBy,
+      firstAt: Math.min(...pendingSchedule.map((item) => item.dispatchAt)),
+      releaseBy,
     });
-    for (const item of plan.schedule) {
-      const parsed = parseThreadIdentityKey(item.threadKey);
-      if (!parsed) continue;
-      const timer = setTimeout(() => {
-        this.restartGateTimers.delete(timer);
-        this.threadTurnQueue.scheduleThreadDrain(parsed);
-      }, Math.max(0, item.dispatchAt - now));
-      timer.unref?.();
-      this.restartGateTimers.add(timer);
-    }
-    const deadline = setTimeout(() => {
-      this.restartGateTimers.delete(deadline);
-      if (this.restartGate.phase === "resuming") {
-        backendRegistryLog.warn("restart gate opened at its deadline", {
-          pending: [...this.restartGate.pending.keys()],
-        });
-      }
-      this.applyRestartGate({ type: "deadline", at: Date.now() });
-    }, Math.max(0, plan.releaseBy - now));
-    deadline.unref?.();
-    this.restartGateTimers.add(deadline);
+    this.armRestartGateTimers();
   }
 
   /**
@@ -10607,6 +10906,12 @@ export class DesktopBackendRegistry {
       this.forgetRestartContinuation(entry.id);
     }
     if (entry.restartContinuation && restartContinuationSettles(event.type)) {
+      if (this.beforeQuietRestartGate) {
+        this.beforeQuietRestartGate = transitionRestartGate(this.beforeQuietRestartGate, {
+          type: "settled",
+          entryId: entry.id,
+        });
+      }
       this.applyRestartGate({ type: "settled", entryId: entry.id });
     }
   }
@@ -11696,6 +12001,7 @@ export class DesktopBackendRegistry {
     agentMessageOrigins?: AppServerThreadMessageOrigin[];
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
+    isCompactCommand?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const endUpdateBlockingWork = beginUpdateBlockingWork();
     try {
@@ -11714,10 +12020,23 @@ export class DesktopBackendRegistry {
   private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
     return await this.threadStarts.run(params, async () => {
+      const acpCompactTurn = isAcpBackendId(params.backend) && (
+        params.isCompactCommand === true
+        || isAcpCompactTurnInput(
+          params.input,
+          this.acpBackend.getSession(params.backend, params.threadId)?.availableCommands,
+        )
+      );
       // The first call establishes the per-turn context by calling startTurnNow
       // again. Add the notice at its inner, actual admission boundary.
-      const notices = this.tokenMiserServerCapabilitiesForTurn.getStore()
-        ? this.correspondenceStore.pendingStackNotices(params) : [];
+      // Never prepend stack notices to a `/compact` command: ACP and Claude
+      // agents only trigger compaction when `/compact` is the leading text.
+      const notices =
+        params.isCompactCommand !== true
+        && !acpCompactTurn
+        && this.tokenMiserServerCapabilitiesForTurn.getStore()
+          ? this.correspondenceStore.pendingStackNotices(params)
+          : [];
       const result = await this.startTurnWithoutHandoff(notices.length ? {
         ...params, input: [...notices.map(({ text }) => ({ type: "text" as const, text })), ...params.input],
       } : params);
@@ -11747,6 +12066,7 @@ export class DesktopBackendRegistry {
     agentMessageOrigins?: AppServerThreadMessageOrigin[];
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
+    isCompactCommand?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.threadArchiveCoordinator.assertArchiveWorkspaceUsable(buildThreadIdentityKey(params.backend, params.threadId));
     if (!this.tokenMiserServerCapabilitiesForTurn.getStore()) {
@@ -11791,7 +12111,7 @@ export class DesktopBackendRegistry {
               return undefined;
             });
           const servers = [...registrations.map((registration) => ({
-            ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
+            ...registration.server, name: buildClaudeConnectionMcpServerName(registration.server),
           })), ...(owned ? [owned.server] : [])];
           const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
             ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
@@ -11857,8 +12177,18 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
-      const pendingManagedReviewContextEntryIds =
-        overlay?.pendingManagedReviewContextEntryIds ?? [];
+      const acpCompactTurn =
+        params.isCompactCommand === true
+        || isAcpCompactTurnInput(
+          params.input,
+          this.acpBackend.getSession(params.backend, params.threadId)?.availableCommands,
+        );
+      // Leave pending review contexts for the next normal turn so they neither
+      // get prepended before `/compact` (breaking slash-command detection) nor
+      // get consumed without reaching the agent.
+      const pendingManagedReviewContextEntryIds = acpCompactTurn
+        ? []
+        : overlay?.pendingManagedReviewContextEntryIds ?? [];
       const managedReviewEntriesById = new Map(
         (overlay?.managedReviewEntries ?? []).map((entry) => [entry.id, entry]),
       );
@@ -11884,6 +12214,7 @@ export class DesktopBackendRegistry {
       let preparedPdfInput!: Awaited<ReturnType<typeof preparePdfTurnInput>>;
       let userInput!: AppServerTurnInputItem[];
       let input!: AppServerTurnInputItem[];
+      let promptContext: string | undefined;
       return await this.threadStarts.startAcp({
         reserve: () => {
           if (this.threadHasActiveTurn(params.threadId, params.backend)) {
@@ -11934,6 +12265,10 @@ export class DesktopBackendRegistry {
           ...identity, input,
           origin: resolveThreadMessageOrigin(params),
           text: extractFirstMeaningfulTextInput(params.input),
+          // The prompt's own item claims this context by turn. persistOrigin
+          // writes its origin row once the agent accepts the turn, before or
+          // after that item lands.
+          turnStartPrompt: true,
         }),
         beginOrigin: () => this.beginStartingTurnOrigin({
           ...identity, origin: resolveThreadMessageOrigin(params), turnInputSource: resolveTurnInputSource(params),
@@ -11942,6 +12277,7 @@ export class DesktopBackendRegistry {
           ...identity, input,
           model: modelSettings.model,
           reasoningEffort: modelSettings.reasoningEffort,
+          ...(acpCompactTurn ? { isCompactCommand: true } : {}),
         }, { executionMode: params.executionMode }),
         bindOrigin: (origin, result) => this.bindStartingTurnOrigin(origin, result),
         consumeReviewContexts: () => this.overlayStore.consumeManagedReviewContexts({
@@ -11956,7 +12292,10 @@ export class DesktopBackendRegistry {
           threadId: result.threadId,
           input: userInput,
         }),
-        bindContext: (context, result) => this.bindPendingThreadMessageContext(context, result.turnId),
+        bindContext: (context, result) => {
+          this.bindPendingThreadMessageContext(context, result.turnId);
+          promptContext = context;
+        },
         persistOrigin: (origin) => this.persistStartingTurnOrigin(origin),
         retainAttachments: (result) => this.rememberTurnInputAttachments({
           backend: params.backend,
@@ -11964,7 +12303,13 @@ export class DesktopBackendRegistry {
           turnId: result.turnId,
           input: userInput,
         }),
-        forgetContext: (context) => this.forgetPendingThreadMessageContext(context),
+        // An accepted turn's prompt item claims its bound context, as every
+        // other user item does. That item can reach the message-context stage
+        // after this start returns, behind image work already in flight on
+        // the thread, so only a start that bound no turn forgets it here.
+        forgetContext: (context) => {
+          if (context !== promptContext) this.forgetPendingThreadMessageContext(context);
+        },
         disposeOrigin: (origin) => this.dropStartingTurnOrigin(origin),
         release: () => { this.reservedAcpStartThreadKeys.delete(reservationKey); },
         failed: (stage, error, turn) => backendRegistryLog.warn("acp_turn_start_finalization_failed", {
@@ -12342,6 +12687,7 @@ export class DesktopBackendRegistry {
     text?: string;
     turnId?: string;
     retainAttachments?: boolean;
+    turnStartPrompt?: boolean;
   }): Promise<string | undefined> {
     const admittedCodexTurnSequence = params.backend === "codex" && !params.turnId
       ? this.codexMessageContextTurnSequence
@@ -12372,6 +12718,7 @@ export class DesktopBackendRegistry {
       ...(imageParts.length > 0 ? { imageParts } : {}),
       ...(retainedInput.length > 0 ? { retainedInput } : {}),
       ...(params.origin ? { origin: params.origin } : {}),
+      ...(params.turnStartPrompt ? { turnStartPrompt: true as const } : {}),
       ...(params.text ? { text: params.text } : {}),
       threadId: params.threadId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
@@ -12456,6 +12803,16 @@ export class DesktopBackendRegistry {
       const bound = candidates.find((pending) => pending.messageId === params.messageId);
       if (bound) {
         return bound;
+      }
+      // An ACP turn's prompt item claims its start's context by turn, not by
+      // text: the prompt the agent receives can carry more than the operator's
+      // words, such as review context or several text parts. A thread starts
+      // one ACP turn at a time, so an unbound start context is this turn's.
+      if (params.turnId && params.messageId === buildTurnUserMessageOriginId(params.turnId)) {
+        const start = candidates.find((pending) => pending.turnStartPrompt);
+        if (start) {
+          return start;
+        }
       }
       // Turn identity alone is not message identity. Codex can deliver several
       // user items in a turn, including operator steers with no pending origin.
@@ -12553,12 +12910,17 @@ export class DesktopBackendRegistry {
     if (notification.method === "item/completed" && notification.params.turnId && !pending.turnId) {
       this.bindPendingThreadMessageContext(pending.id, notification.params.turnId);
     }
-    await this.persistThreadMessageOrigin({
-      backend: event.backend,
-      threadId: notification.params.threadId,
-      messageId: notification.params.item.id,
-      origin: pending.origin,
-    });
+    const turnStartWritesThisRow = pending.turnStartPrompt === true
+      && notification.params.turnId !== undefined
+      && notification.params.item.id === buildTurnUserMessageOriginId(notification.params.turnId);
+    if (!turnStartWritesThisRow) {
+      await this.persistThreadMessageOrigin({
+        backend: event.backend,
+        threadId: notification.params.threadId,
+        messageId: notification.params.item.id,
+        origin: pending.origin,
+      });
+    }
     if (event.notification.method === "item/completed") {
       this.pendingThreadMessageContexts.delete(pending.id);
     }
@@ -12680,6 +13042,14 @@ export class DesktopBackendRegistry {
     trustedSnapshot = false,
   ): Promise<StartReviewRequest> {
     return this.managedReviewService.prepareReviewRequest(params, trustedSnapshot);
+  }
+
+  reviewsInProgress(): ReturnType<ManagedReviewService["reviewsInProgress"]> {
+    return this.managedReviewService.reviewsInProgress();
+  }
+
+  onLiveReviewChanged(listener: Parameters<ManagedReviewService["onLiveReviewChanged"]>[0]): () => void {
+    return this.managedReviewService.onLiveReviewChanged(listener);
   }
 
   startReview(
@@ -13226,12 +13596,313 @@ export class DesktopBackendRegistry {
     itemId?: string;
   }> {
     if (isAcpBackendId(params.backend)) {
+      return await this.compactAcpThread({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+    }
+    if (params.backend === "claude") {
+      return await this.compactClaudeThread({
+        backend: "claude",
+        threadId: params.threadId,
+      });
+    }
+    await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
+    return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
+  }
+
+  private async hasAutoCompactionHold(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean> {
+    if (this.closed || this.isRestartGateClosed()) {
+      return true;
+    }
+    const identityKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    const archived = this.getThreadInfo(params)?.archived
+      ?? (overlay?.archiveRetentionStartedAt !== undefined || overlay?.archiveTombstonedAt !== undefined);
+    return (
+      await this.isThreadLocked(params)
+      || archived
+      || !this.threadTurnQueue.canStartImmediately(params)
+      || this.threadHasActiveTurn(params.threadId, params.backend)
+      || this.threadTurnQueue.hasWaitingEntries(params)
+      || (params.backend === "codex" && this.context.turnState.hasRetry(params.threadId))
+      || (isAcpBackendId(params.backend)
+        && this.reservedAcpStartThreadKeys.has(
+          buildTurnStartReservationKey(params.backend, params.threadId),
+        ))
+      || this.threadWorkspaceService.threadHandoffReservationRecords.has(identityKey)
+      || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(params)
+      || this.threadArchiveCoordinator.checkoutRestoreRecords.has(identityKey)
+    );
+  }
+
+  private async prepareAcpCompaction(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    allowProbe: boolean;
+    wakeArchivedCheckout: boolean;
+  }): Promise<{
+    input: [{ type: "text"; text: string }];
+    isCompactCommand: true;
+  }> {
+    const commands = await this.resolveAcpThreadAvailableCommands({
+      backend: params.backend,
+      threadId: params.threadId,
+      allowProbe: params.allowProbe,
+      wakeArchivedCheckout: params.wakeArchivedCheckout,
+    });
+    const compactCommand = findAdvertisedAcpCompactCommand(commands);
+    if (!compactCommand) {
       throw new Error(
         "ACP backend " + params.backend + " does not support thread compaction",
       );
     }
-    await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
-    return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
+    await this.threadModelSettings.assertRequestedThreadModelAvailable(params);
+    return {
+      input: [
+        {
+          type: "text",
+          text: formatAcpCompactCommandPrompt(compactCommand),
+        },
+      ],
+      isCompactCommand: true,
+    };
+  }
+
+  private async compactAcpThread(params: {
+    backend: AcpBackendId;
+    threadId: string;
+  }): Promise<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }> {
+    if (this.closed) {
+      throw new Error("Desktop backend registry is closed");
+    }
+    this.assertThreadOwnership();
+    await this.assertThreadNotLocked(params.backend, params.threadId);
+    if (
+      this.reservedAcpStartThreadKeys.has(
+        buildTurnStartReservationKey(params.backend, params.threadId),
+      )
+      || this.threadHasActiveTurn(params.threadId, params.backend)
+    ) {
+      throw new Error("Cannot compact a thread while another operation is running");
+    }
+    const prepared = await this.prepareAcpCompaction({
+      backend: params.backend,
+      threadId: params.threadId,
+      allowProbe: true,
+      wakeArchivedCheckout: true,
+    });
+    try {
+      return await this.startTurnNow({
+        backend: params.backend,
+        threadId: params.threadId,
+        input: prepared.input,
+        isCompactCommand: prepared.isCompactCommand,
+      });
+    } catch (error) {
+      if (error instanceof ThreadAlreadyActiveError) {
+        throw new Error("Cannot compact a thread while another operation is running");
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * What owner-driven auto-compaction can do for one thread now. Codex
+   * compacts through its API, between turns. Claude runs a `/compact` prompt
+   * itself. An ACP agent needs `compact` among its live advertised commands or
+   * its repo command cache: one with no live or cached commands is waited on,
+   * and one whose list lacks `compact` cannot compact. Only Antigravity takes
+   * a steered `/compact` mid-turn.
+   */
+  async autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }): Promise<{
+    canSteer: boolean;
+    canStart: "yes" | "blocked" | "unsupported";
+    reportsFillOnNextTurn?: boolean;
+  }> {
+    if (this.closed) return { canSteer: false, canStart: "blocked" };
+    const gate = this.isRestartGateClosed() ? "blocked" as const : "yes" as const;
+    if (!isAcpBackendId(params.backend)) return { canSteer: false, canStart: gate };
+    let commands: AppServerAvailableCommandSummary[];
+    try {
+      commands = await this.resolveAcpThreadAvailableCommands({
+        backend: params.backend,
+        threadId: params.threadId,
+        allowProbe: false,
+      });
+    } catch (error) {
+      if (this.closed) return { canSteer: false, canStart: "blocked" };
+      throw error;
+    }
+    if (this.closed) return { canSteer: false, canStart: "blocked" };
+    if (!commands.length) return { canSteer: false, canStart: "blocked" };
+    if (!findAdvertisedAcpCompactCommand(commands)) {
+      return { canSteer: false, canStart: "unsupported" };
+    }
+    return {
+      canSteer: params.backend === "acp:antigravity"
+        && this.acpBackend.supportsActiveAntigravitySteering(params.threadId),
+      canStart: this.isRestartGateClosed() ? "blocked" : "yes",
+      ...(params.backend === "acp:antigravity" ? { reportsFillOnNextTurn: true } : {}),
+    };
+  }
+
+  /** The thread's current model, for matching auto-compaction rules. */
+  async resolveAutoCompactionModel(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string | undefined> {
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    return overlay?.model ?? this.getCachedThreadSummary(params)?.model;
+  }
+
+  /**
+   * Steers an owner-requested compaction into a running turn, formatting the
+   * thread's advertised or cached ACP compact command when applicable.
+   */
+  async steerAutoCompaction(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    expectedTurnId: string;
+    requestId: string;
+    messageOrigin: AppServerThreadMessageOrigin;
+  }): Promise<unknown> {
+    let promptText = "/compact";
+    if (isAcpBackendId(params.backend)) {
+      const commands = await this.resolveAcpThreadAvailableCommands({
+        backend: params.backend,
+        threadId: params.threadId,
+        allowProbe: false,
+      });
+      const compactCommand = findAdvertisedAcpCompactCommand(commands);
+      if (!compactCommand) {
+        throw new Error(
+          "ACP backend " + params.backend + " does not support thread compaction",
+        );
+      }
+      promptText = formatAcpCompactCommandPrompt(compactCommand);
+    }
+    return await this.steerTurn({
+      backend: params.backend,
+      threadId: params.threadId,
+      expectedTurnId: params.expectedTurnId,
+      requestId: params.requestId,
+      input: [{ type: "text", text: promptText }],
+    }, params.messageOrigin);
+  }
+
+  /**
+   * Starts an owner-requested compaction on an idle thread: Codex's
+   * compaction API, the ACP `/compact` path, or a `/compact` prompt for
+   * Claude. A lock, an archive, a running turn, waiting queue entries, or
+   * another hold answers `busy`.
+   */
+  async startAutoCompaction(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    messageOrigin: AppServerThreadMessageOrigin;
+  }): Promise<{ status: "started"; turnId?: string } | { status: "busy" }> {
+    if (params.backend === "codex") {
+      // The holds `submitTurnIfIdle` answers busy for, plus a pending retry:
+      // `compactThread` would wake an archived checkout or throw, and a throw
+      // counts as the provider refusing.
+      if (await this.hasAutoCompactionHold(params)) {
+        return { status: "busy" };
+      }
+      const result = await this.compactThread({ backend: "codex", threadId: params.threadId });
+      return { status: "started", turnId: result.turnId };
+    }
+    if (isAcpBackendId(params.backend)) {
+      if (await this.hasAutoCompactionHold(params)) {
+        return { status: "busy" };
+      }
+      const prepared = await this.prepareAcpCompaction({
+        backend: params.backend,
+        threadId: params.threadId,
+        allowProbe: false,
+        wakeArchivedCheckout: false,
+      });
+      if (await this.hasAutoCompactionHold(params)) {
+        return { status: "busy" };
+      }
+      const result = await this.submitTurnIfIdle({
+        backend: params.backend,
+        threadId: params.threadId,
+        input: prepared.input,
+        isCompactCommand: prepared.isCompactCommand,
+        messageOrigin: params.messageOrigin,
+        canAdmit: async () => !(await this.hasAutoCompactionHold(params)),
+      });
+      return result.status === "started"
+        ? { status: "started", turnId: result.turnId }
+        : { status: "busy" };
+    }
+    const result = await this.submitTurnIfIdle({
+      backend: params.backend,
+      threadId: params.threadId,
+      input: [{ type: "text", text: "/compact" }],
+      messageOrigin: params.messageOrigin,
+    });
+    return result.status === "started" ? { status: "started", turnId: result.turnId } : { status: "busy" };
+  }
+
+  private async compactClaudeThread(params: {
+    backend: "claude";
+    threadId: string;
+  }): Promise<{
+    backend: "claude";
+    threadId: string;
+    turnId: string;
+  }> {
+    if (this.closed) throw new Error("Desktop backend registry is closed");
+    this.assertThreadOwnership();
+    this.assertNotBootstrap("compactThread");
+    assertOwnerExecutionPolicy(getOwnerHostServices().runtimePolicy, params);
+    // Compaction runs a backend turn, so a lock refuses it like any other.
+    await this.assertThreadNotLocked(params.backend, params.threadId);
+    const isBusy = () =>
+      this.threadStarts.hasPending(params)
+      || this.threadTurnQueue.hasDispatchInFlight(params)
+      || this.threadHasActiveTurn(params.threadId, "claude")
+      || this.claudeBackend.hasActiveOperation(params.threadId);
+    if (this.pendingClaudeCompactions.has(params.threadId) || isBusy()) {
+      throw new Error("Cannot compact a thread while another operation is running");
+    }
+    this.pendingClaudeCompactions.add(params.threadId);
+    try {
+      if (!await this.claudeBackend.supportsCompactCommand(params.threadId)) {
+        throw new Error("Claude does not support thread compaction for this thread");
+      }
+      // Recheck after the async store lookup in case another operation started.
+      if (isBusy()) {
+        throw new Error("Cannot compact a thread while another operation is running");
+      }
+      const started = await this.startTurnNow({
+        backend: "claude",
+        threadId: params.threadId,
+        input: [{ type: "text", text: "/compact" }],
+        isCompactCommand: true,
+      });
+      return {
+        backend: "claude",
+        threadId: started.threadId,
+        turnId: started.turnId,
+      };
+    } catch (error) {
+      if (error instanceof ThreadAlreadyActiveError) {
+        throw new Error("Cannot compact a thread while another operation is running", { cause: error });
+      }
+      throw error;
+    } finally {
+      this.pendingClaudeCompactions.delete(params.threadId);
+    }
   }
 
   private async compactThreadNow(params: {
@@ -15501,6 +16172,19 @@ export class DesktopBackendRegistry {
   async setThreadPrAutoDispatch(
     params: SetThreadPrAutoDispatchRequest,
   ): Promise<SetThreadPrAutoDispatchResponse> {
+    if (params.prKey !== undefined) {
+      // One PR's switch; the thread's own preference is untouched.
+      if (!this.threadPrAutoDispatchHandler?.pullRequestChanged) {
+        throw new Error("Auto-fix for one pull request is not available here.");
+      }
+      await this.threadPrAutoDispatchHandler.pullRequestChanged({
+        backend: params.backend,
+        threadId: params.threadId,
+        prKey: params.prKey,
+        enabled: params.enabled,
+      });
+      return params;
+    }
     await this.setThreadPrAutoDispatchBatch([params]);
     return params;
   }
@@ -16177,8 +16861,7 @@ export class DesktopBackendRegistry {
     this.shutdownRequested = true;
     this.codexProviderCatalogRetry.close();
     this.threadDirectoryService.cancelLaunchpadCreations();
-    for (const timer of this.restartGateTimers) clearTimeout(timer);
-    this.restartGateTimers.clear();
+    this.clearRestartGateTimers();
     this.closeOperation ??= this.closeResources();
     return this.closeOperation;
   }
@@ -16287,6 +16970,7 @@ export class DesktopBackendRegistry {
       unsubscribe();
     }
     this.streamNoticeOwners.clear();
+    this.managedReviewService.clearCandidateLedger();
     this.planLimits.close();
 
     for (const [key, pending] of this.pendingServerRequests) {
@@ -17375,9 +18059,16 @@ export class DesktopBackendRegistry {
         const codexStartDelivery = backend === "codex" && notification.method === "turn/started"
           ? this.context.turnState.beginStartDelivery(notification.params.threadId, turnIdFromStartedNotification(notification as Extract<AppServerNotification, { method: "turn/started" }>))
           : undefined;
+        if (codexStartDelivery && !isPendingTurnId(codexStartDelivery.threadId, codexStartDelivery.turnId)) {
+          this.managedReviewService.candidateLedger.confirmToolTurn({ backend, ...codexStartDelivery });
+        }
         if (backend === "codex" && (notification.method === "turn/completed"
           || notification.method === "turn/failed" || notification.method === "turn/cancelled")) {
-          this.context.turnState.observeTurnTerminal(notification.params.threadId, turnIdFromTerminalNotification(notification));
+          const turnId = turnIdFromTerminalNotification(notification);
+          if (turnId) {
+            this.managedReviewService.candidateLedger.retireToolTurn({ backend, threadId: notification.params.threadId, turnId });
+          }
+          this.context.turnState.observeTurnTerminal(notification.params.threadId, turnId);
         }
         try {
           if (backend === "codex" && notification.method === "thread/started") {
@@ -19882,6 +20573,26 @@ export class DesktopBackendRegistry {
         call: hostToolCall,
       });
     }
+    const managedReviewLedgerRouter = buildManagedReviewLedgerToolRouter(
+      this.managedReviewService.candidateLedger,
+    );
+    if (
+      hostToolCall
+      && managedReviewLedgerRouter.acceptsDynamicToolCall(hostToolCall)
+    ) {
+      if (!this.managedReviewService.candidateLedger.hasToolTurn({ backend, ...hostToolCall })) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message:
+            "Review candidate tools are callable only during an active managed code review turn.",
+        });
+      }
+      return await managedReviewLedgerRouter.handleDynamicToolCall({
+        backend,
+        call: hostToolCall,
+      });
+    }
 
     if (hostToolCall) {
       // Use the same definitions as advertisement, including compatibility
@@ -20356,7 +21067,7 @@ export class DesktopBackendRegistry {
 
   private async authorizeAgentToolMcpCall(params: {
     backend: AppServerBackendKind;
-    catalogId?: AgentToolCatalogId;
+    catalogId?: AgentToolMcpCatalogId;
     threadId: string;
     tool: string;
     turnId: string;
@@ -20365,6 +21076,11 @@ export class DesktopBackendRegistry {
     const refusal = localAgentToolRefusal(params.tool);
     if (refusal) return refusal;
     if (params.tool === GET_CURRENT_TURN_INPUT_SOURCE) return null;
+    if (params.catalogId === "managed_review") {
+      return this.managedReviewService.candidateLedger.hasToolTurn(params)
+        ? null
+        : "an active managed code review turn";
+    }
     const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
     if (!category) {
       return null;
@@ -22213,6 +22929,14 @@ export class DesktopBackendRegistry {
     const notification = event.notification;
     const isTerminal = notification.method === "turn/completed"
       || notification.method === "turn/failed" || notification.method === "turn/cancelled";
+    if (isTerminal && !event.federationTarget) {
+      const turnId = turnIdFromTerminalNotification(notification);
+      if (turnId) {
+        this.managedReviewService.candidateLedger.retireToolTurn({
+          backend: event.backend, threadId: notification.params.threadId, turnId,
+        });
+      }
+    }
     if (!event.federationTarget) {
       try {
         if (notification.method === "item/completed") {
@@ -22657,29 +23381,30 @@ export class DesktopBackendRegistry {
     const turnId = turnIdFromTerminalNotification(event.notification);
     const notification = event.notification;
     const { managedReview } = delivery;
-    const genericActiveTurnKeyPrefix =
-      `${event.backend}:${notification.params.threadId}:`;
-    const hadGenericActiveTurn = Array.from(this.context.turnState.registeredTurnKeys()).some((key) =>
-      key.startsWith(genericActiveTurnKeyPrefix),
-    );
+    const thread = { backend: event.backend, threadId: notification.params.threadId };
     const hadMatchingGenericActiveTurn = turnId !== undefined
-      && this.context.turnState.hasRegisteredTurn({ backend: event.backend, threadId: notification.params.threadId, turnId: turnId });
+      && this.context.turnState.hasRegisteredTurn({ ...thread, turnId });
+    let retiredAcpTurn = false;
     if (turnId) {
       if (isAcpBackendId(event.backend)) {
-        for (const key of Array.from(this.context.turnState.registeredTurnKeys())) {
-          if (key.startsWith(genericActiveTurnKeyPrefix)) {
-            this.context.turnState.unregisterTurn(key);
-            const parsed = parseActiveTurnKey(key);
-            backendRegistryLog.info("ACP active turn removed", {
-              backend: event.backend,
-              threadId: notification.params.threadId,
-              turnId: parsed?.turnId ?? null,
-              method: event.notification.method,
-              completedTurnId: turnId,
-            });
-            if (parsed) {
-              this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
-            }
+        const terminalTurn = { ...thread, turnId };
+        // A stopped prompt can report its own terminal again after a new
+        // prompt starts. A prompt ID issued for this thread can only retire
+        // that prompt. Keep the fallback for terminals with a drifted ID.
+        const recoverDriftedId = !hadMatchingGenericActiveTurn && !isAcpPromptTurnId(thread.threadId, turnId);
+        const turns = recoverDriftedId
+          ? this.context.turnState.registeredOtherProviderTurnsForThread(thread)
+          : [terminalTurn];
+        for (const turn of turns) {
+          if (!this.context.turnState.unregisterTurn(turn)) continue;
+          retiredAcpTurn = true;
+          backendRegistryLog.info("ACP active turn removed", {
+            ...turn,
+            method: event.notification.method,
+            completedTurnId: turnId,
+          });
+          if (turn.turnId !== turnId) {
+            this.clearAcceptedToolCallsForEndedTurn(turn.backend, turn.threadId, turn.turnId);
           }
         }
       } else {
@@ -22694,8 +23419,7 @@ export class DesktopBackendRegistry {
         turnId,
       });
     }
-    if ((event.backend === "claude" && hadMatchingGenericActiveTurn)
-      || (isAcpBackendId(event.backend) && hadGenericActiveTurn)) {
+    if ((event.backend === "claude" && hadMatchingGenericActiveTurn) || retiredAcpTurn) {
       await this.adoptThreadBranchChangeFromActiveTurn({
         backend: event.backend,
         threadId: notification.params.threadId,

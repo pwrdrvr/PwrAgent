@@ -9,20 +9,34 @@ import { type DesktopHelperModelSettings } from "@pwragent/shared/helper-models"
 import { formatFederationPeerDisplayLabelParts, type FederationTarget } from "@pwragent/shared/contracts/federation";
 import { UsageTimeline, type UsageChartForecast, type UsageChartMember } from "./UsageTimeline";
 import { UsageLimitsBand } from "./UsageLimitsBand";
+import { UsageAccountTokenTrend } from "./UsageAccountTokenTrend";
+import { UsageOverviewBand } from "./UsageOverviewBand";
+import {
+  cycleTriStateFilter,
+  hasTriStateFilter,
+  matchesTriStateFilter,
+  overviewRowModelKey,
+  overviewRowProviderLabel,
+  removeTriStateFilterKey,
+  type TriStateFilter,
+} from "./usage-activity-overview";
 import { UsageInspector, analysisModelKey, defaultAnalysisModel, parseAnalysisModelKey,
   type AnalysisModelChoice, type AnalysisScope, type UsageAnalysis } from "./UsageInspector";
 import { UsageSignals, groupSignals } from "./UsageSignals";
 import { USAGE_CUSTOM_RANGE_DEBOUNCE_MS, USAGE_SERIES, usageBucketLabel, usageCompletionBuckets, usageDimensionValue, type UsageDimension, usageNotCountedReason, usageSpendStrip, usageMoney as money, usageCount as compact, usageClock } from "./usage-activity-presentation";
 import { buildLimitAccounts, fiveHourSeries, limitLabel, projectLimit, seriesStart, sinceResetSeries, type LimitAccount, type LimitSeries } from "./usage-limits";
+import { accountTokenUsageAccountKey, buildAccountTokenAccounts, type AccountTokenAccount } from "./usage-account-tokens";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { summarizeUsageActivity, type OwnedUsageRow, type UsageGroup } from "./usage-activity-summary";
+import { readUsageActivityInPieces } from "./usage-activity-pieces";
 import { buildUsageAccounts, limitUsageAccountKey, usageAccountKey, usageAccountProvider, type UsageAccount } from "./usage-activity-accounts";
 import { USAGE_RESULTS_MAX_HEIGHT, USAGE_RESULTS_MIN_HEIGHT, clampUsageResultsHeight, readStoredUsageResultsHeight,
   writeStoredUsageResultsHeight } from "./usage-activity-layout";
 
 const DAY = 86_400_000;
-const MAX_WINDOW = 31 * DAY;
+// Owners reject windows over 31 days; longer periods are read in pieces.
+const MAX_WINDOW = 90 * DAY;
 /** A focused window rereads when its data is older than this. */
 const STALE_AFTER = 60_000;
 const time = (value: number) => new Date(value).toLocaleString();
@@ -38,11 +52,11 @@ function usageInstanceLabels(peer: Parameters<typeof formatFederationPeerDisplay
   return { label: `${label}${suffix}`, ...(shortLabel ? { shortLabel: `${shortLabel}${suffix}` } : {}) };
 }
 
-type Preset = "reset" | "five" | "today" | "day" | "week" | "month" | "custom";
+type Preset = "reset" | "five" | "today" | "day" | "week" | "month" | "quarter" | "custom";
 type SourceResult = Source & { data?: ReadUsageActivityResponse; error?: string };
 type Snapshot = {
   queryKey: string; from: number; to: number; preset: Preset; readAt: number;
-  rows: OwnedUsageRow[]; sources: SourceResult[]; accounts: LimitAccount[];
+  rows: OwnedUsageRow[]; sources: SourceResult[]; accounts: LimitAccount[]; tokenAccounts: AccountTokenAccount[];
 };
 
 const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
@@ -52,6 +66,7 @@ const PRESETS: Array<{ value: Preset; label: string; title: string }> = [
   { value: "day", label: "24 h", title: "The last 24 hours" },
   { value: "week", label: "7 days", title: "The last 7 days" },
   { value: "month", label: "30 days", title: "The last 30 days" },
+  { value: "quarter", label: "90 days", title: "The last 90 days" },
   { value: "custom", label: "Custom", title: "Choose a start and end" },
 ];
 
@@ -122,14 +137,17 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   // replaced; the first read waits for it.
   const [peersReady, setPeersReady] = useState(() => !desktopApi?.readFederationActivity);
   const [disabled, setDisabled] = useState<Set<string>>(() => new Set());
-  const [preset, setPreset] = useState<Preset>("reset");
+  const [preset, setPreset] = useState<Preset>("week");
   const [lens, setLens] = useState<"threads" | "excluded">("threads");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState("cost");
   const [bucket, setBucket] = useState<number>();
   const [dimension, setDimension] = useState<UsageDimension>("thread");
-  // One model, provider or instance the thread list is narrowed to.
+  // One model, provider or instance the thread list is narrowed to from Spend by.
   const [facet, setFacet] = useState<string>();
+  // Tri-state multi-select filters from the Overview band (unfiltered → include → exclude → unfiltered).
+  const [providerFilters, setProviderFilters] = useState<TriStateFilter>({});
+  const [modelFilters, setModelFilters] = useState<TriStateFilter>({});
   const [from, setFrom] = useState(() => { const day = new Date(); day.setHours(0, 0, 0, 0); return localDate(day); });
   const [to, setTo] = useState(() => localDate(new Date()));
   const [snapshot, setSnapshot] = useState<Snapshot>();
@@ -203,7 +221,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   }, [desktopApi]);
 
   const allSummary = useMemo(() => snapshot ? summarizeUsageActivity(snapshot.rows, snapshot.from, snapshot.to) : undefined, [snapshot]);
-  const usageAccounts = useMemo(() => buildUsageAccounts(allSummary?.rows ?? [], snapshot?.accounts ?? [], accountNames),
+  const usageAccounts = useMemo(() => buildUsageAccounts(allSummary?.rows ?? [], snapshot?.accounts ?? [], accountNames, snapshot?.tokenAccounts ?? []),
     [allSummary, snapshot, accountNames]);
   const selectedAccount = usageAccounts.find((account) => account.key === accountFilter) ?? rememberedAccount;
   // A selected historical account may have no usage in the next period. Keep
@@ -224,6 +242,14 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   const summary = useMemo(() => snapshot && allSummary && accountFilter
     ? summarizeUsageActivity(allSummary.rows.filter((row) => usageAccountKey(row) === accountFilter), snapshot.from, snapshot.to)
     : allSummary, [snapshot, allSummary, accountFilter]);
+  // Overview filters scope everything below the Overview except account
+  // limits, which a provider or model cannot split.
+  const hasOverviewFilters = hasTriStateFilter(providerFilters) || hasTriStateFilter(modelFilters);
+  const scopedSummary = useMemo(() => snapshot && summary && hasOverviewFilters
+    ? summarizeUsageActivity(summary.groups.flatMap((group) => group.rows).filter((row) =>
+      matchesTriStateFilter(providerFilters, overviewRowProviderLabel(row.line))
+      && matchesTriStateFilter(modelFilters, overviewRowModelKey(row.line))), snapshot.from, snapshot.to)
+    : summary, [snapshot, summary, hasOverviewFilters, providerFilters, modelFilters]);
   const selectedGroup = selectedKey ? summary?.groups.find((group) => group.key === selectedKey) : undefined;
   const inspected = selectedGroup?.rows[0] ?? selectedExcluded;
   const analysisTarget = scope === "turn" && turn?.line.turnId ? turn : inspected;
@@ -273,14 +299,25 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     preset === "custom" ? [from, to] : null, limitPreset ? [focusKey ?? null, accountFilter, focusProvider] : null]);
   const scopedLimits = (accounts: LimitAccount[]) => accountFilter
     ? accounts.filter((account) => limitUsageAccountKey(account) === accountFilter) : accounts;
+  const scopedTokenAccounts = (accounts: AccountTokenAccount[]) => accountFilter
+    ? accounts.filter((account) => accountTokenUsageAccountKey(account) === accountFilter) : accounts;
 
-  const readAll = async (targets: Source[], start: number, end: number) => {
+  const readAll = async (targets: Source[], start: number, end: number,
+    includeAccountTokenUsage: (source: Source) => boolean, shouldContinue: () => boolean) => {
     const results: SourceResult[] = [];
-    // At most four reads in flight. Each owner enforces a 5,000-row bound.
+    // At most four owners read at once. Each rejects a window over 31 days and
+    // returns at most 5,000 rows, so a long or busy period is read in pieces.
     for (let offset = 0; offset < targets.length; offset += 4) {
       results.push(...await Promise.all(targets.slice(offset, offset + 4).map(async (source) => {
-        try { return { ...source, data: await desktopApi!.readUsageActivity!({ from: start, to: end, federationTarget: source.target }) }; }
-        catch (cause) { return { ...source, error: String(cause) }; }
+        try {
+          return {
+            ...source,
+            data: await readUsageActivityInPieces((window, includeTokens) => desktopApi!.readUsageActivity!({
+              from: window.from, to: window.to, federationTarget: source.target,
+              ...(includeTokens ? { includeAccountTokenUsage: true } : {}),
+            }), { from: start, to: end }, { includeAccountTokenUsage: includeAccountTokenUsage(source), shouldContinue }),
+          };
+        } catch (cause) { return { ...source, error: String(cause) }; }
       })));
     }
     return results;
@@ -289,6 +326,9 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     // An older owner reports Codex alone, in the single-reading fields.
     owner: source.label, target: source.target, current: source.data!.limitObservations ?? source.data!.limitObservation,
     history: [...source.data!.limitHistory ?? [], ...source.data!.providerLimitHistory ?? []],
+  })));
+  const tokenAccountsOf = (results: SourceResult[]) => buildAccountTokenAccounts(results.filter((source) => source.data).map((source) => ({
+    owner: source.label, target: source.target, observations: source.data!.accountTokenUsage,
   })));
 
   const refresh = async () => {
@@ -305,20 +345,28 @@ export function UsageActivity({ desktopApi, initialProvider }: {
       : preset === "day" ? end - DAY
       : preset === "week" ? end - 7 * DAY
       : preset === "month" ? end - 30 * DAY
+      : preset === "quarter" ? end - 90 * DAY
       : known ?? end - (preset === "five" ? 5 * 3_600_000 : 8 * DAY);
     if (preset !== "custom") start = Math.max(start, end - MAX_WINDOW);
     if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || end - start > MAX_WINDOW) {
-      setError("Choose a start before the end, within 31 days."); return;
+      setError("Choose a start before the end, within 90 days."); return;
     }
     // A refresh of the same selection keeps what the operator was looking at.
     const sameQuery = snapshot?.queryKey === queryKey;
     setPending(true); setError(undefined);
     if (!sameQuery) {
       setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); setBucket(undefined); setFacet(undefined);
+      setProviderFilters({}); setModelFilters({});
     }
-    let results = await readAll(enabledSources, start, end);
+    // A superseded read stops issuing owner reads; its result is discarded below.
+    const current = () => mounted.current && seq === readSeq.current;
+    let results = await readAll(enabledSources, start, end, () => true, current);
     if (!mounted.current || seq !== readSeq.current) return;
     let accounts = accountsOf(results);
+    // Only owners that answered: one that failed the first read asks again below,
+    // so a retried answer is never mistaken for an older peer's.
+    const initialTokenUsageBySource = new Map(results.filter((source) => source.data)
+      .map((source) => [sourceId(source.target), source.data!.accountTokenUsage]));
     const resolved = limitStart(preset, focusAccount(scopedLimits(accounts), focusKey, focusProvider));
     if (resolved !== undefined && resolved < end) {
       const bounded = Math.max(resolved, end - MAX_WINDOW);
@@ -326,13 +374,20 @@ export function UsageActivity({ desktopApi, initialProvider }: {
         // Read once more over the window itself: from its start when it began
         // earlier than what was read, and when it began later, so the owners'
         // helper rollups and bars fit the window instead of straddling its start.
-        results = await readAll(enabledSources, bounded, end);
+        // Account-wide daily token history is period-independent, so reuse the
+        // first pass rather than polling `account/usage/read` a second time.
+        results = (await readAll(enabledSources, bounded, end,
+          (source) => !initialTokenUsageBySource.has(sourceId(source.target)), current)).map((source) => {
+          const accountTokenUsage = source.data?.accountTokenUsage ?? initialTokenUsageBySource.get(sourceId(source.target));
+          return source.data && accountTokenUsage ? { ...source, data: { ...source.data, accountTokenUsage } } : source;
+        });
         if (!mounted.current || seq !== readSeq.current) return;
         accounts = accountsOf(results);
       }
       start = bounded;
     }
-    setSnapshot({ queryKey, from: start, to: end, preset, readAt: Date.now(), sources: results, accounts,
+    const tokenAccounts = tokenAccountsOf(results);
+    setSnapshot({ queryKey, from: start, to: end, preset, readAt: Date.now(), sources: results, accounts, tokenAccounts,
       // A narrowed window drops turns that finished before it began; they are
       // outside the window, not intervals that straddle its start.
       rows: results.flatMap((source) => (source.data?.rows ?? [])
@@ -365,18 +420,19 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     return () => window.removeEventListener("focus", onFocus);
   }, [discoverPeers]);
 
-  const included = summary?.groups.flatMap((group) => group.rows) ?? [];
+  const accountRows = summary?.groups.flatMap((group) => group.rows) ?? [];
+  const included = scopedSummary?.groups.flatMap((group) => group.rows) ?? [];
   const instances = (snapshot?.sources ?? []).filter((source) => source.data).length;
   const shownDimension: UsageDimension = (dimension === "instance" && instances < 2) || (dimension === "account" && !multipleAccounts)
     ? "thread" : dimension;
   // The five most expensive threads (or models, providers, instances) get
   // chart colors; a thread keeps its color in every row, strip, and legend entry.
   const seriesIndex = new Map(shownDimension === "thread"
-    ? (summary?.groups ?? []).slice(0, USAGE_SERIES).map((group, index) => [group.key, index]) : []);
+    ? (scopedSummary?.groups ?? []).slice(0, USAGE_SERIES).map((group, index) => [group.key, index]) : []);
   const rowSeries = new Map<OwnedUsageRow, number>();
   let facets: Array<{ value: string; cost: number }> = [];
   if (shownDimension === "thread") {
-    for (const group of summary?.groups ?? []) {
+    for (const group of scopedSummary?.groups ?? []) {
       const index = seriesIndex.get(group.key);
       if (index !== undefined) for (const row of group.rows) rowSeries.set(row, index);
     }
@@ -396,30 +452,32 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   const activeFacet = shownDimension !== "thread" && facet !== undefined && facets.some((item) => item.value === facet) ? facet : undefined;
   // A bucket member is the row's thread, model, provider or instance; its
   // thread is the group it rolls up to, so a helper counts as its parent.
-  const rowThread = new Map((summary?.groups ?? []).flatMap((group) => group.rows.map((row) => [row, group.key] as const)));
+  const rowThread = new Map((scopedSummary?.groups ?? []).flatMap((group) => group.rows.map((row) => [row, group.key] as const)));
   const buckets = snapshot ? usageCompletionBuckets(included, snapshot.from, snapshot.to, (row) => rowSeries.get(row), (row) => {
     const thread = rowThread.get(row) ?? "";
     return { key: shownDimension === "thread" ? thread : usageDimensionValue(row, shownDimension), thread };
   }) : undefined;
   const selectedInterval = bucket === undefined ? undefined : buckets?.[bucket];
+  const clearOverviewFilters = () => {
+    setProviderFilters({});
+    setModelFilters({});
+  };
+  const overviewFilterSummary = [
+    ...Object.entries(providerFilters).map(([label, mode]) => `${mode === "include" ? "+" : "−"}${label}`),
+    ...Object.entries(modelFilters).map(([name, mode]) => `${mode === "include" ? "+" : "−"}${name}`),
+  ].join(", ");
   const filteredSummary = snapshot && (selectedInterval || activeFacet !== undefined)
     ? summarizeUsageActivity(included.filter((row) => (!selectedInterval
       || (row.line.completedAt! >= selectedInterval.from && row.line.completedAt! < selectedInterval.to))
       && (activeFacet === undefined || usageDimensionValue(row, shownDimension as Exclude<UsageDimension, "thread">) === activeFacet)),
     snapshot.from, snapshot.to)
-    : summary;
+    : scopedSummary;
   const matches = (text: string) => text.toLocaleLowerCase().includes(search.toLocaleLowerCase());
   const groups = [...(filteredSummary?.groups ?? [])].filter((group) => matches(`${group.title} ${group.rows[0].owner} ${group.rows[0].line.threadId}`))
     .sort((a, b) => sort === "tokens" ? (b.uncached + b.cached + b.output) - (a.uncached + a.cached + a.output)
       : sort === "recent" ? Math.max(...b.rows.map((row) => row.line.completedAt!)) - Math.max(...a.rows.map((row) => row.line.completedAt!)) : b.cost - a.cost);
   const excluded = (summary?.excluded ?? []).filter((row) => matches(`${row.title} ${row.owner}`));
   const total = summary?.groups.reduce((value, group) => value + group.cost, 0) ?? 0;
-  const totals = included.reduce((value, { line }) => ({
-    uncached: value.uncached + line.uncachedInputTokens, cached: value.cached + line.cachedInputTokens,
-    output: value.output + line.outputTokens,
-  }), { uncached: 0, cached: 0, output: 0 });
-  const cacheShare = totals.cached + totals.uncached ? totals.cached / (totals.cached + totals.uncached) : 0;
-  const available = snapshot?.sources.filter((source) => source.data).length ?? 0;
   const failures = (snapshot?.sources ?? []).filter((source) => source.error)
     .map((source) => ({ ...source, kind: unavailableKind(source.error!) }));
   const outdated = failures.filter((source) => source.kind === "outdated").map((source) => source.label);
@@ -431,9 +489,15 @@ export function UsageActivity({ desktopApi, initialProvider }: {
     outdated.length ? `${nameList(outdated)} ${outdated.length === 1 ? "needs" : "need"} a PwrAgent update to share usage` : "",
     offline.length ? `${nameList(offline)} ${offline.length === 1 ? "is" : "are"} offline` : "",
     failed.length ? `${nameList(failed.map((source) => source.label))} could not be read` : "",
-    capped.length ? `${nameList(capped)} returned only the newest 5,000 rows; choose a shorter period for the rest` : "",
+    capped.length ? `${nameList(capped)} had too much usage to read in full; choose a shorter period for the rest` : "",
   ].filter(Boolean);
   const limitAccounts = scopedLimits(snapshot?.accounts ?? []);
+  const tokenAccounts = scopedTokenAccounts(snapshot?.tokenAccounts ?? []);
+  const legacyTokenOwners = tokenAccounts.length > 0
+    ? (snapshot?.sources ?? [])
+      .filter((source) => source.data && source.data.accountTokenUsage === undefined)
+      .map((source) => source.label)
+    : [];
   const focus = snapshot ? focusAccount(limitAccounts, focusKey, focusProvider) : undefined;
   // An account without a 5-hour limit reads the last 5 hours, and the line is
   // its longest limit, resets and all: the window is not that limit's.
@@ -452,7 +516,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   // A thread opens in the main window; a model, provider or instance narrows
   // the thread list to itself, and an account scopes the page. The legend and
   // the slice card both name members this way.
-  const groupsByKey = new Map((summary?.groups ?? []).map((group) => [group.key, group]));
+  const groupsByKey = new Map((scopedSummary?.groups ?? []).map((group) => [group.key, group]));
   const chartMember = (key: string): UsageChartMember => {
     if (shownDimension === "thread") {
       const group = groupsByKey.get(key);
@@ -478,6 +542,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
   const closeInspector = () => { setSelectedKey(undefined); setSelectedExcluded(undefined); setTurn(undefined); };
   const selectAccount = (key: string) => {
     setAccountFilter(key); closeInspector(); setBucket(undefined); setFacet(undefined); setRenaming(undefined);
+    clearOverviewFilters();
     const account = accountChoices.find((item) => item.key === key);
     setRememberedAccount(account);
     setFocusKey(account?.limitKey);
@@ -611,15 +676,31 @@ export function UsageActivity({ desktopApi, initialProvider }: {
         </>}
         <button type="button" className="usage-link" onClick={() => selectAccount("")}>All accounts</button>
       </div> : null}
+      <UsageOverviewBand
+        groups={summary.groups}
+        from={snapshot.from}
+        to={snapshot.to}
+        providerFilters={providerFilters}
+        onToggleProvider={(providerLabel) => setProviderFilters((current) => cycleTriStateFilter(current, providerLabel))}
+        onRemoveProviderFilter={(providerLabel) => setProviderFilters((current) => removeTriStateFilterKey(current, providerLabel))}
+        modelFilters={modelFilters}
+        onToggleModel={(modelName) => setModelFilters((current) => cycleTriStateFilter(current, modelName))}
+        onRemoveModelFilter={(modelName) => setModelFilters((current) => removeTriStateFilterKey(current, modelName))}
+        onClearModelFilters={() => setModelFilters({})}
+        onClearFilters={clearOverviewFilters}
+        readable={snapshot.sources.some((source) => source.data)}
+      />
       <UsageLimitsBand accounts={limitAccounts} focusKey={focus?.key} onFocus={setFocusKey} now={snapshot.to}
-        accountLabel={(limit) => { const key = limitUsageAccountKey(limit); return key ? accountLabels.get(key) : undefined; }}
-        cost={available ? total : undefined} threads={summary.groups.length} turns={summary.contained}
-        cacheShare={cacheShare} uncached={totals.uncached} output={totals.output} />
+        accountLabel={(limit) => { const key = limitUsageAccountKey(limit); return key ? accountLabels.get(key) : undefined; }} />
+      {/* Account-wide, like the limits above: compared against every measured turn, not the Overview's filter. */}
+      <UsageAccountTokenTrend accounts={tokenAccounts} focusKey={focusKey ?? focus?.key} onFocus={setFocusKey}
+        accountLabel={(account) => { const key = accountTokenUsageAccountKey(account); return key ? accountLabels.get(key) : undefined; }}
+        measuredRows={accountRows} now={snapshot.readAt} legacyOwnerLabels={legacyTokenOwners} />
       {buckets ? <UsageTimeline buckets={buckets} selected={bucket} onSelect={setBucket}
         dimension={shownDimension} onDimension={(next) => { setDimension(next); setFacet(undefined); }}
         dimensions={["thread", "model", "provider", ...multipleAccounts ? ["account" as const] : [], ...instances > 1 ? ["instance" as const] : []]}
         series={shownDimension === "thread"
-          ? summary.groups.slice(0, USAGE_SERIES).map((group) => ({ ...chartMember(group.key), cost: money(group.cost) }))
+          ? (scopedSummary?.groups ?? []).slice(0, USAGE_SERIES).map((group) => ({ ...chartMember(group.key), cost: money(group.cost) }))
           : facets.slice(0, USAGE_SERIES).map((item) => ({ ...chartMember(item.value), cost: money(item.cost) }))}
         member={chartMember}
         limit={lineSeries ? { label: limitLabel(lineSeries), points: lineSeries.points, resets: lineSeries.resets } : undefined}
@@ -639,6 +720,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
             ]} /></label> : null}
           </div>
           {activeFacet !== undefined && lens === "threads" ? <div className="usage-filter-note">{DIMENSION_LABELS[shownDimension]}: {activeFacet}<button type="button" onClick={() => setFacet(undefined)}>Clear {DIMENSION_LABELS[shownDimension].toLocaleLowerCase()} filter ×</button></div> : null}
+          {hasOverviewFilters && lens === "threads" ? <div className="usage-filter-note">Overview filter: {overviewFilterSummary}<button type="button" onClick={clearOverviewFilters}>Clear filters ×</button></div> : null}
           {lens === "excluded" ? <p className="usage-list-note">Only work that both started and finished in this period counts toward the total.
             These did not, or were never tied to a turn. Their prices are shown for context and are not part of any total above.</p> : null}
           {lens === "threads" ? <div className="usage-list-head"><span>Thread / instance</span><span>When</span><span>Signals</span><span>Input · cached</span><span>API-eq.</span></div> : null}
@@ -670,7 +752,7 @@ export function UsageActivity({ desktopApi, initialProvider }: {
               <span className="usage-thread__reason">{usageNotCountedReason(row, snapshot.from, snapshot.to)}</span>
               <span className="usage-thread__cost"><strong>{row.line.priceStatus === "priced" && row.line.currency === "USD" ? money(row.line.totalCostMicros) : "Unpriced"}</strong><small>not counted</small></span>
             </button>)}
-            {(lens === "threads" ? groups : excluded).length === 0 ? <div className="usage-empty"><strong>{search ? "No matching threads" : "No usage in this period"}</strong><p>{search ? "Try a thread title or instance name." : "Choose a longer period."}</p></div> : null}
+            {(lens === "threads" ? groups : excluded).length === 0 ? <div className="usage-empty"><strong>{search || hasOverviewFilters || activeFacet !== undefined ? "No matching threads" : "No usage in this period"}</strong><p>{search ? "Try a thread title or instance name." : hasOverviewFilters || activeFacet !== undefined ? "Try adjusting or clearing active filters." : "Choose a longer period."}</p></div> : null}
             {(lens === "threads" ? groups : excluded).length > 250 ? <p className="usage-list-note">Showing 250 results. Filter by thread name or choose a shorter period.</p> : null}
           </div>
           <div className="usage-list-footer"><span>{summary.groups.length} threads · {summary.contained} turns in the total</span>

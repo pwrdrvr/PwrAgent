@@ -102,7 +102,7 @@ describe("formatActivityText", () => {
         const label = `File ${labelPath}`;
         const roots = place === "unlinked" ? [] : [root];
 
-        expect(formatActivityText(label, detailFor(fullPath), roots)).toBe(label);
+        expect(formatActivityText(label, detailFor(fullPath, label), roots)).toBe(label);
       }),
       { numRuns: 300 },
     );

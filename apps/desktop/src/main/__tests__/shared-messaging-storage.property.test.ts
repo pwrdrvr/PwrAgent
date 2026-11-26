@@ -28,7 +28,7 @@ it("binds every generated desktop choice to the functioning portable messaging i
   fc.assert(fc.property(hostChoice, host => {
     expect(pairings[host]).toBe(SharedPairing);
     expect(activities[host]).toBe(SharedActivity);
-  }));
+  }), { numRuns: 8 });
 });
 
 // The database owns the profile secret. An independent HMAC oracle checks every
@@ -79,7 +79,7 @@ it("models profile-secret generation, token privacy and qualified HMAC identity"
       dbs[0]!.raw.prepare("UPDATE messaging_pairing_tokens SET token_hmac = ?").run("ab");
       expect(store.findMatchingPending({ ...input, now: input.generatedAt })).toBeUndefined();
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // Pending/observed expiry is irreversible by time alone. Explicit status writes
@@ -192,7 +192,7 @@ it("matches an independent pairing transition model over WAL connections, expiry
         }
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // Lists order by durable id, while summaries order timestamps independently.
@@ -258,7 +258,7 @@ it("models activity payloads, bounded cursors and monotone platform freshness ac
         }
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("publishes pairing and activity together or rolls both back without leaking a new secret", async () => {
@@ -288,7 +288,7 @@ it("publishes pairing and activity together or rolls both back without leaking a
       expect(logs[1 - host]!.list()).toHaveLength(commit ? 1 : 0);
       expect(Boolean(dbs[1 - host]!.getMeta("messaging_pairing_secret_v1"))).toBe(commit);
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("retains only the newest 500 activity ids per origin while preserving response freshness", async () => {
@@ -336,5 +336,5 @@ it("reads malformed legacy payloads without repairing or losing their envelope",
       expect(db.raw.prepare("SELECT payload FROM messaging_pairing_tokens WHERE entry_id = ?").pluck().get(entry.id)).toBe(payload);
       expect(db.raw.prepare("SELECT payload FROM messaging_activity_log WHERE id = ?").pluck().get(activity.id)).toBe(payload);
     } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });

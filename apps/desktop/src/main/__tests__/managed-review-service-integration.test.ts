@@ -3711,6 +3711,195 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  async function prReviewStartFixture(persistence?: SqliteOverlayStore) {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-review-start-"));
+    onTestFinished(async () => { await rm(cwd, { recursive: true, force: true }); });
+    const url = "https://github.com/example/atlas/pull/42";
+    await git(cwd, ["init", "-b", "main"]);
+    await git(cwd, ["remote", "add", "origin", "https://github.com/example/atlas.git"]);
+    await git(cwd, ["commit", "--allow-empty", "-m", "Base"]);
+    const baseCommit = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+    await git(cwd, ["commit", "--allow-empty", "-m", "Head"]);
+    const headCommit = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+    const pullRequest = { provider: "github.com", org: "example", repo: "atlas", number: 42, url,
+      headRefName: "feature", baseRefName: "main", state: "passing" as const };
+    const attachment = (threadId: string): ThreadOverlayState => ({
+      backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [], prs: [pullRequest],
+    });
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/start", "turn/start"] } });
+    const overlayStore = createOverlayStoreMock({
+      overlays: { "codex:independent": attachment("independent"), "codex:offer-owner": attachment("offer-owner") },
+    });
+    if (persistence) {
+      overlayStore.getThreadSubAgent = (...args) => persistence.getThreadSubAgent(...args);
+      overlayStore.upsertThreadSubAgent = (...args) => persistence.upsertThreadSubAgent(...args);
+      overlayStore.upsertManagedReviewEntry = (...args) => persistence.upsertManagedReviewEntry(...args);
+    }
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
+    onTestFinished(async () => { await registry.close(); });
+    const request = {
+      backend: "codex" as const,
+      cwd,
+      runMode: "pwragent-sub-agent" as const,
+      target: { type: "pullRequest" as const, url,
+        snapshot: { pullRequest, headCommit, baseCommit, mergeBaseCommit: baseCommit, capturedAt: 1_000 } },
+    };
+
+    return { codexClient, registry, request, headCommit };
+  }
+
+  function reviewTerminal(
+    status: "cancelled" | "failed" | "completed",
+    child: { reviewThreadId: string; turnId: string },
+  ): AppServerNotification {
+    const terminal = { threadId: child.reviewThreadId, turnId: child.turnId };
+    const turn = { id: child.turnId };
+    switch (status) {
+      case "failed": return { method: "turn/failed", params: { ...terminal,
+        turn: { ...turn, status, error: { message: "Review failed" } },
+      } };
+      case "cancelled": return { method: "turn/cancelled", params: { ...terminal, turn: { ...turn, status } } };
+      case "completed": return { method: "turn/completed", params: { ...terminal,
+        turn: { ...turn, status, output: [{ type: "text", text: "Early reviewer output." }] },
+      } };
+    }
+  }
+
+  it.each(["cancelled", "failed"] as const)(
+    "refuses a stale PR review start until the accepted review is %s",
+    async (status) => {
+      const { registry, codexClient, request, headCommit } = await prReviewStartFixture();
+      const activeHeads: Array<string | undefined> = [];
+      const unsubscribe = registry.onLiveReviewChanged(() => {
+        activeHeads.push([...registry.reviewsInProgress()][0]?.context?.headCommit);
+      });
+      const original = await registry.startReview({ ...request, threadId: "independent" }, true);
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .rejects.toThrow("A review is already running for PR #42");
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await codexClient.emit(reviewTerminal(status, original));
+      expect(activeHeads).toEqual([headCommit, undefined]);
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .resolves.toMatchObject({ status: "started" });
+      expect(codexClient.startTurnCallCount).toBe(2);
+      unsubscribe();
+    },
+  );
+
+  it.each(["acknowledges", "refuses"] as const)("permits only one overlapping provider dispatch when the first start %s", async (outcome) => {
+    const { registry, codexClient, request } = await prReviewStartFixture();
+    const dispatched = createDeferred<void>();
+    const acknowledgement = createDeferred<void>();
+    const start = codexClient.startTurn.bind(codexClient);
+    const provider = vi.spyOn(codexClient, "startTurn").mockImplementationOnce(async (params) => {
+      dispatched.resolve();
+      await acknowledgement.promise;
+      if (outcome === "refuses") throw new Error("Provider refused");
+      return await start(params);
+    });
+    const first = registry.startReview({ ...request, threadId: "independent" }, true);
+    const receipt = Promise.allSettled([first]);
+    try {
+      // First dispatch is live at the provider, but the owner has no accepted
+      // turn ID. The second thread must be refused before it calls the provider.
+      await dispatched.promise;
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .rejects.toThrow(/review is already starting for PR #42/i);
+      expect(provider).toHaveBeenCalledTimes(1);
+    } finally {
+      acknowledgement.resolve();
+      await receipt;
+    }
+
+    if (outcome === "refuses") {
+      await expect(first).rejects.toThrow("Provider refused");
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .resolves.toMatchObject({ status: "started" });
+    } else {
+      await first;
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .rejects.toThrow("A review is already running for PR #42");
+    }
+  });
+
+  it.each(["cancelled", "failed", "completed"] as const)("settles a managed review whose child is %s before its start acknowledgement", async (status) => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-early-managed-review-");
+    const db = StateDb.open(temp.dbPath);
+    onTestFinished(async () => {
+      db.close();
+      await removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    });
+    const { registry, codexClient, request } = await prReviewStartFixture(new SqliteOverlayStore(db));
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    onTestFinished(unsubscribe);
+    const start = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementationOnce(async (params) => {
+      const response = await start(params);
+      await codexClient.emit(reviewTerminal(status, { reviewThreadId: response.threadId, turnId: response.turnId }));
+      return response;
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      const response = await registry.startReview({ ...request, threadId: "independent" }, true);
+      // A terminal delivered before the acknowledgement is still the final
+      // state. Repeated delivery must not republish it or restore the hold.
+      expect([...registry.reviewsInProgress()]).toEqual([]);
+      expect(registry.getActiveTurnForThread({ backend: "codex", threadId: response.reviewThreadId })).toBeUndefined();
+      await codexClient.emit(reviewTerminal(status, response));
+    });
+    expectSqliteWriteBudget({
+      scenario: `managed-review-early-${status}`,
+      note: "Early terminal uses the regular review storage writes, without a running sub-agent write. Duplicate terminal adds none.",
+      writes,
+    });
+    expect(events.filter(({ notification }) =>
+      notification.method === `turn/${status}`
+      && "threadId" in notification.params && notification.params.threadId === "independent"
+    )).toHaveLength(1);
+    if (status === "completed") {
+      expect(events.filter((event) => isCompletedItemType(event, "exitedReviewMode"))).toEqual([
+        expect.objectContaining({ notification: expect.objectContaining({
+          params: expect.objectContaining({ item: expect.objectContaining({ review: "Early reviewer output." }) }),
+        }) }),
+      ]);
+    } else {
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .resolves.toMatchObject({ status: "started" });
+    }
+  });
+
+  it("publishes submitted output when a managed child completes twice before its start acknowledgement", async () => {
+    const { registry, codexClient, request } = await prReviewStartFixture();
+    const output = { findings: [], overall_correctness: "patch is correct" as const, overall_explanation: "The structured review passed." };
+    const ledger = registryModules(registry).managedReviewService.candidateLedger;
+    const events: AgentEvent[] = [];
+    onTestFinished(registry.onEvent((event) => { events.push(event); }));
+
+    const start = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementationOnce(async (params) => {
+      const response = await start(params);
+      expect(ledger.submitOutput({ backend: "codex", ...response }, output).ok).toBe(true);
+      const terminal = reviewTerminal("completed", { reviewThreadId: response.threadId, turnId: response.turnId });
+      await codexClient.emit(terminal);
+      await codexClient.emit(terminal);
+      return response;
+    });
+
+    await registry.startReview({ ...request, threadId: "independent" }, true);
+    expect([...registry.reviewsInProgress()]).toEqual([]);
+    expect(events.filter((event) => isCompletedItemType(event, "exitedReviewMode"))).toEqual([
+      expect.objectContaining({ notification: expect.objectContaining({
+        params: expect.objectContaining({ item: expect.objectContaining({
+          data: expect.objectContaining({ reviewOutput: output }),
+        }) }),
+      }) }),
+    ]);
+  });
+
   it("fingerprints failed review starts by target and error, not snapshot time", () => {
     // Each scheduled pull request review captures a new snapshot. Comparing
     // whole targets let every retry of a failing PR review send a new notice.

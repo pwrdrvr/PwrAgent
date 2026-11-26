@@ -1,4 +1,5 @@
 import { fromMarkdown } from "mdast-util-from-markdown";
+import { readComposerThreadReference, resolveComposerThreadHref } from "./composer-thread-references";
 import { findSharedSkillNames, isSharedSkillName } from "@pwragent/shared/skill-origin";
 import { type AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseInstanceReferenceUrl } from "../../lib/instance-references";
@@ -6,12 +7,13 @@ import { decodeMarkdownDestination } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";
 import { parseSkillMentionParts } from "../../lib/skill-mentions";
 import { parsePullRequestUrl, resolveLivePullRequest, type PullRequestLinkContextValue } from "../../lib/pull-request-links";
-import { resolveThreadHref, type ThreadLinkContextValue } from "../../lib/thread-links";
+import type { ThreadLinkContextValue } from "../../lib/thread-links";
 import type { ComposerSkillToken } from "./ComposerInputTypes";
 import { createComposerAtReferenceToken, createComposerDirectoryToken, createComposerPullRequestToken, createComposerSkillToken, createComposerThreadToken } from "./composer-mention-tokens";
 
 type MarkdownNode = {
   type: string;
+  url?: string;
   position?: { start: { offset?: number }; end: { offset?: number } };
   children?: MarkdownNode[];
 };
@@ -89,7 +91,7 @@ export function hydrateComposerDraft(
       hydrateSkillAndDirectoryParts(text.slice(cursor, matchIndex));
       const href = match[2] ?? "";
       const instanceId = parseInstanceReferenceUrl(href);
-      const resolvedThread = resolveThreadHref(href, threadLinks);
+      const resolvedThread = resolveComposerThreadHref(href, threadLinks);
       if (instanceId) {
         skillTokens.push(createComposerAtReferenceToken({
           kind: "instance",
@@ -97,7 +99,7 @@ export function hydrateComposerDraft(
           path: href,
         }, draft.length));
       } else if (resolvedThread) {
-        skillTokens.push(createComposerThreadToken(resolvedThread, draft.length));
+        skillTokens.push(createComposerThreadToken(resolvedThread.link, draft.length, undefined, resolvedThread.ref));
       } else {
         const pullRequest = parsePullRequestUrl(href);
         if (pullRequest) {
@@ -125,6 +127,13 @@ export function hydrateComposerDraft(
   // CommonMark handles inline, fenced, indented, and nested code consistently.
   const visit = (node: MarkdownNode): void => {
     if (node.type === "link") {
+      const reference = readComposerThreadReference(node, canonicalDraft, threadLinks);
+      if (reference) {
+        hydrateReferences(canonicalDraft.slice(cursor, reference.start));
+        skillTokens.push(createComposerThreadToken(reference.link, draft.length, reference.fallbackLabel, reference.ref));
+        cursor = reference.end;
+        return;
+      }
       const start = node.position?.start.offset;
       const end = node.position?.end.offset;
       // Inline code in an explicit link's label belongs to that reference.

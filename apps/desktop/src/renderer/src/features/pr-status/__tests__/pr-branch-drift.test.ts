@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import {
@@ -90,5 +91,38 @@ describe("readPrBranchDrift", () => {
       .toBe("1,200 behind main");
     expect(prBranchBehindLabel({ prKey, baseBranch: "main", behind: 0, ahead: 3 }))
       .toBeUndefined();
+  });
+});
+
+/**
+ * A fork's base only moves when the operator syncs it, so `0 behind main`
+ * hides a stale branch. The rule: the rollup names the base when it is
+ * behind, else the upstream when that is behind, else nothing; and the card
+ * gets the upstream count whenever it is known.
+ */
+describe("prBranchBehindLabel with an upstream (property)", () => {
+  const prKey = "github.com/acme/orbit#2";
+  const count = fc.option(fc.integer({ min: -2, max: 3000 }), { nil: undefined });
+
+  it("prefers the base's count and falls back to the upstream's", () => {
+    fc.assert(fc.property(count, count, count, fc.boolean(), (behind, ahead, upstreamBehind, hasUpstream) => {
+      const drift = {
+        prKey,
+        baseBranch: "main",
+        behind,
+        ahead,
+        ...(hasUpstream ? { upstreamBranch: "upstream/main", upstreamBehind } : {}),
+      };
+      const valid = (value: number | undefined) => value !== undefined && value >= 0 ? value : undefined;
+      const base = valid(behind);
+      const upstream = hasUpstream ? valid(upstreamBehind) : undefined;
+      const expected = base ? `${base.toLocaleString()} behind main`
+        : upstream ? `${upstream.toLocaleString()} behind upstream/main`
+        : undefined;
+      expect(prBranchBehindLabel(drift)).toBe(expected);
+      expect(readPrBranchDrift(drift)?.upstream).toEqual(
+        upstream === undefined ? undefined : { branch: "upstream/main", behind: upstream },
+      );
+    }));
   });
 });

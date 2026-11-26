@@ -28,7 +28,7 @@ it("matches the current owner's durable archive authority for retained imports a
           }
         }
       } finally { f.close(); }
-    }), { numRuns: 25, examples: [[0, []], [0, ["restore", "observe"]]] });
+    }), { numRuns: 8, examples: [[0, []], [0, ["restore", "observe"]]] });
 });
 
 // The model has two independent reasons for retention: a committed, still
@@ -91,28 +91,26 @@ it("models import confirmation and every accepted job boundary against live prof
         else expect(f.jobs.get(job.id)).toBeUndefined();
       }
     } finally { f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
-it("atomically confirms an imported batch, rolls it back on refusal and fences late confirmation after retirement", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), async reverse => {
-    const f = retainedOwnerFixture(false, ["imported", "second"]);
-    const ids = reverse ? ["second", "imported"] : ["imported", "second"];
-    try {
-      const before = await f.overlay.listThreadMetadata();
-      f.db.raw.exec(reverse
-        ? "CREATE TRIGGER refuse_confirmation BEFORE INSERT ON threads WHEN json_extract(NEW.payload, '$.threadId') = 'imported' BEGIN SELECT RAISE(ABORT, 'confirmation refused'); END"
-        : "CREATE TRIGGER refuse_confirmation BEFORE INSERT ON threads WHEN json_extract(NEW.payload, '$.threadId') = 'second' BEGIN SELECT RAISE(ABORT, 'confirmation refused'); END");
-      expect(() => f.retained.confirmNativeThreads(ids)).toThrow("confirmation refused");
-      expect(await f.overlay.listThreadMetadata()).toEqual(before);
-      f.db.raw.exec("DROP TRIGGER refuse_confirmation");
-      f.retained.confirmNativeThreads(ids);
-      expect(f.retained.list()).toEqual([]);
-      await f.overlay.updateThreadMetadata({ backend: "codex", threadId: ids[0]! }, { nativeMembershipRetired: true });
-      f.retained.confirmNativeThreads(ids);
-      expect((await f.overlay.getThreadMetadata({ backend: "codex", threadId: ids[0]! }))?.nativeMembershipRetired).toBe(true);
-    } finally { f.close(); }
-  }), { numRuns: 20 });
+it.each([false, true] as const)("atomically confirms an imported batch, rolls it back on refusal and fences late confirmation after retirement [%#]", async (reverse) => {
+  const f = retainedOwnerFixture(false, ["imported", "second"]);
+  const ids = reverse ? ["second", "imported"] : ["imported", "second"];
+  try {
+    const before = await f.overlay.listThreadMetadata();
+    f.db.raw.exec(reverse
+      ? "CREATE TRIGGER refuse_confirmation BEFORE INSERT ON threads WHEN json_extract(NEW.payload, '$.threadId') = 'imported' BEGIN SELECT RAISE(ABORT, 'confirmation refused'); END"
+      : "CREATE TRIGGER refuse_confirmation BEFORE INSERT ON threads WHEN json_extract(NEW.payload, '$.threadId') = 'second' BEGIN SELECT RAISE(ABORT, 'confirmation refused'); END");
+    expect(() => f.retained.confirmNativeThreads(ids)).toThrow("confirmation refused");
+    expect(await f.overlay.listThreadMetadata()).toEqual(before);
+    f.db.raw.exec("DROP TRIGGER refuse_confirmation");
+    f.retained.confirmNativeThreads(ids);
+    expect(f.retained.list()).toEqual([]);
+    await f.overlay.updateThreadMetadata({ backend: "codex", threadId: ids[0]! }, { nativeMembershipRetired: true });
+    f.retained.confirmNativeThreads(ids);
+    expect((await f.overlay.getThreadMetadata({ backend: "codex", threadId: ids[0]! }))?.nativeMembershipRetired).toBe(true);
+  } finally { f.close(); }
 });
 
 it("requires committed, byte-verified import provenance and does not repair a changed backup", () => {

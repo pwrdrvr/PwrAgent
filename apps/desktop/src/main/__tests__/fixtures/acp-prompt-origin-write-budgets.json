@@ -1,0 +1,3 @@
+{
+  "acp-messaging-turn-start": {"commits": 3, "note": "One ACP turn started from messaging, through its prompt's user item: two ACP session-record writes and one origin row (~36 KB WAL); the prompt item formerly upserted the origin row again (~4 KB WAL), ~0.4 MB/day at 100 messaging turns a day", "observedWalBytes": 37080, "rowsChanged": 3, "statements": 3}
+}

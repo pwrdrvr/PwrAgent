@@ -4,7 +4,6 @@ import { useComposerWorkspaceHandoffState } from "./useComposerWorkspaceHandoffS
 import { useComposerSendPreparation } from "./useComposerSendPreparation";
 import { useComposerScheduleMenu } from "./useComposerScheduleMenu";
 import {
-  CODEX_SPEED_LABELS,
   codexSpeedOptions,
   codexSpeedSettings,
   selectedCodexSpeed,
@@ -14,6 +13,7 @@ import {
   buildProviderPickerEntries,
   codexModelProviderCatalogNote,
   parseProviderPickerValue,
+  providerPickerValue,
 } from "@pwragent/shared/provider-picker";
 import { codexProviderIdOfModel } from "@pwragent/shared/codex-model-providers";
 import {
@@ -23,6 +23,10 @@ import {
 import { type BackendModelOption } from "@pwragent/shared/contracts/backend";
 import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
 import { ModelDropdown } from "./ModelDropdown";
+import { ModelSettingsPicker, ModelSettingsQuickList, type ModelSettingsPickerProps } from "./ModelSettingsPicker";
+import { useNewThreadRecents } from "./useNewThreadRecents";
+import { newThreadRecents, type NewThreadRecent } from "../../lib/model-settings-recents";
+import { MODEL_DEFAULT_EFFORT, splitEffortChoices } from "./model-settings-picker-model";
 import { ThreadHandoffComposerBand } from "../federation/ThreadHandoffProgress";
 import { mayContainLinearPastedImages } from "@pwragent/shared/linear-paste";
 import { NativeVoiceBar, isNativeVoiceApi, threadVoiceTarget } from "../native-voice/NativeVoice";
@@ -51,8 +55,17 @@ import {
   reviewWorkspacePullRequests,
 } from "../../../../shared/pull-request-review";
 import { hydrateComposerDraft } from "./composer-draft-hydration";
+import { resolveComposerThreadDestinations } from "./composer-thread-references";
 import { contextWindowMoonFace } from "./context-window-moon";
-import { useContextMoonStyle } from "../../lib/context-moon-preferences";
+import {
+  applyContextWindowBudget,
+  autoCompactionStatusLine,
+  isAutoCompactionActive,
+  type ContextWindowBudget,
+  type ThreadAutoCompactionStatus,
+} from "./context-window-budget";
+import { useAutoCompactionRules, useContextMoonStyle } from "../../lib/context-moon-preferences";
+import { useThreadAutoCompaction } from "../../lib/useThreadAutoCompaction";
 import {
   getShortTermRateLimitResetAt,
   getRateLimitResetSendAt,
@@ -81,6 +94,7 @@ import {
 } from "./launchpad-composer-scope";
 import {
   QueuedMessageInspector,
+  QueuedThreadReferencePreview,
   QueuedRowGrip,
   QueuedRowIconButton,
   QueuedRowPausedLabel,
@@ -127,7 +141,6 @@ import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
   MoveThreadToMainCheckoutResponse,
-  AppServerAvailableCommandSummary,
   AppServerBackendKind,
   AppServerReviewTarget,
   AppServerSkillSummary,
@@ -166,6 +179,7 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { DEFAULT_WATCH_MERGE_BUILDS } from "@pwragent/shared/contracts/settings";
 import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automation";
+import { describeAutoFixCoverage } from "./auto-fix-coverage";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
 import { mergeBuildPullRequestUrl } from "../pr-watches/merge-build-watches";
@@ -198,7 +212,6 @@ import {
   FileCodeIcon,
   FolderIcon,
   HistoryIcon,
-  LightningIcon,
   MoreVerticalIcon,
   PauseIcon,
   PencilIcon,
@@ -224,6 +237,7 @@ import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import { LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { prefersClaudeCodeReview, resolveReviewRunMode } from "../../lib/review-run-mode";
@@ -289,10 +303,7 @@ import {
   usePullRequestLinks,
 } from "../../lib/pull-request-links";
 import {
-  resolveThreadHref,
-  resolveThreadIdText,
   useThreadLinks,
-  type ResolvedThreadLink,
 } from "../../lib/thread-links";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
 import {
@@ -363,7 +374,12 @@ import {
 import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./EnvironmentSetupRow";
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
-import { findSlashCommandTrigger } from "./composer-slash-commands";
+import {
+  findComposerCompactCommand,
+  findSlashCommandTrigger,
+  isComposerCompactDraft,
+  isComposerCompactSuggestion,
+} from "./composer-slash-commands";
 import {
   forkCommandCompletion,
   forkCommandHint,
@@ -388,7 +404,7 @@ import {
 } from "./ComposerDropdown";
 import { providerPickerDropdownOptions } from "./provider-picker-options";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
-import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
+import { isSkillOriginShortcut, SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import {
   canPushToRemoteTarget,
@@ -449,6 +465,7 @@ export type ComposerProps = {
   onOpenCodexSkillProfiles?: () => void;
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage?: (
     text: string,
     imageParts?: AppServerThreadImagePart[],
@@ -595,7 +612,8 @@ export type ComposerProps = {
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
-  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  skillCatalogTargetKey?: string;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   pendingRequestActive?: boolean;
   pendingUserInputActive?: boolean;
@@ -751,7 +769,7 @@ export type ComposerProps = {
   setExecutionModeError?: string;
   skillError?: string;
   skillLoading?: boolean;
-  providerCommands?: AppServerAvailableCommandSummary[];
+  providerCommands?: ThreadProviderCommand[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
   integratedTerminal?: ComposerTerminalToggleProps;
@@ -794,7 +812,8 @@ export type ComposerProps = {
       >
     >
   ) => Promise<void>;
-  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean, prKey?: string) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
   onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   threadModelSettingsError?: string;
@@ -956,6 +975,8 @@ type QueuedTurnDraft = {
   /** See `ComposerQueuedTurnSnapshot.pendingMove`. */
   pendingMove?: { beforeQueueEntryId?: string; requestId?: number };
   scheduledActionId?: string;
+  /** See `ComposerQueuedTurnSnapshot.reviewTodoId`. */
+  reviewTodoId?: string;
   failedScheduledActionId?: string;
   errorMessage?: string;
   manualReleaseRequired?: boolean;
@@ -1030,6 +1051,7 @@ type SlashCommandSuggestion = {
   id: string;
   insertText: string;
   label: string;
+  skill?: AppServerSkillSummary;
   source: "provider" | "pwragent";
   sourceLabel: string;
 };
@@ -1096,13 +1118,6 @@ type ReviewWorkspaceOption = {
 /** Backends whose turns take Plan: Codex's collaboration mode, Claude's plan permission mode. */
 const PLAN_MODE_BACKENDS: ReadonlySet<string> = new Set(["codex", "claude"]);
 
-// Fast keeps the Fast toggle's own tooltip copy. Ultrafast claims only what
-// the catalog proves: the model advertises it, and nothing is priced yet.
-const CODEX_SPEED_DESCRIPTIONS: Record<CodexSpeed, string> = {
-  standard: "Default processing",
-  fast: "Faster, lower-latency responses",
-  ultrafast: "The fastest tier this model offers",
-};
 const SCHEDULED_SEND_OPTIONS = [
   { label: "Send in 15m", delayMs: 15 * 60_000 },
   { label: "Send in 30m", delayMs: 30 * 60_000 },
@@ -1194,7 +1209,7 @@ const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
 ];
 
 function providerCommandToSlashSuggestion(
-  command: AppServerAvailableCommandSummary,
+  command: ThreadProviderCommand,
   backends: BackendSummary[] = [],
 ): SlashCommandSuggestion {
   const commandName = command.name.startsWith("/")
@@ -1209,6 +1224,7 @@ function providerCommandToSlashSuggestion(
     insertText: `/${commandName}`,
     description: command.description ?? "Provider command",
     aliases: command.aliases,
+    skill: command.skill,
     ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
     source: "provider",
     sourceLabel,
@@ -3463,7 +3479,7 @@ function useComposerController(props: ComposerProps) {
     terminalTurnKeysRef,
     queuedRowActionIdsRef,
     activeReviewTurnIdRef,
-    inFlightReviewSubmissionKeyRef,
+    inFlightReviewSubmissionRef,
     autocompleteOptionRefs,
     reviewOptionRefs,
     reviewCommitInputRef,
@@ -3648,6 +3664,11 @@ function useComposerController(props: ComposerProps) {
     isLaunchpad,
     launchpad,
   } = useComposerSessionState();
+  const newThreadRecentLists = useNewThreadRecents({
+    api: props.desktopApi,
+    enabled: Boolean(props.launchpad),
+    federationTarget: props.launchpad?.federationTarget ?? readRendererFederationTarget(),
+  });
   // Counts the times a card brought the review panel up, so each one
   // replays the panel's arrival, including Show from a waiting card.
   const [reviewPanelArrival, setReviewPanelArrival] = useState(0);
@@ -3695,7 +3716,7 @@ function useComposerController(props: ComposerProps) {
     // waiting.
     const queuedRowActionIdsRef = useRef(new Set<string>());
     const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
-    const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
+    const inFlightReviewSubmissionRef = useRef<{ key: string; scopeKey: string } | undefined>(undefined);
     const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
     const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
     const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
@@ -4191,7 +4212,7 @@ function useComposerController(props: ComposerProps) {
       terminalTurnKeysRef,
       queuedRowActionIdsRef,
       activeReviewTurnIdRef,
-      inFlightReviewSubmissionKeyRef,
+      inFlightReviewSubmissionRef,
       autocompleteOptionRefs,
       reviewOptionRefs,
       reviewCommitInputRef,
@@ -4389,20 +4410,11 @@ function useComposerController(props: ComposerProps) {
     backend?.kind.startsWith("acp:") === true
       ? backend.capabilities.startReview !== false
       : true;
-  const supportsCompactCommand = Boolean(
-    props.providerCommands?.some((command) => {
-      const commandName = command.name.startsWith("/")
-        ? command.name.slice(1)
-        : command.name;
-      // Claude runs `/compact` itself when it arrives as a prompt; the
-      // compaction API below is Codex's.
-      return (
-        commandName === "compact" &&
-        command.backend !== "claude" &&
-        (!props.thread || !command.backend || command.backend === props.thread.source)
-      );
-    })
+  const compactCommand = findComposerCompactCommand(
+    props.providerCommands,
+    props.thread?.source,
   );
+  const supportsCompactCommand = Boolean(compactCommand);
   const supportsForkCommand = Boolean(
     !isLaunchpad
     && props.thread
@@ -6160,7 +6172,11 @@ function useComposerController(props: ComposerProps) {
   };
   const trigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
-  const directoryRefTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
+  const [, setReferenceSelectionRevision] = useState(0);
+  const referenceTriggers = inputRef.current?.getReferenceTriggers();
+  const directoryRefTrigger = referenceTriggers
+    ? referenceTriggers["@"]
+    : findDirectoryReferenceTrigger(draft, selectionStart);
   // `#` is the one trigger whose query spans spaces — thread titles have
   // spaces in them — so unlike `@` and `$` nothing retires it. Left alone,
   // a `#` anywhere in a sentence keeps the picker armed and the federated
@@ -6169,7 +6185,9 @@ function useComposerController(props: ComposerProps) {
   const [coldHashAnchors, setColdHashAnchors] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
-  const rawHashReferenceTrigger = findHashReferenceTrigger(draft, selectionStart);
+  const rawHashReferenceTrigger = referenceTriggers
+    ? referenceTriggers["#"]
+    : findHashReferenceTrigger(draft, selectionStart);
   const rawHashReferenceQuery = rawHashReferenceTrigger?.query;
   const hashReferenceTrigger =
     rawHashReferenceTrigger
@@ -6728,7 +6746,7 @@ function useComposerController(props: ComposerProps) {
   const forkCommand = supportsForkCommand || supportsSubthreadCommand
     ? parseForkCommand(draft)
     : undefined;
-  const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
+  const isCompactCommand = isComposerCompactDraft(draft, compactCommand);
   const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
     supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"
       ? "toolsAndAuthOnly"
@@ -7217,10 +7235,13 @@ function useComposerController(props: ComposerProps) {
     };
   }, [activeAutocompleteIndex, autocompleteKind]);
 
+  const onEnsureSkillsLoaded = props.onEnsureSkillsLoaded;
+  const isSlashSkillPicker = !trigger && Boolean(slashTrigger);
+  const skillPickerScope = `${composerScopeKey}:${props.skillCatalogTargetKey ?? props.thread?.source ?? props.launchpad?.backend}`;
   const skillPickerLoadKey = trigger
-    ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:skills:${trigger.start}`
+    ? `${skillPickerScope}:skills:${trigger.start}`
     : slashTrigger
-      ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:slash:${slashTrigger.start}`
+      ? `${skillPickerScope}:slash:${slashTrigger.start}`
       : undefined;
   const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -7228,15 +7249,16 @@ function useComposerController(props: ComposerProps) {
       loadedSkillPickerRef.current = undefined;
       return;
     }
-    if (!props.onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
+    if (!onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
       return;
     }
     // Query edits and streamed thread summaries can replace the callback.
     // Check freshness once per trigger opening, including an empty list.
     loadedSkillPickerRef.current = skillPickerLoadKey;
-    void props.onEnsureSkillsLoaded?.();
+    void onEnsureSkillsLoaded(isSlashSkillPicker ? { includeCommands: true } : undefined);
   }, [
-    props.onEnsureSkillsLoaded,
+    onEnsureSkillsLoaded,
+    isSlashSkillPicker,
     skillPickerLoadKey,
   ]);
 
@@ -7671,8 +7693,9 @@ function useComposerController(props: ComposerProps) {
         statusRecord?.type === "idle"
       ) {
         if (
-          activeReviewTurnIdRef.current &&
-          activeTurnIdRef.current === activeReviewTurnIdRef.current
+          inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey ||
+          (activeReviewTurnIdRef.current &&
+            activeTurnIdRef.current === activeReviewTurnIdRef.current)
         ) {
           return;
         }
@@ -7766,7 +7789,8 @@ function useComposerController(props: ComposerProps) {
     const submissionKey = reviewSubmissionKey(reviewCommand);
     if (
       sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === submissionKey
+      inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey &&
+      inFlightReviewSubmissionRef.current.key === submissionKey
     ) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -7811,7 +7835,13 @@ function useComposerController(props: ComposerProps) {
     }
 
     setSendError(undefined);
-    inFlightReviewSubmissionKeyRef.current = submissionKey;
+    const submission = { key: submissionKey, scopeKey: composerScopeKey };
+    inFlightReviewSubmissionRef.current = submission;
+    const clearReviewSubmission = () => {
+      if (inFlightReviewSubmissionRef.current === submission) {
+        inFlightReviewSubmissionRef.current = undefined;
+      }
+    };
     updateSending(true);
     props.onPendingStatusChange?.("Reviewing");
 
@@ -7847,7 +7877,6 @@ function useComposerController(props: ComposerProps) {
         } else {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
         }
-        inFlightReviewSubmissionKeyRef.current = undefined;
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
         releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -7855,12 +7884,14 @@ function useComposerController(props: ComposerProps) {
           setSendError(error instanceof Error ? error.message : String(error));
         }
       } finally {
+        clearReviewSubmission();
         updateSending(false);
       }
       return;
     }
 
     if (!props.thread || !props.desktopApi?.startReview) {
+      clearReviewSubmission();
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
@@ -7904,6 +7935,7 @@ function useComposerController(props: ComposerProps) {
       resetComposerDraftAndState(submittedScopeKey);
       setReviewConfig(undefined);
     }
+    const releaseReviewReservation = props.beginReviewSubmission?.();
     try {
       const response = await props.desktopApi.startReview({
         backend: props.thread.source,
@@ -7965,7 +7997,6 @@ function useComposerController(props: ComposerProps) {
           },
         })?.catch(() => undefined);
       }
-      inFlightReviewSubmissionKeyRef.current = undefined;
       props.onReviewStarted?.(threadSummaryIdentityKey(props.thread), submittedReviewRequestId);
       if (updateActiveTurnId(response.turnId, { review: true })) {
         props.onActiveTurnIdChange?.(response.turnId);
@@ -7985,7 +8016,6 @@ function useComposerController(props: ComposerProps) {
       if (optimisticReviewId) {
         props.removeOptimisticMessage?.(optimisticReviewId);
       }
-      inFlightReviewSubmissionKeyRef.current = undefined;
       if (!options?.queued) {
         if (restoreRejectedReviewDraft(submittedScopeKey, submittedSnapshot)) {
           setReviewConfig(submittedReviewConfig ?? createReviewConfig({
@@ -8009,6 +8039,9 @@ function useComposerController(props: ComposerProps) {
         message,
         tone: "error",
       });
+    } finally {
+      clearReviewSubmission();
+      releaseReviewReservation?.();
     }
   };
 
@@ -8642,14 +8675,15 @@ function useComposerController(props: ComposerProps) {
     );
     const build = (
       resolvedInspection: ComposerReferenceInspection,
+      resolvedText: string,
     ): ComposerTurnPayload => {
-      const turnSkills = listMentionedSkills(textDraft, props.skills).filter(({ name }) => !hiddenSkills.has(name));
+      const turnSkills = listMentionedSkills(resolvedText, props.skills).filter(({ name }) => !hiddenSkills.has(name));
       // File-reference pills ride the outgoing text as `[@label](~/path)`
       // markdown appended after the typed draft — part of BOTH the display
       // text and the text input item, so the agent and the transcript see
       // the same message.
       const displayText = appendFileReferenceMarkdown(
-        hydrateSkillLabelsWithMarkdown(textDraft.trim(), turnSkills),
+        hydrateSkillLabelsWithMarkdown(resolvedText.trim(), turnSkills),
         fileRefs,
       );
       const imageParts = attachments.map((attachment, index) => ({
@@ -8673,7 +8707,11 @@ function useComposerController(props: ComposerProps) {
 
       return { displayText, imageParts, input };
     };
-    return isPromiseLike(inspection) ? inspection.then(build) : build(inspection);
+    const resolvedText = resolveComposerThreadDestinations(textDraft, threadLinks);
+    if (isPromiseLike(inspection) || isPromiseLike(resolvedText)) {
+      return Promise.all([inspection, resolvedText]).then(([files, text]) => build(files, text));
+    }
+    return build(inspection, resolvedText);
   };
 
   const buildQueuedTurnPayload = (
@@ -9446,6 +9484,9 @@ function useComposerController(props: ComposerProps) {
         upsertScheduledProjectionInScope(submittedScopeKey, {
           id: `scheduled-projection:${response.action.id}`,
           scheduledActionId: response.action.id,
+          ...(submittedReviewConfig?.reviewTodo
+            ? { reviewTodoId: submittedReviewConfig.reviewTodo.id }
+            : {}),
           text,
           imageAttachments: [],
           fileAttachments: [],
@@ -10326,7 +10367,8 @@ function useComposerController(props: ComposerProps) {
     if (
       reviewCommand &&
       sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === reviewSubmissionKey(reviewCommand)
+      inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey &&
+      inFlightReviewSubmissionRef.current.key === reviewSubmissionKey(reviewCommand)
     ) {
       return;
     }
@@ -10863,137 +10905,16 @@ function useComposerController(props: ComposerProps) {
       shortLabel?: string;
     },
   ): void => {
-    if (!inputRef.current) {
-      return;
-    }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    // Prefer replacing the `@` trigger the popover opened from; when the
-    // reference arrives without one (the "+"-menu picker, or the trigger
-    // vanished while an OS dialog was open) fall back to a zero-width
-    // "trigger" at the current caret so the chip still lands in place.
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-    if (!directory.path) {
-      return;
-    }
-
-    // Mint a durable mention token (the `@label` chip) instead of
-    // splicing path text — mirrors applySkill. The chip is zero-width in
-    // the plain draft; serializeDraftWithSkillTokens splices the markdown
-    // link back in for the outgoing text and launchpad prompt. Like
-    // applySkill, always leave one space after the chip and park the
-    // caret after it.
-    const before = draft.slice(0, refTrigger.start);
-    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${nextAfter}`;
-    const tokenIndex = before.length;
-    const nextSelection = tokenIndex + 1;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      createComposerAtReferenceToken(directory, tokenIndex),
-    ];
-
-    // Same protected-update dance as applySkill: the editability sync in
-    // ComposerTiptapInput re-emits the editor's (still pre-insert) content
-    // through onChange before the external-value sync applies the new
-    // draft. The pending-programmatic guard in handleComposerChange
-    // swallows that stale replay so the two sides can't ping-pong.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
-  };
-
-  const applyThreadReference = (thread: ResolvedThreadLink): void => {
-    if (!inputRef.current) {
-      return;
-    }
-    inputRef.current.insertMentionToken(createComposerThreadToken(thread, 0));
+    if (!directory.path) return;
+    inputRef.current?.replaceReference("@", [createComposerAtReferenceToken(directory, 0)]);
+    setActiveDirectoryRefIndex(0);
   };
 
   const applyHashReference = (
     createToken: (index: number) => ComposerSkillToken,
   ): void => {
-    if (!inputRef.current) {
-      return;
-    }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const referenceTrigger =
-      findHashReferenceTrigger(draft, selectionStart)
-      ?? findHashReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-    const before = draft.slice(0, referenceTrigger.start);
-    const after = draft.slice(Math.max(referenceTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${nextAfter}`;
-    const tokenIndex = before.length;
-    const nextSelection = tokenIndex + 1;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      createToken(tokenIndex),
-    ];
-
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveHashReferenceIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    inputRef.current?.replaceReference("#", [createToken(0)]);
+    setActiveHashReferenceIndex(0);
   };
 
   /**
@@ -11011,118 +10932,19 @@ function useComposerController(props: ComposerProps) {
     applyDirectoryReference(picked);
   };
 
-  /**
-   * Mint file-reference chips at the `@` trigger (or the caret when no
-   * trigger survives) — the multi-token sibling of
-   * `applyDirectoryReference`. The plain draft gets n-1 separator spaces
-   * plus the guaranteed post-chip space, placing the n zero-width tokens
-   * at consecutive indexes so the serialized draft reads
-   * `chip␠chip␠…chip␠after` with exactly one space after every chip.
-   */
   /** Drop the `@query` an autocomplete pick would have replaced. */
   const removeReferenceTrigger = (): void => {
-    if (!inputRef.current) {
-      return;
-    }
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length);
-    if (!refTrigger) {
-      return;
-    }
-    const before = draft.slice(0, refTrigger.start);
-    const nextDraft = `${before}${draft.slice(refTrigger.end)}`;
-    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
-      currentDraft: draft,
-      nextDraft,
-      skillTokens,
-    });
-    // The same protected update as applyFileReferences below.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(before.length, before.length);
-    });
+    inputRef.current?.replaceReference("@", []);
+    setActiveDirectoryRefIndex(0);
   };
 
   const applyFileReferences = (paths: string[]): void => {
-    if (!inputRef.current || paths.length === 0) {
-      return;
-    }
+    if (!inputRef.current || paths.length === 0) return;
 
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-
-    const before = draft.slice(0, refTrigger.start);
-    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${" ".repeat(paths.length - 1)}${nextAfter}`;
-    const nextSelection = before.length + paths.length;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      ...paths.map((path, index) =>
-        createComposerFileToken(
-          { label: fileLabelFromPath(path), path },
-          before.length + index,
-        ),
-      ),
-    ];
-
-    // Same protected-update dance as applySkill / applyDirectoryReference:
-    // the editability sync in ComposerTiptapInput re-emits the editor's
-    // (still pre-insert) content through onChange before the
-    // external-value sync applies the new draft. The pending-programmatic
-    // guard in handleComposerChange swallows that stale replay so the two
-    // sides can't ping-pong.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    inputRef.current.replaceReference("@", paths.map((path) =>
+      createComposerFileToken({ label: fileLabelFromPath(path), path }, 0),
+    ));
+    setActiveDirectoryRefIndex(0);
 
     // Feed the reference picker's Files tab — fire-and-forget.
     void props.desktopApi
@@ -11153,75 +10975,14 @@ function useComposerController(props: ComposerProps) {
     applyFileReferences(result.paths);
   };
 
-  /**
-   * Mint directory-reference chips for a batch of picked directories —
-   * the multi-token sibling of `applyDirectoryReference`, sharing
-   * `applyFileReferences`' token layout (n-1 separator spaces plus the
-   * guaranteed post-chip space). Needed because the single-directory
-   * helper can't be called twice in one tick: each call captures the
-   * pre-insert draft, so the second insert would clobber the first.
-   */
   const applyDirectoryReferenceChips = (
     directories: { label: string; path: string }[],
   ): void => {
-    if (!inputRef.current || directories.length === 0) {
-      return;
-    }
-
-    const selectionStart = Math.min(
-      inputRef.current.selectionStart ?? draft.length,
-      draft.length,
-    );
-    const selectionEnd = Math.min(
-      inputRef.current.selectionEnd ?? selectionStart,
-      draft.length,
-    );
-    const refTrigger =
-      findDirectoryReferenceTrigger(draft, selectionStart)
-      ?? findDirectoryReferenceTrigger(draft, draft.length)
-      ?? { start: selectionStart, end: selectionEnd };
-
-    const before = draft.slice(0, refTrigger.start);
-    const after = draft.slice(Math.max(refTrigger.end, selectionEnd));
-    const nextAfter = /^[^\S\r\n]/.test(after) ? after : ` ${after}`;
-    const nextDraft = `${before}${" ".repeat(directories.length - 1)}${nextAfter}`;
-    const nextSelection = before.length + directories.length;
-    const nextSkillTokens = [
-      ...adjustSkillTokenIndexesForTextChange({
-        currentDraft: draft,
-        nextDraft,
-        skillTokens,
-      }),
-      ...directories.map((directory, index) =>
-        createComposerDirectoryToken(directory, before.length + index),
-      ),
-    ];
-
-    // Same protected-update dance as applySkill / applyDirectoryReference:
-    // the editability sync in ComposerTiptapInput re-emits the editor's
-    // (still pre-insert) content through onChange before the
-    // external-value sync applies the new draft. The pending-programmatic
-    // guard in handleComposerChange swallows that stale replay so the two
-    // sides can't ping-pong.
-    pendingProgrammaticComposerChangeRef.current = {
-      expectedDraft: nextDraft,
-      expectedSkillTokensSignature:
-        getComposerSkillTokensSignature(nextSkillTokens),
-      staleDraft: draft,
-      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
-    };
-    flushSync(() => {
-      setSkillTokens(nextSkillTokens);
-      setDraft(nextDraft);
-      setActiveDirectoryRefIndex(0);
-    });
-    requestAnimationFrame(() => {
-      // Typing can beat this frame after the picker closes. A stale insertion
-      // must not move the caret behind the operator's subsequent text.
-      if (inputRef.current?.value !== nextDraft) return;
-      inputRef.current.focus();
-      inputRef.current.setSelectionRange(nextSelection, nextSelection);
-    });
+    if (directories.length === 0) return;
+    inputRef.current?.replaceReference("@", directories.map((directory) =>
+      createComposerDirectoryToken(directory, 0),
+    ));
+    setActiveDirectoryRefIndex(0);
   };
 
   /**
@@ -11554,15 +11315,6 @@ function useComposerController(props: ComposerProps) {
     const pastedText = typeof event.clipboardData.getData === "function"
       ? event.clipboardData.getData("text/plain").trim()
       : "";
-    const pastedThread =
-      resolveThreadHref(pastedText, threadLinks)
-      ?? resolveThreadIdText(pastedText, threadLinks);
-    if (pastedThread) {
-      event.preventDefault();
-      setSendError(undefined);
-      applyThreadReference(pastedThread);
-      return;
-    }
     if (mayContainLinearPastedImages(pastedText)) {
       // The text pastes as usual; its images follow once they download.
       void attachLinearPastedImages(pastedText);
@@ -11835,7 +11587,15 @@ function useComposerController(props: ComposerProps) {
         | "codexEnvironmentExecutionTarget"
         | "codexEnvironmentActionId"
       >
-    >
+    >,
+    options?: {
+      /**
+       * The change came from the open model panel, where the next choice
+       * is often the model or effort. Leave focus there: sending it to
+       * the prompt moves focus out of the panel, which closes it.
+       */
+      keepFocus?: boolean;
+    },
   ): void => {
     if (!props.launchpad || !props.onUpdateLaunchpad) {
       return;
@@ -11856,6 +11616,7 @@ function useComposerController(props: ComposerProps) {
         stickySettingsChanged: true,
       },
     );
+    if (options?.keepFocus) return;
     window.setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
@@ -12313,6 +12074,7 @@ function useComposerController(props: ComposerProps) {
     turnSendActionsVisible,
     turnBackendLabel,
     steerUnavailableReason,
+    interruptOffered,
     interruptUnavailableReason,
     pendingSteerReason,
     launchpadWorkspaceOptions,
@@ -12334,6 +12096,7 @@ function useComposerController(props: ComposerProps) {
     prAutoDispatchIdleTooltip,
     prAutoDispatchTooltip,
     prAutoDispatchProjectMuted,
+    prAutoDispatchProjectAutomation,
     prMergeBuildWatchDefault,
     prAutoDispatchIdle,
     environmentMenuAction,
@@ -12842,8 +12605,12 @@ function useComposerController(props: ComposerProps) {
       submitButtonLabel === "Queue" && Boolean(activeTurnId) && supportsSteering;
     const submitTooltip = useQueueSteerTooltip(submitButtonSteerHint);
     // Mid-turn the send menu also names how this message can meet the running
-    // turn. Steer and Interrupt stay listed where the provider or model cannot
-    // do them, dimmed with the reason, so the menu explains the gap.
+    // turn. Steer stays listed where the provider or model cannot do it,
+    // dimmed with the reason, so the menu explains the gap. Interrupt is
+    // listed only for a provider that can cut in at all; where it can but
+    // not right now, it is dimmed with the reason instead. A peer's thread
+    // keeps it: this window cannot see that owner's capabilities, so it
+    // points to the owner's window rather than ruling Interrupt out.
     const turnSendActionsVisible =
       submitButtonLabel === "Queue"
       && Boolean(activeTurnId)
@@ -12858,11 +12625,13 @@ function useComposerController(props: ComposerProps) {
       : backend?.capabilities.steerTurn
         ? `${selectedModelOption?.label ?? selectedModelOption?.id ?? "This model"} can't take messages mid-turn`
         : `${turnBackendLabel} can't take messages mid-turn`;
-    const interruptUnavailableReason = supportsInterruptSteer
-      ? undefined
-      : !backendsDescribeThreadOwner && supportsSteering
-        ? "Open this instance's window to interrupt"
-        : `${turnBackendLabel} can't cut in mid-response`;
+    const interruptOffered = !backendsDescribeThreadOwner
+      || backend?.capabilities.interruptSteerTurn === true;
+    // Interrupt rides the steer path, so whatever blocks Steer blocks it too.
+    const interruptUnavailableReason = steerUnavailableReason
+      ?? (backendsDescribeThreadOwner
+        ? undefined
+        : "Open this instance's window to interrupt");
     // One steer at a time: a second would be dropped while the first waits.
     const pendingSteerReason = pendingSteer
       ? "Another message is already steering in"
@@ -13367,7 +13136,7 @@ function useComposerController(props: ComposerProps) {
         return true;
       }
 
-      if (command.label.toLowerCase() === "/compact") {
+      if (isComposerCompactSuggestion(command, compactCommand)) {
         void submitCompactThread();
         return true;
       }
@@ -13450,6 +13219,16 @@ function useComposerController(props: ComposerProps) {
     ): void => {
       if (!hasAutocompleteOptions && event.key !== "Escape") {
         return;
+      }
+
+      if (autocompleteKind === "slash" && isSkillOriginShortcut(event)) {
+        const skill = filteredSlashCommands[activeSlashIndex]?.skill;
+        const anchor = autocompleteOptionRefs.current[activeSlashIndex];
+        if (skill && anchor && skillOriginCard.openFromKeyboard(skill, anchor, event.currentTarget)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
       }
 
       const updateActiveAutocompleteIndex = (
@@ -13915,6 +13694,7 @@ function useComposerController(props: ComposerProps) {
       turnSendActionsVisible,
       turnBackendLabel,
       steerUnavailableReason,
+      interruptOffered,
       interruptUnavailableReason,
       pendingSteerReason,
       launchpadWorkspaceOptions,
@@ -13936,6 +13716,7 @@ function useComposerController(props: ComposerProps) {
       prAutoDispatchIdleTooltip,
       prAutoDispatchTooltip,
       prAutoDispatchProjectMuted,
+      prAutoDispatchProjectAutomation: prAutoDispatchProject?.forgeAutomation,
       prMergeBuildWatchDefault,
       prAutoDispatchIdle,
       environmentMenuAction,
@@ -14080,7 +13861,7 @@ function useComposerController(props: ComposerProps) {
                     : "Pending steer"}
             </span>
             <span className="composer__queued-text">
-              {formatDraftPreview(pendingSteer)}
+              <QueuedThreadReferencePreview text={formatDraftPreview(pendingSteer)} />
             </span>
           </div>
           <QueuedImageAttachments
@@ -14528,7 +14309,7 @@ function useComposerController(props: ComposerProps) {
                   queued.title ? "" : "composer__queued-text--raw",
                 ].filter(Boolean).join(" ")}
               >
-                {queuedTitle}
+                {queued.title ?? <QueuedThreadReferencePreview text={queuedTitle} />}
               </span>
             </QueuedMessageInspector>
           </div>
@@ -15436,6 +15217,8 @@ function useComposerController(props: ComposerProps) {
               ref={(node) => {
                 autocompleteOptionRefs.current[index] = node;
               }}
+              aria-describedby={command.skill ? skillOriginCard.describedBy(command.skill) : undefined}
+              aria-keyshortcuts={command.skill ? "Shift+F10" : undefined}
               aria-selected={index === activeSlashIndex}
               className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
               role="option"
@@ -15463,11 +15246,18 @@ function useComposerController(props: ComposerProps) {
                     {command.argumentHint}
                   </span>
                 ) : null}
-                <span
-                  className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
-                >
-                  {command.sourceLabel}
-                </span>
+                {command.skill?.origin ? (
+                  <SkillOriginChip
+                    origin={command.skill.origin}
+                    {...skillOriginCard.chipHandlers(command.skill)}
+                  />
+                ) : (
+                  <span
+                    className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
+                  >
+                    {command.sourceLabel}
+                  </span>
+                )}
               </span>
               <span className="composer__autocomplete-meta">
                 {command.description}
@@ -15758,7 +15548,309 @@ function useComposerController(props: ComposerProps) {
     );
   }
 
+  /**
+   * The model pill's props: provider, model, effort and speed in one control.
+   * The provider rail is offered only while starting a thread; a thread's
+   * provider is fixed, so the panel names it instead.
+   */
+  function buildComposerModelSettingsPicker(): Omit<ModelSettingsPickerProps, "id" | "disabled" | "size" | "testId"> | undefined {
+    if (!props.launchpad && !props.thread) return undefined;
+    const hasModels = Boolean(backend?.launchpadOptions?.models?.length);
+    const offersProviders = Boolean(props.launchpad && providerOptions.length > 0);
+    const efforts = supportsReasoning ? getReasoningEffortsForModel(backend, selectedModelOption) : [];
+    // A provider can list efforts without a model catalog; the effort bar
+    // is still its control.
+    if (!backend || (!hasModels && !offersProviders && efforts.length === 0)) return undefined;
+    // What moving the launchpad to another provider sets, with its side
+    // effects: a provider pick and a Recent row both start here.
+    const providerChangePatch = (value: string): Parameters<typeof handleLaunchpadPatch>[0] | undefined => {
+      if (!props.launchpad) {
+        return undefined;
+      }
+      const picked = parseProviderPickerValue(value);
+      const nextBackend = picked.backend as NavigationLaunchpadDraft["backend"];
+      const pickedEntry = providerPickerEntries.find((entry) => entry.value === value);
+      const hasRememberedModel = Boolean(
+        props.launchpad.providerSettings?.[value]?.model,
+      );
+      if (nextBackend.startsWith("acp:") && !hasRememberedModel) {
+        pendingProviderSelectionKeyRef.current =
+          `${props.launchpad.directoryKey}:${nextBackend}`;
+      } else {
+        pendingProviderSelectionKeyRef.current = undefined;
+      }
+      if (
+        !nextBackend.startsWith("acp:")
+        || !props.onProviderSelected
+      ) {
+        void refreshProviderCatalogOnFirstSelection(
+          props.desktopApi,
+          nextBackend,
+          filesystemFederationTarget,
+        );
+      }
+      const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
+      const remembered = props.launchpad.providerSettings?.[value];
+      const configuredDefaults = filesystemFederationTarget?.scope === "remote"
+        ? nextSummary?.modelProviderDefaults?.[value] ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined)
+        : props.providerModelDefaults?.[value] ?? nextSummary?.modelProviderDefaults?.[value]
+          ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined);
+      // A Codex entry, OpenAI's own or a model provider's, offers
+      // only that provider's models, so its model is chosen there.
+      const ownerModels = nextBackend === "codex"
+        ? pickedEntry?.models ?? []
+        : nextSummary?.launchpadOptions?.models ?? [];
+      const defaultOption = getDefaultModelOption(nextSummary);
+      const ownerModel = ownerModels.find((candidate) => candidate.id === remembered?.model)
+        ?? ownerModels.find((candidate) => candidate.id === configuredDefaults?.model)
+        ?? (nextBackend === "codex"
+          ? ownerModels.find((candidate) => candidate.id === defaultOption?.id) ?? ownerModels[0]
+          : defaultOption);
+      const ownerEffort = ownerModel
+        ? remembered?.reasoningEffortsByModel?.[ownerModel.id]
+          ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
+          ?? configuredDefaults?.reasoningEffortsByModel[ownerModel.id]
+        : undefined;
+      return {
+        backend: nextBackend,
+        ...(nextBackend === "codex" ? {
+          codexModelProviderId: picked.codexModelProviderId,
+          executionMode: remembered?.executionMode
+            ?? configuredDefaults?.executionMode
+            ?? resolveDefaultLaunchpadExecutionMode(value),
+        } : {}),
+        // A local Codex choice names its provider through the model
+        // id, so moving between Codex entries sets the model. The
+        // remembered effort, Fast mode and tier still restore as
+        // they do for any other provider switch.
+        ...(nextBackend === "codex" || filesystemFederationTarget?.scope === "remote" ? {
+          model: ownerModel?.id,
+          reasoningEffort: ownerModel?.supportsReasoning
+            ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)
+            : undefined,
+          fastMode: ownerModel?.supportsFast ? remembered?.fastMode : undefined,
+          serviceTier: ownerModel?.serviceTiers?.includes(remembered?.serviceTier ?? "")
+            || (ownerModel?.supportsFast && ["fast", "priority"].includes(remembered?.serviceTier ?? ""))
+            ? remembered?.serviceTier
+            : undefined,
+        } : {}),
+      };
+    };
+    const onProviderChange = (value: string): void => {
+      const patch = providerChangePatch(value);
+      if (patch) handleLaunchpadPatch(patch, { keepFocus: true });
+    };
+    const onModelChange = (value: string): void => {
+      const model = value;
+      const nextModelOption = backend.launchpadOptions?.models?.find(
+        (option) => option.id === model
+      );
+      const nextSupportsReasoning =
+        nextModelOption?.supportsReasoning ??
+        Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
+      const nextSupportsFast =
+        backend.kind === "codex"
+          ? nextModelOption?.supportsFast ??
+            backend.launchpadOptions?.supportsFastMode ??
+            false
+          : false;
+      if (props.launchpad) {
+        handleLaunchpadPatch({
+          model,
+          ...(nextSupportsFast ? {} : { fastMode: undefined }),
+          ...(filesystemFederationTarget?.scope === "remote" ? {
+            reasoningEffort: nextSupportsReasoning
+              ? getReasoningEffortValue(backend, nextModelOption,
+                  props.launchpad.providerSettings?.[navigationLaunchpadProviderKey(props.launchpad)]?.reasoningEffortsByModel?.[model]
+                    ?? props.launchpad.reasoningEffort)
+              : undefined,
+            serviceTier: nextModelOption?.serviceTiers?.includes(props.launchpad.serviceTier ?? "")
+              || (nextSupportsFast && ["fast", "priority"].includes(props.launchpad.serviceTier ?? ""))
+              ? props.launchpad.serviceTier
+              : undefined,
+          } : {}),
+        }, { keepFocus: true });
+        return;
+      }
+      if (nextSupportsReasoning) {
+        handleThreadModelSettingsPatch({
+          model,
+          ...(nextSupportsFast ? {} : { fastMode: undefined }),
+        });
+        return;
+      }
+      const patch = {
+        model,
+        reasoningEffort: undefined,
+        ...(nextSupportsFast ? {} : { fastMode: undefined }),
+      };
+      handleThreadModelSettingsPatch(patch);
+    };
+    const providerChoices = offersProviders
+      ? providerPickerDropdownOptions(providerPickerEntries, props.backends)
+      : undefined;
+    const providerValue = props.launchpad ? navigationLaunchpadProviderKey(props.launchpad) : undefined;
+    const providerLabel = props.launchpad
+      ? [...providerChoices?.options ?? [], ...providerChoices?.otherOptions ?? []]
+        .find((option) => option.value === providerValue)?.label
+        ?? formatBackendLabel(backend.kind, props.backends)
+      : formatOwnerProviderLabel(props.thread?.source ?? backend.kind, props.thread?.model, props.backends);
+    const { stops, hasModelDefault } = splitEffortChoices(efforts);
+    const fastOnly = supportsFast && !speedOptions.includes("ultrafast");
+    const applySettings = (
+      patch: Partial<Pick<NavigationThreadSummary, "reasoningEffort" | "serviceTier" | "fastMode">>,
+    ): void => {
+      if (props.launchpad) {
+        handleLaunchpadPatch(patch, { keepFocus: true });
+        return;
+      }
+      handleThreadModelSettingsPatch(patch);
+    };
+    const modelLabel = selectedModelOption?.label ?? selectedModelOption?.id ?? "Default model";
+    // A new thread can start on any provider, so it is offered the whole
+    // settings recent threads started with, one click each.
+    const recentRows = providerChoices && props.launchpad
+      ? newThreadRecents({
+          composer: newThreadRecentLists.composer,
+          todoDispatch: newThreadRecentLists.todoDispatch,
+          backends: props.backends ?? [],
+        })
+      : [];
+    const pickRecent = (row: NewThreadRecent): void => {
+      const value = providerPickerValue(row.recent.backend, row.recent.model);
+      const codex = row.recent.backend === "codex";
+      const base = value === providerValue ? {} : providerChangePatch(value) ?? {};
+      // The row names its model, so an agent's catalog refresh keeps it
+      // rather than adopting that agent's default.
+      if (row.recent.model) pendingProviderSelectionKeyRef.current = undefined;
+      // An unset model or effort is the default, and replays as unset.
+      handleLaunchpadPatch({
+        ...base,
+        backend: row.recent.backend,
+        ...(codex ? { codexModelProviderId: parseProviderPickerValue(value).codexModelProviderId } : {}),
+        model: row.recent.model,
+        reasoningEffort: row.recent.reasoningEffort,
+        ...(codex ? codexSpeedSettings(row.speed) : {}),
+      }, { keepFocus: true });
+    };
+    // A row is the launchpad's own values, unset ones included.
+    const recentSelected = (row: NewThreadRecent): boolean =>
+      providerPickerValue(row.recent.backend, row.recent.model) === providerValue
+      && (row.recent.model ?? "") === (props.launchpad?.model ?? "")
+      && (row.recent.reasoningEffort ?? "") === (props.launchpad?.reasoningEffort ?? "")
+      && row.speed === (backend.kind === "codex" ? selectedSpeed : "standard");
+    return {
+      provider: {
+        label: providerLabel,
+        showInPill: Boolean(props.launchpad),
+        ...(props.launchpad ? {} : { note: "Fixed for this thread" }),
+        ...(providerChoices && providerValue !== undefined ? {
+          choices: {
+            options: providerChoices.options,
+            unavailable: providerChoices.otherOptions,
+            unavailableLabel: providerChoices.otherLabel,
+            value: providerValue,
+            onChange: onProviderChange,
+          },
+        } : {}),
+      },
+      model: {
+        value: selectedModelOption?.id ?? "",
+        label: modelLabel,
+        kind: backend.kind,
+        models: modelOptions,
+        thread: props.launchpad ? launchpadModelScope : props.thread,
+        leadingOptions: selectedModelOption && !modelOptions.some((option) => option.id === selectedModelOption.id)
+          ? [{ value: selectedModelOption.id, label: selectedModelOption.id, disabled: true,
+              description: "This model is absent from this provider's catalog. Choose an available model." }]
+          : [],
+        emptyOptions: [{ value: "", label: "Default model" }],
+        disabled: !hasModels,
+        onChange: onModelChange,
+      },
+      ...(stops.length > 0 || hasModelDefault ? {
+        effort: {
+          stops,
+          value: selectedReasoningEffort,
+          ...(hasModelDefault ? { defaultOption: { value: MODEL_DEFAULT_EFFORT, label: "Default" } } : {}),
+          onChange: (reasoningEffort: string) => applySettings({ reasoningEffort }),
+        },
+      } : {}),
+      ...(speedOptions.includes("ultrafast") ? {
+        speed: {
+          options: speedOptions,
+          value: selectedSpeed,
+          onChange: (speed: CodexSpeed) => applySettings(codexSpeedSettings(speed)),
+        },
+      } : fastOnly ? {
+        speed: {
+          options: ["standard", "fast"] as CodexSpeed[],
+          value: currentSettings?.fastMode ? "fast" as const : "standard" as const,
+          onChange: (speed: CodexSpeed) => applySettings({ fastMode: speed === "fast" }),
+        },
+      } : {}),
+      // The row stays while the draft matches the default, stating so, so the
+      // panel does not change height as the operator moves between providers.
+      ...(props.launchpad && profileModelOption ? {
+        reset: {
+          label: "Use AI Providers default",
+          currentLabel: "Using AI Providers default",
+          current: !launchpadDiffersFromProfileDefaults,
+          detail: [
+            profileModelOption.label ?? profileModelOption.id,
+            profileReasoningOptions.length > 0 ? profileReasoningEffort : undefined,
+          ].filter(Boolean).join(" · "),
+          onSelect: () => handleLaunchpadPatch({
+            model: profileModelOption.id,
+            reasoningEffort:
+              profileReasoningOptions.length > 0
+                ? profileReasoningEffort
+                : undefined,
+          }, { keepFocus: true }),
+        },
+      } : {}),
+      ...(modelMenuFootnote ? { footnote: modelMenuFootnote } : {}),
+      ...(recentRows.length > 0 ? {
+        recents: {
+          startOpen: true,
+          content: (close: () => void) => (
+            <ModelSettingsQuickList
+              label="Recent settings"
+              sections={[{
+                heading: { title: "Recent", detail: "all threads" },
+                rows: recentRows.map((row, index) => {
+                  const efforts = row.model?.supportsReasoning === false
+                    ? []
+                    : row.model?.reasoningEfforts ?? row.backend.launchpadOptions?.reasoningEfforts ?? [];
+                  return {
+                    key: `recent-${index}`,
+                    provider: formatOwnerProviderLabel(row.recent.backend, row.recent.model, props.backends),
+                    model: row.model?.label ?? row.recent.model ?? "Default model",
+                    ...(row.recent.reasoningEffort ? {
+                      effort: row.recent.reasoningEffort,
+                      effortStops: splitEffortChoices(efforts).stops,
+                    } : {}),
+                    speed: row.speed,
+                    selected: recentSelected(row),
+                    onPick: () => {
+                      pickRecent(row);
+                      close();
+                    },
+                  };
+                }),
+              }]}
+            />
+          ),
+        },
+      } : {}),
+      onOpenChange: (open: boolean) => {
+        if (open) newThreadRecentLists.refresh();
+      },
+    };
+  }
+
   function renderComposerToolbar(): ReactNode {
+    const modelSettingsPicker = buildComposerModelSettingsPicker();
     const localPresetLaunchpad = props.desktopApi?.manageAgentPresets && props.onUpdateLaunchpad
       && filesystemFederationTarget?.scope !== "remote" ? props.launchpad : undefined;
     return (
@@ -15793,88 +15885,10 @@ function useComposerController(props: ComposerProps) {
               />,
             )
           ) : null}
-          {props.launchpad && providerOptions.length > 0 ? (
-            <ComposerDropdown
-              id="composer-provider"
-              ariaLabel="Provider"
-              disabled={launchpadSubmitting}
-              value={navigationLaunchpadProviderKey(props.launchpad)}
-              {...providerPickerDropdownOptions(providerPickerEntries, props.backends)}
-              onChange={(value) => {
-                if (!props.launchpad) {
-                  return;
-                }
-                const picked = parseProviderPickerValue(value);
-                const nextBackend = picked.backend as NavigationLaunchpadDraft["backend"];
-                const pickedEntry = providerPickerEntries.find((entry) => entry.value === value);
-                const hasRememberedModel = Boolean(
-                  props.launchpad.providerSettings?.[value]?.model,
-                );
-                if (nextBackend.startsWith("acp:") && !hasRememberedModel) {
-                  pendingProviderSelectionKeyRef.current =
-                    `${props.launchpad.directoryKey}:${nextBackend}`;
-                } else {
-                  pendingProviderSelectionKeyRef.current = undefined;
-                }
-                if (
-                  !nextBackend.startsWith("acp:")
-                  || !props.onProviderSelected
-                ) {
-                  void refreshProviderCatalogOnFirstSelection(
-                    props.desktopApi,
-                    nextBackend,
-                    filesystemFederationTarget,
-                  );
-                }
-                const nextSummary = props.backends?.find((candidate) => candidate.kind === nextBackend);
-                const remembered = props.launchpad.providerSettings?.[value];
-                const configuredDefaults = filesystemFederationTarget?.scope === "remote"
-                  ? nextSummary?.modelProviderDefaults?.[value] ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined)
-                  : props.providerModelDefaults?.[value] ?? nextSummary?.modelProviderDefaults?.[value]
-                    ?? (value === nextBackend ? nextSummary?.modelDefaults : undefined);
-                // A Codex entry, OpenAI's own or a model provider's, offers
-                // only that provider's models, so its model is chosen there.
-                const ownerModels = nextBackend === "codex"
-                  ? pickedEntry?.models ?? []
-                  : nextSummary?.launchpadOptions?.models ?? [];
-                const defaultOption = getDefaultModelOption(nextSummary);
-                const ownerModel = ownerModels.find((candidate) => candidate.id === remembered?.model)
-                  ?? ownerModels.find((candidate) => candidate.id === configuredDefaults?.model)
-                  ?? (nextBackend === "codex"
-                    ? ownerModels.find((candidate) => candidate.id === defaultOption?.id) ?? ownerModels[0]
-                    : defaultOption);
-                const ownerEffort = ownerModel
-                  ? remembered?.reasoningEffortsByModel?.[ownerModel.id]
-                    ?? (remembered?.model === ownerModel.id ? remembered.reasoningEffort : undefined)
-                    ?? configuredDefaults?.reasoningEffortsByModel[ownerModel.id]
-                  : undefined;
-                handleLaunchpadPatch({
-                  backend: nextBackend,
-                  ...(nextBackend === "codex" ? {
-                    codexModelProviderId: picked.codexModelProviderId,
-                    executionMode: remembered?.executionMode
-                      ?? configuredDefaults?.executionMode
-                      ?? resolveDefaultLaunchpadExecutionMode(value),
-                  } : {}),
-                  // A local Codex choice names its provider through the model
-                  // id, so moving between Codex entries sets the model. The
-                  // remembered effort, Fast mode and tier still restore as
-                  // they do for any other provider switch.
-                  ...(nextBackend === "codex" || filesystemFederationTarget?.scope === "remote" ? {
-                    model: ownerModel?.id,
-                    reasoningEffort: ownerModel?.supportsReasoning
-                      ? getReasoningEffortValue(nextSummary, ownerModel, ownerEffort)
-                      : undefined,
-                    fastMode: ownerModel?.supportsFast ? remembered?.fastMode : undefined,
-                    serviceTier: ownerModel?.serviceTiers?.includes(remembered?.serviceTier ?? "")
-                      || (ownerModel?.supportsFast && ["fast", "priority"].includes(remembered?.serviceTier ?? ""))
-                      ? remembered?.serviceTier
-                      : undefined,
-                  } : {}),
-                });
-              }}
-            />
-          ) : props.thread ? (
+          {props.thread && !props.launchpad && !backend?.launchpadOptions?.models?.length ? (
+            // A thread's pill never names its provider, and without a model
+            // list the pill (if any) holds only effort, so the provider
+            // stays as a plain fact.
             <span className="composer__fixed-value" aria-label="Provider">
               {formatOwnerProviderLabel(props.thread.source, props.thread.model, props.backends)}
             </span>
@@ -16164,116 +16178,14 @@ function useComposerController(props: ComposerProps) {
             />
           ) : null}
 
-          {(props.launchpad || props.thread) && backend?.launchpadOptions?.models?.length ? (
-            <ModelDropdown
+          {modelSettingsPicker ? (
+            <ModelSettingsPicker
               id="composer-model"
-              ariaLabel="Model"
               disabled={launchpadSubmitting}
-              value={selectedModelOption?.id ?? ""}
-              kind={backend.kind}
-              models={modelOptions}
-              thread={props.launchpad ? launchpadModelScope : props.thread}
-              leadingOptions={selectedModelOption && !modelOptions.some((option) => option.id === selectedModelOption.id)
-                ? [{ value: selectedModelOption.id, label: selectedModelOption.id, disabled: true,
-                    description: "This model is absent from this provider's catalog. Choose an available model." }]
-                : []}
-              footnote={modelMenuFootnote}
-              onChange={(value) => {
-                const model = value;
-                const nextModelOption = backend.launchpadOptions?.models?.find(
-                  (option) => option.id === model
-                );
-                const nextSupportsReasoning =
-                  nextModelOption?.supportsReasoning ??
-                  Boolean(backend.launchpadOptions?.reasoningEfforts?.length);
-                const nextSupportsFast =
-                  backend.kind === "codex"
-                    ? nextModelOption?.supportsFast ??
-                      backend.launchpadOptions?.supportsFastMode ??
-                      false
-                    : false;
-                if (props.launchpad) {
-                  handleLaunchpadPatch({
-                    model,
-                    ...(nextSupportsFast ? {} : { fastMode: undefined }),
-                    ...(filesystemFederationTarget?.scope === "remote" ? {
-                      reasoningEffort: nextSupportsReasoning
-                        ? getReasoningEffortValue(backend, nextModelOption,
-                            props.launchpad.providerSettings?.[navigationLaunchpadProviderKey(props.launchpad)]?.reasoningEffortsByModel?.[model]
-                              ?? props.launchpad.reasoningEffort)
-                        : undefined,
-                      serviceTier: nextModelOption?.serviceTiers?.includes(props.launchpad.serviceTier ?? "")
-                        || (nextSupportsFast && ["fast", "priority"].includes(props.launchpad.serviceTier ?? ""))
-                        ? props.launchpad.serviceTier
-                        : undefined,
-                    } : {}),
-                  });
-                  return;
-                }
-                if (nextSupportsReasoning) {
-                  handleThreadModelSettingsPatch({
-                    model,
-                    ...(nextSupportsFast ? {} : { fastMode: undefined }),
-                  });
-                  return;
-                }
-                const patch = {
-                  model,
-                  reasoningEffort: undefined,
-                  ...(nextSupportsFast ? {} : { fastMode: undefined }),
-                };
-                handleThreadModelSettingsPatch(patch);
-              }}
+              size="composer"
+              testId="composer-model-settings"
+              {...modelSettingsPicker}
             />
-          ) : null}
-
-          {(props.launchpad || props.thread) &&
-          supportsReasoning &&
-          getReasoningEffortsForModel(backend, selectedModelOption).length ? (
-            <ComposerDropdown
-              id="composer-reasoning"
-              ariaLabel="Reasoning"
-              disabled={launchpadSubmitting}
-              value={selectedReasoningEffort ?? ""}
-              options={getReasoningEffortsForModel(
-                backend,
-                selectedModelOption,
-              ).map((effort) => ({
-                label: effort,
-                value: effort,
-              }))}
-              onChange={(value) => {
-                const reasoningEffort = value;
-                if (props.launchpad) {
-                  handleLaunchpadPatch({ reasoningEffort });
-                  return;
-                }
-                handleThreadModelSettingsPatch({ reasoningEffort });
-              }}
-            />
-          ) : null}
-
-          {props.launchpad &&
-          profileModelOption &&
-          launchpadDiffersFromProfileDefaults ? (
-            <button
-              aria-label="Reset model and reasoning to profile default"
-              className="composer__toggle tooltip-target"
-              data-tooltip="Reset model and reasoning to the AI Providers default"
-              disabled={launchpadSubmitting}
-              type="button"
-              onClick={() => {
-                handleLaunchpadPatch({
-                  model: profileModelOption.id,
-                  reasoningEffort:
-                    profileReasoningOptions.length > 0
-                      ? profileReasoningEffort
-                      : undefined,
-                });
-              }}
-            >
-              <span aria-hidden="true">↺</span>
-            </button>
           ) : null}
 
           {(props.launchpad || props.thread) && backend?.launchpadOptions?.serviceTiers?.length ? (
@@ -16297,56 +16209,6 @@ function useComposerController(props: ComposerProps) {
             />
           ) : null}
 
-          {(props.launchpad || props.thread) && speedOptions.includes("ultrafast") ? (
-            <ComposerDropdown
-              id="composer-speed"
-              ariaLabel="Speed"
-              disabled={launchpadSubmitting}
-              icon={LightningIcon}
-              // Standard keeps the old Fast toggle's 26px circle; a faster
-              // tier is a paid choice, so it is named and lit like the toggle.
-              iconOnly={selectedSpeed === "standard"}
-              tone={selectedSpeed === "standard" ? undefined : "active"}
-              tooltip={`Speed: ${CODEX_SPEED_LABELS[selectedSpeed]}`}
-              value={selectedSpeed}
-              options={speedOptions.map((speed) => ({
-                value: speed,
-                label: CODEX_SPEED_LABELS[speed],
-                description: CODEX_SPEED_DESCRIPTIONS[speed],
-              }))}
-              onChange={(value) => {
-                const patch = codexSpeedSettings(value as CodexSpeed);
-                if (props.launchpad) {
-                  handleLaunchpadPatch(patch);
-                  return;
-                }
-                handleThreadModelSettingsPatch(patch);
-              }}
-            />
-          ) : null}
-
-          {(props.launchpad || props.thread) && supportsFast && !speedOptions.includes("ultrafast") ? (
-            <button
-              type="button"
-              className={`composer__toggle tooltip-target${
-                currentSettings?.fastMode ? " is-active" : ""
-              }`}
-              aria-label="Fast mode"
-              aria-pressed={Boolean(currentSettings?.fastMode)}
-              data-tooltip="Fast mode — faster, lower-latency responses"
-              disabled={launchpadSubmitting}
-              onClick={() => {
-                const next = !currentSettings?.fastMode;
-                if (props.launchpad) {
-                  handleLaunchpadPatch({ fastMode: next });
-                  return;
-                }
-                handleThreadModelSettingsPatch({ fastMode: next });
-              }}
-            >
-              <LightningIcon size={15} aria-hidden="true" />
-            </button>
-          ) : null}
 
           {threadSkillProfile || props.launchpad?.backend === "codex" ? (
             <CodexSkillProfileControl
@@ -16401,6 +16263,13 @@ function useComposerController(props: ComposerProps) {
                 available: prAutoDispatchAvailable,
                 unavailableDetail: !backgroundPrPollingEnabled ? "PR polling is off" : "Not allowed in Git settings",
                 onToggle: (enabled) => { void props.onSetThreadPrAutoDispatch?.(enabled); },
+                coverage: describeAutoFixCoverage(props.thread, prAutoDispatchProjectAutomation),
+                // A peer that predates one PR's switch would toggle the thread.
+                onTogglePr: props.onSetThreadPrAutoDispatch
+                  && (!props.thread.federation
+                    || props.thread.federation.capabilities?.includes("thread_pull_request_auto_fix_v1") === true)
+                  ? (prKey, enabled) => { void props.onSetThreadPrAutoDispatch?.(enabled, prKey); }
+                  : undefined,
               }}
             />
           ) : null}
@@ -16781,6 +16650,9 @@ function useComposerController(props: ComposerProps) {
           ) : null}
           <ContextWindowMoon
             contextWindow={props.contextWindow}
+            desktopApi={props.desktopApi}
+            model={selectedModelOption?.id ?? currentSettings?.model}
+            thread={props.thread}
             onOpenUsage={props.desktopApi?.openUsageActivity
               ? () => void props.desktopApi?.openUsageActivity?.({
                 provider: usageLimitProviderForBackend(props.thread?.source),
@@ -16973,19 +16845,21 @@ function useComposerController(props: ComposerProps) {
                         void submitTurn("steer", { restoreComposerFocus: true });
                       }}
                     />
-                    <ComposerSendMenuItem
-                      description={
-                        interruptUnavailableReason
-                        ?? pendingSteerReason
-                        ?? "Cut off the current response and send now"
-                      }
-                      disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
-                      label="Interrupt"
-                      onSelect={() => {
-                        setScheduleMenuOpen(false);
-                        void submitTurn("interrupt", { restoreComposerFocus: true });
-                      }}
-                    />
+                    {interruptOffered ? (
+                      <ComposerSendMenuItem
+                        description={
+                          interruptUnavailableReason
+                          ?? pendingSteerReason
+                          ?? "Cut off the current response and send now"
+                        }
+                        disabled={Boolean(interruptUnavailableReason ?? pendingSteerReason)}
+                        label="Interrupt"
+                        onSelect={() => {
+                          setScheduleMenuOpen(false);
+                          void submitTurn("interrupt", { restoreComposerFocus: true });
+                        }}
+                      />
+                    ) : null}
                     <div
                       className="composer__schedule-menu-separator"
                       role="separator"
@@ -17580,6 +17454,7 @@ function useComposerController(props: ComposerProps) {
               value={draft}
               onChange={handleComposerChange}
               onPaste={handlePaste}
+              onReferenceSelectionChange={() => setReferenceSelectionRevision((revision) => revision + 1)}
               onDragOver={handleDragOver}
               onDrop={handleDrop}
               onClick={handleComposerClick}
@@ -17931,10 +17806,17 @@ function AttachmentTooltip({
 }
 
 function ContextWindowMoon({
-  contextWindow,
+  contextWindow: reportedContextWindow,
+  desktopApi,
+  model,
+  thread,
   onOpenUsage,
 }: {
   contextWindow?: ThreadContextWindowState;
+  desktopApi?: DesktopApi;
+  /** The thread's model, matched against auto-compaction rules. */
+  model?: string;
+  thread?: NavigationThreadSummary;
   /** Opens Usage Activity; the moon is a button only when this is given. */
   onOpenUsage?: () => void;
 }) {
@@ -17944,6 +17826,19 @@ function ContextWindowMoon({
   // The card's copy depends on availability, not the callback identity.
   const opensUsage = Boolean(onOpenUsage);
   const moonStyle = useContextMoonStyle();
+  const savedRules = useAutoCompactionRules();
+  const autoCompaction = useThreadAutoCompaction(desktopApi, thread);
+  const backend = thread?.source;
+  const ownedElsewhere = Boolean(thread?.federation?.ref);
+  // A rule's budget, when one matches, is the window the moon measures.
+  const measured = useMemo(
+    () => reportedContextWindow
+      ? applyContextWindowBudget({ contextWindow: reportedContextWindow, savedRules, backend, model, ownedElsewhere })
+      : undefined,
+    [backend, model, ownedElsewhere, reportedContextWindow, savedRules],
+  );
+  const contextWindow = measured?.contextWindow;
+  const budget = measured?.budget;
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
@@ -17962,13 +17857,15 @@ function ContextWindowMoon({
     recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
     update(
       <ContextWindowUsageCard
+        autoCompaction={autoCompaction}
+        budget={budget}
         contextWindow={contextWindow}
         critical={moonFace.critical}
         opensUsage={opensUsage}
         phaseLabel={moonFace.phaseLabel}
       />,
     );
-  }, [contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
+  }, [autoCompaction, budget, contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
 
   if (!contextWindow) {
     return null;
@@ -17980,9 +17877,15 @@ function ContextWindowMoon({
   const tokenLabel = `${formatCompactNumber(
     contextWindow.totalTokens
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
-  const label = `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const compacting = isAutoCompactionActive(autoCompaction);
+  const label = budget
+    ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : phaseLabel}`
+    : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const moonClassName = compacting ? " context-window-moon--compacting" : "";
   const card = (
     <ContextWindowUsageCard
+      autoCompaction={autoCompaction}
+      budget={budget}
       contextWindow={contextWindow}
       critical={moonFace.critical}
       opensUsage={opensUsage}
@@ -18016,7 +17919,7 @@ function ContextWindowMoon({
   return onOpenUsage ? (
     <button
       aria-label={label}
-      className="context-window-moon context-window-moon--button"
+      className={`context-window-moon context-window-moon--button${moonClassName}`}
       type="button"
       onBlur={hide}
       onClick={() => {
@@ -18032,7 +17935,7 @@ function ContextWindowMoon({
   ) : (
     <div
       aria-label={label}
-      className="context-window-moon"
+      className={`context-window-moon${moonClassName}`}
       role="img"
       tabIndex={0}
       onBlur={hide}
@@ -18046,16 +17949,21 @@ function ContextWindowMoon({
 }
 
 function ContextWindowUsageCard({
+  autoCompaction,
+  budget,
   contextWindow,
   critical,
   opensUsage,
   phaseLabel,
 }: {
+  autoCompaction?: ThreadAutoCompactionStatus;
+  budget?: ContextWindowBudget;
   contextWindow: ThreadContextWindowState;
   critical: boolean;
   opensUsage?: boolean;
   phaseLabel: string;
 }) {
+  const statusLine = budget ? autoCompactionStatusLine(autoCompaction, formatCompactNumber) : undefined;
   const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
   const hasBreakdown =
     typeof contextWindow.inputTokens === "number"
@@ -18066,14 +17974,20 @@ function ContextWindowUsageCard({
   return (
     <>
       <div className="context-usage-card__header">
-        <span className="context-usage-card__eyebrow">Context window</span>
+        <span className="context-usage-card__eyebrow">{budget ? "Context budget" : "Context window"}</span>
         <span className="context-usage-card__phase">{phaseLabel}</span>
       </div>
       <div className="context-usage-card__headline">
         <span className="context-usage-card__percent">
           {Math.round(usedPercent)}% full
         </span>
-        {typeof contextWindow.remainingTokens === "number" ? (
+        {budget ? (
+          <span className="context-usage-card__remaining">
+            {budget.tokensToTrigger > 0
+              ? `${formatCompactNumber(budget.tokensToTrigger)} to compaction`
+              : `past ${budget.compactAtPercent}%`}
+          </span>
+        ) : typeof contextWindow.remainingTokens === "number" ? (
           <span className="context-usage-card__remaining">
             {formatCompactNumber(contextWindow.remainingTokens)} left
           </span>
@@ -18088,12 +18002,35 @@ function ContextWindowUsageCard({
           }
           style={{ width: `${usedPercent}%` }}
         />
+        {budget ? (
+          <span
+            className="context-usage-card__meter-mark"
+            style={{ left: `${budget.compactAtPercent}%` }}
+          />
+        ) : null}
       </div>
       <div className="context-usage-card__caption">
         {`${formatCompactNumber(contextWindow.totalTokens)} of ${formatCompactNumber(
           contextWindow.modelContextWindow
-        )} tokens`}
+        )} ${budget ? "budget" : "tokens"}`}
       </div>
+      {budget ? (
+        <div className="context-usage-card__budget">
+          <ContextUsageRow
+            label="Compacts at"
+            value={`${formatCompactNumber(budget.triggerTokens)} · ${budget.compactAtPercent}%`}
+          />
+          {budget.reportedContextWindow !== budget.effectiveContextWindow ? (
+            <ContextUsageRow
+              label="Model window"
+              value={formatCompactNumber(budget.reportedContextWindow)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {statusLine ? (
+        <div className="context-usage-card__status">{statusLine}</div>
+      ) : null}
       {hasBreakdown ? (
         <div className="context-usage-card__section">
           <span className="context-usage-card__section-title">Current request</span>

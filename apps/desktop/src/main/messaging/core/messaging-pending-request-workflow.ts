@@ -20,7 +20,7 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import type { MessagingBindingRecord, MessagingActiveTurnSummary, MessagingApprovalDecision, MessagingDeliveryResult, MessagingInboundCallbackEvent, MessagingInboundTextEvent, MessagingPendingIntentRecord, MessagingQuestionnaireAnswer, MessagingQuestionnaireIntent, MessagingSurfaceAction, MessagingSurfaceIntent } from "@pwragent/messaging-interface";
-import { messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent } from "@pwragent/messaging-interface";
+import { messagingMultiAnswerWithCustom, messagingQuestionnaireAnswerComplete, normalizeMessagingQuestionnaireIntent, toggleMessagingQuestionnaireOption } from "@pwragent/messaging-interface";
 import type { MessagingThreadAdmissionState } from "./messaging-adapter.js";
 import { buildApprovalIntent, buildAsyncQuestionnaireIntent, buildConfirmationIntent, buildErrorIntent, buildQuestionnaireIntent } from "./messaging-renderer.js";
 import { buildMessagingAuditContext } from "./messaging-audit.js";
@@ -198,10 +198,10 @@ export class MessagingPendingRequestWorkflow {
       return false;
     }
 
-    const updated = this.questionnaireWithRecordedAnswer(intent, {
-      kind: "custom",
-      value,
-    });
+    // A multi-select question keeps its choices beside the custom answer.
+    const updated = this.questionnaireWithRecordedAnswer(intent, question.multiSelect
+      ? messagingMultiAnswerWithCustom(question, intent.answers[intent.currentIndex], value)
+      : { kind: "custom", value });
     if (this.questionnaireReadyToSubmit(updated)) {
       await this.submitAndRetireQuestionnaire(pendingIntent, updated, event);
       return true;
@@ -272,6 +272,13 @@ export class MessagingPendingRequestWorkflow {
       return;
     }
 
+    const multiSelect = intent.questions[intent.currentIndex]?.multiSelect === true;
+    if (multiSelect) {
+      // A choice toggles and stays on the question; Next or Submit moves on.
+      const toggled = this.questionnaireWithToggledOption(intent, action.id);
+      if (toggled !== intent) await this.updateQuestionnairePendingIntent(pendingIntent, toggled, event);
+      return;
+    }
     const updated = this.questionnaireWithOptionAnswer(intent, action.id);
     if (updated !== intent) {
       if (this.questionnaireReadyToSubmit(updated)) {
@@ -302,6 +309,23 @@ export class MessagingPendingRequestWorkflow {
       optionId: option.id,
       value: typeof option.value === "string" ? option.value : option.label,
     });
+  }
+
+  questionnaireWithToggledOption(
+    intent: MessagingQuestionnaireIntent,
+    optionId: string,
+  ): MessagingQuestionnaireIntent {
+    const question = intent.questions[intent.currentIndex];
+    if (intent.phase !== "answering" || !question) {
+      return intent;
+    }
+    const answer = toggleMessagingQuestionnaireOption(question, intent.answers[intent.currentIndex], optionId);
+    if (!answer) {
+      return intent;
+    }
+    const answers = [...intent.answers];
+    answers[intent.currentIndex] = answer;
+    return { ...intent, answers };
   }
 
   questionnaireWithRecordedAnswer(

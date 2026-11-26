@@ -6,6 +6,7 @@ import {
   buildMcpElicitationResponse,
   canAcceptMcpElicitation,
   createMcpElicitationState,
+  mcpElicitationPurposeLabel,
   mcpFieldFormatError,
   redactDisplayValue,
   readMcpApprovalPersistence,
@@ -253,6 +254,60 @@ describe("MCP elicitation helpers", () => {
       content: {
         scopes: ["repo", "issues"],
       },
+      _meta: null,
+    });
+  });
+
+  // An agent form the questionnaire cannot ask still names itself a question,
+  // and the card answers each choice with its option value.
+  it("answers an agent's choice form with option values and Other text", () => {
+    const state = createMcpElicitationState(
+      buildRequest({
+        serverName: "Antigravity",
+        message: "The agent has 2 questions.",
+        _meta: { pwragent_acp_agent_elicitation: true },
+        requestedSchema: {
+          type: "object",
+          properties: {
+            q1: {
+              type: "string",
+              title: "Pick a color",
+              oneOf: [
+                { const: "1", title: "Red" },
+                { const: "2", title: "Green" },
+              ],
+            },
+            q1_other: { type: "string", title: "Other", description: "Optional free-form answer to: Pick a color" },
+            q2: {
+              type: "array",
+              title: "Pick fruits",
+              items: {
+                anyOf: [
+                  { const: "1", title: "Apple" },
+                  { const: "2", title: "Pear" },
+                ],
+              },
+            },
+          },
+        },
+      })
+    )!;
+
+    expect(mcpElicitationPurposeLabel(state.purpose)).toBe("Question");
+    expect(state.form?.fields.map((field) => [field.key, field.kind, field.label])).toEqual([
+      ["q1", "singleSelect", "Pick a color"],
+      ["q1_other", "string", "Other"],
+      ["q2", "multiSelect", "Pick fruits"],
+    ]);
+    const answered = updateMcpFieldValue(
+      updateMcpFieldValue(updateMcpFieldValue(state, "q1", "2"), "q1_other", "Teal"),
+      "q2",
+      ["1", "2"],
+    );
+    expect(canAcceptMcpElicitation(answered)).toBe(true);
+    expect(buildMcpElicitationResponse(answered, "accept")).toEqual({
+      action: "accept",
+      content: { q1: "2", q1_other: "Teal", q2: ["1", "2"] },
       _meta: null,
     });
   });

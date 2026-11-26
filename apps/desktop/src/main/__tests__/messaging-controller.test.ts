@@ -57,6 +57,7 @@ import {
   type MessagingInboundTextEvent,
   type MessagingJsonValue,
   type MessagingSurfaceIntent,
+  formatMessagingQuestionnaireText,
   messagingQuestionnaireActions,
 } from "@pwragent/messaging-interface";
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
@@ -1300,7 +1301,7 @@ describe("MessagingController", () => {
           afterReview: autoFix ? "auto-fix" : "wait",
         }));
       }),
-    ), { numRuns: 25 });
+    ), { numRuns: 12 });
   });
 
   it("keeps Auto-fix off in a restored pending review and resets it for the next review", async () => {
@@ -21390,7 +21391,7 @@ describe("MessagingController", () => {
         // Each generated final item must also reach the recipient exactly once.
         expect(unique).toEqual(texts);
       }),
-    ), { numRuns: 25 });
+    ), { numRuns: 12 });
   });
 
   it("settles one test harness without disposing another test's harness", async () => {
@@ -23821,6 +23822,58 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       status: "waiting",
+    });
+  });
+
+  it("lets a multi-select question take several choices and a custom answer before submitting", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleBackendPendingRequest("codex", {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        requestId: "0",
+        questions: [{
+          id: "0",
+          header: "",
+          question: "Pick fruits",
+          isOther: true,
+          isSecret: false,
+          multiSelect: true,
+          options: [
+            { label: "Apple", description: "" },
+            { label: "Pear", description: "" },
+            { label: "Plum", description: "" },
+          ],
+        }],
+      },
+    } satisfies AppServerPendingRequestNotification);
+    const questionnaire = () => harness.delivered.filter((intent) => intent.kind === "questionnaire").at(-1);
+    expect(questionnaire()).toMatchObject({ questions: [{ id: "0", multiSelect: true }] });
+    expect(formatMessagingQuestionnaireText(questionnaire() as Extract<MessagingSurfaceIntent, { kind: "questionnaire" }>))
+      .toContain("Choose any that apply.");
+
+    // Choosing the last question's options never submits on the operator's behalf.
+    for (const actionId of ["0:option:1", "0:option:3", "0:option:2", "0:option:2"]) {
+      await harness.controller.handleInboundEvent(buildCallbackEvent({ actionId }));
+    }
+    expect(harness.submitServerRequest).not.toHaveBeenCalled();
+    expect(questionnaire()).toMatchObject({
+      phase: "answering",
+      answers: [{ kind: "multi", optionIds: ["0:option:1", "0:option:3"], values: ["Apple", "Plum"] }],
+    });
+    expect(messagingQuestionnaireActions(questionnaire() as Extract<MessagingSurfaceIntent, { kind: "questionnaire" }>)
+      .map((action) => action.label)).toEqual(["Selected: Apple", "Pear", "Selected: Plum", "Submit"]);
+
+    await harness.controller.handleInboundEvent(buildTextEvent("Kiwi"));
+
+    expect(harness.submitServerRequest).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      requestId: "0",
+      response: { answers: { "0": { answers: ["Apple", "Plum", "Kiwi"] } } },
     });
   });
 

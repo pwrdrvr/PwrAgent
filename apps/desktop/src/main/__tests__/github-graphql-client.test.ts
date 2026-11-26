@@ -12,6 +12,10 @@ import {
   retryDelayMs,
 } from "../pr-status/github-graphql-client";
 import { SKIPPED_ONLY_CHECKS_SETTLE_MS } from "../pr-status/pr-derivations";
+import {
+  forgetHandsOffLabelRepositories,
+  setHandsOffLabelRepositories,
+} from "../pr-status/hands-off-label-repositories";
 import { getPrStatusWatchOutcome } from "../pr-status/pr-status-watch";
 import {
   clearForgeRepositoryNames,
@@ -1374,5 +1378,42 @@ describe("readGithubDotComAuthToken", () => {
       "GitHub CLI authentication status check failed",
     );
     expect(String(caught)).not.toContain(exposedCredential);
+  });
+});
+
+describe("hands-off labels", () => {
+  afterEach(() => {
+    forgetHandsOffLabelRepositories();
+  });
+
+  it("asks for labels only on PRs in a repository a label rule names", () => {
+    setHandsOffLabelRepositories(["PingDotGG/t3code"]);
+    const { query } = buildBatchedPrQuery([
+      { owner: "pingdotgg", repo: "t3code", number: 43027 },
+      { owner: "pwrdrvr", repo: "t3code", number: 4 },
+    ]);
+    const lines = query.split("\n");
+    expect(lines.find((line) => line.includes("r0:"))).toContain("...PrLabels");
+    expect(lines.find((line) => line.includes("r1:"))).not.toContain("...PrLabels");
+    expect(query).toContain("fragment PrLabels on PullRequest");
+
+    const branch = buildBranchPrQuery([{ owner: "pingdotgg", repo: "t3code", branch: "fix/x" }]).query;
+    const commit = buildCommitPrQuery([{ owner: "pingdotgg", repo: "t3code", sha: "a".repeat(40) }]).query;
+    expect(branch).toContain("...PrLabels");
+    expect(commit).toContain("...PrLabels");
+  });
+
+  it("leaves the fragment out of a poll with no labeled repository", () => {
+    const { query } = buildBatchedPrQuery([{ owner: "pwrdrvr", repo: "t3code", number: 4 }]);
+    // GraphQL refuses a document that defines a fragment it does not use.
+    expect(query).not.toContain("PrLabels");
+  });
+
+  it("maps labels sorted, and leaves them out when the query did not ask", () => {
+    expect(mapGraphqlPrNode(node({
+      labels: { nodes: [{ name: "vouch:unvouched" }, { name: "takeover:in-progress" }, null, { name: " " }] },
+    })).labels).toEqual(["takeover:in-progress", "vouch:unvouched"]);
+    expect(mapGraphqlPrNode(node({ labels: { nodes: [] } })).labels).toEqual([]);
+    expect("labels" in mapGraphqlPrNode(node())).toBe(false);
   });
 });

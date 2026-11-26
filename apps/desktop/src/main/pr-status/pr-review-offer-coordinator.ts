@@ -1,7 +1,8 @@
 import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerBackendKind, AppServerReviewContext } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadTodo, ThreadTodoAction } from "@pwragent/shared/contracts/thread-todos";
+import { hasActivePrReview, reviewPullRequestSnapshots } from "./active-pr-review";
 import type { PrChangeIdentitySource } from "./pr-change-identity";
 import {
   deriveReviewStanding,
@@ -25,6 +26,7 @@ export type PrReviewOfferThread = { backend: AppServerBackendKind; threadId: str
 
 /** The to-do service surface the coordinator writes through. */
 export type PrOfferCardPort = {
+  findByDependency(dependencyId: string): ThreadTodo | undefined;
   findOpenByKey(params: PrReviewOfferThread & { key: string }): ThreadTodo | undefined;
   reconcileOffer(params: PrReviewOfferThread & {
     retire?: { id: string; result: string };
@@ -49,8 +51,23 @@ export type PrReviewOfferPorts = {
    * parent and its sub-thread is offered once.
    */
   ownerThread(prKey: string): Promise<PrReviewOfferThread | undefined>;
+  /**
+   * Threads that show this PR but may not hold its offers (see
+   * `ineligiblePrReviewOfferThreads`). Each reconcile withdraws an offer
+   * card left open on one of them, so a card raised before its project
+   * paused, turned offers off, or left the PR hands-off does not linger.
+   */
+  ineligibleThreads?(prKey: string): Promise<PrReviewOfferThread[]>;
   /** The primary attached PR keys of one thread, for review events. */
   threadPrKeys(thread: PrReviewOfferThread): string[];
+  /**
+   * Why the thread's project never merges `pr`, as an agent refusal;
+   * undefined when it merges it: the project merges, or `pr.baseRefName` is
+   * a branch its never-merge setting still merges into. A refused PR gets
+   * review offers but no merge offer, and an open merge offer is withdrawn.
+   * A change of base re-evaluates the PR, as any readiness field does.
+   */
+  neverMergeRefusal?(thread: PrReviewOfferThread, pr: PrSummary): string | undefined;
   /** The status registry's current PR. No forge request is made. */
   getPr(prKey: string): PrSummary | undefined;
   stackHold?(pr: PrSummary): Promise<{ reason: string; lowerKey?: string } | undefined>;
@@ -65,6 +82,7 @@ export type PrReviewOfferPorts = {
    * wherever it ran.
    */
   listReviews(thread: PrReviewOfferThread, pr: PrSummary): ThreadReview[];
+  liveReviews?(): Iterable<{ context?: AppServerReviewContext }>;
   recordFixedThrough(reviewId: string, commit: string, settledAt: number): void;
   cards: PrOfferCardPort;
   identity: PrChangeIdentitySource;
@@ -124,6 +142,7 @@ export type PrReviewOfferEvaluation = {
 export class PrReviewOfferCoordinator {
   private readonly inFlight = new Map<string, { again: boolean; recoveryOnly: boolean; done: Promise<void> }>();
   private readonly pending = new Set<Promise<void>>();
+  private readonly reviewReads = new Map<string, Set<{ changed: boolean }>>();
   private readonly lowerKeysByChild = new Map<string, string[]>();
   private readonly childKeysByLower = new Map<string, Set<string>>();
   private readonly lowerChanges = new Map<string, number>();
@@ -182,6 +201,24 @@ export class PrReviewOfferCoordinator {
       const thread = await this.ports.ownerThread(key);
       if (thread) await this.schedule(thread, key, recoveryOnly);
       else this.trackLowers(key, []);
+      await this.withdrawFromIneligible(key);
+    }
+  }
+
+  /** Withdraw this PR's open offer card from every thread that may not hold it. */
+  private async withdrawFromIneligible(prKey: string): Promise<void> {
+    const cardKey = prOfferCardKey(prKey);
+    for (const thread of await this.ports.ineligibleThreads?.(prKey) ?? []) {
+      if (this.closed) return;
+      const card = this.ports.cards.findOpenByKey({ ...thread, key: cardKey });
+      if (!card || parsePrOfferId(card.dependencyId)?.prKey !== prKey) continue;
+      const result = this.ports.cards.reconcileOffer({
+        ...thread,
+        retire: { id: card.id, result: PR_OFFER_RETIRE_RESULTS.not_offered },
+      });
+      if (result.retired) {
+        this.ports.log?.("pr review offer withdrawn", { prKey, threadId: thread.threadId });
+      }
     }
   }
 
@@ -206,6 +243,30 @@ export class PrReviewOfferCoordinator {
     }
   }
 
+  /**
+   * A project setting that decides which offers a PR gets changed, such as
+   * Never merge. Re-evaluates each PR with its current owner, so an open
+   * merge offer is withdrawn, or raised again, without waiting for the PR's
+   * next transition.
+   */
+  reevaluate(prKeys: Iterable<string>): void {
+    if (this.closed) return;
+    this.track(this.reconcile(new Set(prKeys)));
+  }
+
+  /** Acceptance and terminal are wakeups. The evaluation reads the current owner state. */
+  handleLiveReviewChanged(context: AppServerReviewContext | undefined): void {
+    const keys = reviewPullRequestSnapshots(context).map(({ pullRequest }) => buildPullRequestStatusKey(pullRequest));
+    this.invalidateReviewReads(keys);
+    this.reevaluate(keys);
+  }
+
+  private invalidateReviewReads(keys: readonly string[]): void {
+    for (const key of keys) {
+      for (const read of this.reviewReads.get(key) ?? []) read.changed = true;
+    }
+  }
+
   /** A review on a thread was recorded, settled, or reopened. */
   handleReviewChanged(review: ThreadReview): void {
     if (this.closed) return;
@@ -215,6 +276,7 @@ export class PrReviewOfferCoordinator {
       return pr !== undefined && reviewMatchesPr(review, pr);
     });
     if (prKeys.length === 0) return;
+    this.invalidateReviewReads(prKeys);
     this.track((async () => {
       // The PR's owner may be another thread on the same PR, such as the
       // parent of the sub-thread the review ran in.
@@ -308,6 +370,10 @@ export class PrReviewOfferCoordinator {
           ...(parsed.headSha ? { headSha: parsed.headSha } : {}),
         }
       : undefined;
+    // A never-merge project keeps its review offers; an open merge offer is
+    // withdrawn whatever the PR's state, so no early return below keeps it.
+    const neverMerge = this.ports.neverMergeRefusal?.(thread, pr) !== undefined;
+    const withdrawMerge = neverMerge && open?.kind === "merge";
 
     // Git runs only when CI is green, or to withdraw an open offer: a review
     // offer that a review started some other way has answered, or a merge
@@ -315,7 +381,21 @@ export class PrReviewOfferCoordinator {
     const withdrawable = open?.kind === "review"
       || (open?.kind === "merge" && open.headSha === pr.headSha);
     const lowerSequence = this.lowerChangeSequence;
-    const assessment = await this.assessPr(thread, pr, withdrawable, !recoveryOnly);
+    const read = { changed: false };
+    const reads = this.reviewReads.get(prKey) ?? new Set();
+    reads.add(read);
+    this.reviewReads.set(prKey, reads);
+    let assessment;
+    try {
+      do {
+        read.changed = false;
+        // Restart recovery also needs the change ID when the offer is closed.
+        assessment = await this.assessPr(thread, pr, withdrawable, !recoveryOnly || !open);
+      } while (read.changed && !this.closed);
+    } finally {
+      reads.delete(read);
+      if (!reads.size) this.reviewReads.delete(prKey);
+    }
     const latest = this.ports.getPr(prKey);
     if (this.closed || !latest || latest.headSha !== pr.headSha || latest.baseRefName !== pr.baseRefName
       || prGateReadiness(latest) !== prGateReadiness(pr)) return undefined;
@@ -338,23 +418,39 @@ export class PrReviewOfferCoordinator {
     } else if (assessment.readiness === "closed") {
       this.trackLowers(prKey, []);
     }
-    if (recoveryOnly && assessment.standing !== "ready_to_merge") return undefined;
+    // Read after the asynchronous coverage and stack checks so a review
+    // accepted during those checks cannot race a card write.
+    const reviewInProgress = hasActivePrReview(this.ports.liveReviews?.() ?? [], prKey, pr.headSha);
     // A transient transport failure defers a new offer. A previously
     // verified card stays put; executing it always rechecks live evidence.
-    if (assessment.retryOnObservation && !assessment.stackHold && open?.kind === "merge" && open.headSha === pr.headSha) return undefined;
+    if (assessment.retryOnObservation && !assessment.stackHold && open?.kind === "merge" && open.headSha === pr.headSha
+      && !withdrawMerge) return undefined;
     const { readiness, reviewId, headContentId, headCovered, standing } = assessment;
-    const desired = desiredPrOffer({
+    const offer = desiredPrOffer({
       prKey,
       readiness,
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
       ...(headContentId ? { headContentId } : {}),
     });
-    const plan = assessment.stackHold && open
+    const desired = ((neverMerge && offer?.kind === "merge") || (reviewInProgress && offer?.kind === "review"))
+      ? undefined : offer;
+    if (recoveryOnly && standing !== "ready_to_merge" && !withdrawMerge
+      && !(reviewInProgress && open?.kind === "review")) {
+      // Recovery can reopen the exact suppressed card, but may not create a
+      // first review offer or recover one withdrawn for a different reason.
+      const earlier = desired?.kind === "review" ? this.ports.cards.findByDependency(desired.offerId) : undefined;
+      if (earlier?.status !== "dismissed" || earlier.result !== PR_OFFER_RETIRE_RESULTS.review_running
+        || earlier.backend !== thread.backend || earlier.threadId !== thread.threadId) return undefined;
+    }
+    const plan = withdrawMerge && open
+      ? { retire: { cardId: open.cardId, reason: "never_merge" as const }, raise: desired }
+      : assessment.stackHold && open
       ? { retire: { cardId: open.cardId, reason: "stale" as const }, raise: undefined } : planPrOffer({
       open,
       desired,
       readiness,
       headCovered,
+      reviewInProgress,
       ...(standing ? { standing } : {}),
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
     });
@@ -409,6 +505,8 @@ export class PrReviewOfferCoordinator {
   async mergeOfferRefusal(thread: PrReviewOfferThread, prKey: string): Promise<string | undefined> {
     const pr = this.ports.getPr(prKey);
     if (!pr) return undefined;
+    const neverMerge = this.ports.neverMergeRefusal?.(thread, pr);
+    if (neverMerge) return `${neverMerge} This card was not raised.`;
     const hold = await this.ports.stackHold?.(pr);
     if (hold) return hold.reason;
     const assessment = await this.assessPr(thread, pr, true, false);

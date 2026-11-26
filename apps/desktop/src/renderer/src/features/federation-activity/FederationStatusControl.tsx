@@ -89,7 +89,12 @@ export function FederationStatusControl(props: {
       <button ref={trigger} type="button" className="thread-header__star-map-toggle"
         aria-label="Open Star Map" aria-haspopup="dialog" aria-expanded={open}
         aria-controls={open ? id : undefined}
-        onClick={openStarMap}>
+        onClick={() => {
+          if (props.desktopApi?.replayFixtureActive) {
+            console.debug("[star-map-open] header click handled");
+          }
+          openStarMap();
+        }}>
         <StarMapIcon size={14} />
       </button>
       {open ? (

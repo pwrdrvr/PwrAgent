@@ -33,6 +33,12 @@ export function bundledGitExecutable(): string {
   return dugite.resolveGitBinary(bundledGitDirectory());
 }
 
+export function isPackagedBundledGit(executable: string): boolean {
+  // Match the running package's entry point exactly. Other paths can name a
+  // wrapper or launch Git with a different installed layout.
+  return packagedResourcesPath !== undefined && executable === bundledGitExecutable();
+}
+
 export function bundledGitLfsExecutable(): string {
   // The explicit empty override resolves the bundled platform layout, as in
   // bundledGitEnvironment, without writing that environment's system config.

@@ -2019,10 +2019,17 @@ describe("Claude SDK backend", () => {
       permissionMode: "default",
       includePartialMessages: true,
     });
+    const {
+      PWRAGENT_BACKEND: queryBackend,
+      PWRAGENT_THREAD_ID: queryThreadId,
+      ...baseQueryEnv
+    } = f.queries[0].env ?? {};
+    expect(queryBackend).toBe("claude");
+    expect(queryThreadId).toBe(threadId);
     expect(f.queries[0].env).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(f.queries[0].env).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
     expect(f.backendOptions.inspectInstallation).toHaveBeenCalledWith({
-      env: f.queries[0].env, signal: expect.any(AbortSignal),
+      env: baseQueryEnv, signal: expect.any(AbortSignal),
     });
     expect(f.queries[0].env?.PATH).toBe("/fixture");
     expect(f.queries[0].env?.CLAUDE_CODE_REPORT_FINDINGS).toBe("1");
@@ -4177,6 +4184,22 @@ describe("Claude permission bridge", () => {
     await expect(handler("AskUserQuestion", { questions: [{ question: "Color?", header: "Color", options: [{ label: "Blue", description: "Blue" }] }] },
       { signal: new AbortController().signal, toolUseID: "question", requestId: "sdk-request" }))
       .resolves.toMatchObject({ behavior: "allow", updatedInput: { answers: { "Color?": "Blue" } } });
+  });
+
+  it("asks a multi-select AskUserQuestion as one and returns every choice", async () => {
+    const request = vi.fn(async (_request: unknown) => ({ answers: { "0": { answers: ["Blue", "Green"] } } }));
+    const handler = createClaudePermissionHandler({
+      threadId: "thread", turnId: () => "turn", cancelRequest: async () => {}, request,
+    });
+    await expect(handler("AskUserQuestion", { questions: [{
+      question: "Colors?", header: "Colors", multiSelect: true,
+      options: [{ label: "Blue", description: "" }, { label: "Green", description: "" }],
+    }] }, { signal: new AbortController().signal, toolUseID: "question", requestId: "sdk-request" }))
+      .resolves.toMatchObject({ behavior: "allow", updatedInput: { answers: { "Colors?": "Blue, Green" } } });
+    expect(request.mock.lastCall![0]).toMatchObject({
+      method: "item/tool/requestUserInput",
+      params: { questions: [{ id: "0", question: "Colors?", multiSelect: true }] },
+    });
   });
 });
 

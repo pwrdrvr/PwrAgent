@@ -161,6 +161,11 @@ export type ThreadTodoCardHandlers = {
 export type ThreadTodoReviewSetup = {
   todoId?: string;
   onShow: (todo: ThreadTodo) => void;
+  /**
+   * Cards whose review waits in a thread's queue. Each says its review is
+   * queued until it starts, rather than offering Start review again.
+   */
+  queuedTodoIds?: ReadonlySet<string>;
 };
 
 export type ThreadTodoCardProps = ThreadTodoCardHandlers & {
@@ -773,10 +778,11 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
   const mergeHeld = blockingMergeHolds.length > 0;
   const titleId = `thread-todo-title-${todo.id}`;
   const prompt = action?.type === "start_thread" || action?.type === "send_message" ? action.prompt : undefined;
-  const hasFacts = action?.type === "merge_pull_request";
+  const hasFacts = action?.type === "merge_pull_request" || action?.type === "add_forge_hands_off_rule";
   const runningLabel = ciTitle ? "Approving…"
     : sendingMessage ? "Sending…"
     : action?.type === "merge_pull_request" ? mergeQueue ? "Adding to queue…" : "Merging…"
+    : action?.type === "add_forge_hands_off_rule" ? "Adding rule…"
     : "Starting…";
   const progress = threadTodoItemProgress(todo);
   const prerequisites = threadTodoPrerequisites(todo);
@@ -1000,6 +1006,17 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             </>
           );
         }
+        if (props.reviewSetup?.queuedTodoIds?.has(todo.id)) {
+          return (
+            <>
+              <span role="status" className="thread-todo-card__waiting">
+                <span className="thread-todo-card__waiting-dot" aria-hidden="true" />
+                Review queued
+              </span>
+              {done}
+            </>
+          );
+        }
         return (
           <>
             {done}
@@ -1097,6 +1114,22 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
           </>
         );
       }
+      case "add_forge_hands_off_rule":
+        return (
+          <>
+            {done}
+            <button
+              type="button"
+              className="button button--primary thread-todo-card__button"
+              onClick={() => completeCard(
+                { question: "Add the rule anyway?", label: "Add rule" },
+                (allowOpenItems) => props.onRun(todo, resolveOptions(allowOpenItems)),
+              )}
+            >
+              {todo.error ? "Retry" : "Add rule"}
+            </button>
+          </>
+        );
       case "start_thread":
       case "send_message": {
         const entries: TodoSplitMenuEntry[] = [];
@@ -1284,6 +1317,18 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
                 <dd>
                   <TodoPullRequestChip todo={todo} pullRequest={action.pullRequest} />
                 </dd>
+              </div>
+            </dl>
+          ) : action?.type === "add_forge_hands_off_rule" ? (
+            // The exact rule the click saves, not the agent's description of it.
+            <dl className="thread-todo-card__facts">
+              <div className="thread-todo-card__fact">
+                <dt>Repository</dt>
+                <dd>{action.repository}</dd>
+              </div>
+              <div className="thread-todo-card__fact">
+                <dt>Label</dt>
+                <dd>{action.label ?? "Any PR"}</dd>
               </div>
             </dl>
           ) : null}

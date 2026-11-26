@@ -58,8 +58,8 @@ describe("CI completion reporters", () => {
     ]) {
       const destination = reportFile();
       const reporter = new PlaywrightReporter();
-      reporter.onBegin({}, { allTests: () => [{
-        id: "test", titlePath: () => ["test"], outcome: () => outcome, expectedStatus, results,
+      reporter.onBegin({ rootDir: process.cwd() }, { allTests: () => [{
+        id: "test", location: { file: path.resolve("test.spec.ts") }, titlePath: () => ["test"], outcome: () => outcome, expectedStatus, results,
       }] });
       reporter.onEnd({ status: "failed" });
       expect(JSON.parse(readFileSync(destination, "utf8")).complete).toBe(complete);
@@ -96,10 +96,10 @@ describe("CI completion reporters", () => {
   it("compares Playwright's selected test IDs before and after execution", () => {
     for (const change of ["none", "reorder", "missing", "extra", "replace", "duplicate"]) {
       const destination = reportFile();
-      const makeTest = (id) => ({ id, titlePath: () => [id], outcome: () => "expected", expectedStatus: "passed", results: [{ status: "passed" }] });
+      const makeTest = (id) => ({ id, location: { file: path.resolve("test.spec.ts") }, titlePath: () => [id], outcome: () => "expected", expectedStatus: "passed", results: [{ status: "passed" }] });
       let tests = [makeTest("a"), makeTest("b")];
       const reporter = new PlaywrightReporter();
-      reporter.onBegin({}, { allTests: () => tests });
+      reporter.onBegin({ rootDir: process.cwd() }, { allTests: () => tests });
       if (change === "reorder") tests = tests.toReversed();
       if (change === "missing") tests.pop();
       if (change === "extra") tests.push(makeTest("c"));

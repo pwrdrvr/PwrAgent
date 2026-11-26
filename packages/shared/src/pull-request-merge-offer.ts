@@ -126,3 +126,44 @@ export function resolvePullRequestMergeRoute(input: {
   }
   return input.viewerWindow ? { kind: "none" } : { kind: "local" };
 }
+
+/**
+ * What merging a layer of a GitHub stack does with the open layers below it.
+ * GitHub's asynchronous merge lands every open layer below the one merged,
+ * so the operator has to see and choose them: `with_layers_below` sends
+ * their numbers with the merge, which this instance's main checks against
+ * the stack again. A peer's owner takes no such choice, so its card says to
+ * merge the lower layers first. Undefined when nothing below is open.
+ */
+export type GithubStackMergePlan =
+  /** `trunk`: where GitHub lands the stack, whatever the PR's base is now. */
+  | { kind: "with_layers_below"; below: number[]; count: number; trunk?: string }
+  | { kind: "merge_below_first"; below: number[] };
+
+export function resolveGithubStackMergePlan(input: {
+  /** The PR's compact stack membership, when its stack exists on GitHub. */
+  member?: { githubStack?: number; openBelow?: readonly number[]; trunk?: string };
+  /** The merge runs on a peer that owns the thread. */
+  remote: boolean;
+}): GithubStackMergePlan | undefined {
+  const below = input.member?.githubStack !== undefined ? [...input.member.openBelow ?? []] : [];
+  if (!below.length) return undefined;
+  if (input.remote) return { kind: "merge_below_first", below };
+  const trunk = input.member?.trunk;
+  return { kind: "with_layers_below", below, count: below.length + 1, ...(trunk ? { trunk } : {}) };
+}
+
+/** "#7", "#7 and #8", "#7, #8 and #9". */
+export function listPullRequestNumbers(numbers: readonly number[]): string {
+  const labels = numbers.map((number) => `#${number}`);
+  return labels.length <= 1 ? labels.join("") : `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}`;
+}
+
+/** The line a merge of a stacked PR shows before it runs. */
+export function githubStackMergeNote(plan: GithubStackMergePlan, number: number): string {
+  const below = listPullRequestNumbers(plan.below);
+  const verb = plan.below.length === 1 ? "is" : "are";
+  return plan.kind === "with_layers_below"
+    ? `${below} below #${number} in its GitHub stack ${verb} still open. GitHub merges ${plan.below.length === 1 ? "it" : "them"} first, then #${number}.`
+    : `${below} below #${number} in its GitHub stack ${verb} still open. Merge ${plan.below.length === 1 ? "it" : "them"} first.`;
+}

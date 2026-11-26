@@ -1,3 +1,12 @@
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import {
+  ANTIGRAVITY_CALL_PWRAGENT_TOOL,
+  readPwrAgentCallTarget,
+} from "../agent-tools/antigravity-mcp-catalog.js";
+
+const ANTIGRAVITY_PWRAGENT_PREFIX = `mcp_${PWRAGENT_TOOL_NAMESPACE}_`;
+const ANTIGRAVITY_CALL_MCP_TOOL = `${ANTIGRAVITY_PWRAGENT_PREFIX}call_mcp_tool`;
+
 export function readAcpToolCommand(
   record: Record<string, unknown>,
 ): string | undefined {
@@ -28,12 +37,11 @@ export function readAcpToolInvocation(
   record: Record<string, unknown>,
   followsTitleScript = false,
 ): string | undefined {
-  const mcpToolName = readAcpMcpToolName(record);
-  if (mcpToolName) {
-    const input = asRecord(record.rawInput)?.tool_input;
-    return input === undefined
-      ? mcpToolName
-      : `${mcpToolName}\n${JSON.stringify(input, null, 2)}`;
+  const mcp = readAcpMcpInvocation(record);
+  if (mcp) {
+    return mcp.input === undefined
+      ? mcp.toolName
+      : `${mcp.toolName}\n${JSON.stringify(mcp.input, null, 2)}`;
   }
   const webSearch = readAcpWebSearch(record);
   if (webSearch) {
@@ -59,18 +67,117 @@ export function readAcpToolInvocation(
     : undefined;
 }
 
-/** Grok's MCP dispatcher exposes the invoked tool inside its UseTool input. */
+type AcpMcpInvocation = {
+  toolName: string;
+  input?: unknown;
+  summary?: string;
+};
+
+function readAcpMcpInvocation(
+  record: Record<string, unknown>,
+): AcpMcpInvocation | undefined {
+  const rawInput = asRecord(record.rawInput);
+  if (
+    readString(rawInput ?? {}, "variant") === "UseTool"
+    || readString(readAcpToolMetadata(record) ?? {}, "name") === "use_tool"
+  ) {
+    const toolName = readString(rawInput ?? {}, "tool_name")?.trim();
+    return toolName
+      ? { toolName, input: rawInput?.tool_input }
+      : undefined;
+  }
+
+  const outerName =
+    readString(record, "name")
+    ?? stripRunPrefix(readString(record, "title"));
+  if (!outerName || !/^mcp_[A-Za-z0-9_-]+$/u.test(outerName)) {
+    return undefined;
+  }
+
+  const summary = readString(rawInput ?? {}, "toolSummary");
+  if (outerName === ANTIGRAVITY_CALL_PWRAGENT_TOOL) {
+    const target = readPwrAgentCallTarget(rawInput);
+    const fallbackName = readString(rawInput ?? {}, "toolName");
+    const toolName = target?.name
+      ?? (fallbackName && /^[a-z][a-z0-9_]*$/u.test(fallbackName) ? fallbackName : undefined);
+    if (!toolName) {
+      return undefined;
+    }
+    const input = target?.args ?? rawInput?.arguments;
+    return { toolName, ...(input !== undefined ? { input } : {}), ...(summary ? { summary } : {}) };
+  }
+
+  if (outerName === ANTIGRAVITY_CALL_MCP_TOOL) {
+    const toolName = readString(rawInput ?? {}, "toolName");
+    if (!toolName) {
+      return undefined;
+    }
+    const connectionId = readString(rawInput ?? {}, "connectionId");
+    const args = rawInput?.arguments;
+    const input = args !== undefined
+      ? (connectionId ? { connectionId, arguments: args } : args)
+      : omitToolSummary(rawInput);
+    return { toolName, ...(input !== undefined ? { input } : {}), ...(summary ? { summary } : {}) };
+  }
+
+  if (outerName.startsWith(ANTIGRAVITY_PWRAGENT_PREFIX)) {
+    const toolName = outerName.slice(ANTIGRAVITY_PWRAGENT_PREFIX.length);
+    if (!toolName) {
+      return undefined;
+    }
+    const input = omitToolSummary(rawInput);
+    return { toolName, ...(input !== undefined ? { input } : {}), ...(summary ? { summary } : {}) };
+  }
+
+  if (!rawInput) {
+    return undefined;
+  }
+  const input = omitToolSummary(rawInput);
+  return { toolName: outerName, ...(input !== undefined ? { input } : {}), ...(summary ? { summary } : {}) };
+}
+
+function stripRunPrefix(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const match = /^Run\s+(mcp_[A-Za-z0-9_-]+)$/u.exec(value.trim());
+  return match?.[1];
+}
+
+function omitToolSummary(
+  rawInput: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!rawInput) {
+    return undefined;
+  }
+  const entries = Object.entries(rawInput).filter(([key]) => key !== "toolSummary");
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+/**
+ * Unwraps MCP dispatcher calls (Grok's `UseTool` and Antigravity's
+ * `mcp_pwragent_call_pwragent_tool` / `mcp_pwragent_call_mcp_tool` / direct
+ * `mcp_pwragent_*` calls) to the invoked sub-tool name.
+ */
 export function readAcpMcpToolName(
   record: Record<string, unknown>,
 ): string | undefined {
-  const rawInput = asRecord(record.rawInput);
-  if (
-    readString(rawInput ?? {}, "variant") !== "UseTool"
-    && readString(readAcpToolMetadata(record) ?? {}, "name") !== "use_tool"
-  ) {
+  return readAcpMcpInvocation(record)?.toolName;
+}
+
+export function readAcpMcpToolLabel(
+  record: Record<string, unknown>,
+): string | undefined {
+  const mcp = readAcpMcpInvocation(record);
+  if (!mcp) {
     return undefined;
   }
-  return readString(rawInput ?? {}, "tool_name")?.trim() || undefined;
+  if (!mcp.summary) {
+    return mcp.toolName;
+  }
+  return mcp.summary.toLowerCase().includes(mcp.toolName.toLowerCase())
+    ? mcp.summary
+    : `${mcp.toolName}: ${mcp.summary}`;
 }
 
 export type AcpCodeSearch = {

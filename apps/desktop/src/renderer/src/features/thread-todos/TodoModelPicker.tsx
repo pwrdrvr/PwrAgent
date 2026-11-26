@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useMemo, useState } from "react";
+import type { CodexSpeed } from "@pwragent/shared/codex-speed";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { ModelSettingsRecent } from "@pwragent/shared/contracts/agent";
 import type { ThreadTodo, ThreadTodoModelSettings } from "@pwragent/shared/contracts/thread-todos";
@@ -11,15 +11,16 @@ import {
   resolveThreadTodoModelSettings,
   sameThreadTodoModelSettings,
 } from "@pwragent/shared/contracts/thread-todos";
-import { CheckIcon, ChevronDownIcon } from "../../icons";
-import { useMenuNavigation } from "../../lib/useMenuNavigation";
-import { ComposerDropdown } from "../composer/ComposerDropdown";
+import { formatOwnerProviderLabel } from "../../lib/thread-provider-label";
+import {
+  ModelSettingsPicker,
+  ModelSettingsQuickList,
+  type ModelSettingsQuickRow,
+} from "../composer/ModelSettingsPicker";
+import { MODEL_DEFAULT_EFFORT, splitEffortChoices } from "../composer/model-settings-picker-model";
 import { providerPickerDropdownOptions } from "../composer/provider-picker-options";
-import { ModelDropdown } from "../composer/ModelDropdown";
 import { useTodoDispatchBackends, useTodoDispatchContext } from "./TodoDispatchProvider";
 import { customTodoDispatchSettings, formatTodoDispatchSettings, todoDispatchRecentResolves } from "./todo-dispatch-model";
-
-import { placeTodoModelMenu } from "./todo-model-menu-placement";
 
 type PickerProps = {
   todo: ThreadTodo;
@@ -37,6 +38,15 @@ type MachinePickerProps = PickerProps & {
   machineLabel?: string;
   /** Marks the chip when the settings differ from the card's own. */
   changed?: boolean;
+  /** The card's Codex speed, chosen in the same panel. */
+  speed?: {
+    options: CodexSpeed[];
+    speed: CodexSpeed;
+    changed: boolean;
+    /** Why only Standard is offered. */
+    lockedReason?: string;
+    onChange: (speed: CodexSpeed) => void;
+  };
 };
 
 export function TodoModelPicker(props: MachinePickerProps) {
@@ -45,10 +55,6 @@ export function TodoModelPicker(props: MachinePickerProps) {
   const [open, setOpen] = useState(false);
   const [recents, setRecents] = useState<ModelSettingsRecent[]>([]);
   const [error, setError] = useState<string>();
-  const [position, setPosition] = useState<{ left: number; top: number; maxHeight?: number }>({ left: 0, top: 0 });
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const id = useId();
   const ownerBackends = useTodoDispatchBackends(todo, open);
   const backends = props.backends ?? ownerBackends;
   const elsewhere = props.machineLabel !== undefined;
@@ -59,9 +65,6 @@ export function TodoModelPicker(props: MachinePickerProps) {
   // Another machine offers this thread's settings only when it can run them.
   const offerThread = !elsewhere || todoDispatchRecentResolves(thread, backends);
   const offerSuggestion = hasSuggestion && (!elsewhere || todoDispatchRecentResolves(suggested, backends));
-  const label = formatTodoDispatchSettings(selection.settings, backends);
-  const close = () => setOpen(false);
-  useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
 
   useEffect(() => {
     if (!open) return;
@@ -70,61 +73,11 @@ export function TodoModelPicker(props: MachinePickerProps) {
     void context.api?.listModelSettingsRecents?.({ scope: "todo-dispatch", federationTarget: todo.federationTarget })
       .then((response) => { if (!cancelled) setRecents(response.recents); })
       .catch(() => { if (!cancelled) setError("Recent settings could not be loaded."); });
-    const outside = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node) && !triggerRef.current?.contains(event.target as Node)) close();
-    };
-    document.addEventListener("pointerdown", outside, true);
     return () => {
       cancelled = true;
-      document.removeEventListener("pointerdown", outside, true);
     };
   }, [open, context.api, todo.federationTarget]);
 
-  const place = useCallback(() => {
-    const trigger = triggerRef.current?.getBoundingClientRect();
-    const menu = menuRef.current;
-    if (!trigger || !menu) return;
-    const facts = triggerRef.current?.closest(".thread-todo-card__facts, .todo-dispatch-chips")?.getBoundingClientRect();
-    const next = placeTodoModelMenu({
-      trigger,
-      alignLeft: facts?.left,
-      menuHeight: menu.scrollHeight + menu.offsetHeight - menu.clientHeight,
-      menuWidth: menu.offsetWidth || 312,
-      viewportHeight: window.innerHeight,
-      viewportWidth: window.innerWidth,
-    });
-    setPosition((current) => current.left === next.left && current.top === next.top && current.maxHeight === next.maxHeight
-      ? current : next);
-  }, []);
-
-  // Content can grow after Recents loads, or wrap when Custom changes provider.
-  useLayoutEffect(() => { if (open) place(); });
-  useLayoutEffect(() => {
-    if (!open) return;
-    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(place);
-    if (triggerRef.current) observer?.observe(triggerRef.current);
-    if (menuRef.current) observer?.observe(menuRef.current);
-    window.addEventListener("resize", place);
-    window.addEventListener("scroll", place, true);
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener("resize", place);
-      window.removeEventListener("scroll", place, true);
-    };
-  }, [open, place]);
-
-  const pickRow = (settings: ThreadTodoModelSettings) => { props.onPick(settings); close(); };
-  const row = (settings: ThreadTodoModelSettings, detail?: string, key?: string) => (
-    <button type="button" role="menuitemradio" key={key ?? detail}
-      className="todo-split__item" aria-checked={sameThreadTodoModelSettings(selection.settings, settings)}
-      onClick={() => pickRow(settings)}>
-      <span className="todo-split__item-check" aria-hidden="true">
-        {sameThreadTodoModelSettings(selection.settings, settings) ? <CheckIcon size={12} /> : null}
-      </span>
-      <span className="todo-split__item-label">{formatTodoDispatchSettings(settings, backends)}</span>
-      {detail ? <span className="todo-model-picker__detail">{detail}</span> : null}
-    </button>
-  );
   const providers = useMemo(
     () => backends.filter((backend) => backend.available && backend.capabilities.createThread),
     [backends],
@@ -135,59 +88,120 @@ export function TodoModelPicker(props: MachinePickerProps) {
   const models = backend?.launchpadOptions?.models ?? [];
   const model = models.find((entry) => entry.id === selection.settings.model);
   const efforts = model?.supportsReasoning === false ? [] : model?.reasoningEfforts ?? backend?.launchpadOptions?.reasoningEfforts ?? [];
+  const { stops, hasModelDefault } = splitEffortChoices(efforts);
   const recentRows = recents.filter((recent) => todoDispatchRecentResolves(recent, backends)).slice(0, 5);
+  const providerChoices = providerPickerDropdownOptions(providerEntries, backends);
+  const providerLabel = formatOwnerProviderLabel(selection.settings.backend, selection.settings.model, backends);
+  const stopsFor = (settings: ThreadTodoModelSettings): string[] => {
+    const summary = backends.find((entry) => entry.kind === settings.backend);
+    const entry = summary?.launchpadOptions?.models?.find((candidate) => candidate.id === settings.model);
+    return splitEffortChoices(entry?.supportsReasoning === false
+      ? []
+      : entry?.reasoningEfforts ?? summary?.launchpadOptions?.reasoningEfforts ?? []).stops;
+  };
+  const quickRow = (
+    settings: ThreadTodoModelSettings,
+    key: string,
+    close: () => void,
+    detail?: string,
+  ): ModelSettingsQuickRow => {
+    const summary = backends.find((entry) => entry.kind === settings.backend);
+    const entry = summary?.launchpadOptions?.models?.find((candidate) => candidate.id === settings.model);
+    return {
+      key,
+      provider: formatOwnerProviderLabel(settings.backend, settings.model, backends),
+      model: entry?.label ?? settings.model ?? "Default model",
+      ...(settings.reasoningEffort ? { effort: settings.reasoningEffort, effortStops: stopsFor(settings) } : {}),
+      ...(detail ? { detail } : {}),
+      selected: sameThreadTodoModelSettings(selection.settings, settings),
+      onPick: () => {
+        props.onPick(settings);
+        close();
+      },
+    };
+  };
+  const speed = props.speed;
   return (
-    <>
-      <button ref={triggerRef} type="button" disabled={props.disabled}
-        className={`composer-dropdown__button todo-model-picker__chip tooltip-target${differs ? " is-changed" : ""}`}
-        aria-label={`Model for the new thread: ${label.replaceAll(" · ", ", ")}`}
-        aria-haspopup="menu" aria-expanded={open} aria-controls={open ? id : undefined}
-        data-tooltip={open ? undefined : elsewhere ? `Settings for the start on ${props.machineLabel}.` : "Settings for the start on this thread's machine."}
-        onClick={() => setOpen(!open)}>
-        <span className="composer-dropdown__label">{label}</span><span className="composer-dropdown__icon" aria-hidden="true"><ChevronDownIcon size={12} /></span>
-      </button>
-      {open ? createPortal(
-        <div ref={menuRef} id={id} className="todo-split__menu todo-model-picker__menu"
-          style={position} role="menu" aria-label="Model for the new thread" tabIndex={-1}>
-          {offerThread ? row(thread, "This thread") : null}
-          {offerSuggestion ? row(suggested, "Suggested") : null}
-          {recentRows.length ? <div className="composer-dropdown__group-label"><span>Recent</span><span className="composer-dropdown__group-detail">all threads</span></div> : null}
-          {recentRows.map((recent, index) => row(recent, undefined, `recent-${index}`))}
+    <ModelSettingsPicker
+      ariaLabel="Model for the new thread"
+      changed={differs || Boolean(speed?.changed)}
+      disabled={props.disabled}
+      size="card"
+      testId="todo-dispatch-model"
+      tooltip={elsewhere ? `Settings for the start on ${props.machineLabel}.` : "Settings for the start on this thread's machine."}
+      onOpenChange={setOpen}
+      provider={{
+        label: providerLabel,
+        showInPill: true,
+        choices: {
+          options: providerChoices.options,
+          unavailable: providerChoices.otherOptions,
+          unavailableLabel: providerChoices.otherLabel,
+          value: providerPickerValue(selection.settings.backend, selection.settings.model),
+          onChange: (value) => {
+            const entry = providerEntries.find((candidate) => candidate.value === value);
+            const next = providers.find((candidate) => candidate.kind === entry?.backend);
+            if (!entry || !next) return;
+            // A Codex entry names its provider through the model id.
+            const codexModel = next.kind === "codex"
+              ? (entry.models.find((candidate) => candidate.current) ?? entry.models[0])?.id
+              : undefined;
+            props.onPick(customTodoDispatchSettings(next, codexModel));
+          },
+        },
+      }}
+      model={{
+        value: selection.settings.model ?? "",
+        label: model?.label ?? selection.settings.model ?? "Default model",
+        kind: backend?.kind,
+        models,
+        emptyOptions: [{ value: "", label: "Default model" }],
+        disabled: models.length === 0,
+        ...(backend?.kind === "codex" ? { thread: { model: selection.settings.model } } : {}),
+        onChange: (value) => {
+          if (backend) props.onPick(customTodoDispatchSettings(backend, value, selection.settings.reasoningEffort));
+        },
+      }}
+      {...(stops.length > 0 || hasModelDefault || selection.settings.reasoningEffort ? {
+        effort: {
+          stops,
+          value: selection.settings.reasoningEffort,
+          ...(hasModelDefault ? { defaultOption: { value: MODEL_DEFAULT_EFFORT, label: "Default" } } : {}),
+          onChange: (reasoningEffort: string) => props.onPick({ ...selection.settings, reasoningEffort }),
+        },
+      } : {})}
+      {...(speed ? {
+        speed: {
+          options: speed.options,
+          value: speed.speed,
+          ...(speed.lockedReason ? { lockedReason: speed.lockedReason } : {}),
+          onChange: speed.onChange,
+        },
+      } : {})}
+      quickPicks={(close) => (
+        <>
+          <ModelSettingsQuickList
+            label="Ready settings"
+            sections={[
+              {
+                rows: [
+                  ...(offerThread ? [quickRow(thread, "thread", close, "This thread")] : []),
+                  ...(offerSuggestion ? [quickRow(suggested, "suggested", close, "Suggested")] : []),
+                ],
+              },
+              {
+                heading: { title: "Recent", detail: "all threads" },
+                rows: recentRows.map((recent, index) => quickRow(recent, `recent-${index}`, close)),
+              },
+            ]}
+          />
           {error ? <p className="todo-model-picker__error" role="status">{error}</p> : null}
-          <div className="todo-split__separator" role="separator" />
-          <div className="composer-dropdown__group-label">Custom</div>
-          <div className="todo-model-picker__custom" role="presentation">
-            <ComposerDropdown ariaLabel="To-do provider" triggerRole="menuitem" menuPlacement="below"
-              {...providerPickerDropdownOptions(providerEntries, backends)}
-              value={providerPickerValue(selection.settings.backend, selection.settings.model)} onChange={(value) => {
-                const entry = providerEntries.find((candidate) => candidate.value === value);
-                const next = providers.find((candidate) => candidate.kind === entry?.backend);
-                if (!entry || !next) return;
-                // A Codex entry names its provider through the model id.
-                const codexModel = next.kind === "codex"
-                  ? (entry.models.find((candidate) => candidate.current) ?? entry.models[0])?.id
-                  : undefined;
-                props.onPick(customTodoDispatchSettings(next, codexModel));
-              }} />
-            <ModelDropdown ariaLabel="To-do model" triggerRole="menuitem" menuPlacement="below" disabled={models.length === 0}
-              kind={backend?.kind} models={models} emptyOptions={[{ value: "", label: "Default model" }]}
-              thread={backend?.kind === "codex" ? { model: selection.settings.model } : undefined}
-              value={selection.settings.model ?? ""} onChange={(value) => {
-                if (backend) props.onPick(customTodoDispatchSettings(backend, value));
-              }} />
-            {efforts.length ? <ComposerDropdown ariaLabel="To-do reasoning" triggerRole="menuitem" menuPlacement="below"
-              options={efforts.map((effort) => ({ value: effort, label: effort }))}
-              value={selection.settings.reasoningEffort ?? ""}
-              onChange={(reasoningEffort) => props.onPick({ ...selection.settings, reasoningEffort })} /> : null}
-          </div>
-          <p className="todo-model-picker__footnote">
-            {elsewhere
-              ? `Starts this card on ${props.machineLabel}. Moving the card back keeps this thread's settings.`
-              : "Starts this card. Later cards in this thread start with the last one you dispatched."}
-          </p>
-        </div>, document.body,
-      ) : null}
-    </>
+        </>
+      )}
+      footnote={elsewhere
+        ? `Starts this card on ${props.machineLabel}. Moving the card back keeps this thread's settings.`
+        : "Starts this card. Later cards in this thread start with the last one you dispatched."}
+    />
   );
 }
 

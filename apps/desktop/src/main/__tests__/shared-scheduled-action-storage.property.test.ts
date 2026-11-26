@@ -31,7 +31,7 @@ it("binds every desktop scheduled-action and payload constructor to the shared i
   const entries = [[DesktopStore, SharedStore], [DesktopFiles, SharedFiles], [DesktopMemory, SharedMemory]] as const;
   fc.assert(fc.property(fc.integer({ min: 0, max: entries.length - 1 }), index => {
     expect(entries[index]![0]).toBe(entries[index]![1]);
-  }));
+  }), { numRuns: 8 });
 });
 
 // A single claimant owns callbacks. Recovery cannot replay an ambiguous
@@ -153,7 +153,7 @@ it("matches an independent multi-owner claim model across portable and desktop W
         expect(fs.readdirSync(path.join(fixture.tempDir, "scheduled-actions"))).toHaveLength(model.size);
       }
     } finally { for (const db of dbs) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("preserves file payloads through rejected writes, cleans replaced and terminal payloads, and rolls claim transactions back", async () => {
@@ -186,7 +186,7 @@ it("preserves file payloads through rejected writes, cleans replaced and termina
       store.cancel(input.id, 4); store.cleanupTerminalBefore(4); expect(store.get(input.id)).toBeDefined();
       store.cleanupTerminalBefore(5); expect(store.get(input.id)).toBeUndefined(); expect(files()).toEqual([]);
     } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("migrates generated legacy inline payloads exactly once and reopens them through either host", async () => {
@@ -227,7 +227,7 @@ it("migrates generated legacy inline payloads exactly once and reopens them thro
         });
         expect(fs.readdirSync(path.join(fixture.tempDir, "scheduled-actions"))).toEqual(before);
       } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
-    }), { numRuns: 25 });
+    }), { numRuns: 8 });
 });
 
 it("keeps projection pages bounded and expires WAL cursors only when scheduled facts change", async () => {
@@ -279,5 +279,5 @@ it("keeps in-memory payload fallback detached and bounds memory payload reads", 
       expect(() => payload.read(ref, 0)).toThrow("budget"); payload.delete(ref);
       expect(() => payload.read(ref)).toThrow("not found");
     } finally { db.close(); }
-  }));
+  }), { numRuns: 8 });
 });

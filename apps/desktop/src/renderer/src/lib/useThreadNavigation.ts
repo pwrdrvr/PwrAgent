@@ -1,4 +1,5 @@
 import { formatArchiveCleanupNotice, formatArchiveCleanupProgress, type ArchiveThreadNotice } from "./archive-cleanup-notice";
+import { newThreadModelSettingsRecent } from "./model-settings-recents";
 import { useLockedArchiveWorktreeNotice } from "./useLockedArchiveWorktreeNotice";
 import { lockChangedBeforeHandoffNotice } from "./locked-worktree-notice";
 import { BackgroundArchiveCleanupReport, BACKGROUND_CLEANUP_REPORT_INTERVAL_MS } from "./background-archive-cleanup-report";
@@ -855,6 +856,9 @@ function prSummariesEqual(
       candidate.sourceRepository?.org === pr.sourceRepository?.org &&
       candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
       candidate.explicitlyAttached === pr.explicitlyAttached &&
+      candidate.autoFixOff === pr.autoFixOff &&
+      // A label can make a PR hands-off, so a label-only change is a change.
+      JSON.stringify(candidate.labels ?? null) === JSON.stringify(pr.labels ?? null) &&
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&
@@ -1026,6 +1030,7 @@ function threadSummariesEqual(
     left.prAutoDispatchEnabled === right.prAutoDispatchEnabled &&
     JSON.stringify(left.prAutoDispatchPending ?? null) ===
       JSON.stringify(right.prAutoDispatchPending ?? null) &&
+    left.prAutoDispatchActive === right.prAutoDispatchActive &&
     // A peer row's eye comes from its owner's marks.
     JSON.stringify(left.prCiWatches ?? null) ===
       JSON.stringify(right.prCiWatches ?? null) &&
@@ -2170,7 +2175,11 @@ function applyPullRequestStatusUpdate(
     if (buildPullRequestStatusKey(currentPr) !== prKey) {
       continue;
     }
-    const updatedPr = { ...params.pr, explicitlyAttached: currentPr.explicitlyAttached };
+    const updatedPr = {
+      ...params.pr,
+      explicitlyAttached: currentPr.explicitlyAttached,
+      autoFixOff: currentPr.autoFixOff,
+    };
     if (prSummariesEqual([currentPr], [updatedPr])) {
       continue;
     }
@@ -2305,6 +2314,13 @@ function applyThreadPrAutoDispatchUpdate(
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
+/** A pendingUpdated event: the repair, and the row's active marker with it. */
+function prAutoDispatchPendingFields(pending: NavigationThreadSummary["prAutoDispatchPending"]): Pick<
+  NavigationThreadSummary, "prAutoDispatchPending" | "prAutoDispatchActive"
+> {
+  return { prAutoDispatchPending: pending, prAutoDispatchActive: pending ? true : undefined };
+}
+
 function applyThreadPrAutoDispatchPendingUpdate(
   snapshot: NavigationLoadedRows | undefined,
   params: {
@@ -2328,7 +2344,7 @@ function applyThreadPrAutoDispatchPendingUpdate(
       return thread;
     }
     changed = true;
-    return { ...thread, prAutoDispatchPending: params.pending };
+    return { ...thread, ...prAutoDispatchPendingFields(params.pending) };
   });
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
@@ -3302,9 +3318,11 @@ export function useThreadNavigation(
       >
     >
   ) => Promise<void>;
+  /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
   setThreadPrAutoDispatch: (
     thread: NavigationThreadSummary,
     enabled: boolean,
+    prKey?: string,
   ) => Promise<void>;
   cancelThreadPrAutoDispatch: (
     thread: NavigationThreadSummary,
@@ -5229,7 +5247,7 @@ export function useThreadNavigation(
         }));
         setOptimisticThread((current) =>
           current && agentEventMatchesThread(event, current, params.threadId)
-            ? { ...current, prAutoDispatchPending: pending }
+            ? { ...current, ...prAutoDispatchPendingFields(pending) }
             : current
         );
         return;
@@ -8682,6 +8700,13 @@ export function useThreadNavigation(
           }));
         }
         materialized = true;
+        // The next new-thread panel offers these settings under Recent. The
+        // owner keeps the list, since its catalog has to run them.
+        void desktopApi.recordModelSettingsRecent?.({
+          ...(federationTarget ? { federationTarget } : {}),
+          scope: "composer",
+          recent: newThreadModelSettingsRecent(launchpad),
+        })?.catch(() => undefined);
         const landing = pendingLaunchpadCreationsRef.current.get(launchpadSelectionKey);
         if (landing) {
           pendingLaunchpadCreationsRef.current.set(launchpadSelectionKey, {
@@ -10413,6 +10438,7 @@ export function useThreadNavigation(
     async (
       thread: NavigationThreadSummary,
       enabled: boolean,
+      prKey?: string,
     ): Promise<void> => {
       if (!setThreadPrAutoDispatchRequest) {
         setSetThreadModelSettingsError(
@@ -10421,6 +10447,25 @@ export function useThreadNavigation(
         return;
       }
       setSetThreadModelSettingsError(undefined);
+      if (prKey !== undefined) {
+        // One PR's switch rewrites the thread's attachment list; the owner's
+        // thread/pullRequests/updated event carries it to every window.
+        try {
+          await setThreadPrAutoDispatchRequest({
+            backend: thread.source,
+            federationTarget: thread.federation?.ref.target ??
+              readRendererFederationTarget(),
+            threadId: thread.id,
+            enabled,
+            prKey,
+          });
+        } catch (error) {
+          setSetThreadModelSettingsError(
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+        return;
+      }
       setOptimisticThread((current) =>
         current
         && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)

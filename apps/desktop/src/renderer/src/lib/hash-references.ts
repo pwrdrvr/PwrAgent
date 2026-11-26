@@ -26,6 +26,13 @@ const THREAD_CANDIDATE_LIMIT = 8;
 const PULL_REQUEST_CANDIDATE_LIMIT = 6;
 const THREAD_LABEL_LENGTH_LIMIT = 72;
 const THREAD_TOOLTIP_LENGTH_LIMIT = 300;
+const REFERENCE_CLOSERS: Readonly<Record<string, string>> = {
+  "(": ")",
+  "[": "]",
+  "{": "}",
+  "“": "”",
+  "‘": "’",
+};
 
 /**
  * How long a `#` query may get, with nothing to show for it, before the
@@ -137,12 +144,26 @@ export function findHashReferenceTrigger(
   caret: number,
 ): HashReferenceTrigger | undefined {
   const prefix = text.slice(0, caret);
-  const match = /(?:^|\s)#([^\n#]*)$/.exec(prefix);
+  const match = /(?:^|[\s\p{Ps}\p{Pi}])#([^\r\n#]*)$/u.exec(prefix);
   if (!match) {
     return undefined;
   }
 
   const query = match[1] ?? "";
+  // A reference in parentheses or brackets ends at the matching close.
+  // Balanced punctuation inside a thread title can still be searched.
+  const opener = match[0][0];
+  const closer = REFERENCE_CLOSERS[opener];
+  if (closer) {
+    let depth = 1;
+    for (const character of query) {
+      if (character === opener) depth += 1;
+      if (character === closer) {
+        depth -= 1;
+        if (depth === 0) return undefined;
+      }
+    }
+  }
   // A numeric hash is a pull-request query, so the first whitespace ends
   // autocomplete. Thread-title queries may still span spaces.
   if (/^\d{1,7}\s/.test(query)) {

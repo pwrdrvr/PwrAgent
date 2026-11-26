@@ -9,6 +9,7 @@ import {
 } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HOVER_TRANSITION_GRACE_MS } from "../useHoverTransitionGrace";
 import {
   TOOLTIP_HOVER_DELAY_MS,
   useViewportTooltip,
@@ -25,6 +26,22 @@ afterEach(() => {
   Reflect.deleteProperty(HTMLElement.prototype, "getAnimations");
   stubbedAnimations.length = 0;
 });
+
+/** An enterable card whose owner never closes it on leave, as a pinned one. */
+function PinnedCardFixture() {
+  const tooltip = useViewportTooltip({
+    className: "pinned-card",
+    interactive: { onPointerEnter: () => {}, onPointerLeave: () => {} },
+  });
+  return (
+    <div data-testid="lane">
+      <button type="button" onClick={(event) => tooltip.show(event.currentTarget, "Stack")}>
+        Stack
+      </button>
+      {tooltip.tooltipNode}
+    </div>
+  );
+}
 
 function TooltipFixture() {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
@@ -291,6 +308,33 @@ function stubAncestorAnimation(options?: {
 }
 
 describe("useViewportTooltip", () => {
+  it("closes a pinned card once the grace ends after the pointer leaves it, if its anchor moved while held", () => {
+    vi.useFakeTimers();
+    render(<PinnedCardFixture />);
+    fireEvent.click(screen.getByRole("button", { name: "Stack" }));
+    const card = screen.getByRole("tooltip");
+    fireEvent.mouseEnter(card);
+    fireEvent.scroll(screen.getByTestId("lane"));
+    expect(screen.getByRole("tooltip")).toBe(card);
+
+    fireEvent.mouseLeave(card);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS - 1));
+    expect(screen.getByRole("tooltip")).toBe(card);
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("keeps a pinned card the pointer leaves when its anchor never moved", () => {
+    vi.useFakeTimers();
+    render(<PinnedCardFixture />);
+    fireEvent.click(screen.getByRole("button", { name: "Stack" }));
+    const card = screen.getByRole("tooltip");
+    fireEvent.mouseEnter(card);
+    fireEvent.mouseLeave(card);
+    act(() => vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS * 2));
+    expect(screen.getByRole("tooltip")).toBe(card);
+  });
+
   it("keeps a tooltip open when an unrelated pane scrolls", () => {
     render(<TooltipFixture />);
 

@@ -41,6 +41,7 @@ export type ThreadTurnQueueEntry = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  isCompactCommand?: boolean;
   automationRunId?: string;
   automationName?: string;
   manualReleaseRequired?: boolean;
@@ -344,6 +345,8 @@ export function isSteerableAgentTraffic(origin: AppServerThreadMessageOrigin | u
   return Boolean(origin && COMBINABLE_ORIGIN_KINDS.has(origin.kind))
     && origin?.systemReason !== "app-restart"
     && origin?.systemReason !== "compaction-recovery"
+    // A `/compact` must arrive alone: shared with other text it is not a command.
+    && origin?.systemReason !== "auto-compaction"
     && !origin?.reviewAutoFix
     && origin?.prAutomation?.kind !== "auto-fix";
 }

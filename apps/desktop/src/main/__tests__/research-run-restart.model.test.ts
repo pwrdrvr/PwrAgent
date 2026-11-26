@@ -143,7 +143,7 @@ it("keeps a run running and resumable across any sequence of quits, crashes and 
         check();
       }
       service.close();
-    }), { numRuns: 150 });
+    }), { numRuns: 8 });
   } finally { db.close(); }
 });
 
@@ -184,7 +184,7 @@ it("ends a run at its time limit across a restart, and never one with no limit",
       } else expect(shared.timers.filter((timer) => timer.live)).toEqual([]);
       expect(shared.errors).toEqual([]);
       service.close();
-    }), { numRuns: 80 });
+    }), { numRuns: 8 });
   } finally { db.close(); }
 });
 

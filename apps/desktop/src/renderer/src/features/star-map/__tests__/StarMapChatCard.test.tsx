@@ -24,7 +24,6 @@ import type {
   NavigationQueryPage,
   ThreadQueuedTurnSummary,
 } from "@pwragent/shared/contracts/navigation";
-import { buildModelMenu } from "@pwragent/shared/model-menu";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import {
@@ -32,7 +31,16 @@ import {
   SUPERSEDED_CODEX_MODEL_LABELS,
   codexCatalogModels,
   codexCatalogWithChoiceArbitrary,
+  expectModelSettingsToList,
+  expectedModelDropdown,
 } from "../../../test/model-catalog";
+import {
+  chooseModelSettingsOption,
+  chooseSpeed,
+  modelSettingsOptionNames,
+  modelSettingsPill,
+  openModelSettings,
+} from "../../../test/model-settings";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { StarMapChatCard } from "../StarMapChatCard";
 import {
@@ -3365,6 +3373,14 @@ describe("StarMapChatCard settings menu", () => {
     );
   }
 
+  /** Open the model pill once the catalog has listed `model`. */
+  async function openModelPanel(model: string): Promise<HTMLElement> {
+    await screen.findByRole("button", { name: /^Model settings/ });
+    const panel = openModelSettings();
+    await within(panel).findByRole("option", { name: model });
+    return panel;
+  }
+
   it("describes the backend once on mount with the card's target", async () => {
     const desktopApi = settingsApi();
     renderCard({ desktopApi, thread: remoteThread({ model: "gpt-5-codex" }) });
@@ -3386,15 +3402,11 @@ describe("StarMapChatCard settings menu", () => {
     expect(desktopApi.listBackends).toHaveBeenCalledTimes(1);
   });
 
-  it("changes the model through the submenu, on the thread's own target", async () => {
+  it("changes the model through the model pill, on the thread's own target", async () => {
     const desktopApi = settingsApi();
     renderCard({ desktopApi, thread: remoteThread({ model: "gpt-5-codex" }) });
-    await openSettingsMenu();
-
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
-    fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: "gpt-5-spark" }),
-    );
+    await openModelPanel("gpt-5-spark");
+    chooseModelSettingsOption("Model", "gpt-5-spark");
     await waitFor(() => {
       expect(desktopApi.setThreadModelSettings).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -3423,19 +3435,17 @@ describe("StarMapChatCard settings menu", () => {
       })),
     } as unknown as Partial<DesktopApi>);
     renderCard({ desktopApi, thread: localThread({ model: "gpt-6.1-sol" }) });
-    await openSettingsMenu();
+    const panel = await openModelPanel("GPT-6.1-Sol");
 
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
-    await screen.findByRole("menuitemradio", { name: "GPT-6.1-Sol" });
-    const radios = () =>
-      screen.getAllByRole("menuitemradio").map((row) => row.textContent?.replace("✓", ""));
     // An existing Codex thread keeps its provider, so the provider's model
     // is not offered here, as in the full composer.
-    expect(radios()).toEqual(CURRENT_CODEX_MODEL_LABELS);
-    fireEvent.click(screen.getByRole("menuitem", { name: /^Other/ }));
-    await screen.findByRole("menuitemradio", { name: "GPT-5.6-Sol" });
-    expect(radios()).toEqual(SUPERSEDED_CODEX_MODEL_LABELS);
-    fireEvent.click(screen.getByRole("menuitemradio", { name: "GPT-5.6-Sol" }));
+    expect(modelSettingsOptionNames("Model")).toEqual(CURRENT_CODEX_MODEL_LABELS);
+    fireEvent.click(within(panel).getByRole("button", { name: "Other" }));
+    const other = within(panel).getByRole("listbox", { name: "Model: Other" });
+    expect(within(other).getAllByRole("option").map((option) =>
+      option.querySelector(".model-settings__option-label")?.textContent))
+      .toEqual(SUPERSEDED_CODEX_MODEL_LABELS);
+    chooseModelSettingsOption("Model", "GPT-5.6-Sol");
     await waitFor(() => {
       expect(desktopApi.setThreadModelSettings).toHaveBeenCalledWith(
         expect.objectContaining({ model: "gpt-5.6-sol" }),
@@ -3459,23 +3469,21 @@ describe("StarMapChatCard settings menu", () => {
           }],
         })),
       } as unknown as Partial<DesktopApi>);
-      const menu = buildModelMenu({ kind: "codex", models, thread: { model: threadModel.id } });
-      const labels = (rows: typeof models) => rows.map((model) => model.label ?? model.id);
-      const radios = () =>
-        screen.getAllByRole("menuitemradio").map((row) => row.textContent?.replace("✓", ""));
+      const expected = expectedModelDropdown({
+        kind: "codex",
+        models,
+        thread: { model: threadModel.id },
+        otherInline: true,
+      });
       try {
         renderCard({ desktopApi, thread: localThread({ model: threadModel.id }) });
-        await openSettingsMenu();
-        fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
-        await screen.findAllByRole("menuitemradio");
-        expect(radios()).toEqual(labels(menu.primary));
-        const other = screen.queryByRole("menuitem", { name: /^Other/ });
-        expect(Boolean(other)).toBe(menu.other.length > 0);
-        if (other) {
-          fireEvent.click(other);
-          await screen.findByRole("menuitemradio", { name: labels(menu.other)[0] });
-          expect(radios()).toEqual(labels(menu.other));
-        }
+        await screen.findByRole("button", { name: /^Model settings/ });
+        const panel = openModelSettings();
+        // Until the describe lands the list holds only the thread's model.
+        await waitFor(() => {
+          expect(within(panel).queryByText("Loading models…")).toBeNull();
+        });
+        expectModelSettingsToList(panel, expected);
       } finally {
         cleanup();
       }
@@ -3486,13 +3494,11 @@ describe("StarMapChatCard settings menu", () => {
     vi.mocked(normalizeImageFile).mockClear();
     const desktopApi = settingsApi();
     renderCard({ desktopApi, thread: localThread({ model: "gpt-5-codex" }) });
-    await openSettingsMenu();
-
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
-    fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: "gpt-5-spark" }),
-    );
-    await screen.findByText("gpt-5-spark");
+    await openModelPanel("gpt-5-spark");
+    chooseModelSettingsOption("Model", "gpt-5-spark");
+    await waitFor(() => {
+      expect(modelSettingsPill().getAttribute("data-model")).toBe("gpt-5-spark");
+    });
     const input = await findReadyTextbox( { name: "Message Local work" });
     const image = new File(["spark"], "spark.png", { type: "image/png" });
 
@@ -3565,6 +3571,34 @@ describe("StarMapChatCard settings menu", () => {
         threadId: "t-local",
       });
     });
+  });
+
+  it("keeps the model panel's input off the map behind it", async () => {
+    // The panel portals out of the card's DOM but not its React tree, so a
+    // press on the effort bar reached the map's canvas pan: the bar is not
+    // a button and the panel is outside every `.star-map-*` container.
+    const onPointerDown = vi.fn();
+    const onKeyDown = vi.fn();
+    render(
+      <div onKeyDown={onKeyDown} onPointerDown={onPointerDown}>
+        {card({ desktopApi: settingsApi(), thread: localThread({ model: "gpt-5-codex" }) })}
+      </div>,
+    );
+    const panel = await openModelPanel("gpt-5-spark");
+    const track = within(panel).getByRole("slider", { name: "Effort" });
+    expect(shouldStartCanvasPan(track)).toBe(true);
+    onPointerDown.mockClear();
+    onKeyDown.mockClear();
+
+    fireEvent.pointerDown(track, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(track, { button: 0, pointerId: 1 });
+    fireEvent.keyDown(panel, { key: "a" });
+
+    expect(onPointerDown).not.toHaveBeenCalled();
+    expect(onKeyDown).not.toHaveBeenCalled();
+    // The pill itself still reaches the card, which raises on press.
+    fireEvent.pointerDown(modelSettingsPill(), { button: 0 });
+    expect(onPointerDown).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the warning's input off the map behind it", async () => {
@@ -3790,12 +3824,48 @@ describe("StarMapChatCard settings menu", () => {
       })),
     } as unknown as Partial<DesktopApi>);
     renderCard({ desktopApi, thread: localThread({ model: "gpt-5-codex" }) });
-    await openSettingsMenu();
 
-    // The fast toggle only renders once the describe landed, so its
+    // The pill's Speed row only renders once the describe landed, so its
     // presence proves Access's absence is a decision, not a race.
-    await screen.findByRole("menuitemcheckbox", { name: "Fast mode" });
+    await screen.findByRole("button", { name: /^Model settings/ });
+    await waitFor(() => {
+      expect(within(openModelSettings()).queryByRole("radio", { name: "Fast" })).toBeTruthy();
+    });
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await openSettingsMenu();
     expect(screen.queryByRole("menuitem", { name: /Access/ })).toBeNull();
+  });
+
+  it("offers no Fast where the account may not use it", async () => {
+    const listBackends = vi.fn(async () => ({
+      fetchedAt: 1,
+      backends: [
+        {
+          kind: "codex",
+          label: "Codex",
+          available: true,
+          codexFastAllowed: false,
+          methods: [],
+          capabilities: {},
+          executionModes: [{ mode: "default", label: "Default Access", available: true }],
+          launchpadOptions: {
+            models: [{ id: "gpt-5-codex", supportsFast: true, reasoningEfforts: ["low", "high"] }],
+            reasoningEfforts: ["low", "high"],
+            supportsFastMode: true,
+          },
+        },
+      ],
+    }));
+    const desktopApi = settingsApi({ listBackends } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread({ fastMode: false, model: "gpt-5-codex" }) });
+    await screen.findByRole("button", { name: /^Model settings/ });
+    await waitFor(() => expect(listBackends).toHaveBeenCalled());
+    // The effort row needs the describe, so the Speed row's absence below
+    // is a decision, not a race.
+    await waitFor(() => {
+      expect(within(openModelSettings()).getByRole("slider")).toBeTruthy();
+    });
+    expect(within(openModelSettings()).queryByRole("radio", { name: "Fast" })).toBeNull();
   });
 
   it("toggles fast mode for a model that supports it", async () => {
@@ -3804,11 +3874,11 @@ describe("StarMapChatCard settings menu", () => {
       desktopApi,
       thread: localThread({ fastMode: false, model: "gpt-5-codex" }),
     });
-    await openSettingsMenu();
-
-    fireEvent.click(
-      await screen.findByRole("menuitemcheckbox", { name: "Fast mode" }),
-    );
+    await screen.findByRole("button", { name: /^Model settings/ });
+    await waitFor(() => {
+      expect(within(openModelSettings()).queryByRole("radio", { name: "Fast" })).toBeTruthy();
+    });
+    chooseSpeed("Fast");
     await waitFor(() => {
       expect(desktopApi.setThreadModelSettings).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -4025,7 +4095,7 @@ describe("Star Map exact detail and FIFO authority", () => {
     expect(desktopApi.startTurn).not.toHaveBeenCalled();
     await act(async () => queue.resolve({ protocol: 2, ref, revision: "fifo", readiness: "ready", complete: true, entries: [] }));
     await waitFor(() => expect(editor.getAttribute("contenteditable")).toBe("true"));
-    expect(screen.getByRole("button", { name: /^Thread settings/ }).textContent).toContain("owner-model");
+    expect(modelSettingsPill().textContent).toContain("owner-model");
     await typeAndSend("Remote work", "ready now");
     await waitFor(() => expect(desktopApi.startTurn).toHaveBeenCalledTimes(1));
   });

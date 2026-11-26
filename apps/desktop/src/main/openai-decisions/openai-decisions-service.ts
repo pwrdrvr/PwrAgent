@@ -81,6 +81,15 @@ import {
   readDecisionBatchFile,
 } from "./decision-batch-files";
 import { railBatch, railBatchPage } from "./decision-batch-rail";
+import {
+  DecisionFileError,
+  formatBatchOutputFile,
+  formatSingleOutputFile,
+  readDecisionInputsFile,
+  resolveWritableDecisionOutputFile,
+  writeDecisionOutputFile,
+  type DecisionFileAccess,
+} from "./decision-io-files";
 import type { SystemOneTarget } from "../decision/system-one";
 import { imageCodec } from "../owner-host";
 import { decisionImageReferences, hasDecisionImageParts, prepareDecisionInput, type PreparedDecisionInput } from "./decision-images";
@@ -97,6 +106,8 @@ export type OpenAIDecisionsErrorCode =
   | "decision_deleted"
   | "invalid_definition"
   | "invalid_input"
+  | "file_not_found"
+  | "file_access_denied"
   | "invalid_image"
   | "images_unsupported"
   | "credential_missing"
@@ -183,6 +194,12 @@ export type OpenAIDecisionsServiceOptions = {
    * there as JSONL; without it, batches live in memory only.
    */
   batchResultsDirectory?: (caller: DecisionBatchCaller) => string;
+  /**
+   * Local filesystem access policy for `inputsFile` and `outputFile` on
+   * `decisions_invoke`. Resolved per call so workspace changes take effect
+   * immediately.
+   */
+  resolveCallerFileAccess?: (caller: DecisionBatchCaller) => Promise<DecisionFileAccess>;
   newBatchId?: () => string;
 };
 
@@ -192,6 +209,9 @@ const INVOKE_KEYS = new Set([
   "version",
   "input",
   "inputs",
+  "inputsFile",
+  "outputFile",
+  "inlineResults",
   "concurrency",
   "definition",
   "detail",
@@ -445,21 +465,36 @@ export class OpenAIDecisionsService {
     }
     // close() waits only for the batches it saw, so nothing starts after it.
     if (this.closing) throw new OpenAIDecisionsError("busy", "PwrAgent is shutting down. Try again after it restarts.");
-    const bulk = args.inputs !== undefined;
+    const hasInputs = args.inputs !== undefined;
+    const hasInputsFile = args.inputsFile !== undefined;
     const single = "input" in args;
-    if (bulk && single) {
-      throw new OpenAIDecisionsError("invalid_input", "Pass input for one item or inputs for a batch, not both.");
+    const sourceCount = Number(hasInputs) + Number(hasInputsFile) + Number(single);
+    if (sourceCount > 1) {
+      throw new OpenAIDecisionsError("invalid_input", "Pass input, inputs, or inputsFile, not more than one.");
     }
-    if (!bulk && !single) {
-      throw new OpenAIDecisionsError("invalid_input", "Pass input for one item, or inputs for a batch.");
+    if (sourceCount === 0) {
+      throw new OpenAIDecisionsError("invalid_input", "Pass input for one item, or inputs or inputsFile for a batch.");
     }
-    const inputs = bulk ? parseBulkInputs(args.inputs) : [args.input];
+    const bulk = hasInputs || hasInputsFile;
+    const hasOutputFile = args.outputFile !== undefined;
+    const inlineResults = parseInlineResults(args.inlineResults, hasOutputFile, bulk);
     const concurrency = parseConcurrency(args.concurrency, bulk);
     const detail = parseDetail(args.detail) ?? (bulk ? "compact" : "full");
     const background = parseBackground(args.background, bulk);
     const { record, schema } = args.definition !== undefined
       ? await this.adHocRecord(caller, args)
       : this.registeredRecord(caller, args);
+    const fileAccess = hasInputsFile || hasOutputFile
+      ? await this.options.resolveCallerFileAccess?.(caller)
+      : undefined;
+    const outputFile = hasOutputFile
+      ? await this.validateOutputFile(args.outputFile, fileAccess)
+      : undefined;
+    const inputs = hasInputsFile
+      ? parseBulkInputs(await this.loadInputsFile(args.inputsFile, fileAccess))
+      : hasInputs
+        ? parseBulkInputs(args.inputs)
+        : [args.input];
     // Every input is checked before the key is read or any request is sent.
     const capability = this.imageCapabilities(record.provider);
     const validated = inputs.map((input, index) => {
@@ -478,8 +513,8 @@ export class OpenAIDecisionsService {
       const input = validated[0] as PreparedDecisionInput;
       await this.imageReferences(input, false);
       const run = await this.itemRunner(caller, record, signal);
-      const result = await this.inLane(record.decisionId, signal, async () => await run(input));
-      return detail === "compact" ? compactSingleResult(result) : result;
+      const raw = await this.inLane(record.decisionId, signal, async () => await run(input));
+      return await this.finishSingleInvoke(raw, detail, outputFile, inlineResults, fileAccess);
     }
     if (background && this.batches.unfinishedBackground(caller) >= DECISION_BATCH_LIMITS.backgroundPerThread) {
       throw new OpenAIDecisionsError(
@@ -487,7 +522,7 @@ export class OpenAIDecisionsService {
         `This thread already has ${DECISION_BATCH_LIMITS.backgroundPerThread} background batches running. Wait for one to finish or cancel one with decisions_batch_cancel.`,
       );
     }
-    const batch = this.newBatch(caller, record, validated.length, concurrency, background);
+    const batch = this.newBatch(caller, record, validated.length, concurrency, background, outputFile, detail);
     const run = validated.some((input) => !(input instanceof OpenAIDecisionsError))
       ? await this.itemRunner(caller, record, batch.controller.signal)
       : undefined;
@@ -508,7 +543,9 @@ export class OpenAIDecisionsService {
       void done.finally(() => this.runs.delete(batch.batchId));
       return {
         ...summarizeBatch(batch),
-        next: "Running in the background. End your turn: PwrAgent starts a turn on this thread when the batch ends. Read answers any time with decisions_batch_results.",
+        next: batch.outputFile
+          ? "Running in the background. End your turn: PwrAgent writes outputFile and starts a turn on this thread when the batch ends. Read answers any time with decisions_batch_results."
+          : "Running in the background. End your turn: PwrAgent starts a turn on this thread when the batch ends. Read answers any time with decisions_batch_results.",
       };
     }
     // A blocking batch stops when its call does. Its finished items stay
@@ -528,6 +565,12 @@ export class OpenAIDecisionsService {
     } finally {
       this.runs.delete(batch.batchId);
       signal?.removeEventListener("abort", onAbort);
+    }
+    if (!inlineResults) {
+      return {
+        ...summarizeBatch(batch),
+        detail,
+      };
     }
     const page = pageBatchResults(batch, { from: 0, limit: batch.count, status: "all", detail });
     return {
@@ -855,6 +898,8 @@ export class OpenAIDecisionsService {
     count: number,
     concurrency: number,
     background: boolean,
+    outputFile?: string,
+    outputDetail?: DecisionBatchDetail,
   ): DecisionBatchRecord {
     return {
       batchId: `batch_${(this.options.newBatchId ?? randomUUID)()}`,
@@ -873,8 +918,81 @@ export class OpenAIDecisionsService {
       failed: 0,
       skipped: 0,
       controller: new AbortController(),
+      ...(outputFile ? { outputFile, outputDetail: outputDetail ?? "compact" } : {}),
       definition: batchDefinition(record.questions, record.prefix),
     };
+  }
+
+  private async loadInputsFile(rawPath: unknown, access: DecisionFileAccess | undefined): Promise<unknown[]> {
+    try {
+      return await readDecisionInputsFile(rawPath, access);
+    } catch (error) {
+      if (error instanceof DecisionFileError) {
+        throw new OpenAIDecisionsError(error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async validateOutputFile(rawPath: unknown, access: DecisionFileAccess | undefined): Promise<string> {
+    try {
+      return await resolveWritableDecisionOutputFile(rawPath, access);
+    } catch (error) {
+      if (error instanceof DecisionFileError) {
+        throw new OpenAIDecisionsError(error.code, error.message);
+      }
+      throw error;
+    }
+  }
+
+  private async finishSingleInvoke(
+    raw: DecisionItemResult,
+    detail: DecisionBatchDetail,
+    outputFile: string | undefined,
+    inlineResults: boolean,
+    access: DecisionFileAccess | undefined,
+  ): Promise<Record<string, unknown>> {
+    const formatted = detail === "compact" ? compactSingleResult(raw) : raw;
+    if (!outputFile) return formatted;
+    let writtenPath: string;
+    try {
+      writtenPath = await writeDecisionOutputFile(outputFile, formatSingleOutputFile(formatted), access);
+    } catch (error) {
+      if (error instanceof DecisionFileError) {
+        throw new OpenAIDecisionsError(error.code, error.message);
+      }
+      throw new OpenAIDecisionsError("invalid_input", "Could not write outputFile.");
+    }
+    if (!inlineResults) {
+      return {
+        decisionId: raw.decisionId,
+        name: raw.name,
+        version: raw.version,
+        provider: raw.provider,
+        ...(raw.model ? { model: raw.model } : {}),
+        ...(raw.requestId ? { requestId: raw.requestId } : {}),
+        detail,
+        usage: raw.usage,
+        outputFile: writtenPath,
+      };
+    }
+    return { ...formatted, outputFile: writtenPath };
+  }
+
+  private async writeBatchOutputFile(batch: DecisionBatchRecord): Promise<void> {
+    if (!batch.outputFile) return;
+    try {
+      const access = await this.options.resolveCallerFileAccess?.(batch.caller);
+      const content = formatBatchOutputFile(batch, batch.outputDetail ?? "compact", batch.outputFile);
+      batch.outputFile = await writeDecisionOutputFile(batch.outputFile, content, access);
+    } catch (error) {
+      batch.outputFileError = error instanceof Error ? error.message : "Could not write outputFile.";
+      this.options.log?.warn("decision batch output file not written", {
+        decisionId: batch.decisionId,
+        batchId: batch.batchId,
+        error: error instanceof Error ? error.name : "unknown",
+      });
+    }
   }
 
   /**
@@ -1168,6 +1286,9 @@ export class OpenAIDecisionsService {
         ? "cancelled"
         : "completed";
     batch.finishedAt = this.now();
+    // Write caller outputFile before settling the end line so resultsFile
+    // persists both outputFile and any outputFileError across eviction/restart.
+    await this.writeBatchOutputFile(batch);
     // The end line goes out even at shutdown: the file is what survives it.
     const writer = this.writers.get(batch.batchId);
     writer?.append(batchEndEntry(batch));
@@ -1528,7 +1649,7 @@ function parseBulkInputs(value: unknown): unknown[] {
 
 function parseConcurrency(value: unknown, bulk: boolean): number {
   if (value === undefined) return OPENAI_DECISION_BOUNDS.bulkMaxConcurrency;
-  if (!bulk) throw new OpenAIDecisionsError("invalid_input", "concurrency applies only to inputs.");
+  if (!bulk) throw new OpenAIDecisionsError("invalid_input", "concurrency applies only to inputs or inputsFile.");
   if (!Number.isInteger(value) || (value as number) < 1 || (value as number) > OPENAI_DECISION_BOUNDS.bulkMaxConcurrency) {
     throw new OpenAIDecisionsError(
       "invalid_input",
@@ -1554,7 +1675,18 @@ function parseDetail(value: unknown): DecisionBatchDetail | undefined {
 function parseBackground(value: unknown, bulk: boolean): boolean {
   if (value === undefined) return false;
   if (typeof value !== "boolean") throw new OpenAIDecisionsError("invalid_input", "background must be true or false.");
-  if (value && !bulk) throw new OpenAIDecisionsError("invalid_input", "background applies only to inputs.");
+  if (value && !bulk) throw new OpenAIDecisionsError("invalid_input", "background applies only to inputs or inputsFile.");
+  return value;
+}
+
+function parseInlineResults(value: unknown, hasOutputFile: boolean, bulk: boolean): boolean {
+  if (value === undefined) return !hasOutputFile;
+  if (typeof value !== "boolean") {
+    throw new OpenAIDecisionsError("invalid_input", "inlineResults must be true or false.");
+  }
+  if (!value && !bulk && !hasOutputFile) {
+    throw new OpenAIDecisionsError("invalid_input", "inlineResults: false requires outputFile for a single input.");
+  }
   return value;
 }
 

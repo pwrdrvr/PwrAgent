@@ -52,6 +52,7 @@ import {
   type AppServerThreadActivityEntry,
   type AppServerThreadActivityDetail,
   type AppServerReviewContext,
+  type AppServerReviewOutput,
   type AppServerThreadImagePart,
   type AppServerThreadMessageOrigin,
   type AppServerThreadReplay,
@@ -449,6 +450,7 @@ export type BackendClient = {
   }): Promise<CodexAppServerRecycleOutcome | void>;
   readAccount?(): Promise<BackendAccountSummary>;
   readRateLimits?(): Promise<BackendRateLimitSummary[]>;
+  readAccountUsage?(): Promise<unknown>;
   interruptTurn(params: {
     threadId: string;
     turnId: string;
@@ -636,6 +638,13 @@ export type ThreadPrAutoDispatchHandler = {
     changes: ThreadPrAutoDispatchPreferenceChange[],
   ) => Promise<void>;
   cancelPending: (request: CancelThreadPrAutoDispatchRequest) => Promise<boolean>;
+  /** Auto-fix switched off, or back on, for one PR of the thread. */
+  pullRequestChanged?: (request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prKey: string;
+    enabled: boolean;
+  }) => Promise<void>;
   /** A lock or unlock moves the thread out of or back into the Auto-fix election. */
   lockChanged?: (request: {
     backend: AppServerBackendKind;
@@ -853,6 +862,8 @@ export type ReviewTerminal = {
   completedAt?: number;
   errorMessage?: string;
   method: "turn/completed" | "turn/failed" | "turn/cancelled";
+  output?: Extract<AppServerNotification, { method: "turn/completed" }>["params"]["turn"]["output"];
+  submittedOutput?: AppServerReviewOutput;
   threadId: string;
   turnId: string;
 };
@@ -1242,6 +1253,12 @@ export type PendingThreadMessageContext = {
   imageParts?: AppServerThreadImagePart[];
   retainedInput?: AppServerTurnInputItem[];
   origin?: AppServerThreadMessageOrigin;
+  /**
+   * Registered by an ACP turn start for its prompt. The prompt's own user
+   * item (`user:<turnId>`) claims it by turn, and the start writes its origin
+   * as that row, so the item carries the origin without writing it again.
+   */
+  turnStartPrompt?: true;
   text?: string;
   threadId: string;
   turnId?: string;
@@ -1305,6 +1322,7 @@ export type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<Ow
     | "listThreadCompactions"
     | "recordThreadCompaction"
     | "readTokenMiserGatePricingLines"
+    | "readTokenMiserLegacyReplayCounts"
     | "reconcileOrphanedThreadSubAgents"
     | "moveLegacyThreadSubAgents"
     | "moveLegacyThreadUsageActivities"

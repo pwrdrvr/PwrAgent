@@ -100,7 +100,7 @@ Read this before source edits, dependency installation, test execution, lint/too
 - The former ESLint configs and `lint:eslint:cached` / `lint:eslint:typed`
   commands remain available for migration comparisons.
 - The CI `Lint` job also runs SQL, Codex-storage, colors, Electron-version,
-  license, typecheck and dependency-boundary checks.
+  property-budget, license, typecheck and dependency-boundary checks.
 - `.oxlintrc.json` preserves the recommended correctness rules and classic
   renderer React Hooks checks. `oxlint.typed.json` scopes the typed rule.
 - Fix all lint errors. Existing `no-explicit-any`, `exhaustive-deps` and

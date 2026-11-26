@@ -607,7 +607,7 @@ describe("Star Map Agent flights", () => {
       ok: true,
       data: {
         layout: "lanes",
-        hideOfflineInstances: false,
+        hideOfflineInstances: true,
         filters: [
           { key: "attention", label: "Attention", state: "include" },
           { key: "agent", label: "Agents", state: "exclude" },

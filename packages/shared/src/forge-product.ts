@@ -39,7 +39,7 @@ export const FORGE_PRODUCTS = {
     saasHost: "gitlab.com",
     changeRequest: "merge request",
     changeRequestPath: "-/merge_requests",
-    pollBatchSize: 1,
+    pollBatchSize: 8,
     nestedNamespaces: true,
     remoteHostPrefix: "gitlab.",
     configurableHost: true,

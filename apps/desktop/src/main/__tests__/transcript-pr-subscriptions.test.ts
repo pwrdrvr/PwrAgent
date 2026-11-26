@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { TranscriptPrSubscriptions, parseTranscriptPullRequest } from "../pr-status/transcript-pr-subscriptions";
 import { PrPollingScheduler, TIER_CADENCE_MS } from "../pr-status/pr-polling-scheduler";
+import type { ForgePrRef } from "../pr-status/forge-pr-ref";
 
 const url = "https://github.com/example/project/pull/42";
 const pr: PrSummary = { provider: "github.com", org: "example", repo: "project", number: 42, url, state: "passing" };
@@ -19,18 +20,29 @@ afterEach(() => {
 });
 
 describe("transcript PR subscriptions", () => {
-  function onDemandHarness(count: number, tryTakeToken = () => true) {
+  function onDemandHarness(count: number, options: {
+    tryTakeToken?: () => boolean;
+    separateProjects?: boolean;
+  } = {}) {
     subscriptions.set(1, { removedUrls: [], updates: Array.from({ length: count }, (_, index) => ({
-      url: `https://gitlab.com/example/project/-/merge_requests/${index + 1}`, visible: true,
+      url: `https://gitlab.com/example/${options.separateProjects ? `project-${index + 1}` : "project"}/-/merge_requests/${index + 1}`,
+      visible: true,
     })) }, vi.fn());
-    const fetch = vi.fn().mockResolvedValue([]);
+    const fetch = vi.fn(async (_refs: ForgePrRef[]): Promise<PrSummary[]> => []);
     const listTargets = vi.fn(() => subscriptions.targets());
     const scheduler = new PrPollingScheduler({
       listTargets,
       getFocusedThreadKeys: () => new Set(),
       isWindowVisible: () => true,
-      tryTakeToken,
-      fetchPullRequests: fetch,
+      tryTakeToken: options.tryTakeToken ?? (() => true),
+      fetchPullRequests: async (refs, poll) => {
+        // The request mock counts actual transport starts after GitLab admission.
+        if (poll && !poll.takeFirstRequestToken()) {
+          for (const ref of refs) poll.defer(ref.number);
+          return [];
+        }
+        return await fetch(refs);
+      },
       applyResults: async () => [],
       onTargetsHandled: (keys) => subscriptions.markHandled(keys),
     });
@@ -40,8 +52,8 @@ describe("transcript PR subscriptions", () => {
     return { fetch, listTargets, scheduler };
   }
 
-  it("drains four GitLab initial reads across the three-batch cap without background polling", async () => {
-    const { fetch, listTargets } = onDemandHarness(4);
+  it("drains four GitLab projects across the three-batch cap without background polling", async () => {
+    const { fetch, listTargets } = onDemandHarness(4, { separateProjects: true });
     await vi.advanceTimersByTimeAsync(50);
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(subscriptions.pendingTargets()).toMatchObject([{ pr: { number: 4 } }]);
@@ -56,10 +68,20 @@ describe("transcript PR subscriptions", () => {
     expect(listTargets).not.toHaveBeenCalled();
   });
 
+  it("handles all subscribed MRs from one GitLab project in one paid batch", async () => {
+    const budget = vi.fn(() => true);
+    const { fetch } = onDemandHarness(4, { tryTakeToken: budget });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(budget).toHaveBeenCalledOnce();
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]?.[0].map((ref) => ref.number)).toEqual([1, 2, 3, 4]);
+    expect(subscriptions.pendingTargets()).toEqual([]);
+  });
+
   it("retains initial reads while the shared budget is empty, then retries at a bounded cadence", async () => {
     let available = false;
     const budget = vi.fn(() => available);
-    const { fetch, listTargets } = onDemandHarness(1, budget);
+    const { fetch, listTargets } = onDemandHarness(1, { tryTakeToken: budget });
     await vi.advanceTimersByTimeAsync(50);
     await vi.advanceTimersByTimeAsync(15_000);
     expect(fetch).not.toHaveBeenCalled();
@@ -75,7 +97,7 @@ describe("transcript PR subscriptions", () => {
 
   it("cancels deferred admission when the last window closes", async () => {
     const budget = vi.fn(() => false);
-    const { fetch } = onDemandHarness(4, budget);
+    const { fetch } = onDemandHarness(4, { tryTakeToken: budget });
     await vi.advanceTimersByTimeAsync(50);
     subscriptions.clearSender(1);
     await vi.advanceTimersByTimeAsync(30_000);

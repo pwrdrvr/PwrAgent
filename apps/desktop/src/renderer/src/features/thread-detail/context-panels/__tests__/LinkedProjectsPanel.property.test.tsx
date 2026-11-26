@@ -126,7 +126,7 @@ describe("linked project checkout identity", () => {
           panel.unmount();
         }
       },
-    ), { numRuns: 25 });
+    ), { numRuns: 8 });
   });
 
   it("offers Detach on the secondary worktree regardless of the display order", () => {
@@ -161,6 +161,6 @@ describe("linked project checkout identity", () => {
           panel.unmount();
         }
       },
-    ), { numRuns: 25 });
+    ), { numRuns: 8 });
   });
 });

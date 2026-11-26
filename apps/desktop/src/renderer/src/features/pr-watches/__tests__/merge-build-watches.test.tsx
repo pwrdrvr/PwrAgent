@@ -17,6 +17,7 @@ import {
 } from "../../thread-dependencies/useThreadDependencyIndicators";
 import { describeMergeBuildWatchRow, mergeBuildWaitForPr } from "../merge-build-watches";
 import { PullRequestWatchList } from "../PullRequestWatchList";
+import { ThreadForgeAutomationContext } from "../../forge-automation/thread-hands-off";
 import { PullRequestWatchMenuItems } from "../PullRequestWatchMenuItems";
 import {
   resolvePrChipWatch,
@@ -233,4 +234,53 @@ describe("the hover card and the rail", () => {
     expect(stop).toBeDisabled();
     await waitFor(() => expect(stop).toBeEnabled());
   });
+
+  it("switches Auto-fix for one PR from its watch list, and back on once it is off", () => {
+    const pr: PrSummary = {
+      provider: "github.com", org: "example", repo: "app", number: 41, state: "passing", lifecycleState: "open",
+      url: "https://github.com/example/app/pull/41",
+    };
+    const onSetPrAutoFix = vi.fn();
+    const onTurnOffAutoFix = vi.fn();
+    const { rerender } = render(
+      <PullRequestWatchList pr={pr} watches={[]} autoFix onTurnOffAutoFix={onTurnOffAutoFix} onSetPrAutoFix={onSetPrAutoFix} now={NOW} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Skip This PR, #41: the thread's other PRs keep Auto-fix" }));
+    expect(onSetPrAutoFix).toHaveBeenLastCalledWith(false);
+    expect(onTurnOffAutoFix).not.toHaveBeenCalled();
+    rerender(
+      <PullRequestWatchList pr={pr} watches={[]} autoFix={false} autoFixBlocked={{ reason: "switched_off" }}
+        onTurnOffAutoFix={onTurnOffAutoFix} onSetPrAutoFix={onSetPrAutoFix} now={NOW} />,
+    );
+    expect(screen.getByText("Auto-fix off for this PR")).toBeInTheDocument();
+    expect(screen.queryByText(/handled by/)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Turn On Auto-fix for #41" }));
+    expect(onSetPrAutoFix).toHaveBeenLastCalledWith(true);
+  });
+
+  it("names a hands-off PR on its card and in its watch list instead of claiming Auto-fix repairs it", () => {
+    const pr: PrSummary = {
+      provider: "github.com", org: "upstream", repo: "app", number: 7, state: "failing", lifecycleState: "open",
+      url: "https://github.com/upstream/app/pull/7", labels: ["takeover:maintainer"],
+    };
+    const thread = {
+      id: "t", source: "codex", title: "t", titleSource: "explicit", inbox: { inInbox: false },
+      linkedDirectories: [{ path: "/work/app" }],
+    } as unknown as NavigationThreadSummary;
+    const lookup = () => ({ handsOff: [{ repository: "upstream/app", label: "takeover:*" }] });
+    render(
+      <ThreadForgeAutomationContext.Provider value={lookup}>
+        <PrStatusCard pr={pr} watch={{ autoFix: true }} stackThread={thread} now={NOW} />
+      </ThreadForgeAutomationContext.Provider>,
+    );
+    expect(screen.getByText("hands-off")).toBeInTheDocument();
+    expect(screen.getByText("Labeled takeover:maintainer")).toBeInTheDocument();
+    expect(screen.queryByText("on")).toBeNull();
+    cleanup();
+    render(<PullRequestWatchList pr={pr} watches={[]} autoFix={false}
+      autoFixBlocked={{ reason: "hands_off", detail: "hands-off, labeled takeover:maintainer" }} now={NOW} />);
+    expect(screen.getByText("Auto-fix hands-off")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Auto-fix/ })).toBeNull();
+  });
 });
+

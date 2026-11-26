@@ -22,6 +22,14 @@ recovery belong only in PwrSuiteLab. Never copy private access values,
 addresses, usernames, fingerprints, keys, configuration contents, host
 inventory, or lab construction details into PwrAgent.
 
+## Reserve host CPU capacity
+
+Use the advisory [local CPU checkout workflow](../../../docs/local-cpu-checkout.md)
+to reserve 4 CPUs on the VM host before `lab_e2e_start`, `lab_e2e_acquire`,
+`lab_e2e_run`, or a managed-controller fallback run. Use the same checkout
+when handing an interactive display reservation over to a job. Hold it
+through your VM use and any shutdown Control performs for your request.
+
 ## Prefer PwrSuiteLab Control MCP
 
 Discover the connected Control tools and obtain the current `tools/list`
@@ -99,9 +107,11 @@ For `lab_e2e_acquire`, use the same top-level target and attribution but omit
    Use `lab_e2e_collect` with the target and saved run ID, polling its request
    if needed. Inspect the returned artifact directory and log, and report test
    exit code, setup failures, and missing artifacts. Never commit raw logs.
-   Collection does not start a stopped VM: use `lab_e2e_start` for the exact
-   target before collecting, within the authorized task. Do not rerun tests
-   just to retrieve artifacts.
+   Collection can retrieve previously collected artifacts while the VM is
+   stopped. If artifacts still need to be collected from a stopped VM, follow
+   the host CPU checkout guidance above before calling `lab_e2e_start` for
+   the exact target, within the authorized task. Do not rerun tests just to
+   retrieve artifacts.
 
 ### Invalid arguments are not a permission diagnosis
 

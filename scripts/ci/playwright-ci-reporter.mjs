@@ -5,8 +5,9 @@ import { sameTestIds } from "./retry-failures.mjs";
 export default class CiRetryReporter {
   errors = 0;
 
-  onBegin(_config, suite) {
+  onBegin(config, suite) {
     this.suite = suite;
+    this.rootDir = config.rootDir;
     this.selectedIds = suite.allTests().map((test) => test.id);
   }
 
@@ -20,6 +21,7 @@ export default class CiRetryReporter {
     mkdirSync(path.dirname(destination), { recursive: true });
     const tests = this.suite?.allTests().map((test) => ({
       id: test.id,
+      file: path.relative(this.rootDir, test.location.file).split(path.sep).join("/"),
       name: test.titlePath().filter(Boolean).join(" > "),
       outcome: test.outcome(),
       completed: test.results.length > 0

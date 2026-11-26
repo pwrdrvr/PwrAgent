@@ -1,11 +1,12 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { runNativeFixtureCommand } from "../src/test-setup/native-helper-fixture";
-import { appendNativeOracleTiming } from "./native-relay-oracle-profile.mjs";
+import { appendNativeOracleTiming, profileNativeBuild } from "./native-relay-oracle-profile.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const fixtures = [];
@@ -16,22 +17,28 @@ afterEach(async () => {
   for (const root of fixtures.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-function fixture() {
+function fixture(callerSource) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "relay-build-oracle-")));
   fixtures.push(root);
-  cpSync(join(desktop, "scripts"), join(root, "scripts"), { recursive: true, filter: (file) =>
-    file === join(desktop, "scripts") || ["build-mcp-ipc-relay.mjs", "native-helper-cache.mjs"].some((name) => file === join(desktop, "scripts", name)) });
-  cpSync(join(desktop, "native/mcp-ipc-relay"), join(root, "native/mcp-ipc-relay"), { recursive: true });
+  mkdirSync(join(root, "scripts"));
+  for (const name of ["build-mcp-ipc-relay.mjs", "native-helper-cache.mjs"]) {
+    copyFileSync(join(desktop, "scripts", name), join(root, "scripts", name));
+  }
   const builder = join(root, "scripts/build-mcp-ipc-relay.mjs");
   const source = join(root, "native/mcp-ipc-relay/main.c");
   const header = join(root, "native/mcp-ipc-relay/maintenance-lock.h");
-  // Keep the production implementation callable. Only the fixture adds a
-  // query that observes which source, local header and flags were compiled.
-  const entry = process.platform === "win32" ? "wmain" : "main";
-  const parameters = process.platform === "win32" ? "int argc, wchar_t **argv" : "int argc, char **argv";
-  const match = process.platform === "win32" ? 'wcscmp(argv[1], L"--build-oracle")' : 'strcmp(argv[1], "--build-oracle")';
-  writeFileSync(header, readFileSync(header, "utf8") + '\n#define BUILD_ORACLE_HEADER "header-one"\n');
-  writeFileSync(source, `#define ${entry} original_entry\n${readFileSync(source, "utf8")}\n#undef ${entry}
+  if (callerSource !== undefined) {
+    mkdirSync(dirname(source), { recursive: true });
+    writeFileSync(source, callerSource);
+  } else {
+    cpSync(join(desktop, "native/mcp-ipc-relay"), dirname(source), { recursive: true });
+    // Keep the production implementation callable. Only the fixture adds a
+    // query that observes which source, local header and flags were compiled.
+    const entry = process.platform === "win32" ? "wmain" : "main";
+    const parameters = process.platform === "win32" ? "int argc, wchar_t **argv" : "int argc, char **argv";
+    const match = process.platform === "win32" ? 'wcscmp(argv[1], L"--build-oracle")' : 'strcmp(argv[1], "--build-oracle")';
+    writeFileSync(header, readFileSync(header, "utf8") + '\n#define BUILD_ORACLE_HEADER "header-one"\n');
+    writeFileSync(source, `#define ${entry} original_entry\n${readFileSync(source, "utf8")}\n#undef ${entry}
 #ifndef BUILD_ORACLE_FLAG
 #define BUILD_ORACLE_FLAG 1
 #endif
@@ -45,6 +52,7 @@ int ${entry}(${parameters}) {
   return original_entry(argc, argv);
 }
 `);
+  }
   let attempt = 0;
   const program = (options = {}, profile = process.env.PWRAGENT_NATIVE_ORACLE_PROFILE) => {
     const label = { root, attempt: ++attempt };
@@ -254,34 +262,45 @@ it("only the active owner can replace or invalidate a shared native output", () 
 });
 
 it("invalidates linked input identity even when library size and mtime are restored", () => {
-  const f = fixture();
   if (process.platform === "win32") {
+    const f = fixture();
     const output = f.build({ reuse: true });
     expect(existsSync(`${output}.build.json`)).toBe(false);
     expect(observe(output)).toBe("source-one header-one flag-1");
     return;
   }
-  const library = join(f.root, "library");
-  mkdirSync(library);
-  const source = join(library, "value.c");
-  const object = join(library, "value.o");
-  const archive = join(library, "libvalue.a");
-  writeFileSync(source, 'const char *oracle_library_value(void) { return "lib-one"; }\n');
-  execFileSync("cc", ["-c", "-O2", source, "-o", object], { stdio: "pipe" });
-  execFileSync("ar", ["rcs", archive, object], { stdio: "pipe" });
-  // Use a whole-second timestamp so utimesSync can restore it exactly.
-  utimesSync(archive, 1, 1);
-  // This oracle only needs a caller for the archive symbol. The other cases
-  // exercise the real relay entry point and its headers.
-  writeFileSync(f.source, `#include <stdio.h>
+  const f = fixture(`int puts(const char *);
 const char *oracle_library_value(void);
 int main(void) {
   puts(oracle_library_value());
   return 0;
 }
 `);
+  const library = join(f.root, "library");
+  mkdirSync(library);
+  const object = join(library, "value.o");
+  const archive = join(library, "libvalue.a");
+  const started = performance.now();
+  try {
+    execFileSync("cc", ["-x", "c", "-c", "-", "-o", object,
+      ...(process.platform === "darwin" ? ["-mmacosx-version-min=12.0"] : []),
+    ], {
+      input: 'const char *oracle_library_value(void) { return "lib-one"; }\n', stdio: "pipe",
+    });
+    execFileSync("ar", ["rcs", archive, object], { stdio: "pipe" });
+  } finally {
+    appendNativeOracleTiming({ kind: "archive-setup", label: { root: f.root }, ms: performance.now() - started });
+  }
+  // Use a whole-second timestamp so utimesSync can restore it exactly.
+  utimesSync(archive, 1, 1);
   writeFileSync(f.builder, readFileSync(f.builder, "utf8").replace('source, "-o", output', `source, ${JSON.stringify(`-Wl,${archive}`)}, "-o", output`));
-  const output = f.build({ reuse: true });
+  // Load the isolated production builder once. This case keeps the same
+  // environment throughout and needs no Node subprocess for either build.
+  const { buildMcpIpcRelay } = createRequire(import.meta.url)(f.builder);
+  let attempt = 0;
+  const build = () => profileNativeBuild({ root: f.root, attempt: ++attempt },
+    () => buildMcpIpcRelay({ outputRoot: f.root, reuse: true }));
+  const output = build();
   const inputs = JSON.parse(readFileSync(`${output}.build.json`, "utf8")).inputs;
   expect(inputs.some((input) => input.path === archive)).toBe(true);
   expect(observe(output)).toBe("lib-one");
@@ -299,7 +318,7 @@ int main(void) {
   expect(updated.ino).toBe(original.ino);
   expect(updated.size).toBe(original.size);
   expect(updated.mtimeNs).toBe(original.mtimeNs);
-  f.build({ reuse: true });
+  expect(build()).toBe(output);
   expect(observe(output)).toBe("lib-two");
 });
 

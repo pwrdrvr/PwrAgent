@@ -49,13 +49,20 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import { ProviderSetupStep } from "../guided-setup/MessagingSetupSteps";
 import { chooseSelectOption, selectOptionLabels } from "../../../test/select";
 import {
+  chooseEffort,
+  chooseModelSettingsOption,
+  modelSettingsOptionNames,
+  modelSettingsPill,
+  openModelSettings,
+} from "../../../test/model-settings";
+import {
   CURRENT_CODEX_MODEL_LABELS,
   PROVIDER_MODEL,
   SUPERSEDED_CODEX_MODEL_LABELS,
   codexCatalogArbitrary,
   codexCatalogModels,
-  expectedModelSelectSections,
-  selectSections,
+  expectModelSettingsToList,
+  expectedModelDropdown,
 } from "../../../test/model-catalog";
 import { pressEscape, tabEscapes } from "../../../test/tab-walk";
 import type { AppearanceController } from "../../../lib/useAppearance";
@@ -1071,19 +1078,18 @@ describe("SettingsScreen", () => {
   it.each([
     {
       models: codexCatalogModels(),
-      sections: [
-        { labels: ["Provider advertised default", ...CURRENT_CODEX_MODEL_LABELS] },
-        { group: "Other models", labels: SUPERSEDED_CODEX_MODEL_LABELS },
-      ],
+      rows: ["Provider default", ...CURRENT_CODEX_MODEL_LABELS],
+      other: SUPERSEDED_CODEX_MODEL_LABELS,
       count: 8,
     },
     {
       // The property's smallest counterexample: one model per provider.
       models: [{ id: "gpt-6.1-sol", label: "GPT-6.1-Sol" }, PROVIDER_MODEL],
-      sections: [{ labels: ["Provider advertised default", "GPT-6.1-Sol"] }],
+      rows: ["Provider default", "GPT-6.1-Sol"],
+      other: [],
       count: 1,
     },
-  ])("keeps OpenAI defaults scoped like the launchpad provider picker ($count models)", async ({ models, sections, count }) => {
+  ])("keeps OpenAI defaults scoped like the launchpad provider picker ($count models)", async ({ models, rows, other, count }) => {
     const cachedBackends = [{
       kind: "codex",
       label: "OpenAI",
@@ -1109,8 +1115,8 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(selectSections(screen.getByLabelText("OpenAI default model"))).toEqual(sections);
-    const field = screen.getByLabelText("OpenAI default model").closest(".settings-field") as HTMLElement;
+    expectModelSettingsToList(openModelSettings("OpenAI default model"), { rows, groups: [], other });
+    const field = modelSettingsPill("OpenAI default model").closest(".settings-field") as HTMLElement;
     expect(within(field).getByText(`${count} discovered model${count === 1 ? "" : "s"}`)).toBeInTheDocument();
     // Let the mount's agent read land inside act.
     await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
@@ -1144,13 +1150,12 @@ describe("SettingsScreen", () => {
             onClose={() => undefined}
           />,
         );
-        expect(
-          selectSections(screen.getByLabelText("OpenAI default model")),
-        ).toEqual(expectedModelSelectSections({
+        expectModelSettingsToList(openModelSettings("OpenAI default model"), expectedModelDropdown({
           kind: "codex",
           models: buildProviderPickerEntries(cachedBackends)
             .find((entry) => entry.value === "codex")!.models,
-          leading: ["Provider advertised default"],
+          leading: ["Provider default"],
+          otherInline: true,
         }));
         await waitFor(() => expect(listAcpAgents).toHaveBeenCalled());
         await act(async () => undefined);
@@ -1195,7 +1200,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    chooseSelectOption(screen.getByLabelText("OpenAI default model"), "GPT-6-Astra");
+    chooseModelSettingsOption("Model", "GPT-6-Astra", "OpenAI default model");
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenLastCalledWith({
         models: {
@@ -1234,17 +1239,18 @@ describe("SettingsScreen", () => {
       desktopApi={{ listAcpAgents, listBackends: async () => await new Promise<never>(() => undefined) }}
       initialSection="models" settings={settings} onClose={() => undefined}
     />);
-    expect(selectOptionLabels(screen.getByLabelText("MathOS default model"))).toEqual([
-      "Provider advertised default", "Math one", "Math two",
+    expect(modelSettingsOptionNames("Model", "MathOS default model")).toEqual([
+      "Provider default", "Math one", "Math two",
     ]);
-    chooseSelectOption(screen.getByLabelText("MathOS default model"), "Math two");
+    chooseModelSettingsOption("Model", "Math two", "MathOS default model");
     await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
       ...snapshot.models.providerDefaults,
       "codex-provider:mathos": {
         model: "@mathos/two", reasoningEffortsByModel: { "@mathos/one": "low", "@mathos/two": "high" },
       },
     } } }));
-    chooseSelectOption(screen.getByLabelText("MathOS default reasoning"), "high");
+    chooseEffort("high", "MathOS default model");
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     await waitFor(() => expect(settings.writeConfig).toHaveBeenLastCalledWith({ models: { providerDefaults: {
       ...snapshot.models.providerDefaults,
       "codex-provider:mathos": { model: "@mathos/one", reasoningEffortsByModel: { "@mathos/one": "high" } },
@@ -1336,9 +1342,8 @@ describe("SettingsScreen", () => {
     );
 
     expect(screen.getByText("1 discovered model")).toBeInTheDocument();
-    expect(
-      selectOptionLabels(screen.getByLabelText("OpenAI default model")),
-    ).toContain("GPT-5.6-Sol");
+    expect(modelSettingsOptionNames("Model", "OpenAI default model")).toContain("GPT-5.6-Sol");
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     expect(screen.queryByText("No provider has reported a model catalog yet."))
       .not.toBeInTheDocument();
     await waitFor(() => {
@@ -4624,8 +4629,9 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    const reasoning = await screen.findByLabelText("Codex default reasoning");
-    chooseSelectOption(reasoning, "xhigh");
+    await screen.findByRole("button", { name: /^Codex default model/ });
+    chooseEffort("xhigh", "Codex default model");
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         models: {
@@ -4648,12 +4654,10 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(
       "Changing a model, reasoning, or access updates all launchpads for that provider in this profile. Existing threads keep their settings.",
     )).toBeInTheDocument();
-    expect(
-      screen.getByRole("combobox", { name: "Codex default model" }),
-    ).toHaveClass("settings-select--chip");
-    expect(
-      screen.getByRole("combobox", { name: "Codex default reasoning" }),
-    ).toHaveClass("settings-select--chip");
+    // Model and effort are one pill, as in the composer.
+    expect(modelSettingsPill("Codex default model").closest(".model-settings"))
+      .toHaveClass("model-settings--setting");
+    expect(screen.queryByRole("combobox", { name: /^Codex default/ })).not.toBeInTheDocument();
 
     fireEvent.click(
       screen.getByRole("button", { name: "Schedule existing threads…" }),

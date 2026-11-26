@@ -84,8 +84,8 @@ describe("restart continuation gate", () => {
 });
 
 describe("planRestartDispatch", () => {
-  it("staggers continuations in batches, each with its own jitter", () => {
-    const randoms = [0, 0.5, 1, 0.25, 0, 0, 0.1, 0.9, 0.5];
+  it("starts the first continuation without jitter and staggers the rest in batches", () => {
+    const randoms = [0.5, 1, 0.25, 0, 0, 0.1, 0.9, 0.5];
     let index = 0;
     const entries = Array.from({ length: 9 }, (_, i) => ({ entryId: `e${i}`, threadKey: `codex:t${i}` }));
     const plan = planRestartDispatch(entries, {
@@ -107,16 +107,28 @@ describe("planRestartDispatch", () => {
   });
 
   it("clamps out-of-range options and random values", () => {
-    const plan = planRestartDispatch([{ entryId: "a", threadKey: "codex:a" }], {
-      now: 0,
-      batchSize: 0,
-      firstDelayMs: -5,
-      intervalMs: -5,
-      jitterMs: 100,
-      releaseGraceMs: -1,
-      random: () => 7,
+    const plan = planRestartDispatch(
+      [
+        { entryId: "a", threadKey: "codex:a" },
+        { entryId: "b", threadKey: "codex:b" },
+      ],
+      {
+        now: 0,
+        batchSize: 0,
+        firstDelayMs: -5,
+        intervalMs: -5,
+        jitterMs: 100,
+        releaseGraceMs: -1,
+        random: () => 7,
+      },
+    );
+    expect(plan).toEqual({
+      schedule: [
+        { entryId: "a", threadKey: "codex:a", dispatchAt: 0 },
+        { entryId: "b", threadKey: "codex:b", dispatchAt: 100 },
+      ],
+      releaseBy: 100,
     });
-    expect(plan).toEqual({ schedule: [{ entryId: "a", threadKey: "codex:a", dispatchAt: 100 }], releaseBy: 100 });
   });
 
   it("releases at once with nothing to send", () => {

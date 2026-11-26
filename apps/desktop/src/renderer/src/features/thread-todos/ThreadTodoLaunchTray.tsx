@@ -3,10 +3,14 @@ import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { BanIcon, CheckIcon, CloseIcon, InfoIcon } from "../../icons";
 import { PendingSpinner } from "../../components/PendingSpinner";
 import { useNowWhileActive } from "../thread-detail/context-panels/RailCardTiming";
-import { dismissThreadTodoLaunch, type ThreadTodoLaunch } from "./thread-todo-launches";
+import {
+  pauseThreadTodoLaunchDismissal,
+  THREAD_TODO_LAUNCH_DISMISS_MS,
+  threadTodoLaunchDismissRemainingMs,
+  type ThreadTodoLaunch,
+} from "./thread-todo-launches";
 
-/** How long a successful start stays in the tray, while nothing pauses it. */
-export const THREAD_TODO_LAUNCH_DISMISS_MS = 6_000;
+export { THREAD_TODO_LAUNCH_DISMISS_MS } from "./thread-todo-launches";
 /** The arrival wash's length; a row older than this is not new on mount. */
 const ARRIVE_MS = 600;
 const SHOW_CARD_AFTER_SECONDS = 60;
@@ -81,7 +85,9 @@ function ThreadTodoLaunchRow(props: {
   // Only a row that just arrived washes in; one shown again after a thread
   // switch does not.
   const [arriving] = useState(() => Date.now() - launch.startedAt < ARRIVE_MS);
-  useDismissCountdown(launch.id, launch.phase === "started", props.paused);
+  useEffect(() => {
+    if (props.paused && launch.phase === "started") return pauseThreadTodoLaunchDismissal(launch);
+  }, [launch, props.paused]);
   const started = launch.todo.startedThread;
   const state = launch.phase === "starting" ? "Starting…"
     : launch.phase === "started" ? (started?.instanceLabel ? `Started on ${started.instanceLabel}` : "Started")
@@ -142,27 +148,18 @@ function ThreadTodoLaunchRow(props: {
           </button>
         ) : null}
       </span>
-      {launch.phase === "started" ? (
-        <span
-          className="thread-todo-launches__countdown"
-          style={{ animationDuration: `${THREAD_TODO_LAUNCH_DISMISS_MS}ms` }}
-          aria-hidden="true"
-        />
-      ) : null}
+      {launch.phase === "started" ? <ThreadTodoLaunchCountdown launch={launch} /> : null}
     </li>
   );
 }
 
-/** Closes a successful row once its time is up, keeping what is left across pauses. */
-function useDismissCountdown(id: string, active: boolean, paused: boolean): void {
-  const remaining = useRef(THREAD_TODO_LAUNCH_DISMISS_MS);
-  useEffect(() => {
-    if (!active || paused) return;
-    const began = Date.now();
-    const timer = setTimeout(() => dismissThreadTodoLaunch(id), remaining.current);
-    return () => {
-      clearTimeout(timer);
-      remaining.current = Math.max(0, remaining.current - (Date.now() - began));
-    };
-  }, [id, active, paused]);
+function ThreadTodoLaunchCountdown({ launch }: { launch: ThreadTodoLaunch }) {
+  const [elapsed] = useState(() => THREAD_TODO_LAUNCH_DISMISS_MS - threadTodoLaunchDismissRemainingMs(launch));
+  return (
+    <span
+      className="thread-todo-launches__countdown"
+      style={{ animationDuration: `${THREAD_TODO_LAUNCH_DISMISS_MS}ms`, animationDelay: `${-elapsed}ms` }}
+      aria-hidden="true"
+    />
+  );
 }

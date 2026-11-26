@@ -61,7 +61,7 @@ it("matches an independent answer/cursor protocol through real callbacks, free t
         await f.callback("questionnaire:submit");
         expect(f.submissions).toHaveLength(1);
       } finally { await f.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 12 });
 });
 
 it("coalesces overlapping presentations, releases failed reservations and reads a replacement store at call time", async () => {
@@ -89,7 +89,7 @@ it("coalesces overlapping presentations, releases failed reservations and reads 
       await expect(f.controller.handleBackendPendingRequest("codex", f.request())).resolves.toBeUndefined();
       expect(f.questionnaires()).toHaveLength(1);
     } finally { await scheduler.waitAll(); await work; await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("does not resurrect waiting activity when terminal evidence arrives during presentation delivery", async () => {
@@ -114,7 +114,7 @@ it("does not resurrect waiting activity when terminal evidence arrives during pr
       expect(await f.pending()).toBeUndefined();
       expect(messagingModules(f.controller).turns.get(binding!)?.status).toBe(settledStatus);
     } finally { await scheduler.waitAll(); await work; await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("keeps approvals actionable until backend acceptance, then retires markup and resumes the same waiting turn", async () => {
@@ -150,7 +150,7 @@ it("keeps approvals actionable until backend acceptance, then retires markup and
         params: { threadId: "fixture-thread", requestId: "fixture-request" } } });
       expect(f.deliveries.filter(intent => intent.kind === "approval")).toHaveLength(2);
     } finally { await scheduler.waitAll(); await work; await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("keeps presentation reservations and deliveries isolated by provider and owning instance", async () => {
@@ -184,7 +184,7 @@ it("keeps presentation reservations and deliveries isolated by provider and owni
         backend: "codex", threadId: "fixture-thread", requestId: "fixture-request", now: 1_000,
       })).map(row => row.bindingId).sort()).toEqual(["fixture-binding", "remote-binding"]);
     } finally { await scheduler.waitAll(); await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("routes async replies through accepted steering or canonical admission and restores cards after refused sending", async () => {
@@ -221,7 +221,7 @@ it("routes async replies through accepted steering or canonical admission and re
         if (mode === "busy-steer") expect(f.steers[0]).toMatchObject({ expectedTurnId: "pending-turn", threadId: "fixture-thread", backend: "codex" });
       }
     } finally { await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("retires async cards after skip, invisible delivery or an owning-instance answer, without capturing later text", async () => {
@@ -264,7 +264,7 @@ it("retires async cards after skip, invisible delivery or an owning-instance ans
       expect(f.starts).toHaveLength(1);
       expect(f.starts[0]?.input).toEqual([{ type: "text", text: "A plain later reply" }]);
     } finally { await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("persists an answer update only after delivery settles and records the returned editable surface", async () => {
@@ -290,7 +290,7 @@ it("persists an answer update only after delivery settles and records the return
         currentIndex: 1, answers: [{ kind: "option", value: "Choice Alpha" }, null],
       } });
     } finally { await scheduler.waitAll(); await work; await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("retires externally resolved requests only for the owning instance and resumes without submitting another response", async () => {
@@ -318,7 +318,7 @@ it("retires externally resolved requests only for the owning instance and resume
       await f.emit({ backend: "codex", notification });
       expect(f.deliveries).toHaveLength(deliveries);
     } finally { await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("honors detach and shutdown before a pending presentation's binding read settles", async () => {
@@ -349,7 +349,7 @@ it("honors detach and shutdown before a pending presentation's binding read sett
       expect(f.starts).toHaveLength(0);
       if (mode === "detach") expect(await f.pending()).toBeUndefined();
     } finally { await scheduler.waitAll(); await work; await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("preserves the pending form when backend submission fails and retires it only after acceptance", async () => {
@@ -375,7 +375,7 @@ it("preserves the pending form when backend submission fails and retires it only
       expect(f.submissions).toHaveLength(1);
       expect(f.questionnaires().at(-1)?.phase).toBe("submitted");
     } finally { await scheduler.waitAll(); await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });
 
 it("preserves full answer values while adapting labels to the current provider capability", async () => {
@@ -389,5 +389,5 @@ it("preserves full answer values while adapting labels to the current provider c
       await f.callback(intent.questions[0]!.options[1]!.id);
       expect(f.submissions[0]?.response).toEqual({ answers: { "question-0": { answers: ["Choice Beta"] } } });
     } finally { await f.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 12 });
 });

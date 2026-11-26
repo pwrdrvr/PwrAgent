@@ -461,7 +461,9 @@ class ThreadLinkMetadataStore {
     listeners.add(listener);
     this.listeners.set(key, listeners);
     if (!this.links.has(key)) {
-      this.links.set(key, link);
+      // A subscription seeds thread facts, which are shared by every link to
+      // the thread, including links with different message anchors.
+      this.links.set(key, link.messageId ? { ...link, messageId: undefined } : link);
     }
 
     return () => {
@@ -918,9 +920,9 @@ export function ThreadLinkProvider(props: {
           return undefined;
         }
         const liveResolved = metadataStore.getSnapshot(resolved);
-        return ref.messageId
-          ? { ...liveResolved, messageId: ref.messageId }
-          : liveResolved;
+        return liveResolved.messageId === ref.messageId
+          ? liveResolved
+          : { ...liveResolved, messageId: ref.messageId };
       },
       show(link) {
         if (threadLinkNamesThisMachine(link, localInstanceId)) {

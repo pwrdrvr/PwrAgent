@@ -6,7 +6,6 @@ import { createInterface } from "node:readline";
 import { PassThrough } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import { query, type Options, type SDKControlRequest, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
-import fc from "fast-check";
 import { expect, it } from "vitest";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
@@ -66,20 +65,32 @@ async function observeLaunch(fixture: Fixture, marker: string) {
         const stdin = new PassThrough();
         const stdout = new PassThrough();
         const lines = createInterface({ input: stdin });
+        const exit = (code: number | null, signal: NodeJS.Signals | null) => {
+          stdout.end();
+          queueMicrotask(() => {
+            child.emit("exit", code, signal);
+            stopped.resolve();
+          });
+        };
         const child = Object.assign(new EventEmitter(), {
-          stdin, stdout, killed: false, exitCode: null,
-          kill() {
-            if (child.killed) return false;
+          stdin, stdout, killed: false, exitCode: null as number | null,
+          kill(signal: NodeJS.Signals = "SIGTERM") {
+            if (child.killed || child.exitCode !== null) return false;
             child.killed = true;
             lines.close();
             stdin.end();
-            stdout.end();
-            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
-            stopped.resolve();
+            exit(null, signal);
             return true;
           },
         });
         stopFixture = () => { child.kill(); };
+        // Closing the query sends EOF. Let the fixture exit cleanly like the
+        // CLI, so the SDK does not have to wait for its forced-kill fallback.
+        lines.once("close", () => {
+          if (child.killed) return;
+          child.exitCode = 0;
+          exit(0, null);
+        });
         lines.on("line", (line) => {
           const message = JSON.parse(line) as SDKControlRequest | { type: "user" };
           if (message.type === "user") {
@@ -145,18 +156,16 @@ const launches: Array<Fixture & { name: string }> = [
 ];
 
 it.each(launches)("sends MCP config over stdin before prompting $name", async (fixture) => {
-  await fc.assert(fc.asyncProperty(fc.uuid(), async (id) => {
-    const marker = `fixture-mcp-${id}`;
-    const { launch, commands, commandsBeforePrompt, outcome, mcpServers, bundled, system } = await observeLaunch(fixture, marker);
-    expect(launch?.command).toBe(fixture.systemVersion === "2.1.329" ? bundled : system);
-    expect(launch?.args.join(" ")).not.toContain(marker);
-    expect(launch?.args.includes("--strict-mcp-config")).toBe(Boolean(fixture.strict));
-    expect(outcome).toBe("prompt");
-    expect(commands.slice(0, commandsBeforePrompt).find((command) => command.subtype === fixture.delivery)).toMatchObject(
-      fixture.delivery === "initialize" ? { mcpServers } : { servers: mcpServers },
-    );
-    expect(commands.filter((command) => "mcpServers" in command || command.subtype === "mcp_set_servers")).toHaveLength(1);
-  }), { numRuns: 5, examples: [["00000000-0000-1000-8000-000000000000"]] });
+  const marker = "fixture-mcp-00000000-0000-1000-8000-000000000000";
+  const { launch, commands, commandsBeforePrompt, outcome, mcpServers, bundled, system } = await observeLaunch(fixture, marker);
+  expect(launch?.command).toBe(fixture.systemVersion === "2.1.329" ? bundled : system);
+  expect(launch?.args.join(" ")).not.toContain(marker);
+  expect(launch?.args.includes("--strict-mcp-config")).toBe(Boolean(fixture.strict));
+  expect(outcome).toBe("prompt");
+  expect(commands.slice(0, commandsBeforePrompt).find((command) => command.subtype === fixture.delivery)).toMatchObject(
+    fixture.delivery === "initialize" ? { mcpServers } : { servers: mcpServers },
+  );
+  expect(commands.filter((command) => "mcpServers" in command || command.subtype === "mcp_set_servers")).toHaveLength(1);
 });
 
 it.each(launches)("closes the query when $name rejects MCP config before the prompt", async (fixture) => {

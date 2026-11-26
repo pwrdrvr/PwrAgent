@@ -1,5 +1,5 @@
 import { CAMERA_SAMPLE_GAP_MS, CameraCueFilter, openVoiceCamera, type CameraCapture, type CameraGestureCue } from "./voice-camera";
-import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode } from "../../../../shared/native-voice";
+import type { NativeVoiceAction, NativeVoiceApi, NativeVoiceEvent, NativeVoiceMode, NativeVoiceStopCause } from "../../../../shared/native-voice";
 import {
   CAMERA_GESTURES, CAMERA_HEAD_CUES, VOICE_CAMERA_CONVERSATION_LIMITS,
   type CameraCue, type VoiceCameraConversationLine, type VoiceCameraObservation,
@@ -35,7 +35,14 @@ export type VoiceStatus = "idle" | "checking" | "connecting" | "listening" | "st
  * `seq` orders transcript rows and action receipts against each other. `at`
  * is when the row began, for the camera's conversation excerpt.
  */
-export type VoiceTranscriptRow = { role: string; text: string; seq: number; at: number };
+export type VoiceTranscriptRow = {
+  role: string;
+  text: string;
+  seq: number;
+  at: number;
+  /** The operator typed or pasted it. Codex reports transcripts only for speech. */
+  typed?: true;
+};
 export type VoiceActionRow = NativeVoiceAction & { seq: number; at: number };
 /** Gestures, head nods and shakes, and presence go in the transcript; vibes stay in the dock. */
 export function isTranscriptCue(cue: CameraCue): boolean {
@@ -242,7 +249,7 @@ export class NativeVoiceController {
     resources.idleTimer = setTimeout(() => {
       if (!this.current(resources) || !this.view.muted || this.view.status !== "listening") return;
       this.publish({ endedAfterReply: true });
-      void this.stop();
+      void this.stop("muted-idle");
     }, busy ? MUTED_STALL_END_MS : MUTED_IDLE_END_MS);
   }
 
@@ -366,8 +373,7 @@ export class NativeVoiceController {
           this.openRows.delete(event.role);
           if (event.role === "assistant") this.voiceActivity++;
         }
-        // Voice text is memory-only, bounded and discarded on the next session.
-        this.publish({ transcript: transcript.slice(-MAX_TRANSCRIPT_ROWS).map((row) => ({ ...row, text: row.text.slice(-8000) })) });
+        this.publishTranscript(transcript);
         this.armMutedIdleEnd(resources);
         break;
       }
@@ -382,7 +388,7 @@ export class NativeVoiceController {
         break;
       case "closed":
         if (event.reason) this.fail(resources, new Error(event.reason));
-        else void this.stop();
+        else void this.stop("backend-closed");
         break;
     }
   }
@@ -414,10 +420,15 @@ export class NativeVoiceController {
     if (!this.current(resources)) return;
     const message = error instanceof Error ? error.message : "Voice failed.";
     this.publish({ status: "error", error: message });
-    void this.stop(true);
+    void this.end("failure", true);
   }
 
-  stop(preserveError = false): Promise<void> {
+  /** End the session. `cause` names the control or rule that ended it, for main's stop log. */
+  stop(cause?: NativeVoiceStopCause): Promise<void> {
+    return this.end(cause, false);
+  }
+
+  private end(cause: NativeVoiceStopCause | undefined, preserveError: boolean): Promise<void> {
     const resources = this.resources;
     if (!resources) return Promise.resolve();
     if (resources.stop) return resources.stop;
@@ -445,7 +456,7 @@ export class NativeVoiceController {
     }
     if (!preserveError) this.publish({ status: "stopping" });
     let stopped = false;
-    resources.stop = this.api.stopNativeVoice({ sessionId: resources.id }).then(() => {
+    resources.stop = this.api.stopNativeVoice({ sessionId: resources.id, ...(cause ? { cause } : {}) }).then(() => {
       stopped = true;
     }).catch((error: unknown) => {
       this.publish({ status: "stop-error", error: error instanceof Error ? error.message : "Could not end voice. Try End voice again." });
@@ -622,7 +633,7 @@ export class NativeVoiceController {
             ].join("; ") });
             if (decision.end) {
               this.publish({ endedAfterAway: true });
-              void this.stop();
+              void this.stop("away");
               return;
             }
             if (decision.cue) {
@@ -664,13 +675,36 @@ export class NativeVoiceController {
     } catch (error) { failed(error); }
   }
 
-  async text(text: string): Promise<void> {
+  /** Voice text is memory-only, bounded and discarded on the next session. */
+  private publishTranscript(transcript: VoiceTranscriptRow[]): void {
+    this.publish({ transcript: transcript.slice(-MAX_TRANSCRIPT_ROWS).map((row) => ({ ...row, text: row.text.slice(-8000) })) });
+  }
+
+  /**
+   * Send typed text to the voice. Once Codex accepts it, it joins the
+   * transcript as the operator's line, in the place it was sent: Codex
+   * reports transcripts only for speech. A send that fails leaves the
+   * session open and returns why, so the operator can send it again.
+   */
+  async text(text: string): Promise<string | undefined> {
     const resources = this.resources;
-    if (!resources || this.view.status !== "listening") return;
-    try { await this.api.sendNativeVoiceText({ sessionId: resources.id, text }); }
-    catch (error) { this.fail(resources, error); }
+    if (!resources || this.view.status !== "listening") return "Voice is not listening.";
+    const seq = ++this.seq;
+    const at = Date.now();
     // A typed message is the operator still talking, even while muted.
     this.armMutedIdleEnd(resources);
+    try {
+      await this.api.sendNativeVoiceText({ sessionId: resources.id, text });
+    } catch (error) {
+      return error instanceof Error
+        ? error.message.replace(/^Error invoking remote method '[^']*': (?:Error: )?/, "") || "Not sent."
+        : "Not sent.";
+    }
+    if (!this.current(resources)) return undefined;
+    const transcript = [...this.view.transcript, { role: "user", text, seq, at, typed: true as const }];
+    this.publishTranscript(transcript.sort((left, right) => left.seq - right.seq));
+    this.armMutedIdleEnd(resources);
+    return undefined;
   }
 }
 
@@ -681,7 +715,7 @@ let windowController: NativeVoiceController | undefined;
 let windowApi: NativeVoiceApi | undefined;
 export function getWindowNativeVoiceController(api: NativeVoiceApi): NativeVoiceController {
   if (!windowController) {
-    window.addEventListener("pagehide", () => { void windowController?.stop(); });
+    window.addEventListener("pagehide", () => { void windowController?.stop("window-closed"); });
   }
   if (!windowController || (windowApi !== api && !windowController.hasSession())) {
     windowController = new NativeVoiceController(api);

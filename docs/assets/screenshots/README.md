@@ -23,26 +23,11 @@ path may appear in one; check each frame with OCR before committing it.
 | `review.webp` | A code review in a thread with P1–P3 findings |
 | `terminal.webp` | Integrated terminal in a thread's worktree |
 
-## Older captures (PNG and GIF)
+## Legacy capture spec
 
-`pnpm --filter @pwragent/desktop screenshot:readme` still produces these. The
-README no longer shows them.
-
-| File | Surface |
-|---|---|
-| `screenshot-recents-hero.png` | Hero — Recents lens populated with realistic threads |
-| `screenshot-install.png` | macOS DMG install window — drag PwrAgent into Applications |
-| `screenshot-bound-thread.png` | Thread detail with linked-messenger context |
-| `screenshot-messenger-status.png` | Settings → Messaging status card |
-| `screenshot-pairing.gif` | Multi-frame animated demo of the paste-token pairing flow |
-| `screenshot-pairing-frame-1.png` … `-frame-3.png` | Source frames for the pairing GIF |
-| `screenshot-closed-by-default.png` | Messaging activity log with denied unauthorized users |
-
-## Regenerating
-
-```bash
-pnpm --filter @pwragent/desktop screenshot:readme
-```
+`pnpm --filter @pwragent/desktop screenshot:readme` still exists for the older
+PNG/GIF capture workflow, though those unreferenced `screenshot-*.png` and
+`screenshot-pairing.gif` files are no longer checked into this directory.
 
 The full walkthrough — the spec, fixtures, state-seeding helpers, native
 capture and GIF stitching utilities, and the macOS Screen Recording

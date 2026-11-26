@@ -246,6 +246,32 @@ describe("GitHub tool client", () => {
     expect(calls[2]).toMatchObject({ method: "PUT", body: { merge_method: "squash", sha: "c".repeat(40) } });
   });
 
+  it("merges a pull request in a GitHub stack through the asynchronous merge, at the checked head", async () => {
+    const { calls, client } = harness(({ method, url }) => {
+      if (method === "POST") return stackHistory("main");
+      if (method === "GET" && url.endsWith("/stacks/4402")) return json({ number: 4402, pull_requests: [
+        { number: 8, state: "closed", merged_at: "2026-11-25T11:00:00Z" }, { number: 9, state: "open", merged_at: null },
+      ] });
+      if (method === "GET" && url.endsWith("/merge-async/req-1")) return json({ status: "merged", details: { sha: "e".repeat(40) } });
+      if (method === "GET") return json(pull(9, {
+        created_at: "2026-11-22T10:00:00Z", base: { ref: "main", repo: { default_branch: "main" } },
+        stack: { id: 1, number: 4402, position: 2, size: 2, base: { ref: "main", sha: "b".repeat(40) } },
+      }));
+      if (method === "PUT" && url.endsWith("/pulls/9/merge-async")) return json({ status: "pending", details: { uuid: "req-1" } }, 202);
+      return json({ message: "This endpoint does not support stacked pull requests." }, 405);
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const merge = client.execute("merge_pull_request", { number: 9, expectedHeadSha: "a".repeat(40) }, ctx());
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(merge).resolves.toMatchObject({ merged: true, number: 9, mergeCommitSha: "e".repeat(40) });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(calls.find((call) => call.method === "PUT")).toMatchObject({ body: { merge_method: "squash", sha: "a".repeat(40) } });
+    expect(calls.some((call) => call.url.endsWith("/pulls/9/merge"))).toBe(false);
+  });
+
   it("refuses an inferred child when its parent merged while it still targets the parent branch", async () => {
     const { calls, client } = harness((call) => {
       if (call.method === "POST") return stackHistory("topic");

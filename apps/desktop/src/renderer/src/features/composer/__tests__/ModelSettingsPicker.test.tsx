@@ -1,0 +1,295 @@
+import "@testing-library/jest-dom/vitest";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ModelSettingsPicker, ModelSettingsQuickList } from "../ModelSettingsPicker";
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
+
+function renderPicker() {
+  render(
+    <>
+      <ModelSettingsPicker
+        model={{
+          value: "opus", label: "Opus 5.5", kind: "claude",
+          models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+          onChange: () => undefined,
+        }}
+        effort={{ stops: ["low", "high"], value: "high", onChange: () => undefined }}
+      />
+      <textarea aria-label="Prompt" />
+    </>,
+  );
+  fireEvent.click(screen.getByRole("button", { name: /^Model settings/ }));
+  return screen.getByRole("dialog", { name: "Model settings" });
+}
+
+/**
+ * The panel stays while the operator chooses in it. A composer once sent
+ * focus to its prompt after every change, and the panel closed under the
+ * cursor after one click.
+ */
+describe("ModelSettingsPicker focus", () => {
+  it("stays open when code moves focus out of it, and closes when Tab leaves it", async () => {
+    const panel = renderPicker();
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    const option = screen.getByRole("option", { name: "Sonnet 5.5" });
+    await act(async () => { fireEvent.blur(option, { relatedTarget: prompt }); });
+    expect(screen.queryByRole("dialog")).toBe(panel);
+
+    await act(async () => {
+      fireEvent.keyDown(option, { key: "Tab" });
+      fireEvent.blur(option, { relatedTarget: prompt });
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("closes on a pointer press outside it", async () => {
+    renderPicker();
+    await act(async () => { fireEvent.pointerDown(screen.getByRole("textbox", { name: "Prompt" })); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+/**
+ * A portalled panel is hidden until it is placed, and a browser will not
+ * focus into a hidden element. The panel once moved focus during that
+ * hidden first render, so a to-do card opened with focus nowhere.
+ */
+describe("ModelSettingsPicker initial focus", () => {
+  it("moves focus into a portalled panel only once it is visible", async () => {
+    const seen: string[] = [];
+    const focus = HTMLElement.prototype.focus;
+    vi.spyOn(HTMLElement.prototype, "focus").mockImplementation(function (this: HTMLElement, options) {
+      const panel = this.closest<HTMLElement>(".model-settings__panel");
+      if (panel) seen.push(panel.style.visibility || "visible");
+      focus.call(this, options);
+    });
+    render(
+      <ModelSettingsPicker
+        size="card"
+        model={{
+          value: "opus", label: "Opus 5.5", kind: "claude",
+          models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+          onChange: () => undefined,
+        }}
+      />,
+    );
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Model settings/ })); });
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen).not.toContain("hidden");
+    expect(document.activeElement).toBe(screen.getByRole("option", { name: "Opus 5.5" }));
+  });
+});
+
+/**
+ * While the pill is disabled (a save in flight), the open panel takes no
+ * picks. Its handlers hold the last render's props, so a second pick sent
+ * the old model back with the new effort and undid the first.
+ */
+describe("ModelSettingsPicker while disabled", () => {
+  it("ignores picks in an open panel once the pill is disabled", async () => {
+    const onModel = vi.fn();
+    const onEffort = vi.fn();
+    const picker = (disabled: boolean) => (
+      <ModelSettingsPicker
+        disabled={disabled}
+        model={{
+          value: "opus", label: "Opus 5.5", kind: "claude",
+          models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+          onChange: onModel,
+        }}
+        effort={{ stops: ["low", "high"], value: "high", onChange: onEffort }}
+      />
+    );
+    const { rerender } = render(picker(false));
+    fireEvent.click(screen.getByRole("button", { name: /^Model settings/ }));
+    rerender(picker(true));
+    const panel = screen.getByRole("dialog", { name: "Model settings" });
+    fireEvent.click(screen.getByRole("option", { name: "Sonnet 5.5" }));
+    const slider = screen.getByRole("slider", { name: "Effort" });
+    fireEvent.keyDown(slider, { key: "Home" });
+    fireEvent.pointerDown(panel.querySelector("[data-effort='low']")!, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(panel.querySelector("[data-effort='low']")!, { button: 0, pointerId: 1 });
+    expect(onModel).not.toHaveBeenCalled();
+    expect(onEffort).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Model settings" })).toBe(panel);
+    rerender(picker(false));
+    fireEvent.click(screen.getByRole("option", { name: "Sonnet 5.5" }));
+    expect(onModel).toHaveBeenCalledWith("sonnet");
+  });
+
+  it("names an effort the bar does not list as that effort, not the default", () => {
+    render(
+      <ModelSettingsPicker
+        model={{ value: "m", label: "Model", kind: "claude", models: [], onChange: () => undefined }}
+        effort={{ stops: ["low", "high"], value: "xhigh", defaultOption: { value: "default", label: "Default" }, onChange: () => undefined }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Model settings/ }));
+    expect(screen.getByRole("slider", { name: "Effort" }).getAttribute("aria-valuetext")).toBe("xhigh");
+  });
+});
+
+/**
+ * Above the composer the panel opens in line with its pill, over the
+ * toolbar's top row (close to the pill, not past the prompt), then stays put. A pick can widen or narrow the chips before the
+ * pill (a provider with another access mode) or wrap the toolbar so the pill
+ * changes rows. A panel hung from the pill slid sideways and dropped under
+ * the pointer choosing in it; one held over the pill covered the chips when
+ * the pill moved back up a row.
+ */
+describe("ModelSettingsPicker composer panel position", () => {
+  const rect = (left: number, top: number, width: number, height: number) => ({
+    left, top, right: left + width, bottom: top + height, width, height, x: left, y: top, toJSON: () => undefined,
+  });
+
+  function renderInComposer() {
+    const at = { pillLeft: 300, pillTop: 600, toolbarTop: 556 };
+    const picker = (label: string) => (
+      <div className="composer__setup">
+        <ModelSettingsPicker
+          model={{
+            value: "opus", label, kind: "claude",
+            models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+            onChange: () => undefined,
+          }}
+        />
+      </div>
+    );
+    const { container, rerender } = render(picker("Opus 5.5"));
+    const pill = screen.getByRole("button", { name: /^Model settings/ });
+    vi.spyOn(pill, "getBoundingClientRect").mockImplementation(() => rect(at.pillLeft, at.pillTop, 120, 24));
+    vi.spyOn(container.querySelector(".composer__setup")!, "getBoundingClientRect")
+      .mockImplementation(() => rect(0, at.toolbarTop, 760, at.pillTop + 26 - at.toolbarTop));
+    const move = async (next: Partial<typeof at>, label: string) => {
+      Object.assign(at, next);
+      await act(async () => { rerender(picker(label)); });
+    };
+    // Where the panel sits in the window: its left from the pill's, and its
+    // foot `calc(100% + rise)` above the pill's top (the stylesheet's 8px
+    // when no inline rule says otherwise), moved by any translation.
+    const placed = (panel: HTMLElement) => {
+      const rise = Number(/calc\(100% \+ (-?[\d.]+)px\)/.exec(panel.style.bottom)?.[1] ?? 8);
+      const shift = Number(/translateY\((-?[\d.]+)px\)/.exec(panel.style.transform)?.[1] ?? 0);
+      return { left: at.pillLeft + Number.parseFloat(panel.style.left || "0"), foot: at.pillTop - rise + shift };
+    };
+    return { at, pill, move, placed };
+  }
+
+  it("opens over the toolbar and holds there while the pill moves under it", async () => {
+    const { at, pill, move, placed } = renderInComposer();
+    await act(async () => { fireEvent.click(pill); });
+    const panel = screen.getByRole("dialog", { name: "Model settings" });
+    // A gap over the toolbar's top row, not over the pill's own row.
+    expect(placed(panel)).toEqual({ left: 300, foot: 548 });
+    expect(panel.style.maxHeight).toBe("540px");
+
+    for (const [pillLeft, pillTop, label] of [
+      [420, 600, "Sonnet 5.5"],
+      [180, 644, "Opus 5.5"],
+      [24, 644, "Sonnet 5.5"],
+      // Up onto the toolbar's top row: still clear of the panel.
+      [300, 556, "Opus 5.5"],
+      [300, 600, "Sonnet 5.5"],
+    ] as const) {
+      await move({ pillLeft, pillTop }, label);
+      expect(placed(panel)).toEqual({ left: 300, foot: 548 });
+      expect(placed(panel).foot).toBeLessThan(pillTop);
+    }
+
+    // Closed and opened again, it opens in line with the pill where it is now.
+    at.pillLeft = 420;
+    await act(async () => { fireEvent.click(pill); });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await act(async () => { fireEvent.click(pill); });
+    expect(placed(screen.getByRole("dialog"))).toEqual({ left: 420, foot: 548 });
+  });
+
+  it("rises when the toolbar grows up into it, and never drops back", async () => {
+    const { pill, move, placed } = renderInComposer();
+    await act(async () => { fireEvent.click(pill); });
+    const panel = screen.getByRole("dialog", { name: "Model settings" });
+    await move({ toolbarTop: 512 }, "Sonnet 5.5");
+    expect(placed(panel).foot).toBe(504);
+    await move({ toolbarTop: 556 }, "Opus 5.5");
+    expect(placed(panel).foot).toBe(504);
+  });
+});
+
+/**
+ * A new thread can start on any provider, so its panel opens on the whole
+ * settings recent threads started with, behind a Recent tab at the top of
+ * the provider rail. Any provider row, the chosen one's included, opens
+ * that provider's editor.
+ */
+describe("ModelSettingsPicker Recent tab", () => {
+  function renderWithRecents(startOpen: boolean) {
+    const onPickRecent = vi.fn();
+    const onProvider = vi.fn();
+    render(
+      <ModelSettingsPicker
+        provider={{
+          label: "Claude",
+          showInPill: true,
+          choices: {
+            options: [{ value: "codex", label: "OpenAI" }, { value: "claude", label: "Claude" }],
+            value: "claude",
+            onChange: onProvider,
+          },
+        }}
+        model={{
+          value: "opus", label: "Opus 5.5", kind: "claude",
+          models: [{ id: "opus", label: "Opus 5.5" }, { id: "sonnet", label: "Sonnet 5.5" }],
+          onChange: () => undefined,
+        }}
+        recents={{
+          startOpen,
+          content: (close) => (
+            <ModelSettingsQuickList
+              label="Recent settings"
+              sections={[{ rows: [{
+                key: "r", provider: "OpenAI", model: "GPT-6.1-Sol", effort: "high", effortStops: ["low", "high"],
+                speed: "ultrafast", selected: false,
+                onPick: () => { onPickRecent(); close(); },
+              }] }]}
+            />
+          ),
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Model settings/ }));
+    return { panel: screen.getByRole("dialog", { name: "Model settings" }), onPickRecent, onProvider };
+  }
+
+  it("opens on Recent, and a provider row, the chosen one too, opens its editor", () => {
+    const { panel } = renderWithRecents(true);
+    const recent = within(panel).getByRole("button", { name: "Recent" });
+    expect(recent).toHaveAttribute("aria-pressed", "true");
+    expect(within(panel).getByRole("option", { name: "OpenAI, GPT-6.1-Sol, high effort, Ultrafast" })).toBeTruthy();
+    expect(within(panel).queryByRole("listbox", { name: "Model" })).toBeNull();
+
+    fireEvent.click(within(panel).getByRole("option", { name: "Claude" }));
+    expect(within(panel).getByRole("listbox", { name: "Model" })).toBeTruthy();
+    expect(recent).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(recent);
+    expect(within(panel).queryByRole("listbox", { name: "Model" })).toBeNull();
+  });
+
+  it("picks a whole recent setting in one click and closes", () => {
+    const { panel, onPickRecent, onProvider } = renderWithRecents(true);
+    fireEvent.click(within(panel).getByRole("option", { name: /^OpenAI, GPT-6.1-Sol/ }));
+    expect(onPickRecent).toHaveBeenCalledTimes(1);
+    expect(onProvider).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens on the editor when the host does not ask for Recent", () => {
+    const { panel } = renderWithRecents(false);
+    expect(within(panel).getByRole("button", { name: "Recent" })).toHaveAttribute("aria-pressed", "false");
+    expect(within(panel).getByRole("listbox", { name: "Model" })).toBeTruthy();
+  });
+});

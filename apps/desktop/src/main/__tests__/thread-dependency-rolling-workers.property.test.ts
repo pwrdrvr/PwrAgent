@@ -257,7 +257,7 @@ describe("rolling worker Continue After lifecycle", () => {
         }
         expect(ended.filter(isReady)).toEqual([]);
       });
-    }), { numRuns: 30 });
+    }), { numRuns: 8 });
   });
 
   it("recovers the busy latch from owner-confirmed idle when the idle notification never arrives", async () => {

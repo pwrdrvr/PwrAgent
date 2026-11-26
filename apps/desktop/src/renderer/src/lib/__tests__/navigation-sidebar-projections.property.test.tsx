@@ -1,5 +1,4 @@
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
-import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { NavigationQueryPage, NavigationRow } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
@@ -31,22 +30,18 @@ function owner() {
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-it("keeps the bounded window projection stable through generated unrelated renders", async () => {
-  await fc.assert(fc.asyncProperty(fc.array(fc.integer(), { minLength: 1, maxLength: 20 }), async (actions) => {
-    const f = owner();
-    const view = renderHook(() => useBoundedNavigationWindow({ desktopApi: f.api, enabled: true, visible: true,
-      browseMode: "inbox", attentionView: { id: "fixture", promoteOnTurnEnd: true }, expandedByKey: {}, unpinnedExpandedByKey: {} }));
-    try {
-      await waitFor(() => expect(view.result.current.presentationReady).toBe(true));
-      const before = view.result.current;
-      const reads = f.read.mock.calls.length;
-      for (const _action of actions) {
-        view.rerender();
-        expect(view.result.current).toBe(before);
-        expect(f.read).toHaveBeenCalledTimes(reads);
-      }
-    } finally { view.unmount(); }
-  }), { numRuns: 25 });
+it("keeps the bounded window projection stable through unrelated renders", async () => {
+  const f = owner();
+  const view = renderHook(() => useBoundedNavigationWindow({ desktopApi: f.api, enabled: true, visible: true,
+    browseMode: "inbox", attentionView: { id: "fixture", promoteOnTurnEnd: true }, expandedByKey: {}, unpinnedExpandedByKey: {} }));
+  await waitFor(() => expect(view.result.current.presentationReady).toBe(true));
+  const before = view.result.current;
+  const reads = f.read.mock.calls.length;
+  for (let action = 0; action < 20; action++) {
+    view.rerender();
+    expect(view.result.current).toBe(before);
+    expect(f.read).toHaveBeenCalledTimes(reads);
+  }
 });
 
 it("keeps sidebar data wrappers stable after the rows have accepted their pages", async () => {

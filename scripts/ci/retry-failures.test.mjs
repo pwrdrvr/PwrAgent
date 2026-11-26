@@ -80,6 +80,10 @@ describe("E2E retry selection", () => {
     expect(verifyInitialE2eRun({ ...first, complete: false })).toBe(false);
     expect(verifyInitialE2eRun({ ...first, tests: [] })).toBe(false);
     expect(verifyInitialE2eRun({ ...first, tests: [{ id: "a", outcome: "skipped" }] })).toBe(false);
+    const intentional = { ...first, tests: [{ id: "a", file: "a.spec.ts", outcome: "skipped" }] };
+    expect(verifyInitialE2eRun(intentional, ["a.spec.ts"])).toBe(true);
+    expect(verifyInitialE2eRun(intentional, ["a.spec.ts", "missing.spec.ts"])).toBe(false);
+    expect(verifyInitialE2eRun({ ...intentional, complete: false }, ["a.spec.ts"])).toBe(false);
   });
   it("does not reset a shutdown circuit after an abnormal close", () => {
     expect(canRetryAfterShutdown({ schemaVersion: 1, consecutiveAbnormalCloses: 0, open: false })).toBe(true);

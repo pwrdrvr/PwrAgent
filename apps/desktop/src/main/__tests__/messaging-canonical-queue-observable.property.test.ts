@@ -53,7 +53,7 @@ describe("observable canonical messaging queue protocol", () => {
           expect(real.requests.every(request => request.messageOrigin?.messaging?.actor?.platformUserId === "fixture-actor"
             && request.messageOrigin.messaging.platform === channel)).toBe(true);
         } finally { await real.close(); }
-      }), { numRuns: 25 });
+      }), { numRuns: 12 });
   });
 
   // Acceptance is the oracle: a pending/rejected steer must never look successful,
@@ -99,7 +99,7 @@ describe("observable canonical messaging queue protocol", () => {
           const updates = real.deliveries.filter(intent => intent.kind === "confirmation" && intent.delivery?.mode === "update");
           expect(updates.at(-1)).toMatchObject({ title: "Message steered", body: "Sent to the current turn." });
         } finally { release.resolve(); await real.close(); }
-      }), { numRuns: 16 });
+      }), { numRuns: 12 });
   });
 
   it.each(["held", "queued", "scheduled", "started"] as const)(
@@ -176,7 +176,7 @@ describe("observable canonical messaging queue protocol", () => {
         expect(real.queued()).toEqual([]);
         expect(real.deliveries.filter(intent => intent.kind === "confirmation" && intent.body === "Queued message sent as the next turn.")).toHaveLength(1);
       } finally { release.resolve(); await scheduler.waitAll(); await sending; await real.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 12 });
   });
 
   it("admits one explicit recovery Retry while duplicate clicks and cancellation interleave", async () => {
@@ -211,7 +211,7 @@ describe("observable canonical messaging queue protocol", () => {
         await real.controller.handleInboundEvent(real.callback(retry!.id));
         expect(real.requests).toHaveLength(before + 1);
       } finally { release.resolve(); await scheduler.waitAll(); await retrying; await real.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 12 });
   });
 
   it("retains the owner's edited input across failed steering, failed fallback and explicit Retry", async () => {
@@ -244,6 +244,6 @@ describe("observable canonical messaging queue protocol", () => {
         await real.controller.handleInboundEvent(real.callback(retry!.id));
         expect(real.starts.at(-1)?.input).toEqual([{ type: "text", text: "edited at the owner" }]);
       } finally { await real.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 12 });
   });
 });

@@ -9,10 +9,12 @@ import { GitLabReadError, type GitLabPrFetcher } from "./gitlab-pr-fetcher";
 import { ForgeReadError, repositoryUrl, type ForgeReadArgs, type ForgeReadOperation, type ForgeRepository } from "./forge-tool-contract";
 import { FORGE_ARTIFACT_MAX_BYTES, FORGE_JSON_MAX_BYTES, FORGE_LOG_MAX_BYTES } from "./forge-read-limits";
 import { saveForgeArtifact } from "./forge-artifact-download";
+import { PrStatusTokenBucket } from "./pr-status-token-bucket";
 
 type Payload = Record<string, unknown>;
 type Artifact = { id?: number; jobId?: number; name?: string; sizeBytes?: number; expired?: boolean; expiresAt?: string; createdAt?: string; fileType?: string; url: string };
 type Read = (repo: ForgeRepository, endpoint: string, signal?: AbortSignal, raw?: boolean) => Promise<unknown>;
+type ForgeRequestSource = "shared" | "operator_merge_preflight";
 /** One GitHub REST or GraphQL request. `path` is relative to the REST root; `graphql` posts to the host's GraphQL endpoint. */
 export type GithubRequest = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -108,10 +110,11 @@ async function readGithubErrorReason(response: Response): Promise<string | undef
 export class ForgeCiClient {
   private active = 0;
   private readonly cooldowns = new Map<string, number>();
+  private readonly operatorMergePreflightBudget = new PrStatusTokenBucket();
   constructor(private readonly options: {
     gitlab: Pick<GitLabPrFetcher, "readApi">;
     enabled: (provider: ForgeRepository["provider"]) => boolean;
-    takeToken: () => boolean;
+    takeToken: (source: ForgeRequestSource) => boolean;
     read?: Read;
     fetch?: typeof fetch;
     githubToken?: (host: string) => Promise<string | null>;
@@ -219,8 +222,19 @@ export class ForgeCiClient {
 
   /** A GitHub request through the same admission as CI reads: cooldowns, three at a time, and the shared PR budget. */
   async requestGithub(r: ForgeRepository, request: GithubRequest, signal?: AbortSignal): Promise<unknown> {
+    return this.requestGithubWithSource(r, request, signal, "shared");
+  }
+
+  /** Stack evidence for an operator-confirmed PR-card or to-do merge. */
+  async requestGithubForOperatorMergePreflight(r: ForgeRepository, request: GithubRequest, signal?: AbortSignal): Promise<unknown> {
+    return this.requestGithubWithSource(r, request, signal, "operator_merge_preflight");
+  }
+
+  private async requestGithubWithSource(
+    r: ForgeRepository, request: GithubRequest, signal: AbortSignal | undefined, source: ForgeRequestSource,
+  ): Promise<unknown> {
     if (r.provider !== "github") throw new ForgeReadError("unsupported_provider", "This tool supports GitHub repositories only.");
-    return this.admit(r, signal, () => this.github(r, request, signal));
+    return this.admit(r, signal, () => this.github(r, request, signal), source);
   }
 
   /** Bind the preflight and approval to one credential for the life of a card action. */
@@ -264,7 +278,9 @@ export class ForgeCiClient {
     });
   }
 
-  private async admit<T>(r: ForgeRepository, signal: AbortSignal | undefined, work: () => Promise<T>): Promise<T> {
+  private async admit<T>(
+    r: ForgeRepository, signal: AbortSignal | undefined, work: () => Promise<T>, source: ForgeRequestSource = "shared",
+  ): Promise<T> {
     signal?.throwIfAborted();
     if (!this.options.enabled(r.provider)) throw new ForgeReadError("provider_disabled", `${r.provider} is disabled in Settings → Git.`);
     const key = `${r.provider}:${r.host}`;
@@ -272,7 +288,12 @@ export class ForgeCiClient {
     if (retryAt > Date.now()) throw new ForgeReadError("rate_limited", `Provider cooldown is active; retry after ${new Date(retryAt).toISOString()}.`);
     if (this.active >= 3) throw new ForgeReadError("busy", "Three forge reads are already active; retry after they complete.");
     // GitLab's existing transport owns its own admission token.
-    if (r.provider === "github" && !this.options.takeToken()) throw new ForgeReadError("rate_limited", "The shared forge request budget is exhausted. Retry later.");
+    if (r.provider === "github") {
+      const reserved = source === "operator_merge_preflight" && this.operatorMergePreflightBudget.tryTake();
+      if (!reserved && !this.options.takeToken(source)) {
+        throw new ForgeReadError("rate_limited", "The shared forge request budget is exhausted. Retry later.");
+      }
+    }
     this.active++;
     try {
       return await work();

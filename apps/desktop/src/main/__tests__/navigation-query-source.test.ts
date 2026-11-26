@@ -1257,6 +1257,134 @@ it("observes a retired Git stack before starting a new viewer lease", async () =
   });
 });
 
+it("rechecks Git at the native stack deadline even when a peer event refreshed the viewer", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer, retargetCatalog }) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const layers = (index: NavigationQueryIndex) => projectSelectedStackLayers(index, { backend: "codex", threadId: "stacked" }).count;
+    try {
+      expect(layers(await read(viewer))).toBe(1);
+      await retargetCatalog();
+      vi.advanceTimersByTime(900);
+      source.emit("federation/peerStatus/changed");
+      expect(layers(await read(viewer))).toBe(1);
+      vi.advanceTimersByTime(100);
+      // The on-disk catalog retired this thread's layer. Only the original
+      // native observation's one-second window may hide that change.
+      expect(layers(await read(viewer))).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("keeps the owner listing when a stacked viewer with peer pins nears the byte budget", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+    const list = source.listThreads.getMockImplementation()!;
+    // The stack-free inventory and one stacked copy fit the pool. A second
+    // charge for the viewer's identical stacked rows would evict the owner.
+    const history = Array.from({ length: 128 }, (_, i): NavigationThreadSummary => ({
+      id: `history-${i}`, source: "codex", title: "x".repeat(24_000), titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    }));
+    source.listThreads.mockImplementation(async () => [...await list(), ...history]);
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const first = await read(viewer);
+      expect(first.threads.find((thread) => thread.id === "stacked")?.stackMemberships).toHaveLength(1);
+      expect(first.threads.at(-1)?.id).toBe("remote");
+      expect(source.listThreads).toHaveBeenCalledTimes(1);
+      source.emit("navigation/remoteThreadPins/changed");
+      await read(viewer);
+      expect(source.listThreads).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+it("isolates local owner listing and stack projection from remote pin and peer-status churn", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const stackReads = vi.spyOn(StackReader.prototype, "read");
+    const materialize = mocks.store.readNavigationQueryIndex;
+    let pinTitle = "Viewer pin v0";
+    let peerOnline = true;
+    const dynamicViewer = {
+      source: viewer.source,
+      project: async (index: NavigationQueryIndex) => {
+        const pin: NavigationThreadSummary = {
+          id: "remote",
+          source: "codex",
+          title: pinTitle,
+          titleSource: "explicit",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            instanceLabel: "Peer",
+            peerStatus: peerOnline ? "connected" : "disconnected",
+            ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote", instanceId: "peer" }),
+          },
+        };
+        return appendViewerNavigationPins(index, [pin]);
+      },
+    };
+    try {
+      await fc.assert(fc.asyncProperty(
+        fc.array(
+          fc.constantFrom("remote-pin", "peer-disconnect", "peer-reconnect", "local-name"),
+          { minLength: 4, maxLength: 8, size: "max" },
+        ),
+        async (events) => {
+          // Advance both Date.now() and pool retention timers between runs so
+          // slow real-Git runs cannot expire the 1,000 ms owner snapshot mid-pass.
+          vi.advanceTimersByTime(2_000);
+          source.emit("thread/name/updated");
+          pinTitle = "Viewer pin warm";
+          peerOnline = true;
+          const warm = await read(dynamicViewer);
+          expect(warm.stacks).toHaveLength(1);
+          expect(warm.threads.find((t) => t.id === "remote")?.title).toBe(pinTitle);
+
+          source.listThreads.mockClear();
+          materialize.mockClear();
+          stackReads.mockClear();
+
+          let expectedLocalRebuilds = 0;
+          let step = 0;
+          for (const kind of events) {
+            step += 1;
+            if (kind === "remote-pin") {
+              pinTitle = `Viewer pin v${step}`;
+              source.emit("navigation/remoteThreadPins/changed");
+            } else if (kind === "peer-disconnect") {
+              peerOnline = false;
+              source.emit("federation/peerStatus/changed");
+            } else if (kind === "peer-reconnect") {
+              peerOnline = true;
+              source.emit("federation/peerStatus/changed");
+            } else {
+              expectedLocalRebuilds += 1;
+              source.emit("thread/name/updated");
+            }
+            const next = await read(dynamicViewer);
+            expect(next.stacks).toHaveLength(1);
+            const remote = next.threads.find((t) => t.id === "remote");
+            expect(remote?.title).toBe(pinTitle);
+            expect(remote?.federation?.peerStatus).toBe(peerOnline ? "connected" : "disconnected");
+          }
+
+          expect(source.listThreads).toHaveBeenCalledTimes(expectedLocalRebuilds);
+          expect(materialize).toHaveBeenCalledTimes(expectedLocalRebuilds);
+          expect(stackReads).toHaveBeenCalledTimes(expectedLocalRebuilds);
+        },
+      ), { numRuns: 5 });
+    } finally {
+      stackReads.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
 it("never requests stack projection for composer mention queries", () => {
   const queries: NavigationQueryRequest["query"][] = [
     { kind: "lens", lens: "inbox" },

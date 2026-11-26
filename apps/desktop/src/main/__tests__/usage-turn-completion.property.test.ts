@@ -1,5 +1,4 @@
 import { statSync } from "node:fs";
-import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
@@ -67,17 +66,16 @@ async function addTurn(db: StateDb, id: string, kind: LineKind, end: End = "open
   return { target, before, read };
 }
 
-it("records the first observed end only for a turn linked to a qualifying live root", async () => {
-  await fc.assert(fc.asyncProperty(
-    fc.constantFrom<LineKind>("root", "child", "superseded", "missing", "hydrated", "monitor", "cross-provider", "legacy"),
-    fc.constantFrom<End>("open", "inferred", "observed"),
-    fc.boolean(),
-    async (kind, end, batch) => {
-      const db = openInMemoryStateDb();
-      try {
-        const { target, before, read } = await addTurn(db, "target", kind, end);
-        const store = new SqliteOverlayStore(db);
-        vi.spyOn(Date, "now").mockReturnValue(now);
+it.each([
+  "root", "child", "superseded", "missing", "hydrated", "monitor", "cross-provider", "legacy",
+] satisfies LineKind[])("records the first observed end for qualifying %s lines only", async (kind) => {
+  const db = openInMemoryStateDb();
+  const store = new SqliteOverlayStore(db);
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    for (const end of ["open", "inferred", "observed"] satisfies End[]) {
+      for (const batch of [false, true]) {
+        const { target, before, read } = await addTurn(db, `target-${end}-${batch}`, kind, end);
         const record = (at: number) => batch
           ? store.completeThreadUsageTurns({ completedAt: at, turns: [target, target, identity("absent")] })
           : store.completeThreadUsageTurn({ ...target, completedAt: at, limitObservation: newLimits });
@@ -90,12 +88,12 @@ it("records the first observed end only for a turn linked to a qualifying live r
         expect(read()).toEqual(expected);
         expect(await record(completedAt + 1000)).toBe(batch ? 0 : false);
         expect(read()).toEqual(expected);
-      } finally {
-        vi.restoreAllMocks();
-        db.close();
       }
-    },
-  ), { numRuns: 48 });
+    }
+  } finally {
+    vi.restoreAllMocks();
+    db.close();
+  }
 });
 
 function seedHistory(db: StateDb, from: number, to: number) {

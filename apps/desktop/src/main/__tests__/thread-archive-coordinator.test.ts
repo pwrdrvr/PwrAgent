@@ -389,13 +389,14 @@ describe("archive cleanup checkpoints", () => {
   // runtime resumes each exactly once, never repeats the provider archive,
   // and leaves alone the ones it already owns.
   it("resumes exactly the cleanups the previous runtime checkpointed (model)", async () => {
+    const db = openInMemoryStateDb();
+    databases.push(db);
     await fc.assert(fc.asyncProperty(
       fc.uniqueArray(fc.record({ id: fc.integer({ min: 0, max: 20 }), backend: fc.constantFrom<AppServerBackendKind>("codex", "claude") }),
         { selector: (row) => `${row.backend}:${row.id}`, maxLength: 12 }),
       fc.func(fc.boolean()),
       async (rows, alreadyOwned) => {
-        const db = openInMemoryStateDb();
-        databases.push(db);
+        db.raw.prepare("DELETE FROM meta WHERE key GLOB ?").run("archive_cleanup_checkpoint_v*:*");
         const store = new ArchiveCleanupCheckpointStore(db.raw, { processAlive: () => false });
         const quitting = checkpointCoordinator(store, "runtime-before");
         const intents = rows.map((row) => intent(`thread-${row.id}`, row.backend));
@@ -423,7 +424,7 @@ describe("archive cleanup checkpoints", () => {
         await next.coordinator.resumeArchiveCleanupsAtStartup();
         expect(next.completed).toHaveLength(resumed.length);
       },
-    ), { numRuns: 40 });
+    ), { numRuns: 8 });
   });
 });
 

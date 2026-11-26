@@ -273,6 +273,32 @@ describe("Tangerine Terminal theme contract", () => {
     }
   });
 
+  it("keeps a visible dashed batch border on the active thread in every theme", () => {
+    const rules = collectAppCssRules();
+    const active = rules.findIndex((rule) => rule.selector === ".thread-row.is-selected");
+    const xray = rules.findIndex((rule) => rule.selector === ".thread-row-shell[data-xray-target] > .thread-row");
+    const batch = rules.findIndex((rule) => rule.selector.split(", ").includes(".thread-row.is-batch-selected"));
+    // The two selectors have equal specificity on a row with both states.
+    expect(active).toBeGreaterThanOrEqual(0);
+    expect(batch).toBeGreaterThan(active);
+    expect(xray).toBeGreaterThanOrEqual(0);
+    expect(batch).toBeGreaterThan(xray);
+    expect(rules[batch]!.selector.split(", "))
+      .toContain(".thread-row-shell[data-xray-target] > .thread-row.is-batch-selected");
+    expect(rules[active]!.body).toContain("box-shadow: inset 2px 0 0 0 var(--accent)");
+    expect(rules[batch]!.body).toContain("border-style: dashed");
+    const ink = rules[batch]!.body.match(/border-color:\s*var\(--([a-z0-9-]+)\)/)?.[1];
+    const fill = rules[active]!.body.match(/background:\s*var\(--([a-z0-9-]+)\)/)?.[1];
+    expect(ink).toBeDefined();
+    expect(fill).toBeDefined();
+    const themes = [":root", ':root[data-theme="light"]', ...rules
+      .map((rule) => rule.selector).filter((selector) => /^:root\[data-color-theme="[^"]+"\]$/.test(selector))];
+    for (const selector of themes) {
+      const theme = { ...tokens, ...extractTokensForSelector(css, selector) };
+      expect(contrastRatio(theme[ink!], theme[fill!]), selector).toBeGreaterThanOrEqual(3);
+    }
+  });
+
   it("keeps every Token Miser verdict ink readable in both themes", () => {
     // The verdict tokens alias status tokens in `:root`, and the light block
     // overrides only the one whose alias fails there — `--status-warning` is

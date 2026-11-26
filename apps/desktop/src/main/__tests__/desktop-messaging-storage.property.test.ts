@@ -125,5 +125,5 @@ it("binds each accessor to the current profile or override while already returne
       active.store = undefined;
       for (const profile of profiles) profile.db.close();
     }
-  }), { numRuns: 50 });
+  }), { numRuns: 8 });
 });

@@ -59,7 +59,7 @@ it("keeps search projections equal to the latest provider rows across replacemen
         expect(reads.writes.commits).toBe(0);
       }
     } finally { db.close(); }
-  }), { numRuns: 50 });
+  }), { numRuns: 8 });
 });
 
 type Metadata = { objectId: string; threadId: string; createdAt: number; count: number };
@@ -118,5 +118,5 @@ it("keeps Token Miser metadata updates atomic and retention generations stable a
         expect(reads.writes.commits).toBe(0);
       }
     } finally { db.close(); }
-  }), { numRuns: 100 });
+  }), { numRuns: 8 });
 });

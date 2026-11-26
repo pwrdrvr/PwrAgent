@@ -62,7 +62,7 @@ import { describeLeadingCommand } from "./composer-command-chip";
 import type { ComposerCommandChip } from "./ComposerInputTypes";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { SkillPickerHeader } from "./SkillPickerHeader";
-import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
+import { isSkillOriginShortcut, SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 
 /**
  * The populations a compact composer's mention popovers pick from.
@@ -103,7 +103,8 @@ export type ComposerMentionSources = {
   navigationLoading?: boolean;
   navigationSettledQuery?: string;
   /** Called when `$` or `/` opens a popover. */
-  ensureSkillsLoaded?: (options?: { force?: boolean }) => void;
+  ensureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void;
+  skillCatalogTargetKey?: string;
   skillLoading?: boolean;
   /**
    * Peer thread search behind `#`. Omitted leaves `#` local-only; the
@@ -140,6 +141,7 @@ export type ComposerMentions = {
   inputRef: RefObject<ComposerInputHandle | null>;
   /** `aria-controls` for the editor while a popover is open. */
   listboxId?: string;
+  onReferenceSelectionChange?: () => void;
   /** Hover for the draft's `$skill` chips; pass both to the editor. */
   onSkillChipPointerEnter: (
     skill: AppServerSkillSummary,
@@ -227,6 +229,7 @@ export function useComposerMentions(params: {
   }));
   const { draft, skillTokens } = content;
   const [activeIndex, setActiveIndex] = useState(0);
+  const [, setReferenceSelectionRevision] = useState(0);
   const [dismissedKey, setDismissedKey] = useState<string | undefined>(
     undefined,
   );
@@ -267,8 +270,13 @@ export function useComposerMentions(params: {
   );
   const skillTrigger = findSkillTrigger(draft, selectionStart);
   const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
-  const directoryTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
-  const rawHashTrigger = findHashReferenceTrigger(draft, selectionStart);
+  const referenceTriggers = inputRef.current?.getReferenceTriggers();
+  const directoryTrigger = referenceTriggers
+    ? referenceTriggers["@"]
+    : findDirectoryReferenceTrigger(draft, selectionStart);
+  const rawHashTrigger = referenceTriggers
+    ? referenceTriggers["#"]
+    : findHashReferenceTrigger(draft, selectionStart);
   const hashTrigger =
     rawHashTrigger
     && !coldHashAnchors.has(hashReferenceAnchorKey(rawHashTrigger.query))
@@ -391,10 +399,12 @@ export function useComposerMentions(params: {
     Boolean(kind) && !params.disabled && dismissKey !== dismissedKey;
   const activeOption = Math.min(activeIndex, Math.max(optionCount - 1, 0));
 
+  const skillPickerScope = sources?.skillCatalogTargetKey ?? sources?.currentThreadKey ?? "";
+  const isSlashSkillPicker = !skillTrigger && Boolean(slashTrigger);
   const skillPickerLoadKey = skillTrigger
-    ? `${sources?.currentThreadKey ?? ""}:skills:${skillTrigger.start}`
+    ? `${skillPickerScope}:skills:${skillTrigger.start}`
     : slashTrigger
-      ? `${sources?.currentThreadKey ?? ""}:slash:${slashTrigger.start}`
+      ? `${skillPickerScope}:slash:${slashTrigger.start}`
       : undefined;
   const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   const navigationTriggered = Boolean(directoryTrigger || rawHashTrigger);
@@ -411,8 +421,8 @@ export function useComposerMentions(params: {
     }
     if (!ensureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) return;
     loadedSkillPickerRef.current = skillPickerLoadKey;
-    ensureSkillsLoaded();
-  }, [ensureSkillsLoaded, skillPickerLoadKey]);
+    ensureSkillsLoaded(isSlashSkillPicker ? { includeCommands: true } : undefined);
+  }, [ensureSkillsLoaded, isSlashSkillPicker, skillPickerLoadKey]);
   useEffect(() => {
     if (navigationTriggered) ensureNavigationLoaded?.(navigationQuery);
   }, [ensureNavigationLoaded, navigationTriggered, navigationQuery]);
@@ -572,8 +582,10 @@ export function useComposerMentions(params: {
       setActiveIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      const currentInput = inputRef.current;
+      if (currentInput?.value !== nextDraft) return;
+      currentInput.focus();
+      currentInput.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -607,8 +619,10 @@ export function useComposerMentions(params: {
       setActiveIndex(0);
     });
     requestAnimationFrame(() => {
-      inputRef.current?.focus();
-      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+      const currentInput = inputRef.current;
+      if (currentInput?.value !== nextDraft) return;
+      currentInput.focus();
+      currentInput.setSelectionRange(nextSelection, nextSelection);
     });
   };
 
@@ -630,23 +644,21 @@ export function useComposerMentions(params: {
     if (kind === "directories" && directoryTrigger) {
       const directory = directoryOptions[index] ?? directoryOptions[0];
       if (directory?.path) {
-        insertToken(directoryTrigger, (at) =>
-          createComposerAtReferenceToken(directory, at),
-        );
+        inputRef.current?.replaceReference("@", [createComposerAtReferenceToken(directory, 0)]);
       }
       return;
     }
     if (kind === "hash" && hashTrigger) {
       const option = hashOptions[index] ?? hashOptions[0];
       if (!option) return;
-      insertToken(hashTrigger, (at) =>
+      inputRef.current?.replaceReference("#", [
         option.kind === "thread"
           ? createComposerThreadToken(
               resolveThreadSummaryReference(option.thread),
-              at,
+              0,
             )
-          : createComposerPullRequestToken(option.pullRequest, at),
-      );
+          : createComposerPullRequestToken(option.pullRequest, 0),
+      ]);
     }
   };
 
@@ -661,6 +673,16 @@ export function useComposerMentions(params: {
       return true;
     }
     if (optionCount === 0) return false;
+
+    if (kind === "commands" && isSkillOriginShortcut(event)) {
+      const skill = commandOptions[activeOption]?.skill;
+      const anchor = optionRefs.current[activeOption];
+      if (skill && anchor && skillOriginCard.openFromKeyboard(skill, anchor, event.currentTarget)) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+    }
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
@@ -700,10 +722,12 @@ export function useComposerMentions(params: {
 
   const renderOption = (index: number, content: ReactNode, extra?: {
     describedBy?: string;
+    keyShortcuts?: string;
     title?: string;
   }): ReactNode => (
     <button
       aria-describedby={extra?.describedBy}
+      aria-keyshortcuts={extra?.keyShortcuts}
       aria-selected={index === activeOption}
       className={`compact-composer__mention-option${
         index === activeOption ? " is-active" : ""
@@ -763,6 +787,7 @@ export function useComposerMentions(params: {
     label = "Commands";
     options = commandOptions.map((command, index) => {
       const name = normalizeSlashCommandName(command.name);
+      const { skill } = command;
       return renderOption(
         index,
         <>
@@ -776,11 +801,18 @@ export function useComposerMentions(params: {
                 {command.argumentHint}
               </span>
             ) : null}
+            {skill?.origin ? (
+              <SkillOriginChip origin={skill.origin} {...skillOriginCard.chipHandlers(skill)} />
+            ) : null}
           </span>
           <span className="compact-composer__mention-meta">
-            {[command.sourceLabel, command.description].filter(Boolean).join(" · ")}
+            {[skill?.origin ? undefined : command.sourceLabel, command.description].filter(Boolean).join(" · ")}
           </span>
         </>,
+        {
+          describedBy: skill ? skillOriginCard.describedBy(skill) : undefined,
+          keyShortcuts: skill ? "Shift+F10" : undefined,
+        },
       );
     });
   } else if (kind === "directories") {
@@ -937,6 +969,9 @@ export function useComposerMentions(params: {
     handleKeyDown,
     inputRef,
     listboxId: open ? listboxId : undefined,
+    onReferenceSelectionChange: sources
+      ? () => setReferenceSelectionRevision((revision) => revision + 1)
+      : undefined,
     onSkillChipPointerEnter: skillOriginCard.hoverAnchor,
     onSkillChipPointerLeave: skillOriginCard.leaveAnchor,
     open,

@@ -19,7 +19,7 @@ function fixture({ nativeCompiler = true } = {}) {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "pwragent-typecheck-")));
   directories.push(root);
   mkdirSync(join(root, "scripts"));
-  for (const script of ["typecheck.mjs", "typecheck-cache.mjs"]) {
+  for (const script of ["typecheck.mjs", "typecheck-cache.mjs", "local-cpu-budget.mjs"]) {
     const source = join(repository, "scripts", script);
     if (existsSync(source)) copyFileSync(source, join(root, "scripts", script));
   }

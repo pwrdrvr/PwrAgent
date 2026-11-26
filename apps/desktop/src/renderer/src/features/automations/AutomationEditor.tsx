@@ -66,7 +66,7 @@ import {
 } from "./AutomationRunLimitsFields";
 import { ProjectPicker } from "../composer/ProjectPicker";
 import { ComposerDropdown } from "../composer/ComposerDropdown";
-import { ModelDropdown } from "../composer/ModelDropdown";
+import { AutomationModelPicker } from "./AutomationModelPicker";
 import { AutomationFlow, AutomationStage } from "./AutomationFunnel";
 import {
   ORIGINAL_TELEGRAM_BOT,
@@ -1558,18 +1558,6 @@ export function AutomationEditor(props: AutomationEditorProps) {
   const effectiveBackend = backendCatalog?.find(
     (backend) => backend.kind === effectiveBackendKind,
   );
-  const catalogModels = effectiveBackend?.launchpadOptions?.models ?? [];
-  const selectedCatalogModel = catalogModels.find(
-    (model) => model.id === profileModel,
-  );
-  const reasoningChoices =
-    selectedCatalogModel?.reasoningEfforts
-    ?? effectiveBackend?.launchpadOptions?.reasoningEfforts
-    ?? [];
-  const backendLabelFor = (kind: AppServerBackendKind | undefined): string =>
-    kind
-      ? backendCatalog?.find((backend) => backend.kind === kind)?.label ?? kind
-      : "";
 
   const [cwdCopied, setCwdCopied] = useState(false);
   const [allocatingWorkspace, setAllocatingWorkspace] = useState(false);
@@ -2807,103 +2795,17 @@ export function AutomationEditor(props: AutomationEditorProps) {
                       setProfileExecutionMode(value as OptionalExecutionMode)
                     }
                   />
-                  <ComposerDropdown
-                    ariaLabel="Automation model provider"
-                    options={[
-                      {
-                        label: agentAssignment
-                          ? `Inherit Agent provider (${backendLabelFor(agentAssignment.backend)})`
-                          : "Inherit Agent provider",
-                        value: "",
-                      },
-                      ...(backendCatalog ?? [])
-                        .filter(
-                          (backend) =>
-                            backend.available || backend.kind === profileBackend,
-                        )
-                        .map((backend) => ({
-                          label: backend.label,
-                          value: backend.kind,
-                        })),
-                    ]}
-                    value={profileBackend}
-                    onChange={(value) => {
-                      const next = value as "" | AppServerBackendKind;
-                      setProfileBackend(next);
-                      // A model belongs to one provider's catalog. Keep the
-                      // selection only when the new catalog still lists it.
-                      const nextKind = next || agentAssignment?.backend;
-                      const nextModels =
-                        backendCatalog?.find((backend) => backend.kind === nextKind)
-                          ?.launchpadOptions?.models ?? [];
-                      if (
-                        profileModel
-                        && !nextModels.some((model) => model.id === profileModel)
-                      ) {
-                        setProfileModel("");
-                        setProfileReasoning("");
-                      }
-                    }}
-                  />
-                  <ModelDropdown
-                    ariaLabel="Automation model"
-                    disabled={!effectiveBackendKind}
-                    kind={effectiveBackendKind}
-                    models={catalogModels}
-                    leadingOptions={[
-                      {
-                        label: agentThreadSummary?.model
-                          ? `Inherit Agent model (${agentThreadSummary.model})`
-                          : "Inherit Agent model",
-                        value: "",
-                      },
-                      ...(profileModel
-                      && !catalogModels.some((model) => model.id === profileModel)
-                        ? [
-                            {
-                              label: `${profileModel} (not in this provider's catalog)`,
-                              value: profileModel,
-                            },
-                          ]
-                        : []),
-                    ]}
-                    value={profileModel}
-                    onChange={(value) => {
-                      setProfileModel(value);
-                      // Reasoning choices are per-model; drop a value the new
-                      // model does not offer rather than sending it anyway.
-                      const nextModel = catalogModels.find(
-                        (model) => model.id === value,
-                      );
-                      const efforts =
-                        nextModel?.reasoningEfforts
-                        ?? effectiveBackend?.launchpadOptions?.reasoningEfforts
-                        ?? [];
-                      if (profileReasoning && !efforts.includes(profileReasoning)) {
-                        setProfileReasoning("");
-                      }
-                    }}
-                  />
-                  <ComposerDropdown
-                    ariaLabel="Automation reasoning"
-                    disabled={!effectiveBackendKind}
-                    options={[
-                      {
-                        label: agentThreadSummary?.reasoningEffort
-                          ? `Inherit Agent reasoning (${agentThreadSummary.reasoningEffort})`
-                          : "Inherit Agent reasoning",
-                        value: "",
-                      },
-                      ...(profileReasoning && !reasoningChoices.includes(profileReasoning)
-                        ? [{ label: profileReasoning, value: profileReasoning }]
-                        : []),
-                      ...reasoningChoices.map((reasoning) => ({
-                        label: reasoning,
-                        value: reasoning,
-                      })),
-                    ]}
-                    value={profileReasoning}
-                    onChange={(value) => setProfileReasoning(value)}
+                  <AutomationModelPicker
+                    agentBackend={agentAssignment?.backend}
+                    agentModel={agentThreadSummary?.model}
+                    agentReasoning={agentThreadSummary?.reasoningEffort}
+                    backendCatalog={backendCatalog}
+                    backend={profileBackend}
+                    model={profileModel}
+                    reasoning={profileReasoning}
+                    onBackend={setProfileBackend}
+                    onModel={setProfileModel}
+                    onReasoning={setProfileReasoning}
                   />
                 </div>
               </div>

@@ -499,7 +499,7 @@ describe("ThreadTodoStack", () => {
       <ThreadTodoStack threadKey="codex:thread-a" todos={[handoff]} view={createView([handoff])} onStartReview={vi.fn()} />,
     );
 
-    expect(screen.getByRole("button", { name: "Model for the new thread: OpenAI, gpt-6.1-sol, xhigh" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Model for the new thread: OpenAI, gpt-6.1-sol, xhigh effort" })).toBeTruthy();
     // Access cannot change on the card, so the row shows it as a plain pill.
     const access = screen.getByRole("img", { name: "Access for the new thread: Auto" });
     expect(access.textContent).toBe("Auto");
