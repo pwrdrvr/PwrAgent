@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitDirectory, bundledGitExecutable, configureBundledGit } from "../bundled-git";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
@@ -54,20 +54,24 @@ function row(cwd: string, id: string): NavigationThreadSummary {
   };
 }
 
+async function packagedGitFixture() {
+  const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-packaged-selection-")));
+  onTestFinished(async () => await rm(sandbox, { recursive: true, force: true }));
+  onTestFinished(isolateProcessGitEnvironment());
+  onTestFinished(() => { vi.unstubAllEnvs(); configureBundledGit(undefined); });
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:DYLD_|LD_|GIT_TEST_|GIT_IMPLICIT_WORK_TREE$)/i.test(key)) vi.stubEnv(key, undefined);
+  }
+  vi.stubEnv("HOME", sandbox);
+  vi.stubEnv("USERPROFILE", sandbox);
+  vi.stubEnv("XDG_CONFIG_HOME", sandbox);
+  configureBundledGit(path.dirname(bundledGitDirectory()));
+  return { sandbox, executable: bundledGitExecutable() };
+}
+
 describe("StackReader installed-Git and unavailable checkout budgets", () => {
-  it.skipIf(process.platform === "win32")("skips ordinary unrelated checkouts for explicitly selected packaged Git while matching the live Git projection", async ({ onTestFinished }) => {
-    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-packaged-selection-")));
-    onTestFinished(async () => await rm(sandbox, { recursive: true, force: true }));
-    onTestFinished(isolateProcessGitEnvironment());
-    onTestFinished(() => { vi.unstubAllEnvs(); configureBundledGit(undefined); });
-    for (const key of Object.keys(process.env)) {
-      if (/^(?:DYLD_|LD_|GIT_TEST_|GIT_IMPLICIT_WORK_TREE$)/i.test(key)) vi.stubEnv(key, undefined);
-    }
-    vi.stubEnv("HOME", sandbox);
-    vi.stubEnv("USERPROFILE", sandbox);
-    vi.stubEnv("XDG_CONFIG_HOME", sandbox);
-    configureBundledGit(path.dirname(bundledGitDirectory()));
-    const executable = bundledGitExecutable();
+  it.skipIf(process.platform === "win32")("skips ordinary unrelated checkouts for explicitly selected packaged Git while matching the live Git projection", async () => {
+    const { sandbox, executable } = await packagedGitFixture();
     const stacked = path.join(sandbox, "stacked");
     const unrelated = path.join(sandbox, "unrelated");
     const nested = path.join(unrelated, "nested");
@@ -150,6 +154,55 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     expect((await reader.read(unrelatedRows, [])).stacks).toEqual([]);
     await writeCatalog(unrelated, "unrelated");
     expect((await reader.read(unrelatedRows, [])).stacks[0]?.repository).toBe("github.com:fixture/unrelated");
+  });
+
+  it.skipIf(process.platform === "win32")("admits a nested inferred stack only in the clone found by Git", async () => {
+    const { sandbox, executable } = await packagedGitFixture();
+    const outer = path.join(sandbox, "outer");
+    const inner = path.join(outer, "inner");
+    await mkdir(inner, { recursive: true });
+    initialize(outer);
+    initialize(inner);
+    git(inner, "branch", "lower");
+    git(inner, "branch", "upper");
+    const thread = (cwd: string, id: string, repo: string, number: number, head: string, base: string) => {
+      const pr: PrSummary = {
+        number, provider: "github.com", org: "fixture", repo, lifecycleState: "open", state: "passing",
+        headRefName: head, baseRefName: base, url: `https://github.com/fixture/${repo}/pull/${number}`,
+        linkedDirectoryPaths: [cwd],
+      };
+      return { ...row(cwd, id), prs: [pr] };
+    };
+    const rows = [
+      thread(inner, "lower", "inner", 1, "lower", "main"),
+      thread(inner, "upper", "inner", 2, "upper", "lower"),
+      thread(outer, "outer", "outer", 3, "outer-topic", "main"),
+    ];
+    const wrapper = path.join(sandbox, "git-wrapper");
+    const quoted = "'" + executable.replaceAll("'", "'\\''") + "'";
+    await writeFile(wrapper, `#!/bin/sh\nexec ${quoted} "$@"\n`, { mode: 0o700 });
+    const read = async (command: string) => {
+      process.env.PWRAGENT_GIT_PATH = command;
+      const validated: string[] = [];
+      const projection = await new StackReader().read(rows, [], undefined, undefined, undefined, async (candidate) => {
+        validated.push(candidate.id);
+        return candidate.prs;
+      });
+      return { ...projection, validated: validated.sort() };
+    };
+
+    // Git resolves the nested repository's PR chain to one clone. The
+    // enclosing repository has an attachment but no stack of its own.
+    const live = await read(wrapper);
+    expect(live.stacks).toHaveLength(1);
+    expect(live.stacks[0]).toMatchObject({ repository: "github.com:fixture/inner", inferred: true });
+    expect(live.catalogs).toEqual([{ status: "missing" }]);
+    expect(live.validated).toEqual(["lower", "upper"]);
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    onTestFinished(() => starts.mockRestore());
+    expect(await read(executable)).toEqual(live);
+    expect(starts.mock.calls.filter(([, [verb], purpose]) => verb === "rev-parse" && purpose === "stack-checkout")
+      .map(([cwd]) => cwd)).toEqual([inner]);
   });
 
   it("revalidates attachment checkouts without repeating Git on unrelated repositories", async () => {

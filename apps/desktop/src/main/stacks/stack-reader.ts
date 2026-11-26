@@ -1434,6 +1434,8 @@ export class StackReader {
     if (directories && !scopedClones.size) return { stacks: [], catalogs: unavailable };
 
     const eligible = possibleInferredLayers(local, knownPrs);
+    const inferredRows = local.filter((row) => row.prs?.some((pr) => eligible.has(prIdentity(pr))));
+    const inferredPaths = new Set(inferredRows.flatMap(threadDirectories));
     const wanted = new Set<string>();
     // Read explicitly requested catalogs even when there is nothing to bind.
     await Promise.all([...scopedClones.keys()].map(async (commonDir) => {
@@ -1467,8 +1469,9 @@ export class StackReader {
     const scan = new IterableMapper(paths, async (cwd) => {
       const found = anchorPaths.has(cwd) ? undefined : await hints.possibleCommonDirs(cwd);
       // An explicit path to this package's Git can rule out unrelated
-      // checkouts too. Empty or inconclusive hints still go through Git.
-      if (found && (!hints.requiresGitDiscovery || (packagedHintVersion && found.length))) {
+      // checkouts too. Inference needs the resolved clone before admission:
+      // enclosing repositories in the hints may have unrelated attachments.
+      if (found && (!hints.requiresGitDiscovery || (packagedHintVersion && found.length && !inferredPaths.has(cwd)))) {
         if (found.length) hinted.add(cwd);
         return [cwd, found] as const;
       }
@@ -1496,14 +1499,12 @@ export class StackReader {
       }), STACK_CHECKOUT_SCAN_LIMITS);
       for await (const { commonDir, present } of catalogs) if (present) wanted.add(commonDir);
     }
-    const inferredRows = local.filter((row) => row.prs?.some((pr) => eligible.has(prIdentity(pr))));
-    const inferredPaths = new Set<string>();
-    for (const row of inferredRows) {
-      for (const cwd of threadDirectories(row)) {
-        inferredPaths.add(cwd);
-        for (const commonDir of possible.get(cwd) ?? []) {
-          if (!directories || scopedClones.has(commonDir)) wanted.add(commonDir);
-        }
+    for (const cwd of inferredPaths) {
+      // The candidate list survives a failed lookup for catalog discovery.
+      // Only the Git-backed result can seed inference in this fast path.
+      if (packagedHintVersion && !located.has(cwd)) continue;
+      for (const commonDir of possible.get(cwd) ?? []) {
+        if (!directories || scopedClones.has(commonDir)) wanted.add(commonDir);
       }
     }
     const participates = (cwd: string) => possible.get(cwd)?.some((commonDir) => wanted.has(commonDir));
