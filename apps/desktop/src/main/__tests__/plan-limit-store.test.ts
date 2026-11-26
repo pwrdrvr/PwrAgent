@@ -525,6 +525,54 @@ describe("PlanLimitStore", () => {
     });
   });
 
+  describe("Antigravity complete snapshots", () => {
+    const now = Date.parse("2026-11-26T14:00:00Z");
+
+    it("clears a prior resetAt and keeps the bucket live when a complete newest read resets a 5h pool to idle", () => {
+      fc.assert(fc.property(
+        fc.integer({ min: 1, max: 100 }),
+        fc.integer({ min: 1_000, max: 5 * 60_000 }),
+        (priorUsed, skewMs) => {
+          const { store, advance } = storeAt(now);
+          const staleResetAt = now + skewMs;
+          const active = {
+            name: "5h Gemini limit",
+            limitId: "gemini-5h",
+            usedPercent: priorUsed,
+            windowMinutes: 300,
+            resetAt: staleResetAt,
+          };
+          const idle = {
+            name: "5h Gemini limit",
+            limitId: "gemini-5h",
+            usedPercent: 0,
+            windowMinutes: 300,
+          };
+          store.record("acp:antigravity", {
+            limits: [active],
+            since: store.mark("acp:antigravity"),
+            precise: true,
+            dated: true,
+            complete: true,
+          });
+          // Bucket rolls back to idle before the local clock passes the prior resetAt.
+          store.record("acp:antigravity", {
+            limits: [idle],
+            since: store.mark("acp:antigravity"),
+            precise: true,
+            dated: true,
+            complete: true,
+          });
+          expect(store.limits("acp:antigravity")).toEqual([idle]);
+          expect("resetAt" in store.limits("acp:antigravity")![0]!).toBe(false);
+          // Passing the old reset timestamp must not evict the freshly-idle bucket.
+          advance(skewMs + 1_000);
+          expect(store.limits("acp:antigravity")).toEqual([idle]);
+        },
+      ));
+    });
+  });
+
   it("tells subscribers when a window passes its reset", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const store = new PlanLimitStore();

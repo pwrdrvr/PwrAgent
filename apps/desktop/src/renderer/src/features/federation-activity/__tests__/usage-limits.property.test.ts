@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import type { UsageLimitObservation } from "@pwragent/shared/contracts/usage-activity";
-import { buildLimitAccounts, projectLimit, sinceResetSeries } from "../usage-limits";
+import { buildLimitAccounts, fiveHourSeries, projectLimit, sinceResetSeries } from "../usage-limits";
 
 const HOUR = 3_600_000;
 const START = Date.UTC(2026, 8, 27, 21);
@@ -100,6 +100,32 @@ describe("usage limit schedule properties", () => {
         const [expected] = buildLimitAccounts([{ ...fixtureOwner, current: codex }]);
         const accounts = buildLimitAccounts([{ ...fixtureOwner, history: [claude], current: codex }]);
         expect(accounts.find((account) => account.provider === "openai")).toEqual(expected);
+      },
+    ));
+  });
+
+  it("picks an anchored active 5h pool over an idle 5h pool without a reset regardless of pool order", () => {
+    fc.assert(fc.property(
+      fc.boolean(),
+      fc.integer({ min: 1, max: 99 }),
+      fc.integer({ min: 1, max: 4 }),
+      (idleFirst, activePercent, elapsedHours) => {
+        const idle = { name: "5h Gemini limit", limitId: "gemini-5h", usedPercent: 0, windowMinutes: 300 };
+        const active = {
+          name: "5h Claude/GPT limit",
+          limitId: "3p-5h",
+          usedPercent: activePercent,
+          resetAt: START + 5 * HOUR,
+          windowMinutes: 300,
+        };
+        const limits = idleFirst ? [idle, active] : [active, idle];
+        const [account] = buildLimitAccounts([{
+          ...fixtureOwner,
+          current: { observedAt: START + elapsedHours * HOUR, provider: "google", limits },
+        }]);
+        const selected = fiveHourSeries(account)!;
+        expect(selected.limitId).toBe("3p-5h");
+        expect(selected.windowStart).toBe(START);
       },
     ));
   });

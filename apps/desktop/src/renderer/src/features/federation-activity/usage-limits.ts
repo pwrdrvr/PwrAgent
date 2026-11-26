@@ -202,10 +202,27 @@ export function sinceResetSeries(account: LimitAccount | undefined): LimitSeries
  * The account's 5-hour limit. Codex names its windows by position, not
  * length: an account with only a weekly limit reports it as `primary`, so a
  * primary window of another stated length is not the 5-hour limit.
+ *
+ * When a provider reports multiple 5-hour pools (Antigravity's Gemini and
+ * Claude/GPT pools), prefer an anchored pool with a known window start or
+ * reset over an idle pool whose reset was omitted, breaking ties by higher
+ * usage and then existing order.
  */
 export function fiveHourSeries(account: LimitAccount | undefined): LimitSeries | undefined {
-  return account?.series.find((series) => series.windowMinutes === 300)
-    ?? account?.series.find((series) => series.windowKey === "primary" && series.windowMinutes === undefined);
+  const candidates = account?.series.filter((series) => series.windowMinutes === 300) ?? [];
+  if (candidates.length > 0) {
+    return candidates.reduce((best, candidate) => (
+      isBetterFiveHourSeries(candidate, best) ? candidate : best
+    ));
+  }
+  return account?.series.find((series) => series.windowKey === "primary" && series.windowMinutes === undefined);
+}
+
+function isBetterFiveHourSeries(candidate: LimitSeries, current: LimitSeries): boolean {
+  const candidateAnchored = candidate.windowStart !== undefined || candidate.latest.resetAt !== undefined;
+  const currentAnchored = current.windowStart !== undefined || current.latest.resetAt !== undefined;
+  if (candidateAnchored !== currentAnchored) return candidateAnchored;
+  return candidate.latest.usedPercent > current.latest.usedPercent;
 }
 
 /**

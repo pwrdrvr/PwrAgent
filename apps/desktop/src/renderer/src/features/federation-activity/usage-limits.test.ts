@@ -184,4 +184,22 @@ describe("usage limit history", () => {
     expect(claude5h.pacePerHour).toBeUndefined();
     expect(projectLimit(claude5h)).toBeUndefined();
   });
+
+  it("prefers an active Antigravity 5h pool over an earlier idle 5h pool without a reset", () => {
+    const antigravity: UsageLimitObservation = {
+      observedAt: t0 + 2 * HOUR,
+      provider: "google",
+      limits: [
+        { name: "5h Gemini limit", limitId: "gemini-5h", usedPercent: 0, windowMinutes: 300 },
+        { name: "5h Claude/GPT limit", limitId: "3p-5h", usedPercent: 35, resetAt: t0 + 5 * HOUR, windowMinutes: 300 },
+        { name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 8, resetAt: t0 + 168 * HOUR, windowMinutes: 10_080 },
+        { name: "Weekly Claude/GPT limit", limitId: "3p-weekly", usedPercent: 22, resetAt: t0 + 168 * HOUR, windowMinutes: 10_080 },
+      ],
+    };
+    const [account] = buildLimitAccounts([{ ...studio, current: antigravity }]);
+    const selected = fiveHourSeries(account)!;
+    expect(selected.limitId).toBe("3p-5h");
+    expect(selected.windowStart).toBe(t0);
+    expect(selected.pacePerHour).toBeCloseTo(17.5);
+  });
 });
