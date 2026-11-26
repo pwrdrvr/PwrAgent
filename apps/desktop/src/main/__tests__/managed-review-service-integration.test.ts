@@ -3753,10 +3753,12 @@ describe("DesktopBackendRegistry", () => {
         .rejects.toThrow("A review is already running for PR #42");
       expect(codexClient.startTurnCallCount).toBe(1);
 
-      await codexClient.emit({ method: `turn/${status}`, params: {
-        threadId: original.reviewThreadId, turnId: original.turnId,
-        turn: { id: original.turnId, status, ...(status === "failed" ? { error: { message: "Review failed" } } : {}) },
-      } });
+      const terminal = { threadId: original.reviewThreadId, turnId: original.turnId };
+      await codexClient.emit(status === "failed"
+        ? { method: "turn/failed", params: { ...terminal,
+            turn: { id: original.turnId, status, error: { message: "Review failed" } },
+          } }
+        : { method: "turn/cancelled", params: { ...terminal, turn: { id: original.turnId, status } } });
       expect(activeHeads).toEqual([headCommit, undefined]);
       await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
         .resolves.toMatchObject({ status: "started" });
