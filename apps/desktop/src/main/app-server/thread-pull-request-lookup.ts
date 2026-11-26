@@ -31,6 +31,7 @@ import {
   prLogIds,
   prLogStatuses,
   prSummariesEqual,
+  type PrStatusObservations,
 } from "./thread-pull-request-summaries";
 
 const appServerLog = getMainLogger("pwragent:app-server");
@@ -220,7 +221,7 @@ type ThreadPullRequestLookupPorts = {
     prs: PrSummary[],
     fetchedAt: number,
     source: string,
-  ): PrSummary[];
+  ): PrStatusObservations;
   canonicalizePrs(prs: PrSummary[]): PrSummary[];
   detachedPrKeyCanonicalizer(): { canonicalizePrKey?: (key: string) => string };
   publishThreadPullRequestsUpdated(params: {
@@ -698,7 +699,7 @@ export class ThreadPullRequestLookup {
     let incomplete = false;
     const onProviderFailure = () => { incomplete = true; };
     const trigger = params.request.trigger ?? "scheduled";
-    const prs = (await detectPullRequestsForThread({
+    const discoveredPrs = (await detectPullRequestsForThread({
       fetcher: this.ports.getPrFetcher(),
       onProviderFailure,
       branch: params.request.branch.trim(),
@@ -707,27 +708,30 @@ export class ThreadPullRequestLookup {
         ? { allowPrimedBranchLookup: false }
         : {}),
     })).map(normalizePrSummary);
-    this.ports.prRepositoryAliases.confirm(prs);
+    this.ports.prRepositoryAliases.confirm(discoveredPrs);
     const retainedPrs = await this.fetchRetainedNonTerminalPullRequests({
       prs: this.getPullRequestLookupSubscriberPreviousPrs({
         lookupKey: params.lookupKey,
         fallbackPrs: params.previousPrs,
       }),
-      discoveredPrs: prs,
+      discoveredPrs,
       onProviderFailure,
       cwd: params.lookupDirectoryPaths[0] ?? params.request.directoryPaths[0],
     });
-    const statusPrs = dedupePrsByStatusKey([...prs, ...retainedPrs]);
-    const changedStatusPrs = this.ports.rememberPrStatuses(
+    const statusPrs = dedupePrsByStatusKey([...discoveredPrs, ...retainedPrs]);
+    const { accepted, changed } = this.ports.rememberPrStatuses(
       statusPrs,
       fetchedAt,
       `thread-lookup:${trigger}`,
     );
-    await this.ports.writePrStatusesToCache(statusPrs, fetchedAt);
+    await this.ports.writePrStatusesToCache(accepted, fetchedAt);
     await this.ports.publishPullRequestStatusUpdates({
       backend: params.backend,
-      prs: changedStatusPrs,
+      prs: changed,
     });
+    // Keep discovery membership and provenance. The registry supplies the
+    // status written to the attachment row and published to its subscribers.
+    const prs = this.ports.canonicalizePrs(discoveredPrs);
     // A partial lookup is not an authoritative (possibly empty) branch result.
     if (!incomplete) {
       this.rememberPrLookup({
