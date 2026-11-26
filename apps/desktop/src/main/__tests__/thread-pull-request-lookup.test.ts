@@ -32,7 +32,7 @@ it("coalesces a shared branch lookup and preserves each subscriber's prior attac
     loadPrStatusRegistry: async () => {},
     filterStoredDiscoveredPrs: async (prs) => prs,
     mergePrHistory: (prior, discovered) => [...new Map([...prior, ...discovered].map((pr) => [pr.number, pr])).values()],
-    rememberPrStatuses: () => [],
+    rememberPrStatuses: () => ({ accepted: [], changed: [], cacheChanged: [] }),
     canonicalizePrs: (prs) => prs,
     detachedPrKeyCanonicalizer: () => ({}),
     publishThreadPullRequestsUpdated: publish,
