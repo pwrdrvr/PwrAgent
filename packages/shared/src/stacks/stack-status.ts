@@ -49,6 +49,12 @@ export type StackSummary = {
   repository: string;
   inferred: boolean;
   trunk: string;
+  /**
+   * The stack's number on GitHub, when the stack exists there (made on
+   * github.com or with `gh stack`). GitHub merges a layer of it together with
+   * every open layer below.
+   */
+  githubStack?: number;
   layers: StackLayer[];
 };
 
@@ -59,6 +65,12 @@ export type ThreadStackMembership = {
 };
 
 export const MAX_COMPACT_STACK_MEMBERSHIPS = 8;
+/**
+ * The most open layers below a PR that a card lists and a merge may name.
+ * Past it the card offers no stack merge and the merge guard refuses, which
+ * keeps each row's membership small in a stack of hundreds.
+ */
+export const MAX_GITHUB_STACK_OPEN_BELOW = 64;
 
 /**
  * How long a stack's detail stays current without a new read. The owner
@@ -85,6 +97,13 @@ export type CompactStackMembership = {
   trunk?: string;
   hasOpenPr?: boolean;
   basePr?: Pick<StackLayerPullRequest, "number" | "lifecycleState" | "checkState" | "mergeState"> & { branch?: string };
+  /** The stack's number on GitHub, when the stack exists there. Absent from older owners. */
+  githubStack?: number;
+  /**
+   * In a GitHub stack, the open PRs below this layer, bottom first. GitHub's
+   * merge of this layer lands them too. Absent when none are open or unknown.
+   */
+  openBelow?: number[];
 };
 
 export type SelectedStackLayer = {
@@ -124,6 +143,18 @@ export function compactStackMembership(
     ...(layer.thread && layer.thread.key.length <= 512 ? { threadKey: layer.thread.key } : {}),
     ...(parent?.thread && parent.thread.key.length <= 512 ? { parentThreadKey: parent.thread.key } : {}),
     ...(parent?.pullRequest?.lifecycleState === "merged" ? { parentMerged: true } : {}),
+    ...githubStackPlace(stack, position),
+  };
+}
+
+/** A GitHub stack's number and the open PRs below `position`, which GitHub's merge of that layer lands too. */
+function githubStackPlace(stack: StackSummary, position: number): Pick<CompactStackMembership, "githubStack" | "openBelow"> {
+  if (stack.githubStack === undefined) return {};
+  const openBelow = stack.layers.slice(0, position - 1).flatMap((layer) =>
+    layer.pullRequest && layer.pullRequest.lifecycleState === "open" ? [layer.pullRequest.number] : []);
+  return {
+    githubStack: stack.githubStack,
+    ...(openBelow.length && openBelow.length <= MAX_GITHUB_STACK_OPEN_BELOW ? { openBelow } : {}),
   };
 }
 

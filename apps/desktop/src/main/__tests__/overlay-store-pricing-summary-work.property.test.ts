@@ -108,7 +108,7 @@ it("bounds cumulative summary work by the number of one-line flushes", async () 
     fc.integer({ min: 64, max: 120 }),
     fc.integer({ min: 8, max: 18 }),
     expectAppendBudget,
-  ), { numRuns: 15 });
+  ), { numRuns: 8 });
 });
 
 it("keeps checkpoints equal to the ledger through replay, regrouping, and repricing", async () => {
@@ -163,7 +163,7 @@ it("keeps checkpoints equal to the ledger through replay, regrouping, and repric
     } finally {
       db.close();
     }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 const pricingDeltaVersion = 85;

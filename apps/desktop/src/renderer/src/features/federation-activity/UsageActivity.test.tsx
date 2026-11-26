@@ -171,13 +171,16 @@ it("warns when the pace reaches the limit before its reset and draws that ahead 
   const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: now, rateLimits: [], truncated: false, limitObservation: observation }));
   render(<UsageActivity desktopApi={{ readUsageActivity }} />);
   expect(await screen.findByText(/On pace to reach 100% .*, 2 days before the reset/)).toBeInTheDocument();
-  expect(screen.getByText("At this pace")).toBeInTheDocument();
+  // The default 7-day clock window is history only; Since reset draws the pace forecast ahead of now.
+  expect(screen.queryByText("Now")).not.toBeInTheDocument();
+  choosePeriod("Since reset");
+  expect(await screen.findByText("At this pace")).toBeInTheDocument();
   expect(screen.getByText("Now")).toBeInTheDocument();
   // The reset lies past the 40% cap; the 100% crossing a day out is inside it.
   expect(screen.getByText(/^100% /)).toBeInTheDocument();
   expect(screen.queryByText(/^Resets /)).not.toBeInTheDocument();
 
-  // A clock window is history only.
+  // Returning to a clock window removes the forecast.
   choosePeriod("7 days");
   await waitFor(() => expect(screen.queryByText("Now")).not.toBeInTheDocument());
   expect(screen.getByText(/On pace to reach 100%/)).toBeInTheDocument();
@@ -231,10 +234,9 @@ it("filters totals, tokens, limits and threads by recorded account across owners
       limitObservation: observation("alpha") } }));
   render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers([{ id: "remote", label: "Remote", status: "connected" }]) }} />);
   await screen.findByRole("button", { name: "Inspect Current login" });
-  choosePeriod("7 days");
-  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
-  const band = () => within(screen.getByRole("region", { name: "Limits and cost" }));
-  expect(band().getByText("$15.00")).toBeInTheDocument();
+  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+  const overview = () => screen.getByRole("region", { name: "Usage overview" });
+  expect(overview()).toHaveTextContent("$15.00 API-eq.");
   const picker = screen.getByRole("combobox", { name: "Account" });
   expect(selectOptionLabels(picker)).toEqual([
     "All accounts", "OpenAI · Local", "OpenAI · Local +1", "xAI", "No account recorded · Local",
@@ -249,28 +251,28 @@ it("filters totals, tokens, limits and threads by recorded account across owners
   expect(picker).toHaveTextContent("OpenAI · Local +1");
   expect(screen.getByRole("group", { name: "Account scope" })).toHaveTextContent(
     "Showing OpenAI · Local +1 · Local, Remote. Limits, spend, chart and threads are this account only.");
-  expect(band().getByText("$5.00")).toBeInTheDocument();
-  expect(band().getByText("2 threads · 2 turns")).toBeInTheDocument();
-  expect(band().getByText("600")).toBeInTheDocument();
-  expect(band().getByText("400")).toBeInTheDocument();
+  expect(overview()).toHaveTextContent("$5.00 API-eq.");
+  expect(overview()).toHaveTextContent("2 threads · 2 turns ·");
+  expect(overview()).toHaveTextContent("Uncached total 600");
+  expect(overview()).toHaveTextContent("Output 400");
   expect(screen.getByRole("button", { name: "Inspect Previous login" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Same account abroad" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Current login" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Another provider" })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Inspect Previous login" }));
   chooseSelectOption(picker, "OpenAI · Local");
-  expect(band().getByText("$2.00")).toBeInTheDocument();
+  expect(overview()).toHaveTextContent("$2.00 API-eq.");
   expect(screen.queryByRole("group", { name: "Turns in window" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Current login" })).toBeInTheDocument();
   chooseSelectOption(picker, "No account recorded · Local");
-  expect(band().getByText("$3.00")).toBeInTheDocument();
+  expect(overview()).toHaveTextContent("$3.00 API-eq.");
   expect(screen.getByText(/No account was recorded for these turns/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Rename" })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect Unkeyed history" })).toBeInTheDocument();
   chooseSelectOption(picker, "All accounts");
-  expect(band().getByText("$15.00")).toBeInTheDocument();
+  expect(overview()).toHaveTextContent("$15.00 API-eq.");
   expect(screen.queryByRole("group", { name: "Account scope" })).not.toBeInTheDocument();
-  expect(readUsageActivity).toHaveBeenCalledTimes(4); // Clock-period account filtering stays local.
+  expect(readUsageActivity).toHaveBeenCalledTimes(2); // Clock-period account filtering stays local.
 });
 
 it("focuses an account's turns and helper costs without any limit reading", async () => {
@@ -288,13 +290,12 @@ it("focuses an account's turns and helper costs without any limit reading", asyn
     rows: [row("Account A turn", "alpha", 1), row("Account A helpers", "alpha", 2, true), row("Account B turn", "beta", 4)] }));
   render(<UsageActivity desktopApi={{ readUsageActivity }} />);
   await screen.findByRole("button", { name: "Inspect Account B turn" });
-  choosePeriod("7 days");
-  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
+  expect(readUsageActivity).toHaveBeenCalledTimes(1);
   chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · This instance · alph");
-  expect(within(screen.getByRole("region", { name: "Limits and cost" })).getByText("$3.00")).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Usage overview" })).toHaveTextContent("$3.00 API-eq.");
   expect(screen.getByRole("button", { name: "Inspect Account A helpers" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Account B turn" })).not.toBeInTheDocument();
-  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+  expect(readUsageActivity).toHaveBeenCalledTimes(1);
 });
 
 it("reads ten federated profiles, sums their provider usage and selects an account outside the five chart series", async () => {
@@ -322,9 +323,9 @@ it("reads ten federated profiles, sums their provider usage and selects an accou
   expect(readUsageActivity).toHaveBeenCalledTimes(10);
   expect(new Set(readUsageActivity.mock.calls.map(([request]) => request.federationTarget.instanceId ?? "local")).size).toBe(10);
   expect(peakReads).toBe(4);
-  const band = () => within(screen.getByRole("region", { name: "Limits and cost" }));
-  expect(band().getByText("$55.00")).toBeInTheDocument();
-  expect(band().getByText("10 threads · 10 turns")).toBeInTheDocument();
+  const overview = () => screen.getByRole("region", { name: "Usage overview" });
+  expect(overview()).toHaveTextContent("$55.00 API-eq.");
+  expect(overview()).toHaveTextContent("10 threads · 10 turns ·");
   const picker = screen.getByRole("combobox", { name: "Account" });
   expect(selectOptionLabels(picker)).toHaveLength(11); // All accounts, plus each of the ten accounts.
   expect(selectOptionLabels(picker)).toContain("OpenAI · Machine 9 (profile-9)");
@@ -334,15 +335,15 @@ it("reads ten federated profiles, sums their provider usage and selects an accou
   fireEvent.click(within(spendBy).getByRole("button", { name: "Account" }));
   expect(screen.getByText("Other accounts")).toBeInTheDocument();
   chooseSelectOption(picker, "OpenAI · Local");
-  expect(band().getByText("$1.00")).toBeInTheDocument();
-  expect(band().getByText("1 thread · 1 turn")).toBeInTheDocument();
-  expect(band().getByText("300")).toBeInTheDocument();
-  expect(band().getByText("200")).toBeInTheDocument();
+  expect(overview()).toHaveTextContent("$1.00 API-eq.");
+  expect(overview()).toHaveTextContent("1 thread · 1 turn ·");
+  expect(overview()).toHaveTextContent("Uncached total 300");
+  expect(overview()).toHaveTextContent("Output 200");
   expect(screen.getByRole("button", { name: "Inspect Account 0 work" })).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Inspect Account 9 work" })).not.toBeInTheDocument();
   chooseSelectOption(picker, "All accounts");
-  expect(band().getByText("$55.00")).toBeInTheDocument();
-  expect(band().getByText("10 threads · 10 turns")).toBeInTheDocument();
+  expect(overview()).toHaveTextContent("$55.00 API-eq.");
+  expect(overview()).toHaveTextContent("10 threads · 10 turns ·");
 });
 
 it("keeps a mixed-version ledger copy in its recorded account when the unkeyed peer is read first", async () => {
@@ -358,16 +359,15 @@ it("keeps a mixed-version ledger copy in its recorded account when the unkeyed p
     } }));
   render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers([{ id: "remote", label: "Remote", status: "connected" }]) }} />);
   await screen.findByRole("button", { name: "Inspect Fixture thread" });
-  choosePeriod("7 days");
-  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
+  expect(readUsageActivity).toHaveBeenCalledTimes(2);
   const picker = screen.getByRole("combobox", { name: "Account" });
   chooseSelectOption(picker, "OpenAI · Local +1");
-  const band = within(screen.getByRole("region", { name: "Limits and cost" }));
-  expect(band.getByText("$5.00")).toBeInTheDocument();
-  expect(band.getByText("1 thread · 1 turn")).toBeInTheDocument();
+  const overview = () => screen.getByRole("region", { name: "Usage overview" });
+  expect(overview()).toHaveTextContent("$5.00 API-eq.");
+  expect(overview()).toHaveTextContent("1 thread · 1 turn ·");
   expect(screen.getByRole("button", { name: "Inspect Fixture thread" })).toBeInTheDocument();
   expect(selectOptionLabels(picker).some((label) => label.includes("No account recorded"))).toBe(false);
-  expect(readUsageActivity).toHaveBeenCalledTimes(4);
+  expect(readUsageActivity).toHaveBeenCalledTimes(2);
 });
 
 it("uses the selected account's reset window rather than another instance's current account", async () => {
@@ -380,9 +380,12 @@ it("uses the selected account's reset window rather than another instance's curr
   const readUsageActivity = vi.fn(async (request) => ({ rows: [], readAt: now, rateLimits: [], truncated: false,
     limitObservation: request.federationTarget?.scope === "local" ? reading("local-account", 4) : reading("remote-account", 2) }));
   render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers([{ id: "remote", label: "Remote", status: "connected" }]) }} />);
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
   await screen.findByRole("combobox", { name: "Account" });
+  choosePeriod("Since reset");
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
   chooseSelectOption(screen.getByRole("combobox", { name: "Account" }), "OpenAI · Remote");
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(6));
   await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
@@ -403,7 +406,7 @@ it("shows separate keyless limits for the local dev profile and the default peer
   }));
   render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity }} />);
 
-  const band = within(await screen.findByRole("region", { name: "Limits and cost" }));
+  const band = within(await screen.findByRole("region", { name: "Account limits" }));
   expect(band.getByRole("img", { name: /19% used/ })).toBeInTheDocument();
   expect(band.getByRole("img", { name: /68% used/ })).toBeInTheDocument();
   const instances = within(screen.getByRole("group", { name: "Instances" }));
@@ -433,6 +436,7 @@ it("shows Claude's limits beside Codex's and follows the provider the window was
   });
   render(<UsageActivity desktopApi={{ readUsageActivity, onUsageActivityFocusProvider }} initialProvider="anthropic" />);
   expect(await screen.findByRole("button", { name: /^Anthropic Max/ })).toHaveAttribute("aria-pressed", "true");
+  choosePeriod("Since reset");
   // Since reset follows Claude's account-wide weekly limit, which began two days ago.
   await waitFor(() => expect(lastFrom()).toBe(now - 2 * 24 * HOUR));
   expect(screen.getByRole("button", { name: /^OpenAI Pro/ })).toHaveAttribute("aria-pressed", "false");
@@ -465,6 +469,9 @@ it("reads the last 5 hours for the 5-hour window when the account's only limit i
     limitHistory: [weekly(now - 3 * HOUR, 40, now + 3 * 24 * HOUR)],
     limitObservation: weekly(resetSeen, 1, resetSeen + 7 * 24 * HOUR) }));
   const { container } = render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(1));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+  choosePeriod("Since reset");
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
   // Since reset starts at the reset itself.
@@ -508,9 +515,8 @@ it("names an account on this machine, from the scope line, without undoing anoth
   const picker = screen.getByRole("combobox", { name: "Account" });
   expect(selectOptionLabels(picker)).toEqual(["All accounts", "OpenAI", "OpenAI Plus"]);
   chooseSelectOption(picker, "OpenAI Plus");
-  // Since reset follows the selected account's window, so selecting rereads once; naming never does.
-  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+  // Clock periods filter accounts locally, and naming never rereads.
+  expect(readUsageActivity).toHaveBeenCalledTimes(1);
   const scope = () => screen.getByRole("group", { name: "Account scope" });
   expect(scope()).toHaveTextContent("Showing OpenAI Plus · This instance. Limits, spend, chart and threads are this account only.");
   expect(screen.getByRole("button", { name: "Inspect Home thread" })).not.toHaveTextContent("OpenAI Plus");
@@ -523,7 +529,7 @@ it("names an account on this machine, from the scope line, without undoing anoth
   expect(writeSettingsConfig).toHaveBeenLastCalledWith({ patch: { models: { usageAccountNames: {
     "openai:elsewhere": "Named in another window", "openai:home": "Home" } } } });
   expect(scope()).toHaveTextContent("Showing Home · OpenAI Plus · This instance.");
-  expect(within(screen.getByRole("region", { name: "Limits and cost" })).getByText("$1.00")).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Usage overview" })).toHaveTextContent("$1.00 API-eq.");
 
   // Blank returns the derived name.
   fireEvent.click(within(scope()).getByRole("button", { name: "Rename" }));
@@ -531,7 +537,7 @@ it("names an account on this machine, from the scope line, without undoing anoth
   fireEvent.click(within(scope()).getByRole("button", { name: "Save" }));
   await waitFor(() => expect(picker).toHaveTextContent("OpenAI Plus"));
   expect(stored).toEqual({ "openai:elsewhere": "Named in another window" });
-  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+  expect(readUsageActivity).toHaveBeenCalledTimes(1);
 });
 
 it("offers Spend by Account only when the period has more than one account", async () => {
@@ -565,7 +571,7 @@ it("keeps a historical account selected when the new period has no usage for it"
   await waitFor(() => expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 8, 28).getTime() })));
   await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
   expect(screen.getByRole("combobox", { name: "Account" })).toHaveTextContent("OpenAI · This instance · prev");
-  expect(within(screen.getByRole("region", { name: "Limits and cost" })).getByText("$0.00")).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Usage overview" })).toHaveTextContent("$0.00 API-eq.");
   expect(screen.queryByRole("button", { name: "Inspect Current account" })).not.toBeInTheDocument();
   expect(screen.getByText("No usage in this period")).toBeInTheDocument();
 });
@@ -603,11 +609,13 @@ it("rereads when the period or instances change, and on focus once the data is s
   vi.spyOn(Date, "now").mockImplementation(() => now);
   const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: now, rateLimits: [], truncated: false }));
   render(<UsageActivity desktopApi={{ readUsageActivity, readFederationActivity: peers([{ id: "owner", label: "Owner", status: "connected" }]) }} />);
+  expect(within(screen.getByRole("group", { name: "Period" })).getByRole("button", { name: "7 days" })).toHaveAttribute("aria-pressed", "true");
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
-
-  choosePeriod("7 days");
-  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
   expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: now - 7 * 24 * HOUR, to: now }));
+
+  choosePeriod("24 h");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(4));
+  expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: now - 24 * HOUR, to: now }));
 
   choosePeriod("30 days");
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(6));
@@ -732,12 +740,14 @@ it("starts Since reset at an unexpected reset and says so", async () => {
     limitObservation: reading(now - 10 * 60_000, 7),
     limitHistory: [reading(now - 4 * HOUR, 62), reading(now - 2.5 * HOUR, 1), reading(now - 10 * 60_000, 7)] }));
   render(<UsageActivity desktopApi={{ readUsageActivity }} />);
-  expect(within(screen.getByRole("group", { name: "Period" })).getByRole("button", { name: "Since reset" })).toHaveAttribute("aria-pressed", "true");
   expect(await screen.findByText(/Unexpected reset seen/)).toBeInTheDocument();
-  // The window turned out shorter than the provisional read, so it is read
-  // once more over itself: owners bucket helper rollups by the window read.
+  expect(readUsageActivity).toHaveBeenCalledTimes(1);
+  expect(readUsageActivity).toHaveBeenNthCalledWith(1, expect.objectContaining({ from: now - 7 * 24 * HOUR, to: now }));
+  choosePeriod("Since reset");
+  expect(within(screen.getByRole("group", { name: "Period" })).getByRole("button", { name: "Since reset" })).toHaveAttribute("aria-pressed", "true");
+  // Switching to Since reset reads directly over the observed reset window so
+  // owners bucket helper rollups cleanly inside it.
   await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
-  expect(readUsageActivity).toHaveBeenNthCalledWith(1, expect.objectContaining({ from: now - 8 * 24 * HOUR, to: now }));
   expect(readUsageActivity).toHaveBeenNthCalledWith(2, expect.objectContaining({ from: now - 2.5 * HOUR, to: now }));
   expect(screen.getByRole("img", { name: "Weekly limit 7% used" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Inspect After the reset" })).toBeInTheDocument();
@@ -758,7 +768,8 @@ it("reads a monthly credit limit from its start, once more, within the 31-day bo
   expect(await screen.findByRole("img", { name: "Individual limit 37% used" })).toBeInTheDocument();
   expect(screen.getByText(/37.2K of 100K used/)).toBeInTheDocument();
   expect(screen.getByText("Available")).toBeInTheDocument();
-  expect(readUsageActivity).toHaveBeenCalledTimes(2);
+  choosePeriod("Since reset");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
   expect(readUsageActivity).toHaveBeenLastCalledWith(expect.objectContaining({ from: new Date(2026, 7, 30).getTime(), to: now }));
 });
 
@@ -925,4 +936,447 @@ it("names each instance toggle by its short name, with the full name as its tool
   expect(remoteDefault).toHaveAttribute("title", "DESKTOP-17ISFOI");
   const local = within(instances).getByRole("button", { name: "Harold-MBP-M5-Max" });
   expect(local).toHaveTextContent("M5 Max");
+});
+
+it("deduplicates OpenAI account daily token history across federated owners, preserves omitted gaps, and keeps ledger detail separate", async () => {
+  const now = Date.UTC(2026, 10, 24, 18, 0, 0);
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const sharedAccountKey = "acct-pro-shared";
+  const measuredAt = Date.UTC(2026, 10, 23, 15, 0, 0);
+  const turn = usageFixture({
+    usageLineId: "openai-turn-1",
+    threadId: "thread-openai",
+    turnId: "turn-openai",
+    provider: "openai",
+    createdAt: measuredAt - 60_000,
+    startedAt: measuredAt - 60_000,
+    completedAt: measuredAt,
+    uncachedInputTokens: 200_000,
+    cachedInputTokens: 0,
+    outputTokens: 50_000,
+    totalTokens: 250_000,
+    totalCostMicros: 1_500_000,
+  });
+  const sharedBuckets = [
+    { startDate: "2026-11-21", tokens: 1_000_000 },
+    // 2026-11-22 intentionally omitted by provider — must render as gap, not zero.
+    { startDate: "2026-11-23", tokens: 2_000_000 },
+  ];
+  const readUsageActivity = vi.fn(async (request) => {
+    const id = request.federationTarget?.instanceId;
+    if (id === "legacy-peer") {
+      // Older PwrAgent omits accountTokenUsage completely.
+      return { rows: [], readAt: now, rateLimits: [], truncated: false };
+    }
+    if (id === "proxy-outpost") {
+      // New Outpost with OpenAI disabled returns an explicit empty array.
+      return { rows: [], readAt: now, rateLimits: [], truncated: false, accountTokenUsage: [] };
+    }
+    return {
+      rows: id === "outpost" ? [{ ...turn, accountKey: sharedAccountKey }] : [{ ...turn, accountKey: sharedAccountKey }],
+      readAt: now,
+      rateLimits: [],
+      truncated: false,
+      accountTokenUsage: [{
+        provider: "openai",
+        accountKey: sharedAccountKey,
+        planType: "pro",
+        observedAt: id === "outpost" ? now - 5_000 : now,
+        status: "available" as const,
+        dailyUsageBuckets: sharedBuckets,
+        summary: {
+          lifetimeTokens: 10_000_000,
+          peakDailyTokens: 2_000_000,
+          currentStreakDays: 12,
+          longestStreakDays: 20,
+        },
+      }],
+    };
+  });
+
+  render(<UsageActivity desktopApi={{
+    readUsageActivity,
+    readFederationActivity: peers([
+      { id: "outpost", label: "Build Outpost", status: "connected" },
+      { id: "proxy-outpost", label: "Proxy Outpost", status: "connected" },
+      { id: "legacy-peer", label: "Legacy Mac", status: "connected" },
+    ]),
+  }} />);
+
+  const trend = await screen.findByRole("region", { name: "Account daily token trend" });
+  expect(readUsageActivity).toHaveBeenCalledWith(expect.objectContaining({ includeAccountTokenUsage: true }));
+  // Deduplicated across Local + Build Outpost: 1M + 2M = 3M (NOT 6M, and NOT 3.25M adding PwrAgent's 250K!).
+  expect(trend).toHaveTextContent("deduplicated across Build Outpost, Local");
+  expect(trend).toHaveTextContent("3M tokens across 2 reported days");
+  expect(trend).toHaveTextContent("PwrAgent measured this period (included above) 250K");
+  expect(trend).toHaveTextContent("Not a quota percentage and not added to PwrAgent's per-thread ledger below");
+  expect(trend).toHaveTextContent("today is not yet reported by OpenAI");
+  expect(trend).toHaveTextContent("1 omitted day shown as gaps, not zero");
+  // Legacy Mac omitted accountTokenUsage -> noted as older peer; Proxy Outpost returned [] -> NOT flagged.
+  expect(trend).toHaveTextContent("Legacy Mac did not report account-wide token history");
+  expect(trend).not.toHaveTextContent("Proxy Outpost did not report");
+
+  // Omitted date renders as a gap button with an explicit omitted label (never 0 tokens).
+  const omittedBar = within(trend).getByRole("button", { name: /Nov 22, 2026 \(UTC\): Not reported by OpenAI \(omitted, not zero\)/ });
+  fireEvent.click(omittedBar);
+  expect(trend).toHaveTextContent("Omitted by OpenAI (no bucket reported, not zero)");
+
+  // PwrAgent's measured per-thread API-equivalent ledger remains intact below.
+  expect(screen.getByRole("button", { name: "Inspect Fixture thread" })).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Usage overview" })).toHaveTextContent("$1.50 API-eq.");
+});
+
+it("shows auth-required status cleanly when Codex uses API-key or signed-out auth", async () => {
+  const now = Date.UTC(2026, 10, 24, 18, 0, 0);
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const readUsageActivity = vi.fn(async () => ({
+    rows: [],
+    readAt: now,
+    rateLimits: [],
+    truncated: false,
+    accountTokenUsage: [{
+      provider: "openai",
+      observedAt: now,
+      status: "auth_required" as const,
+    }],
+  }));
+
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  const trend = await screen.findByRole("region", { name: "Account daily token trend" });
+  expect(trend).toHaveTextContent("requires a ChatGPT/Codex account sign-in");
+});
+
+it("asks a peer that failed the first read for account token history again, not mistaking it for an older peer", async () => {
+  const now = new Date(2026, 10, 24, 12).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const resetAt = now + 4 * 24 * HOUR;
+  const reading = (at: number, usedPercent: number): UsageLimitObservation => ({ observedAt: at, accountKey: "acct", planType: "plus",
+    limits: [{ name: "Weekly limit", windowKey: "secondary", usedPercent, resetAt, windowMinutes: 10_080 }] });
+  let peerCalls = 0;
+  // Since reset reads twice: the first pass, then once more over the limit
+  // window. The peer times out on the first pass only.
+  let failNextPeerRead = false;
+  const readUsageActivity = vi.fn(async (request) => {
+    if (request.federationTarget?.instanceId === "flaky-peer") {
+      peerCalls += 1;
+      if (failNextPeerRead) { failNextPeerRead = false; throw new Error("peer timed out"); }
+      // A current peer answers the flag with an explicit (possibly empty) list.
+      return { rows: [], readAt: now, rateLimits: [], truncated: false,
+        ...request.includeAccountTokenUsage ? { accountTokenUsage: [] } : {} };
+    }
+    return { rows: [], readAt: now, rateLimits: [], truncated: false,
+      // The 7-day default read carries no limit reading, so Since reset starts
+      // without a known window and reads twice, as on a first open.
+      ...request.from === now - 7 * 24 * HOUR ? {} : {
+        limitObservation: reading(now - 10 * 60_000, 7),
+        limitHistory: [reading(now - 4 * HOUR, 62), reading(now - 2.5 * HOUR, 1), reading(now - 10 * 60_000, 7)],
+      },
+      accountTokenUsage: [{ provider: "openai", accountKey: "acct", observedAt: now, status: "available" as const,
+        dailyUsageBuckets: [{ startDate: "2026-11-23", tokens: 1_000 }] }] };
+  });
+  render(<UsageActivity desktopApi={{
+    readUsageActivity,
+    readFederationActivity: peers([{ id: "flaky-peer", label: "Flaky Mac", status: "connected" }]),
+  }} />);
+  await screen.findByRole("region", { name: "Account daily token trend" });
+  await waitFor(() => expect(peerCalls).toBe(1));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Refresh" })).toBeEnabled());
+  failNextPeerRead = true;
+  choosePeriod("Since reset");
+  await waitFor(() => expect(peerCalls).toBe(3));
+  const trend = screen.getByRole("region", { name: "Account daily token trend" });
+  await waitFor(() => expect(trend).toHaveTextContent("1K tokens across 1 reported day"));
+  const peerReads = readUsageActivity.mock.calls.map(([request]) => request)
+    .filter((request) => request.federationTarget?.instanceId === "flaky-peer");
+  expect(peerReads.at(-1)).toEqual(expect.objectContaining({ includeAccountTokenUsage: true }));
+  expect(trend).not.toHaveTextContent("Flaky Mac did not report");
+});
+
+it("labels the chart's peak by its range and the provider's all-time peak separately", async () => {
+  const now = Date.UTC(2026, 10, 24, 18, 0, 0);
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const readUsageActivity = vi.fn(async () => ({ rows: [], readAt: now, rateLimits: [], truncated: false,
+    accountTokenUsage: [{ provider: "openai", accountKey: "acct", observedAt: now, status: "available" as const,
+      dailyUsageBuckets: [{ startDate: "2026-11-23", tokens: 2_000_000 }],
+      summary: { peakDailyTokens: 9_000_000 } }] }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  const trend = await screen.findByRole("region", { name: "Account daily token trend" });
+  await waitFor(() => expect(trend).toHaveTextContent("Peak day 2M"));
+  expect(trend).toHaveTextContent("All-time peak 9M");
+});
+
+it("shows per-provider tokens, cost, cache savings, and model/day breakdown across federated instances", async () => {
+  const now = new Date(2026, 10, 24, 15, 0).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const row = (overrides: Partial<ReturnType<typeof usageFixture>["line"]> & { title?: string }) => {
+    const { title, ...lineOverrides } = overrides;
+    const fixture = usageFixture({
+      createdAt: now - 2 * HOUR,
+      startedAt: now - 2 * HOUR,
+      completedAt: now - HOUR,
+      ...lineOverrides,
+    });
+    return title ? { ...fixture, title } : fixture;
+  };
+  const readUsageActivity = vi.fn(async (request) => {
+    if (request.federationTarget?.instanceId === "m2-max") {
+      return {
+        rows: [
+          row({
+            usageLineId: "claude-1", threadId: "claude-thread", turnId: "claude-turn",
+            title: "Claude refactor", backend: "claude", provider: "anthropic",
+            model: "claude-opus-4-6", modelLabel: "Claude Opus 4.6",
+            uncachedInputTokens: 100_000, cacheWriteInputTokens: 20_000,
+            cachedInputTokens: 3_000_000, outputTokens: 50_000, totalTokens: 3_150_000,
+            uncachedInputCostMicros: 400_000, cacheWriteInputCostMicros: 125_000,
+            cachedInputCostMicros: 1_500_000, outputCostMicros: 1_250_000, totalCostMicros: 3_275_000,
+          }),
+          row({
+            usageLineId: "grok-1", threadId: "grok-thread", turnId: "grok-turn",
+            title: "Grok triage", backend: "acp:grok", provider: "xai",
+            model: "grok-4", modelLabel: "Grok 4",
+            uncachedInputTokens: 50_000, cachedInputTokens: 900_000, outputTokens: 50_000, totalTokens: 1_000_000,
+            uncachedInputCostMicros: 150_000, cachedInputCostMicros: 250_000,
+            outputCostMicros: 600_000, totalCostMicros: 1_000_000,
+          }),
+        ],
+        readAt: now, rateLimits: [], truncated: false,
+      };
+    }
+    return {
+      rows: [
+        row({
+          usageLineId: "codex-1", threadId: "codex-thread", turnId: "codex-turn",
+          title: "Codex fix", backend: "codex", provider: "openai",
+          model: "gpt-5.4", modelLabel: "GPT-5.4",
+          uncachedInputTokens: 200_000, cachedInputTokens: 6_000_000, outputTokens: 100_000, totalTokens: 6_300_000,
+          uncachedInputCostMicros: 500_000, cachedInputCostMicros: 1_500_000,
+          outputCostMicros: 1_500_000, totalCostMicros: 3_500_000,
+        }),
+      ],
+      readAt: now, rateLimits: [], truncated: false,
+    };
+  });
+
+  render(<UsageActivity desktopApi={{
+    readUsageActivity,
+    readFederationActivity: peers([{ id: "m2-max", label: "M2 Max", status: "connected" }]),
+  }} />);
+
+  const overview = await screen.findByRole("region", { name: "Usage overview" });
+  expect(overview).toHaveTextContent("10.5M");
+  expect(overview).toHaveTextContent("$7.78 API-eq.");
+  const providerList = within(overview).getByRole("group", { name: "Usage by provider" });
+  expect(providerList).toHaveTextContent("OpenAI");
+  expect(providerList).toHaveTextContent("Anthropic");
+  expect(providerList).toHaveTextContent("xAI");
+  expect(within(overview).getByRole("group", { name: "Token totals and cache savings" })).toHaveTextContent("Cache savings");
+  expect(overview).toHaveTextContent("GPT-5.4");
+  expect(overview).toHaveTextContent("Claude Opus 4.6");
+  expect(overview).toHaveTextContent("Grok 4");
+  expect(within(overview).queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
+
+  // A share percentage only ever sits beside the figure it is a share of: the
+  // breakdown column left of Share is the active metric, and the provider bar's
+  // readout is the share alone (the other metric rides with the thread count).
+  const columnBeforeShare = () => {
+    const head = [...overview.querySelectorAll(".usage-overview__table-head > span")].map((node) => node.textContent);
+    return head[head.indexOf("Share") - 1];
+  };
+  const providerShareReadouts = () => [...providerList.querySelectorAll(".usage-overview__provider-sub")].map((node) => node.textContent);
+  expect(columnBeforeShare()).toBe("Tokens");
+  for (const readout of providerShareReadouts()) expect(readout).toMatch(/^(<0\.1|\d+(\.\d)?)%$/);
+
+  // Switching to Cost flips the hero figure to dollars.
+  fireEvent.click(within(overview).getByRole("button", { name: "Cost" }));
+  expect(overview).toHaveTextContent("Daily API-equivalent cost");
+  expect(columnBeforeShare()).toBe("Cost");
+  for (const readout of providerShareReadouts()) expect(readout).toMatch(/^(<0\.1|\d+(\.\d)?)%$/);
+
+  // Hovering a trend point shows a tooltip with the time point and providers in descending order.
+  const trendHits = within(within(overview).getByRole("group", { name: "Daily provider trend" })).getAllByRole("button");
+  fireEvent.mouseEnter(trendHits.at(-1)!);
+  const tooltip = within(overview).getByRole("tooltip");
+  expect(tooltip).toHaveTextContent(/Nov 24/);
+  expect(tooltip).toHaveTextContent("$7.78");
+  const tooltipNames = [...tooltip.querySelectorAll(".usage-overview__tooltip-name")].map((node) => node.textContent);
+  expect(tooltipNames).toEqual(["OpenAI", "Anthropic", "xAI"]);
+  fireEvent.mouseLeave(trendHits.at(-1)!.parentElement!.parentElement!);
+  expect(within(overview).queryByRole("tooltip")).not.toBeInTheDocument();
+
+  // Tri-state multi-select: click Anthropic (include), then xAI (multi-include),
+  // then Anthropic again (exclude) so only xAI remains, then clear filters.
+  // Rows are looked up again after every click, so a re-rendered band cannot
+  // leave an assertion reading a detached node.
+  const providerRows = () => within(screen.getByRole("group", { name: "Usage by provider" }));
+  const anthropicButton = () => providerRows().getByRole("button", { name: /Anthropic/ });
+  const xaiButton = () => providerRows().getByRole("button", { name: /xAI/ });
+  fireEvent.click(anthropicButton());
+  expect(anthropicButton()).toHaveAttribute("aria-pressed", "true");
+  // Overview filters scope everything below except account limits: Spend by
+  // charts and lists only the included provider's threads.
+  const spendByLegend = () => document.querySelector(".usage-timeline__legend")!;
+  expect(spendByLegend()).toHaveTextContent("Claude refactor");
+  expect(spendByLegend()).not.toHaveTextContent("Codex fix");
+  expect(spendByLegend()).not.toHaveTextContent("Grok triage");
+  expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Grok triage" })).not.toBeInTheDocument();
+
+  // Adding a second included provider shows both without clearing the first.
+  fireEvent.click(xaiButton());
+  expect(xaiButton()).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Grok triage" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
+
+  // Clicking Anthropic a second time flips it to excluded, leaving xAI included.
+  fireEvent.click(anthropicButton());
+  expect(anthropicButton()).toHaveAttribute("aria-pressed", "false");
+  expect(anthropicButton()).toHaveAccessibleName(/, excluded$/);
+  expect(screen.queryByRole("button", { name: "Inspect Claude refactor" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Grok triage" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
+
+  // Removing xAI leaves only Anthropic excluded, so OpenAI + xAI are shown.
+  fireEvent.click(within(overview).getByRole("button", { name: "Remove xAI provider filter" }));
+  expect(screen.getByRole("button", { name: "Inspect Codex fix" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Grok triage" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Claude refactor" })).not.toBeInTheDocument();
+
+  // Clicking Anthropic a third time returns it to unfiltered and clears the filter bar.
+  fireEvent.click(anthropicButton());
+  expect(anthropicButton()).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
+  expect(within(overview).queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
+
+  // Model breakdown rows use the same tri-state include/exclude + Clear filters button.
+  // Scoped to the Breakdown rows: an included model also gets a "Remove GPT-5.4 · OpenAI model filter" chip.
+  const gptButton = () => within(screen.getByRole("region", { name: "Usage overview" })
+    .querySelector<HTMLElement>(".usage-overview__table-body")!).getByRole("button", { name: /GPT-5\.4/ });
+  fireEvent.click(gptButton());
+  expect(gptButton()).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Inspect Codex fix" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Inspect Claude refactor" })).not.toBeInTheDocument();
+
+  fireEvent.click(gptButton());
+  expect(gptButton()).toHaveAttribute("aria-pressed", "false");
+  expect(gptButton()).toHaveAccessibleName(/, excluded$/);
+  expect(screen.queryByRole("button", { name: "Inspect Codex fix" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
+
+  // Clear filters resets everything in one click.
+  fireEvent.click(within(overview).getAllByRole("button", { name: "Clear filters" })[0]);
+  expect(gptButton()).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: "Inspect Codex fix" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Claude refactor" })).toBeInTheDocument();
+
+  // Switching breakdown tab to Day shows daily totals.
+  fireEvent.click(within(overview).getByRole("button", { name: "Day" }));
+  expect(overview).toHaveTextContent("3 threads · 3 turns");
+});
+
+it("states an excluded Overview row in its accessible name, not as a half-pressed toggle", async () => {
+  const now = new Date(2026, 10, 24, 15, 0).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const at = { createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR };
+  const readUsageActivity = vi.fn(async () => ({ readAt: now, rateLimits: [], truncated: false,
+    rows: [
+      usageFixture({ ...at, usageLineId: "codex-1", threadId: "codex-thread", turnId: "codex-turn",
+        backend: "codex", provider: "openai", model: "gpt-5.4", modelLabel: "GPT-5.4" }),
+      usageFixture({ ...at, usageLineId: "claude-1", threadId: "claude-thread", turnId: "claude-turn",
+        backend: "claude", provider: "anthropic", model: "claude-opus-4-6", modelLabel: "Claude Opus 4.6" }),
+    ] }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await screen.findByRole("region", { name: "Usage overview" });
+  // Look each row up again after every click, so a re-rendered band cannot
+  // leave the assertions reading a detached node.
+  const overview = () => screen.getByRole("region", { name: "Usage overview" });
+  const rows = {
+    provider: () => within(within(overview()).getByRole("group", { name: "Usage by provider" }))
+      .getByRole("button", { name: /^Anthropic/ }),
+    model: () => within(overview().querySelector<HTMLElement>(".usage-overview__table-body")!)
+      .getByRole("button", { name: /Claude Opus 4\.6/ }),
+  };
+
+  for (const [label, row] of Object.entries(rows)) {
+    expect(row(), label).toHaveAttribute("aria-pressed", "false");
+    expect(row(), label).not.toHaveAccessibleName(/excluded/);
+
+    fireEvent.click(row());
+    expect(row(), label).toHaveAttribute("aria-pressed", "true");
+    expect(row(), label).not.toHaveAccessibleName(/excluded/);
+
+    // The second click removes the row's turns from every total. A toggle
+    // announced as "mixed" reads as partially pressed, so the name says it.
+    fireEvent.click(row());
+    expect(row(), label).toHaveAttribute("data-filter-state", "exclude");
+    expect(row(), label).not.toHaveAttribute("aria-pressed", "mixed");
+    expect(row(), label).toHaveAttribute("aria-pressed", "false");
+    expect(row(), label).toHaveAccessibleName(/, excluded$/);
+
+    fireEvent.click(row());
+    expect(row(), label).toHaveAttribute("aria-pressed", "false");
+    expect(row(), label).not.toHaveAccessibleName(/excluded/);
+  }
+});
+
+it("names a sub-day Overview chart without \"Daily\" and puts the period peak on the top axis label", async () => {
+  const now = new Date(2026, 10, 24, 15, 0).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const readUsageActivity = vi.fn(async () => ({ readAt: now, rateLimits: [], truncated: false,
+    rows: [usageFixture({ createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR })] }));
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  const overview = await screen.findByRole("region", { name: "Usage overview" });
+  // The 7-day default charts one bucket per day; the peak bucket's top edge
+  // sits on the top label, which names that peak.
+  expect(overview).toHaveTextContent("Daily processed tokens");
+  const topEdgeY = () => Math.min(...[...overview.querySelectorAll(".usage-overview__band-line")]
+    .flatMap((path) => [...(path.getAttribute("d") ?? "").matchAll(/(-?[\d.]+) (-?[\d.]+)/g)].map((pair) => Number(pair[2]))));
+  expect(topEdgeY()).toBe(0);
+
+  choosePeriod("Today");
+  await waitFor(() => expect(readUsageActivity).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(within(screen.getByRole("region", { name: "Usage overview" })).getByRole("group", { name: "Provider trend" })).toBeInTheDocument());
+  expect(screen.getByRole("region", { name: "Usage overview" })).toHaveTextContent("Processed tokens");
+  expect(screen.getByRole("region", { name: "Usage overview" })).not.toHaveTextContent("Daily");
+});
+
+it("says an Overview total is unavailable, not zero, when no instance could be read", async () => {
+  const now = new Date(2026, 10, 24, 15, 0).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const readUsageActivity = vi.fn(async () => { throw new Error("database is locked"); });
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  const overview = await screen.findByRole("region", { name: "Usage overview" });
+  expect(overview).toHaveTextContent("Unavailable");
+  expect(overview).not.toHaveTextContent("$0.00");
+});
+
+it("reads 90 days in pieces every owner accepts and counts turns older than 31 days", async () => {
+  const now = new Date(2026, 10, 25, 13, 31).getTime();
+  vi.spyOn(Date, "now").mockReturnValue(now);
+  const old = { ...usageFixture({ threadId: "old", turnId: "old-turn", usageLineId: "old-line",
+    createdAt: now - 60 * 24 * HOUR, startedAt: now - 60 * 24 * HOUR, completedAt: now - 60 * 24 * HOUR + HOUR }), title: "Old thread" };
+  const recent = { ...usageFixture({ threadId: "recent", turnId: "recent-turn", usageLineId: "recent-line",
+    createdAt: now - 2 * HOUR, startedAt: now - 2 * HOUR, completedAt: now - HOUR }), title: "Recent thread" };
+  const readUsageActivity = vi.fn(async (request: { from: number; to: number }) => {
+    // Every owner, including older peers, rejects a window over 31 days.
+    if (request.to - request.from > 31 * 24 * HOUR) throw new Error("Select a usage window of at most 31 days.");
+    return { readAt: now, rateLimits: [], truncated: false,
+      rows: [old, recent].filter((row) => row.line.startedAt! < request.to && row.line.completedAt! >= request.from) };
+  });
+  render(<UsageActivity desktopApi={{ readUsageActivity }} />);
+  await screen.findByRole("button", { name: "Inspect Recent thread" });
+  expect(screen.queryByRole("button", { name: "Inspect Old thread" })).not.toBeInTheDocument();
+
+  readUsageActivity.mockClear();
+  choosePeriod("90 days");
+  expect(await screen.findByRole("button", { name: "Inspect Old thread" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Inspect Recent thread" })).toBeInTheDocument();
+  const windows = readUsageActivity.mock.calls.map(([request]) => request);
+  expect(windows.length).toBeGreaterThan(1);
+  expect(Math.min(...windows.map((window) => window.from))).toBe(now - 90 * 24 * HOUR);
+  expect(Math.max(...windows.map((window) => window.to))).toBe(now);
+  expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "Usage overview" })).toHaveTextContent("2 threads · 2 turns");
 });

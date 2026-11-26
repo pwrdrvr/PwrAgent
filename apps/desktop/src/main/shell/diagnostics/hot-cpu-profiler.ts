@@ -3,8 +3,11 @@ import path from "node:path";
 import type { Profiler } from "node:inspector";
 import type { ProcessMetric } from "electron";
 import type {
+  HotCpuFinalCaptureFailedEvent,
+  HotCpuPostCapEvent,
   HotCpuProfileCapturedEvent,
   HotCpuProfileHeapSnapshotArtifact,
+  HotCpuRearmableCapture,
   HotCpuRuleMatch,
 } from "../../../shared/hot-cpu-profile";
 import type { HotCpuProfileConfig } from "../../diagnostics/hot-cpu-profile-config";
@@ -114,7 +117,10 @@ export class HotCpuProfiler {
   private readonly logger: Logger;
   private readonly now: () => Date;
   private readonly onHeapSnapshotLimitReached?: () => void | Promise<void>;
+  private readonly onFinalCaptureFailed?: (event: HotCpuFinalCaptureFailedEvent) => void;
+  private readonly onPostCapHotCpu?: (event: HotCpuPostCapEvent) => void;
   private readonly onSampleCaptured?: () => void;
+  private readonly onStopped?: () => void;
   private readonly onProfileWritten?: (
     event: HotCpuProfileCapturedEvent,
   ) => void | Promise<void>;
@@ -134,7 +140,9 @@ export class HotCpuProfiler {
   private captureSamplePromise: Promise<void> | null = null;
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private lastProfileAtMs: number | null = null;
-  private lastCapWarningAtMs: number | null = null;
+  private batchStartCount = 0;
+  private pendingRearm?: HotCpuRearmableCapture;
+  private reportedPostCapHeat = false;
   private previousMetric?: {
     pid: number;
     creationTime: number;
@@ -167,7 +175,10 @@ export class HotCpuProfiler {
     logger?: Logger;
     now?: () => Date;
     onHeapSnapshotLimitReached?: () => void | Promise<void>;
+    onFinalCaptureFailed?: (event: HotCpuFinalCaptureFailedEvent) => void;
+    onPostCapHotCpu?: (event: HotCpuPostCapEvent) => void;
     onProfileWritten?: (event: HotCpuProfileCapturedEvent) => void | Promise<void>;
+    onStopped?: () => void;
     /**
      * Fires once per completed sampling iteration, after the sample has been
      * written and any profile it triggered has started.
@@ -188,8 +199,11 @@ export class HotCpuProfiler {
     this.logger = options.logger ?? getMainLogger("pwragent:hot-cpu");
     this.now = options.now ?? (() => new Date());
     this.onHeapSnapshotLimitReached = options.onHeapSnapshotLimitReached;
+    this.onFinalCaptureFailed = options.onFinalCaptureFailed;
+    this.onPostCapHotCpu = options.onPostCapHotCpu;
     this.onProfileWritten = options.onProfileWritten;
     this.onSampleCaptured = options.onSampleCaptured;
+    this.onStopped = options.onStopped;
     this.session = options.session;
     this.target = options.target;
   }
@@ -202,6 +216,36 @@ export class HotCpuProfiler {
 
   get hasActiveProfile(): boolean {
     return this.profiling || this.stopProfilePromise !== null;
+  }
+
+  private get captureCap(): number {
+    return this.batchStartCount + this.config.maxProfiles;
+  }
+
+  get rearmableCapture(): HotCpuRearmableCapture | undefined {
+    if (this.stopped || this.isTargetDestroyed()) return undefined;
+    return this.pendingRearm;
+  }
+
+  rearm(profileFilename: string): boolean {
+    if (profileFilename !== this.rearmableCapture?.profileFilename) return false;
+    this.pendingRearm = undefined;
+    this.batchStartCount = this.profileCount;
+    this.reportedPostCapHeat = false;
+    // Discard rule matches from any sample still being written when Rearm was clicked.
+    this.ruleRevision += 1;
+    this.resetSampleBaseline();
+    void this.reconcileChromiumTrace().catch(() => {
+      this.logger.warn("[pwragent:hot-cpu] Chromium trace rearm failed");
+    });
+    void this.session.appendEvent({
+      capturedAt: this.now().toISOString(),
+      type: "profile-cap-rearmed",
+      detail: { profileCount: this.profileCount, captureCap: this.captureCap },
+    }).catch(() => {
+      this.logger.warn("[pwragent:hot-cpu] Could not record profile rearm");
+    });
+    return true;
   }
 
   async rearmListingDiagnostics(): Promise<void> {
@@ -271,6 +315,7 @@ export class HotCpuProfiler {
     }
 
     this.stopped = true;
+    this.onStopped?.();
     this.shutdownPromise = this.stopInner(reason).finally(async () => {
       await this.chromiumTrace?.release(this);
       await this.setListingDiagnosticsEnabled(false);
@@ -419,30 +464,26 @@ export class HotCpuProfiler {
         && matches.length > 0
         && !this.stopped
         && !this.hasActiveProfile
-        && this.profileCount >= this.config.maxProfiles
+        && this.profileCount >= this.captureCap
+        && !this.reportedPostCapHeat
+        && this.lastProfileAtMs !== null
+        && capturedAtMs - this.lastProfileAtMs >= this.config.cooldownMs
       ) {
-        const lastNoticeAt = Math.max(
-          this.lastProfileAtMs ?? Number.NEGATIVE_INFINITY,
-          this.lastCapWarningAtMs ?? Number.NEGATIVE_INFINITY,
-        );
-        if (capturedAtMs - lastNoticeAt >= this.config.cooldownMs) {
-          this.lastCapWarningAtMs = capturedAtMs;
-          const detail = {
-            target: this.session.target ?? "renderer",
-            pid,
-            cpuPercent: cpuUsage.cpuPercent,
-            matchedRules: matches.map((rule) => rule.id),
-            profileCount: this.profileCount,
-            maxProfiles: this.config.maxProfiles,
-          };
-          this.logger.warn("[pwragent:hot-cpu] hot CPU detected after profile cap reached", detail);
-          await this.session.appendEvent({
-            capturedAt,
-            type: "profile-cap-warning",
-            detail,
-          });
-        }
-      } else if (!this.stopped && this.profileCount < this.config.maxProfiles) {
+        this.reportedPostCapHeat = true;
+        const target = this.session.target ?? "renderer";
+        const detail = {
+          target,
+          pid,
+          cpuPercent: cpuUsage.cpuPercent,
+          matchedRules: matches.map((rule) => rule.id),
+          profileCount: this.profileCount,
+          maxProfiles: this.config.maxProfiles,
+          captureCap: this.captureCap,
+        };
+        this.logger.warn("[pwragent:hot-cpu] hot CPU detected after profile cap reached", detail);
+        this.onPostCapHotCpu?.({ captureCount: this.profileCount, capturedAt, sessionId: this.session.id, target });
+        await this.session.appendEvent({ capturedAt, type: "profile-cap-warning", detail });
+      } else if (!this.stopped && this.profileCount < this.captureCap) {
         await this.maintainRecording(capturedAtMs);
       }
     } catch (error) {
@@ -523,7 +564,7 @@ export class HotCpuProfiler {
 
   private shouldStartProfile(atMs: number): boolean {
     return !this.stopped && !this.hasActiveProfile
-      && this.profileCount < this.config.maxProfiles
+      && this.profileCount < this.captureCap
       && (this.lastProfileAtMs === null || atMs - this.lastProfileAtMs >= this.config.cooldownMs);
   }
 
@@ -548,7 +589,7 @@ export class HotCpuProfiler {
       || this.recording
       || this.isTargetDestroyed()
       || this.target.isDevToolsOpened?.()
-      || this.profileCount >= this.config.maxProfiles
+      || this.profileCount >= this.captureCap
     ) return;
     try {
       if (!this.debuggerLease) {
@@ -690,10 +731,10 @@ export class HotCpuProfiler {
       };
       this.profileCount += 1;
       const index = this.profileCount;
+      this.lastProfileAtMs = Date.parse(options.capturedAt);
       // Stop the rolling trace while it still contains the interval that
       // tripped the CPU rule. V8 continues recording its own post-trigger tail.
       this.activeChromiumTrace = this.captureChromiumTrace(index, this.activeProfileTime);
-      this.lastProfileAtMs = Date.parse(options.capturedAt);
       await this.session.appendEvent({
         capturedAt: options.capturedAt,
         type: "profile-started",
@@ -733,6 +774,7 @@ export class HotCpuProfiler {
       // pending. Only the path that claims it can discard its recording.
       const ownsProfile = this.profiling;
       if (ownsProfile) {
+        this.offerRearmAfterFailure(this.profileCount);
         this.profiling = false;
         this.activeProfileTrigger = null;
         this.activeProfileTime = undefined;
@@ -773,6 +815,23 @@ export class HotCpuProfiler {
     }
   }
 
+  private offerRearmAfterFailure(index: number): void {
+    if (this.stopped || this.isTargetDestroyed() || index !== this.captureCap || this.pendingRearm) return;
+    const event: HotCpuFinalCaptureFailedEvent = {
+      capturedAt: this.now().toISOString(),
+      captureLimit: this.config.maxProfiles,
+      profileFilename: artifactFilename(this.session.createProfilePath(index)),
+      sessionDirectoryName: this.session.directoryName,
+      target: this.session.target ?? "renderer",
+    };
+    this.pendingRearm = event;
+    try {
+      this.onFinalCaptureFailed?.(event);
+    } catch {
+      this.logger.warn("[pwragent:hot-cpu] Could not publish final capture failure");
+    }
+  }
+
   private async writeDiagnostics(profilePath: string): Promise<void> {
     if (!this.target.readDiagnostics) return;
     const diagnosticsPath = profilePath.replace(/\.cpuprofile$/, ".diagnostics.json");
@@ -805,7 +864,7 @@ export class HotCpuProfiler {
   }
 
   private async reconcileChromiumTrace(): Promise<void> {
-    if (!this.stopped && this.profileCount < this.config.maxProfiles) {
+    if (!this.stopped && this.profileCount < this.captureCap) {
       await this.chromiumTrace?.arm(this);
     } else {
       await this.chromiumTrace?.release(this);
@@ -902,7 +961,7 @@ export class HotCpuProfiler {
         await this.captureHeapSnapshot(index, "stop");
       }
       await this.drainActiveHeapSnapshotCaptures();
-      await this.onProfileWritten?.({
+      const capture: HotCpuProfileCapturedEvent = {
         capturedAt: this.now().toISOString(),
         ...(chromiumTracePath ? { chromiumTracePath } : {}),
         heapSnapshotArtifacts: [...this.activeProfileHeapSnapshots],
@@ -912,8 +971,15 @@ export class HotCpuProfiler {
         sessionDirectory: this.session.directoryPath,
         sessionDirectoryName: this.session.directoryName,
         ...activeProfileTrigger,
-      });
+      };
+      if (!this.stopped && !this.isTargetDestroyed() && index === this.captureCap) {
+        this.pendingRearm = { ...capture, captureLimit: this.config.maxProfiles };
+        await this.onProfileWritten?.(this.pendingRearm);
+      } else {
+        await this.onProfileWritten?.(capture);
+      }
     } catch (error) {
+      this.offerRearmAfterFailure(index);
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: "profile-stop-failed",

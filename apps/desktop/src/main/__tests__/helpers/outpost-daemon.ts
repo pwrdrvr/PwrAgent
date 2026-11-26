@@ -57,6 +57,8 @@ export async function startOutpostDaemon(options: {
   fixturePreload?: string;
   env?: NodeJS.ProcessEnv;
   waitForCodexCommand?: boolean;
+  /** Releases caller-owned startup barriers before waiting for the daemon to exit. */
+  beforeFailedStartupClose?: () => Promise<void>;
 } = {}): Promise<OutpostDaemon> {
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock
   // and refuses a socket path over 100 bytes (the Unix sun_path limit). A
@@ -165,7 +167,8 @@ export async function startOutpostDaemon(options: {
     }
     return { ...viewer, workspace, cli, env, enrollViewer, close };
   } catch (error) {
-    await close();
+    try { await options.beforeFailedStartupClose?.(); }
+    finally { await close(); }
     throw error;
   }
 }

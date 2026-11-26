@@ -18,6 +18,8 @@ export function approvalBodyWithResponse(body: string, responseLabel: string): s
 export function questionnaireAnswerValue(
   answer: MessagingQuestionnaireAnswer | null | undefined,
 ): string[] {
+  // A multi-select answer lists each chosen value, then the custom answer.
+  if (answer?.kind === "multi") return answer.custom ? [...answer.values, answer.custom] : answer.values;
   const value = answer?.value.trim();
   return value ? [value] : [];
 }

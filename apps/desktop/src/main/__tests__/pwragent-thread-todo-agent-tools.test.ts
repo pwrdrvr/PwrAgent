@@ -152,6 +152,30 @@ describe("normalizeAddTodoArgs", () => {
     expect(normalizeAddTodoArgs({ title: "   " })).toMatchObject({ ok: false });
   });
 
+  it("proposes a hands-off rule with the repository normalized, and refuses one it cannot hold", () => {
+    expect(normalizeAddTodoArgs({
+      title: "Leave taken-over PRs to their maintainers",
+      action: { type: "add_forge_hands_off_rule", repository: "https://github.com/upstream/t3code.git", label: " takeover:* " },
+    })).toEqual({
+      ok: true,
+      value: {
+        title: "Leave taken-over PRs to their maintainers",
+        action: { type: "add_forge_hands_off_rule", repository: "upstream/t3code", label: "takeover:*" },
+      },
+    });
+    expect(normalizeAddTodoArgs({
+      title: "Every upstream PR", action: { type: "add_forge_hands_off_rule", repository: "upstream/t3code", label: "  " },
+    })).toMatchObject({ ok: true, value: { action: { type: "add_forge_hands_off_rule", repository: "upstream/t3code" } } });
+    for (const action of [
+      { type: "add_forge_hands_off_rule" },
+      { type: "add_forge_hands_off_rule", repository: "t3code" },
+      { type: "add_forge_hands_off_rule", repository: "upstream/t3code", label: 7 },
+      { type: "add_forge_hands_off_rule", repository: "upstream/t3code", label: "x".repeat(201) },
+    ]) {
+      expect(normalizeAddTodoArgs({ title: "Rule", action })).toMatchObject({ ok: false });
+    }
+  });
+
   it("leaves the merge method to the operator", () => {
     expect(normalizeAddTodoArgs({
       title: "Merge",

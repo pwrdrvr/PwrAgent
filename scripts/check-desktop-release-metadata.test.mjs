@@ -184,6 +184,17 @@ test("rejects a release test matrix that omits half the suite", () => {
   expect(result.stderr).toContain("test must contain \"lane: [1, 2, 3, 4]\"");
 });
 
+test.each([
+  ["unit_macos_lanes || '[1, 2, 3, 4]'", "unit_macos_lanes || '[1, 2]'"],
+  ["pnpm test --shard=${{ matrix.lane }}/4", "pnpm test --shard=${{ matrix.lane }}/2"],
+])("rejects a truncated full macOS CI fallback at %s", (before, after) => {
+  const root = fixture();
+  replace(root, ".github/workflows/ci.yml", before, after);
+  const result = check(root);
+  expect(result.status, result.stderr).toBe(1);
+  expect(result.stderr).toContain("ci.yml test-macos");
+});
+
 // A valid actool setting on another step cannot satisfy either unit step.
 test.each([
   ["Test (unit)", 'PWRAGENT_REQUIRE_ACTOOL: "1"', 'PWRAGENT_REQUIRE_ACTOOL: "0"'],

@@ -279,7 +279,15 @@ export function transition(
         const matches = (terminal: ReviewTerminal) => terminal.backend === event.terminal.backend
           && terminal.threadId === event.terminal.threadId && terminal.turnId === event.terminal.turnId;
         return { ...start, terminals: start.terminals.some(matches)
-          ? start.terminals.map(terminal => matches(terminal) ? event.terminal : terminal)
+          ? start.terminals.map(terminal => {
+              if (!matches(terminal)) return terminal;
+              // The tool ledger is already cleared on terminal redelivery.
+              if (event.terminal.method === "turn/completed"
+                && !event.terminal.submittedOutput && terminal.submittedOutput) {
+                return { ...event.terminal, submittedOutput: terminal.submittedOutput };
+              }
+              return event.terminal;
+            })
           : [...start.terminals, event.terminal] };
       }) });
     case "reviewActivated": {

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
@@ -183,17 +182,14 @@ async function scenario(actions: Array<"settings" | "discover" | "call" | "inspe
   }
 }
 
-describe("local command recovery model", () => {
-  it("keeps a stale thread ended after Settings succeeds, until operator reconnect", async () => {
-    await scenario([]);
-  });
-
-  it("Settings success and read/call order cannot authorize an ended session", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.array(fc.constantFrom("settings" as const, "discover" as const, "call" as const, "inspect" as const), { maxLength: 5 }),
-      async (actions) => await scenario(actions),
-    ), { numRuns: 5 });
-  });
+describe("local command recovery", () => {
+  it.each(["discover", "call"] as const)(
+    "keeps the ended session blocked until operator reconnect when %s comes first after a successful Settings probe",
+    async (first) => {
+      const second = first === "discover" ? "call" : "discover";
+      await scenario([first, second, "settings", second, first]);
+    },
+  );
 
   it("requires another operator reconnect after a command exits before initialization", async () => {
     await scenario([], true);

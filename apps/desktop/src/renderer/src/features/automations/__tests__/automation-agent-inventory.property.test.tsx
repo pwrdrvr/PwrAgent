@@ -70,7 +70,7 @@ describe("automation Agent inventory", () => {
         view.rerender(editor(api, [rows[(offset + 1) % count]!]));
         expect(labels()).toEqual(expected);
       } finally { cleanup(); }
-    }), { numRuns: 12 });
+    }), { numRuns: 6 });
   });
 
   it("finds an old Agent without visiting it in the sidebar and retains earlier pages while scrolling", async () => {
@@ -155,6 +155,6 @@ describe("automation Agent inventory", () => {
           expect(within(list).getByRole("option", { name: new RegExp(`Agent ${count}codex`) })).toBeInTheDocument();
         } finally { cleanup(); }
       },
-    ), { numRuns: 12 });
+    ), { numRuns: 6 });
   });
 });

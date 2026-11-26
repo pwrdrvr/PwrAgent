@@ -2,7 +2,7 @@
 // that plan, or the full suite when it says `full`.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
-import { getPrDiff, harnessReferences, listAffectedE2eFiles, listE2eFiles, planImpact, separateA11y, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
+import { getPrDiff, getPushDiff, harnessReferences, listAffectedE2eFiles, listE2eFiles, planImpact, playwrightListPath, scheduleImpact, wholeSuiteReason } from "./pr-test-impact.mjs";
 import { withVitestImpact } from "./pr-test-impact-vitest.mjs";
 
 const directory = ".local/ci/pr-test-impact";
@@ -11,74 +11,84 @@ const root = process.cwd();
 const size = (suite) => suite.mode === "full"
   ? `full — ${suite.reason}${suite.file ? ` (\`${suite.file}\`)` : ""}`
   : `${suite.selected.length} of ${suite.total} files`;
-const range = (count) => Array.from({ length: count }, (_, index) => index + 1);
 
-const event = read(process.env.GITHUB_EVENT_PATH).pull_request;
+const event = read(process.env.GITHUB_EVENT_PATH);
 const started = performance.now();
 let diff;
 try {
-  diff = getPrDiff(root, { base: event.base.sha, head: event.head.sha, changedFiles: event.changed_files },
-    read(".local/ci/pr-test-impact-files.json"));
+  const pr = event.pull_request;
+  diff = pr
+    ? getPrDiff(root, { base: pr.base.sha, head: pr.head.sha, changedFiles: pr.changed_files },
+      read(".local/ci/pr-test-impact-files.json"))
+    : getPushDiff(root, event);
 } catch (error) {
-  diff = { fallback: "could not read or verify PR diff", detail: error.message };
+  diff = { fallback: "could not read or verify changed files", detail: error.message };
 }
 let plan;
 let plannerError;
 try {
-  await withVitestImpact(root, async (unit) => {
-    let inventory;
-    plan = await planImpact(diff.mergeFiles ?? [], {
-      unit,
-      e2e: {
-        inventory: () => inventory ??= listE2eFiles(root),
-        affected: () => listAffectedE2eFiles(root, diff.stacked ? diff.testedBase : diff.base),
-        testOnly: unit.testOnly,
-        harness: harnessReferences(root),
-      },
-      fallback: diff.fallback,
+  const files = diff.mergeFiles ?? [];
+  const fallback = diff.fallback ?? wholeSuiteReason(files);
+  if (fallback) {
+    plan = await planImpact(files, { fallback });
+  } else {
+    await withVitestImpact(root, async (unit) => {
+      let inventory;
+      plan = await planImpact(files, {
+        unit,
+        e2e: {
+          inventory: () => inventory ??= listE2eFiles(root),
+          affected: () => listAffectedE2eFiles(root, diff.testedBase ?? diff.before),
+          testOnly: unit.testOnly,
+          harness: harnessReferences(root),
+        },
+      });
     });
-  });
+  }
 } catch (error) {
   plannerError = String(error.stack ?? error);
   plan = await planImpact([], { fallback: "Vitest or inventory initialization error" });
 }
 
-// The accessibility audit has its own job; a lane never runs it.
-const { e2e: laneE2e, a11y: e2eA11y } = separateA11y(plan.e2e);
-plan = { ...plan, e2e: laneE2e };
-
-// The lanes each job runs. A full plan runs every lane of the full suite.
-const lanes = Object.fromEntries(Object.keys(unitGroups).map((group) => [group, range(plan.unit.mode === "selected"
-  ? unitLaneCount(unitGroupFiles(plan.unit.selected, group).length, group) : unitGroups[group].lanes)]));
-// The required `Test` check needs a Linux lane to report.
-if (!lanes.linux.length) lanes.linux = [1];
-// A narrowed Playwright plan is a handful of specs, so one lane runs it.
-lanes.e2e = range(plan.e2e.mode === "selected" ? Math.min(1, plan.e2e.selected.length) : 5);
-
+const allPlatforms = process.env.FULL_PLATFORMS === "true";
+const { e2e, nativeE2e, windowsMode, lanes } = scheduleImpact(plan, {
+  allPlatforms,
+  windowsFull: process.env.WINDOWS_E2E_REQUESTED === "true" || process.env.WINDOWS_DIAGNOSTICS === "true",
+  auditRequested: process.env.A11Y_REQUESTED === "true",
+  e2eOnly: process.env.E2E_ONLY === "true",
+});
 mkdirSync(directory, { recursive: true });
+for (const [name, suite] of [["linux", e2e], ["native", nativeE2e]]) {
+  if (suite.mode === "selected" && suite.selected.length) {
+    writeFileSync(`${directory}/${name}-e2e.txt`, `${suite.selected.map(({ file }) => playwrightListPath(file)).join("\n")}\n`);
+  }
+}
 writeFileSync(`${directory}/plan.json`, `${JSON.stringify({
-  schemaVersion: 3, diff, plan, lanes, plannerError, plannerWallMs: Math.round(performance.now() - started),
+  schemaVersion: 4, diff, plan, lanes, plannerError, plannerWallMs: Math.round(performance.now() - started),
 }, null, 2)}\n`);
 const outputs = {
   unit_mode: plan.unit.mode,
-  e2e_mode: plan.e2e.mode,
-  unit_linux_lanes: JSON.stringify(lanes.linux),
-  unit_windows_main_lanes: JSON.stringify(lanes["windows-main"]),
-  unit_windows_renderer_lanes: JSON.stringify(lanes["windows-renderer"]),
-  e2e_lanes: JSON.stringify(lanes.e2e),
-  e2e_a11y: String(e2eA11y),
+  e2e_mode: e2e.mode,
+  e2e_windows_mode: windowsMode,
+  e2e_a11y: String(lanes["e2e-linux-a11y"].length > 0),
+  lane_inventory: JSON.stringify(lanes),
+  ...Object.fromEntries(Object.entries(lanes).map(([name, values]) => [`${name.replaceAll("-", "_")}_lanes`, JSON.stringify(values)])),
+  // Keep the workflow's existing Linux Desktop E2E output name.
+  e2e_lanes: JSON.stringify(lanes["e2e-linux"]),
 };
 // The job publishes these after it uploads the plan, so that a lane narrows
 // only when the plan is there to download.
 writeFileSync(`${directory}/outputs`, Object.entries(outputs).map(([key, value]) => `${key}=${value}\n`).join(""));
 if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${[
-    "### Test plan for this pull request",
+    "### Test plan for this revision",
     "",
     `- Unit tests: ${size(plan.unit)}`,
-    `- Linux Desktop E2E: ${size(plan.e2e)}`,
-    `- Accessibility audit: ${e2eA11y ? "selected; its own job runs it" : "not selected by this plan"}`,
-    "- The `ci:full` label runs every test on every platform.",
+    `- Linux Desktop E2E: ${size(e2e)}`,
+    `- Windows Desktop E2E: ${windowsMode === "off" ? "skipped" : windowsMode === "selected" ? size(nativeE2e) : "full"}`,
+    `- macOS Desktop E2E: ${allPlatforms ? size(nativeE2e) : "skipped"}`,
+    `- Accessibility audit: ${outputs.e2e_a11y === "true" ? "selected; its own job runs it" : "not selected by this plan"}`,
+    "- The `ci:full` label runs every test on every platform; `ci:windows-e2e` runs the full Windows Desktop E2E suite.",
     ...(plannerError ? ["", "Planner error:", "", "```", plannerError, "```"] : []),
   ].join("\n")}\n`);
 }

@@ -63,8 +63,9 @@ import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
   stageLocalTurnInputAttachment,
+  stageTurnInputAttachment,
 } from "./turn-input-attachment-files";
-import type { ThreadAssetOwner } from "./thread-assets";
+import { isThreadAssetPath, type ThreadAssetOwner } from "./thread-assets";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import type {
   AgentToolMcpServerLike,
@@ -215,6 +216,7 @@ export type AcpRuntimeClient = Pick<
       | "closeIdleSessions"
       | "closeSessionForArchive"
       | "closeSessionForTransfer"
+      | "retireManagedReviewSession"
       | "didSessionLoadReplayHistory"
       | "disconnected"
       | "configureWorkflowBudget"
@@ -227,6 +229,7 @@ export type AcpRuntimeClient = Pick<
       | "readProviderStatus"
       | "rebindAntigravityWorkspace"
       | "sendControlPrompt"
+      | "sessionSupportsManagedReviewLedger"
       | "setRuntimeOption"
       | "steerSession"
       | "supportsArchivedSessionRestore"
@@ -408,6 +411,7 @@ export type AcpBackendAdapterOptions = {
     backend: AcpBackendId,
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
+  onTurnTerminalIngress?: (turn: { backend: AcpBackendId; threadId: string; turnId: string }) => void;
 };
 
 export function readAcpUpdateKind(
@@ -466,6 +470,7 @@ function acpSteeredUserMessageNotification(params: {
         id: messageId,
         type: "userMessage",
         text,
+        steered: true,
         ...(content?.length ? { content } : {}),
         ...(createdAt !== undefined ? { createdAt } : {}),
       },
@@ -1065,8 +1070,21 @@ export async function inputToAcpPrompt(
       if (name) {
         promptContent.push({ type: "text", text: `Attached image filename: ${name}` });
       }
-      parts.push({ type: "image", ...(name ? { alt: name } : {}), url: item.url });
       const image = parseImageDataUrl(item.url);
+      let replayUrl = item.url;
+      if (image && options?.owner) {
+        const bytes = Buffer.from(image.data, "base64");
+        if (bytes.byteLength > 0) {
+          const staged = await stageTurnInputAttachment({
+            type: "localImage",
+            data: bytes,
+            ...(name ? { name } : {}),
+            mimeType: image.mimeType,
+          }, options.owner);
+          replayUrl = toTranscriptImageProtocolUrl(pathToFileURL(staged.path).toString());
+        }
+      }
+      parts.push({ type: "image", ...(name ? { alt: name } : {}), url: replayUrl });
       if (image) {
         promptContent.push({
           type: "image",
@@ -1098,19 +1116,23 @@ export async function inputToAcpPrompt(
       continue;
     }
 
-    const fileName = item.name?.trim() || path.basename(item.path);
+    const explicitName = item.name?.trim();
+    const fileName = explicitName || path.basename(item.path);
+    const alreadyOwnedAsset = Boolean(options?.owner && isThreadAssetPath(item.path, options.owner));
     const imagePath = options?.owner
       ? (await stageLocalTurnInputAttachment(item, {
           owner: options.owner,
           privateStorageRoots: options.privateStorageRoots,
         })).path
       : item.path;
-    promptContent.push({ type: "text", text: `[Local image: ${fileName}]` });
+    if (explicitName || !alreadyOwnedAsset) {
+      promptContent.push({ type: "text", text: `[Local image: ${fileName}]` });
+    }
     // Record the image itself, as the inline-image branch does. A text
     // placeholder here was all a reopened thread could show.
     parts.push({
       type: "image",
-      alt: fileName,
+      ...(explicitName || !alreadyOwnedAsset ? { alt: fileName } : {}),
       url: toTranscriptImageProtocolUrl(pathToFileURL(imagePath).toString()),
     });
     const fileInfo = await stat(imagePath);
@@ -1121,7 +1143,9 @@ export async function inputToAcpPrompt(
       throw new Error(`Invalid local image attachment: ${fileName}`);
     }
     const data = await readFile(imagePath);
-    const mimeType = detectLocalImageMimeType(data);
+    const mimeType =
+      detectLocalImageMimeType(data)
+      ?? (alreadyOwnedAsset ? inferOwnedImageMimeTypeFromPath(imagePath) : undefined);
     if (!mimeType) {
       throw new Error(`Unsupported local image attachment: ${fileName}`);
     }
@@ -1180,6 +1204,22 @@ function detectLocalImageMimeType(data: Buffer): string | undefined {
     return "image/webp";
   }
   return undefined;
+}
+
+function inferOwnedImageMimeTypeFromPath(imagePath: string): string | undefined {
+  switch (path.extname(imagePath).toLowerCase()) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    default:
+      return undefined;
+  }
 }
 
 function formatAcpLocalFileReference(
@@ -2399,6 +2439,10 @@ export class AcpBackendAdapter {
     }
   }
 
+  retireManagedReviewSession(backend: AcpBackendId, sessionId: string): void {
+    this.findSessionOwner(backend, sessionId)?.client.retireManagedReviewSession?.(sessionId);
+  }
+
   /**
    * Close sessions idle for `idleMs` on every live ACP process, so each agent
    * stops their MCP servers (`AcpAgentClient.closeIdleSessions`). The next
@@ -3574,6 +3618,9 @@ export class AcpBackendAdapter {
           updateKind === "turn_finished"
           && !fromSessionLoad
           && replay.threadStatus !== "active";
+        if (promptSettledTurnFinished && turnId) {
+          this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
+        }
         const completedUsage =
           promptSettledTurnFinished && turnId
             ? this.liveTurnUsage.get(
@@ -3647,15 +3694,18 @@ export class AcpBackendAdapter {
           });
         }
         if (updateKind === "available_commands_update") {
+          const session = this.getSession(agent.backendId, sessionId);
+          const cwd = agent.backendId === "acp:antigravity" && !session?.requiresAgentSessionRebind
+            ? session?.antigravityPrimaryCwd ?? session?.cwd
+            : undefined;
           await this.emit({
             backend: agent.backendId,
             notification: {
               method: "thread/availableCommands/updated",
               params: {
                 threadId: sessionId,
-                commands:
-                  this.getSession(agent.backendId, sessionId)?.availableCommands ??
-                  [],
+                commands: session?.availableCommands ?? [],
+                ...(cwd ? { cwd: path.resolve(cwd) } : {}),
               },
             },
           });
@@ -3846,6 +3896,7 @@ export class AcpBackendAdapter {
         // prompt-settled terminal events, not transcript replay snapshots.
       },
       onPromptError: async ({ sessionId, turnId, error, usage }) => {
+        this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
         );
@@ -4005,9 +4056,40 @@ export class AcpBackendAdapter {
         backendId,
         runtimeCapabilities,
         sessionId,
+        managedReview,
       }): Promise<AcpMcpServerRegistration> => {
         let baseRegistration: AcpMcpServerRegistration | undefined;
         const http = acpRuntimeSupportsHttpMcp(runtimeCapabilities);
+        if (managedReview) {
+          if (!http || !this.agentToolMcpServer || localMemberRole() === "contained") {
+            return { servers: [] };
+          }
+          try {
+            const registration = await this.agentToolMcpServer.registerClient({
+              backend: backendId,
+              threadId: sessionId,
+              managedReview: true,
+            });
+            const readTool = registration.readTool;
+            return {
+              servers: [registration.server],
+              bindThread: registration.bindThread,
+              managedReviewLedgerAvailable: true,
+              ...(readTool ? {
+                hostApprovesToolCall: async (serverName: string, toolName: string) =>
+                  serverName === registration.server.name
+                  && pwragentToolSkipsAgentApproval(await readTool(toolName)),
+              } : {}),
+            };
+          } catch (error) {
+            acpBackendAdapterLog.warn("agent_tool_mcp_start_failed", {
+              backend: backendId,
+              error: error instanceof Error ? error.message : String(error),
+              sessionId: sessionId ?? null,
+            });
+            return { servers: [] };
+          }
+        }
         if (this.agentToolMcpServer) {
           try {
             const registration = await this.agentToolMcpServer.registerClient({

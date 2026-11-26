@@ -18,7 +18,7 @@ import {
 } from "@pwragent/shared/contracts/thread-reviews";
 import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import type { ThreadReviewStorage } from "@pwragent/owner-core/thread-review-storage";
-import { normalizeReviewCategory, parseReviewOutputText, reviewEntryFailure, reviewEntryFindings } from "../../shared/review-output";
+import { isReviewResultEntry, normalizeReviewCategory, parseReviewOutputText, reviewEntryFailure, reviewEntryFindings } from "../../shared/review-output";
 
 /**
  * A review is a work-queue record, not a transcript copy: it keeps enough of
@@ -180,9 +180,7 @@ export class ThreadReviewService {
     entry: AppServerThreadReviewEntry,
     source: "live" | "replay" = "replay",
   ): ThreadReview | undefined {
-    if (reviewEntryFailure(entry)) return undefined;
-    if (entry.id.endsWith(":started") || entry.turn?.status === "in_progress"
-      || (entry.displayText !== undefined && !entry.output)) return undefined;
+    if (reviewEntryFailure(entry) || !isReviewResultEntry(entry) || entry.turn?.status === "in_progress") return undefined;
     // Reading history is not evidence that a review is still waiting on work.
     // A replay can recover a missed completion only after this profile began
     // tracking. Undated history cannot establish that and stays transcript-only.

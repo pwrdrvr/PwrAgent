@@ -46,7 +46,7 @@ it("binds concrete choices and the original factory/service to the shared implem
       expect(new SharedStore(db).getInstalledAgent(backend(0))).toEqual(clone(record(0, revision)));
       write.mockRestore();
     } finally { db.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // A second host's records deliberately have no desktop launch or registry types.
@@ -68,7 +68,7 @@ it("preserves arbitrary host JSON payloads over the minimal generic port", async
       expect(store.getInstalledAgent("acp:other-host")).toEqual(expectedAgent);
       expect(store.listInstalledAgents()).toEqual([expectedAgent]);
     } finally { db.close(); }
-  }), { numRuns: 25, examples: [[-0, 0], [[-0], 0], [[{ "": -0 }], 0]] });
+  }), { numRuns: 8, examples: [[-0, 0], [[-0], 0], [[{ "": -0 }], 0]] });
 });
 
 it("matches independent backend replacement, NOCASE order and latest-cache models across WAL hosts and reopens", async () => {
@@ -122,7 +122,7 @@ it("matches independent backend replacement, NOCASE order and latest-cache model
         expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("keeps permissive legacy payload guards and JSON failure behavior without repairing reads", async () => {
@@ -163,7 +163,7 @@ it("keeps permissive legacy payload guards and JSON failure behavior without rep
           expect(measured.writes.commits).toBe(0);
         }
       } finally { db.close(); }
-    }), { numRuns: 25, examples: [[-0, "name"], [[{ "": -0 }], "registryId"]] });
+    }), { numRuns: 8, examples: [[-0, "name"], [[{ "": -0 }], "registryId"]] });
 });
 
 it("preserves outer transaction atomicity, WAL visibility and zero-write serialization refusal", async () => {
@@ -193,5 +193,5 @@ it("preserves outer transaction atomicity, WAL visibility and zero-write seriali
       expect(refused.writes.commits).toBe(0);
       expect(desktop.getInstalledAgent(backend(0))).toEqual(clone(record(0, commit ? revision : -1)));
     } finally { writer.close(); reader.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });

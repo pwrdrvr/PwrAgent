@@ -375,6 +375,9 @@ describe("auto-updater release-list request budget", () => {
     ["#1768 back-off", [new Advance(11), new RateLimitNext(1), new ManualCheck(), new OpenSettings(), new OpenSettings()]],
     // Before #2414 the budget lived in memory, so a restart spent another.
     ["#2414 restart", [new Advance(11), new Restart()]],
+    ["I5b freshness after a rate-limited manual check and restart", [
+      new Advance(11), new RateLimitNext(1), new ManualCheck(), new Advance(5), new Restart(), new OpenSettings(),
+    ]],
   ])("keeps the shrunk %s sequence", async (_name, commands) => {
     await owner.run((scope) => runSession(scope, commands));
   });

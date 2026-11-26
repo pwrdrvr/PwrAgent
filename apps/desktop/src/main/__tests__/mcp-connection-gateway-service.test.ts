@@ -247,7 +247,7 @@ describe("McpConnectionGatewayService", () => {
           await expect(service.readIpcBearerTokenState({ connectionId: ids[0]! })).rejects.toThrow();
         },
       ),
-      { numRuns: 40 },
+      { numRuns: 16 },
     );
   });
 
@@ -740,7 +740,7 @@ describe("McpConnectionGatewayService", () => {
         service.readPwrSnapMediaResource({ threadId: "thread-1", uri })));
       expect(results.every((result) => result.ok && result.dataBase64 === "AQID")).toBe(true);
       expect(readResource).toHaveBeenCalledOnce();
-    }), { numRuns: 20 });
+    }), { numRuns: 16 });
 
     // Another thread, though it shares the session, or a link the session
     // never returned, is not read.

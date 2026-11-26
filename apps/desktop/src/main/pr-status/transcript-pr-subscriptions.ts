@@ -157,14 +157,15 @@ export class TranscriptPrSubscriptions {
     };
   }
 
-  observe(prs: PrSummary[], fetchedAt: number): void {
+  observe(prs: PrSummary[], fetchedAt: number, fetchedAtByKey?: ReadonlyMap<string, number>): void {
     const updates = new Map<number, TranscriptPullRequestStatuses>();
     for (const pr of prs) {
       const key = buildPullRequestStatusKey(pr);
+      const prFetchedAt = fetchedAtByKey?.get(key) ?? fetchedAt;
       const cached = this.cache.get(key);
-      if (!cached || fetchedAt <= cached.fetchedAt) continue;
+      if (!cached || prFetchedAt <= cached.fetchedAt) continue;
       cached.pr = pr;
-      cached.fetchedAt = fetchedAt;
+      cached.fetchedAt = prFetchedAt;
       // Inverted ownership index: touch only windows subscribed to this PR.
       for (const sender of cached.subscribers.keys()) {
         let pending = updates.get(sender);
@@ -172,7 +173,7 @@ export class TranscriptPrSubscriptions {
           pending = { statuses: [] };
           updates.set(sender, pending);
         }
-        pending.statuses.push({ pr, fetchedAt });
+        pending.statuses.push({ pr, fetchedAt: prFetchedAt });
       }
     }
     for (const [sender, statuses] of updates) this.senders.get(sender)?.publish(statuses);

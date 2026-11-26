@@ -142,6 +142,7 @@ export type ThreadSearchResult = {
   source: AppServerBackendKind;
   gitBranch?: string;
   model?: string;
+  /** Relaxed projection matches score below zero. Legacy exact scores are positive. */
   score: number;
   confidence: ThreadSearchConfidenceBand;
   matchReasons: ThreadSearchMatchReason[];

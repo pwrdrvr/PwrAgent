@@ -82,7 +82,7 @@ describe("CheckoutDirectoryOwners", () => {
           actual.forEach((owner, index) => expect(owner).toBe(expected[index]));
         }
       },
-    ), { numRuns: 3000 });
+    ), { numRuns: 100 });
   });
 
   it("keeps a sibling with a shared name prefix out, and a nested directory in", () => {

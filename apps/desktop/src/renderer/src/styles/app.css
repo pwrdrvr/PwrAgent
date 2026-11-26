@@ -6911,6 +6911,7 @@ a.button {
 .composer__attachment-remove:focus,
 .composer-dropdown__button:focus,
 .composer-dropdown__option:focus,
+.model-settings__pill:focus,
 .button:focus-visible,
 .thread-row:focus-visible,
 .transcript-activity__toggle:focus-visible,
@@ -9579,7 +9580,8 @@ button.stack-display__thread,
    `aria-hidden` because flex blockifies them into two separate a11y nodes, so
    the name would otherwise be announced split mid-word. Absolute positioning
    keeps this out of the flex flow entirely. */
-.pr-status-card__branch-full {
+.pr-status-card__branch-full,
+.pr-status-card__label-note {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -9994,6 +9996,60 @@ button.stack-display__thread,
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+/* The PR's labels, read only for a repository a hands-off label rule
+   names. The one a rule matched carries the accent edge, and its name says
+   "hands-off" to assistive tech. */
+.pr-status-card__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pr-status-card__label {
+  max-width: 100%;
+  padding: 1px 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-status-card__label--hands-off {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+/* The sidebar card's way to the project's hands-off rules, under its
+   Auto-fix row. Inset by its own padding so the words line up with the
+   row's label. */
+.pr-status-card__link {
+  margin: 1px -6px 0;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pr-status-card__link:hover,
+.pr-status-card__link:focus-visible {
+  background: var(--accent-soft);
+  color: var(--text-primary);
 }
 
 /* A thread chip's hover card: the PR card's container and rows, plus the
@@ -12535,6 +12591,235 @@ button.stack-display__thread,
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.35;
+}
+
+/* Never merge's exceptions: indented under its checkbox, past the box's
+   14px column and 8px gap, so the list reads as part of that choice. */
+.forge-automation-dialog__merge-branches {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 0 22px;
+  padding: 6px 0 2px 12px;
+  border-left: 2px solid var(--border-subtle);
+}
+
+.forge-automation-dialog__sublabel {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.forge-automation-dialog__branch-list {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  list-style: none;
+}
+
+.forge-automation-dialog__branch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 4px 0 10px;
+}
+
+.forge-automation-dialog__branch + .forge-automation-dialog__branch {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.forge-automation-dialog__branch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font: 12.5px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-automation-dialog__branch-remove {
+  display: inline-grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.forge-automation-dialog__branch-remove:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.forge-automation-dialog__branch-remove:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.forge-automation-dialog__branch-add {
+  display: flex;
+  gap: 8px;
+}
+
+.forge-automation-dialog__branch-add input {
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: 12.5px var(--font-mono);
+}
+
+.forge-automation-dialog__branch-add input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.forge-automation-dialog__branch-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.forge-automation-dialog__hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.forge-automation-dialog__rules {
+  display: grid;
+  margin: 2px 0 4px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  list-style: none;
+}
+
+/* Repository, condition, Remove: a long repository or label wraps inside its
+   own track rather than pushing Remove out of the row. */
+.forge-automation-dialog__rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 10px;
+  font-size: 13px;
+}
+
+.forge-automation-dialog__rule + .forge-automation-dialog__rule {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.forge-automation-dialog__rule-repository {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-condition {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+
+.forge-automation-dialog__rule-remove {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.forge-automation-dialog__rule-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-field input {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-field input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.forge-automation-dialog__rule-field input[aria-invalid="true"] {
+  border-color: var(--danger-text);
+}
+
+.forge-automation-dialog__rule-submit {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.forge-automation-dialog__rule-picks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-picks > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.forge-automation-dialog__rule-pick {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.forge-automation-dialog__rule-pick:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.forge-automation-dialog__rule-pick:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .forge-automation-dialog__status {
@@ -26549,6 +26834,12 @@ button.stack-display__thread,
   flex: 1 1 auto;
 }
 
+.compact-composer__model {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
 /* The settings chip: the thread's model · effort · access readout, and the
    trigger for the settings menu. Neutral at rest, accent border on hover /
    open (same move as the main composer's pill dropdowns); the chevron only
@@ -38058,6 +38349,12 @@ div.composer-error-row__toggle {
   line-height: 1.35;
 }
 
+.transcript-questionnaire__hint {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 /* The MCP card is denser than the questionnaire it shares a frame with: the
    title, its warning and its parameters read as one 6px block, and the card
    spends 10px between header, block, fields and actions. */
@@ -38382,6 +38679,8 @@ div.composer-error-row__toggle {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  /* A question's legend would otherwise sit 2px right of its options. */
+  padding: 0;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 650;
@@ -38395,7 +38694,7 @@ div.composer-error-row__toggle {
 }
 
 .transcript-mcp__field input,
-.transcript-mcp__field select {
+.transcript-mcp__field .select-trigger {
   min-height: 36px;
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -38406,12 +38705,12 @@ div.composer-error-row__toggle {
 }
 
 .transcript-mcp__field input:focus,
-.transcript-mcp__field select:focus {
+.transcript-mcp__field .select-trigger:focus {
   border-color: var(--accent-border);
 }
 
 .transcript-mcp__field input:focus-visible,
-.transcript-mcp__field select:focus-visible {
+.transcript-mcp__field .select-trigger:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
@@ -43115,6 +43414,23 @@ div.composer-error-row__toggle {
   flex: 1 1 auto;
   flex-direction: column;
   gap: 1px;
+}
+
+.pr-watch-list__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+/* Auto-fix's thread and PR switches sit under its text, past the icon. */
+.pr-watch-list__row--stacked {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.pr-watch-list__row--stacked .pr-watch-list__actions {
+  flex-basis: 100%;
+  padding-left: 24px;
 }
 
 .pr-watch-list__title {
@@ -50645,6 +50961,687 @@ button.composer__subthread-source-parent:hover {
   text-align: center;
 }
 
+/* The model pill (`ModelSettingsPicker`): provider, model, effort and speed
+   in one chip. It keeps the composer chip's 26px rim and hover; the to-do
+   card draws it at its 22px fact size and Settings at its 30px field size.
+   The meter's ticks are the effort stops the model offers, filled through
+   the chosen one. The bolt is the only accent at rest. */
+.model-settings {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 300px;
+}
+
+.model-settings__pill {
+  display: inline-flex;
+  max-width: 100%;
+  min-height: 26px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.model-settings__pill:hover:not(:disabled),
+.model-settings__pill:focus-visible,
+.model-settings--open .model-settings__pill {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+}
+
+.model-settings__pill:disabled {
+  color: var(--text-secondary);
+  cursor: default;
+}
+
+.model-settings__pill-provider {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.model-settings__pill-sep {
+  flex: none;
+  color: var(--text-muted);
+}
+
+/* The model name gives way first; effort and the bolt never truncate. */
+.model-settings__pill-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-settings__pill-effort {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-secondary);
+}
+
+.model-settings__pill:hover:not(:disabled) .model-settings__pill-effort,
+.model-settings--open .model-settings__pill-effort {
+  color: var(--text-primary);
+}
+
+.model-settings__pill-bolt {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--accent);
+}
+
+.model-settings__pill-bolt svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.model-settings__pill-bolt svg + svg {
+  margin-left: -5px;
+}
+
+.model-settings__pill-chevron {
+  display: inline-flex;
+  flex: none;
+  color: var(--text-muted);
+}
+
+.model-settings__meter {
+  display: inline-flex;
+  flex: none;
+  align-items: flex-end;
+  gap: 1.5px;
+  height: 11px;
+}
+
+.model-settings__meter i {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+
+.model-settings__meter i.is-on {
+  background: currentColor;
+}
+
+.model-settings__pill:hover:not(:disabled) .model-settings__meter i.is-on,
+.model-settings--open .model-settings__meter i.is-on {
+  background: var(--accent);
+}
+
+/* The model's own default is chosen: hollow ticks, no level. */
+.model-settings__meter--default i {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.model-settings--card {
+  max-width: 100%;
+}
+
+.model-settings--card .model-settings__pill {
+  min-height: 22px;
+  gap: 6px;
+  padding: 0 7px 0 9px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.model-settings--card .model-settings__meter {
+  height: 10px;
+}
+
+.model-settings--changed .model-settings__pill {
+  border-color: var(--accent-border);
+}
+
+.model-settings--setting {
+  max-width: 100%;
+}
+
+.model-settings--setting .model-settings__pill {
+  min-height: 30px;
+  padding: 0 10px 0 12px;
+  border-color: var(--border-strong);
+}
+
+/* ---- the panel ---- */
+
+.model-settings__panel {
+  position: absolute;
+  z-index: 30;
+  bottom: calc(100% + 8px);
+  left: 0;
+  width: 344px;
+  max-width: calc(100vw - 16px);
+  max-height: min(560px, calc(100dvh - 96px));
+  box-sizing: border-box;
+  padding: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  white-space: normal;
+}
+
+.model-settings__panel--rail {
+  width: 512px;
+}
+
+/* Portalled under a card or a Settings field; placed from the trigger. */
+.model-settings__panel--below {
+  position: fixed;
+  z-index: 150;
+  bottom: auto;
+}
+
+/* With a provider rail the body keeps one height whatever the provider
+   offers, so switching providers never moves the panel's free edge: the
+   model list scrolls inside it and Effort and Speed stay at its foot. */
+.model-settings__grid {
+  display: grid;
+  height: 320px;
+  grid-template-columns: 156px minmax(0, 1fr);
+}
+
+.model-settings__rail {
+  min-width: 0;
+  min-height: 0;
+  padding-right: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--border-subtle);
+  scrollbar-width: thin;
+}
+
+.model-settings__main {
+  min-width: 0;
+}
+
+.model-settings__grid .model-settings__main {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  padding-left: 8px;
+}
+
+.model-settings__grid .model-settings__section {
+  flex: none;
+}
+
+.model-settings__grid .model-settings__models {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.model-settings__quick {
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.model-settings__head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+  padding: 6px 10px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.model-settings__head-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.model-settings__head-note {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.model-settings__label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.model-settings__label-value {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  text-transform: none;
+}
+
+.model-settings__label-value.is-level {
+  color: var(--accent-bright);
+}
+
+.model-settings__section + .model-settings__section {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.model-settings__group {
+  margin-top: 4px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.model-settings__option,
+.model-settings__disclosure {
+  display: flex;
+  width: 100%;
+  min-height: 30px;
+  box-sizing: border-box;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
+}
+
+.model-settings__option[aria-selected="true"] {
+  background: var(--bg-row-active);
+}
+
+.model-settings__rail .model-settings__option[aria-selected="true"] {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* The Recent tab heads the provider rail. While it is shown, the tab holds
+   the rail's mark and the chosen provider keeps only its check. */
+.model-settings__rail-recent .model-settings__check {
+  color: var(--text-muted);
+}
+
+.model-settings__rail-recent.is-on {
+  background: var(--bg-row-active);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.model-settings__rail-recent.is-on .model-settings__check {
+  color: var(--accent);
+}
+
+.model-settings__rail--recent .model-settings__option[aria-selected="true"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+.model-settings__recent {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+/* The chosen row keeps its own paint under the pointer and the focus ring. */
+.model-settings__option:hover:not([aria-disabled="true"]):not([aria-selected="true"]),
+.model-settings__option:focus-visible:not([aria-disabled="true"]):not([aria-selected="true"]),
+.model-settings__disclosure:hover,
+.model-settings__disclosure:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.model-settings__rail .model-settings__rail-recent.is-on:hover,
+.model-settings__rail .model-settings__rail-recent.is-on:focus-visible {
+  background: var(--bg-row-active);
+  color: var(--text-primary);
+}
+
+.model-settings__option:focus-visible,
+.model-settings__disclosure:focus-visible,
+.model-settings__reset:focus-visible,
+.model-settings__effort-default:focus-visible,
+.model-settings__speed-option:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.model-settings__option[aria-disabled="true"] {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.model-settings__disclosure {
+  color: var(--text-secondary);
+}
+
+.model-settings__disclosure-mark {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.model-settings__disclosure-mark.is-open {
+  transform: rotate(90deg);
+}
+
+.model-settings__check {
+  display: inline-grid;
+  width: 14px;
+  flex: 0 0 14px;
+  place-items: center;
+  color: var(--accent-bright);
+}
+
+.model-settings__option-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.model-settings__option-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.model-settings__option-description {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.model-settings__option:hover:not([aria-disabled="true"]) .model-settings__option-description,
+.model-settings__option:focus-visible:not([aria-disabled="true"]) .model-settings__option-description {
+  color: var(--text-secondary);
+}
+
+.model-settings__separator {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--border-subtle);
+}
+
+/* ---- effort ---- */
+
+.model-settings__effort-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 4px 10px 8px;
+}
+
+.model-settings__effort-default {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.model-settings__effort-default.is-on {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.model-settings__effort-default:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.model-settings__effort-bar {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.model-settings__effort-track {
+  display: grid;
+  gap: 3px;
+  height: 22px;
+  box-sizing: border-box;
+  padding: 7px 0;
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+
+.model-settings__effort-track:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.model-settings__effort-track[aria-disabled="true"] {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.model-settings__effort-stop {
+  border-radius: 2px;
+  background: var(--border-strong);
+  transition: background-color 80ms ease;
+}
+
+.model-settings__effort-stop.is-on {
+  background: var(--accent);
+}
+
+.model-settings__effort-stop.is-hover {
+  background: var(--accent-border);
+}
+
+.model-settings__effort-track.is-unset .model-settings__effort-stop {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.model-settings__effort-ticks {
+  display: grid;
+  gap: 3px;
+}
+
+.model-settings__effort-ticks span {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.3;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.model-settings__effort-ticks span.is-on {
+  color: var(--accent-bright);
+  font-weight: 700;
+}
+
+/* ---- speed ---- */
+
+.model-settings__speed {
+  display: flex;
+  gap: 4px;
+  padding: 2px 10px 8px;
+}
+
+.model-settings__speed-option {
+  display: inline-flex;
+  flex: 1 1 0;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.model-settings__speed-option svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.model-settings__speed-option svg + svg {
+  margin-left: -5px;
+}
+
+.model-settings__speed-option:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.model-settings__speed-option.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.model-settings__speed-option:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.model-settings__note {
+  margin: 0;
+  padding: 0 10px 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.model-settings__reset {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px 10px 4px;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.model-settings__reset:hover:not(.model-settings__reset--current) {
+  color: var(--accent-bright);
+}
+
+.model-settings__reset--current {
+  margin-bottom: 0;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.model-settings__reset--current .model-settings__reset-detail {
+  color: var(--text-secondary);
+}
+
+.model-settings__reset-mark {
+  color: var(--text-muted);
+}
+
+.model-settings__reset-detail {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.model-settings__label-value--muted {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.model-settings__quick-summary {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.model-settings__quick-model {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-settings__quick-summary .model-settings__meter {
+  height: 9px;
+}
+
+.model-settings__quick-detail {
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.model-settings__option:hover .model-settings__quick-detail,
+.model-settings__option:focus-visible .model-settings__quick-detail {
+  color: var(--text-secondary);
+}
+
+.model-settings__footnote {
+  margin: 4px 0 0;
+  padding: 7px 10px 2px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
 .composer__toggle {
   display: inline-flex;
   align-items: center;
@@ -52548,6 +53545,12 @@ button.composer__subthread-source-parent:hover {
   white-space: nowrap;
 }
 
+/* A compaction PwrAgent sent is open: the percent takes the accent until
+   the fill drops. */
+.context-window-moon--compacting .context-window-moon__label {
+  color: var(--accent);
+}
+
 /* Portal-rendered hover card for the context-window moon (rendered by
    useViewportTooltip). A structured usage card — meter + stat rows —
    instead of a text-blob tooltip. */
@@ -52612,6 +53615,7 @@ button.composer__subthread-source-parent:hover {
 }
 
 .context-usage-card__meter {
+  position: relative;
   display: block;
   height: 6px;
   margin-top: 7px;
@@ -52630,6 +53634,33 @@ button.composer__subthread-source-parent:hover {
 
 .context-usage-card__meter-fill--critical {
   background: var(--status-error);
+}
+
+/* Where auto-compaction starts, as a share of the context budget. */
+.context-usage-card__meter-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text-primary);
+}
+
+.context-usage-card__budget {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.context-usage-card__status {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 11.5px;
+  line-height: 1.4;
 }
 
 .context-usage-card__caption {
@@ -56943,8 +57974,118 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex: none; }
 .usage-status-dot.is-partial { background: var(--status-warning); }
 
+/* Overview */
+.usage-overview { display: flex; flex: none; flex-direction: column; gap: 12px; min-width: 0; padding: 14px 18px 14px; border-bottom: 1px solid var(--border-subtle); }
+.usage-overview__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.usage-overview__spacer { flex: 1; }
+.usage-overview__hero { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 16px 28px; align-items: start; }
+.usage-overview__summary { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.usage-overview__hero-figure { display: flex; flex-direction: column; gap: 4px; }
+.usage-overview__hero-figure > strong { font-family: var(--font-mono); font-size: 30px; line-height: 1; font-weight: 650; font-variant-numeric: tabular-nums; }
+.usage-overview__hero-figure > span { color: var(--text-secondary); font-size: 11px; }
+.usage-overview__providers { display: flex; flex-direction: column; gap: 3px; }
+.usage-overview__provider { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 5px 8px; margin-left: -8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-primary); text-align: left; }
+.usage-overview__provider:hover { background: var(--bg-panel-hover); }
+.usage-overview__provider.is-included { background: var(--bg-row-active); box-shadow: inset 2px 0 var(--accent); }
+.usage-overview__provider.is-excluded { box-shadow: inset 2px 0 var(--border-strong); }
+.usage-overview__provider.is-excluded .usage-overview__provider-name { text-decoration: line-through; color: var(--text-muted); }
+/* Fade only the non-text marks: text keeps AA contrast while it is still clickable. */
+.usage-overview__provider:is(.is-dimmed, .is-excluded) :is(.usage-overview__swatch, .usage-overview__share-track) { opacity: 0.35; }
+.usage-overview__state-badge { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 3px; font: 700 10px/1 var(--font-mono); }
+.usage-overview__state-badge.is-include { background: var(--accent-soft); color: var(--accent); }
+.usage-overview__state-badge.is-exclude { background: var(--danger-surface); color: var(--danger-text); }
+.usage-overview__clear { font-size: 11px; white-space: nowrap; }
+.usage-overview__provider-top { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.usage-overview__provider-name { font-size: 12px; font-weight: 600; white-space: nowrap; }
+.usage-overview__provider-meta { color: var(--text-muted); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.usage-overview__provider-top > strong { margin-left: auto; font-family: var(--font-mono); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-overview__provider-bar { display: flex; align-items: center; gap: 8px; padding-left: 15px; }
+.usage-overview__provider-bar .usage-overview__share-track { flex: 1; max-width: 110px; }
+.usage-overview__provider-sub { color: var(--text-muted); font: 10px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-overview__swatch { flex: none; width: 8px; height: 8px; border-radius: 2px; align-self: center; }
+
+.usage-overview__chart { display: flex; flex-direction: column; min-width: 0; }
+.usage-overview__chart-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 10px; margin-bottom: 8px; }
+.usage-overview__chart-title { color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+.usage-overview__chart-kind { color: var(--text-muted); font-size: 10px; }
+.usage-overview__chart-frame { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; }
+.usage-overview__axis-y { display: flex; flex-direction: column; justify-content: space-between; height: 156px; color: var(--text-muted); font: 9px var(--font-mono); text-align: right; }
+.usage-overview__plot { position: relative; height: 156px; min-width: 0; border-bottom: 1px solid var(--border-subtle); }
+.usage-overview__svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
+.usage-overview__gridline { stroke: var(--border-subtle); stroke-width: 1; }
+.usage-overview__cursor { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 3; }
+.usage-overview__series--0 { color: var(--usage-series-1); }
+.usage-overview__series--1 { color: var(--usage-series-2); }
+.usage-overview__series--2 { color: var(--usage-series-3); }
+.usage-overview__series--3 { color: var(--usage-series-4); }
+.usage-overview__series--4 { color: var(--usage-series-5); }
+.usage-overview__series--other { color: var(--usage-series-other); }
+.usage-overview__band-fill { fill: currentColor; fill-opacity: 0.24; transition: fill-opacity 120ms ease; }
+.usage-overview__band-line { fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; transition: opacity 120ms ease; }
+.usage-overview__series.is-hot .usage-overview__band-fill { fill-opacity: 0.38; }
+.usage-overview__series.is-muted .usage-overview__band-fill { fill-opacity: 0.1; }
+.usage-overview__series.is-muted .usage-overview__band-line { opacity: 0.35; }
+.usage-overview__hits { position: relative; z-index: 1; display: flex; width: 100%; height: 100%; }
+.usage-overview__hit { flex: 1 1 0; height: 100%; min-width: 0; padding: 0; border: 0; background: transparent; }
+.usage-overview__tooltip { position: absolute; top: 6px; z-index: 4; display: flex; flex-direction: column; gap: 6px; width: max-content; min-width: 196px; max-width: min(290px, calc(100% - 16px)); padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--popover-bg); box-shadow: 0 12px 28px var(--shadow-tint-soft); color: var(--text-primary); font-size: 11px; pointer-events: none; text-align: left; }
+.usage-overview__tooltip-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.usage-overview__tooltip-head span { color: var(--text-secondary); font: 10px var(--font-mono); white-space: nowrap; }
+.usage-overview__tooltip-head strong { font: 600 12px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-overview__tooltip-rows { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 5px 0 0; border-top: 1px solid var(--border-subtle); list-style: none; }
+.usage-overview__tooltip-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto 30px; align-items: center; column-gap: 7px; }
+.usage-overview__tooltip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.usage-overview__tooltip-row b { text-align: right; font: 600 10.5px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-overview__tooltip-row small { text-align: right; color: var(--text-muted); font: 9.5px var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.usage-overview__tooltip-empty { margin: 0; padding-top: 5px; border-top: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 10px; }
+.usage-overview__axis-x { padding: 5px 0 0 52px; color: var(--text-muted); font: 9px var(--font-mono); }
+.usage-overview__ticks { position: relative; height: 12px; }
+.usage-overview__ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.usage-overview__ticks span.is-start { transform: none; }
+.usage-overview__ticks span.is-end { transform: translateX(-100%); }
+.usage-overview__readout { min-height: 15px; margin: 6px 0 0; color: var(--text-secondary); font: 10px var(--font-mono); }
+
+.usage-overview__mix { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border-subtle); }
+.usage-overview__mix-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 14px; }
+.usage-overview__mix-summary { color: var(--text-muted); font-size: 11px; }
+.usage-overview__mix-summary strong { color: var(--text-primary); font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-overview__type-bar { display: flex; gap: 2px; height: 5px; overflow: hidden; border-radius: 2px; background: var(--border-subtle); }
+.usage-overview__type-bar i { display: block; flex-basis: 0; min-width: 2px; }
+.usage-overview__type-bar i.is-input, .usage-overview__type-legend i.is-input { background: var(--usage-series-2); }
+.usage-overview__type-bar i.is-cache-read, .usage-overview__type-legend i.is-cache-read { background: var(--usage-series-3); }
+.usage-overview__type-bar i.is-cache-write, .usage-overview__type-legend i.is-cache-write { background: var(--usage-series-5); }
+.usage-overview__type-bar i.is-output, .usage-overview__type-legend i.is-output { background: var(--usage-series-1); }
+.usage-overview__type-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-muted); font-size: 10px; }
+.usage-overview__type-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.usage-overview__type-legend i { width: 7px; height: 7px; border-radius: 2px; }
+.usage-overview__type-legend strong { color: var(--text-secondary); font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-overview__type-extra { margin-left: auto; }
+
+.usage-overview__breakdown { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--border-subtle); }
+.usage-overview__breakdown-head { display: flex; align-items: center; gap: 10px; }
+.usage-overview__table-head, .usage-overview__table-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) 86px 86px 58px; gap: 10px; align-items: center; }
+.usage-overview__table-head { padding: 4px 6px; border-bottom: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 10px; }
+.usage-overview__table-head > span:nth-child(n + 3) { text-align: right; }
+.usage-overview__table-body { display: flex; flex-direction: column; }
+.usage-overview__table-row { width: 100%; padding: 6px; border: 0; border-bottom: 1px solid var(--border-subtle); background: transparent; color: var(--text-primary); text-align: left; }
+button.usage-overview__table-row:hover { background: var(--bg-panel-hover); }
+button.usage-overview__table-row.is-included { background: var(--bg-row-active); box-shadow: inset 2px 0 var(--accent); }
+button.usage-overview__table-row.is-excluded { box-shadow: inset 2px 0 var(--border-strong); }
+button.usage-overview__table-row.is-excluded .usage-overview__entity-line strong { text-decoration: line-through; color: var(--text-muted); }
+button.usage-overview__table-row:is(.is-dimmed, .is-excluded) :is(.usage-overview__swatch, .usage-overview__share-track) { opacity: 0.35; }
+.usage-overview__rank { color: var(--text-muted); font: 10px var(--font-mono); font-variant-numeric: tabular-nums; }
+.usage-overview__entity { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.usage-overview__entity-line { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.usage-overview__entity-line strong { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-overview__entity-line small { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.usage-overview__share-track { display: block; width: 100%; max-width: 240px; height: 2px; border-radius: 1px; background: var(--border-subtle); overflow: hidden; }
+.usage-overview__share-track i { display: block; height: 100%; }
+.usage-overview__share-track i.usage-overview__share-neutral { background: var(--text-muted); }
+.usage-overview__num { text-align: right; font: 11px var(--font-mono); font-variant-numeric: tabular-nums; }
+.usage-overview__share { color: var(--text-secondary); }
+.usage-overview__more { align-self: flex-start; margin-top: 2px; font-size: 11px; }
+
 /* Limits band */
-.usage-band { display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 280px); gap: 14px 28px; flex: none; padding: 16px 18px 12px; border-bottom: 1px solid var(--border-subtle); }
+.usage-band { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px 28px; flex: none; padding: 16px 18px 12px; border-bottom: 1px solid var(--border-subtle); }
 .usage-band__accounts { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
 .usage-account { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .usage-account__name { align-self: flex-start; display: flex; gap: 8px; align-items: baseline; padding: 2px 6px; margin-left: -6px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); font-size: 11px; font-weight: 600; }
@@ -56962,7 +58103,6 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-limit__figure > span { color: var(--text-secondary); font-size: 11px; }
 .usage-limit__meter { height: 5px; overflow: hidden; border-radius: 1px; background: var(--border-subtle); }
 .usage-limit__meter i { display: block; height: 100%; background: var(--accent); }
-.usage-limit__meter--cache i { background: var(--text-muted); }
 .usage-pace { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; color: var(--text-secondary); font-size: 11px; }
 .usage-pace > span { padding: 1px 5px; border-radius: 3px; background: var(--bg-panel-hover); color: var(--text-primary); font: 10px var(--font-mono); }
 .usage-pace.is-short { color: var(--status-warning-text); font-weight: 600; }
@@ -56970,8 +58110,36 @@ details.launchpad-pending__output > summary .launchpad-pending__command-label {
 .usage-limit__sub { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--text-muted); font-size: 10px; }
 .usage-limit__sub strong { color: var(--text-secondary); font-weight: 600; }
 .usage-limit__reset { color: var(--status-warning-text); }
-.usage-band__cost { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-left: 20px; border-left: 1px solid var(--border-subtle); }
 .usage-band__note { grid-column: 1 / -1; margin: 0; color: var(--text-muted); font-size: 10px; }
+
+/* Account-wide daily token trend (provider-reported, never added to PwrAgent ledger) */
+.usage-account-tokens { flex: none; min-width: 0; padding: 12px 18px 10px; border-bottom: 1px solid var(--border-subtle); }
+.usage-account-tokens__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--text-muted); font-size: 10px; }
+.usage-account-tokens__scope { color: var(--text-secondary); }
+.usage-account-tokens__spacer { flex: 1; }
+.usage-account-tokens__accounts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; }
+.usage-account-tokens__accounts .usage-account__name[aria-pressed="true"] { color: var(--text-primary); box-shadow: inset 2px 0 var(--accent); }
+.usage-account-tokens__status { margin: 8px 0 0; color: var(--text-secondary); font-size: 11px; }
+.usage-account-tokens__status strong { color: var(--text-primary); font-weight: 600; }
+.usage-account-tokens__metrics { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; color: var(--text-muted); font-size: 11px; }
+.usage-account-tokens__metrics strong { color: var(--text-primary); font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-account-tokens__subset { color: var(--text-secondary); }
+.usage-account-tokens__frame { display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 8px; margin-top: 8px; }
+.usage-account-tokens__axis-y { display: flex; flex-direction: column; justify-content: space-between; height: 72px; color: var(--text-muted); font: 9px var(--font-mono); text-align: right; }
+.usage-account-tokens__plot { display: flex; align-items: flex-end; gap: 2px; height: 72px; min-width: 0; border-bottom: 1px solid var(--border-subtle); }
+.usage-account-tokens__bar { display: flex; align-items: flex-end; flex: 1 1 0; height: 100%; min-width: 0; padding: 0; border: 0; border-bottom: 2px solid transparent; background: transparent; }
+.usage-account-tokens__bar:hover, .usage-account-tokens__bar:focus-visible { background: var(--bg-panel-hover); }
+.usage-account-tokens__bar.is-selected { border-bottom-color: var(--accent); background: var(--bg-row-active); }
+.usage-account-tokens__fill { display: block; width: 100%; min-height: 2px; border-radius: 1px 1px 0 0; background: var(--usage-series-1); opacity: 0.82; }
+.usage-account-tokens__bar:hover .usage-account-tokens__fill, .usage-account-tokens__bar:focus-visible .usage-account-tokens__fill, .usage-account-tokens__bar.is-selected .usage-account-tokens__fill { opacity: 1; }
+.usage-account-tokens__gap { display: block; width: 100%; height: 0; border-top: 1px dashed var(--border-strong); opacity: 0.65; }
+.usage-account-tokens__axis { padding: 4px 0 0 52px; color: var(--text-muted); font: 9px var(--font-mono); }
+.usage-account-tokens__ticks { position: relative; height: 12px; }
+.usage-account-tokens__ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.usage-account-tokens__ticks span.is-start { transform: none; }
+.usage-account-tokens__ticks span.is-end { transform: translateX(-100%); }
+.usage-account-tokens__readout { min-height: 15px; margin: 6px 0 0; color: var(--text-secondary); font: 10px var(--font-mono); }
+.usage-account-tokens__note { margin: 2px 0 0; color: var(--text-muted); font-size: 10px; }
 
 /* Timeline */
 .usage-timeline { flex: none; min-width: 0; margin: 0; padding: 14px 18px 8px; border-bottom: 1px solid var(--border-subtle); }
@@ -57036,6 +58204,9 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
 .usage-timeline__legend[data-hot="4"] .usage-timeline__legend-item:has(> .usage-series--4),
 .usage-timeline__legend[data-hot="other"] .usage-timeline__legend-item:has(> .usage-series--other) { background: var(--bg-row-active); color: var(--text-primary); }
 .usage-chip { display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 8px; border: 1px solid var(--accent-border); border-radius: 4px; background: var(--bg-row-active); color: var(--text-primary); font: 10px var(--font-mono); white-space: nowrap; }
+.usage-chip.is-excluded { border-color: var(--border-strong); background: transparent; }
+.usage-chip__sign { font-style: normal; font-weight: 700; color: var(--accent); }
+.usage-chip.is-excluded .usage-chip__sign { color: var(--danger-text); }
 .usage-chip span { color: var(--text-muted); }
 .usage-chip:hover span { color: var(--text-primary); }
 
@@ -57167,8 +58338,7 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   .usage-results.has-inspector .usage-results__toolbar { flex-wrap: wrap; }
 }
 @media (max-width: 760px) {
-  .usage-band { grid-template-columns: minmax(0, 1fr); }
-  .usage-band__cost { padding: 12px 0 0; border-left: 0; border-top: 1px solid var(--border-subtle); }
+  .usage-overview__hero { grid-template-columns: minmax(0, 1fr); }
   .usage-results .usage-list-head, .usage-results .usage-thread:not(.usage-thread--excluded),
   .usage-results.has-inspector .usage-list-head, .usage-results.has-inspector .usage-thread:not(.usage-thread--excluded) { grid-template-columns: minmax(0, 1fr) 84px; }
   .usage-thread--excluded { grid-template-columns: minmax(0, 1fr) 84px; }
@@ -58480,6 +59650,24 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A covered PR's name is an identifier; its state note keeps the room. */
+.composer-pr-menu .composer-pr-menu__pr-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* A covered PR's state goes under its name, past the check column. */
+.composer-pr-menu .composer-pr-menu__pr {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+
+.composer-pr-menu .composer-pr-menu__pr .todo-model-picker__detail {
+  flex-basis: 100%;
+  margin-left: 0;
+  padding-left: 20px;
 }
 
 .todo-dispatch__pending {
@@ -60114,4 +61302,33 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   flex-wrap: wrap;
   align-items: end;
   gap: 8px;
+}
+
+/* Settings → AI providers → Auto-compaction. */
+.auto-compaction-rule__summary {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.auto-compaction-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 4px 18px 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+}
+
+.auto-compaction-editor__actions {
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.auto-compaction-rule__add {
+  padding: 12px 18px 14px;
+  border-top: 1px solid var(--border-subtle);
 }

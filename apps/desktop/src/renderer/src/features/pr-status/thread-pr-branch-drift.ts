@@ -11,6 +11,8 @@ export function useThreadPrBranchDrift(thread: NavigationThreadSummary | undefin
   const baseBranch = working?.baseBranch;
   const behind = working?.baseBehindCommitCount;
   const ahead = working?.baseAheadCommitCount;
+  const upstreamBranch = working?.upstreamBranch;
+  const upstreamBehind = working?.upstreamBehindCommitCount;
   const repository = thread && primaryRepositoryKey(thread);
   const pr = thread && baseBranch && findBranchDriftPr({
     prs: thread.prs ?? [],
@@ -22,7 +24,15 @@ export function useThreadPrBranchDrift(thread: NavigationThreadSummary | undefin
 
   // Keep the same object until a count or its owning PR changes.
   return useMemo(
-    () => prKey && baseBranch ? { prKey, baseBranch, behind, ahead } : undefined,
-    [prKey, baseBranch, behind, ahead],
+    () => prKey && baseBranch
+      ? {
+          prKey,
+          baseBranch,
+          behind,
+          ahead,
+          ...(upstreamBranch ? { upstreamBranch, upstreamBehind } : {}),
+        }
+      : undefined,
+    [prKey, baseBranch, behind, ahead, upstreamBranch, upstreamBehind],
   );
 }

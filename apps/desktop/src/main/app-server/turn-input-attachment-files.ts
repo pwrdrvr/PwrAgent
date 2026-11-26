@@ -312,11 +312,13 @@ export async function ownThreadInputAttachments(
   const output = input.map((item, index) => {
     const attachment = retained[index];
     if (item.type === "localFile" && attachment?.type === "localFile" && item.path !== attachment.path) ownedPaths.set(path.resolve(item.path), attachment.path);
-    // Preserve established inline payloads for ACP and non-JPEG/PNG images
-    // such as animated GIFs. Their owned copy serves replay and forwarding.
+    // Preserve inline payloads only for non-JPEG/PNG images such as animated
+    // GIFs. JPEG/PNG images (including ACP turns) become thread-owned local
+    // files so transcripts and rollouts store lightweight protocol URLs rather
+    // than base64; ACP base64-encodes at the session/prompt wire boundary only.
     const preserveInlineImage = item.type === "image"
-      && (owner.backend.startsWith("acp:")
-        || item.url.startsWith("data:") && !/^data:image\/(?:jpeg|jpg|png);base64,/iu.test(item.url));
+      && item.url.startsWith("data:")
+      && !/^data:image\/(?:jpeg|jpg|png);base64,/iu.test(item.url);
     if (preserveInlineImage) {
       return item;
     } else {

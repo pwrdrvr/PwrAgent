@@ -92,7 +92,7 @@ import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL, NATIVE_VOICE_STOP_CHANNEL,
   NATIVE_VOICE_TEXT_CHANNEL, NATIVE_VOICE_EVENT_CHANNEL,
   NATIVE_VOICE_OPEN_MANAGER_CHANNEL, OPERATOR_FOCUS_PUBLISH_CHANNEL,
-  type NativeVoiceStart, type NativeVoiceTarget, type NativeVoiceText, type NativeVoiceEvent,
+  type NativeVoiceStart, type NativeVoiceStop, type NativeVoiceText, type NativeVoiceEvent,
   type OpenVoiceManagerResponse,
 } from "../shared/native-voice";
 import { USAGE_ACTIVITY_ANALYZE_CHANNEL } from "../shared/ipc";
@@ -848,7 +848,7 @@ import type {
   ImageUploadFallbackResponse,
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
-import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
+import type { HotCpuFinalCaptureFailedEvent, HotCpuPostCapEvent, HotCpuProfileCapturedEvent, HotCpuRearmableCapture, RearmHotCpuProfileRequest } from "../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
 import type { ManagedRuntimeProgress } from "../shared/managed-runtime-progress";
 import type {
@@ -1165,7 +1165,11 @@ import {
   COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL,
   COMPOSER_DRAFT_SAVE_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL,
+  HOT_CPU_POST_CAP_EVENT_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
+  HOT_CPU_PROFILE_REARM_CHANNEL,
+  HOT_CPU_PROFILE_REARMABLE_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
@@ -1547,7 +1551,7 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke("thread:pendingWakes", request),
   nativeVoiceCapability: () => ipcRenderer.invoke(NATIVE_VOICE_CAPABILITY_CHANNEL),
   startNativeVoice: (request: NativeVoiceStart) => ipcRenderer.invoke(NATIVE_VOICE_START_CHANNEL, request),
-  stopNativeVoice: (request: NativeVoiceTarget) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
+  stopNativeVoice: (request: NativeVoiceStop) => ipcRenderer.invoke(NATIVE_VOICE_STOP_CHANNEL, request),
   sendNativeVoiceCameraCue: (request: VoiceCameraCue) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_CUE_CHANNEL, request),
   setNativeVoiceCamera: (request: VoiceCameraRequest) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_CHANNEL, request),
   analyzeNativeVoiceCamera: (request: VoiceCameraFrame) => ipcRenderer.invoke(NATIVE_VOICE_CAMERA_FRAME_CHANNEL, request),
@@ -1829,6 +1833,24 @@ const desktopApi = Object.freeze({
   },
   cancelAppUpdateDownload: async (): Promise<AppUpdateCancelResult> =>
     await ipcRenderer.invoke(APP_UPDATE_CANCEL_DOWNLOAD_CHANNEL),
+  rearmHotCpuProfile: (request: RearmHotCpuProfileRequest): Promise<boolean> =>
+    ipcRenderer.invoke(HOT_CPU_PROFILE_REARM_CHANNEL, request),
+  listRearmableHotCpuProfiles: (): Promise<HotCpuRearmableCapture[]> =>
+    ipcRenderer.invoke(HOT_CPU_PROFILE_REARMABLE_CHANNEL),
+  onHotCpuFinalCaptureFailed: (callback: (event: HotCpuFinalCaptureFailedEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: HotCpuFinalCaptureFailedEvent) => callback(payload);
+    ipcRenderer.on(HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL, listener);
+    };
+  },
+  onHotCpuPostCap: (callback: (event: HotCpuPostCapEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: HotCpuPostCapEvent) => callback(payload);
+    ipcRenderer.on(HOT_CPU_POST_CAP_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(HOT_CPU_POST_CAP_EVENT_CHANNEL, listener);
+    };
+  },
   onHotCpuProfileCaptured: (
     callback: (event: HotCpuProfileCapturedEvent) => void,
   ): (() => void) => {

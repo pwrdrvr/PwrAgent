@@ -72,6 +72,9 @@ export function parseNotRun(value) {
 export function aggregateSlices({ slices, samples = 1, notRun = [], lanes = {}, runId, attempt, sha, headSha, warnings = [] }) {
   const inventory = expectedSlices(samples);
   const skipped = new Set(notRun);
+  for (const pair of ["unit-macos", "e2e-macos", "e2e-windows"]) {
+    if (lanes[pair]?.length === 0) skipped.add(pair);
+  }
   const byKey = new Map();
   const allowed = new Set(inventory.map((slice) => slice.key));
   for (const slice of slices) {

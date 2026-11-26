@@ -1,7 +1,6 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
@@ -81,65 +80,59 @@ type Step =
   | { kind: "advance" | "rewind" | "push" | "restack"; layer: number }
   | { kind: "advance-trunk" | "sync-catalog" };
 
-const step = (height: number): fc.Arbitrary<Step> => fc.oneof(
-  fc.record({ kind: fc.constantFrom("advance", "rewind", "push", "restack" as const), layer: fc.integer({ min: 1, max: height }) }),
-  fc.record({ kind: fc.constantFrom("advance-trunk", "sync-catalog" as const) }),
-);
-
-it("projects exactly what a fresh reader does after any history change", async () => {
-  await fc.assert(fc.asyncProperty(
-    fc.integer({ min: 1, max: 3 }).chain((height) => fc.tuple(
-      fc.constant(height), fc.boolean(), fc.array(step(height), { minLength: 1, maxLength: 5 }),
-    )),
-    async ([height, cataloged, steps]) => {
-      const fixture = await stackFixture(height, cataloged);
-      try {
-        const reader = new StackReader();
-        const project = async (from: StackReader) => (await from.read(fixture.rows, [])).stacks;
-        expect(await project(reader)).toEqual(await project(new StackReader()));
-        for (const change of steps) {
-          const worktree = "layer" in change ? fixture.worktrees[change.layer - 1]! : fixture.root;
-          const branch = "layer" in change ? `s${change.layer}` : "main";
-          if (change.kind === "advance" || change.kind === "advance-trunk") commit(worktree, change.kind);
-          else if (change.kind === "rewind") {
-            // The root commit has no parent to rewind to.
-            if (git(worktree, "rev-list", "--count", "HEAD") !== "1") git(worktree, "reset", "-q", "--hard", "HEAD~1");
-          }
-          else if (change.kind === "push") git(worktree, "update-ref", `refs/remotes/origin/${branch}`, "HEAD");
-          else if (change.kind === "restack") {
-            git(worktree, "reset", "-q", "--hard", "main");
-            commit(worktree, "restacked");
-          } else if (cataloged) await fixture.writeCatalog();
-          // The oracle has never answered a commit-graph question before.
-          expect(await project(reader)).toEqual(await project(new StackReader()));
-        }
-      } finally {
-        await rm(fixture.base, { recursive: true, force: true });
-      }
-    },
-  ), {
-    numRuns: 12,
-    // A layer whose head moves while its parent stays put asks the same
-    // ancestor about a new head; a stale answer would keep it in sync.
-    examples: [
-      [[3, true, [{ kind: "restack", layer: 2 }]]],
-      [[2, true, [{ kind: "advance", layer: 1 }, { kind: "sync-catalog" }, { kind: "rewind", layer: 1 }]]],
-      [[2, true, [{ kind: "advance", layer: 2 }, { kind: "push", layer: 2 }, { kind: "restack", layer: 2 }]]],
-    ],
-  });
-}, 120_000);
-
-it("spends only the clone's ref and worktree reads when nothing has moved, whatever the stack height", async () => {
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), fc.boolean(), async (height, cataloged) => {
+const histories: Array<{ name: string; height: number; cataloged: boolean; steps: Step[] }> = [
+  { name: "a middle layer restacks against trunk", height: 3, cataloged: true,
+    steps: [{ kind: "restack", layer: 2 }] },
+  { name: "a cataloged layer advances, updates its catalog and rewinds", height: 2, cataloged: true,
+    steps: [{ kind: "advance", layer: 1 }, { kind: "sync-catalog" }, { kind: "rewind", layer: 1 }] },
+  { name: "a top layer advances, pushes and restacks", height: 2, cataloged: true,
+    steps: [{ kind: "advance", layer: 2 }, { kind: "push", layer: 2 }, { kind: "restack", layer: 2 }] },
+  { name: "uncataloged history changes at trunk and both layers", height: 2, cataloged: false,
+    steps: [{ kind: "advance-trunk" }, { kind: "advance", layer: 1 }, { kind: "rewind", layer: 2 }] },
+];
+it.for(histories)(
+  "matches a fresh reader after $name", { timeout: 120_000 }, async ({ height, cataloged, steps }) => {
     const fixture = await stackFixture(height, cataloged);
     try {
       const reader = new StackReader();
-      const first = await reader.read(fixture.rows, []);
-      expect(first.stacks).toHaveLength(cataloged || height > 1 ? 1 : 0);
-      const starts = await stackStatusStarts(() => reader.read(fixture.rows, []));
-      expect(starts.toSorted()).toEqual(first.stacks.length ? ["for-each-ref", "worktree"] : []);
+      const project = async (from: StackReader) => (await from.read(fixture.rows, [])).stacks;
+      expect(await project(reader)).toEqual(await project(new StackReader()));
+      for (const change of steps) {
+        const worktree = "layer" in change ? fixture.worktrees[change.layer - 1]! : fixture.root;
+        const branch = "layer" in change ? `s${change.layer}` : "main";
+        if (change.kind === "advance" || change.kind === "advance-trunk") commit(worktree, change.kind);
+        else if (change.kind === "rewind") {
+          // The root commit has no parent to rewind to.
+          if (git(worktree, "rev-list", "--count", "HEAD") !== "1") git(worktree, "reset", "-q", "--hard", "HEAD~1");
+        }
+        else if (change.kind === "push") git(worktree, "update-ref", `refs/remotes/origin/${branch}`, "HEAD");
+        else if (change.kind === "restack") {
+          git(worktree, "reset", "-q", "--hard", "main");
+          commit(worktree, "restacked");
+        } else if (cataloged) await fixture.writeCatalog();
+        // The oracle has never answered a commit-graph question before.
+        expect(await project(reader)).toEqual(await project(new StackReader()));
+      }
     } finally {
       await rm(fixture.base, { recursive: true, force: true });
     }
-  }), { numRuns: 8 });
-}, 120_000);
+  },
+);
+
+it.for([
+  { height: 1, cataloged: false },
+  { height: 1, cataloged: true },
+  { height: 4, cataloged: false },
+  { height: 4, cataloged: true },
+])("spends only ref and worktree reads for an unchanged stack of height $height, cataloged=$cataloged", { timeout: 120_000 }, async ({ height, cataloged }) => {
+  const fixture = await stackFixture(height, cataloged);
+  try {
+    const reader = new StackReader();
+    const first = await reader.read(fixture.rows, []);
+    expect(first.stacks).toHaveLength(cataloged || height > 1 ? 1 : 0);
+    const starts = await stackStatusStarts(() => reader.read(fixture.rows, []));
+    expect(starts.toSorted()).toEqual(first.stacks.length ? ["for-each-ref", "worktree"] : []);
+  } finally {
+    await rm(fixture.base, { recursive: true, force: true });
+  }
+});

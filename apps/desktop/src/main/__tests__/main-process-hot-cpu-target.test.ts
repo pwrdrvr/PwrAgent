@@ -40,7 +40,7 @@ it.each([false, true])("captures main CPU and heap usage (auxiliary failure: %s)
     });
     if (!resolved.enabled) throw new Error("Expected enabled config");
     const config = {
-      ...resolved, maxProfiles: 1,
+      ...resolved, maxProfiles: 2,
       captureHeapSnapshot: true,
     };
     const created = await createHotCpuProfileSession({
@@ -73,6 +73,7 @@ it.each([false, true])("captures main CPU and heap usage (auxiliary failure: %s)
     const event = await capture;
     await profiler.stop("test-complete");
     expect(event).toMatchObject({ target: "main", profileFilename: "main-hot-0001.cpuprofile", heapSnapshotArtifacts: [] });
+    expect(event.captureLimit).toBeUndefined();
     const profile = JSON.parse(await fs.readFile(event.profilePath, "utf8"));
     expect(profile.nodes.length).toBeGreaterThan(0);
     const diagnosticsFilename = "main-hot-0001.diagnostics.json";

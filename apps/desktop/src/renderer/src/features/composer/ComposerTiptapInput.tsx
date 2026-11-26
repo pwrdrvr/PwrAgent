@@ -18,7 +18,7 @@ import { recordRendererUpdate, RendererUpdateEvent } from "../../lib/renderer-up
 import Mention from "@tiptap/extension-mention";
 import StarterKit from "@tiptap/starter-kit";
 import { closeHistory } from "prosemirror-history";
-import { Plugin, PluginKey } from "prosemirror-state";
+import { Plugin, PluginKey, TextSelection, type Transaction } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
 import {
   EditorContent,
@@ -47,6 +47,9 @@ import {
 import { buildInstanceReferenceMarkdown } from "../../lib/instance-references";
 import { findHashReferenceTrigger } from "../../lib/hash-references";
 import { parsePullRequestUrl } from "../../lib/pull-request-links";
+import { resolveThreadIdText, useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
+import { composerThreadLabel, findComposerThreadReferences, resolveComposerThreadHref, useComposerThreadReference } from "./composer-thread-references";
+import { createComposerThreadToken } from "./composer-mention-tokens";
 import { useComposerPullRequestHover } from "./useComposerPullRequestHover";
 import { tildifyPath } from "../../lib/tildify-path";
 import { getDesktopApi } from "../../lib/desktop-api";
@@ -64,6 +67,8 @@ import type {
   ComposerCommandChip,
   ComposerInputChangeMetadata,
   ComposerInputHandle,
+  ComposerReferenceSigil,
+  ComposerReferenceTrigger,
   ComposerSkillToken,
 } from "./ComposerInputTypes";
 
@@ -99,6 +104,7 @@ type ComposerTiptapInputProps = {
   onDrop?: (event: DragEvent<HTMLDivElement>) => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDivElement>) => void;
   onPaste?: (event: ClipboardEvent<HTMLDivElement>) => void;
+  onReferenceSelectionChange?: () => void;
   /**
    * The pointer entered a `$skill` chip. The chip is Tiptap DOM, not React,
    * so the host's hover card is anchored to the element handed over here.
@@ -2028,14 +2034,14 @@ function pastePlainTextIntoActiveBlock(
     const structuredHtmlContent = parseClipboardHtmlStructuredContent(event);
     if (structuredHtmlContent.length > 0) {
       event.preventDefault();
-      return editor.commands.insertContent(structuredHtmlContent, {
+      return editor.chain().setMeta("paste", true).insertContent(structuredHtmlContent, {
         updateSelection: true,
-      });
+      }).run();
     }
     event.preventDefault();
-    return editor.commands.insertContent(splitTextContent(text), {
+    return editor.chain().setMeta("paste", true).insertContent(splitTextContent(text), {
       updateSelection: true,
-    });
+    }).run();
   }
 
   return false;
@@ -2095,9 +2101,9 @@ function pastePlainMarkdownText(
   }
 
   event.preventDefault();
-  return editor.commands.insertContent(markdownContent, {
+  return editor.chain().setMeta("paste", true).insertContent(markdownContent, {
     updateSelection: true,
-  });
+  }).run();
 }
 
 function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
@@ -2625,6 +2631,72 @@ function getSelectionDraftRange(
   };
 }
 
+function readReferenceTriggers(
+  editor: TiptapEditor,
+): ReturnType<ComposerInputHandle["getReferenceTriggers"]> {
+  const { $from } = editor.state.selection;
+  if (!$from.parent.inlineContent || $from.parent.type.spec.code) return {};
+
+  // Marks are presentation. Hard breaks, inline code and existing chips
+  // bound the scan, so text on opposite sides cannot form one reference.
+  let prefix = "";
+  $from.parent.nodesBetween(0, $from.parentOffset, (node, position) => {
+    prefix = node.isText && !node.marks.some((mark) => mark.type.spec.code)
+      ? prefix + node.text!.slice(0, $from.parentOffset - position)
+      : "";
+  });
+  const toDocumentRange = (trigger: ComposerReferenceTrigger | undefined) => trigger && {
+    start: $from.pos - prefix.length + trigger.start,
+    end: $from.pos,
+    query: trigger.query,
+  };
+  return {
+    "#": toDocumentRange(findHashReferenceTrigger(prefix, prefix.length)),
+    "@": toDocumentRange(findDirectoryReferenceTrigger(prefix, prefix.length)),
+  };
+}
+
+function replaceEditorReference(
+  editor: TiptapEditor,
+  sigil: ComposerReferenceSigil,
+  tokens: ComposerSkillToken[],
+): void {
+  const trigger = readReferenceTriggers(editor)[sigil];
+  if (tokens.length === 0 && !trigger) return;
+
+  const { from, to, $from, $to } = editor.state.selection;
+  const fence = [$from, $to].find((position) => position.parent.type.spec.code);
+  const start = trigger?.start ?? from;
+  const following = fence ? "" : $to.nodeAfter?.text ?? "";
+  const hasSpace = /^[^\S\r\n]/.test(following);
+  const addSpace = !hasSpace && !/^[\p{Pe}\p{Pf}]/u.test(following);
+  const nodes = tokens.flatMap((token, index) => [
+    ...(index > 0 ? [editor.schema.text(" ")] : []),
+    editor.schema.nodes.mention.create(getSkillMentionAttrs(token)),
+  ]);
+  if (tokens.length && addSpace) nodes.push(editor.schema.text(" "));
+
+  const transaction = closeHistory(editor.state.tr);
+  let caret = start;
+  if (fence && nodes.length > 0) {
+    // The picker can be opened inside a fence. Its inline chip belongs in
+    // a paragraph after the whole block, even if the operator selected code.
+    const paragraph = editor.schema.nodes.paragraph.create(null, nodes);
+    const afterFence = fence.after();
+    transaction.insert(afterFence, paragraph);
+    caret = afterFence + 1 + paragraph.content.size;
+  } else if (nodes.length > 0) {
+    transaction.replaceWith(start, to, nodes);
+    caret = transaction.mapping.map(to) + (hasSpace ? 1 : 0);
+  } else {
+    transaction.delete(start, from);
+  }
+  transaction.setSelection(TextSelection.create(transaction.doc, caret));
+  editor.view.dispatch(transaction);
+  closeEditorHistory(editor);
+  editor.commands.focus();
+}
+
 function insertMentionTokenAtSelection(params: {
   editor: TiptapEditor;
   readMode: TiptapReadMode;
@@ -2854,15 +2926,129 @@ function acceptInlineCompletion(
   return true;
 }
 
+function pastedThreadReferenceRange(transactions: readonly Transaction[]): { from: number; to: number } | undefined {
+  let from = Infinity;
+  let to = -Infinity;
+  for (const transaction of transactions) {
+    for (const map of transaction.mapping.maps) {
+      from = map.map(from, -1);
+      to = map.map(to, 1);
+      if (transaction.getMeta("paste")) {
+        map.forEach((_oldFrom, _oldTo, insertedFrom, insertedTo) => {
+          from = Math.min(from, insertedFrom);
+          to = Math.max(to, insertedTo);
+        });
+      }
+    }
+  }
+  return from < to ? { from, to } : undefined;
+}
+
+function replacePastedThreadReferences(
+  transaction: Transaction,
+  range: { from: number; to: number },
+  links: NonNullable<ReturnType<typeof useThreadLinks>>,
+): void {
+  const { doc } = transaction;
+  doc.nodesBetween(range.from, range.to, (block, position) => {
+    if (block.type.spec.code) return false;
+    if (!block.isTextblock) return;
+
+    let text = "";
+    let parts: { node: ProseMirrorNode; start: number; end: number; position: number }[] = [];
+    const positionAt = (offset: number): number => {
+      const part = parts.find(({ end }) => offset <= end)!;
+      const local = offset - part.start;
+      return part.position + (part.node.isText
+        ? getTextOffsetAtMarkdownDraftOffset(part.node, local)
+        : local);
+    };
+    const replace = () => {
+      // A link can span multiple inline nodes, for example when its label
+      // contains a code span. Parse their Markdown together before replacing
+      // anything. Existing chips split runs, so a paste cannot swallow one.
+      for (const reference of findComposerThreadReferences(text, links)) {
+        const from = positionAt(reference.start);
+        const to = positionAt(reference.end);
+        if (from < range.from || to > range.to) continue;
+        const token = createComposerThreadToken(reference.link, 0, reference.fallbackLabel, reference.ref);
+        const marks = doc.resolve(from).marksAcross(doc.resolve(to))?.filter((mark) => !mark.type.spec.code);
+        transaction.replaceWith(transaction.mapping.map(from), transaction.mapping.map(to),
+          doc.type.schema.nodes.mention.create(getSkillMentionAttrs(token), null, marks));
+      }
+      text = "";
+      parts = [];
+    };
+    block.forEach((node, offset) => {
+      const markdown = node.isText
+        ? getMarkdownTextSerialization(node).serialized
+        : node.type.name === "hardBreak" ? "\n" : undefined;
+      if (markdown === undefined) {
+        replace();
+        return;
+      }
+      const start = text.length;
+      text += markdown;
+      parts.push({ node, start, end: text.length, position: position + 1 + offset });
+    });
+    replace();
+    return false;
+  });
+}
+
+function ComposerThreadChipTitle(props: { editor: TiptapEditor; path: string; link: ResolvedThreadLink; destination: ThreadLinkRef }) {
+  const { editor, path } = props;
+  const link = useComposerThreadReference(props.link, props.destination);
+  useLayoutEffect(() => {
+    const update = () => {
+      for (const chip of editor.view.dom.querySelectorAll<HTMLElement>("[data-thread-chip]")) {
+        if (chip.dataset.skillPath !== path) continue;
+        const name = composerThreadLabel(link, chip.dataset.label);
+        if (chip.dataset.skillName !== name) chip.dataset.skillName = name;
+        if (chip.dataset.resolvedInstanceId !== link.instanceId) {
+          if (link.instanceId) chip.dataset.resolvedInstanceId = link.instanceId;
+          else delete chip.dataset.resolvedInstanceId;
+        }
+        const tooltip = `${name}\n${path}`;
+        if (chip.dataset.tooltip !== tooltip) chip.dataset.tooltip = tooltip;
+        const label = chip.querySelector(".thread-chip__label");
+        const text = `#${name.replace(/^#/, "")}`;
+        if (label && label.textContent !== text) label.textContent = text;
+      }
+    };
+    // Titles are view metadata. Keep them out of the draft and undo history.
+    update();
+    const onTransaction: Parameters<typeof editor.on<"transaction">>[1] = ({ transaction }) => {
+      if (transaction.docChanged) update();
+    };
+    editor.on("transaction", onTransaction);
+    return () => { editor.off("transaction", onTransaction); };
+  }, [editor, path, link]);
+  return null;
+}
+
 export const ComposerTiptapInput = forwardRef<
   ComposerInputHandle,
   ComposerTiptapInputProps
 >(function ComposerTiptapInput(props, ref) {
   const propsRef = useRef(props);
+  const threadLinks = useThreadLinks();
+  const threadLinksRef = useRef(threadLinks);
+  threadLinksRef.current = threadLinks;
+  const threadPaths = JSON.stringify([...new Set(props.skillTokens
+    .flatMap((token) => token.kind === "thread" && token.path ? [token.path] : []))]);
+  const resolvedThreadChips = useMemo(() => {
+    const paths = JSON.parse(threadPaths) as string[];
+    return paths.flatMap((path) => {
+      const destination = resolveComposerThreadHref(path, threadLinks);
+      return destination ? [{ path, ...destination }] : [];
+    });
+  }, [threadLinks, threadPaths]);
   const editorRef = useRef<TiptapEditor | null>(null);
   const [threadContextMenu, setThreadContextMenu] =
     useState<ComposerThreadContextMenuState>();
   const selectionIndexRef = useRef(props.value.length);
+  const referenceSelectionKeyRef = useRef("");
   const pendingExternalSignatureRef = useRef<string | undefined>(undefined);
   const pendingSelectionIndexRef = useRef<number | undefined>(undefined);
   const appliedSelectionRequestIdRef = useRef<string | undefined>(undefined);
@@ -2884,6 +3070,22 @@ export const ComposerTiptapInput = forwardRef<
       ...(props.markdownConversion ? [FlexibleCodeBlockInputRules] : []),
       IgnoreUnderlineShortcut,
       SkillMention,
+      Extension.create({
+        name: "composerThreadReferencePaste",
+        addProseMirrorPlugins() {
+          return [new Plugin({
+            appendTransaction(transactions, _oldState, state) {
+              const links = threadLinksRef.current;
+              if (!links || !transactions.some((transaction) => transaction.getMeta("paste"))) return null;
+              const range = pastedThreadReferenceRange(transactions);
+              if (!range) return null;
+              const transaction = state.tr;
+              replacePastedThreadReferences(transaction, range, links);
+              return transaction.docChanged ? transaction : null;
+            },
+          })];
+        },
+      }),
       Extension.create({
         name: "composerCommandChip",
         addProseMirrorPlugins() {
@@ -3281,11 +3483,30 @@ export const ComposerTiptapInput = forwardRef<
             event.preventDefault();
             return true;
           }
+          const currentEditor = editorRef.current;
+          const links = threadLinksRef.current;
+          if (currentEditor && links && !selectionIsInsideNode(currentEditor, "codeBlock")
+            && !currentEditor.isActive("code")) {
+            const text = event.clipboardData?.getData?.("text/plain").trim() ?? "";
+            const reference = findComposerThreadReferences(text, links)[0];
+            const standalone = !/\s/.test(text) ? resolveComposerThreadHref(text, links) : undefined;
+            const destination = standalone ?? (reference?.start === 0 && reference.end === text.length
+              ? reference
+              : undefined);
+            const thread = destination?.link ?? resolveThreadIdText(text, links);
+            if (thread && insertMentionTokenAtSelection({
+              editor: currentEditor,
+              readMode: propsRef.current.markdownConversion ? "markdown" : "text",
+              token: createComposerThreadToken(thread, 0, reference?.fallbackLabel, destination?.ref),
+            })) {
+              event.preventDefault();
+              return true;
+            }
+          }
           propsRef.current.onPaste?.(event as unknown as ClipboardEvent<HTMLDivElement>);
           if (event.defaultPrevented) {
             return true;
           }
-          const currentEditor = editorRef.current;
           if (!currentEditor || !propsRef.current.markdownConversion) {
             return false;
           }
@@ -3364,6 +3585,20 @@ export const ComposerTiptapInput = forwardRef<
         nextEditor.state.selection.from,
         readMode,
       );
+    },
+    onTransaction: ({ editor: nextEditor, transaction }) => {
+      const notify = propsRef.current.onReferenceSelectionChange;
+      if (!notify || (!transaction.docChanged && !transaction.selectionSet)) return;
+      const references = readReferenceTriggers(nextEditor);
+      const key = references["#"] || references["@"] ? JSON.stringify(references) : "";
+      if (key === referenceSelectionKeyRef.current) return;
+      referenceSelectionKeyRef.current = key;
+      // Normal document edits already rerender the host via onChange.
+      // Replacing a selection with identical text can set docChanged even
+      // though Tiptap sees equal documents and skips its update event.
+      if (!transaction.docChanged
+        || transaction.getMeta("preventUpdate")
+        || transaction.before.eq(nextEditor.state.doc)) notify();
     },
   });
   const pullRequestTooltip = useComposerPullRequestHover(editor?.view.dom);
@@ -3802,11 +4037,17 @@ export const ComposerTiptapInput = forwardRef<
         editor?.commands.focus();
       }
     },
+    getReferenceTriggers: () => editor ? readReferenceTriggers(editor) : {},
     insertMentionToken: (token) => {
       if (!editor || propsRef.current.readOnly) {
         return false;
       }
       return insertMentionTokenAtSelection({ editor, readMode, token });
+    },
+    replaceReference: (sigil, tokens) => {
+      if (editor?.isEditable && !propsRef.current.readOnly) {
+        replaceEditorReference(editor, sigil, tokens);
+      }
     },
     get selectionEnd() {
       return editor
@@ -3868,13 +4109,16 @@ export const ComposerTiptapInput = forwardRef<
           return;
         }
 
+        if (!link.instanceId && target.dataset.resolvedInstanceId) {
+          link.instanceId = target.dataset.resolvedInstanceId;
+        }
         event.preventDefault();
         event.stopPropagation();
         window.getSelection()?.removeAllRanges();
         const rect = target.getBoundingClientRect();
         setThreadContextMenu({
           label: target.dataset.skillName || target.textContent || link.threadId,
-          link: propsRef.current.resolveThreadLink?.(link) ?? link,
+          link: { ...propsRef.current.resolveThreadLink?.(link), ...link },
           position: {
             x: event.clientX,
             y: event.clientY,
@@ -3957,6 +4201,9 @@ export const ComposerTiptapInput = forwardRef<
         }
       }}
     >
+      {editor && resolvedThreadChips.map(({ link, path, ref }) => (
+        <ComposerThreadChipTitle key={path} editor={editor} path={path} link={link} destination={ref} />
+      ))}
       <EditorContent editor={editor} />
       {pullRequestTooltip}
       {threadContextMenu ? (

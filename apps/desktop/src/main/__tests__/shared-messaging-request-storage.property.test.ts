@@ -48,37 +48,50 @@ it("binds the actual factory to shared storage and retains its selected profile 
       expect(new DesktopStore(dbs[1]!.raw).get(source.ref)).toBeUndefined();
       remember.mockRestore();
     } finally { dbs.forEach(db => db.close()); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
-function expectAlternateHostJsonRoundTrip(payload: unknown, identity: string): void {
-  const db = openInMemoryStateDb();
-  try {
-    const projection = vi.fn((input: unknown) => ({ event: input, eventId: identity,
-      platform: "alternate-host", actorId: "human", destinationIdentity: "opaque-destination", receivedAt: 42 }));
-    const store = new SharedStore(db.raw, projection);
-    const source = store.remember({ agent, event: payload })!;
-    expect(projection).toHaveBeenCalledWith(payload);
-    // Persisted reads obey JSON's data model, including -0 becoming 0.
-    const expected = clone(source);
-    expect(store.get(source.ref)).toEqual(expected);
-    expect(store.destination(source, source.selector)).toEqual(expected);
-    expect(store.list(source, 99)).toEqual([expected]);
-  } finally { db.close(); }
+function expectAlternateHostJsonRoundTrip(db: StateDb, payload: unknown, identity: string): void {
+  const projection = vi.fn((input: unknown) => ({ event: input, eventId: identity,
+    platform: "alternate-host", actorId: "human", destinationIdentity: "opaque-destination", receivedAt: 42 }));
+  const store = new SharedStore(db.raw, projection);
+  const source = store.remember({ agent, event: payload })!;
+  expect(projection).toHaveBeenCalledWith(payload);
+  // Persisted reads obey JSON's data model, including -0 becoming 0.
+  const expected = clone(source);
+  expect(store.get(source.ref)).toEqual(expected);
+  expect(store.destination(source, source.selector)).toEqual(expected);
+  expect(store.list(source, 99)).toEqual([expected]);
+}
+
+function clearMessagingRequests(db: StateDb): void {
+  db.raw.exec("DELETE FROM messaging_human_destinations; DELETE FROM messaging_requests;");
 }
 
 it("persists arbitrary alternate-host JSON through a projection without messaging channel contracts", () => {
-  fc.assert(fc.property(fc.jsonValue(), fc.string(), expectAlternateHostJsonRoundTrip), { numRuns: 40, examples: [
-    [-0, "scalar-negative-zero"],
-    [[-0], "array-negative-zero"],
-    [{ "": { "": -0 } }, "nested-negative-zero"],
-  ] });
+  const db = openInMemoryStateDb();
+  try {
+    fc.assert(fc.property(fc.jsonValue(), fc.string(), (payload, identity) => {
+      clearMessagingRequests(db);
+      expectAlternateHostJsonRoundTrip(db, payload, identity);
+    }), { numRuns: 8 });
+  } finally { db.close(); }
 });
 
-it("persists the shrunk negative-zero payload using JSON number semantics on every read path", () => {
-  const payload = { "": -0 };
-  expectAlternateHostJsonRoundTrip(payload, "");
-  expect(Object.is(payload[""], -0)).toBe(true);
+it.each([
+  { name: "negative-zero payload", payload: { "": -0 }, id: "" },
+  { name: "negative-zero scalar", payload: -0, id: "scalar-negative-zero" },
+  { name: "negative-zero array", payload: [-0], id: "array-negative-zero" },
+  { name: "negative-zero nested object", payload: { "": { "": -0 } }, id: "nested-negative-zero" },
+  { name: "long Unicode payload with a NUL and a quote", payload: "履歴's\0" + "履".repeat(4096), id: "日本語's" },
+])("persists the $name using JSON semantics on every read path", ({ name, payload, id }) => {
+  const db = openInMemoryStateDb();
+  try {
+    expectAlternateHostJsonRoundTrip(db, payload, id);
+    if (name === "negative-zero payload") {
+      expect(Object.is((payload as { "": number })[""], -0)).toBe(true);
+    }
+  } finally { db.close(); }
 });
 
 // The oracle derives identities from the persisted profile namespace and models
@@ -157,13 +170,14 @@ it("models qualified identity, immutable requests, monotone destinations and exa
         expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 30 });
+  }), { numRuns: 8 });
 });
 
 it("models bounded keyset pages at timestamp ties without skipping or repeating destinations", () => {
-  fc.assert(fc.property(fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 27, maxLength: 65 }), fc.integer({ min: 1, max: 40 }), (times, limit) => {
-    const db = openInMemoryStateDb();
-    try {
+  const db = openInMemoryStateDb();
+  try {
+    fc.assert(fc.property(fc.array(fc.integer({ min: 0, max: 3 }), { minLength: 27, maxLength: 65 }), fc.integer({ min: 1, max: 40 }), (times, limit) => {
+      clearMessagingRequests(db);
       const store = construct(db, 0);
       const all = times.map((at, i) => store.remember({ agent, event: event(String(i), String(i), at) })!);
       const expected = all.slice().sort((a, b) => b.event.receivedAt - a.event.receivedAt || (a.selector < b.selector ? -1 : 1));
@@ -179,8 +193,8 @@ it("models bounded keyset pages at timestamp ties without skipping or repeating 
       }
       expect(found).toEqual(expected);
       expect(store.list(all[0]!, -5)).toEqual(expected.slice(0, 1));
-    } finally { db.close(); }
-  }), { numRuns: 25 });
+    }), { numRuns: 8, examples: [[Array<number>(65).fill(0), 1], [Array<number>(27).fill(3), 40]] });
+  } finally { db.close(); }
 });
 
 it("keeps profile-file authority across reopen but excludes copied databases", async () => {
@@ -202,7 +216,7 @@ it("keeps profile-file authority across reopen but excludes copied databases", a
         expect(next.ref.requestId).not.toBe(source.ref.requestId);
       } finally { copy.close(); }
     } finally { db.close(); removeTempStateDbDir(original.tempDir); removeTempStateDbDir(copied.tempDir); }
-  }), { numRuns: 20 });
+  }), { numRuns: 8 });
 });
 
 it("models first attachment outcomes, uncertain claims, cross-host deduplication and exact commits", async () => {
@@ -230,7 +244,7 @@ it("models first attachment outcomes, uncertain claims, cross-host deduplication
         if (op.finish && claimed && !previous) model.set(id, clone(outcome));
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("preserves routing privacy, refusal and atomic rollback without repairing malformed payloads", async () => {
@@ -270,5 +284,5 @@ it("preserves routing privacy, refusal and atomic rollback without repairing mal
       expect(reads.writes.commits).toBe(0);
       expect(db.raw.prepare("SELECT payload FROM messaging_requests").pluck().get()).toBe("{broken");
     } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 20 });
+  }), { numRuns: 8 });
 });

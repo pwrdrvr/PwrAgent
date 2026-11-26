@@ -1,4 +1,13 @@
 import { ANIMATED_GIF_BASE64, ANIMATED_WEBP_BASE64 } from "../../../test/fixtures/animated-images";
+import {
+  chooseEffort,
+  chooseModelSettingsOption,
+  chooseSpeed,
+  modelSettingsOptionNames,
+  modelSettingsPill,
+  openModelSettings,
+  speedChoices,
+} from "../../../test/model-settings";
 import * as composerMentionSources from "../useComposerMentionSources";
 import { buildThreadComposerScopeKey } from "../useComposerDraftStore";
 import { handoffLaunchpadComposer } from "../launchpad-composer-handoff";
@@ -13,6 +22,7 @@ import { Profiler, StrictMode, useMemo, useState, type ComponentProps } from "re
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   type NavigationDirectorySummary,
+  type NavigationQueryRequest,
   type NavigationThreadSummary,
   type NavigationLaunchpadDraft,
   type PrSummary,
@@ -72,6 +82,7 @@ import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
 import { useThreadSkills } from "../../../lib/useThreadSkills";
+import { useThreadSessionState } from "../../../lib/useThreadSessionState";
 import { ContextMoonPreferencesProvider } from "../../../lib/context-moon-preferences";
 import type { DictationEvent } from "../../../../../shared/audio-transcription";
 import { startDictationCapture } from "../dictation-capture";
@@ -204,13 +215,29 @@ afterEach(async () => {
   cleanup();
 });
 
+// Provider, Model, Reasoning and Speed live in the model pill's panel.
+const MODEL_SETTINGS_PARTS = new Set(["Provider", "Model", "Reasoning", "Speed"]);
+
 function openDropdown(label: string): HTMLElement {
+  if (MODEL_SETTINGS_PARTS.has(label)) return openModelSettings();
   const dropdown = screen.getByRole("button", { name: new RegExp(`^${label}(?::|$)`) });
   fireEvent.click(dropdown);
   return dropdown;
 }
 
 function chooseDropdownOption(label: string, optionName: string): void {
+  if (label === "Provider" || label === "Model") {
+    chooseModelSettingsOption(label, optionName);
+    return;
+  }
+  if (label === "Reasoning") {
+    chooseEffort(optionName);
+    return;
+  }
+  if (label === "Speed") {
+    chooseSpeed(optionName as "Standard" | "Fast" | "Ultrafast");
+    return;
+  }
   openDropdown(label);
   fireEvent.click(screen.getByRole("option", { name: optionName }));
 }
@@ -701,6 +728,104 @@ describe("Composer", () => {
     fireEvent.change(input, { target: { value: "" } });
     fireEvent.change(input, { target: { value: `${prefix}paper` } });
     expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { first: "previous", oldCompletesFirst: true },
+    { first: "current", oldCompletesFirst: false },
+  ])("reloads the Antigravity picker when the $first worktree's catalog completes first", async ({ oldCompletesFirst }) => {
+    const thread: NavigationThreadSummary = {
+      id: "antigravity-worktree-picker", title: "Check the release", titleSource: "explicit",
+      source: "acp:antigravity", linkedDirectories: [], inbox: { inInbox: false },
+    };
+    type ListResult = Awaited<ReturnType<NonNullable<DesktopApi["listSkills"]>>>;
+    const first = Promise.withResolvers<ListResult>();
+    const second = Promise.withResolvers<ListResult>();
+    const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>((request) =>
+      request?.cwd === "/first" ? first.promise : second.promise);
+    const desktopApi: DesktopApi = { listSkills };
+    function Picker({ worktreePath }: { worktreePath: string }) {
+      const selected: NavigationThreadSummary = {
+        ...thread, linkedDirectories: [{ id: "repo", path: "/repo", label: "Repo", kind: "local", worktreePath }],
+      };
+      const skills = useThreadSkills({ desktopApi, thread: selected });
+      return <Composer
+        thread={selected}
+        skills={skills.skills}
+        skillCatalogTargetKey={skills.skillCatalogTargetKey}
+        skillLoading={skills.loading}
+        onEnsureSkillsLoaded={skills.ensureLoaded}
+      />;
+    }
+    const view = render(<Picker worktreePath="/first" />);
+    try {
+      const input = screen.getByRole("textbox", { name: "Reply" });
+      fireEvent.change(input, { target: { value: "$release" } });
+      expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first"]);
+
+      view.rerender(<Picker worktreePath="/second" />);
+      expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first", "/second"]);
+
+      const settle = async (pending: typeof first, workspace: string) => {
+        await act(async () => {
+          pending.resolve({ backend: "acp:antigravity", fetchedAt: 1, data: [{
+            skills: [{ name: `release-${workspace}`, path: `/${workspace}/.agents/skills/release/SKILL.md` }],
+          }] });
+        });
+        expect(screen.queryByRole("option", { name: /release-first/ })).toBeNull();
+      };
+      if (oldCompletesFirst) await settle(first, "first");
+      await settle(second, "second");
+      expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
+      if (!oldCompletesFirst) await settle(first, "first");
+      expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it("shows the project chip and opens Antigravity slash provenance from the keyboard", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "slash-skill", title: "Garden release", titleSource: "explicit",
+      source: "acp:antigravity", inbox: { inInbox: false },
+      linkedDirectories: [{ id: "garden", path: "/garden", label: "Garden", kind: "local" }],
+    };
+    const description = "Prepare the Garden release.";
+    const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
+    const desktopApi: DesktopApi = {
+      listSkills: async ({ catalog } = {}) => ({
+        backend: thread.source,
+        fetchedAt: 1,
+        data: catalog === "commands"
+          ? [{ cwd: "/garden", commands: [{ name: "release", backend: thread.source, description }], skills: [] }]
+          : [{ cwd: "/garden", skills: [{ name: "release", description, path: "/garden/.agents/skills/release/SKILL.md" }] }],
+      }),
+    };
+    function Picker() {
+      const skills = useThreadSkills({ desktopApi, thread });
+      return <Composer desktopApi={{ openMarkdownFileViewer }} thread={thread} skills={skills.skills} providerCommands={skills.providerCommands} onEnsureSkillsLoaded={skills.ensureLoaded} />;
+    }
+    render(<Picker />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "/rele" } });
+    const option = await screen.findByRole("option", { name: /\/release.*Garden.*Prepare/ });
+    expect(within(option).getByText("Garden")).toBeInTheDocument();
+    input.focus();
+    fireEvent.keyDown(input, { key: "F10", shiftKey: true });
+    const copy = await screen.findByRole("button", { name: "Copy path" });
+    expect(copy).toHaveFocus();
+    expect(screen.getByRole("group", { name: /Where.*release comes from/ })).toHaveTextContent("/garden/.agents/skills/release/SKILL.md");
+    await userEvent.tab();
+    const open = screen.getByRole("button", { name: "Open SKILL.md" });
+    expect(open).toHaveFocus();
+    fireEvent.scroll(option.parentElement!);
+    fireEvent.resize(window);
+    expect(open).toBeInTheDocument();
+    expect(open).toHaveFocus();
+    fireEvent.keyDown(open, { key: "Escape" });
+    expect(input).toHaveFocus();
+    fireEvent.click(option);
+    expect(input).toHaveValue("/release ");
   });
 
   it("offers explicit Refresh for a missing skill while reopening reuses the fresh catalog", async () => {
@@ -1858,7 +1983,7 @@ describe("Composer", () => {
         model: "gpt-6-astra", fastMode: true, linkedDirectories: [], inbox: { inInbox: false },
         federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "speed-fixture", target } },
       }} />);
-    expect(Boolean(screen.queryByLabelText(/^Speed(?::|$)/))).toBe(allowed);
+    expect(speedChoices().includes("Ultrafast")).toBe(allowed);
     if (allowed) {
       chooseDropdownOption("Speed", "Ultrafast");
       await waitFor(() => expect(onSetThreadModelSettings).toHaveBeenCalledWith({
@@ -1871,22 +1996,22 @@ describe("Composer", () => {
     [{ fastMode: false }, "Standard", false],
     [{ fastMode: true }, "Fast", true],
     [{ serviceTier: "ultrafast", fastMode: false }, "Ultrafast", true],
-  ] as const)("draws Speed %j like the Fast toggle it replaces", (settings, label, active) => {
+  ] as const)("lights the model pill's bolt for Speed %j", (settings, label, active) => {
     render(<Composer skills={[]} codexFastAllowed
       backends={[backendSummary("codex", { models: [{
         id: "gpt-6-astra", supportsFast: true, serviceTiers: ["priority", "ultrafast"],
       }] })]}
       thread={{ id: "speed-look", title: "Speed", titleSource: "explicit", source: "codex",
         model: "gpt-6-astra", ...settings, linkedDirectories: [], inbox: { inInbox: false } }} />);
-    const trigger = screen.getByRole("button", { name: /^Speed(?::|$)/ });
-    const dropdown = trigger.closest(".composer-dropdown");
-    expect(trigger).toHaveAttribute("aria-description", `Speed: ${label}`);
-    // Standard keeps the toggle's icon-only circle; a paid tier is named and lit.
-    expect(dropdown).toHaveClass(active ? "composer-dropdown--active" : "composer-dropdown--icon-only");
-    expect(dropdown).not.toHaveClass(active ? "composer-dropdown--icon-only" : "composer-dropdown--active");
-    expect(trigger.textContent).toBe(active ? label : "");
-    openDropdown("Speed");
-    expect(screen.getByRole("option", { name: "Ultrafast" })).toHaveAccessibleDescription(
+    const pill = modelSettingsPill();
+    // Standard draws no bolt; Fast one and Ultrafast two, and the name says it.
+    expect(pill.querySelectorAll(".model-settings__pill-bolt svg")).toHaveLength(
+      label === "Ultrafast" ? 2 : active ? 1 : 0,
+    );
+    expect(pill.getAttribute("aria-label")?.endsWith(`, ${label}`)).toBe(active);
+    const panel = openModelSettings();
+    expect(within(panel).getByRole("radio", { name: label })).toHaveAttribute("aria-checked", "true");
+    expect(within(panel).getByRole("radio", { name: "Ultrafast" })).toHaveAccessibleDescription(
       "The fastest tier this model offers",
     );
   });
@@ -1896,7 +2021,7 @@ describe("Composer", () => {
     render(<Composer skills={[]} codexFastAllowed={!allowed}
       backends={[{ ...backendSummary("codex", { models: [{ id: "fixture", supportsFast: true }] }), codexFastAllowed: allowed }]}
       thread={{ id: "collision", title: "Remote", titleSource: "explicit", source: "codex", linkedDirectories: [], inbox: { inInbox: false }, federation: { instanceLabel: "Owner", ref: { backend: "codex", threadId: "collision", target } } }} />);
-    expect(Boolean(screen.queryByLabelText("Fast mode"))).toBe(allowed);
+    expect(speedChoices().includes("Fast")).toBe(allowed);
   });
 
   it.each(["row", "window"] as const)("routes Agent and Token Miser controls to the %s owner and uses owner defaults", async (surface) => {
@@ -2505,6 +2630,33 @@ describe("Composer", () => {
         "fingerprint-1",
       );
     });
+  });
+
+  it("offers no Send now or Cancel for a PR repair that is only being tried", () => {
+    // A row refreshed mid-attempt: Scheduled in the sidebar, but the claim
+    // is no longer pending, so neither action could act on it.
+    render(
+      <Composer
+        backgroundPrPollingEnabled
+        disabled={false}
+        onCancelThreadPrAutoDispatch={vi.fn(async () => undefined)}
+        onSendThreadPrAutoDispatchNow={vi.fn(async () => undefined)}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Fix CI",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          prAutoDispatchEnabled: true,
+          prAutoDispatchActive: true,
+        }}
+      />,
+    );
+
+    expect(screen.queryByLabelText("Scheduled PR auto-fix")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Send now" })).not.toBeInTheDocument();
   });
 
   it("renders a newly received PR repair countdown from the current clock", () => {
@@ -6661,8 +6813,8 @@ describe("Composer", () => {
     render(<Composer backends={[backendSummary("claude", { models: [{ id: "opus", label: "Opus 5.5", current: true }] })]}
       thread={{ id: "invalid-model", source: "claude", title: "Fixture", titleSource: "explicit", model: "gpt-6.1-terra",
         linkedDirectories: [], inbox: { inInbox: false } }} skills={[]} />);
-    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-6.1-terra");
-    expect(screen.getByRole("button", { name: "Model: gpt-6.1-terra" })).toBeVisible();
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-6.1-terra");
+    expect(modelSettingsPill()).toHaveAccessibleName("Model settings: gpt-6.1-terra");
     openDropdown("Model");
     expect(screen.getByRole("option", { name: "Opus 5.5" })).toHaveAttribute("aria-selected", "false");
   });
@@ -6702,8 +6854,8 @@ describe("Composer", () => {
           render(<Draft />);
           chooseDropdownOption("Provider", "OpenAI");
           const expected = rememberedOpenAI ? "gpt-5.6-terra" : profileModel;
-          await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue(expected));
-          expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue(rememberedOpenAI ? "xhigh" : "high");
+          await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-model", expected));
+          expect(modelSettingsPill()).toHaveAttribute("data-effort", rememberedOpenAI ? "xhigh" : "high");
         } finally {
           cleanup();
         }
@@ -6736,12 +6888,89 @@ describe("Composer", () => {
     render(<RemoteDraft />);
     chooseDropdownOption("Provider", "OpenAI");
     const model = remembered ? "owner-saved" : "owner-default";
-    await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue(model));
+    await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-model", model));
     expect(onUpdateLaunchpad).toHaveBeenCalledWith(expect.objectContaining({ backend: "codex", model }));
-    if (!remembered) expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
+    if (!remembered) expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
     chooseDropdownOption("Model", "Owner plain");
-    await waitFor(() => expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("owner-plain"));
+    await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-model", "owner-plain"));
     expect(onUpdateLaunchpad).toHaveBeenLastCalledWith(expect.objectContaining({ model: "owner-plain", reasoningEffort: undefined, serviceTier: undefined }));
+  });
+
+  it("keeps an effort control for a thread whose provider lists efforts but no models", () => {
+    const onSetThreadModelSettings = vi.fn(async () => undefined);
+    render(
+      <Composer
+        backends={[backendSummary("acp:grok", { reasoningEfforts: ["low", "high"] })]}
+        onSetThreadModelSettings={onSetThreadModelSettings}
+        skills={[]}
+        thread={{
+          id: "thread-1", title: "Effort only", titleSource: "explicit", source: "acp:grok",
+          executionMode: "default", reasoningEffort: "high", linkedDirectories: [], inbox: { inInbox: false },
+        }}
+      />,
+    );
+    // The removed Reasoning dropdown showed for any listed efforts; the
+    // pill carries them now, with or without a model catalog.
+    expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
+    chooseEffort("low");
+    expect(onSetThreadModelSettings).toHaveBeenCalledWith({ reasoningEffort: "low" });
+  });
+
+  it("keeps the model panel open on a provider pick and lists that provider's models", async () => {
+    function Draft() {
+      const [launchpad, setLaunchpad] = useState<NavigationLaunchpadDraft>({
+        directoryKey: "directory:/repo/atlas", directoryKind: "directory", directoryLabel: "atlas",
+        directoryPath: "/repo/atlas", backend: "acp:grok", model: "grok-4.7", reasoningEffort: "high",
+        executionMode: "default", prompt: "", workMode: "local", createdAt: 1, updatedAt: 1,
+      });
+      return <Composer backends={[
+        { ...backendSummary("acp:grok", { models: [
+          { id: "grok-4.7", label: "Grok 4.7", supportsReasoning: true, reasoningEfforts: ["xhigh", "high", "medium", "low"] },
+        ] }), label: "Grok" },
+        { ...backendSummary("claude", { models: [
+          { id: "opus", label: "Opus 5.5", current: true, supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+          { id: "sonnet", label: "Sonnet 5.5", supportsReasoning: true, reasoningEfforts: ["low", "high"] },
+        ] }), label: "Claude" },
+      ]} launchpad={launchpad}
+        onUpdateLaunchpad={async (_key, patch) => {
+          setLaunchpad((current) => applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(current, patch));
+        }} skills={[]} />;
+    }
+    render(<Draft />);
+    const panel = openModelSettings();
+    const claude = within(within(panel).getByRole("listbox", { name: "Provider" })).getByRole("option", { name: "Claude" });
+    claude.focus();
+    await act(async () => {
+      fireEvent.click(claude);
+      // The old dropdowns closed on a pick and sent focus to the prompt a
+      // tick later. Focus leaving the panel closes it, so let that tick run.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-model", "opus"));
+    // Picking a provider is one step of choosing a model, not the last one.
+    const open = screen.getByRole("dialog", { name: "Model settings" });
+    expect(open.contains(document.activeElement)).toBe(true);
+    expect(modelSettingsPill()).toHaveAttribute("aria-expanded", "true");
+    expect(modelSettingsOptionNames("Model")).toEqual(["Opus 5.5", "Sonnet 5.5"]);
+    expect(within(within(open).getByRole("listbox", { name: "Provider" })).getByRole("option", { name: "Claude" }))
+      .toHaveAttribute("aria-selected", "true");
+    // So do a model and an effort.
+    const sonnet = within(within(open).getByRole("listbox", { name: "Model" })).getByRole("option", { name: "Sonnet 5.5" });
+    sonnet.focus();
+    await act(async () => {
+      fireEvent.click(sonnet);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-model", "sonnet"));
+    expect(open.contains(document.activeElement)).toBe(true);
+    const slider = within(open).getByRole("slider", { name: "Effort" });
+    slider.focus();
+    await act(async () => {
+      fireEvent.keyDown(slider, { key: "End" });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    await waitFor(() => expect(modelSettingsPill()).toHaveAttribute("data-effort", "high"));
+    expect(document.activeElement).toBe(slider);
   });
 
   it("shows OpenAI model and reasoning defaults without a Default option", () => {
@@ -6786,8 +7015,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.5");
-    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("medium");
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-5.5");
+    expect(modelSettingsPill()).toHaveAttribute("data-effort", "medium");
     expect(screen.queryByRole("option", { name: "Default" })).not.toBeInTheDocument();
     openDropdown("Model");
     expect(screen.getByRole("option", { name: "GPT-5.5" })).toBeVisible();
@@ -6829,15 +7058,12 @@ describe("Composer", () => {
       />,
     );
 
-    const modelButton = screen.getByRole("button", { name: /^Model(?::|$)/ });
-    expect(modelButton).toHaveValue("gpt-6.1-sol");
-    fireEvent.click(modelButton);
-    expect(screen.getAllByRole("option").map((option) =>
-      option.querySelector(".composer-dropdown__option-label")?.textContent,
-    )).toEqual(["Other", "GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"]);
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-6.1-sol");
+    expect(modelSettingsOptionNames("Model"))
+      .toEqual(["GPT-6-Astra", "GPT-6.1-Sol", "GPT-6.1-Terra", "GPT-6-Luna"]);
     expect(screen.queryByRole("option", { name: "GPT-6-Sol" })).not.toBeInTheDocument();
     expect(screen.queryByRole("option", { name: "GPT-5.6-Sol" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("option", { name: "Other" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other" }));
     expect(screen.getByRole("option", { name: "GPT-6-Sol" })).toBeVisible();
     fireEvent.click(screen.getByRole("option", { name: "GPT-5.6-Sol" }));
     await waitFor(() => {
@@ -6864,13 +7090,11 @@ describe("Composer", () => {
         directoryPath: "/repo", backend: "claude", executionMode: "default", prompt: "", workMode: "local",
         branchName: "main", createdAt: 1, updatedAt: 1 }}
       onUpdateLaunchpad={onUpdateLaunchpad} skills={[]} />);
-    const modelButton = screen.getByRole("button", { name: /^Model(?::|$)/ });
-    expect(modelButton).toHaveValue("fable");
-    fireEvent.click(modelButton);
-    expect(screen.getAllByRole("option").map((option) => option.querySelector(".composer-dropdown__option-label")?.textContent))
-      .toEqual(["Other Models", "Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5"]);
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "fable");
+    expect(modelSettingsOptionNames("Model"))
+      .toEqual(["Opus 5.5", "Fable 5.1", "Sonnet 5.5", "Haiku 5.5"]);
     expect(screen.queryByRole("option", { name: "Opus 4.8" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("option", { name: "Other Models" }));
+    fireEvent.click(screen.getByRole("button", { name: "Other Models" }));
     const submenu = screen.getByRole("listbox", { name: "Model: Other Models" });
     fireEvent.click(within(submenu).getByRole("option", { name: "Opus 4.8" }));
     await waitFor(() => expect(onUpdateLaunchpad).toHaveBeenCalledWith(
@@ -7271,21 +7495,21 @@ describe("Composer", () => {
 
     render(<KimiThinkingHarness />);
 
-    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("max");
+    expect(modelSettingsPill()).toHaveAttribute("data-effort", "max");
     chooseDropdownOption("Model", "K3-256k");
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
+      expect(modelSettingsPill()).toHaveAttribute("data-effort", "low");
     });
 
     chooseDropdownOption("Reasoning", "high");
     chooseDropdownOption("Model", "K3");
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("max");
+      expect(modelSettingsPill()).toHaveAttribute("data-effort", "max");
     });
 
     chooseDropdownOption("Model", "K3-256k");
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
+      expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
     });
   });
 
@@ -7324,8 +7548,8 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5");
-    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "grok-4.5");
+    expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
   });
 
   it("restores provider settings and shares environments across repeated OpenAI and Grok flips", async () => {
@@ -7521,20 +7745,20 @@ describe("Composer", () => {
     render(<ProviderSwitchHarness />);
 
     expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
-    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.6-luna");
-    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("high");
-    expect(screen.getByLabelText("Fast mode")).toHaveAttribute("aria-pressed", "true");
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-5.6-luna");
+    expect(modelSettingsPill()).toHaveAttribute("data-effort", "high");
+    expect(modelSettingsPill()).toHaveAttribute("data-speed", "fast");
     expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
 
     chooseDropdownOption("Model", "GPT-5.6 Sol");
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.6-sol");
-      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("ultra");
+      expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-5.6-sol");
+      expect(modelSettingsPill()).toHaveAttribute("data-effort", "ultra");
     });
 
     chooseDropdownOption("Provider", "Grok");
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveValue("acp:grok");
+      expect(modelSettingsPill()).toHaveAttribute("data-provider", "acp:grok");
     });
     await waitFor(() => {
       expect(listAcpAgents).not.toHaveBeenCalled();
@@ -7550,8 +7774,8 @@ describe("Composer", () => {
     });
     expect(screen.queryByLabelText(/^Access mode(?::|$)/)).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
-    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
-    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("low");
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "grok-4.5-pro");
+    expect(modelSettingsPill()).toHaveAttribute("data-effort", "low");
     expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("priority");
     expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
@@ -7562,18 +7786,18 @@ describe("Composer", () => {
     chooseDropdownOption("Reasoning", "medium");
     chooseDropdownOption("Service tier", "standard");
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("medium");
+      expect(modelSettingsPill()).toHaveAttribute("data-effort", "medium");
       expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
     });
 
     chooseDropdownOption("Provider", "OpenAI");
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveValue("codex");
+      expect(modelSettingsPill()).toHaveAttribute("data-provider", "codex");
     });
     expect(screen.getByLabelText(/^Access mode(?::|$)/)).toHaveValue("full-access");
-    expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("gpt-5.6-sol");
-    expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("ultra");
-    expect(screen.getByLabelText("Fast mode")).toHaveAttribute("aria-pressed", "true");
+    expect(modelSettingsPill()).toHaveAttribute("data-model", "gpt-5.6-sol");
+    expect(modelSettingsPill()).toHaveAttribute("data-effort", "ultra");
+    expect(modelSettingsPill()).toHaveAttribute("data-speed", "fast");
     expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent("Codex Environment");
     expect(screen.getByLabelText(/^Workspace mode(?::|$)/)).toHaveValue("worktree");
     expect(screen.getByLabelText(/^Base branch(?::|$)/)).toHaveValue(
@@ -7582,9 +7806,9 @@ describe("Composer", () => {
 
     chooseDropdownOption("Provider", "Grok");
     await waitFor(() => {
-      expect(screen.getByLabelText(/^Provider(?::|$)/)).toHaveValue("acp:grok");
-      expect(screen.getByLabelText(/^Model(?::|$)/)).toHaveValue("grok-4.5-pro");
-      expect(screen.getByLabelText(/^Reasoning(?::|$)/)).toHaveValue("medium");
+      expect(modelSettingsPill()).toHaveAttribute("data-provider", "acp:grok");
+      expect(modelSettingsPill()).toHaveAttribute("data-model", "grok-4.5-pro");
+      expect(modelSettingsPill()).toHaveAttribute("data-effort", "medium");
       expect(screen.getByLabelText(/^Service tier(?::|$)/)).toHaveValue("standard");
       expect(screen.getByLabelText(/^Agent mode(?::|$)/)).toHaveValue("yolo");
       expect(screen.getByLabelText(/^Environment(?::|$)/)).toHaveTextContent(
@@ -13939,12 +14163,20 @@ describe("Composer", () => {
       expect(screen.getByText("Steering now")).toBeInTheDocument();
     });
 
-    it("explains an Interrupt the provider cannot do", async () => {
+    // Every steer × interrupt capability pair. Interrupt is listed exactly
+    // when the provider can cut in; listed but blocked, it carries the reason
+    // Steer gives, since an interrupt is delivered as a steer.
+    it.each([
+      { steerTurn: true, interruptSteerTurn: true },
+      { steerTurn: true, interruptSteerTurn: false },
+      { steerTurn: false, interruptSteerTurn: true },
+      { steerTurn: false, interruptSteerTurn: false },
+    ])("lists Interrupt only for a provider that can cut in (%o)", (capabilities) => {
       const steerTurn = vi.fn();
       render(
         <Composer
           activeTurnId="turn-1"
-          backends={[capableBackend("codex", { steerTurn: true })]}
+          backends={[capableBackend("codex", capabilities)]}
           desktopApi={{ startTurn: vi.fn(), steerTurn }}
           disabled={false}
           skills={[]}
@@ -13957,10 +14189,24 @@ describe("Composer", () => {
       });
       fireEvent.click(screen.getByRole("button", { name: "Send options" }));
 
-      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      const interrupt = screen.queryByRole("menuitem", { name: /^Interrupt/ });
+      if (!capabilities.interruptSteerTurn) {
+        expect(interrupt).not.toBeInTheDocument();
+        expect(screen.queryByText(/can't cut in/)).not.toBeInTheDocument();
+        // Steer and Queue are still offered in their places.
+        expect(screen.getByRole("menuitem", { name: /^Steer/ })).toBeInTheDocument();
+        expect(screen.getByRole("menuitem", { name: /^Queue/ })).toBeInTheDocument();
+        return;
+      }
+      expect(interrupt).toBeInTheDocument();
+      if (capabilities.steerTurn) {
+        expect(interrupt).not.toHaveAttribute("aria-disabled");
+        expect(interrupt).toHaveTextContent("Cut off the current response and send now");
+        return;
+      }
       expect(interrupt).toHaveAttribute("aria-disabled", "true");
-      expect(interrupt).toHaveTextContent("codex can't cut in mid-response");
-      fireEvent.click(interrupt);
+      expect(interrupt).toHaveTextContent("can't take messages mid-turn");
+      fireEvent.click(screen.getByRole("menuitem", { name: /^Interrupt/ }));
       expect(steerTurn).not.toHaveBeenCalled();
       // A refused pick keeps the menu open on its explanation.
       expect(screen.getByRole("menu")).toBeInTheDocument();
@@ -13989,6 +14235,73 @@ describe("Composer", () => {
       expect(
         screen.getByRole("menuitem", { name: /^Queue/ }),
       ).not.toHaveAttribute("aria-disabled");
+    });
+
+    it("blames the model, not the provider, when only the model cannot steer", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          backends={[{
+            ...capableBackend("codex", { steerTurn: true, interruptSteerTurn: true }),
+            launchpadOptions: {
+              models: [{
+                id: "model-1",
+                label: "Model One",
+                current: true,
+                supportsSteering: false,
+              }],
+            },
+          }]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={runningThread("codex")}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Model One can't take messages mid-turn");
+      expect(screen.queryByText(/can't cut in/)).not.toBeInTheDocument();
+    });
+
+    it("points a peer thread to its owner's window even when this instance cannot interrupt", () => {
+      render(
+        <Composer
+          activeTurnId="turn-1"
+          // The local summary lacks Interrupt; the peer that owns the
+          // thread may have it, and this window cannot tell.
+          backends={[capableBackend("claude", { steerTurn: true })]}
+          desktopApi={{ startTurn: vi.fn(), steerTurn: vi.fn() }}
+          disabled={false}
+          skills={[]}
+          thread={{
+            ...runningThread("claude"),
+            federation: {
+              ref: {
+                backend: "claude",
+                target: { scope: "remote", instanceId: "peer-1" },
+                threadId: "thread-1",
+              },
+              instanceLabel: "Studio",
+            },
+          }}
+        />
+      );
+
+      fireEvent.change(screen.getByLabelText("Reply"), {
+        target: { value: "Change course" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send options" }));
+
+      const interrupt = screen.getByRole("menuitem", { name: /^Interrupt/ });
+      expect(interrupt).toHaveAttribute("aria-disabled", "true");
+      expect(interrupt).toHaveTextContent("Open this instance's window to interrupt");
     });
 
     it("dims Interrupt on a pinned peer thread whose owner it cannot see", () => {
@@ -16141,7 +16454,7 @@ describe("Composer", () => {
       />
     );
 
-    expect(screen.getByLabelText("Fast mode")).toBeInTheDocument();
+    expect(speedChoices()).toContain("Fast");
 
     chooseDropdownOption("Model", "GPT-5.2");
 
@@ -16185,7 +16498,8 @@ describe("Composer", () => {
       />,
     );
 
-    expect(screen.queryByLabelText("Fast mode")).not.toBeInTheDocument();
+    expect(modelSettingsPill()).not.toHaveAttribute("data-speed", "fast");
+    expect(speedChoices()).toEqual([]);
   });
 
   it("routes slash review to startReview instead of startTurn", async () => {
@@ -16805,6 +17119,88 @@ describe("Composer", () => {
       });
     });
   });
+
+  it.each(["accepted", "rejected"] as const)(
+    "keeps a review reservation busy through idle until its start is %s",
+    async (outcome) => {
+      const listeners = new Set<Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]>();
+      const review = Promise.withResolvers<{
+        backend: "codex"; threadId: string; reviewThreadId: string; turnId: string;
+      }>();
+      const thread = {
+        id: "thread-1", title: "Review thread", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false },
+      } satisfies NavigationThreadSummary;
+      const startReview = vi.fn(() => review.promise);
+      const startTurn = vi.fn();
+      const desktopApi: DesktopApi = {
+        onAgentEvent: (listener) => {
+          listeners.add(listener);
+          return () => { listeners.delete(listener); };
+        },
+        readThread: async () => ({
+          backend: "codex", threadId: thread.id, threadStatus: "idle", fetchedAt: Date.now(),
+          replay: {
+            entries: [], messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+        }),
+        startReview,
+        startTurn,
+      };
+      let session!: ReturnType<typeof useThreadSessionState>;
+      function Harness() {
+        session = useThreadSessionState({ desktopApi, thread });
+        return <Composer
+          desktopApi={desktopApi}
+          thread={thread}
+          disabled={false}
+          skills={[]}
+          threadBusy={session.threadBusy}
+          activeTurnId={session.activeTurnId}
+          onActiveTurnIdChange={session.setActiveTurnId}
+          onPendingStatusChange={session.setPendingStatusText}
+          addOptimisticReviewEntry={session.addOptimisticReviewEntry}
+          beginReviewSubmission={session.beginReviewSubmission}
+          removeOptimisticMessage={session.removeOptimisticMessage}
+        />;
+      }
+      const emit = (notification: AgentEvent["notification"]) => {
+        for (const listener of listeners) listener({ backend: "codex", notification });
+      };
+      render(<Harness />);
+      await waitFor(() => expect(session.response?.threadStatus).toBe("idle"));
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review main" } });
+      await clickButton("Send");
+      expect(startReview).toHaveBeenCalledTimes(1);
+
+      // The owner still holds its start reservation over both idle signals.
+      // Only the start result can transfer that ownership to a turn or release it.
+      await act(async () => emit({ method: "thread/status/changed", params: {
+        threadId: thread.id, status: { type: "idle" },
+      } }));
+      await act(async () => { await session.reload(); });
+      expect(session.thinkingThreadKeys[`codex:${thread.id}`]).toBe(true);
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Check the tests too" } });
+      expect(screen.getByRole("button", { name: "Queue" })).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+
+      if (outcome === "accepted") {
+        await act(async () => review.resolve({
+          backend: "codex", threadId: thread.id, reviewThreadId: thread.id, turnId: "review-turn",
+        }));
+        expect(session.activeTurnId).toBe("review-turn");
+        expect(session.threadBusy).toBe(true);
+        await act(async () => emit({ method: "turn/completed", params: {
+          threadId: thread.id, turnId: "review-turn", turn: { id: "review-turn", status: "completed", output: [] },
+        } }));
+      } else {
+        await act(async () => review.reject(new Error("Review start rejected")));
+      }
+      expect(session.threadBusy).toBe(false);
+      expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    },
+  );
 
   it("preserves newer reply edits when starting a review fails after clearing", async () => {
     const startReviewDeferred = createDeferred<{
@@ -19351,6 +19747,235 @@ describe("Composer", () => {
       expect(compactThread).toHaveBeenCalledWith({
         backend: "codex",
         threadId: "thread-1",
+      });
+    });
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("routes bare ACP /compact to compactThread", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-acp",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "acp:antigravity" as const,
+      threadId: "ag-thread-1",
+      turnId: "turn-acp-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Summarize the conversation into a checkpoint.",
+            argumentHint: "[message]",
+            backend: "acp:antigravity",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "ag-thread-1",
+          title: "Antigravity thread",
+          titleSource: "explicit",
+          source: "acp:antigravity",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/compact" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(compactThread).toHaveBeenCalledWith({
+        backend: "acp:antigravity",
+        threadId: "ag-thread-1",
+      });
+    });
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("passes ACP /compact with focus text to startTurn", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-acp",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "acp:antigravity" as const,
+      threadId: "ag-thread-1",
+      turnId: "turn-acp-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Summarize the conversation into a checkpoint.",
+            argumentHint: "[message]",
+            backend: "acp:antigravity",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "ag-thread-1",
+          title: "Antigravity thread",
+          titleSource: "explicit",
+          source: "acp:antigravity",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, {
+      target: { value: "/compact Keep OAuth findings and add tests." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "acp:antigravity",
+          threadId: "ag-thread-1",
+          input: [
+            { type: "text", text: "/compact Keep OAuth findings and add tests." },
+          ],
+        }),
+      );
+    });
+    expect(compactThread).not.toHaveBeenCalled();
+  });
+
+  it("inserts /compact on Enter from slash autocomplete for Claude instead of calling compactThread", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-claude",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "claude" as const,
+      threadId: "claude-thread-1",
+      turnId: "turn-claude-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Compact conversation",
+            backend: "claude",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "claude-thread-1",
+          title: "Claude thread",
+          titleSource: "explicit",
+          source: "claude",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/compact" } });
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
+
+    expect(compactThread).not.toHaveBeenCalled();
+    expect(screen.queryByText("Selected backend does not support compaction.")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(textarea).toHaveValue("/compact ");
+    });
+  });
+
+  it("routes alias-matched ACP compact commands through compactThread", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-alias",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "acp:antigravity" as const,
+      threadId: "ag-thread-alias",
+      turnId: "turn-acp-alias",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "summarize",
+            aliases: ["compact"],
+            description: "Summarize the conversation into a checkpoint.",
+            backend: "acp:antigravity",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "ag-thread-alias",
+          title: "Antigravity alias thread",
+          titleSource: "explicit",
+          source: "acp:antigravity",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/summarize" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(compactThread).toHaveBeenCalledWith({
+        backend: "acp:antigravity",
+        threadId: "ag-thread-alias",
       });
     });
     expect(startTurn).not.toHaveBeenCalled();
@@ -24339,8 +24964,8 @@ describe("Composer", () => {
     );
 
     fireEvent.click(
-      screen.getByRole("button", {
-        name: "Reset model and reasoning to profile default",
+      within(openModelSettings()).getByRole("button", {
+        name: /^Use AI Providers default/,
       }),
     );
 
@@ -24355,6 +24980,59 @@ describe("Composer", () => {
         { stickySettingsChanged: true },
       );
     });
+  });
+
+  it("keeps the default row in the model panel while the launchpad already matches it", () => {
+    // The row once came and went with the match, so the panel, anchored at
+    // its foot above the composer, jumped as the operator moved between
+    // providers. Matching, it now states so and takes no click.
+    render(
+      <Composer
+        backends={[
+          backendSummary("codex", {
+            models: [
+              {
+                id: "gpt-5.6-sol",
+                label: "GPT-5.6-Sol",
+                current: true,
+                defaultReasoningEffort: "low",
+                reasoningEfforts: ["low", "high"],
+                supportsReasoning: true,
+              },
+            ],
+          }),
+        ]}
+        directory={{
+          key: "directory:/repo",
+          kind: "directory",
+          label: "Repo",
+          path: "/repo",
+        }}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        providerModelDefaults={{
+          codex: { model: "gpt-5.6-sol", reasoningEffortsByModel: { "gpt-5.6-sol": "high" } },
+        }}
+        onUpdateLaunchpad={vi.fn(async () => undefined)}
+        skills={[]}
+      />,
+    );
+
+    const panel = openModelSettings();
+    expect(within(panel).queryByRole("button", { name: /AI Providers default/ })).toBeNull();
+    expect(panel.querySelector(".model-settings__reset")?.textContent).toBe("✓Using AI Providers defaultGPT-5.6-Sol · high");
   });
 
   it("marks ACP privileged launchpad modes as full-access before materialization", async () => {
@@ -25691,6 +26369,105 @@ describe("Composer", () => {
       });
     });
   });
+
+  it.each(["local", "cached peer", "explicit local", "off-page peer"] as const)(
+    "hydrates an off-page pasted Antigravity link and uses its title in the queued preview (%s)",
+    async (location) => {
+      const thread: NavigationThreadSummary = {
+        id: "thread-1", title: "Recipient", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false },
+      };
+      const instanceId = "peer-laptop";
+      const localInstanceId = "local-viewer";
+      const cachedPeer = location === "cached peer";
+      const id = "519fbd00-aa00-7100-8100-019fbbbead52";
+      const target: NavigationThreadSummary = {
+        ...thread, id, source: "acp:antigravity", title: "Review the launch checklist",
+        ...(location !== "local" ? {
+          federation: {
+            ref: buildFederatedThreadRef({ backend: "acp:antigravity", instanceId, threadId: id }),
+            instanceLabel: "Laptop", peerStatus: "connected", capabilities: [],
+          },
+        } : {}),
+      };
+      const bare = `pwragent://thread/${id}?backend=acp:antigravity`;
+      const href = location === "explicit local" ? `${bare}&instanceId=${localInstanceId}` : bare;
+      const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [target] }));
+      const startTurn = vi.fn(async (_request: StartTurnRequest) => ({
+        backend: "codex" as const, threadId: thread.id, turnId: "sent", disposition: "queued" as const,
+        queueEntryId: "new-queued-entry",
+      }));
+      const desktopApi = {
+        onAgentEvent: () => () => undefined,
+        getNavigationQueryPage: vi.fn(async (request: NavigationQueryRequest) => {
+          const owner = request.federationTarget?.scope === "remote" ? request.federationTarget.instanceId : undefined;
+          const query = owner && request.query.kind === "exact"
+            ? { ...request.query, identities: request.query.identities.map((identity) => ({ ...identity, ownerInstanceId: owner })) }
+            : request.query;
+          return navigationQueryFixture({ ...request, query }, {
+            threads: location === "local" || owner ? [thread, target] : [thread],
+          });
+        }),
+        jumpSearchRemoteThreads,
+        startTurn,
+      } satisfies Pick<DesktopApi, "onAgentEvent" | "getNavigationQueryPage" | "jumpSearchRemoteThreads" | "startTurn">;
+      vi.stubGlobal("pwragent", desktopApi);
+      const draftStore = createComposerDraftStore();
+      const scope = buildThreadComposerScopeKey("codex", thread.id);
+      draftStore.setQueuedTurns(scope, [{
+        id: "queued", text: `[${id}](${href}) - check this`,
+        imageAttachments: [], fileAttachments: [],
+      }]);
+      try {
+        const view = (title: string) => (
+          <ThreadLinkProvider localInstanceId={localInstanceId} onShowThread={() => undefined}
+            threads={cachedPeer || location === "explicit local" ? [thread, { ...target, title }] : [thread]}>
+            <Composer activeTurnId="active" desktopApi={desktopApi} disabled={false}
+              draftStore={draftStore} skills={[]} thread={thread} />
+          </ThreadLinkProvider>
+        );
+        const { rerender } = render(view(target.title));
+        const input = screen.getByRole("textbox", { name: "Reply" });
+        const paste = (text: string) => fireEvent.paste(input, {
+          clipboardData: {
+            files: [], items: [], types: ["text/plain"],
+            getData: (type: string) => type === "text/plain" ? text : "",
+          },
+        });
+        paste(href);
+        expect(input.querySelector("[data-mention-kind=thread]")).toHaveAttribute("data-skill-path", href);
+        const hasTitle = location === "local" || cachedPeer;
+        let title = hasTitle ? target.title : id;
+        expect(await within(input).findByText(`#${title}`)).toBeInTheDocument();
+        expect(screen.getByLabelText("Queued message").querySelector(".composer__queued-text"))
+          .toHaveTextContent(`#${title} - check this`);
+        if (cachedPeer) {
+          title = "Renamed on the owning peer";
+          rerender(view(title));
+          expect(await within(input).findByText(`#${title}`)).toBeInTheDocument();
+          expect(screen.getByLabelText("Queued message")).toHaveTextContent(title);
+        }
+        paste(`- See [Fix \`lint\` crash](${href})
+- Keep \`${href}\` literal.`);
+        expect(input.querySelectorAll("[data-mention-kind=thread]")).toHaveLength(2);
+        expect(input.querySelector("li")).toHaveTextContent(/^See #/);
+        expect(input).toHaveTextContent(href);
+        expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+        await clickButton("Queue");
+        const expectedHref = cachedPeer ? `${href}&instanceId=${instanceId}` : href;
+        await waitFor(() => expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+          input: [{ type: "text", text: expect.stringContaining(`[${title}](${expectedHref})`) }],
+        })));
+        expect(startTurn.mock.calls[0]?.[0]?.input[0]).toMatchObject({
+          type: "text",
+          text: expect.stringContaining(`See [${hasTitle ? title : "Fix \`lint\` crash"}](${expectedHref})`),
+        });
+        expect(jumpSearchRemoteThreads).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 
   it("uses a live thread name when pasting an in-progress thread id", async () => {
     const targetThreadId = "019fbbbe-ad52-77c2-b7f7-28182d9a6f83";

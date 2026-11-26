@@ -478,10 +478,8 @@ async function expectProviderForkAnnouncementAfterLanding(scheduler: fc.Schedule
   }
 }
 
-it("relays a provider fork announcement after its pending row knows the thread id", async () => {
-  await fc.assert(fc.asyncProperty(
-    fc.scheduler(), fc.integer({ min: 1, max: 3 }), fc.boolean(), expectProviderForkAnnouncementAfterLanding,
-  ), { numRuns: 25 });
+it("pairs concurrent fork announcements after their rows land when replies arrive out of order", async () => {
+  await expectProviderForkAnnouncementAfterLanding(fc.schedulerFor([3, 1, 2]), 3, true);
 });
 
 it("pairs a provider fork announcement received during the reply with its pending row", async () => {

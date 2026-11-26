@@ -42,7 +42,6 @@ import type {
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
-  AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
   AppServerThreadActivityEntry,
@@ -99,6 +98,7 @@ import {
 } from "@pwragent/shared/codex-environment-action-runs";
 import { resolveThreadTerminalCwd } from "@pwragent/shared/thread-terminal";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import {
   agentEventMatchesThread,
   federationTargetsEqual,
@@ -106,6 +106,7 @@ import {
 } from "../../lib/federated-thread-events";
 import { ThreadTodoStack } from "../thread-todos/ThreadTodoStack";
 import type { ThreadTodoReviewSetup } from "../thread-todos/ThreadTodoCard";
+import { useQueuedReviewTodoIds } from "../thread-todos/queued-review-todos";
 import type { ThreadTodoRevealRequest } from "../thread-todos/thread-todo-reveal";
 import type {
   ThreadTodoDoHereOptions,
@@ -731,6 +732,7 @@ export type ThreadViewProps = {
    */
   terminals: IntegratedTerminalsController;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage: (
     text: string,
     imageParts?: AppServerThreadImagePart[]
@@ -850,7 +852,7 @@ export type ThreadViewProps = {
   worktreeArchiveError?: string;
   skillError?: string;
   skillLoading?: boolean;
-  providerCommands?: AppServerAvailableCommandSummary[];
+  providerCommands?: ThreadProviderCommand[];
   skills: AppServerSkillSummary[];
   transcriptEntries: AppServerThreadEntry[];
   transcriptError?: string;
@@ -861,7 +863,8 @@ export type ThreadViewProps = {
   transcriptPagination?: AppServerThreadReplayPagination;
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
-  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  skillCatalogTargetKey?: string;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void | Promise<void>;
   codexSkillProfiles?: readonly CodexSkillProfile[];
   onOpenCodexSkillProfiles?: () => void;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
@@ -1043,7 +1046,8 @@ export type ThreadViewProps = {
       >
     >
   ) => Promise<void>;
-  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean, prKey?: string) => Promise<void>;
   /** Locks (or re-notes) the selected thread when `locked`, else unlocks it. */
   onSetThreadLock?: (locked: boolean, note?: string) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
@@ -3158,6 +3162,7 @@ export function ThreadView(props: ThreadViewProps) {
       : {
           activeTurnId: props.activeTurnId,
           addOptimisticReviewEntry: props.addOptimisticReviewEntry,
+          beginReviewSubmission: props.beginReviewSubmission,
           addOptimisticUserMessage: props.addOptimisticUserMessage,
           bindOptimisticUserMessageToTurn: props.bindOptimisticUserMessageToTurn,
           onForkThread: props.onForkThread,
@@ -3334,6 +3339,7 @@ export function ThreadView(props: ThreadViewProps) {
         onDismissFullAccessRiskWarning={
           props.onDismissFullAccessRiskWarning
         }
+        skillCatalogTargetKey={props.skillCatalogTargetKey}
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
         codexSkillProfiles={props.codexSkillProfiles}
         onOpenCodexSkillProfiles={props.onOpenCodexSkillProfiles}
@@ -4911,9 +4917,10 @@ function useThreadQuestionReplies(
     const pending = [...pendingReviewTodos.current.values()].find((entry) => entry.todo.id === todo.id);
     startTodoReview(todo, pending?.options);
   });
+  const queuedReviewTodoIds = useQueuedReviewTodoIds(props.composerDraftStore);
   const todoReviewSetup = useMemo<ThreadTodoReviewSetup>(
-    () => ({ todoId: reviewSetupTodoId, onShow: showTodoReviewSetup }),
-    [reviewSetupTodoId, showTodoReviewSetup],
+    () => ({ todoId: reviewSetupTodoId, onShow: showTodoReviewSetup, queuedTodoIds: queuedReviewTodoIds }),
+    [reviewSetupTodoId, showTodoReviewSetup, queuedReviewTodoIds],
   );
   const handleReviewRequestHandled = useEventCallback((requestId: number) => {
     setTodoReviewRequest((current) => (current?.id === requestId ? undefined : current));

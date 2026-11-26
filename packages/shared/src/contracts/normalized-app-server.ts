@@ -109,6 +109,8 @@ export type AppServerSkillSummary = {
   path?: string;
   enabled?: boolean;
   scope?: string;
+  /** Available through an explicit path mention outside the provider’s native skill catalog. */
+  mentionOnly?: boolean;
   /** Owning plugin, `<plugin>@<marketplace>`, when the skill ships in one. */
   pluginId?: string;
   /**
@@ -747,6 +749,10 @@ export type ThreadGitWorkingState = {
   baseAheadCommitCount?: number;
   /** True when `baseBranch` has commits after `baseCommit`. */
   isBehindBase?: boolean;
+  /** The matching branch on the fork parent's remote, when it differs from the selected base ref. */
+  upstreamBranch?: string;
+  /** Commits on `upstreamBranch` that HEAD does not have. */
+  upstreamBehindCommitCount?: number;
 };
 
 export type AppServerThreadSummary = {
@@ -833,7 +839,7 @@ export type AppServerThreadMessageOrigin = {
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
   stackNotice?: import("./thread-system-messages").StackNotice;
-  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice";
+  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice" | "auto-compaction";
   /**
    * The operator sent this agent-routed message by acting on a to-do card,
    * so a paused project's refusal of messages from other threads skips it.
@@ -2111,6 +2117,8 @@ export type PersistThreadUsageActivityResponse = {
 
 export type AppServerListSkillsRequest = {
   backend?: AppServerBackendKind;
+  /** Antigravity can read either catalog independently. Omit for both. */
+  catalog?: "skills" | "commands";
   cwd?: string;
   cwds?: string[];
   federationTarget?: FederationTarget;
@@ -2165,8 +2173,18 @@ export type AppServerToolRequestUserInputQuestion = {
   isOther: boolean;
   isSecret: boolean;
   options: AppServerToolRequestUserInputOption[] | null;
+  /**
+   * The operator may pick any number of `options`. Codex never sets it; ACP
+   * forms, Grok's ask_user_question, and Claude's AskUserQuestion can. A
+   * surface that cannot show it still lets the operator pick one option.
+   */
+  multiSelect?: boolean;
 };
 
+/**
+ * Each entry is an option's `label`, or the operator's own text when the
+ * question `isOther`. A multi-select answer lists every chosen label.
+ */
 export type AppServerToolRequestUserInputAnswer = {
   answers: string[];
 };
@@ -2570,6 +2588,12 @@ export type AppServerNotification =
           type: string;
           text?: string;
           origin?: AppServerThreadMessageOrigin;
+          /**
+           * A `userMessage` the owner accepted into a turn that was already
+           * running. It joins that turn rather than opening it, so it never
+           * stands in for the message that started the turn.
+           */
+          steered?: boolean;
           review?: string;
           command?: string;
           commandAction?: AppServerCommandAction;
@@ -2702,6 +2726,25 @@ export type AppServerNotification =
         turnId?: string;
         usedTokens: number;
         modelContextWindow: number;
+      };
+    }
+  | {
+      /**
+       * The owner's auto-compaction state for a thread. Transient and never
+       * persisted: sent when the phase or the threshold changes, so a view
+       * opened later shows nothing until the next change.
+       */
+      method: "thread/autoCompaction/updated";
+      params: {
+        threadId: string;
+        phase: "armed" | "due" | "steering" | "starting" | "compacting" | "resume" | "verifying" | "held";
+        triggerTokens?: number;
+        effectiveContextWindow?: number;
+        reportedContextWindow?: number;
+        via?: "steer" | "start";
+        /** The fill when PwrAgent asked for the compaction. */
+        dispatchedAtTokens?: number;
+        heldReason?: "no-shrink" | "refused" | "unsupported";
       };
     }
   | {
@@ -3025,6 +3068,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         commands: AppServerAvailableCommandSummary[];
+        /** Workspace where this command list was observed, when known. */
+        cwd?: string;
       };
     }
   | {

@@ -25,6 +25,10 @@ import {
 } from "@pwragent/shared/contracts/thread-todos";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import {
+  MAX_HANDS_OFF_RULE_TEXT,
+  normalizeHandsOffRepository,
+} from "@pwragent/shared/project-forge-automation";
 import type {
   AgentToolCallContext,
   AgentToolDefinition,
@@ -353,6 +357,20 @@ function normalizeAction(
         value: { type: "merge_pull_request", pullRequest },
       };
     }
+    case "add_forge_hands_off_rule": {
+      const repository = normalizeHandsOffRepository(action.repository);
+      if (!repository) {
+        return { ok: false, message: "add_forge_hands_off_rule requires repository as owner/name, the PRs' destination repository." };
+      }
+      if (action.label !== undefined && typeof action.label !== "string") {
+        return { ok: false, message: "add_forge_hands_off_rule label must be a string." };
+      }
+      const label = optionalString(action.label);
+      if (label && label.length > MAX_HANDS_OFF_RULE_TEXT) {
+        return { ok: false, message: `add_forge_hands_off_rule label must be at most ${MAX_HANDS_OFF_RULE_TEXT} characters.` };
+      }
+      return { ok: true, value: { type: "add_forge_hands_off_rule", repository, ...(label ? { label } : {}) } };
+    }
     case "start_thread": {
       const prompt = optionalString(action.prompt);
       if (!prompt) {
@@ -405,7 +423,7 @@ function normalizeAction(
       return {
         ok: false,
         message:
-          "add_todo action.type must be start_review, merge_pull_request, start_thread or send_message.",
+          "add_todo action.type must be start_review, merge_pull_request, start_thread, send_message or add_forge_hands_off_rule.",
       };
   }
 }
@@ -665,6 +683,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Find registered backend ids and modelOptions in list_instance_projects. Models are validated against the destination provider.",
         "Use send_message to preview a request for an active thread. Archived targets are refused. Name its target and prompt. The operator sends it.",
         "Prefer this over start_thread when an existing thread owns the work.",
+        "Use add_forge_hands_off_rule to propose leaving a repository's PRs to their maintainers. A label narrows the rule to matching PRs. Those PRs get no Auto-fix, Review or Merge cards. Read the current rules in get_thread_status prAutomation.forgeAutomation first. The operator's click saves the rule to this thread's project. You never change the rules yourself.",
         TODO_WRITING_GUIDANCE,
         "Omit the action for a reminder that must not be lost.",
         "The operator clicks to run an action, and you never run it.",
@@ -776,7 +795,15 @@ function inputSchemaForOperation(
             properties: {
               type: {
                 type: "string",
-                enum: ["start_review", "merge_pull_request", "start_thread", "send_message"],
+                enum: ["start_review", "merge_pull_request", "start_thread", "send_message", "add_forge_hands_off_rule"],
+              },
+              repository: {
+                type: "string",
+                description: "add_forge_hands_off_rule only: the destination repository of the PRs to leave alone, as owner/name.",
+              },
+              label: {
+                type: "string",
+                description: "add_forge_hands_off_rule only: a label pattern, * matching any text and case ignored, such as takeover:*. Omit to cover every PR into the repository.",
               },
               pullRequest: {
                 type: "string",

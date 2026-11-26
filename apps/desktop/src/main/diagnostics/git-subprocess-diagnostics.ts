@@ -6,7 +6,8 @@ export type GitSubprocessPurpose =
   | "working-state" | "pr-remotes" | "pr-discovery" | "pr-local-head"
   | "pr-review-coverage" | "review-working-tree" | "stack-checkout" | "stack-status";
 
-type PrGitSubprocessCaller = "pr-scheduled-prefetch" | "pr-live-branch-lookup" | "pr-stored-attachment-validation";
+type PrGitSubprocessCaller = "pr-scheduled-prefetch" | "pr-live-branch-lookup" | "pr-stored-attachment-validation"
+  | "pr-owner-navigation-inventory";
 export const prGitSubprocessCaller = new AsyncLocalStorage<PrGitSubprocessCaller | undefined>();
 
 type Command =
@@ -71,7 +72,9 @@ export class GitSubprocessDiagnostics {
         this.prune(startMs);
         bucket = {
           startMs, totals: counts(), overflow: counts(), startsByPurpose: {}, rows: new Map(),
-          startsByCaller: { "pr-scheduled-prefetch": 0, "pr-live-branch-lookup": 0, "pr-stored-attachment-validation": 0 },
+          startsByCaller: {
+            "pr-scheduled-prefetch": 0, "pr-live-branch-lookup": 0, "pr-stored-attachment-validation": 0, "pr-owner-navigation-inventory": 0,
+          },
         };
         this.buckets.set(startMs, bucket);
       }

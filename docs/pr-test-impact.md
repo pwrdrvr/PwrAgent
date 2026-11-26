@@ -1,53 +1,69 @@
-# PR test impact
+# Test impact
 
-On a pull request, the `Test plan` job decides which unit tests and Linux
-Desktop E2E specs the change affects, and the test lanes run that selection
-in place of the full suite. The required checks are the same jobs as before:
+The `Test plan` job selects affected unit tests and Desktop E2E specs for
+ordinary pull requests and verified fast-forward pushes to `main`. On
+`main`, the planner may narrow any platform. Each push still gets its own
+run and a daily run at 09:23 UTC exercises the full platform matrices. The required checks are the same jobs as before:
 `Test` and `Desktop E2E`.
 
 Every test runs when:
 
-- the event is a push, including every push to `main` and `releases/**`;
+- the event is the daily scheduled run or a push to `releases/**`;
 - the pull request has the `ci:full` label;
 - the pull request changes a platform-specific path, which also starts the
   macOS and Windows Desktop E2E lanes;
-- the plan says `full` for the reasons listed below;
-- the `Test plan` job fails or does not run.
+- the plan says `full` for a suite, or the planner fails. Each job falls
+  back to the full suite its platform would normally run for that event.
 
 Documentation-only pull requests still skip the test jobs.
 
 ## Jobs
 
 - `Test plan` runs as soon as dependencies are installed, and the lanes wait
-  for it. It writes `plan.json` to the `pr-test-impact-plan` artifact, a
-  summary of the selection, and the lane list of each job.
+  for it. It writes `plan.json` to the `pr-test-impact-plan` artifact,
+  exact Playwright test lists, a summary, and one lane inventory shared by
+  the workflow matrices and the consolidated retry report.
 - `Test (lane N of 4)` runs the selected Vitest files on Linux. A lane holds
   about 150 selected files, so a typical plan runs one lane and a wide one
-  runs four. The lane uses the same reporter, completion check and retry step
-  as a full lane.
+  runs four. When the plan selects no unit test, no lane starts and the
+  required `Test` check accepts the skip. The lane uses the same reporter,
+  completion check and retry step as a full lane.
 - `Windows desktop-main` and `Windows renderer + packages` run the selected
   files of their projects, in at most four and two lanes respectively. A job
   with no selected file does not start.
-- `Linux Desktop E2E (lane 1 of 5)` runs the selected specs. When the plan
-  selects no spec, no lane starts and `Desktop E2E` reports the skip.
+- macOS unit tests use the same selection on `main` through the shared
+  Vitest workspace. A full macOS shard still emits the timing report.
+- A narrowed Desktop E2E list runs in one lane on Linux and Windows, and on
+  macOS when planning a push to `main`. Each platform's Playwright run
+  evaluates its own skips. The verifier requires every listed file to be
+  collected, including when all its tests intentionally skip. A required
+  Linux or macOS lane can skip only when the plan selected no files there.
+  Windows uses the four-lane matrix when the selected files exceed eight
+  minutes of recorded test time in total or a file has no timing. The
+  remaining seven minutes of the job budget cover setup, reporting, and
+  runner variance.
+- Windows Desktop E2E remains advisory. Full Windows E2E on PRs runs with
+  `ci:windows-e2e`, `ci:full`, `ci:windows-shutdown-diagnostics`, or a
+  platform-specific path. A test-only E2E diff whose E2E plan is unavailable
+  or full also runs full Windows E2E.
 
-A lane that the plan leaves out is not reported as a missing slice in the
-consolidated retry report.
+A lane outside the plan does not appear as a missing slice in the retry
+report.
 
 ## Diff provenance
 
-The plan verifies the GitHub file list against an immutable three-dot Git diff
-and requires the checkout to be the merge of the event's base and head. It
-then plans from that merge's first-parent diff: what the PR changes on top of
-the base tip. A branch behind its base still narrows, because a test that
-reaches none of those files runs the same code as on the base tip, where
-`main`'s own full run covers it. Of 94 failed PR runs between 2026-11-16 and
-2026-11-20, 58 tested a branch behind its base.
+For a PR, the planner verifies the GitHub file list against the event
+commit SHAs and plans from the tested merge’s first-parent diff. The second
+parent must be the event head. When GitHub advances the first parent past
+the event base, or constructs a synthetic parent for a stack, the tested
+patch must match the declared PR patch exactly. An ambiguous merge falls
+back to full testing.
 
-For a GitHub stack that first merges the declared PR base into trunk, the plan
-compares the tested child patch against that synthetic parent and requires an
-exact match to the PR patch. An ambiguous merge, or a stack whose base moved,
-selects the full suite.
+For `main`, the planner verifies that the runner checked out the event’s
+`after` SHA and that the push was a fast-forward from `before`. It uses the
+entire tree diff between those SHAs, including when one push includes
+multiple commits. Forced or unverifiable pushes run the full suites on all
+platforms.
 
 ## Vitest selection
 
@@ -65,7 +81,8 @@ or environment reaches the change. The plan adds four rules.
   edge and selects nothing. Typecheck still covers it in `Lint`.
 - **Always-run tests.** A test, or test helper, that lists directories can
   read a file that nothing imports. Every plan includes those tests (79 of
-  2,308 files on 2026-11-20).
+  2,308 files on 2026-11-20), including recursive scans starting outside
+  `apps/desktop/e2e/`.
 - **Tests that run source outside the graph.** A test that bundles source
   with esbuild or Vite, starts a worker, or runs a TypeScript loader executes
   modules that Vitest never links to it. Those tests, and the tests behind a
@@ -82,7 +99,8 @@ deleted `name.ts`, an `index` file, or a `__mocks__` entry).
 The Linux Desktop E2E lanes never run `a11y.spec.ts`; the `Linux Desktop
 a11y` job does. A narrowed plan that selects it removes it from the lane's
 specs and publishes `e2e_a11y=true`, which starts that job. When the
-accessibility spec was the only selection, no Desktop E2E lane runs. See
+accessibility spec is the only selection, the ordinary Linux lane is skipped.
+Windows and macOS keep it in their native selection on `main`. See
 [accessibility audit on PRs](../.github/workflows/README.md#accessibility-audit-on-prs).
 
 The full suite runs for:
@@ -116,8 +134,8 @@ A unit-test input narrows only when everything that imports it, through any
 chain, is itself a test input. Global setup and teardown, any helper that the
 Playwright config names, a deleted harness file, a harness file that no file
 names, and a non-module input such as an image or recorded fixture select the
-full suite. So does a selection of more than a quarter of the specs, because
-one lane runs a narrowed plan.
+full suite. Unrepresentable paths and selections wider than one lane
+(a quarter of the inventory) also widen the plan.
 
 ## Known blind spots
 

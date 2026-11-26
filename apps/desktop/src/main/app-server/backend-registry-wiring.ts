@@ -10,6 +10,8 @@ import { getMainLogger } from "../log";
 import { applicationHost as app, getOwnerHostServices } from "../owner-host";
 import { buildPwrAgentToolGuideDefinition } from "../agent-tools/pwragent-tool-guide";
 import { buildPwrAgentTaskMonitorToolDefinitions } from "../agent-tools/pwragent-task-monitor-agent-tools";
+import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
+import { ManagedReviewCandidateLedger } from "./managed-review-candidate-ledger";
 import { ClaudeBackend } from "../claude/claude-backend";
 import { inspectClaudeInstallation } from "../claude/claude-executable";
 import { resolveMainEntryPath } from "../runtime-resources";
@@ -796,7 +798,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           // single usage event into N pricing reads and 2N notifications;
           // `recordTokenMiserParentModelRequest` already emits once for the
           // whole batch.
-          if (reason === "replay" || reason === "flushed") {
+          // Startup reconciles and publishes a page at a time.
+          if (reason === "replay" || reason === "flushed" || reason === "startup-stop") {
             return;
           }
           try {
@@ -954,7 +957,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     });
   const gitWorkingStateService =
     options?.gitWorkingStateService ??
-    new GitWorkingStateService({ gitEnv: codexEnv });
+    new GitWorkingStateService({
+      gitEnv: codexEnv,
+      resolveRepositoryParent: options?.resolveGitHubRepositoryParent,
+    });
   const worktreeArchiveService =
     options?.worktreeArchiveService ??
     new WorktreeArchiveService({ gitEnv: codexEnv });
@@ -962,6 +968,10 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     options?.worktreeRecoveryService ??
     new WorktreeRecoveryService({ gitEnv: codexEnv });
   const worktreeContainerService = new WorktreeContainerService({ codexHome });
+  const managedReviewCandidateLedger = new ManagedReviewCandidateLedger();
+  const managedReviewLedgerRouter = buildManagedReviewLedgerToolRouter(
+    managedReviewCandidateLedger,
+  );
   const agentToolMcpServer =
     options?.agentToolMcpServer === null
       ? undefined
@@ -969,7 +979,9 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         new AgentToolMcpServer({
           resolveCallContext: (context) =>
             ports.resolveAgentToolMcpCallContext(context),
-          resolveCatalogs: (context) => context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
+          resolveCatalogs: (context) => context.managedReview
+            ? [{ id: "managed_review", router: managedReviewLedgerRouter }]
+            : context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
             ? [
                 { id: "thread_orchestration", router: new AgentToolRouter([
                   ...buildPwrAgentTaskMonitorToolDefinitions(async (request) => await ports.handleAgentTaskMonitorRequest(request), "monitor"),
@@ -1100,6 +1112,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
     acpRolloutStore: options?.acpRolloutStore,
     acpSessionStore: options?.acpSessionStore,
     agentToolMcpServer,
+    onTurnTerminalIngress: (turn) => managedReviewCandidateLedger.retireToolTurn(turn),
     readJobMonitorCreationPreference: (backend, threadId) => ports.isJobMonitorCreationEnabled({ backend, threadId }),
     captureStores: captureStores,
     managedMcpGatewayAvailable: mcpGatewayTools !== undefined,
@@ -1517,6 +1530,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         // The ledger tests for readThreadToolAccounting before calling it, as
         // the registry did; a getter keeps a missing method missing.
         get readThreadToolAccounting() { return overlayStore.readThreadToolAccounting?.bind(overlayStore); },
+        get readTokenMiserLegacyReplayCounts() { return overlayStore.readTokenMiserLegacyReplayCounts?.bind(overlayStore); },
         get persistThreadToolInvocationBoundary() { return overlayStore.persistThreadToolInvocationBoundary?.bind(overlayStore); },
         get markThreadToolInvocationsNoisy() { return overlayStore.markThreadToolInvocationsNoisy?.bind(overlayStore); },
         get setThreadSpendAlertPending() { return overlayStore.setThreadSpendAlertPending?.bind(overlayStore); },
@@ -1599,7 +1613,11 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
   }, context.emit, () => ports);
   const acpSessionRuntimeOptions = new AcpSessionRuntimeOptions(acpBackend, overlayStore, context.emit, () => ports);
   const headlessAutomation = new HeadlessAutomationTurns(context, threadMcpConnections, mcpGatewayTools, () => ports);
-  const managedReviewService = new ManagedReviewService(context, () => ports);
+  const managedReviewService = new ManagedReviewService(
+    context,
+    () => ports,
+    managedReviewCandidateLedger,
+  );
   const subAgentMonitorService = new SubAgentMonitorService(context, {
     forgeToolBridge,
     managedReviewService,

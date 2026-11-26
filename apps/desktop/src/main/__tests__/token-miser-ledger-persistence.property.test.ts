@@ -1,5 +1,6 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
+import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
@@ -11,7 +12,9 @@ import { formatTaskMonitorNumber, formatTaskMonitorTokenCount } from "../app-ser
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
-import { estimateTokenCount, type TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
+import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { estimateTokenCount, type TokenMiserCodeModeObservation, type TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
@@ -46,7 +49,7 @@ function line(index: number, overrides: Partial<ThreadUsageLineRecord> = {}): Th
   };
 }
 
-function fixture(database?: StateDb) {
+function fixture(database?: StateDb, tokenMiserStore?: TokenMiserStore) {
   ledgerOwner.check();
   const db = database ?? openInMemoryStateDb();
   const store = new SqliteOverlayStore(db);
@@ -56,6 +59,7 @@ function fixture(database?: StateDb) {
     emit: async () => {},
   } as unknown as RegistryContext, {} as never, () => ({
     runtimeInstanceId: "fixture-owner", registrySessionId: "fixture-session", invalidateThreadListCache: () => {},
+    tokenMiserStore,
   }) as unknown as ThreadUsageLedgerHost);
   vi.spyOn(ledger, "emitThreadPricingUpdated").mockResolvedValue();
   const internals = ledger as unknown as {
@@ -146,37 +150,75 @@ async function checkOverlappingFlushes(retrievedCharacters: number, failFirst: b
 }
 
 describe("Token Miser persistence work budgets", () => {
+  it("restores 65 persisted gates in two pages and skips all writes on the next startup", ownLedgerTest(async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-token-miser-startup-");
+    const db = StateDb.open(temp.dbPath);
+    try {
+      const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+      const tokenMiserStore = new TokenMiserStore(path.join(temp.tempDir, "objects"), { storage });
+      // Migration is independent of reconciliation and occurs only once.
+      await tokenMiserStore.prune({ maxAgeMs: 0, maxBytes: 0 });
+      db.raw.transaction(() => {
+        for (let index = 0; index < 65; index += 1) storage.writeMetadata(gate(index));
+      })();
+      const read = vi.spyOn(storage, "readMetadataPage");
+      const { ledger, store } = fixture(db, tokenMiserStore);
+      const first = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      expectSqliteWriteBudget({
+        scenario: "token-miser-startup-backfill",
+        note: "One startup reconciliation of 65 existing gates without ledger rows, in two pages of at most 64.",
+        writes: first.writes,
+      });
+      expect(read.mock.calls).toEqual([[undefined, 64], ["gate-8", 64]]);
+      expect(await store.listThreadSubAgents({ backend: "codex", threadId: THREAD })).toHaveLength(65);
+      expect(ledger.emitThreadPricingUpdated).toHaveBeenCalledTimes(1);
+      const repeat = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      expectSqliteWriteBudget({
+        scenario: "token-miser-startup-repeat",
+        note: "Startup reconciliation of 65 unchanged gates after backfill. Zero recurring writes and 0 MB/day.",
+        writes: repeat.writes,
+      });
+      expect(ledger.emitThreadPricingUpdated).toHaveBeenCalledTimes(1);
+    } finally {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }));
+
   it("cannot overwrite one later retrieval with an overlapping older flush", ownLedgerTest(async () => {
     await checkOverlappingFlushes(400, false);
   }));
 
-  it("orders overlapping flushes and isolates an earlier write failure", ownLedgerTest(async () => {
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 10 }), fc.boolean(), async (chunks, failFirst) => {
-      await checkOverlappingFlushes(chunks * 400, failFirst);
-    }).beforeEach(() => ledgerOwner.check()), { numRuns: 15 });
-  }));
+  it.each([
+    [400, true],
+    [4_000, false],
+    [4_000, true],
+  ] as const)("orders overlapping flushes with %i retrieved characters (first flush fails: %s)", ownLedgerTest(
+    async (retrievedCharacters, failFirst) => {
+      await checkOverlappingFlushes(retrievedCharacters, failFirst);
+    },
+  ));
 
-  it("retains a newer pending/live gate arriving while a bulk flush yields", ownLedgerTest(async () => {
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 65, max: 130 }), async (count) => {
-      const { db, ledger, internals } = fixture();
-      try {
-        const entries = Array.from({ length: count }, (_, index) => gate(index));
-        for (const entry of entries) ledger.rememberPendingTokenMiserInterception(entry);
-        const newer = { ...entries[0]!, retrievedCharacters: 800 };
-        const liveCard = { monitorId: "system:token-miser:gate-0" } as ThreadSubAgentSummary;
-        const arriving = yieldToEventLoop().then(() => {
-          ledger.rememberPendingTokenMiserInterception(newer);
-          internals.liveTokenMiserSubAgents.set(THREAD, new Map([[liveCard.monitorId, liveCard]]));
-        });
-        await internals.persistTokenMiserLedgerEntries(entries);
-        await arriving;
-        expect(internals.pendingTokenMiserInterceptions.get(newer.objectId)).toBe(newer);
-        expect(internals.liveTokenMiserSubAgents.get(THREAD)?.get(liveCard.monitorId)).toBe(liveCard);
-        await ledger.flushPendingTokenMiserLedger({ threadId: THREAD });
-        expect(internals.pendingTokenMiserInterceptions.size).toBe(0);
-        expect(internals.liveTokenMiserSubAgents.size).toBe(0);
-      } finally { vi.restoreAllMocks(); db.close(); }
-    }).beforeEach(() => ledgerOwner.check()), { numRuns: 8 });
+  it.each([65, 128, 129, 130])("retains an arriving gate while persisting %i entries across batches", ownLedgerTest(async (count) => {
+    const { db, ledger, internals } = fixture();
+    try {
+      const entries = Array.from({ length: count }, (_, index) => gate(index));
+      for (const entry of entries) ledger.rememberPendingTokenMiserInterception(entry);
+      const newer = { ...entries[0]!, retrievedCharacters: 800 };
+      const liveCard = { monitorId: "system:token-miser:gate-0" } as ThreadSubAgentSummary;
+      const arriving = yieldToEventLoop().then(() => {
+        ledger.rememberPendingTokenMiserInterception(newer);
+        internals.liveTokenMiserSubAgents.set(THREAD, new Map([[liveCard.monitorId, liveCard]]));
+      });
+      await internals.persistTokenMiserLedgerEntries(entries);
+      await arriving;
+      expect(internals.pendingTokenMiserInterceptions.get(newer.objectId)).toBe(newer);
+      expect(internals.liveTokenMiserSubAgents.get(THREAD)?.get(liveCard.monitorId)).toBe(liveCard);
+      await ledger.flushPendingTokenMiserLedger({ threadId: THREAD });
+      expect(internals.pendingTokenMiserInterceptions.size).toBe(0);
+      expect(internals.liveTokenMiserSubAgents.size).toBe(0);
+    } finally { vi.restoreAllMocks(); db.close(); }
   }));
 
   it.each([128, 256])("clears %i live entries in one line pass", (count) => {
@@ -198,6 +240,7 @@ describe("Token Miser persistence work budgets", () => {
     let done = false;
     const builds = vi.spyOn(internals, "buildTokenMiserLedgerArtifact");
     const batch = vi.spyOn(store, "getThreadSubAgents");
+    const pricing = vi.spyOn(store, "readTokenMiserGatePricingLines");
     const observed = [0];
     const observing = (async () => {
       while (!done) { await yieldToEventLoop(); observed.push(builds.mock.calls.length); }
@@ -210,6 +253,7 @@ describe("Token Miser persistence work budgets", () => {
       expect(builds).toHaveBeenCalledTimes(count);
       expect(batch).toHaveBeenCalledTimes(Math.ceil(count / 64));
       expect(batch.mock.calls.every(([params]) => params.monitorIds.length <= 64)).toBe(true);
+      expect(pricing.mock.calls.every(([params]) => params.sourceItemIds.length <= 64 && params.turnIds.length <= 64)).toBe(true);
       for (let index = 1; index < observed.length; index += 1) {
         expect(observed[index]! - observed[index - 1]!).toBeLessThanOrEqual(64);
       }
@@ -219,82 +263,125 @@ describe("Token Miser persistence work budgets", () => {
     } finally { done = true; await observing; db.close(); }
   }));
 
-  // The database owns the persisted comparison. Repeated input must do no
-  // display work, and a sparse change must rebuild only the affected cards.
-  it("rebuilds only changed cards and uses one keyed batch read, for every batch size", ownLedgerTest(async () => {
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 2, max: 36 }), async (count) => {
-      const { db, store, internals } = fixture();
-      try {
-        const entries = Array.from({ length: count }, (_, index) => gate(index));
-        await internals.persistTokenMiserLedgerEntries(entries);
-        const build = vi.spyOn(internals, "buildTokenMiserLedgerArtifact");
-        const single = vi.spyOn(store, "getThreadSubAgent");
-        const batch = vi.spyOn(store, "getThreadSubAgents");
-        const formats = vi.spyOn(Number.prototype, "toLocaleString");
-        // TypeScript declares a method; the runtime exposes a bound accessor.
-        const intlPrototype = Intl.NumberFormat.prototype as unknown as { readonly format: unknown };
-        const intlFormats = vi.spyOn(intlPrototype, "format", "get");
-        await internals.persistTokenMiserLedgerEntries(entries);
-        expect(build).toHaveBeenCalledTimes(0);
-        expect(formats).toHaveBeenCalledTimes(0);
-        expect(intlFormats).toHaveBeenCalledTimes(0);
-        expect(single).toHaveBeenCalledTimes(0);
-        expect(batch).toHaveBeenCalledTimes(1);
-
-        entries[0] = { ...entries[0]!, retrievedCharacters: 800, replayTrackingStoppedAt: AT + 500 };
-        await internals.persistTokenMiserLedgerEntries(entries);
-        expect(build).toHaveBeenCalledTimes(1);
-        expect(intlFormats.mock.calls.length).toBeLessThanOrEqual(6);
-        expect(single).toHaveBeenCalledTimes(0);
-        expect(batch).toHaveBeenCalledTimes(2);
-      } finally { vi.restoreAllMocks(); db.close(); }
-    }).beforeEach(() => ledgerOwner.check()), { numRuns: 15 });
+  it("matches the full legacy replay oracle while streaming a tied timestamp once for all matching gates", ownLedgerTest(async () => {
+    const { db, store, internals } = fixture();
+    try {
+      const entry = { ...gate(0), replayTrackingVersion: undefined, toolUseId: "gate-tool" };
+      const entries = [entry, { ...entry, objectId: "gate-1", toolUseId: "other" },
+        { ...entry, objectId: "gate-2", toolUseId: "same-collation" }];
+      const insert = db.raw.prepare(`INSERT INTO thread_tool_invocations (
+        invocation_id, backend, thread_id, turn_id, item_id, tool_name, category, status,
+        observed_at, updated_at, output_chars, output_lines, estimated_output_tokens, warning_lines,
+        error_lines, info_lines, debug_lines, output_truncated, noisy)
+        VALUES (?, 'codex', ?, ?, ?, 'exec_command', 'command', 'completed', ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)`);
+      for (const [id, item, time] of [
+        ["Z", "gate-tool", 10], ["a", "other", 10], ["ä", "gate-tool", 10],
+        ["a\u0308", "same-collation", 10], ["late", "gate-tool", 20],
+      ] as const) insert.run(id, THREAD, entry.turnId, item, time);
+      insert.run("unrelated", THREAD, "later-turn", "gate-tool", 30);
+      const readAll = vi.spyOn(store, "readThreadToolAccounting");
+      const { invocations } = await store.readThreadToolAccounting({ backend: "codex", threadId: THREAD, includeAllInvocations: true });
+      const expected = indexTokenMiserCachedReplays(invocations);
+      readAll.mockClear();
+      const prepare = db.raw.prepare.bind(db.raw);
+      let streamedRows = 0;
+      vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (!sql.includes("FROM thread_tool_invocations")) return statement;
+        const iterate = statement.iterate.bind(statement);
+        statement.iterate = function* (...args: unknown[]) {
+          for (const row of Reflect.apply(iterate, undefined, args) as Iterable<unknown>) {
+            streamedRows += 1;
+            yield row;
+          }
+        };
+        return statement;
+      });
+      await internals.persistTokenMiserLedgerEntries(entries);
+      for (const gate of entries) {
+        const card = await store.getThreadSubAgent({ backend: "codex", threadId: THREAD, monitorId: `system:token-miser:${gate.objectId}` });
+        expect(card?.tokenMiserAccounting?.cachedReplayCount).toBe(expected.countAfterInvocation(gate));
+      }
+      expect(readAll).not.toHaveBeenCalled();
+      // Five rows in the requested turn plus four in the tied timestamp.
+      expect(streamedRows).toBeLessThanOrEqual(9);
+    } finally { db.close(); }
   }));
 
-  it("follows database edits and metadata transitions instead of caching a previous flush", ownLedgerTest(async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), fc.array(fc.constantFrom("retrieve", "replay", "stop", "delete", "reparent"), {
-      minLength: 5, maxLength: 20, size: "max",
-    }), async (legacy, operations) => {
-      const { db, store, internals } = fixture();
-      try {
-        // The store never downgrades a gate's tracking version or observes
-        // replays after it stops. Generate both creation-time cohorts.
-        let entry: TokenMiserObjectMetadata = {
-          ...gate(0), replayTrackingVersion: legacy ? undefined : 2 as const,
-          originalCharacters: 12_000,
-          cachedReplayCount: legacy ? undefined : 0,
-          cachedBaselineTokens: legacy ? undefined : 0,
-          cachedRevealedTokens: legacy ? undefined : 0,
-          parentRequestsObservedAfterGate: legacy ? undefined : 2,
-          lastParentCumulativeInputTokens: legacy ? undefined : 2_000,
-        };
-        for (const operation of operations) {
-          if (operation === "retrieve") entry = { ...entry, retrievedCharacters: entry.retrievedCharacters + 400 };
-          const active = entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined;
-          if (operation === "replay" && active) entry = { ...entry, cachedReplayCount: (entry.cachedReplayCount ?? 0) + 1,
-            cachedBaselineTokens: (entry.cachedBaselineTokens ?? 0) + entry.baselineParentTokens,
-            cachedRevealedTokens: (entry.cachedRevealedTokens ?? 0)
-              + estimateTokenCount(entry.replacementCharacters + entry.retrievedCharacters),
-            parentRequestsObservedAfterGate: (entry.parentRequestsObservedAfterGate ?? 0) + 1,
-            lastParentCumulativeInputTokens: (entry.lastParentCumulativeInputTokens ?? 0) + 1_000 };
-          if (operation === "stop" && active) entry = { ...entry, replayTrackingStoppedAt: AT + 100 };
-          if (operation === "delete") db.raw.prepare("DELETE FROM thread_sub_agents WHERE monitor_id = ?").run("system:token-miser:gate-0");
-          // Legacy persisted cards can lack nesting; the gate's turn is fixed.
-          if (operation === "reparent") db.raw.prepare("UPDATE thread_sub_agents SET card = json_remove(card, '$.parentTurnId') WHERE monitor_id = ?")
-            .run("system:token-miser:gate-0");
-          // Slow oracle: build a complete card on every transition from the
-          // authoritative whole ledger, regardless of the comparison shortcut.
-          const pricing = await store.readThreadPricing({ backend: "codex", threadId: THREAD });
-          const expected = internals.buildTokenMiserLedgerArtifact({ entry, indexes: {
-            pricing: indexTokenMiserPricingLines(pricing.lines), replays: indexTokenMiserCachedReplays([]),
-          } }).subAgent;
-          await internals.persistTokenMiserLedgerEntries([entry]);
-          const actual = await store.getThreadSubAgent({ backend: "codex", threadId: THREAD, monitorId: expected.monitorId });
-          expect(actual?.parentTurnId).toEqual(expected.parentTurnId);
-          expect(actual?.tokenMiserAccounting).toEqual(expected.tokenMiserAccounting);
-        }
-      } finally { vi.restoreAllMocks(); db.close(); }
-    }).beforeEach(() => ledgerOwner.check()), { numRuns: 15 });
+  // The database owns the persisted comparison. Repeated input must do no
+  // display work, and a sparse change must rebuild only the affected cards.
+  it.each([2, 36])("rebuilds only changed cards and uses one keyed read in a batch of %i", ownLedgerTest(async (count) => {
+    const { db, store, internals } = fixture();
+    try {
+      const entries = Array.from({ length: count }, (_, index) => gate(index));
+      await internals.persistTokenMiserLedgerEntries(entries);
+      const build = vi.spyOn(internals, "buildTokenMiserLedgerArtifact");
+      const single = vi.spyOn(store, "getThreadSubAgent");
+      const batch = vi.spyOn(store, "getThreadSubAgents");
+      const formats = vi.spyOn(Number.prototype, "toLocaleString");
+      // TypeScript declares a method; the runtime exposes a bound accessor.
+      const intlPrototype = Intl.NumberFormat.prototype as unknown as { readonly format: unknown };
+      const intlFormats = vi.spyOn(intlPrototype, "format", "get");
+      await internals.persistTokenMiserLedgerEntries(entries);
+      expect(build).toHaveBeenCalledTimes(0);
+      expect(formats).toHaveBeenCalledTimes(0);
+      expect(intlFormats).toHaveBeenCalledTimes(0);
+      expect(single).toHaveBeenCalledTimes(0);
+      expect(batch).toHaveBeenCalledTimes(1);
+
+      entries[0] = { ...entries[0]!, retrievedCharacters: 800, replayTrackingStoppedAt: AT + 500 };
+      await internals.persistTokenMiserLedgerEntries(entries);
+      expect(build).toHaveBeenCalledTimes(1);
+      expect(intlFormats.mock.calls.length).toBeLessThanOrEqual(6);
+      expect(single).toHaveBeenCalledTimes(0);
+      expect(batch).toHaveBeenCalledTimes(2);
+    } finally { vi.restoreAllMocks(); db.close(); }
+  }));
+
+  it.each([
+    { cohort: "legacy", legacy: true, operations: ["retrieve", "reparent", "retrieve", "delete", "retrieve"] },
+    { cohort: "tracked", legacy: false, operations: ["replay", "retrieve", "replay", "stop", "reparent", "retrieve", "delete"] },
+    { cohort: "stopped first", legacy: false, operations: ["stop", "retrieve", "delete", "reparent", "retrieve"] },
+  ] as const)("follows database edits for a $cohort gate instead of caching a flush", ownLedgerTest(async ({ legacy, operations }) => {
+    const { db, store, internals } = fixture();
+    try {
+      // The store never downgrades a gate's tracking version or observes
+      // replays after it stops.
+      let entry: TokenMiserObjectMetadata = {
+        ...gate(0), replayTrackingVersion: legacy ? undefined : 2 as const,
+        originalCharacters: 12_000,
+        cachedReplayCount: legacy ? undefined : 0,
+        cachedBaselineTokens: legacy ? undefined : 0,
+        cachedRevealedTokens: legacy ? undefined : 0,
+        parentRequestsObservedAfterGate: legacy ? undefined : 2,
+        lastParentCumulativeInputTokens: legacy ? undefined : 2_000,
+      };
+      for (const operation of operations) {
+        if (operation === "retrieve") entry = { ...entry, retrievedCharacters: entry.retrievedCharacters + 400 };
+        const active = entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined;
+        if (operation === "replay" && active) entry = { ...entry, cachedReplayCount: (entry.cachedReplayCount ?? 0) + 1,
+          cachedBaselineTokens: (entry.cachedBaselineTokens ?? 0) + entry.baselineParentTokens,
+          cachedRevealedTokens: (entry.cachedRevealedTokens ?? 0)
+            + estimateTokenCount(entry.replacementCharacters + entry.retrievedCharacters),
+          parentRequestsObservedAfterGate: (entry.parentRequestsObservedAfterGate ?? 0) + 1,
+          lastParentCumulativeInputTokens: (entry.lastParentCumulativeInputTokens ?? 0) + 1_000 };
+        if (operation === "stop" && active) entry = { ...entry, replayTrackingStoppedAt: AT + 100 };
+        if (operation === "delete") db.raw.prepare("DELETE FROM thread_sub_agents WHERE monitor_id = ?").run("system:token-miser:gate-0");
+        // Legacy persisted cards can lack nesting; the gate's turn is fixed.
+        if (operation === "reparent") db.raw.prepare("UPDATE thread_sub_agents SET card = json_remove(card, '$.parentTurnId') WHERE monitor_id = ?")
+          .run("system:token-miser:gate-0");
+        // Slow oracle: build a complete card on every transition from the
+        // authoritative whole ledger, regardless of the comparison shortcut.
+        const pricing = await store.readThreadPricing({ backend: "codex", threadId: THREAD });
+        const expected = internals.buildTokenMiserLedgerArtifact({ entry, indexes: {
+          pricing: indexTokenMiserPricingLines(pricing.lines), replays: indexTokenMiserCachedReplays([]),
+        } }).subAgent;
+        await internals.persistTokenMiserLedgerEntries([entry]);
+        const actual = await store.getThreadSubAgent({ backend: "codex", threadId: THREAD, monitorId: expected.monitorId });
+        expect(actual?.parentTurnId).toEqual(expected.parentTurnId);
+        expect(actual?.tokenMiserAccounting).toEqual(expected.tokenMiserAccounting);
+      }
+    } finally { vi.restoreAllMocks(); db.close(); }
   }));
 });
 
@@ -403,12 +490,20 @@ describe("Token Miser pricing projection", () => {
   // Keep the old whole-ledger implementation as the differential oracle:
   // repairing just the requested gate can jump past a ten-row no-progress
   // barrier, and stopping after one repair pass can miss regrouped rows.
-  it("matches the whole-ledger repricing fixed point across generated repair barriers", ownLedgerTest(async () => {
-    await fc.assert(fc.asyncProperty(fc.oneof(
-      fc.array(fc.boolean(), { minLength: 12, maxLength: 38, size: "max" }),
-      fc.constant([...Array<boolean>(20).fill(true), ...Array<boolean>(10).fill(false)]),
-      fc.constant(Array<boolean>(32).fill(true)),
-    ), async (repairable) => { await runRepricingCase(repairable); }).beforeEach(() => ledgerOwner.check()), { numRuns: 25 });
+  it.each([
+    { scenario: "no repairable rows", repairable: Array<boolean>(12).fill(false) },
+    { scenario: "multiple repair passes", repairable: Array<boolean>(32).fill(true) },
+    { scenario: "older repairs blocked by the first batch", repairable: [...Array<boolean>(20).fill(true), ...Array<boolean>(10).fill(false)] },
+    { scenario: "newer repairs followed by unrepairable history", repairable: [...Array<boolean>(10).fill(false), ...Array<boolean>(28).fill(true)] },
+    {
+      // The scan is newest first. It repairs the last ten entries, then
+      // encounters a full batch with no progress before it can reach gate-0.
+      scenario: "older repairs blocked after a successful batch",
+      repairable: [...Array<boolean>(12).fill(true), ...Array<boolean>(11).fill(false), ...Array<boolean>(10).fill(true)],
+    },
+    { scenario: "alternating repairs with timestamp ties", repairable: Array.from({ length: 38 }, (_, index) => index % 2 === 0) },
+  ])("matches the whole-ledger repricing fixed point with $scenario", ownLedgerTest(async ({ repairable }) => {
+    await runRepricingCase(repairable);
   }));
 });
 

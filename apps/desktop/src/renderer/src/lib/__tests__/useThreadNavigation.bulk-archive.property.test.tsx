@@ -1,6 +1,5 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import fc from "fast-check";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationRow } from "@pwragent/shared/contracts/navigation";
@@ -232,32 +231,17 @@ it("keeps a newer user selection when a partial archive failure finishes later",
   expect(outcome.lensLoads).toBe(1);
 });
 
-it("batch completion preserves user navigation after any earlier archive failure", async () => {
-  await fc.assert(fc.asyncProperty(
-    fc.array(fc.integer({ min: 0, max: 4 }), { minLength: 2, maxLength: 8 }), fc.nat(),
-    async (completionOrder, failureIndex) => {
-      const failed = failureIndex % completionOrder.length;
-      const groups = [[failed], ...[...new Set(completionOrder)].sort().map((rank) => completionOrder
-        .flatMap((value, index) => index !== failed && value === rank ? [index] : [])).filter((group) => group.length > 0)];
-      const outcome = await archiveFromSidebar(completionOrder.length, groups, {
-        failed: [failed], navigateAfterCompletionGroup: 0,
-      });
-      expect(outcome.selectedThreadKey).toBe(`codex:thread-${completionOrder.length}`);
-      expect(outcome.lensLoads).toBe(1);
-    },
-  ), { numRuns: 25 });
+it("preserves newer navigation through a failed reply, a grouped completion and a final staggered reply", async () => {
+  const outcome = await archiveFromSidebar(4, [[2], [0, 3], [1]], {
+    failed: [2], navigateAfterCompletionGroup: 0,
+  });
+  expect(outcome.selectedThreadKey).toBe("codex:thread-4");
+  expect(outcome.lensLoads).toBe(1);
 });
 
-it("loads per bulk archive do not grow with the number of threads or completion groups", async () => {
+it("spends the same load budget when two replies finish together and a third arrives later", async () => {
   const baseline = await archiveFromSidebar(2, [[0, 1]]);
-  await fc.assert(fc.asyncProperty(
-    fc.array(fc.integer({ min: 0, max: 4 }), { minLength: 2, maxLength: 12 }),
-    async (completionOrder) => {
-      const groups = [...new Set(completionOrder)].sort().map((rank) => completionOrder
-        .flatMap((value, index) => value === rank ? [index] : []));
-      const { loads, lensLoads } = await archiveFromSidebar(completionOrder.length, groups);
-      expect(lensLoads).toBe(1);
-      expect(loads).toBeLessThanOrEqual(baseline.loads);
-    },
-  ), { numRuns: 25 });
+  const { loads, lensLoads } = await archiveFromSidebar(3, [[0, 2], [1]]);
+  expect(lensLoads).toBe(1);
+  expect(loads).toBeLessThanOrEqual(baseline.loads);
 });

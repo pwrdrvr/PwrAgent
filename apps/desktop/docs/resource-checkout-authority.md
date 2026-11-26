@@ -29,7 +29,12 @@ the OS, with a one-slot fallback. Its capacity is kept in the shared
 database so different CPU readings across restarts or profiles do not
 resize the pool or invalidate reservations. Units are reservations among
 cooperating jobs. They neither measure live load nor set process affinity. The same
-machine key and queue apply to every profile in the shared root.
+machine key and queue apply to every profile in the shared root. Each profile
+also mirrors its active local-thread grants atomically to
+`<pwragentRoot>/runtime/machine-cpu-budgets/<profile>.json` (removed when idle
+or on shutdown) so cooperating test runners, linters, and build scripts can
+automatically default their worker and thread-pool caps to the thread's granted
+budget without querying SQLite.
 
 Machine CPU checkouts are advisory. Request one to coordinate a substantial
 workload, such as a full test suite or heavy build, or when the operator

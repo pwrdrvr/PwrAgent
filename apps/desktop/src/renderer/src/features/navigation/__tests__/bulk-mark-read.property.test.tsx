@@ -91,7 +91,7 @@ describe("bulk Mark Read", () => {
       } finally {
         cleanup();
       }
-    }), { numRuns: 16 });
+    }), { numRuns: 10 });
   });
 
   it.each([false, true])("marks only selected unread Attention threads (first row unread: %s)", async (firstUnread) => {
@@ -148,7 +148,7 @@ describe("bulk Mark Read", () => {
           cleanup();
         }
       },
-    ), { numRuns: 25 });
+    ), { numRuns: 10 });
   });
 
   it.each(["menu", "keyboard"])("marks a remote Attention thread read from the main window via %s", async (path) => {

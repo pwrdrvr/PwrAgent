@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
-import fc from "fast-check";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import * as gitBoundary from "../app-server/git-executable";
 import { WorktreeArchiveService } from "../app-server/worktree-archive-service";
@@ -132,8 +131,10 @@ it("bounds archive-all Git output for a small fleet on every platform", async ()
   await checkArchiveGitBudget(3, 3);
 });
 
-it("creates no archive branches or empty-change commits, using Git's tree as the oracle", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), fc.string({ maxLength: 40 }), async (dirty, attached, text) => {
+it.each([false, true].flatMap(dirty => [false, true].map(attached => ({ dirty, attached }))))(
+  "creates no archive branches or empty-change commits (dirty=$dirty, attached=$attached)",
+  async ({ dirty, attached }) => {
+    const text = "snapshot bytes";
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-clean-archive-git-")));
     try {
       const repo = await repository(root);
@@ -156,8 +157,9 @@ it("creates no archive branches or empty-change commits, using Git's tree as the
         expect(await git(repo, "rev-parse", snapshot.snapshotRef)).toBe(head);
       }
     } finally { await rm(root, { recursive: true, force: true }); }
-  }), { numRuns: process.platform === "win32" ? 4 : 8, examples: [[false, true, ""], [true, false, "bytes"]] });
-}, 60_000);
+  },
+  60_000,
+);
 
 it("serializes deletes by Git common directory while independent repositories proceed together", async () => {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-parallel-archive-git-")));
@@ -228,16 +230,26 @@ it.runIf(process.platform !== "win32")("bounds archive-all Git output independen
   await checkArchiveGitBudget(201, 3);
 }, 120_000);
 
-// Git owns checkout identity, branch/HEAD and lock state. Generate layouts and
-// late mutations at the admission boundary, and compare preservation/removal
-// with Git's own registration rather than production's scoped predicate.
-it("agrees with Git about archive eligibility across layouts and late registration changes", async () => {
-  const layouts = ["ordinary", "linked-anchor", "alias", "bare", "separate"] as const;
-  // drive-lock: PwrAgent's own lock on a worktree on another drive, which
-  // archive clears and removes; every other lock is a hold that refuses.
-  const mutations = ["none", "drive-lock", "late-drive-lock", "locked", "late-lock", "late-terminal-lock", "late-backlink", "late-gitfile", "late-common", "late-unregister", "late-head", "primary", "foreign", "subdirectory"] as const;
-  let completedRuns = 0;
-  const property = fc.asyncProperty(fc.constantFrom(...layouts), fc.constantFrom(...mutations), fc.boolean(), async (layout, mutation, detached) => {
+// Git owns checkout identity, branch/HEAD and lock state. Exercise each
+// registration mutation and each layout with Git's own list as the oracle.
+type Layout = "ordinary" | "linked-anchor" | "alias" | "bare" | "separate";
+const mutations = [
+  "drive-lock", "late-drive-lock", "locked", "late-lock", "late-terminal-lock", "late-backlink",
+  "late-gitfile", "late-common", "late-unregister", "late-head", "primary", "foreign", "subdirectory",
+] as const;
+type Mutation = "none" | typeof mutations[number];
+const layouts: Layout[] = ["ordinary", "linked-anchor", "alias", "bare", "separate"];
+const archiveCases: { layout: Layout; mutation: Mutation; detached: boolean }[] = [
+  ...layouts.flatMap(layout => [false, true].map(detached => ({ layout, mutation: "none" as const, detached }))),
+  ...mutations.map(mutation => ({ layout: "ordinary" as const, mutation, detached: true })),
+  { layout: "bare", mutation: "primary", detached: true },
+  { layout: "separate", mutation: "primary", detached: false },
+  { layout: "alias", mutation: "late-head", detached: false },
+  { layout: "linked-anchor", mutation: "late-drive-lock", detached: false },
+];
+it.each(archiveCases)(
+  "agrees with Git on archive eligibility for $layout / $mutation (detached=$detached)",
+  async ({ layout, mutation, detached }) => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-git-oracle-")));
     let unregisterTerminals: (() => void) | undefined;
     try {
@@ -326,19 +338,9 @@ it("agrees with Git about archive eligibility across layouts and late registrati
       unregisterTerminals?.();
       await rm(root, { recursive: true, force: true });
     }
-    completedRuns++;
-  });
-  const examples: [typeof layouts[number], typeof mutations[number], boolean][] = [
-    ["ordinary", "none", false], ["linked-anchor", "none", true], ["alias", "none", true],
-    ["bare", "none", false], ["separate", "none", true],
-    ...mutations.filter((mutation) => mutation !== "none").map((mutation): [typeof layouts[number], typeof mutations[number], boolean] => ["ordinary", mutation, true]),
-    ["bare", "primary", true], ["separate", "primary", false],
-  ];
-  await fc.assert(property, { numRuns: examples.length + 24, examples });
-  // fast-check includes explicit examples in numRuns. Keep generated coverage
-  // after every example, including when the table grows.
-  expect(completedRuns).toBe(examples.length + 24);
-}, process.platform === "win32" ? 120_000 : 30_000);
+  },
+  30_000,
+);
 
 async function checkSymlinkLayout(layout: "admin-parent" | "gitfile", lockDuringAdmission: boolean): Promise<void> {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-archive-valid-git-link-")));

@@ -49,6 +49,7 @@ import type {
 import type { ThreadPrWatchesResponse } from "@pwragent/shared/contracts/thread-pr-watches";
 import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import type { PrStatusObservations } from "../app-server/thread-pull-request-summaries";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import {
@@ -2077,10 +2078,21 @@ describe("app server ipc", () => {
       preferenceChanged: expect.any(Function),
       preferencesChanged: expect.any(Function),
       cancelPending: expect.any(Function),
+      pullRequestChanged: expect.any(Function),
       lockChanged: expect.any(Function),
       sendPendingNow: expect.any(Function),
       inspect: expect.any(Function),
     });
+    // One PR's switch reaches the service, never the thread's own preference.
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const perPr = vi.spyOn(appServerService, "setThreadPullRequestAutoFix").mockResolvedValue();
+    const thread = vi.spyOn(appServerService, "handleThreadPrAutoDispatchPreference");
+    const request = { backend: "codex" as const, threadId: "t", prKey: "github.com/upstream/app#7", enabled: false };
+    await setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0].pullRequestChanged(request);
+    expect(perPr).toHaveBeenCalledWith(request);
+    expect(thread).not.toHaveBeenCalled();
+    perPr.mockRestore();
+    thread.mockRestore();
     expect(setThreadPullRequestWatchToolHandler).toHaveBeenCalledWith(
       expect.any(Function),
     );
@@ -2279,6 +2291,42 @@ describe("app server ipc", () => {
       autoDispatch.mockRestore(); cache.mockRestore(); publish.mockRestore();
       service.prStatusRegistry = previousRegistry; service.threadDependencyCoordinator = previousCoordinator;
       db.close(); removeTempStateDbDir(fixture.tempDir); vi.unstubAllEnvs();
+    }
+  });
+
+  it("orders GitLab observations individually and writes accepted rows together", async () => {
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const service = appServerService as unknown as {
+      prStatusRegistry: Map<string, { pr: PrSummary; fetchedAt: number }>;
+      applyPolledPrStatuses: (prs: PrSummary[], fallback: number, timestamps: ReadonlyMap<string, number>) => Promise<string[]>;
+      handlePrAutoDispatchSnapshots: () => Promise<void>;
+      publishPullRequestStatusUpdates: () => Promise<void>;
+      getOverlayStore: () => { writePrStatusCacheEntries: () => Promise<void> };
+    };
+    const prKey = (number: number) => `gitlab.com/fixture/project#${number}`;
+    const rows = [1, 2, 3].map((number): PrSummary => ({
+      provider: "gitlab.com", org: "fixture", repo: "project", number,
+      url: `https://gitlab.com/fixture/project/-/merge_requests/${number}`, state: "passing",
+    }));
+    const registry = service.prStatusRegistry;
+    service.prStatusRegistry = new Map(rows.map((pr) => [prKey(pr.number), {
+      pr: { ...pr, state: "pending" }, fetchedAt: 20,
+    }]));
+    const writePrStatusCacheEntries = vi.fn(async () => {});
+    const cache = vi.spyOn(service, "getOverlayStore").mockReturnValue({ writePrStatusCacheEntries });
+    const automation = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+    const publish = vi.spyOn(service, "publishPullRequestStatusUpdates").mockResolvedValue(undefined);
+    try {
+      const atByKey = new Map([[prKey(1), 15], [prKey(2), 25], [prKey(3), 30]]);
+      expect(await service.applyPolledPrStatuses(rows, 10, atByKey)).toEqual([prKey(2), prKey(3)]);
+      expect(service.prStatusRegistry.get(prKey(1))).toMatchObject({ fetchedAt: 20, pr: { state: "pending" } });
+      expect(writePrStatusCacheEntries).toHaveBeenCalledExactlyOnceWith([
+        { provider: "gitlab.com", prKey: prKey(2), fetchedAt: 25, pr: expect.objectContaining(rows[1]!) },
+        { provider: "gitlab.com", prKey: prKey(3), fetchedAt: 30, pr: expect.objectContaining(rows[2]!) },
+      ]);
+    } finally {
+      cache.mockRestore(); automation.mockRestore(); publish.mockRestore();
+      service.prStatusRegistry = registry;
     }
   });
 
@@ -2864,6 +2912,189 @@ describe("app server ipc", () => {
     expect(service.collectPrPollTargets().some(({ pr }) => pr.number === 1)).toBe(false);
   }, 45_000);
 
+  it.skipIf(process.platform === "win32").each([8, 12])(
+    "bounds owner origin reads across %i ordinary siblings and agrees with Git for a worktree override",
+    async (size) => {
+      const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
+      const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+      const git = await import("../app-server/git-executable");
+      const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
+        await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-remotes-"));
+      const restoreGit = isolateProcessGitEnvironment(root);
+      const runGit = vi.spyOn(git, "runGitCommand");
+      onTestFinished(async () => {
+        runGit.mockRestore();
+        clearGitHubRemoteCache();
+        restoreGit();
+        await rm(root, { recursive: true, force: true });
+      });
+      const clone = path.join(root, "clone");
+      const origin = "https://github.com/fixture/ordinary.git";
+      const override = "https://github.com/fixture/override.git";
+      await git.runGitCommand(root, ["init", "-b", "main", clone]);
+      await git.runGitCommand(clone, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "--allow-empty", "-m", "fixture"]);
+      await git.runGitCommand(clone, ["config", "extensions.worktreeConfig", "true"]);
+      await git.runGitCommand(clone, ["remote", "add", "origin", origin]);
+      const checkouts: string[] = [];
+      for (let index = 0; index <= size; index++) {
+        const checkout = path.join(root, `worktree-${index}`);
+        await git.runGitCommand(clone, ["worktree", "add", "--detach", checkout]);
+        checkouts.push(checkout);
+      }
+      const exceptional = checkouts[size]!;
+      await git.runGitCommand(exceptional, ["config", "--worktree", `url.${override}.insteadOf`, origin]);
+      const rows = await Promise.all(checkouts.map(async (cwd, index) => {
+        const { stdout } = await git.runGitCommand(cwd, ["remote", "get-url", "origin"]);
+        expect(stdout.trim()).toBe(cwd === exceptional ? override : origin);
+        const repo = stdout.trim() === override ? "override" : "ordinary";
+        return {
+          id: `remote-owner-${index}`, source: "codex", title: "Fixture", titleSource: "explicit",
+          linkedDirectories: [{ id: clone, kind: "worktree", label: "Fixture", path: clone, worktreePath: cwd }],
+          prs: [githubPr({ number: index + 1, org: "fixture", repo, explicitlyAttached: true,
+            state: "passing", url: `https://github.com/fixture/${repo}/pull/${index + 1}` })],
+        } satisfies AppServerThreadSummary & { prs: [PrSummary] };
+      }));
+      overlayStoreFixture.stable = getDesktopOverlayStore();
+      getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+      listThreads.mockResolvedValue(rows as never);
+      resolveGitHubRepoForDirectory.mockImplementation((cwd, options) => readOrigin(cwd!, options));
+      registerAppServerIpcHandlers();
+      runGit.mockClear();
+      await startAppServerOwnerNavigation();
+      const originReads = () => runGit.mock.calls.filter(([, , options]) => options?.purpose === "pr-remotes");
+      expect(rows.map(({ id }) => appServerService.readPrimaryGitRepository("codex", id)))
+        .toEqual(rows.map(({ prs }) => `github.com/fixture/${prs[0].repo}`));
+      expect(originReads().filter(([cwd]) => cwd === exceptional)).toHaveLength(1);
+      // The launch budget depends on the number of distinct configurations,
+      // even when the same ordinary configuration appears in more checkouts.
+      expect(originReads().length).toBeLessThanOrEqual(3);
+      const previous = syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length;
+      runGit.mockClear();
+      emitRegistryEvent({ backend: "codex", notification: { method: "navigation/providerThreads/refreshed", params: {} } });
+      await vi.waitFor(() => expect(syncThreadPrAutoDispatchCandidatesBatch.mock.calls.length).toBeGreaterThan(previous));
+      expect(originReads()).toHaveLength(0);
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform === "win32").each(["repointed", "removed", "page-first", "page-last", "late-action-repointed", "late-action-removed"] as const)(
+    "publishes the newest conclusive origin during a %s inventory race",
+    async (change) => {
+      const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
+      const { PR_METADATA_PRIORITY } = await import("../pr-status/pr-metadata-process");
+      const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+      const git = await import("../app-server/git-executable");
+      const { resolveGitHubRepoForDirectory: readOrigin, clearGitHubRemoteCache } =
+        await vi.importActual<typeof import("../pr-status/git-remote")>("../pr-status/git-remote");
+      const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-origin-race-"));
+      const restoreGit = isolateProcessGitEnvironment(root);
+      onTestFinished(async () => {
+        restoreGit();
+        clearGitHubRemoteCache();
+        await rm(root, { recursive: true, force: true });
+      });
+      const lateAction = change.startsWith("late-action-");
+      const removingOrigin = change.endsWith("removed");
+      const foregroundSamplesFirst = lateAction || change === "page-first" || change === "page-last";
+      const holdForeground = lateAction || change === "page-last";
+      const runGit = git.runGitCommand;
+      const clone = path.join(root, "clone");
+      const cwd = path.join(root, "checkout");
+      await runGit(root, ["init", "-b", "main", clone]);
+      await runGit(clone, ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "--allow-empty", "-m", "fixture"]);
+      await runGit(clone, ["remote", "add", "origin", "https://github.com/fixture/original.git"]);
+      if (lateAction && removingOrigin) {
+        // The remaining remote lets ordinary config establish that origin is absent.
+        await runGit(clone, ["remote", "add", "upstream", "https://github.com/fixture/upstream.git"]);
+      }
+      await runGit(clone, ["worktree", "add", "--detach", cwd]);
+      const prs = ["original", "repointed"].map((repo, index) => githubPr({
+        number: index + 1, org: "fixture", repo, explicitlyAttached: true, state: "passing",
+        url: `https://github.com/fixture/${repo}/pull/${index + 1}`,
+      }));
+      const ref = { backend: "codex" as const, threadId: "origin-race" };
+      const row = { id: ref.threadId, source: ref.backend, title: "Fixture", titleSource: "explicit",
+        linkedDirectories: [{ id: clone, kind: "worktree", label: "Fixture", path: clone, worktreePath: cwd }], prs };
+      overlayStoreFixture.stable = getDesktopOverlayStore();
+      getStartupProviderRefreshStatus.mockReturnValue({ state: "ready" });
+      listThreads.mockResolvedValue([row] as never);
+      getCachedThreadSummary.mockReturnValue(row as never);
+      getThreadOverlayState.mockResolvedValue({ ...ref, executionMode: "default", prs, extraLinkedDirectories: [] });
+      resolveGitHubRepoForDirectory.mockImplementation((checkout, options) => readOrigin(checkout!, options));
+      registerAppServerIpcHandlers();
+
+      const inventoryReached = Promise.withResolvers<void>();
+      const foregroundSampled = Promise.withResolvers<void>();
+      const releaseForeground = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const reads = vi.spyOn(git, "runGitCommand").mockImplementation(async (path, args, options) => {
+        const readingConfig = path === cwd && options?.purpose === "pr-remotes" && args[0] === "config";
+        const samplingInventory = readingConfig && args.includes("--show-origin");
+        if (samplingInventory && foregroundSamplesFirst) {
+          inventoryReached.resolve();
+          await release.promise;
+        }
+        const result = await runGit(path, args, options);
+        if (samplingInventory && !foregroundSamplesFirst) {
+          inventoryReached.resolve();
+          await release.promise;
+        }
+        if (readingConfig && !samplingInventory && holdForeground) {
+          foregroundSampled.resolve();
+          await releaseForeground.promise;
+        }
+        return result;
+      });
+      onTestFinished(() => { reads.mockRestore(); });
+      const owner = startAppServerOwnerNavigation();
+      const service = appServerService as unknown as {
+        readPrimaryAttachedPrs(params: typeof ref): Promise<{ primaryRepoKey?: string; prs: PrSummary[] }>;
+      };
+      let actionRead: ReturnType<typeof service.readPrimaryAttachedPrs> | undefined;
+      let pageRead: ReturnType<typeof readOrigin> | undefined;
+      try {
+        await Promise.race([inventoryReached.promise, owner.then(() => { throw new Error("Inventory did not read the checkout"); })]);
+        if (foregroundSamplesFirst) {
+          if (lateAction) actionRead = service.readPrimaryAttachedPrs(ref);
+          else pageRead = readOrigin(cwd, { demand: { priority: () => PR_METADATA_PRIORITY.page } });
+          if (holdForeground) {
+            await Promise.race([foregroundSampled.promise,
+              (actionRead ?? pageRead)!.then(() => { throw new Error("Foreground read did not sample Git"); })]);
+          } else {
+            expect((await pageRead)?.repo).toBe("original");
+          }
+        }
+        await runGit(cwd, removingOrigin
+          ? ["remote", "remove", "origin"]
+          : ["remote", "set-url", "origin", "https://github.com/fixture/repointed.git"]);
+        const expected = removingOrigin ? undefined : "github.com/fixture/repointed";
+        if (!foregroundSamplesFirst) {
+          expect((await service.readPrimaryAttachedPrs(ref)).primaryRepoKey).toBe(expected);
+        }
+        release.resolve();
+        await owner;
+        releaseForeground.resolve();
+        await pageRead;
+        if (actionRead) {
+          const action = await actionRead;
+          expect(action.primaryRepoKey).toBe("github.com/fixture/original");
+          expect(action.prs.map(({ repo }) => repo)).toEqual(["original"]);
+        }
+        expect((await readOrigin(cwd))?.repo).toBe(removingOrigin ? undefined : "repointed");
+        expect(appServerService.readPrimaryGitRepository(ref.backend, ref.threadId)).toBe(expected);
+        expect(syncThreadPrAutoDispatchCandidatesBatch.mock.lastCall?.[0].threads)
+          .toEqual([{ ...ref, prKeys: removingOrigin ? [] : [buildPullRequestStatusKey(prs[1]!)] }]);
+      } finally {
+        release.resolve();
+        releaseForeground.resolve();
+        await Promise.allSettled([owner, pageRead, actionRead]);
+      }
+    },
+  );
+
   it("recovers polling and terminal ownership when the stored origin cannot establish the checkout identity", async () => {
     const { startAppServerOwnerNavigation, appServerService } = await import("../shell/ipc/app-server");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
@@ -3158,7 +3389,7 @@ describe("app server ipc", () => {
     const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
-      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
       backgroundPrPollingEnabled: boolean;
       prAutoDispatchAllowed: boolean;
     };
@@ -5252,7 +5483,7 @@ describe("app server ipc", () => {
     const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
-      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
       collectPrPollTargets: () => { prKey: string; threadKeys: string[] }[];
     };
     const automatic = { ...attached, explicitlyAttached: undefined };
@@ -5502,7 +5733,7 @@ describe("app server ipc", () => {
       const cleanupThread = vi.fn(async () => ({}));
       const internals = service as unknown as {
         getSandboxerPrCleanup: () => unknown;
-        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
         cleanupThreadSandboxesIfDone: (backend: "codex", threadId: string) => Promise<unknown>;
       };
       vi.spyOn(internals, "getSandboxerPrCleanup").mockReturnValue({ cleanupThread });
@@ -11092,7 +11323,7 @@ describe("app server ipc", () => {
         attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] } | undefined,
       ) => void;
       fetchForgePullRequests: (refs: Array<Record<string, unknown>>) => Promise<PrSummary[]>;
-      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
       publishPullRequestStatusUpdates: (params: { backend: "codex"; prs: PrSummary[] }) => Promise<void>;
     };
     const oldUrl = "https://gitlab.com/team/legacy/tools/api/-/merge_requests/41";
@@ -11124,7 +11355,7 @@ describe("app server ipc", () => {
       expect(service.prRepositoryAliases.canonicalizeUrl(oldUrl)).toBe(newUrl);
       expect(service.prRepositoryAliases.canonicalizeUrl(otherUrl)).toBe(otherUrl);
       expect(service.primaryPrThreadsByKey.has("gitlab.com/platform/api#41")).toBe(true);
-      const changed = service.rememberPrStatuses(prs, Date.now(), "background-poll");
+      const { changed } = service.rememberPrStatuses(prs, Date.now(), "background-poll");
       await service.publishPullRequestStatusUpdates({ backend: "codex", prs: changed });
       expect(publishLocalEvent).toHaveBeenCalledWith({ backend: "codex",
         navigationPullRequestKeyAliases: ["gitlab.com/team/legacy/tools/api#41"],
@@ -11867,7 +12098,7 @@ describe("app server ipc", () => {
     const { appServerService } = await import("../shell/ipc/app-server");
     await withRenamedRepositoryStore("outstanding-pr-status-", async ({ store }) => {
       const service = appServerService as unknown as {
-        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
         applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
         nextPrObservationTimestamp: () => number;
         handlePrAutoDispatchSnapshots: () => Promise<void>;
@@ -11926,12 +12157,235 @@ describe("app server ipc", () => {
     await checkOutstandingPrStatus({ laterObservation: "identical-poll", headCheck: "pending" });
   });
 
-  it("preserves terminal PR status across overlapped observations", async () => {
-    await fc.assert(fc.asyncProperty(fc.record({
-      laterObservation: fc.constantFrom("in-app-merge" as const, "identical-poll" as const),
-      headCheck: fc.constantFrom("pending" as const, "failing" as const),
-    }), checkOutstandingPrStatus), { numRuns: 24 });
+  it("reuses the stacked index across pending GitHub mergeability reads and refreshes it for real status changes", async () => {
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const { loadLocalNavigationQueryIndex } = await import("../app-server/navigation-query-source");
+    const { StackReader } = await import("../stacks/stack-reader");
+    const { getDesktopBackendRegistry } = await import("../app-server/backend-registry");
+    const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+    const service = appServerService as unknown as {
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
+      applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
+      nextPrObservationTimestamp: () => number;
+      handlePrAutoDispatchSnapshots: () => Promise<void>;
+      prStatusRegistry: Map<string, { pr: PrSummary; fetchedAt: number }>;
+    };
+    await withRenamedRepositoryStore("transient-mergeability-", async ({ store }) => {
+      const pr = githubPr({
+        org: "fixture", repo: "stack-mergeability", number: 1, state: "passing", mergeState: "mergeable",
+        url: "https://github.com/fixture/stack-mergeability/pull/1",
+        headRefName: "topic", baseRefName: "main", headSha: "a".repeat(40), baseSha: "b".repeat(40),
+      });
+      const key = buildPullRequestStatusKey(pr);
+      const unknown = { ...pr, mergeState: "unknown" as const };
+      const thread: NavigationThreadSummary = {
+        id: "stack-mergeability", source: "codex", title: "Stacked", titleSource: "explicit", gitBranch: "topic",
+        linkedDirectories: [{ id: "/repo/stack", path: "/repo/stack", kind: "local", label: "Stack" }],
+        inbox: { inInbox: false },
+      };
+      const registry = {
+        ...getDesktopBackendRegistry(), listThreads: async () => [thread],
+      } as unknown as ReturnType<typeof getDesktopBackendRegistry>;
+      const read = () => loadLocalNavigationQueryIndex({ registry, callerReason: "stack-mergeability", includeStacks: true });
+      const stackReads = vi.spyOn(StackReader.prototype, "read").mockResolvedValue({ stacks: [], catalogs: [] });
+      const automation = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      overlayStoreFixture.stable = getDesktopOverlayStore();
+      publishLocalEvent.mockImplementation(async (event) => {
+        emitRegistryEvent(event);
+        return undefined;
+      });
+      const poll = (observed: PrSummary) => service.applyPolledPrStatuses([observed], service.nextPrObservationTimestamp());
+      const statuses = () => publishLocalEvent.mock.calls.flatMap(([event]) => {
+        const notification = (event as AgentEvent).notification;
+        return notification.method === "pullRequest/status/updated" && notification.params.prKey === key
+          ? [notification.params.pr as PrSummary] : [];
+      });
+      try {
+        const initial = service.nextPrObservationTimestamp();
+        await store.writePrStatusCacheEntries([{ provider: pr.provider, prKey: key, pr, fetchedAt: initial }]);
+        service.rememberPrStatuses([pr], initial, "seed");
+        await read();
+        expect(stackReads).toHaveBeenCalledTimes(1);
+
+        // Pending computations between the same tips must leave the last result
+        // and the existing stack projection intact, even after GitHub settles again.
+        const changedKeys: string[] = [];
+        for (const observation of [unknown, pr, unknown, pr]) {
+          changedKeys.push(...await poll(observation));
+          await read();
+        }
+        expect({ statuses: statuses().map((status) => status.mergeState), stackReads: stackReads.mock.calls.length })
+          .toEqual({ statuses: [], stackReads: 1 });
+        expect(changedKeys).toEqual([]);
+        expect(service.prStatusRegistry.get(key)?.fetchedAt).toBeGreaterThan(initial);
+        expect((await store.readPrStatusCache())[key]?.fetchedAt).toBe(initial);
+
+        const conflict = { ...pr, mergeState: "conflicting" as const };
+        await expect(poll(conflict)).resolves.toEqual([key]);
+        await read();
+        await expect(poll(unknown)).resolves.toEqual([]);
+        await read();
+        await expect(poll(pr)).resolves.toEqual([key]);
+        await read();
+        // Independent readiness changes still reach stack readers while GitHub computes.
+        await expect(poll({ ...unknown, state: "failing", checkState: "failing" })).resolves.toEqual([key]);
+        await read();
+        expect(statuses().map(({ mergeState, checkState }) => [mergeState, checkState])).toEqual([
+          ["conflicting", "passing"], ["mergeable", "passing"], ["mergeable", "failing"],
+        ]);
+        expect(stackReads).toHaveBeenCalledTimes(4);
+      } finally {
+        emitRegistryEvent({ notification: { method: "thread/name/updated" } });
+        publishLocalEvent.mockImplementation(async () => undefined);
+        overlayStoreFixture.stable = undefined;
+        service.prStatusRegistry.delete(key);
+        clock.mockRestore();
+        automation.mockRestore();
+        stackReads.mockRestore();
+      }
+    });
   });
+
+  it("keeps same-tip mergeability across scheduled discovery and by-number polls", async () => {
+    const { appServerService: service } = await import("../shell/ipc/app-server");
+    await withRenamedRepositoryStore("mergeability-scheduled-discovery-", async ({ store, refresh }) => {
+      const request = {
+        backend: "codex", threadId: "mergeability-discovery", branch: "topic",
+        directoryPaths: ["/repo/mergeability-discovery"], trigger: "scheduled",
+      } satisfies RefreshThreadPullRequestsRequest;
+      const pr = githubPr({
+        org: "fixture", repo: "mergeability-discovery", number: 1, state: "passing", mergeState: "mergeable",
+        url: "https://github.com/fixture/mergeability-discovery/pull/1",
+        headRefName: "topic", baseRefName: "main", headSha: "a".repeat(40), baseSha: "b".repeat(40),
+        linkedDirectoryPaths: request.directoryPaths,
+      });
+      const key = buildPullRequestStatusKey(pr);
+      const initial = service["nextPrObservationTimestamp"]();
+      await store.setThreadPullRequests({
+        ...request, prs: [pr], fetchedAt: Date.now() - 120_000, refreshKey: buildThreadPrRequestKey(request),
+      });
+      await store.writePrStatusCacheEntries([{ provider: pr.provider, prKey: key, fetchedAt: initial, pr }]);
+      service["rememberPrStatuses"]([pr], initial, "seed");
+      const automation = vi.spyOn(service as unknown as { handlePrAutoDispatchSnapshots: () => Promise<void> },
+        "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+      try {
+        detectPullRequestsForThread.mockResolvedValueOnce([{ ...pr, mergeState: "unknown" }]);
+        await refresh(request);
+        expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+        await expect(service["applyPolledPrStatuses"]([pr], service["nextPrObservationTimestamp"]())).resolves.toEqual([]);
+        // A scheduled lookup and the following definitive poll must preserve
+        // the published projection and the attachment row for identical tips.
+        expect(publishLocalEvent.mock.calls.map(([event]) => (event as AgentEvent).notification.method))
+          .not.toContain("pullRequest/status/updated");
+        expect(publishLocalEvent.mock.calls.map(([event]) => (event as AgentEvent).notification.method))
+          .not.toContain("thread/pullRequests/updated");
+        expect((await store.readPrStatusCache())[key]?.pr.mergeState).toBe("mergeable");
+        expect((await store.getThreadOverlayState(request))?.prs?.[0]?.mergeState).toBe("mergeable");
+      } finally {
+        service["prStatusRegistry"].delete(key);
+        automation.mockRestore();
+      }
+    });
+  });
+
+  it("publishes one transcript batch per window for attached and mentioned PRs in a poll", async () => {
+    const { appServerService: service } = await import("../shell/ipc/app-server");
+    const batch = [1, 2, 3].map((number) => githubPr({
+      org: "fixture", repo: "mergeability-transcript", number, state: "passing", mergeState: "mergeable",
+      url: `https://github.com/fixture/mergeability-transcript/pull/${number}`,
+      headSha: "a".repeat(40), baseSha: "b".repeat(40),
+    }));
+    const attached = batch.slice(0, 2);
+    const threadKey = "codex:mergeability-transcript";
+    const sender = 42;
+    const publish = vi.fn();
+    const previous = { scheduler: service["prPollingScheduler"], polling: service["backgroundPrPollingEnabled"] };
+    const automation = vi.spyOn(service as unknown as { handlePrAutoDispatchSnapshots: () => Promise<void> },
+      "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+    const subscriptions = service["transcriptPrSubscriptions"];
+    try {
+      service["backgroundPrPollingEnabled"] = false;
+      service["prPollingScheduler"] = undefined;
+      await service["loadPrStatusRegistry"]();
+      await service.threadPullRequestLookup.loadPrLookupRegistry();
+      service["ensurePrPollingSchedulerStarted"]();
+      service["setThreadPrAttachment"](threadKey, { backend: "codex", primaryRepoKey: "github.com/fixture/mergeability-transcript", prs: attached });
+      service["rememberPrStatuses"](attached, service["nextPrObservationTimestamp"](), "seed");
+      subscriptions.set(sender, { updates: batch.map(({ url }) => ({ url, visible: true })), removedUrls: [] }, publish);
+      const byKey = new Map(batch.map((pr) => [buildPullRequestStatusKey(pr), service["nextPrObservationTimestamp"]()]));
+      const pending = batch.map((pr) => ({ ...pr, mergeState: "unknown" as const }));
+      await service["prPollingScheduler"]!["deps"].applyResults(pending, service["nextPrObservationTimestamp"](), byKey);
+      expect(publish).toHaveBeenCalledTimes(1);
+      // Each PR retains its acquisition time. Mention-only results never enter the registry.
+      expect(publish.mock.calls[0]?.[0].statuses).toEqual(batch.map((pr) => ({
+        pr: expect.objectContaining({ url: pr.url, mergeState: pr.number === 3 ? "unknown" : "mergeable" }),
+        fetchedAt: byKey.get(buildPullRequestStatusKey(pr)),
+      })));
+      expect(service["prStatusRegistry"].has(buildPullRequestStatusKey(batch[2]!))).toBe(false);
+    } finally {
+      subscriptions.clearSender(sender);
+      service["setThreadPrAttachment"](threadKey, undefined);
+      for (const pr of batch) service["prStatusRegistry"].delete(buildPullRequestStatusKey(pr));
+      service["prPollingScheduler"] = previous.scheduler;
+      service["backgroundPrPollingEnabled"] = previous.polling;
+      automation.mockRestore();
+    }
+  });
+
+  it("reloads confirmed base-only mergeability from one SQLite commit without status churn", async () => {
+    const { appServerService: service } = await import("../shell/ipc/app-server");
+    const { measureSqliteWrites } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    await withRenamedRepositoryStore("mergeability-base-tip-", async ({ store }) => {
+      const prs = [1, 2].map((number) => githubPr({
+        org: "fixture", repo: "mergeability-base-tip", number, state: "passing", mergeState: "mergeable",
+        url: `https://github.com/fixture/mergeability-base-tip/pull/${number}`,
+        headRefName: `topic-${number}`, headSha: String(number).repeat(40), baseRefName: "main", baseSha: "b".repeat(40),
+      }));
+      const keys = prs.map(buildPullRequestStatusKey);
+      const initial = service["nextPrObservationTimestamp"]();
+      const wasLoaded = service["prStatusRegistryLoaded"];
+      const automation = vi.spyOn(service as unknown as { handlePrAutoDispatchSnapshots: () => Promise<void> },
+        "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+      const poll = (observed: PrSummary[]) => service["applyPolledPrStatuses"](observed, service["nextPrObservationTimestamp"]());
+      try {
+        await store.writePrStatusCacheEntries(prs.map((pr) => ({
+          provider: pr.provider, prKey: buildPullRequestStatusKey(pr), fetchedAt: initial, pr,
+        })));
+        service["rememberPrStatuses"](prs, initial, "seed");
+        const advanced = prs.map((pr) => ({ ...pr, baseSha: "c".repeat(40) }));
+        const navigationVersion = store.readNavigationSourceVersion();
+        const { writes } = await measureSqliteWrites(() => expect(poll(advanced)).resolves.toEqual([]));
+        expect(store.readNavigationSourceVersion()).toBe(navigationVersion);
+        for (const key of keys) service["prStatusRegistry"].delete(key);
+        service["prStatusRegistryLoaded"] = false;
+        await service["loadPrStatusRegistry"]();
+        expect(keys.map((key) => service["prStatusRegistry"].get(key)?.pr.baseSha)).toEqual(advanced.map((pr) => pr.baseSha));
+        const repeated = await measureSqliteWrites(async () => {
+          await expect(poll(advanced.map((pr) => ({ ...pr, mergeState: "unknown" })))).resolves.toEqual([]);
+          await expect(poll(advanced)).resolves.toEqual([]);
+        });
+        expect(repeated.writes.commits).toBe(0);
+        expect(publishLocalEvent.mock.calls.map(([event]) => (event as AgentEvent).notification.method))
+          .not.toContain("pullRequest/status/updated");
+        expectSqliteWriteBudget({
+          scenario: "github-pr-mergeability-base-tip-poll", writes,
+          note: "One commit for two confirmed base-tip advances in a poll (~4 MB WAL/day at one advancing batch/minute over eight hours). Repeated observations of the same tips make zero writes.",
+        });
+      } finally {
+        for (const key of keys) service["prStatusRegistry"].delete(key);
+        service["prStatusRegistryLoaded"] = wasLoaded;
+        automation.mockRestore();
+      }
+    });
+  });
+
+  it.each((["in-app-merge", "identical-poll"] as const).flatMap(laterObservation =>
+    (["pending", "failing"] as const).map(headCheck => ({ laterObservation, headCheck }))))(
+    "preserves terminal PR status across $laterObservation with a $headCheck check",
+    checkOutstandingPrStatus,
+  );
 
   async function checkSharedPrMerge(input: {
     count: number;
@@ -11952,7 +12406,7 @@ describe("app server ipc", () => {
     await withRenamedRepositoryStore("shared-pr-merge-", async ({ store, db }) => {
       const { appServerService, service, restore } = await renamedRepositoryService();
       const internal = service as unknown as {
-        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
         applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
         writePrStatusesToCache: (prs: PrSummary[], fetchedAt: number) => Promise<void>;
         nextPrObservationTimestamp: () => number;
@@ -12055,7 +12509,7 @@ describe("app server ipc", () => {
             // A provider read that started after the mutation can still see
             // old data. Neither the live registry nor its cache may reopen it.
             const late = internal.nextPrObservationTimestamp();
-            expect(internal.rememberPrStatuses([pr], late, "thread-lookup:user")).toEqual([]);
+            expect(internal.rememberPrStatuses([pr], late, "thread-lookup:user").changed).toEqual([]);
             await internal.writePrStatusesToCache([pr], late);
             expect((await store.readPrStatusCache())[key]?.pr.lifecycleState).toBe("merged");
           }
@@ -12123,7 +12577,10 @@ describe("app server ipc", () => {
       source: fc.constantFrom("poll" as const, "button" as const, "racing_poll" as const),
       lockedPrefix: fc.integer({ min: 0, max: 6 }),
       mergerRestriction: fc.option(fc.constantFrom("lock" as const, "archive" as const, "secondary" as const, "capacity" as const), { nil: undefined }),
-    }), checkSharedPrMerge), { numRuns: 24 });
+    }), checkSharedPrMerge), { numRuns: 5, examples: [
+      [{ count: 6, mergerIndex: 5, source: "racing_poll", lockedPrefix: 6, mergerRestriction: undefined }],
+      [{ count: 6, mergerIndex: 5, source: "button", lockedPrefix: 1, mergerRestriction: "secondary" }],
+    ] });
   });
 
   async function checkAutomaticMergeBuildWatch(input: {
@@ -12221,14 +12678,11 @@ describe("app server ipc", () => {
     await checkAutomaticMergeBuildWatch({ workspace: "missing", conclusion: "success", otherPrFirst: false, restoreWait: true });
   });
 
-  it("settles automatic merge builds from the named PR regardless of checkout metadata", async () => {
-    await fc.assert(fc.asyncProperty(fc.record({
-      workspace: fc.constantFrom("missing" as const, "moved" as const),
-      conclusion: fc.constantFrom("success" as const, "failure" as const),
-      otherPrFirst: fc.boolean(),
-      restoreWait: fc.boolean(),
-    }), checkAutomaticMergeBuildWatch), { numRuns: 24 });
-  });
+  it.each((["missing", "moved"] as const).flatMap(workspace => (["success", "failure"] as const).flatMap(conclusion =>
+    [false, true].flatMap(otherPrFirst => [false, true].map(restoreWait => ({ workspace, conclusion, otherPrFirst, restoreWait }))))))(
+    "settles a $conclusion build for the named PR ($workspace checkout, other PR first=$otherPrFirst, restored=$restoreWait)",
+    checkAutomaticMergeBuildWatch,
+  );
 
   it("validates the Git default branch before arming or recovering an unverified automatic merge build watch", async () => {
     const appState = await import("../state/app-state");
@@ -15798,12 +16252,13 @@ describe("app server ipc", () => {
     await expectDetachInProviderPartition("thread-archived", true);
   });
 
-  it("detaches secondary directories regardless of provider archive membership and timestamp", async () => {
-    registerAppServerIpcHandlers();
-    await fc.assert(fc.asyncProperty(fc.uuid(), fc.boolean(), fc.boolean(), async (threadId, archived, stamped) => {
-      await expectDetachInProviderPartition(threadId, archived, archived && stamped ? 500 : undefined);
-    }), { numRuns: 25 });
-  });
+  it.each([false, true].flatMap(archived => [false, true].map(stamped => ({ archived, stamped }))))(
+    "detaches a secondary directory (archived=$archived, timestamp=$stamped)",
+    async ({ archived, stamped }) => {
+      registerAppServerIpcHandlers();
+      await expectDetachInProviderPartition("a4d45678-1234-4234-8234-123456789abc", archived, archived && stamped ? 500 : undefined);
+    },
+  );
 
   it("rejects detaching the last linked directory", async () => {
     const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } =

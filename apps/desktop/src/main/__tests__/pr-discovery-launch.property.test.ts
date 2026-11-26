@@ -125,7 +125,7 @@ it("starts one queued remote HEAD probe for each distinct Git context", async ()
   ), { numRuns: 30 });
 });
 
-const callers = ["pr-scheduled-prefetch", "pr-live-branch-lookup", "pr-stored-attachment-validation"] as const;
+const callers = ["pr-scheduled-prefetch", "pr-live-branch-lookup", "pr-stored-attachment-validation", "pr-owner-navigation-inventory"] as const;
 
 it.each(callers)("credits a shared queued remote HEAD probe to %s when it arrives first", async (initiator) => {
   const cwd = path.join(os.tmpdir(), "fixture-shared-checkout");

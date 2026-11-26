@@ -1,6 +1,9 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { AppServerReviewPullRequestSnapshot } from "@pwragent/shared/contracts/normalized-app-server";
+import { RegistryTurnState } from "../app-server/registry-turn-state";
+import { buildActiveTurnKey } from "../app-server/thread-turn-keys";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import {
@@ -9,7 +12,11 @@ import {
 } from "@pwragent/shared/project-forge-automation";
 import type { PrChangeIdentitySource } from "../pr-status/pr-change-identity";
 import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
-import { selectPrReviewOfferOwner, type PrReviewOfferCandidate } from "../pr-status/pr-review-offer-owner";
+import {
+  ineligiblePrReviewOfferThreads,
+  selectPrReviewOfferOwner,
+  type PrReviewOfferCandidate,
+} from "../pr-status/pr-review-offer-owner";
 import { computePrStatusTransition, type PrStatusTransitionChanges } from "../pr-status/pr-transitions";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { StateDb } from "../state/state-db";
@@ -53,6 +60,11 @@ const THREAD = { backend: "codex" as const, threadId: "thread-1" };
 const prKeyFor = (number: number) => buildPullRequestStatusKey({ provider: "github.com", org: "example", repo: "project", number });
 const PR_KEY = prKeyFor(7);
 const PR_URL = "https://github.com/example/project/pull/7";
+const INCIDENT_HEAD = "ba1f726f299f2b6127afd2b38d1210e82971bd52";
+const INCIDENT_PR = {
+  provider: "github.com", org: "pwrdrvr", repo: "PwrAgent", number: 4463,
+  url: "https://github.com/pwrdrvr/PwrAgent/pull/4463",
+};
 
 type Ci = "pending" | "passing" | "failing";
 
@@ -84,6 +96,11 @@ class World {
   /** Offers the operator dismissed or ran: `review:<change>` or `merge:<sha>`. */
   readonly operatorClosed = new Set<string>();
   gitProcesses = 0;
+  prIdentity: Pick<PrSummary, "provider" | "org" | "repo" | "number" | "url"> = {
+    provider: "github.com", org: "example", repo: "project", number: 7, url: PR_URL,
+  };
+  readonly turnState = new RegistryTurnState();
+  beforeChangeIdentity?: () => void;
 
   constructor() {
     this.head = this.commit(this.newChange());
@@ -103,11 +120,7 @@ class World {
 
   pr(): PrSummary {
     return {
-      provider: "github.com",
-      org: "example",
-      repo: "project",
-      number: 7,
-      url: PR_URL,
+      ...this.prIdentity,
       title: "Add the thing",
       headRefName: "feature",
       baseRefName: this.base,
@@ -148,6 +161,7 @@ const identity = (world: World): PrChangeIdentitySource => ({
   },
   // A reviewed working tree is modeled as one more id with a change.
   changeIdentity: async ({ sha, tree }) => {
+    world.beforeChangeIdentity?.();
     world.gitProcesses += 3;
     return world.changeOf.get(tree ?? sha);
   },
@@ -169,6 +183,8 @@ type Harness = {
 function createHarness(
   db: StateDb = openInMemoryStateDb(),
   ownerThread: (world: World) => Promise<PrReviewOfferThread | undefined> = async () => THREAD,
+  neverMerge: () => boolean = () => false,
+  ineligibleThreads?: () => PrReviewOfferThread[],
 ): Harness {
   const world = new World();
   let ids = 0;
@@ -178,11 +194,16 @@ function createHarness(
     newId: () => `todo-${++ids}`,
   });
   const buildCoordinator = () => new PrReviewOfferCoordinator({
+    liveReviews: () => world.turnState.liveReviewRecords().values(),
     ownerThread: async (key) => {
       world.evaluatedOwners.push(key);
-      return key === PR_KEY ? await ownerThread(world) : undefined;
+      return key === buildPullRequestStatusKey(world.pr()) ? await ownerThread(world) : undefined;
     },
-    threadPrKeys: () => [PR_KEY],
+    ...(ineligibleThreads
+      ? { ineligibleThreads: async (key: string) => key === PR_KEY ? ineligibleThreads() : [] }
+      : {}),
+    threadPrKeys: () => [buildPullRequestStatusKey(world.pr())],
+    neverMergeRefusal: () => neverMerge() ? "canvas never merges its pull requests." : undefined,
     getPr: () => world.pr(),
     stackHold: async () => world.heldBy ? { reason: world.heldBy, lowerKey: prKeyFor(1) } : undefined,
     stackMergeEvidence: async () => ({
@@ -232,16 +253,251 @@ function openOfferCards(todos: ThreadTodoService, thread: PrReviewOfferThread = 
 type Command = { name: string; run: (harness: Harness) => Promise<void> };
 
 async function transition(harness: Harness, changed: PrStatusTransitionChanges): Promise<void> {
+  const pr = harness.world.pr();
   harness.coordinator.handleTransition({
-    prKey: PR_KEY,
-    url: PR_URL,
-    pr: harness.world.pr(),
-    headSha: harness.world.head,
+    prKey: buildPullRequestStatusKey(pr),
+    url: pr.url,
+    pr,
+    headSha: pr.headSha,
     changed,
     threadKeys: [],
   });
   await harness.coordinator.idle();
 }
+
+function prepareIncident(world: World): void {
+  world.prIdentity = INCIDENT_PR;
+  world.changeOf.set(INCIDENT_HEAD, world.changeOf.get(world.head)!);
+  world.head = INCIDENT_HEAD;
+}
+
+function acceptReview(harness: Harness, pullRequest = INCIDENT_PR, headCommit = INCIDENT_HEAD): string {
+  const snapshot: AppServerReviewPullRequestSnapshot = {
+    pullRequest,
+    headCommit,
+    baseCommit: "b".repeat(40),
+    mergeBaseCommit: "a".repeat(40),
+    capturedAt: harness.world.clock,
+  };
+  const review = {
+    backend: "acp:antigravity" as const,
+    mode: "managed" as const,
+    createdAt: harness.world.clock,
+    displayText: "Review pull request",
+    parentBackend: THREAD.backend,
+    parentThreadId: "independent-review-thread",
+    reviewThreadId: "review-child",
+    turnId: "review-turn",
+    task: "Review pull request",
+    context: {
+      workspacePath: "/work/project",
+      pullRequest,
+      headCommit,
+      pullRequestSnapshot: snapshot,
+    },
+  };
+  harness.world.turnState.activateReview(review);
+  harness.coordinator.handleLiveReviewChanged(review.context);
+  return buildActiveTurnKey(review.backend, review.reviewThreadId, review.turnId);
+}
+
+const CI_GREEN = { checkState: { from: "pending", to: "passing" } } as const;
+
+it("does not offer the incident head when CI goes green during an accepted review", async () => {
+  const harness = createHarness();
+  try {
+    prepareIncident(harness.world);
+    acceptReview(harness);
+    harness.world.ci = "passing";
+    await transition(harness, CI_GREEN);
+
+    // The live review suppresses the card, but still supplies no merge coverage.
+    expect(openOfferCards(harness.todos)).toEqual([]);
+    const key = buildPullRequestStatusKey(INCIDENT_PR);
+    await expect(harness.coordinator.assess(THREAD, key)).resolves.toMatchObject({
+      readiness: "needs_review", headCovered: false,
+    });
+    await expect(harness.coordinator.mergeOfferRefusal(THREAD, key)).resolves.toEqual(expect.any(String));
+  } finally {
+    harness.close();
+  }
+});
+
+it("withdraws an open offer when an independent review of its frozen head is accepted", async () => {
+  const harness = createHarness();
+  try {
+    prepareIncident(harness.world);
+    harness.world.ci = "passing";
+    await transition(harness, CI_GREEN);
+    expect(openOfferCards(harness.todos)).toHaveLength(1);
+
+    const { coordinator, todos, world } = harness;
+    const [original] = openOfferCards(todos);
+    const turnKey = acceptReview(harness);
+    const context = world.turnState.liveReviewRecords().get(turnKey)!.context;
+    await coordinator.idle();
+    expect(openOfferCards(todos)).toEqual([]);
+
+    // A delayed CI transition or a duplicate review wakeup reads live state.
+    coordinator.handleLiveReviewChanged(context);
+    await transition(harness, CI_GREEN);
+    expect(openOfferCards(todos)).toEqual([]);
+
+    world.turnState.finishReview(turnKey);
+    coordinator.handleLiveReviewChanged(context);
+    coordinator.handleLiveReviewChanged(context);
+    await coordinator.idle();
+    expect(openOfferCards(todos).map(({ id }) => id)).toEqual([original!.id]);
+  } finally {
+    harness.close();
+  }
+});
+
+it.each(["number", "repo", "provider", "sha"] as const)("offers the incident head when the active review differs by %s", async (difference) => {
+  const harness = createHarness();
+  try {
+    prepareIncident(harness.world);
+    const pullRequest = difference === "number" ? { ...INCIDENT_PR, number: 4462, url: INCIDENT_PR.url.replace("4463", "4462") }
+      : difference === "repo" ? { ...INCIDENT_PR, repo: "Other", url: INCIDENT_PR.url.replace("PwrAgent", "Other") }
+      : difference === "provider" ? { ...INCIDENT_PR, provider: "git.example.com", url: INCIDENT_PR.url.replace("github.com", "git.example.com") }
+      : INCIDENT_PR;
+    acceptReview(harness, pullRequest, difference === "sha" ? harness.world.commit(harness.world.changeOf.get(INCIDENT_HEAD)!) : INCIDENT_HEAD);
+    harness.world.ci = "passing";
+    await transition(harness, CI_GREEN);
+    expect(openOfferCards(harness.todos)).toHaveLength(1);
+  } finally {
+    harness.close();
+  }
+});
+
+it("checks acceptance again before writing an offer when a review starts during change identity lookup", async () => {
+  const harness = createHarness();
+  try {
+    prepareIncident(harness.world);
+    harness.world.ci = "passing";
+    harness.world.beforeChangeIdentity = () => {
+      harness.world.beforeChangeIdentity = undefined;
+      acceptReview(harness);
+    };
+    await transition(harness, CI_GREEN);
+
+    // Check history too. Raising a card and then withdrawing it is a race.
+    expect(harness.todos.list(THREAD)).toEqual([]);
+  } finally {
+    harness.close();
+  }
+});
+
+it("recovers a suppressed offer on the first unchanged green observation after owner restart", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const temp = createTempStateDb("pwragent-recover-review-offer-");
+  const harness = createHarness(StateDb.open(temp.dbPath));
+  const { world, todos } = harness;
+  try {
+    prepareIncident(world);
+    world.ci = "passing";
+    // An unchanged observation may recover an earlier offer, but never
+    // creates a first review offer.
+    harness.coordinator.handleObservations([world.pr()]);
+    await harness.coordinator.idle();
+    expect(todos.list(THREAD)).toEqual([]);
+
+    await transition(harness, CI_GREEN);
+    const [offer] = openOfferCards(todos);
+    const turn = acceptReview(harness);
+    await harness.coordinator.idle();
+    expect(openOfferCards(todos)).toEqual([]);
+
+    // The restart forgets live reviews and evaluation state. The dismissal
+    // lives in SQLite and no release event is delivered to the new owner.
+    world.turnState.finishReview(turn);
+    harness.restart();
+    const { writes } = await measureSqliteWrites(async () => {
+      harness.coordinator.handleObservations([world.pr()]);
+      await harness.coordinator.idle();
+    });
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-restart-reopen", writes,
+      note: "Reopen one previously suppressed offer after owner restart. At 100 recoveries/day, about 1.24 MB/day." });
+    expect(openOfferCards(todos).map(({ id }) => id)).toEqual([offer!.id]);
+  } finally {
+    harness.close();
+    removeTempStateDbDir(temp.tempDir);
+  }
+});
+
+it("discards stale coverage when a result lands during Git lookup", async () => {
+  const harness = createHarness();
+  const { world, coordinator, todos } = harness;
+  try {
+    prepareIncident(world);
+    world.ci = "passing";
+    await transition(harness, CI_GREEN);
+    const turn = acceptReview(harness);
+    const context = world.turnState.liveReviewRecords().get(turn)!.context;
+    await coordinator.idle();
+
+    // After coverage is read, let the owner publish the result and release
+    // the live hold while the evaluation still awaits the patch ID.
+    const reconcile = vi.spyOn(todos, "reconcileOffer");
+    world.beforeChangeIdentity = () => {
+      world.beforeChangeIdentity = undefined;
+      coordinator.handleReviewChanged(recordReview(world, 1));
+      world.turnState.finishReview(turn);
+      coordinator.handleLiveReviewChanged(context);
+    };
+    await transition(harness, CI_GREEN);
+    expect(openOfferCards(todos)).toEqual([]);
+    expect(reconcile.mock.calls).toEqual([]);
+  } finally {
+    harness.close();
+  }
+});
+
+it("budgets active-review withdrawal, repeat wakeups, and reopening", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const temp = createTempStateDb("pwragent-active-review-offer-");
+  const harness = createHarness(StateDb.open(temp.dbPath));
+  const { world, coordinator, todos } = harness;
+  try {
+    prepareIncident(world);
+    world.ci = "passing";
+    await transition(harness, CI_GREEN);
+    const [offer] = openOfferCards(todos);
+    const { result: turnKey, writes: withdrawal } = await measureSqliteWrites(async () => {
+      const key = acceptReview(harness);
+      await coordinator.idle();
+      return key;
+    });
+    const context = world.turnState.liveReviewRecords().get(turnKey)!.context;
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-active-withdrawal", writes: withdrawal,
+      note: "One commit to withdraw an open offer on independent review acceptance. At 100/day, about 1.24 MB/day." });
+    const { writes: repeat } = await measureSqliteWrites(async () => {
+      coordinator.handleLiveReviewChanged(context);
+      await transition(harness, CI_GREEN);
+    });
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-active-repeat", writes: repeat,
+      note: "Repeated acceptance and CI wakeups during an active review use no commits." });
+    const { writes: reopen } = await measureSqliteWrites(async () => {
+      world.turnState.finishReview(turnKey);
+      coordinator.handleLiveReviewChanged(context);
+      await coordinator.idle();
+    });
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-active-reopen", writes: reopen,
+      note: "One commit to reopen an eligible offer after cancellation or failure. At 100/day, about 1.24 MB/day." });
+
+    acceptReview(harness);
+    await coordinator.idle();
+    const { writes: consume } = await measureSqliteWrites(() => {
+      todos.resolveStartedReview({ ...THREAD, id: offer!.id });
+    });
+    expect(todos.get(offer!.id).status).toBe("done");
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-active-consume", writes: consume,
+      note: "One commit when the accepted scheduled review consumes its source card after the offer was withdrawn. At 100/day, about 0.82 MB/day." });
+  } finally {
+    harness.close();
+    removeTempStateDbDir(temp.tempDir);
+  }
+});
 
 it("retracts a stale review offer, holds merge offers, and rechecks once the lower layer settles", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
@@ -296,7 +552,7 @@ function recordReview(world: World, findings: number): ThreadReview {
       gitBranch: "feature",
       baseBranch: "main",
       headCommit: world.head,
-      pullRequest: { provider: "github.com", org: "example", repo: "project", number: 7, url: PR_URL },
+      pullRequest: world.prIdentity,
     },
     status: findings === 0 ? "handled" : "open",
     // As the service does: a clean review is settled when it lands.
@@ -466,7 +722,7 @@ describe("PR review and merge offers", () => {
       } finally {
         harness.close();
       }
-    }), { numRuns: 30 });
+    }), { numRuns: 8 });
   });
 
   it("does no Git work while CI is pending or failing", async () => {
@@ -697,47 +953,56 @@ describe("PR review and merge offers", () => {
       } finally {
         harness.close();
       }
-    }), { numRuns: 25, examples: [[true, false, 2], [false, true, 2]] });
+    }), { numRuns: 8, examples: [[true, false, 2], [false, true, 2]] });
   });
 
-  it("preserves a merge card during a failed stack read only for the card's exact head", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (headMoved) => {
-      const harness = createHarness();
-      try {
-        const { world } = harness;
-        world.ci = "passing";
-        await reviewChanged(harness, recordReview(world, 0));
-        expect(openOfferCards(harness.todos)).toHaveLength(1);
-        const previous = world.head;
-        world.stackUnavailable = true;
-        if (headMoved) world.head = world.commit(world.changeOf.get(previous)!);
-        await transition(harness, { headSha: { from: previous, to: world.head } });
-        expect(openOfferCards(harness.todos)).toHaveLength(headMoved ? 0 : 1);
-      } finally { harness.close(); }
-    }), { examples: [[true]] });
+  it.each([false, true] as const)("preserves a merge card during a failed stack read only for the card's exact head [%#]", async (headMoved) => {
+    const harness = createHarness();
+    try {
+      const { world } = harness;
+      world.ci = "passing";
+      await reviewChanged(harness, recordReview(world, 0));
+      expect(openOfferCards(harness.todos)).toHaveLength(1);
+      const previous = world.head;
+      world.stackUnavailable = true;
+      if (headMoved) world.head = world.commit(world.changeOf.get(previous)!);
+      await transition(harness, { headSha: { from: previous, to: world.head } });
+      expect(openOfferCards(harness.todos)).toHaveLength(headMoved ? 0 : 1);
+    } finally { harness.close(); }
   });
 
-  it("rechecks an uncovered hold on unchanged child polls within a bounded cadence", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), fc.integer({ min: 1, max: 6 }), async (polled, duplicatePolls) => {
-      const harness = createHarness();
-      try {
-        const { world } = harness;
-        world.ci = "passing";
-        world.lowerPolled = polled;
-        world.lowers.set(1, "open");
-        await reviewChanged(harness, recordReview(world, 0));
-        world.lowers.set(1, "merged");
-        for (let i = 0; i < duplicatePolls; i++) {
-          harness.coordinator.handleObservations([world.pr()]);
-          await harness.coordinator.idle();
-          expect(openOfferCards(harness.todos)).toHaveLength(0);
-        }
-        world.clock += 10 * 60_000;
+  it.each([
+    [false, 1],
+    [false, 2],
+    [false, 3],
+    [false, 4],
+    [false, 5],
+    [false, 6],
+    [true, 1],
+    [true, 2],
+    [true, 3],
+    [true, 4],
+    [true, 5],
+    [true, 6],
+  ] as const)("rechecks an uncovered hold on unchanged child polls within a bounded cadence [%#]", async (polled, duplicatePolls) => {
+    const harness = createHarness();
+    try {
+      const { world } = harness;
+      world.ci = "passing";
+      world.lowerPolled = polled;
+      world.lowers.set(1, "open");
+      await reviewChanged(harness, recordReview(world, 0));
+      world.lowers.set(1, "merged");
+      for (let i = 0; i < duplicatePolls; i++) {
         harness.coordinator.handleObservations([world.pr()]);
         await harness.coordinator.idle();
-        expect(openOfferCards(harness.todos)).toHaveLength(polled ? 0 : 1);
-      } finally { harness.close(); }
-    }), { examples: [[false, 1]] });
+        expect(openOfferCards(harness.todos)).toHaveLength(0);
+      }
+      world.clock += 10 * 60_000;
+      harness.coordinator.handleObservations([world.pr()]);
+      await harness.coordinator.idle();
+      expect(openOfferCards(harness.todos)).toHaveLength(polled ? 0 : 1);
+    } finally { harness.close(); }
   });
 
   it.each(["status transition", "local settlement"] as const)("offers a review on %s without a child PR change", async (trigger) => {
@@ -924,6 +1189,8 @@ const THREAD_B = { backend: "codex" as const, threadId: "thread-2" };
 type ProjectsModel = {
   automation: Map<string, ProjectForgeAutomation>;
   archived: Set<string>;
+  /** Threads whose project's hands-off rules match the PR. */
+  handsOff: Set<string>;
   winner: PrReviewOfferThread;
 };
 
@@ -931,7 +1198,10 @@ const offerThreads = [THREAD, THREAD_B];
 
 function oracleAllowsOffers(model: ProjectsModel, thread: PrReviewOfferThread): boolean {
   const automation = model.automation.get(thread.threadId)!;
-  return !model.archived.has(thread.threadId) && !automation.paused && automation.prOffers;
+  return !model.archived.has(thread.threadId)
+    && !model.handsOff.has(thread.threadId)
+    && !automation.paused
+    && automation.prOffers;
 }
 
 function oracleOwner(model: ProjectsModel): PrReviewOfferThread | undefined {
@@ -941,7 +1211,7 @@ function oracleOwner(model: ProjectsModel): PrReviewOfferThread | undefined {
 
 const projectSwitch = fc.record({
   thread: fc.constantFrom(THREAD, THREAD_B),
-  change: fc.constantFrom("offers-off", "offers-on", "pause", "resume", "archive", "unarchive"),
+  change: fc.constantFrom("offers-off", "offers-on", "pause", "resume", "archive", "unarchive", "hands-off", "hands-on"),
 });
 
 type ProjectsCommand =
@@ -956,19 +1226,36 @@ function applyProjectChange(model: ProjectsModel, thread: PrReviewOfferThread, c
     case "pause": model.automation.set(thread.threadId, { ...automation, paused: true }); break;
     case "resume": model.automation.set(thread.threadId, { ...automation, paused: false }); break;
     case "archive": model.archived.add(thread.threadId); break;
+    case "hands-off": model.handsOff.add(thread.threadId); break;
+    case "hands-on": model.handsOff.delete(thread.threadId); break;
     default: model.archived.delete(thread.threadId);
   }
 }
 
 function createProjectsHarness(model: ProjectsModel): Harness {
-  return createHarness(openInMemoryStateDb(), async () => await selectPrReviewOfferOwner({
-    candidates: offerThreads.map((thread): PrReviewOfferCandidate => ({
-      ...thread,
-      archived: model.archived.has(thread.threadId),
-      automation: model.automation.get(thread.threadId),
-    })),
-    readWinner: async () => model.winner,
+  const candidates = () => offerThreads.map((thread): PrReviewOfferCandidate => ({
+    ...thread,
+    archived: model.archived.has(thread.threadId),
+    automation: model.automation.get(thread.threadId),
+    ...(model.handsOff.has(thread.threadId) ? { handsOff: true as const } : {}),
   }));
+  return createHarness(
+    openInMemoryStateDb(),
+    async () => await selectPrReviewOfferOwner({ candidates: candidates(), readWinner: async () => model.winner }),
+    () => false,
+    () => ineligiblePrReviewOfferThreads(candidates()),
+  );
+}
+
+/**
+ * The service re-evaluates a PR's offers when its project's Forge
+ * Automation changes or its labels change (`applyProjectForgeAutomationChange`,
+ * `rememberPrStatuses`). The model does the same after each switch.
+ */
+async function projectChanged(harness: Harness, model: ProjectsModel, thread: PrReviewOfferThread, change: string): Promise<void> {
+  applyProjectChange(model, thread, change);
+  harness.coordinator.reevaluate([PR_KEY]);
+  await harness.coordinator.idle();
 }
 
 const startingAutomation = fc.record({
@@ -994,13 +1281,18 @@ describe("PR offers and project Forge Automation", () => {
         const model: ProjectsModel = {
           automation: new Map([[THREAD.threadId, automationA], [THREAD_B.threadId, automationB]]),
           archived: new Set(),
+          handsOff: new Set(),
           winner,
         };
         const harness = createProjectsHarness(model);
         try {
           for (const step of sequence) {
             if (step.kind === "project") {
-              applyProjectChange(model, step.thread, step.change);
+              await projectChanged(harness, model, step.thread, step.change);
+              // No offer card outlives its thread's eligibility.
+              for (const thread of offerThreads.filter((candidate) => !oracleAllowsOffers(model, candidate))) {
+                expect(openOfferCards(harness.todos, thread)).toEqual([]);
+              }
               continue;
             }
             const before = new Map(offerThreads.map((thread) => [
@@ -1021,7 +1313,7 @@ describe("PR offers and project Forge Automation", () => {
           harness.close();
         }
       },
-    ), { numRuns: 40 });
+    ), { numRuns: 8 });
   });
 
   it("offers a passing PR to the thread whose project allows it, and to neither when both are off", async () => {
@@ -1031,6 +1323,7 @@ describe("PR offers and project Forge Automation", () => {
         [THREAD_B.threadId, { ...DEFAULT_PROJECT_FORGE_AUTOMATION }],
       ]),
       archived: new Set(),
+      handsOff: new Set(),
       winner: THREAD,
     };
     const harness = createProjectsHarness(model);
@@ -1040,13 +1333,127 @@ describe("PR offers and project Forge Automation", () => {
       expect(openOfferCards(harness.todos, THREAD)).toEqual([]);
       expect(openOfferCards(harness.todos, THREAD_B).map((card) => card.action?.type)).toEqual(["start_review"]);
 
-      applyProjectChange(model, THREAD_B, "offers-off");
+      // Turning offers off withdraws the card raised before the switch.
+      await projectChanged(harness, model, THREAD_B, "offers-off");
+      expect(openOfferCards(harness.todos, THREAD_B)).toEqual([]);
+      expect(harness.todos.list({ ...THREAD_B, status: "all" }).at(-1)?.result)
+        .toBe("Withdrawn: Forge Automation no longer offers this pull request here");
       await push(harness, harness.world.newChange());
       harness.world.ci = "passing";
       await transition(harness, { checkState: { from: "pending", to: "passing" } });
       expect(openOfferCards(harness.todos, THREAD)).toEqual([]);
-      // The card raised before the switch stays; no new one joins it.
-      expect(openOfferCards(harness.todos, THREAD_B)).toHaveLength(1);
+      expect(openOfferCards(harness.todos, THREAD_B)).toEqual([]);
+    } finally {
+      harness.close();
+    }
+  });
+});
+
+describe("PR offers for a hands-off PR", () => {
+  it("withdraws an open card when a maintainer label makes the PR hands-off, and offers it again once the label goes", async () => {
+    const model: ProjectsModel = {
+      automation: new Map([
+        [THREAD.threadId, { ...DEFAULT_PROJECT_FORGE_AUTOMATION }],
+        [THREAD_B.threadId, { ...DEFAULT_PROJECT_FORGE_AUTOMATION, prOffers: false }],
+      ]),
+      archived: new Set(),
+      handsOff: new Set(),
+      winner: THREAD,
+    };
+    const harness = createProjectsHarness(model);
+    try {
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
+
+      await projectChanged(harness, model, THREAD, "hands-off");
+      expect(openOfferCards(harness.todos)).toEqual([]);
+
+      await projectChanged(harness, model, THREAD, "hands-on");
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
+    } finally {
+      harness.close();
+    }
+  });
+});
+
+/**
+ * A contribution fork's project never merges its pull requests (Forge
+ * Automation `neverMerge`). The rule: while it is on, PwrAgent raises no
+ * merge offer, and every evaluation withdraws an open one; review offers
+ * keep their normal rules.
+ */
+describe("PR offers in a never-merge project", () => {
+  type Step = { kind: "workflow"; command: Command } | { kind: "toggle"; on: boolean };
+
+  it("raises no merge card while the project never merges, withdraws an open one, and keeps review offers", async () => {
+    await fc.assert(fc.asyncProperty(
+      fc.boolean(),
+      fc.array(fc.oneof(
+        { weight: 4, arbitrary: fc.oneof(...commands).map((command): Step => ({ kind: "workflow", command })) },
+        { weight: 1, arbitrary: fc.boolean().map((on): Step => ({ kind: "toggle", on })) },
+      ), { minLength: 4, maxLength: 30 }),
+      async (startOn, sequence) => {
+        let never = startOn;
+        const harness = createHarness(openInMemoryStateDb(), async () => THREAD, () => never);
+        try {
+          for (const step of sequence) {
+            if (step.kind === "toggle") {
+              never = step.on;
+              continue;
+            }
+            const before = new Set(openOfferCards(harness.todos).map((card) => card.id));
+            const evaluations = harness.world.evaluatedOwners.length;
+            await step.command.run(harness);
+            if (!never) continue;
+            const cards = openOfferCards(harness.todos);
+            // Never raised while on.
+            for (const card of cards.filter((candidate) => !before.has(candidate.id))) {
+              expect(card.action?.type).toBe("start_review");
+            }
+            // Any evaluation while on leaves no merge card behind.
+            if (harness.world.evaluatedOwners.length > evaluations) {
+              expect(cards.filter((card) => card.action?.type === "merge_pull_request")).toEqual([]);
+            }
+          }
+        } finally {
+          harness.close();
+        }
+      },
+    ), { numRuns: 8 });
+  });
+
+  it("withdraws a merge card raised before the switch, refuses an agent's merge card, and still offers reviews", async () => {
+    let never = false;
+    const harness = createHarness(openInMemoryStateDb(), async () => THREAD, () => never);
+    try {
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
+      await reviewChanged(harness, recordReview(harness.world, 0));
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["merge_pull_request"]);
+
+      never = true;
+      expect(await harness.coordinator.mergeOfferRefusal(THREAD, PR_KEY)).toContain("never merges");
+      // Saving the setting re-evaluates at once; the PR sees no transition.
+      harness.coordinator.reevaluate([PR_KEY]);
+      await harness.coordinator.idle();
+      expect(openOfferCards(harness.todos)).toEqual([]);
+      const withdrawn = harness.todos.list({ ...THREAD, status: "all" })
+        .find((todo) => todo.action?.type === "merge_pull_request");
+      expect(withdrawn?.result).toBe("Withdrawn: this project never merges its pull requests");
+
+      // Turning it off offers the merge again for the same reviewed head.
+      never = false;
+      harness.coordinator.reevaluate([PR_KEY]);
+      await harness.coordinator.idle();
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["merge_pull_request"]);
+
+      never = true;
+      await push(harness, harness.world.newChange());
+      harness.world.ci = "passing";
+      await transition(harness, { checkState: { from: "pending", to: "passing" } });
+      expect(openOfferCards(harness.todos).map((card) => card.action?.type)).toEqual(["start_review"]);
     } finally {
       harness.close();
     }

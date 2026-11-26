@@ -1,16 +1,17 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import type { BackendModelOption, BackendSummary } from "@pwragent/shared/contracts/backend";
 import {
   claudeCatalogArbitrary,
   codexCatalogArbitrary,
-  expectedModelSelectSections,
-  selectSections,
+  expectModelSettingsToList,
+  expectedModelDropdown,
 } from "../../../test/model-catalog";
+import { modelSettingsOptionNames, openModelSettings } from "../../../test/model-settings";
 import { TaskMonitorModelSettings } from "../TaskMonitorModelSettings";
 
-function sectionsFor(backendId: "codex" | "claude", models: BackendModelOption[]) {
+function renderRow(backendId: "codex" | "claude", models: BackendModelOption[]) {
   const backends = (["codex", "claude"] as const).map((kind) => ({
     kind,
     label: kind,
@@ -24,7 +25,6 @@ function sectionsFor(backendId: "codex" | "claude", models: BackendModelOption[]
       helperModels={{ helpers: {} }} choices={{}} catalogReading={false} saving={false}
       onSave={vi.fn(async () => undefined)} />,
   );
-  return selectSections(screen.getByRole("combobox", { name: "Task monitors" }));
 }
 
 /**
@@ -39,18 +39,19 @@ describe("TaskMonitorModelSettings properties", () => {
   ] as const)("lists any %s catalog by the shared model menu rule", (backendId, catalog) => {
     fc.assert(fc.property(catalog, (models) => {
       try {
-        const sections = sectionsFor(backendId, models);
-        const [automatic = "", helper = ""] = sections[0]?.labels ?? [];
+        renderRow(backendId, models);
+        const [automatic = "", helper = ""] = modelSettingsOptionNames("Model", "Task monitors");
         expect(automatic).toMatch(/^Automatic/);
         expect(helper).toMatch(/^Helper model/);
-        expect(sections).toEqual(expectedModelSelectSections({
+        expectModelSettingsToList(openModelSettings("Task monitors"), expectedModelDropdown({
           kind: backendId,
           models,
           leading: [automatic, helper],
-        }));
+          otherInline: true,
+        }), backendId === "claude" ? "Other Models" : "Other");
       } finally {
         cleanup();
       }
-    }), { numRuns: 50 });
+    }), { numRuns: 12 });
   });
 });

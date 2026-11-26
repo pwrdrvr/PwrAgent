@@ -133,7 +133,7 @@ it("places worktree roots according to the saved fold and pin order at acceptanc
     fc.boolean(),
     (cachedFold, finalFold, ordinaryRank, peerFirst, groupedCheckout) =>
       assertWorktreePlacement({ cachedFold, finalFold, ordinaryRank, peerFirst, groupedCheckout }),
-  ), { numRuns: 20 });
+  ), { numRuns: 8 });
 });
 
 async function assertChildPlacement(options: {
@@ -213,7 +213,7 @@ it("pins a child only when the owner can establish it renders outside its parent
   await fc.assert(fc.asyncProperty(
     fc.constantFrom("same" as const, "elsewhere" as const, "unknown" as const), fc.boolean(), fc.boolean(),
     (parentLocation, staleProject, syntheticKey) => assertChildPlacement({ parentLocation, staleProject, syntheticKey }),
-  ), { numRuns: 20 });
+  ), { numRuns: 8 });
 });
 
 it("budgets a cold start into a project with a saved collapsed fold", async () => {

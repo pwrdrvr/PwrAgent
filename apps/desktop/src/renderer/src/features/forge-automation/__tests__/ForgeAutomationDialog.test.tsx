@@ -119,6 +119,70 @@ describe("ForgeAutomationDialog", () => {
     await waitFor(() => expect(back.props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
   });
 
+  it("marks a contribution fork's project as never merging, and the offers switch then names only reviews", async () => {
+    const { props } = renderDialog();
+    const merging = screen.getByRole("group", { name: "Merging" });
+    const never = within(merging).getByRole("checkbox", { name: "Never merge this project's pull requests" });
+    expect(never).not.toBeChecked();
+    fireEvent.click(never);
+    const cards = screen.getByRole("group", { name: "To-do cards" });
+    expect(within(cards).getByRole("checkbox", { name: "Review offers" }))
+      .toHaveAccessibleDescription("A Review card when CI passes on unreviewed changes.");
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith({ ...DEFAULT_PROJECT_FORGE_AUTOMATION, neverMerge: true }));
+    cleanup();
+    const back = renderDialog({ automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, neverMerge: true } });
+    const stored = screen.getByRole("checkbox", { name: "Never merge this project's pull requests" });
+    expect(stored).toBeChecked();
+    fireEvent.click(stored);
+    save();
+    await waitFor(() => expect(back.props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
+  });
+
+  it("lists the branches a never-merge project still merges into, and saves them only with Never merge on", async () => {
+    const { props } = renderDialog();
+    const merging = screen.getByRole("group", { name: "Merging" });
+    expect(within(merging).queryByRole("textbox")).not.toBeInTheDocument();
+    fireEvent.click(within(merging).getByRole("checkbox", { name: "Never merge this project's pull requests" }));
+    const input = within(merging).getByRole("textbox", { name: "Branch that still merges" });
+    const add = within(merging).getByRole("button", { name: "Add" });
+    expect(add).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: " pwrdrvr " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(within(merging).getByRole("list", { name: "Except pull requests into" })).toHaveTextContent("pwrdrvr");
+    expect(input).toHaveValue("");
+    // Merge cards come back for those PRs, so the offers switch names them again.
+    expect(screen.getByRole("checkbox", { name: "Review and merge offers" })).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "pwrdrvr" } });
+    fireEvent.click(add);
+    expect(within(merging).getByRole("alert")).toHaveTextContent("pwrdrvr is already listed.");
+    fireEvent.change(input, { target: { value: "two words" } });
+    expect(within(merging).queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(add);
+    expect(input).toHaveAccessibleDescription(/Enter one branch name, without spaces/);
+    fireEvent.change(input, { target: { value: "release" } });
+    fireEvent.click(add);
+    const remove = within(merging).getByRole("button", { name: "Remove release" });
+    remove.focus();
+    fireEvent.click(remove);
+    // The removed row took its button with it, so focus lands on the field.
+    expect(input).toHaveFocus();
+
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith({
+      ...DEFAULT_PROJECT_FORGE_AUTOMATION, neverMerge: true, mergeBranches: ["pwrdrvr"],
+    }));
+    cleanup();
+
+    // Turning Never merge off drops the list from what is saved.
+    const back = renderDialog({ automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, neverMerge: true, mergeBranches: ["pwrdrvr"] } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Never merge this project's pull requests" }));
+    save();
+    await waitFor(() => expect(back.props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
+  });
+
   it("hides the offers switch while paused, since a paused project gets no offers", () => {
     renderDialog();
     fireEvent.click(screen.getByRole("radio", { name: "Paused" }));
@@ -210,5 +274,73 @@ describe("ForgeAutomationDialog", () => {
     expect(tabEscapes(dialog)).toEqual({ forward: [], backward: [] });
     pressEscape();
     expect(props.onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("adds a hands-off label rule from a suggested repository and saves it", async () => {
+    const { props } = renderDialog({ repositorySuggestions: ["pwrdrvr/t3code", "pingdotgg/t3code"] });
+    const group = screen.getByRole("group", { name: "Hands-off pull requests" });
+    expect(within(group).queryByRole("list", { name: "Hands-off rules" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(group).getByRole("button", { name: "pingdotgg/t3code" }));
+    expect(within(group).getByRole("textbox", { name: "Repository" })).toHaveValue("pingdotgg/t3code");
+    fireEvent.change(within(group).getByRole("textbox", { name: "Label" }), { target: { value: " takeover:* " } });
+    fireEvent.click(within(group).getByRole("button", { name: "Add rule" }));
+
+    const rules = within(group).getByRole("list", { name: "Hands-off rules" });
+    expect(within(rules).getByText("pingdotgg/t3code")).toBeInTheDocument();
+    expect(within(rules).getByText("labeled takeover:*")).toBeInTheDocument();
+    expect(within(group).getByRole("textbox", { name: "Repository" })).toHaveValue("");
+
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith({
+      ...DEFAULT_PROJECT_FORGE_AUTOMATION,
+      handsOff: [{ repository: "pingdotgg/t3code", label: "takeover:*" }],
+    }));
+  });
+
+  it("refuses a repository that is not owner/name and a duplicate rule", () => {
+    renderDialog({
+      automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, handsOff: [{ repository: "pingdotgg/t3code" }] },
+    });
+    const group = screen.getByRole("group", { name: "Hands-off pull requests" });
+    const repository = within(group).getByRole("textbox", { name: "Repository" });
+
+    fireEvent.change(repository, { target: { value: "t3code" } });
+    fireEvent.keyDown(repository, { key: "Enter" });
+    expect(within(group).getByRole("alert")).toHaveTextContent("Enter the repository as owner/name.");
+    expect(repository).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(repository, { target: { value: "https://github.com/PingDotGG/T3Code" } });
+    fireEvent.click(within(group).getByRole("button", { name: "Add rule" }));
+    expect(within(group).getByRole("alert")).toHaveTextContent("That rule is already in the list.");
+  });
+
+  it("will not save while the add row holds a rule that was never added", async () => {
+    const { props } = renderDialog();
+    const group = screen.getByRole("group", { name: "Hands-off pull requests" });
+    const repository = within(group).getByRole("textbox", { name: "Repository" });
+    fireEvent.change(repository, { target: { value: "canvas-org/canvas" } });
+
+    save();
+    expect(await screen.findByText("Add the hands-off rule you typed, or clear it, before saving."))
+      .toBeInTheDocument();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(repository, { target: { value: "" } });
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
+  });
+
+  it("removes a rule, and saves no list once the last one is gone", async () => {
+    const { props } = renderDialog({
+      automation: {
+        ...DEFAULT_PROJECT_FORGE_AUTOMATION,
+        handsOff: [{ repository: "pingdotgg/t3code", label: "takeover:*" }],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove pingdotgg/t3code, labeled takeover:*" }));
+    expect(screen.queryByRole("list", { name: "Hands-off rules" })).not.toBeInTheDocument();
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
   });
 });

@@ -65,6 +65,7 @@ export type PrAutoDispatchOutcome = {
     | "missing-head"
     | "disabled"
     | "project-off"
+    | "hands-off"
     | "busy"
     | "pending"
     | "duplicate"
@@ -128,6 +129,16 @@ export class PrAutoDispatchCoordinator {
         identity: { backend: AppServerBackendKind; threadId: string },
         kind: ThreadPrAutoDispatchEventKind,
       ) => boolean;
+      /**
+       * Why the thread's project leaves this PR to its maintainers (a Forge
+       * Automation hands-off rule), or undefined. Read at scheduling, at
+       * dispatch and at admission, so a label added after a repair was
+       * scheduled cancels it.
+       */
+      handsOff?: (
+        identity: { backend: AppServerBackendKind; threadId: string },
+        pr: PrSummary,
+      ) => string | undefined;
       refreshPendingPrs?: (
         pending: ThreadPrAutoDispatchPending[],
       ) => Promise<ReadonlySet<string>>;
@@ -177,6 +188,17 @@ export class PrAutoDispatchCoordinator {
         resolvedKinds,
         now: params.observedAt,
       });
+
+      const handsOff = this.options.handsOff?.(identity, params.pr);
+      if (handsOff) {
+        const record = await this.options.store
+          .getThreadPrAutoDispatchPending(identity);
+        if (record?.pending.prKey === prKey) {
+          await this.cancelForProject(identity, record.pending, params.observedAt, `Cancelled: ${handsOff}`);
+        }
+        outcomes.push({ threadKey, status: "hands-off" });
+        continue;
+      }
 
       // The project's Forge Automation narrows the incident to the kinds it
       // allows; the fingerprint follows, so dispatch can tell a change.
@@ -430,6 +452,11 @@ export class PrAutoDispatchCoordinator {
       prKey: record.pending.prKey,
     })) ?? true;
     const currentPr = this.options.getCurrentPr?.(record.pending.prKey);
+    const handsOff = currentPr && this.options.handsOff?.(identity, currentPr);
+    if (handsOff) {
+      await this.cancelForProject(identity, record.pending, this.now(), `Cancelled: ${handsOff}`);
+      return;
+    }
     const currentEvent = currentPr
       ? buildPrAutoDispatchEvent(currentPr, this.kindFilter(identity))
       : undefined;
@@ -541,11 +568,13 @@ export class PrAutoDispatchCoordinator {
     }
 
     let admissionHold: string | undefined;
+    let admissionHandsOff: string | undefined;
     const canAdmit = async () => {
       const latest = this.options.getCurrentPr?.(record.pending.prKey);
       const latestEvent = latest && buildPrAutoDispatchEvent(latest, this.kindFilter(identity));
       if (latest && latestEvent?.fingerprint === fingerprint) {
-        admissionHold = await this.options.stackHold?.(latest);
+        admissionHandsOff = this.options.handsOff?.(identity, latest);
+        admissionHold = admissionHandsOff ?? await this.options.stackHold?.(latest);
         return !admissionHold;
       }
       return false;
@@ -554,6 +583,11 @@ export class PrAutoDispatchCoordinator {
     if (lateHold) {
       await this.restoreAfterBusy(identity, fingerprint, this.now());
       this.clearTimer(this.threadKey(identity));
+      if (admissionHandsOff) {
+        // Hands-off is no hold to wait out: drop the repair, as dispatch does.
+        await this.cancelForProject(identity, record.pending, this.now(), `Cancelled: ${admissionHandsOff}`);
+        return;
+      }
       activity(admissionHold ?? "The PR observation changed before repair admission", "warning");
       return;
     }
@@ -750,6 +784,7 @@ export class PrAutoDispatchCoordinator {
     identity: { backend: AppServerBackendKind; threadId: string },
     pending: Pick<ThreadPrAutoDispatchPending, "fingerprint" | "prKey">,
     now: number,
+    message = "Cancelled: off in this project's Forge Automation",
   ): Promise<boolean> {
     const cancelled = await this.options.store.cancelThreadPrAutoDispatch({
       ...identity,
@@ -765,7 +800,7 @@ export class PrAutoDispatchCoordinator {
       threadKeys: [this.threadKey(identity)],
       prKeys: [pending.prKey],
       tone: "warning",
-      message: "Cancelled: off in this project's Forge Automation",
+      message,
     });
     await this.notifyPending(identity, null);
     return true;

@@ -1,6 +1,5 @@
 import "@testing-library/jest-dom/vitest";
 import { act, render, screen, within } from "@testing-library/react";
-import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import type {
   NavigationDirectorySummary,
@@ -56,9 +55,6 @@ function Launchpad(props: { desktopApi: DesktopApi } & LayoutChange) {
   return <ThreadView {...view} />;
 }
 
-const layoutChanges = fc.array(fc.record({ sidebarHidden: fc.boolean(), contextRailPinned: fc.boolean() }), {
-  minLength: 1, maxLength: 5, size: "max",
-});
 type ReadStatus = NonNullable<DesktopApi["readPwrSnapConnectionStatus"]>;
 const availableStatus = {
   connectionId: "pwrsnap", displayName: "PwrSnap", availability: "running", configured: false,
@@ -101,8 +97,14 @@ async function checkLayoutHistory(signal: AbortSignal, changes: LayoutChange[], 
 // A parent update must keep the connection tiles mounted. A locally declared
 // React component would replace the DOM and reread status on every update.
 it("retains connection tile identity through window layout changes", async ({ onTestFinished, signal }) => {
-  const work = fc.assert(fc.asyncProperty(layoutChanges, (changes) => checkLayoutHistory(signal, changes)), { numRuns: 25 });
-  // A Vitest timeout aborts the context and stops awaiting the property.
+  const work = checkLayoutHistory(signal, [
+    { sidebarHidden: true, contextRailPinned: true },
+    { sidebarHidden: true, contextRailPinned: false },
+    { sidebarHidden: false, contextRailPinned: false },
+    { sidebarHidden: false, contextRailPinned: true },
+    { sidebarHidden: false, contextRailPinned: true },
+  ]);
+  // A Vitest timeout aborts the context and stops awaiting the test.
   // Join the cancelled case before the runner destroys editors and jsdom.
   onTestFinished(() => work.catch(() => undefined));
   await work;

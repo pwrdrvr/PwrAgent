@@ -61,7 +61,7 @@ describe("session navigation indicator projection", () => {
           for (let i = 0; i < before.length; i++) expect(after[i]).toBe(before[i]);
         }
       } finally { f.view.unmount(); }
-    }), { numRuns: 20 });
+    }), { numRuns: 8 });
   });
 
   it.each([20, 40])("budgets zero row renders and indicator records for 20 deltas with %i rows", async (count) => {

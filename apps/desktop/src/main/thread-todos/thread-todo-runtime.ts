@@ -1,6 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { assertMergeNotHeld } from "../app-server/thread-dependency-merge-hold";
+import { getProjectForgeAutomationIndex } from "../app-server/project-forge-automation-index";
+import {
+  buildProjectNeverMergeError,
+  projectMergesPullRequest,
+  resolveProjectNeverMergePolicy,
+} from "@pwragent/shared/project-forge-automation";
 import { ciApprovalsForDependency } from "../app-server/thread-dependency-ci-runs";
 import { createThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -42,6 +48,7 @@ import { buildPullRequestReferenceUrl } from "../pr-status/forge-reference";
 import { resolveGitHubRepoForCheckoutAction } from "../pr-status/git-remote";
 import { parsePrRefFromUrl } from "../pr-status/github-graphql-client";
 import { GithubPrFetcher } from "../pr-status/github-pr-fetcher.js";
+import { readPullRequestBase } from "../pr-status/pull-request-base-lookup";
 import { createThreadTodoStorage } from "../storage/desktop-runtime-storage.js";
 import {
   findPeerThreadTodoProject,
@@ -191,8 +198,11 @@ export async function setThreadTodoProject(
   } = {},
 ): Promise<ThreadTodo> {
   const todos = deps.todos ?? getThreadTodoService();
-  if (!threadTodoProjectIsChoosable(todos.get(params.id))) {
-    throw new ThreadTodoError("invalid_arguments", "A review or merge card runs in its own thread's project.");
+  const todo = todos.get(params.id);
+  if (!threadTodoProjectIsChoosable(todo)) {
+    throw new ThreadTodoError("invalid_arguments", todo.action?.type === "add_forge_hands_off_rule"
+      ? "A hands-off rule card adds the rule to its own thread's project."
+      : "A review or merge card runs in its own thread's project.");
   }
   if (params.projectKey === null) {
     return todos.update({ id: params.id, targetProject: null });
@@ -730,6 +740,21 @@ async function readThreadTodoDestinationCatalog(
   return catalog;
 }
 
+/** Saves a hands-off rule card's rule; the owner's app-server service. */
+export type ThreadTodoHandsOffRuleWriter = (request: {
+  backend: AppServerBackendKind;
+  threadId: string;
+  repository: string;
+  label?: string;
+}) => Promise<{ summary: string }>;
+
+let handsOffRuleWriter: ThreadTodoHandsOffRuleWriter | undefined;
+
+/** Installed by the owner services, which hold Forge Automation. */
+export function setThreadTodoHandsOffRuleWriter(writer: ThreadTodoHandsOffRuleWriter | undefined): void {
+  handsOffRuleWriter = writer;
+}
+
 /**
  * The main-process actions behind a card's buttons: merging through gh, and
  * starting a thread here or, through the federation tools, on a peer.
@@ -795,6 +820,20 @@ export function createThreadTodoRunners(params: {
       return { summary: `Sent to ${request.target.title ?? request.target.threadId}` };
     },
     mergePullRequest: async (request) => {
+      // A card raised before the project was set to never merge, or by an
+      // older build, must not land the PR either.
+      const project = getProjectForgeAutomationIndex().resolveThread({
+        backend: request.sourceBackend, threadId: request.sourceThreadId,
+      });
+      // The base comes from this owner's PR status; one not read yet counts
+      // as a branch the project does not merge into.
+      const never = resolveProjectNeverMergePolicy(project);
+      if (never && !projectMergesPullRequest(project?.automation, readPullRequestBase(
+        { backend: request.sourceBackend, threadId: request.sourceThreadId },
+        request.pullRequest,
+      ))) {
+        throw new Error(buildProjectNeverMergeError(never));
+      }
       const overlay = getDesktopOverlayStore();
       const assertNotHeld = (pullRequest: string) => assertMergeNotHeld(createThreadDependencyStorage().active(), {
         backend: request.sourceBackend, threadId: request.sourceThreadId, pullRequest,
@@ -803,6 +842,15 @@ export function createThreadTodoRunners(params: {
       return await new GithubPrFetcher().mergePullRequest({
         ...request, thread: { backend: request.sourceBackend, threadId: request.sourceThreadId },
         assertCanMerge: assertNotHeld, checkStackOrder: true,
+      });
+    },
+    addForgeHandsOffRule: async (request) => {
+      if (!handsOffRuleWriter) throw new Error("Forge Automation is not available here.");
+      return await handsOffRuleWriter({
+        backend: request.sourceBackend,
+        threadId: request.sourceThreadId,
+        repository: request.repository,
+        ...(request.label ? { label: request.label } : {}),
       });
     },
     startThread: async ({

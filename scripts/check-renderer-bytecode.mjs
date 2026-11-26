@@ -52,7 +52,7 @@ async function checkBytecode() {
       modules.push({ file, variant: "minified", code: minified.code });
     }
 
-    const { records } = await compileBytecode(modules);
+    const { records } = await compileBytecode(modules, { cwd: repoRoot });
 
     const reportIndex = process.argv.indexOf("--report");
     if (reportIndex !== -1) {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_STAR_MAP_PREFERENCES,
   readStoredPreferences,
+  writeStoredPreferences,
 } from "../star-map-preferences";
 
 const STORAGE_KEY = "pwragent.starMap.viewPreferences";
@@ -58,5 +59,22 @@ describe("star map view preferences", () => {
     expect(preferences.cardFields.primaryDirectory).toBe(
       DEFAULT_STAR_MAP_PREFERENCES.cardFields.primaryDirectory,
     );
+  });
+
+  it("hides offline instances by default and upgrades unversioned legacy blobs", () => {
+    expect(DEFAULT_STAR_MAP_PREFERENCES.hideOfflineInstances).toBe(true);
+    expect(readStoredPreferences().hideOfflineInstances).toBe(true);
+
+    // Pre-v2 blobs serialized `hideOfflineInstances: false` whenever any
+    // other View option was saved; upgrade them to the new default.
+    seed({ layout: "orbit", hideOfflineInstances: false });
+    expect(readStoredPreferences().hideOfflineInstances).toBe(true);
+
+    // Explicit opt-in persisted through `writeStoredPreferences` is preserved.
+    writeStoredPreferences({
+      ...DEFAULT_STAR_MAP_PREFERENCES,
+      hideOfflineInstances: false,
+    });
+    expect(readStoredPreferences().hideOfflineInstances).toBe(false);
   });
 });

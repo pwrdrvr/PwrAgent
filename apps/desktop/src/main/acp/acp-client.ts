@@ -8,10 +8,15 @@ import {
   findAcpMirroredModeConfigOption,
 } from "@pwragent/shared/acp-permission-mode";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
+import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { ACP_AGENT_ELICITATION_META_KEY } from "@pwragent/shared/mcp-elicitation-purpose";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
+import { isAcpCompactPromptBlocks } from "./acp-compact";
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
+  AppServerMcpElicitationRequestNotification,
+  AppServerMcpElicitationSchema,
   AppServerPendingRequestNotification,
   AppServerThreadReplay,
   AppServerThreadMessagePart,
@@ -31,6 +36,8 @@ import {
   acpSessionReplayNormalizerOptions,
   isAcpUserBoilerplateMessage,
   readAcpContentText,
+  readAcpMessageParts,
+  readAcpToolCallId,
   readAcpTopicTitle,
   readAcpUpdateTimestamp,
   loadAcpReplayKit,
@@ -54,6 +61,8 @@ import {
   type AcpProviderStatus,
 } from "./acp-provider-status.js";
 import {
+  readAcpMcpToolName,
+  readAcpProviderTool,
   readAcpToolCommand,
   readAcpToolContentCommand,
   readAcpToolText,
@@ -80,6 +89,7 @@ import {
 } from "./acp-usage.js";
 import type { JsonRpcId } from "@pwrdrvr/agent-transport";
 import { ANTIGRAVITY_CALL_PWRAGENT_TOOL, readPwrAgentCallTarget } from "../agent-tools/antigravity-mcp-catalog.js";
+import { isManagedReviewLedgerToolName } from "../agent-tools/pwragent-managed-review-ledger-tools.js";
 import { getMainLogger } from "../log.js";
 import {
   ACP_WORKSPACE_HANDOFF_RECORD,
@@ -87,6 +97,12 @@ import {
   acpWorkspaceContinuationText,
   acpWorkspaceHistory,
 } from "./acp-workspace-history.js";
+import {
+  acpElicitationUserInput,
+  grokAskUserQuestionInput,
+  userInputAnswers,
+  type GrokAskUserQuestionResponse,
+} from "./acp-user-input.js";
 
 const acpClientLog = getMainLogger("pwragent:acp-client");
 
@@ -177,6 +193,7 @@ export type { AcpMcpServerConfig, AcpMcpServerWireConfig } from "@pwrdrvr/agent-
 export type AcpMcpServerRegistration = {
   servers: AcpMcpServerConfig[];
   managedConnectionsViaGateway?: true;
+  managedReviewLedgerAvailable?: true;
   bindThread?: (threadId: string) => Promise<void> | void;
   readListedJobMonitorCreation?: () => boolean | undefined;
   /**
@@ -203,6 +220,9 @@ export function mergeMcpServerRegistrations(
     servers: present.flatMap((registration) => registration.servers),
     ...(present.some((registration) => registration.managedConnectionsViaGateway)
       ? { managedConnectionsViaGateway: true }
+      : {}),
+    ...(present.some((registration) => registration.managedReviewLedgerAvailable)
+      ? { managedReviewLedgerAvailable: true }
       : {}),
     readListedJobMonitorCreation: present.find((entry) => entry.readListedJobMonitorCreation)?.readListedJobMonitorCreation,
     ...(approvers.length ? {
@@ -323,6 +343,8 @@ type AcpActiveTurn = {
   assistantText: string;
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
+  /** The prompt itself is a leading `/compact` slash command. */
+  isCompactCommand?: boolean;
   sentAgentMemory?: boolean;
   sentWorkspaceContext?: boolean;
   cancelBeforePrompt?: () => void;
@@ -359,6 +381,7 @@ type AcpSuppressedControlPrompt = {
 
 type AcpHydratedSessionHistory = {
   isComplete: boolean;
+  hasReplay?: boolean;
   antigravityReplayPrompts?: AcpReplayPromptIdentity[];
 };
 
@@ -409,6 +432,7 @@ export type AcpAgentClientOptions = {
     cwd: string;
     runtimeCapabilities?: BackendAcpRuntimeCapabilities;
     sessionId?: string;
+    managedReview?: boolean;
   }) =>
     | AcpMcpServerConfig[]
     | AcpMcpServerRegistration
@@ -488,10 +512,14 @@ export class AcpAgentClient {
    * session/load would bring back neither. They are never idle-closed.
    */
   private readonly sessionsWithoutFaithfulReload = new Set<string>();
+  private readonly pendingManagedReviewSessions = new Set<string>();
   /** The `agentToolCatalogKey` each session's MCP servers started under, by app session id. */
   private readonly sessionAgentToolCatalogKeys = new Map<string, string>();
   /** The MCP servers each session's agent last received. */
   private readonly sessionMcpServers = new Map<string, AcpSessionMcpServers>();
+  /** Managed review child sessions that received the in-memory candidate ledger MCP server. */
+  private readonly managedReviewLedgerSessions = new Set<string>();
+  private readonly managedReviewLedgerToolCalls = new Map<string, Map<string, string>>();
   /** MCP tools the operator allowed for the rest of a thread. */
   private readonly sessionMcpToolGrants = new Map<string, Set<string>>();
   private readonly now: () => number;
@@ -562,6 +590,11 @@ export class AcpAgentClient {
       clientCapabilities: {
         auth: {
           terminal: false,
+        },
+        // Without this, Antigravity's ask_question degrades to the questions
+        // as plain assistant text and ends the turn unanswered.
+        elicitation: {
+          form: {},
         },
         fs: {
           readTextFile: false,
@@ -729,6 +762,7 @@ export class AcpAgentClient {
       !this.loadedSessionCwds.has(protocolSessionId)
       || (idleClosed && !idleClosed.workerOpen)
       || this.sessionsWithoutFaithfulReload.has(sessionId)
+      || this.pendingManagedReviewSessions.has(sessionId)
       || this.activeTurns.has(sessionId)
       || this.pendingPermissionRequests.has(sessionId)
       || this.loadingSessions.has(protocolSessionId)
@@ -862,6 +896,9 @@ export class AcpAgentClient {
     this.idleClosedSessions.delete(sessionId);
     this.pendingPermissionRequests.delete(sessionId);
     this.sessionsWithoutFaithfulReload.delete(sessionId);
+    this.retireManagedReviewSession(sessionId);
+    this.managedReviewLedgerSessions.delete(sessionId);
+    this.managedReviewLedgerToolCalls.delete(sessionId);
     this.sessionAgentToolCatalogKeys.delete(sessionId);
     const previousMcpServers = this.sessionMcpServers.get(sessionId);
     if (retainMcpGrants && previousMcpServers && this.sessionMcpToolGrants.has(sessionId)) {
@@ -875,6 +912,15 @@ export class AcpAgentClient {
     this.jobMonitorCatalogs.delete(sessionId);
     this.grokBackgroundSessions.delete(sessionId);
     this.antigravityBackgroundCommands.delete(sessionId);
+  }
+
+  sessionSupportsManagedReviewLedger(sessionId: string): boolean {
+    return this.managedReviewLedgerSessions.has(sessionId);
+  }
+
+  /** Managed review children need their original catalog only for one turn. */
+  retireManagedReviewSession(sessionId: string): void {
+    this.pendingManagedReviewSessions.delete(sessionId);
   }
 
   supportsTurnSteering(): boolean {
@@ -920,6 +966,9 @@ export class AcpAgentClient {
     this.pendingPermissionRequests.clear();
     this.idleClosedSessions.clear();
     this.sessionsWithoutFaithfulReload.clear();
+    this.pendingManagedReviewSessions.clear();
+    this.managedReviewLedgerSessions.clear();
+    this.managedReviewLedgerToolCalls.clear();
     this.jobMonitorCatalogs.clear();
     this.grokBackgroundSessions.clear();
     this.antigravityBackgroundCommands.clear();
@@ -1105,6 +1154,11 @@ export class AcpAgentClient {
     if (activeTurn.pendingSteerHandoff) {
       throw new Error("Another Antigravity steering request is already in flight");
     }
+    const session = this.options.store.getSession(this.options.backendId, params.sessionId);
+    const isCompactCommand = isAcpCompactPromptBlocks(
+      params.content,
+      session?.availableCommands,
+    );
     const nextGeneration = activeTurn.promptGeneration + 1;
     const messageId = `user:${activeTurn.turnId}:steer:${params.interjectionId}`;
     const displayPrompt = params.prompt ?? params.text;
@@ -1113,6 +1167,9 @@ export class AcpAgentClient {
     let nextPromptSettled = false;
 
     const adoptSteer = (): void => {
+      if (isCompactCommand) {
+        activeTurn.isCompactCommand = true;
+      }
       // This receipt describes provider acceptance. The history write can
       // fail after ownership has already moved to the replacement prompt.
       handoff.resolve();
@@ -1260,6 +1317,7 @@ export class AcpAgentClient {
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
+    managedReview?: boolean;
     /** An agent-requested review cannot prompt until the caller's mode is confirmed. */
     requiredAntigravityMode?: string;
     mcpServers?: "default" | "none";
@@ -1299,6 +1357,7 @@ export class AcpAgentClient {
         : await this.buildMcpServers({
             cwd,
             sessionId: params.sessionId,
+            ...(params.managedReview ? { managedReview: true } : {}),
           });
     const additional = params.additionalMcpRegistration;
     const mcpRegistration = defaultMcpRegistration.managedConnectionsViaGateway
@@ -1395,6 +1454,12 @@ export class AcpAgentClient {
     this.touchSession(appSessionId);
     if (params.sessionMeta || params.mcpServers === "none") {
       this.sessionsWithoutFaithfulReload.add(appSessionId);
+    }
+    if (params.managedReview) this.pendingManagedReviewSessions.add(appSessionId);
+    if (mcpRegistration.managedReviewLedgerAvailable) {
+      this.managedReviewLedgerSessions.add(appSessionId);
+    } else {
+      this.managedReviewLedgerSessions.delete(appSessionId);
     }
     if (!params.hidden && !this.sessionsWithoutFaithfulReload.has(appSessionId)) {
       this.rememberJobMonitorCatalog(appSessionId, mcpRegistration, jobMonitorCreationEnabled, false);
@@ -1517,12 +1582,21 @@ export class AcpAgentClient {
       const replayPrompts = localHistory.antigravityReplayPrompts;
       // Antigravity's prompt identities annotate a clean provider transcript.
       // Other incomplete fallbacks provide timestamps that agents such as
-      // Kimi omit, so those fallbacks merge with the incoming replay.
-      if (localHistory.isComplete || replayPrompts) {
+      // Kimi omit, so those fallbacks merge with the incoming replay without
+      // enabling provider-prompt-replay mode on the hydrated fallback.
+      const useFreshProviderNormalizer =
+        localHistory.isComplete
+        || !localHistory.hasReplay
+        || (this.options.backendId === "acp:antigravity" && Boolean(replayPrompts));
+      if (useFreshProviderNormalizer) {
         this.normalizers.delete(metadata.sessionId);
       }
-      const providerNormalizer = replayPrompts && this.normalizerFor(metadata.sessionId);
-      if (replayPrompts) providerNormalizer?.beginProviderPromptReplay(replayPrompts);
+      const providerNormalizer = useFreshProviderNormalizer && replayPrompts
+        ? this.normalizerFor(metadata.sessionId)
+        : undefined;
+      if (replayPrompts && providerNormalizer) {
+        providerNormalizer.beginProviderPromptReplay(replayPrompts);
+      }
       try {
         await this.ensureSession(hydratedMetadata, {
           suppressTranscriptReplay: false,
@@ -1700,12 +1774,21 @@ export class AcpAgentClient {
      */
     agentInstructions?: string;
     readAgentMemory?: () => Promise<string | undefined>;
+    /** Explicit marker when the caller already resolved this turn as a compact command. */
+    isCompactCommand?: boolean;
   }): Promise<{ sessionId: string; turnId: string }> {
     this.assertPromptAccess(params.sessionId);
     const session = this.options.store.getSession(this.options.backendId, params.sessionId);
-    const needsWorkspaceContext = session?.antigravityWorkspaceRebound && !session.antigravityWorkspaceContextDelivered;
     const prompt = params.promptContent ? [...params.promptContent] : textPrompt(params.prompt);
-    if (needsWorkspaceContext) {
+    const isCompactCommand =
+      params.isCompactCommand === true
+      || isAcpCompactPromptBlocks(prompt, session?.availableCommands);
+    const needsWorkspaceContext = Boolean(
+      !isCompactCommand
+      && session?.antigravityWorkspaceRebound
+      && !session.antigravityWorkspaceContextDelivered,
+    );
+    if (needsWorkspaceContext && session) {
       const priorWorkspace = this.workspaceHistory(session).previous;
       if (!priorWorkspace) throw new Error("Couldn't recover this thread's previous workspace history.");
       prompt.push({
@@ -1715,6 +1798,7 @@ export class AcpAgentClient {
     }
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
+    activeTurn.isCompactCommand = isCompactCommand;
     activeTurn.sentWorkspaceContext = needsWorkspaceContext;
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
@@ -1726,6 +1810,7 @@ export class AcpAgentClient {
       turnId,
       agentInstructions: params.agentInstructions?.trim(),
       readAgentMemory: params.readAgentMemory,
+      isCompactCommand,
       onDispatch: () => {
         const receivedAt = this.now();
         this.normalizerFor(params.sessionId).recordUserPrompt({
@@ -1823,6 +1908,14 @@ export class AcpAgentClient {
           throw responseError;
         }
         const receivedAt = this.now();
+        // A completed `/compact` command summarizes earlier turns (including
+        // any prior instruction block) even when the token drop is under 50%.
+        // Cancelled compactions leave history intact. Fold clearing the digest
+        // into finishTrackedTurn's idle write so no extra SQLite commit occurs.
+        const clearAgentInstructionsDigest = !cancelled && Boolean(activeTurn.isCompactCommand);
+        if (clearAgentInstructionsDigest) {
+          activeTurn.compacted = true;
+        }
         // A prompt that session/cancel stopped settles normally, with
         // stopReason cancelled. Carry that through, so the transcript and
         // the terminal event say the turn was interrupted, not completed.
@@ -1831,6 +1924,7 @@ export class AcpAgentClient {
           receivedAt,
           cancelled ? "interrupted" : "completed",
           !cancelled && activeTurn.sentWorkspaceContext,
+          clearAgentInstructionsDigest,
         );
         this.appendHistoryUpdate(sessionId, receivedAt, {
           kind: "turn_finished",
@@ -2609,6 +2703,12 @@ export class AcpAgentClient {
     params: Record<string, unknown>,
     id?: JsonRpcId,
   ): Promise<unknown> {
+    if (method === "elicitation/create") {
+      return await this.handleElicitationRequest(params, id);
+    }
+    if (GROK_ASK_USER_QUESTION_METHODS.has(method)) {
+      return await this.handleGrokAskUserQuestion(params, id);
+    }
     if (method !== "session/request_permission") {
       throw new Error(`Unsupported ACP request: ${method}`);
     }
@@ -2644,24 +2744,109 @@ export class AcpAgentClient {
       return cancelledPermissionOutcome();
     }
 
-    // A session waiting on the operator must stay open to hear the answer.
     const sessionId = request.params.threadId;
+    const response = await this.askOperator(sessionId, request);
+    const toolName = request.params.acpMcpToolName;
+    const allowOnce = allowOncePermissionOptionId(permissionOptions);
+    if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
+      const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
+      grants.add(toolName);
+      this.sessionMcpToolGrants.set(sessionId, grants);
+      return { outcome: { outcome: "selected", optionId: allowOnce } };
+    }
+    return permissionOutcomeFromResponse(response, permissionOptions);
+  }
+
+  /**
+   * Ask an agent's form elicitation, such as Antigravity's ask_question.
+   * A form of choices and text is asked on the questionnaire card, one
+   * question at a time; any other form is shown on the MCP elicitation card.
+   * Either way the answer goes back in ACP's shape. Only form mode is
+   * advertised, and only a session can show a card, so anything else is
+   * declined without asking.
+   */
+  private async handleElicitationRequest(
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): Promise<AcpElicitationResponse> {
+    const protocolSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;
+    const message = typeof params.message === "string" ? params.message.trim() : "";
+    if (params.mode !== "form" || !protocolSessionId || !message || id == null) {
+      return { action: "decline" };
+    }
+    const sessionId = this.appSessionIdFor(protocolSessionId);
+    const session = this.options.store.getSession(this.options.backendId, sessionId);
+    if (session?.approvalPolicy === "deny-all" || !this.options.onRequest) {
+      return { action: "cancel" };
+    }
+    const turnId = this.activeTurns.get(sessionId)?.turnId;
+    const questions = acpElicitationUserInput(params);
+    if (questions) {
+      const toolCallId = typeof params.toolCallId === "string" ? params.toolCallId : undefined;
+      const answers = userInputAnswers(await this.askOperator(sessionId, {
+        method: "item/tool/requestUserInput",
+        params: {
+          threadId: sessionId,
+          ...(turnId ? { turnId } : {}),
+          ...(toolCallId ? { itemId: toolCallId } : {}),
+          requestId: String(id),
+          questions: questions.questions,
+        },
+      }));
+      return answers ? { action: "accept", content: questions.content(answers) } : { action: "cancel" };
+    }
+    return acpElicitationResponse(await this.askOperator(sessionId, {
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: sessionId,
+        turnId: turnId ?? null,
+        requestId: String(id),
+        serverName: this.approvalRequesterName,
+        mode: "form",
+        message,
+        // Main's own marker, so the card names the agent's question as one.
+        _meta: { [ACP_AGENT_ELICITATION_META_KEY]: true },
+        requestedSchema: acpElicitationFormSchema(params.requestedSchema),
+      },
+    } satisfies AppServerMcpElicitationRequestNotification));
+  }
+
+  /** Grok's own question request, asked on the questionnaire card. */
+  private async handleGrokAskUserQuestion(
+    params: Record<string, unknown>,
+    id?: JsonRpcId,
+  ): Promise<GrokAskUserQuestionResponse> {
+    const input = grokAskUserQuestionInput(params);
+    if (!input || id == null || !this.options.onRequest) return { outcome: "cancelled" };
+    const sessionId = this.appSessionIdFor(input.sessionId);
+    const session = this.options.store.getSession(this.options.backendId, sessionId);
+    if (session?.approvalPolicy === "deny-all") return { outcome: "cancelled" };
+    const turnId = this.activeTurns.get(sessionId)?.turnId;
+    const answers = userInputAnswers(await this.askOperator(sessionId, {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: sessionId,
+        ...(turnId ? { turnId } : {}),
+        ...(input.toolCallId ? { itemId: input.toolCallId } : {}),
+        requestId: String(id),
+        questions: input.questions,
+      },
+    }));
+    return answers ? input.response(answers) : { outcome: "cancelled" };
+  }
+
+  /** A session waiting on the operator must stay open to hear the answer. */
+  private async askOperator(
+    sessionId: string,
+    request: AppServerPendingRequestNotification,
+  ): Promise<unknown> {
     this.pendingPermissionRequests.set(
       sessionId,
       (this.pendingPermissionRequests.get(sessionId) ?? 0) + 1,
     );
     this.touchSession(sessionId);
     try {
-      const response = await this.options.onRequest(request);
-      const toolName = request.params.acpMcpToolName;
-      const allowOnce = allowOncePermissionOptionId(permissionOptions);
-      if (toolName && allowOnce && isThreadToolGrantResponse(response, request)) {
-        const grants = this.sessionMcpToolGrants.get(sessionId) ?? new Set<string>();
-        grants.add(toolName);
-        this.sessionMcpToolGrants.set(sessionId, grants);
-        return { outcome: { outcome: "selected", optionId: allowOnce } };
-      }
-      return permissionOutcomeFromResponse(response, permissionOptions);
+      return await this.options.onRequest!(request);
     } finally {
       const remaining = (this.pendingPermissionRequests.get(sessionId) ?? 1) - 1;
       if (remaining > 0) this.pendingPermissionRequests.set(sessionId, remaining);
@@ -2812,16 +2997,14 @@ export class AcpAgentClient {
       this.normalizerOptionsFor(metadata),
     );
     let hasTranscriptHistory = false;
-    const antigravityReplayPrompts: AcpReplayPromptIdentity[] = [];
+    const replayPrompts: AcpReplayPromptIdentity[] = [];
     const { current: records } = this.workspaceHistory(metadata);
     for (const record of records) {
       if (isPwrAgentSyntheticAcpUpdate(record.update)) {
         continue;
       }
-      if (this.options.backendId === "acp:antigravity") {
-        const identity = readAntigravityReplayPromptIdentity(record);
-        if (identity) antigravityReplayPrompts.push(identity);
-      }
+      const identity = readReplayPromptIdentity(record);
+      if (identity) replayPrompts.push(identity);
       if (isTranscriptReplayUpdate(record.update)) {
         hasTranscriptHistory = true;
       }
@@ -2834,11 +3017,13 @@ export class AcpAgentClient {
     this.normalizers.set(metadata.sessionId, normalizer);
     const replay = normalizer.replay();
     const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
+    const needsPromptReplayOverlay =
+      (metadata.antigravityWorkspaceRebound && replayPrompts.length > 0)
+      || replayPrompts.some((prompt) => Boolean(prompt.steerMessageId || prompt.attachmentParts?.length));
     return {
       isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
-      antigravityReplayPrompts: ((metadata.antigravityWorkspaceRebound && antigravityReplayPrompts.length > 0)
-        || antigravityReplayPrompts.some((prompt) => prompt.steerMessageId))
-        ? antigravityReplayPrompts : undefined,
+      hasReplay,
+      antigravityReplayPrompts: needsPromptReplayOverlay ? replayPrompts : undefined,
     };
   }
 
@@ -3311,12 +3496,14 @@ export class AcpAgentClient {
   private async buildMcpServers(params: {
     cwd: string;
     sessionId?: string;
+    managedReview?: boolean;
   }): Promise<AcpMcpServerRegistration> {
     const registration = await this.options.mcpServers?.({
       backendId: this.options.backendId,
       cwd: params.cwd,
       runtimeCapabilities: this.runtimeCapabilities,
       sessionId: params.sessionId,
+      ...(params.managedReview ? { managedReview: true } : {}),
     });
     return Array.isArray(registration)
       ? { servers: registration }
@@ -3345,6 +3532,7 @@ export class AcpAgentClient {
     turnId: string;
     agentInstructions?: string;
     readAgentMemory?: () => Promise<string | undefined>;
+    isCompactCommand?: boolean;
     onDispatch?: () => void;
   }): Promise<unknown> {
     const activeTurn = this.activeTurns.get(params.sessionId);
@@ -3380,16 +3568,25 @@ export class AcpAgentClient {
       // The agent keeps the block in the session's history, so a session
       // loaded again (after an idle close or an app restart) is not sent it
       // a second time. The stored record says what this agent session holds.
-      const instructions = params.agentInstructions;
+      // Never prepend instructions or append memory to a `/compact` command:
+      // ACP agents such as Antigravity require `/compact` as leading text,
+      // and appending memory would turn bare `/compact` into compact-and-continue.
+      const storedSession = this.options.store.getSession(
+        this.options.backendId,
+        params.sessionId,
+      );
+      const isCompactCommand =
+        params.isCompactCommand === true
+        || isAcpCompactPromptBlocks(params.prompt, storedSession?.availableCommands);
+      const instructions = isCompactCommand ? undefined : params.agentInstructions;
       const digest = instructions === undefined
         ? undefined
         : agentInstructionsDigest(params.protocolSessionId, instructions);
       const sendInstructions = instructions !== undefined
-        && digest !== this.options.store.getSession(
-          this.options.backendId,
-          params.sessionId,
-        )?.agentInstructionsDigest;
-      const memory = params.readAgentMemory ? await params.readAgentMemory() : undefined;
+        && digest !== storedSession?.agentInstructionsDigest;
+      const memory = !isCompactCommand && params.readAgentMemory
+        ? await params.readAgentMemory()
+        : undefined;
       if (cancelledBeforePrompt) return cancelled;
       if (this.jobMonitorCatalogs.has(params.sessionId)) {
         await this.prepareJobMonitorCatalog(params.sessionId);
@@ -3434,6 +3631,7 @@ export class AcpAgentClient {
     completedAt: number,
     status: "completed" | "interrupted" = "completed",
     workspaceContextDelivered?: boolean,
+    clearAgentInstructionsDigest?: boolean,
   ): {
     assistantText: string;
     replay: AppServerThreadReplay;
@@ -3441,6 +3639,7 @@ export class AcpAgentClient {
   } {
     const activeTurn = this.activeTurns.get(sessionId);
     this.activeTurns.delete(sessionId);
+    this.retireManagedReviewSession(sessionId);
     // The idle clock starts when the turn ends, not when it began.
     this.touchSession(sessionId);
     const replay = this.normalizerFor(sessionId).recordTurnFinished(
@@ -3449,8 +3648,12 @@ export class AcpAgentClient {
       status,
     );
     // Use the existing idle write so remembering one accepted context block
-    // does not introduce another per-turn commit.
-    this.updateSessionStatus(sessionId, "idle", this.now(), { workspaceContextDelivered });
+    // or clearing delivered instructions after `/compact` does not introduce
+    // another per-turn commit.
+    this.updateSessionStatus(sessionId, "idle", this.now(), {
+      workspaceContextDelivered,
+      clearAgentInstructionsDigest,
+    });
     return {
       assistantText: activeTurn?.assistantText ?? "",
       replay,
@@ -3466,7 +3669,11 @@ export class AcpAgentClient {
       return;
     }
     const activeTurn = this.activeTurns.get(sessionId);
-    if (activeTurn?.assistantText.trim()) {
+    if (
+      activeTurn?.assistantText.trim()
+      || activeTurn?.isCompactCommand
+      || activeTurn?.compacted
+    ) {
       return;
     }
 
@@ -3565,38 +3772,94 @@ export class AcpAgentClient {
     // cannot prove that session/load returned usable transcript history, and
     // providers such as Kimi still need the local timestamps they omit.
     if (verifiedReplay?.lastTimestampedTranscriptAt !== undefined) {
-      if (this.options.backendId !== "acp:antigravity") return;
-      const identity = readAntigravityReplayPromptIdentity({ type: "update", receivedAt, update });
+      const identity = readReplayPromptIdentity({ type: "update", receivedAt, update });
       if (!identity) return;
-      // The provider owns the transcript. Keep only the metadata required
-      // to recognize local prompt boundaries on its next replay.
-      update = {
-        kind: "pwragent_antigravity_prompt_identity",
-        turnId: identity.turnId,
-        messageId: identity.steerMessageId,
-        textDigest: identity.textDigest,
-      };
+      const lightweightAttachments = persistableAttachmentParts(identity.attachmentParts);
+      if (this.options.backendId === "acp:antigravity") {
+        // The provider owns the transcript. Keep only the metadata required
+        // to recognize local prompt boundaries and lightweight attachment refs
+        // on its next replay.
+        update = {
+          kind: "pwragent_antigravity_prompt_identity",
+          turnId: identity.turnId,
+          messageId: identity.steerMessageId,
+          textDigest: identity.textDigest,
+          ...(lightweightAttachments?.length ? { attachmentParts: lightweightAttachments } : {}),
+        };
+      } else if (lightweightAttachments?.length) {
+        update = {
+          kind: "pwragent_prompt_attachments",
+          turnId: identity.turnId,
+          textDigest: identity.textDigest,
+          attachmentParts: lightweightAttachments,
+        };
+      } else {
+        return;
+      }
     }
     this.options.rolloutStore?.appendUpdate({
       backendId: this.options.backendId,
       sessionId,
       receivedAt,
-      update,
+      update: this.managedReviewRolloutUpdate(sessionId, update),
     });
+  }
+
+  private managedReviewRolloutUpdate(
+    sessionId: string,
+    update: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!this.managedReviewLedgerSessions.has(sessionId)) return update;
+    const kind = readUpdateKind(update);
+    if (kind !== "tool_call" && kind !== "tool_call_update") return update;
+
+    const id = readAcpToolCallId(update);
+    let calls = this.managedReviewLedgerToolCalls.get(sessionId);
+    const knownName = id ? calls?.get(id) : undefined;
+    const prefix = `mcp_${PWRAGENT_TOOL_NAMESPACE}_`;
+    const toolName = knownName ?? [
+      readAcpMcpToolName(update), readAcpProviderTool(update)?.name,
+      update.name, update.toolName, update.title,
+    ].flatMap((name) => typeof name === "string"
+      ? [name.startsWith(prefix) ? name.slice(prefix.length) : name]
+      : []).find(isManagedReviewLedgerToolName);
+    if (!toolName) return update;
+    if (id && !knownName) {
+      if (!calls) {
+        calls = new Map();
+        this.managedReviewLedgerToolCalls.set(sessionId, calls);
+      }
+      calls.set(id, toolName);
+    }
+    // Completion updates can carry a result without repeating the tool name.
+    // Write only transcript bookkeeping, including for future updates by ID.
+    return {
+      sessionUpdate: kind,
+      ...(id ? { toolCallId: id } : {}),
+      title: toolName,
+      status: update.status,
+    };
   }
 
   private updateSessionStatus(
     sessionId: string,
     status: AcpSessionMetadata["status"],
     receivedAt = this.now(),
-    options: AcpSessionMetadataUpdateOptions & { workspaceContextDelivered?: boolean } = {},
+    options: AcpSessionMetadataUpdateOptions & {
+      workspaceContextDelivered?: boolean;
+      clearAgentInstructionsDigest?: boolean;
+    } = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata) {
       return;
     }
+    const { agentInstructionsDigest, ...rest } = metadata;
     this.options.store.upsertSession({
-      ...metadata,
+      ...rest,
+      ...(!options.clearAgentInstructionsDigest && agentInstructionsDigest !== undefined
+        ? { agentInstructionsDigest }
+        : {}),
       status,
       ...(options.workspaceContextDelivered ? { antigravityWorkspaceContextDelivered: true } : {}),
       updatedAt:
@@ -4004,6 +4267,30 @@ function isThreadToolGrantResponse(
       .includes(decision.toLowerCase());
 }
 
+/** Grok Build sends the underscore form; t3code also accepts the bare name. */
+const GROK_ASK_USER_QUESTION_METHODS = new Set(["_x.ai/ask_user_question", "x.ai/ask_user_question"]);
+
+type AcpElicitationResponse =
+  | { action: "accept"; content: Record<string, unknown> }
+  | { action: "decline" }
+  | { action: "cancel" };
+
+/** Anything but an explicit accept or decline is a dismissal. */
+export function acpElicitationResponse(response: unknown): AcpElicitationResponse {
+  const record = asRecord(response);
+  if (record?.action === "decline") return { action: "decline" };
+  if (record?.action !== "accept") return { action: "cancel" };
+  return { action: "accept", content: asRecord(record.content) ?? {} };
+}
+
+// The card refuses anything but an object schema. An agent that sent none
+// asks for confirmation only, which is an empty form.
+function acpElicitationFormSchema(schema: unknown): AppServerMcpElicitationSchema {
+  const record = asRecord(schema);
+  if (record?.type === "object") return record as AppServerMcpElicitationSchema;
+  return { type: "object", properties: {} };
+}
+
 function cancelledPermissionOutcome(): { outcome: { outcome: "cancelled" } } {
   return { outcome: { outcome: "cancelled" } };
 }
@@ -4101,20 +4388,54 @@ function isAntigravityPromptEndTurn(result: unknown): boolean {
     || record?.stop_reason === "end_turn";
 }
 
-function readAntigravityReplayPromptIdentity(record: AcpRolloutRecord): AcpReplayPromptIdentity | undefined {
+function readReplayPromptIdentity(record: AcpRolloutRecord): AcpReplayPromptIdentity | undefined {
   const { update, receivedAt } = record;
   const turnId = typeof update.turnId === "string" ? update.turnId : undefined;
   if (!turnId) return undefined;
   const kind = readUpdateKind(update);
   const steerMessageId = typeof update.messageId === "string" ? update.messageId : undefined;
-  if (kind === "pwragent_antigravity_prompt_identity" && typeof update.textDigest === "string") {
-    return { turnId, receivedAt, steerMessageId, textDigest: update.textDigest };
+  if (
+    (kind === "pwragent_antigravity_prompt_identity" || kind === "pwragent_prompt_attachments")
+    && typeof update.textDigest === "string"
+  ) {
+    const attachmentParts = readNonTextAttachmentParts(update, "attachmentParts");
+    return {
+      turnId,
+      receivedAt,
+      ...(steerMessageId ? { steerMessageId } : {}),
+      textDigest: update.textDigest,
+      ...(attachmentParts?.length ? { attachmentParts } : {}),
+    };
   }
   if ((kind === "pwragent_user_prompt" || kind === "pwragent_steered_user_prompt")
     && typeof update.prompt === "string") {
-    return { turnId, receivedAt, steerMessageId, textDigest: acpReplayPromptTextDigest(update.prompt) };
+    const attachmentParts = readNonTextAttachmentParts(update, "parts");
+    return {
+      turnId,
+      receivedAt,
+      ...(steerMessageId ? { steerMessageId } : {}),
+      textDigest: acpReplayPromptTextDigest(update.prompt),
+      ...(attachmentParts?.length ? { attachmentParts } : {}),
+    };
   }
   return undefined;
+}
+
+function readNonTextAttachmentParts(
+  update: Record<string, unknown>,
+  key: string,
+): AppServerThreadMessagePart[] | undefined {
+  const parts = readAcpMessageParts(update, key)?.filter((part) => part.type !== "text");
+  return parts?.length ? parts : undefined;
+}
+
+function persistableAttachmentParts(
+  parts: readonly AppServerThreadMessagePart[] | undefined,
+): AppServerThreadMessagePart[] | undefined {
+  const retained = parts?.filter(
+    (part) => part.type !== "text" && (part.type !== "image" || !part.url.startsWith("data:")),
+  );
+  return retained?.length ? retained : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

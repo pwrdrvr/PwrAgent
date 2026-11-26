@@ -1,4 +1,6 @@
+import { resolveProjectNeverMergePolicy } from "@pwragent/shared/project-forge-automation";
 import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { getProjectForgeAutomationIndex } from "../app-server/project-forge-automation-index";
 import { assertMergeNotHeld } from "../app-server/thread-dependency-merge-hold";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
@@ -6,6 +8,7 @@ import { getDesktopOverlayStore } from "../storage/desktop-overlay-store";
 import { createThreadDependencyStorage } from "../storage/desktop-runtime-storage";
 import { readProjectMergeMethodPreference } from "../thread-todos/thread-todo-runtime";
 import { GithubPrFetcher } from "./github-pr-fetcher";
+import { readPullRequestBase } from "./pull-request-base-lookup";
 import type { ThreadPullRequestMergeDeps } from "./thread-pull-request-merge";
 
 const mergeLog = getMainLogger("pwragent:pr-card-merge");
@@ -24,6 +27,11 @@ export function desktopThreadPullRequestMergeDeps(
     readThreadPullRequestUrls: (thread) => overlay.readThreadPullRequestUrls(thread),
     readPreference: async (thread) => await readProjectMergeMethodPreference(registry, thread),
     defaultMethod: () => getDesktopSettingsService().resolveDefaultMergeMethod(),
+    neverMergePolicy: (thread) => resolveProjectNeverMergePolicy(getProjectForgeAutomationIndex().resolveThread(
+      thread,
+      () => registry.getCachedThreadSummary(thread),
+    )),
+    readPullRequestBase,
     resolveCwd: async (thread) => await registry.resolveThreadWorkspaceCwd(thread.backend, thread.threadId)
       .catch(() => undefined),
     assertNotHeld: (thread, url) => assertMergeNotHeld(createThreadDependencyStorage().active(), {

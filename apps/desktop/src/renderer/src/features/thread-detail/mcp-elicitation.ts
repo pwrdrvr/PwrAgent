@@ -200,6 +200,7 @@ export function mcpElicitationPurposeLabel(purpose: McpElicitationPurpose): stri
     case "tool-approval": return "Tool approval";
     case "confirmation": return "MCP confirmation";
     case "form": return "MCP input";
+    case "agent-question": return "Question";
     case "url": return "MCP link";
   }
 }

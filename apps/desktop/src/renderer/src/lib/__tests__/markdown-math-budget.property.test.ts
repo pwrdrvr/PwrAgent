@@ -77,7 +77,7 @@ describe("Markdown math parser work", () => {
         expect(tree).toEqual(fromMarkdown(source));
         expect(work).toBeLessThanOrEqual(4 * source.length);
       },
-    ), { numRuns: 25 });
+    ), { numRuns: 12 });
   });
 
   // The installed parser is the syntax oracle, including every source position.

@@ -3,7 +3,7 @@ import { type PrSummary, type PullRequestProviderAvailability } from "@pwragent/
 import { type PullRequestTerminalDetails } from "@pwragent/shared/contracts/thread-tools";
 import { GithubPrFetcher, type GithubPrFetcherOptions } from "./github-pr-fetcher";
 import { GithubGraphqlPrClient } from "./github-graphql-client";
-import { GitLabPrFetcher } from "./gitlab-pr-fetcher";
+import { GitLabPrFetcher, type GitLabPollRequest } from "./gitlab-pr-fetcher";
 import { resolveGitHubReposForDirectory, type GitHubRepoRef } from "./git-remote";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
@@ -14,7 +14,7 @@ export { parseForgePrRefFromUrl, type ForgePrRef } from "./forge-pr-ref";
 type BranchLookup = { providers?: ForgeKind[]; cwd: string; branch: string; allowPrimed?: boolean; onProviderFailure?: () => void };
 type CommitLookup = { cwd: string; sha: string; onProviderFailure?: () => void };
 type UrlLookup = { cwd: string; url: string; onProviderFailure?: () => void };
-type PollOptions = { reconnect?: boolean; requestTokenTaken?: boolean };
+type PollOptions = { reconnect?: boolean; gitlabPoll?: GitLabPollRequest };
 
 /** The only transport seam the router needs. Provider-specific auth and
  * GraphQL branch priming stay on their concrete adapters. */
@@ -77,12 +77,12 @@ export class ForgePrFetcher {
         fetchForCommit: (params) => gitlab.fetchForCommit(params.cwd, params.sha),
         fetchByUrl: (_params, ref) => gitlab.fetchByRef(ref),
         fetchRefs: async (refs, poll) => {
+          if (poll.gitlabPoll) return await gitlab.pollProject(refs, poll.gitlabPoll);
           const results: PrSummary[] = [];
-          // Each MR is one REST request. A failed observation must not discard
-          // successful siblings or overwrite the previous persisted status.
+          // Explicit refreshes use independent detail reads.
           for (const ref of refs) {
             try {
-              results.push(await gitlab.fetchByRef(ref, poll.requestTokenTaken));
+              results.push(await gitlab.fetchByRef(ref));
             } catch {
               // Preserve the previous observation and timestamp.
             }

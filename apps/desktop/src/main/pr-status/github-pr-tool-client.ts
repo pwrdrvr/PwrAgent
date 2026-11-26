@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { discoverGhCommands } from "../settings/gh-discovery";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import { assertGithubStackMergeAllowed, assertStackMergeBaseUnchanged } from "../stacks/stack-merge-guard";
+import { assertStackMergeBaseUnchanged, checkGithubStackMerge, githubStackLayersAboveNote, type GithubNativeStack } from "../stacks/stack-merge-guard";
+import { GITHUB_ASYNC_MERGE_REQUIRED, runGithubAsyncMerge } from "./github-async-merge";
 import { redactForgeLog, type ForgeCiClient } from "./forge-ci-client";
 import { describeMergeQueueRemoval, describeMergeQueueState } from "@pwragent/shared/pr-merge-queue";
 import { type PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
@@ -484,7 +485,8 @@ export class GithubPrToolClient {
       }
       case "merge_pull_request": {
         ctx.assertCanMerge?.(r, args.number!);
-        const checkedBase = await assertGithubStackMergeAllowed(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route), graphql);
+        const checked = await checkGithubStackMerge(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route), graphql);
+        const checkedBase = checked.base;
         // Read the queue only when it can matter. A queue read that fails
         // never blocks a merge: GitHub itself refuses a direct merge past one.
         const readGate = async () => {
@@ -523,16 +525,63 @@ export class GithubPrToolClient {
           }
           return queued(result.status, { note: queuedNote(gate.baseRef, false) });
         };
+        const method = args.method ?? ctx.defaultMergeMethod();
+        // GitHub's own stacks merge only through its asynchronous merge, which
+        // also takes a required merge queue. The order check refused any open
+        // layer below, which that merge would land too.
+        const mergeAsynchronously = async (stack: GithubNativeStack | undefined) => {
+          const url = `${repositoryUrl(r)}/pull/${args.number}`;
+          // The stack, with its members when they were read, for the agent to account for.
+          const githubStack = stack ? { githubStack: stack } : {};
+          const outcome = await runGithubAsyncMerge({
+            number: args.number!, method, ...(args.expectedHeadSha ? { sha: args.expectedHeadSha } : {}),
+            request: async (verb, route, body) => await call(verb, route, body),
+            isAlreadyRequested: (error) => error instanceof ForgeReadError && error.code === "conflict",
+            // Polls share the forge budget: the agent can watch the PR past this.
+            signal: ctx.signal, deadlineMs: 20_000,
+          }).catch((error: unknown) => {
+            // A conflict that is no merge in progress: the head moved past expectedHeadSha.
+            if (error instanceof ForgeReadError && error.code === "conflict") {
+              throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
+            }
+            throw error;
+          });
+          if (outcome.status === "merged") {
+            const above = githubStackLayersAboveNote(args.number!, stack);
+            return writeResult({ merged: true, number: args.number, method, ...(outcome.sha ? { mergeCommitSha: str(outcome.sha, 64) } : {}), url, ...githubStack, ...(above ? { note: above } : {}) });
+          }
+          if (outcome.status === "enqueued") {
+            noteMergeQueueRepository(r.host, r.owner, r.repo);
+            return writeResult({ merged: false, queued: true, number: args.number, url, ...githubStack, note: queuedNote(checkedBase, false), nextStep: QUEUE_NEXT_STEP });
+          }
+          return writeResult({
+            merged: false, pending: true, number: args.number, url, ...githubStack,
+            ...(outcome.uuid ? { mergeRequestId: outcome.uuid } : {}),
+            note: outcome.alreadyRequested
+              ? "GitHub was already running a merge of this pull request. Nothing was changed."
+              : "GitHub accepted the merge and had not finished it when this call returned.",
+            nextStep: "watch_thread_pull_request with notifyOn [\"merged\"] wakes this thread when it lands.",
+          });
+        };
+        if (checked.nativeStack) return await mergeAsynchronously(checked.nativeStack);
         // A repository never seen with a queue merges exactly as before.
         if (isMergeQueueRepository(r.host, r.owner, r.repo)) {
           const gate = await readGate();
           if (gate?.required) return await enqueue(gate);
         }
-        const method = args.method ?? ctx.defaultMergeMethod();
         let result: Payload;
         try {
           result = object(await call("PUT", `/pulls/${args.number}/merge`, { merge_method: method, sha: args.expectedHeadSha, ...(args.commitTitle ? { commit_title: args.commitTitle } : {}), ...(args.commitMessage !== undefined ? { commit_message: args.commitMessage } : {}) }));
         } catch (error) {
+          // A stack GitHub formed after the order check read the pull request.
+          if (error instanceof ForgeReadError && GITHUB_ASYNC_MERGE_REQUIRED.test(error.message)) {
+            // Learned from the refusal: read the whole stack, so the decision and
+            // the result account for every pull request in it.
+            const recheck = await checkGithubStackMerge(r, args.number!, ctx.stackCatalogs ?? [], (route) => call("GET", route), graphql,
+              undefined, { readLayers: true });
+            assertStackMergeBaseUnchanged(checkedBase, recheck.base);
+            return await mergeAsynchronously(recheck.nativeStack);
+          }
           if (error instanceof ForgeReadError && error.code === "conflict") throw new ForgeReadError("head_changed", `The pull request's head is no longer ${args.expectedHeadSha}. Read it again before merging.`);
           // GitHub refused because the branch merges through a queue: learn
           // the repository and queue the PR instead.

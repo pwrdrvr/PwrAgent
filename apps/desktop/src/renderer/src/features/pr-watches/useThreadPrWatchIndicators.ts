@@ -43,14 +43,18 @@ export type PrChipWatch = {
   autoFix?: boolean;
   /**
    * Auto-fix is on for the thread, but main will not wake it for this PR:
-   * the repair budget is paused, or another thread owns this PR's repairs.
+   * the repair budget is paused, another thread owns this PR's repairs, or
+   * the operator switched it off for this PR here.
    */
   autoFixBlocked?: PrAutoFixBlock;
 };
 
 export type PrAutoFixBlock =
   | { reason: "paused" }
-  | { reason: "handled_by_other_thread"; threadTitle?: string };
+  | { reason: "handled_by_other_thread"; threadTitle?: string }
+  | { reason: "switched_off" }
+  /** The project's Forge Automation leaves the PR to its maintainers. */
+  | { reason: "hands_off"; detail: string };
 
 /**
  * One thread's active PR watches. A peer's row carries only its owner's CI
@@ -336,6 +340,8 @@ const NO_AUTO_FIX_STATES: ReadonlyMap<string, ThreadPrAutoFixState> = new Map();
 
 const AUTO_FIX_ONLY: PrChipWatch = { autoFix: true };
 const NO_CHIP_WATCH: PrChipWatch = {};
+const SWITCHED_OFF: PrAutoFixBlock = { reason: "switched_off" };
+const withSwitchedOffCache = new WeakMap<PrChipWatch, PrChipWatch>();
 // One object per watch entry, so a chip keeps its props across row renders.
 const withAutoFixCache = new WeakMap<PrChipWatch, PrChipWatch>();
 // Keyed by main's Auto-fix state object, which keeps its identity while the
@@ -388,6 +394,17 @@ function resolveCiChipWatch(
     resolveLifecycleState(pr) !== "open"
     || !pullRequestMatchesRepositoryKey(attachment, autoFixRepository)
   ) return base;
+  // Switched off for this PR here: the thread is no candidate, so main sends
+  // no state for it, and no entry would otherwise read as active.
+  if (attachment.autoFixOff === true) {
+    const key = base ?? NO_CHIP_WATCH;
+    let switchedOff = withSwitchedOffCache.get(key);
+    if (!switchedOff) {
+      switchedOff = { ...base, autoFixBlocked: SWITCHED_OFF };
+      withSwitchedOffCache.set(key, switchedOff);
+    }
+    return switchedOff;
+  }
   // Main says when it will not repair here. No entry yet reads as active:
   // the candidate list catches up on main's next refresh.
   const autoFixState = watches?.autoFixByPrKey?.get(prKey);

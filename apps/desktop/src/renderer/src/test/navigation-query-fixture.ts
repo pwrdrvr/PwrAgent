@@ -218,6 +218,7 @@ export function navigationQueryFixture(
         subthreadsCollapsed: thread.subthreadsCollapsed, reactions: thread.reactions, model: thread.model,
         executionMode: thread.executionMode, serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort,
         primaryGitRepository: thread.primaryGitRepository, prAutoDispatchEnabled: thread.prAutoDispatchEnabled,
+        prAutoDispatchPending: thread.prAutoDispatchPending, prAutoDispatchActive: thread.prAutoDispatchActive,
         scheduledStart: thread.scheduledStart,
         fastMode: thread.fastMode, ordinaryChildCount: scopedMembers
           ? all.filter((child) => scopedMembers.has(key(child)) && resolveParentKey(child) === key(thread)).length

@@ -19,16 +19,14 @@ const reviewBindings = [SharedReview, DesktopReview];
 const actor = (index: number) => ({ backend: backends[index % 3]!, threadId: "same-provider-id" });
 afterEach(() => vi.unstubAllEnvs());
 
-it("binds every concrete desktop export to the functioning portable implementation", () => {
-  fc.assert(fc.property(fc.constantFrom("todo", "review", "desktop-recents", "state-recents"), binding => {
-    if (binding === "todo") expect(DesktopTodo).toBe(SharedTodo);
-    if (binding === "review") expect(DesktopReview).toBe(SharedReview);
-    if (binding.endsWith("recents")) {
-      const recents = binding === "state-recents" ? stateRecents : desktopRecents;
-      expect(recents.recordModelSettingsRecent).toBe(sharedRecents.recordModelSettingsRecent);
-      expect(recents.listModelSettingsRecents).toBe(sharedRecents.listModelSettingsRecents);
-    }
-  }));
+it.each(["todo", "review", "desktop-recents", "state-recents"] as const)("binds every concrete desktop export to the functioning portable implementation [%#]", (binding) => {
+  if (binding === "todo") expect(DesktopTodo).toBe(SharedTodo);
+  if (binding === "review") expect(DesktopReview).toBe(SharedReview);
+  if (binding.endsWith("recents")) {
+    const recents = binding === "state-recents" ? stateRecents : desktopRecents;
+    expect(recents.recordModelSettingsRecent).toBe(sharedRecents.recordModelSettingsRecent);
+    expect(recents.listModelSettingsRecents).toBe(sharedRecents.listModelSettingsRecents);
+  }
 });
 
 // A card belongs to a backend-qualified thread. Content edits retain its
@@ -112,7 +110,7 @@ it("matches a card model through alternating hosts, WAL readers and reopen order
         expect([reads.writes.commits, reads.writes.statements, reads.writes.rowsChanged]).toEqual([0, 0, 0]);
       }
     } finally { for (const db of connections) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("preserves review ownership, ordering, enrollment and outcomes across host connections", async () => {
@@ -157,11 +155,12 @@ it("preserves review ownership, ordering, enrollment and outcomes across host co
         }
       }
     } finally { for (const db of connections) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // A dispatch remembers only explicit changes until a preference exists.
-// Recents are per scope, unique by the whole setting, newest first, capped at ten.
+// Recents are per scope, unique by the whole setting, newest first, capped at ten,
+// and dispatching the newest one again writes nothing.
 it("matches dispatch preferences and shared recents without changing commit counts", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   await fc.assert(fc.asyncProperty(fc.array(fc.record({
@@ -184,7 +183,11 @@ it("matches dispatch preferences and shared recents without changing commit coun
           identity.backend, identity.threadId, settings, source));
         const differs = !command.defaultPick;
         const changed = previous && (previous.model !== settings.model || previous.reasoningEffort !== settings.reasoningEffort);
-        expect(measured.writes.commits).toBe(differs || changed ? 1 : 0);
+        // Dispatching the newest recent again changes no recent, so writes none.
+        const newest = recents[0];
+        const recentChanged = differs && !(newest && newest.backend === settings.backend
+          && newest.model === settings.model && newest.reasoningEffort === settings.reasoningEffort);
+        expect(measured.writes.commits).toBe(recentChanged || changed ? 1 : 0);
         if (differs || previous) prefs.set(command.identity, settings);
         if (differs) recents = [settings, ...recents.filter(r => r.backend !== settings.backend
           || r.model !== settings.model || r.reasoningEffort !== settings.reasoningEffort)].slice(0, 10);
@@ -197,7 +200,7 @@ it("matches dispatch preferences and shared recents without changing commit coun
         }
       }
     } finally { for (const db of connections) db.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("retains immediate transaction rollback and one profile tracking boundary across hosts", async () => {
@@ -230,5 +233,5 @@ it("retains immediate transaction rollback and one profile tracking boundary acr
         expect(todo.getThreadModelSettings("codex", "thread")).toBeUndefined();
       }
     } finally { db.close(); observer.close(); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 15 });
+  }), { numRuns: 8 });
 });

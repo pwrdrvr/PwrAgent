@@ -15,7 +15,8 @@ import {
   NATIVE_VOICE_CAPABILITY_CHANNEL, NATIVE_VOICE_START_CHANNEL,
   NATIVE_VOICE_STOP_CHANNEL, NATIVE_VOICE_TEXT_CHANNEL, NATIVE_VOICE_EVENT_CHANNEL,
   NATIVE_VOICE_OPEN_MANAGER_CHANNEL, OPERATOR_FOCUS_PUBLISH_CHANNEL,
-  type NativeVoiceStart, type NativeVoiceTarget, type NativeVoiceText,
+  isNativeVoiceStopCause,
+  type NativeVoiceStart, type NativeVoiceStop, type NativeVoiceTarget, type NativeVoiceText,
 } from "../../../shared/native-voice";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { NativeVoiceSessionManager } from "../../codex-app-server/native-voice-session";
@@ -59,13 +60,17 @@ function observeOwner(sender: WebContents): void {
   const owner = sender.id;
   if (owners.has(owner)) return;
   owners.add(owner);
-  const stop = () => {
+  const stop = (cause: string) => {
     abortCamera(owner);
-    void sessions.stopOwner(owner).catch(() => undefined);
+    void sessions.stopOwner(owner, cause).catch(() => undefined);
   };
-  sender.on("render-process-gone", stop);
-  sender.on("did-start-navigation", (_event, _url, _inPlace, mainFrame) => { if (mainFrame) stop(); });
-  sender.once("destroyed", () => { owners.delete(owner); stop(); });
+  sender.on("render-process-gone", () => stop("renderer-gone"));
+  // An in-place navigation (a fragment link, history state) keeps the
+  // document, and with it the controller that owns the session.
+  sender.on("did-start-navigation", (_event, _url, inPlace, mainFrame) => {
+    if (mainFrame && !inPlace) stop("window-navigated");
+  });
+  sender.once("destroyed", () => { owners.delete(owner); stop("window-destroyed"); });
 }
 /** A decision request the server refused outright stops camera cues: sending it again cannot succeed. */
 function cameraRefusal(error: SystemOneRejected): Error {
@@ -135,10 +140,10 @@ export function registerNativeVoiceIpcHandlers(): void {
     if (!isLocalMainWindowWebContents(event.sender) || !isOperatorFocusSnapshot(focus)) return;
     publishOperatorFocus({ focus, webContents: event.sender });
   });
-  ipcMain.handle(NATIVE_VOICE_STOP_CHANNEL, async (event, request: NativeVoiceTarget) => {
+  ipcMain.handle(NATIVE_VOICE_STOP_CHANNEL, async (event, request: NativeVoiceStop) => {
     validTarget(request);
     abortCamera(event.sender.id, request.sessionId);
-    await sessions.stop(event.sender.id, request);
+    await sessions.stop(event.sender.id, request, isNativeVoiceStopCause(request.cause) ? request.cause : "unspecified");
   });
   ipcMain.handle(NATIVE_VOICE_CAMERA_CHANNEL, async (event, request: VoiceCameraRequest) => {
     validTarget(request);

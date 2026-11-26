@@ -397,12 +397,12 @@ describe("merge_pull_request and merge queues", () => {
   });
 
   it("uses the owning forge transport to block a historical parent on both checkout-less merge routes", async () => {
-    const requests: string[] = [];
     const writes: string[] = [];
     const parentSha = "b".repeat(40);
+    const takeToken = vi.fn(() => true);
     const ci = new ForgeCiClient({
       githubToken: async () => "fixture-token", gitlab: { readApi: vi.fn() }, enabled: () => true,
-      takeToken: () => { requests.push("admitted"); return true; },
+      takeToken,
       fetch: (async (input: string | URL | Request, init?: RequestInit) => {
         const url = new URL(String(input));
         const query: string | undefined = init?.body ? JSON.parse(String(init.body)).query : undefined;
@@ -433,7 +433,8 @@ describe("merge_pull_request and merge queues", () => {
         .rejects.toMatchObject({ code: "stack_parent_open", message: expect.stringContaining("#6") });
       await expect(gh.mergePullRequest({ pullRequest: "https://github.com/fixture/project/pull/7", method: "squash", checkStackOrder: true }))
         .rejects.toMatchObject({ code: "stack_parent_open", message: expect.stringContaining("#6") });
-      expect(requests).toHaveLength(8);
+      expect(takeToken).toHaveBeenCalledTimes(4);
+      expect(takeToken.mock.lastCall).toEqual(["shared"]);
       expect(writes).toEqual([]);
     } finally {
       uninstall();
@@ -565,6 +566,32 @@ describe("merge_pull_request and merge queues", () => {
         .resolves.toMatchObject({ merged: true, method: "squash" });
       expect(calls).toEqual(["GET", "POST", "POST", "PUT"]);
     }), { numRuns: 16 });
+  });
+
+  it.each([
+    ["a 5xx, without the page gh attached", Object.assign(new Error("exit 1"), {
+      stderr: "non-200 OK status code: 502 Bad Gateway body: \"<html>\\r\\n<center>nginx</center>\\r\\n</html>\\r\\n\"\n",
+    }), "GitHub returned 502 Bad Gateway, which is usually temporary"],
+    ["a gh it had to kill, without its command line", Object.assign(
+      new Error("Command failed: /fixture/gh api graphql --hostname github.com -f query=query PwrAgentStackHistory {"),
+      { killed: true, signal: "SIGTERM", stderr: "" },
+    ), "gh did not answer in time"],
+  ])("names %s on the stack check", async (_case, failure, message) => {
+    seenRepository(false);
+    const ran: string[][] = [];
+    const fetcher = new GithubPrFetcher({
+      graphqlClient: { fetchPullRequests: vi.fn(), fetchPullRequestsForBranches: vi.fn() },
+      discoverGhCommands: async () => ({ selectedCommand: "/fixture/gh" }) as never,
+      runGhCommand: async (_command, args) => {
+        ran.push(args);
+        if (args[0] === "api" && args[1] === "graphql") throw failure;
+        if (args[0] === "api") return { stdout: JSON.stringify(trunkTarget) };
+        return { stdout: "" };
+      },
+    });
+    await expect(fetcher.mergePullRequest({ pullRequest: "https://github.com/fixture/project/pull/3631", method: "squash", checkStackOrder: true }))
+      .rejects.toThrow(new RegExp(`^${message}$`));
+    expect(ran.some((args) => args[0] === "pr" && args[1] === "merge")).toBe(false);
   });
 
   it("merges with gh, as before, when a to-do card's queue read fails", async () => {

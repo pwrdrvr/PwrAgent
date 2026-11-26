@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import desktopE2eTimings from "../../docs/desktop-e2e-shard-durations.json" with { type: "json" };
 
 const codeFile = /\.[cm]?[jt]sx?$/;
 // Unit-test inputs that the application bundle never loads.
@@ -33,6 +34,24 @@ function apiFileEntries(files) {
 const fileKeys = (files) => files.map(({ status, file }) => JSON.stringify([status, file])).sort();
 const sameFiles = (a, b) => JSON.stringify(fileKeys(a)) === JSON.stringify(fileKeys(b));
 const sha = /^[a-f0-9]{40}$/;
+const patch = (root, range) => git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", range, "--");
+const isAncestor = (root, ancestor, descendant) => {
+  try {
+    git(root, "merge-base", "--is-ancestor", ancestor, descendant);
+    return true;
+  } catch (error) {
+    if (error.status === 1) return false;
+    throw error;
+  }
+};
+
+export function getPushDiff(root, { before, after, forced }) {
+  if (forced !== false || !sha.test(before) || !sha.test(after) || /^0+$/.test(before)
+    || git(root, "rev-parse", "HEAD").trim() !== after || !isAncestor(root, before, after)) {
+    return { before, after, fallback: "checkout is not a verified fast-forward push" };
+  }
+  return { before, after, mergeFiles: gitFiles(root, `${before}..${after}`) };
+}
 
 export function getPrDiff(root, { base, head, changedFiles }, githubFiles) {
   if (!sha.test(base) || !sha.test(head)) throw new Error("Expected immutable PR base and head SHAs");
@@ -46,30 +65,35 @@ export function getPrDiff(root, { base, head, changedFiles }, githubFiles) {
   const stacked = parents.length === 2 && parents[1] === head && testedBase !== base
     && git(root, "show", "-s", "--format=%P", testedBase).trim().split(" ").length === 2
     && git(root, "rev-parse", `${testedBase}^2`).trim() === base;
-  const testedRange = `${stacked ? testedBase : base}..${merge}`;
+  const movedBase = parents.length === 2 && parents[1] === head && testedBase !== base && !stacked
+    && isAncestor(root, base, testedBase);
+  const testedRange = `${stacked || movedBase ? testedBase : base}..${merge}`;
   const mergeFiles = gitFiles(root, testedRange);
   // The tested merge is the base tip plus this PR. Its first-parent diff is
   // what the PR changes there, including on a branch behind its base: a test
   // that reaches none of those files runs the same code as on the base tip.
   const source = {
-    base, head, mergeBase, merge, testedBase, stacked, behindBase: mergeBase !== base,
+    base, head, mergeBase, merge, testedBase, stacked, movedBase, behindBase: mergeBase !== base,
     githubFiles, branchFiles, mergeFiles,
   };
   if (!Array.isArray(githubFiles) || !githubFiles.length || githubFiles.length !== changedFiles) {
     return { ...source, fallback: "incomplete GitHub diff" };
   }
   if (!sameFiles(apiFileEntries(githubFiles), branchFiles)) return { ...source, fallback: "GitHub and three-dot diff disagree" };
-  if (parents.length !== 2 || (!stacked && testedBase !== base) || parents[1] !== head) {
+  if (parents.length !== 2 || (!stacked && !movedBase && testedBase !== base) || parents[1] !== head) {
     return { ...source, fallback: "checkout is not the merge of the event base and head" };
   }
   if (stacked) {
     if (mergeBase !== base || !sameFiles(branchFiles, mergeFiles)) {
       return { ...source, fallback: "stack base advanced or the merge diff differs from the PR diff" };
     }
-    const patch = (range) => git(root, "diff", "--no-ext-diff", "--no-renames", "--binary", range, "--");
-    if (patch(`${base}..${head}`) !== patch(testedRange)) {
+    if (patch(root, `${base}..${head}`) !== patch(root, testedRange)) {
       return { ...source, fallback: "tested stack merge changed the child patch" };
     }
+  }
+  if (movedBase && (!sameFiles(branchFiles, mergeFiles)
+    || patch(root, `${mergeBase}..${head}`) !== patch(root, testedRange))) {
+    return { ...source, fallback: "advanced base changed the tested PR patch" };
   }
   return source;
 }
@@ -82,7 +106,8 @@ export function wholeSuiteReason(files) {
     if (status !== "A" && status !== "M" && status !== "D") return "type change or unsupported Git status";
     if (file === "pnpm-lock.yaml" || file === "pnpm-workspace.yaml" || /(?:^|\/)package\.json$/.test(file)
       || /^\.(?:npmrc|nvmrc|pnpmfile\.cjs)$/.test(file) || file.startsWith("patches/")) return "dependency metadata or patch";
-    if (/^\.github\/|^scripts\/ci\/|(?:^|\/)(?:electron\.)?(?:vitest|vite|playwright|tsconfig)[.-]|(?:^|\/)\.env(?:\.|$)/.test(file)) {
+    if (file === "docs/desktop-e2e-shard-durations.json"
+      || /^\.github\/|^scripts\/ci\/|(?:^|\/)(?:electron\.)?(?:vitest|vite|playwright|tsconfig)[.-]|(?:^|\/)\.env(?:\.|$)/.test(file)) {
       return "CI or test/build configuration";
     }
     if (/^apps\/desktop\/(?:native|build)\/|^apps\/desktop\/scripts\/(?:macos-|assemble-mac-|app-icon)|\.swift$|^apps\/desktop\/e2e\/(?:macos-|windows-|visual-regression\.spec\.ts|get-started\.spec\.ts|fixtures\/detached-profile-instances\.ts)/.test(file)) {
@@ -178,6 +203,8 @@ export async function planE2e(changes, { inventory, affected, testOnly = () => f
   }
   const missing = [...reasons.keys()].find((file) => !files.includes(file));
   if (missing) return full("edited spec is absent from Playwright collection", missing);
+  const ambiguous = [...reasons.keys()].find((file) => !playwrightListPath(file));
+  if (ambiguous) return full("spec path cannot be represented in a Playwright test list", ambiguous);
   // One lane runs a narrowed plan. A wider selection needs the full suite's
   // four balanced lanes.
   if (reasons.size > Math.ceil(files.length / 4)) return full("selection is wider than one Playwright lane");
@@ -199,6 +226,61 @@ export function separateA11y(e2e) {
     e2e: { ...e2e, selected: e2e.selected.filter(({ file }) => file !== a11ySpec) },
     a11y: e2e.selected.some(({ file }) => file === a11ySpec),
   };
+}
+
+const range = (count) => Array.from({ length: count }, (_, index) => index + 1);
+
+// Full Windows lanes model about eight minutes of tests. Leave the rest
+// of the fifteen-minute job for setup, reporting, retries, and runner variance.
+const windowsE2eTestBudgetSeconds = 8 * 60;
+const windowsTimingColumn = desktopE2eTimings.platforms.indexOf("windows");
+const windowsE2eSecondsBySpec = new Map();
+for (const { spec, seconds } of desktopE2eTimings.groups) {
+  const duration = seconds[windowsTimingColumn];
+  const file = `${e2eDirectory}${spec}`;
+  const estimate = Number.isFinite(duration) && duration >= 0 ? duration : Infinity;
+  windowsE2eSecondsBySpec.set(file, (windowsE2eSecondsBySpec.get(file) ?? 0) + estimate);
+}
+
+// Every matrix and the retry report consume the same lane inventory.
+export function scheduleImpact(plan, { allPlatforms, windowsFull, auditRequested, e2eOnly }) {
+  const { e2e, a11y } = separateA11y(plan.e2e);
+  const unit = (group) => range(plan.unit.mode === "selected"
+    ? unitLaneCount(unitGroupFiles(plan.unit.selected, group).length, group)
+    : unitGroups[group].lanes);
+  const e2eLanes = (suite, fullLanes) => suite.mode === "full" ? range(fullLanes) : range(suite.selected.length ? 1 : 0);
+  const nativeE2e = allPlatforms ? plan.e2e : e2e;
+  let windowsMode = "off";
+  if (windowsFull || ((allPlatforms || e2eOnly) && nativeE2e.mode === "full")) {
+    windowsMode = "full";
+  } else if (nativeE2e.mode === "selected" && nativeE2e.selected.length) {
+    const seconds = nativeE2e.selected.reduce((sum, { file }) => sum + (windowsE2eSecondsBySpec.get(file) ?? Infinity), 0);
+    windowsMode = seconds <= windowsE2eTestBudgetSeconds ? "selected" : "full";
+  }
+  return {
+    e2e,
+    nativeE2e,
+    windowsMode,
+    a11y,
+    lanes: {
+      "unit-linux": unit("linux"),
+      "unit-windows-main": unit("windows-main"),
+      "unit-windows-renderer": unit("windows-renderer"),
+      "unit-macos": allPlatforms ? unit("macos") : [],
+      "e2e-linux": e2eLanes(e2e, 5),
+      "e2e-linux-a11y": a11y || auditRequested || (allPlatforms && e2e.mode === "full") ? [1, 2] : [],
+      "e2e-windows": windowsMode === "full" ? range(4) : windowsMode === "selected" ? [1] : [],
+      "e2e-macos": allPlatforms ? e2eLanes(nativeE2e, 5) : [],
+    },
+  };
+}
+
+// The pinned Playwright test-list format uses paths relative to its root,
+// with optional title and location delimiters. Ambiguous names widen E2E.
+export function playwrightListPath(file) {
+  if (!file.startsWith(e2eDirectory)) return undefined;
+  const relative = file.slice(e2eDirectory.length);
+  return relative && relative === relative.trim() && !/^[#\[]|[>:›\\\r\n]/u.test(relative) ? relative : undefined;
 }
 
 export async function planImpact(files, { fallback, unit, e2e }) {
@@ -253,6 +335,7 @@ export function listAffectedE2eFiles(root, base, config = "apps/desktop/playwrig
 // across two jobs; Linux runs every project in one.
 export const unitGroups = {
   linux: { config: "vitest.linux-ci.mts", lanes: 4 },
+  macos: { config: "vitest.workspace.mts", lanes: 4 },
   "windows-main": { config: "vitest.windows-main-ci.mts", lanes: 4, projects: ["desktop-main"] },
   "windows-renderer": {
     config: "vitest.workspace.mts", lanes: 2,

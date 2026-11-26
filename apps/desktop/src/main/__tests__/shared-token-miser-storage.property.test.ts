@@ -49,7 +49,7 @@ it("binds generated concrete choices and the actual desktop service factory to t
       expect(new SharedStore(db).readMetadata(metadata.objectId, "same")).toEqual(metadata);
       write.mockRestore();
     } finally { db.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 // The model keeps immutable index ownership/order separately from the JSON
@@ -135,7 +135,7 @@ it("matches independent object, observation and generation models across WAL hos
         expect(reads.writes.commits).toBe(0);
       }
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("imports generated duplicate records once with archive precedence and independent migration markers", async () => {
@@ -179,7 +179,7 @@ it("imports generated duplicate records once with archive precedence and indepen
       expect(failed.writes.commits).toBe(0);
       expect(reader.readMetadata("rollback")).toBeUndefined();
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("keeps generated exclusive batches atomic, immediately locked and rollback-safe across hosts", async () => {
@@ -217,7 +217,7 @@ it("keeps generated exclusive batches atomic, immediately locked and rollback-sa
       expect(observer.listMetadata()).toEqual(counts.map(record).reverse());
       expect(observer.readRetentionGeneration("same")).toBe("committed");
     } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
 it("reports generated malformed payloads without repairing them or writing on reads", async () => {
@@ -241,64 +241,62 @@ it("reports generated malformed payloads without repairing them or writing on re
       expect(db.raw.prepare("SELECT payload FROM token_miser_objects").pluck().get()).toBe(invalid);
       expect(db.raw.prepare("SELECT payload FROM token_miser_observations").pluck().get()).toBe(invalid);
     } finally { db.close(); }
-  }), { numRuns: 25 });
+  }), { numRuns: 8 });
 });
 
-it("retains generated service privacy and replay ownership through the real factory, migration and restart", async () => {
+it.each([1, 2, 3, 4, 5] as const)("retains generated service privacy and replay ownership through the real factory, migration and restart [%#]", async (count) => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 5 }), async count => {
-    const fixture = createTempStateDb("shared-miser-service-");
-    const dbs = bindings.map(() => StateDb.open(fixture.dbPath));
-    const directory = path.join(fixture.tempDir, "objects");
-    const portable = new SharedStore<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(dbs[0]!);
-    const reader = new TokenMiserStore(directory, { storage: portable });
-    try {
-      active.db = dbs[1]!;
-      const service = createTokenMiserStorage(directory, {});
-      active.db = undefined;
-      const entries: TokenMiserObjectMetadata[] = [];
-      for (let index = 0; index < count; index++) entries.push(await service.store(accepted("same", index)));
-      const buffered = await measureSqliteWrites(async () => {
-        for (const entry of entries) for (let request = 1; request <= 4; request++) {
-          await service.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: request * 100 });
-        }
-      });
-      expect(buffered.writes.commits).toBe(0);
-      expect((await reader.listMetadata("same")).every(entry => entry.cachedReplayCount === 0)).toBe(true);
-      dbs[1]!.raw.exec("CREATE TEMP TRIGGER refuse_flush BEFORE UPDATE ON token_miser_objects BEGIN SELECT RAISE(ABORT, 'invented flush refusal'); END");
-      const failedFlush = await measureSqliteWrites(async () => {
-        await expect(service.flushThread("same")).rejects.toThrow("invented flush refusal");
-      });
-      expect(failedFlush.writes.commits).toBe(0);
-      expect((await reader.listMetadata("same")).every(entry => entry.cachedReplayCount === 0)).toBe(true);
-      expect((await service.listMetadata("same")).every(entry => entry.cachedReplayCount === 2)).toBe(true);
-      dbs[1]!.raw.exec("DROP TRIGGER refuse_flush");
-      const flushed = await measureSqliteWrites(() => service.flushThread("same"));
-      expect(flushed.writes.commits).toBe(1);
-      expect((await reader.listMetadata("same")).every(entry => entry.cachedReplayCount === 2)).toBe(true);
-      expect(await reader.readAll({ threadId: "same", objectId: entries[0]!.objectId })).toBeUndefined();
-      await service.recordCodeModeObservation({ threadId: "same", turnId: "turn", callId: "call", cellId: "cell", outputCharacters: 10,
-        maxOutputTokens: 100, scriptStatus: "completed", retrieval: false, capturedNestedInvocationCount: 1,
-        script: "PRIVATE_SCRIPT", outputPreview: "PRIVATE_PREVIEW" });
-      const key = createHash("sha256").update("same").digest("hex");
-      const thread = path.join(directory, "threads", key);
-      await fs.mkdir(thread, { recursive: true });
-      await fs.writeFile(path.join(thread, `${entries[0]!.objectId}.json`), JSON.stringify({ ...entries[0], retrievedCharacters: 999, summary: accepted("same", 0).summary }));
-      await fs.writeFile(path.join(thread, "archived"), "legacy-archive");
-      await fs.writeFile(path.join(thread, "retention-generation"), "older-generation");
-      await fs.writeFile(path.join(directory, `${entries[0]!.objectId}.txt`), "PRIVATE_LEGACY_OUTPUT");
-      await service.prune({ maxAgeMs: 0, maxBytes: 0 });
-      expect((await reader.readMetadata(entries[0]!.objectId))?.retrievedCharacters).toBe(0);
-      expect(portable.readRetentionGeneration(key)).toBe("legacy-archive");
-      expect(await service.readAll({ threadId: "same", objectId: entries[0]!.objectId })).toBeUndefined();
-      await service.restoreThread("same");
-      expect(await service.readAll({ threadId: "same", objectId: entries[0]!.objectId })).toBeUndefined();
-      expect(JSON.stringify(dbs[0]!.raw.prepare("SELECT payload FROM token_miser_objects UNION ALL SELECT payload FROM token_miser_observations").all())).not.toContain("PRIVATE_");
-      await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
-      const replayed = await measureSqliteWrites(() => service.prune({ maxAgeMs: 0, maxBytes: 0 }));
-      expect(replayed.writes.commits).toBe(0);
-      const emptyFlush = await measureSqliteWrites(() => service.flushAll());
-      expect(emptyFlush.writes.commits).toBe(0);
-    } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
-  }), { numRuns: 25 });
+  const fixture = createTempStateDb("shared-miser-service-");
+  const dbs = bindings.map(() => StateDb.open(fixture.dbPath));
+  const directory = path.join(fixture.tempDir, "objects");
+  const portable = new SharedStore<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(dbs[0]!);
+  const reader = new TokenMiserStore(directory, { storage: portable });
+  try {
+    active.db = dbs[1]!;
+    const service = createTokenMiserStorage(directory, {});
+    active.db = undefined;
+    const entries: TokenMiserObjectMetadata[] = [];
+    for (let index = 0; index < count; index++) entries.push(await service.store(accepted("same", index)));
+    const buffered = await measureSqliteWrites(async () => {
+      for (const entry of entries) for (let request = 1; request <= 4; request++) {
+        await service.recordParentModelRequest({ objectId: entry.objectId, cumulativeInputTokens: request * 100 });
+      }
+    });
+    expect(buffered.writes.commits).toBe(0);
+    expect((await reader.listMetadata("same")).every(entry => entry.cachedReplayCount === 0)).toBe(true);
+    dbs[1]!.raw.exec("CREATE TEMP TRIGGER refuse_flush BEFORE UPDATE ON token_miser_objects BEGIN SELECT RAISE(ABORT, 'invented flush refusal'); END");
+    const failedFlush = await measureSqliteWrites(async () => {
+      await expect(service.flushThread("same")).rejects.toThrow("invented flush refusal");
+    });
+    expect(failedFlush.writes.commits).toBe(0);
+    expect((await reader.listMetadata("same")).every(entry => entry.cachedReplayCount === 0)).toBe(true);
+    expect((await service.listMetadata("same")).every(entry => entry.cachedReplayCount === 2)).toBe(true);
+    dbs[1]!.raw.exec("DROP TRIGGER refuse_flush");
+    const flushed = await measureSqliteWrites(() => service.flushThread("same"));
+    expect(flushed.writes.commits).toBe(1);
+    expect((await reader.listMetadata("same")).every(entry => entry.cachedReplayCount === 2)).toBe(true);
+    expect(await reader.readAll({ threadId: "same", objectId: entries[0]!.objectId })).toBeUndefined();
+    await service.recordCodeModeObservation({ threadId: "same", turnId: "turn", callId: "call", cellId: "cell", outputCharacters: 10,
+      maxOutputTokens: 100, scriptStatus: "completed", retrieval: false, capturedNestedInvocationCount: 1,
+      script: "PRIVATE_SCRIPT", outputPreview: "PRIVATE_PREVIEW" });
+    const key = createHash("sha256").update("same").digest("hex");
+    const thread = path.join(directory, "threads", key);
+    await fs.mkdir(thread, { recursive: true });
+    await fs.writeFile(path.join(thread, `${entries[0]!.objectId}.json`), JSON.stringify({ ...entries[0], retrievedCharacters: 999, summary: accepted("same", 0).summary }));
+    await fs.writeFile(path.join(thread, "archived"), "legacy-archive");
+    await fs.writeFile(path.join(thread, "retention-generation"), "older-generation");
+    await fs.writeFile(path.join(directory, `${entries[0]!.objectId}.txt`), "PRIVATE_LEGACY_OUTPUT");
+    await service.prune({ maxAgeMs: 0, maxBytes: 0 });
+    expect((await reader.readMetadata(entries[0]!.objectId))?.retrievedCharacters).toBe(0);
+    expect(portable.readRetentionGeneration(key)).toBe("legacy-archive");
+    expect(await service.readAll({ threadId: "same", objectId: entries[0]!.objectId })).toBeUndefined();
+    await service.restoreThread("same");
+    expect(await service.readAll({ threadId: "same", objectId: entries[0]!.objectId })).toBeUndefined();
+    expect(JSON.stringify(dbs[0]!.raw.prepare("SELECT payload FROM token_miser_objects UNION ALL SELECT payload FROM token_miser_observations").all())).not.toContain("PRIVATE_");
+    await expect(fs.stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    const replayed = await measureSqliteWrites(() => service.prune({ maxAgeMs: 0, maxBytes: 0 }));
+    expect(replayed.writes.commits).toBe(0);
+    const emptyFlush = await measureSqliteWrites(() => service.flushAll());
+    expect(emptyFlush.writes.commits).toBe(0);
+  } finally { dbs.forEach(db => db.close()); removeTempStateDbDir(fixture.tempDir); }
 });

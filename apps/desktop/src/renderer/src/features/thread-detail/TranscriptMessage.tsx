@@ -1769,6 +1769,9 @@ function labelForOrigin(origin: AppServerThreadMessageOrigin): string {
   if (origin.kind === "pwragent" && origin.systemReason === "compaction-recovery") {
     return "Compaction recovery";
   }
+  if (origin.kind === "pwragent" && origin.systemReason === "auto-compaction") {
+    return "PwrAgent System - Auto-compaction";
+  }
   if (origin.kind === "pwragent" && origin.systemReason === "app-restart") {
     return "PwrAgent System - Restart";
   }

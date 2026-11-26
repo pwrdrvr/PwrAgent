@@ -368,4 +368,218 @@ describe("ACP file read and listing normalization", () => {
       { numRuns: 300 },
     );
   });
+
+  it("keeps live and replay read_file and list_dir labels across null rawInput, null bounds, and empty locations", () => {
+    expectLiveAndReplayLabels("acp:grok", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "grok-null-bounds",
+        kind: "read",
+        title: "Read `/repo/a.ts`",
+        status: "in_progress",
+        _meta: { "x.ai/tool": { name: "read_file", kind: "read" } },
+        rawInput: { target_file: "/repo/a.ts", offset: 10, limit: 20 },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "grok-null-bounds",
+        rawInput: { target_file: "/repo/a.ts", offset: null, limit: null },
+        status: "completed",
+      },
+    ]);
+
+    expectLiveAndReplayLabels("acp:grok", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "grok-null-raw-input",
+        kind: "read",
+        title: "Read `/repo/a.ts`",
+        status: "in_progress",
+        _meta: { "x.ai/tool": { name: "read_file", kind: "read" } },
+        rawInput: { target_file: "/repo/a.ts", offset: 10, limit: 20 },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "grok-null-raw-input",
+        rawInput: null,
+        status: "completed",
+      },
+    ]);
+
+    expectLiveAndReplayLabels("acp:antigravity", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "ag-empty-locations-read",
+        name: "read_file",
+        kind: "read",
+        title: "File repo/a.ts",
+        status: "in_progress",
+        locations: [{ path: "/repo/a.ts" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "ag-empty-locations-read",
+        locations: [],
+        status: "completed",
+      },
+    ]);
+
+    expectLiveAndReplayLabels("acp:grok", [
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "grok-empty-locations-list",
+        kind: "read",
+        title: "List `/repo/src`",
+        status: "in_progress",
+        _meta: { "x.ai/tool": { name: "list_dir", kind: "list" } },
+        locations: [{ path: "/repo/src" }],
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "grok-empty-locations-list",
+        locations: [],
+        rawInput: null,
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("property: live and replay read_file and list_dir labels match across null rawInput, null bounds, and empty locations", () => {
+    const degradationKind = fc.constantFrom(
+      "null-rawInput",
+      "null-bounds",
+      "null-path",
+      "zero-bounds",
+      "empty-locations",
+      "null-locations",
+      "null-meta",
+      "null-rawInput-and-empty-locations",
+    );
+    const scenario = fc.record({
+      backendId: fc.constantFrom("acp:grok", "acp:antigravity"),
+      tool: fc.constantFrom("read_file", "list_dir"),
+      windows: fc.boolean(),
+      name: fc.stringMatching(/^[a-z]{1,12}$/u),
+      initialSource: fc.constantFrom("rawInput", "locations", "both"),
+      start: fc.integer({ min: 1, max: 2_000 }),
+      limit: fc.integer({ min: 1, max: 500 }),
+      boundsShape: fc.constantFrom("range", "startOnly", "none"),
+      degradations: fc.array(degradationKind, { minLength: 1, maxLength: 4 }),
+      degradeOnCompletion: fc.boolean(),
+    });
+
+    fc.assert(
+      fc.property(scenario, (input) => {
+        const toolCallId = "call-degrade-parity";
+        const leaf = input.tool === "read_file" ? `${input.name}.ts` : input.name;
+        const fullPath = input.windows ? `C:\\repo\\${leaf}` : `/repo/${leaf}`;
+        const pathKey = input.backendId === "acp:grok"
+          ? input.tool === "read_file" ? "target_file" : "target_directory"
+          : "Path";
+        const openingIdentity = input.backendId === "acp:grok"
+          ? {
+              _meta: {
+                "x.ai/tool": {
+                  name: input.tool,
+                  kind: input.tool === "read_file" ? "read" : "list",
+                },
+              },
+            }
+          : { name: input.tool };
+        const end = input.start + input.limit - 1;
+        const boundsFields: Record<string, unknown> =
+          input.tool !== "read_file" || input.initialSource === "locations" || input.boundsShape === "none"
+            ? {}
+            : input.backendId === "acp:grok"
+              ? input.boundsShape === "range"
+                ? { offset: input.start, limit: input.limit }
+                : { offset: input.start }
+              : input.boundsShape === "range"
+                ? { StartLine: input.start, EndLine: end }
+                : { StartLine: input.start };
+        const opening: Record<string, unknown> = {
+          sessionUpdate: "tool_call",
+          toolCallId,
+          kind: "read",
+          status: "in_progress",
+          title: input.tool === "read_file"
+            ? `File ${fullPath.replace(/^\/+/, "")}`
+            : `Dir ${fullPath.replace(/^\/+/, "")}`,
+          ...openingIdentity,
+          ...(input.initialSource !== "locations"
+            ? { rawInput: { [pathKey]: fullPath, ...boundsFields } }
+            : {}),
+          ...(input.initialSource !== "rawInput"
+            ? { locations: [{ path: fullPath }] }
+            : {}),
+        };
+
+        const buildDegradation = (kind: typeof input.degradations[number]): Record<string, unknown> => {
+          switch (kind) {
+            case "null-rawInput":
+              return { rawInput: null };
+            case "null-bounds":
+              return {
+                rawInput: input.backendId === "acp:grok"
+                  ? { [pathKey]: fullPath, offset: null, limit: null, pages: null }
+                  : { [pathKey]: fullPath, StartLine: null, EndLine: null },
+              };
+            case "null-path":
+              return { rawInput: { [pathKey]: null } };
+            case "zero-bounds":
+              return {
+                rawInput: input.backendId === "acp:grok"
+                  ? { [pathKey]: "", offset: 0, limit: 0 }
+                  : { [pathKey]: "", StartLine: 0, EndLine: 0 },
+              };
+            case "empty-locations":
+              return { locations: [] };
+            case "null-locations":
+              return { locations: null };
+            case "null-meta":
+              return { _meta: null };
+            case "null-rawInput-and-empty-locations":
+              return { rawInput: null, locations: [] };
+          }
+        };
+
+        const followUps = input.degradations.map((kind, index) => ({
+          sessionUpdate: "tool_call_update",
+          toolCallId,
+          ...buildDegradation(kind),
+          ...(input.degradeOnCompletion && index === input.degradations.length - 1
+            ? { status: "completed" }
+            : {}),
+        }));
+        const frames: Record<string, unknown>[] = [
+          opening,
+          ...followUps,
+          ...(input.degradeOnCompletion
+            ? []
+            : [{ sessionUpdate: "tool_call_update", toolCallId, status: "completed" }]),
+        ];
+
+        const expectedRange =
+          input.tool !== "read_file" || input.initialSource === "locations" || input.boundsShape === "none"
+            ? undefined
+            : input.boundsShape === "range"
+              ? `lines ${input.start}-${end}`
+              : input.start > 1
+                ? `from line ${input.start}`
+                : undefined;
+        const expectedLabel = input.tool === "read_file"
+          ? `Read ${leaf}${expectedRange ? ` (${expectedRange})` : ""}`
+          : `Listed ${leaf}`;
+
+        const [activity] = activities(replay(input.backendId, frames));
+        expect(activity?.details[0]).toMatchObject({
+          kind: "read",
+          label: expectedLabel,
+          path: fullPath,
+        });
+        expectLiveAndReplayLabels(input.backendId, frames);
+      }),
+      { numRuns: 200 },
+    );
+  });
 });

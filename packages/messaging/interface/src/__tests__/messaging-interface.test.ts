@@ -1,3 +1,4 @@
+import fc from "fast-check";
 import type {
   MessagingDeliveryResult,
   MessagingInboundEvent,
@@ -12,9 +13,12 @@ import {
   formatMessagingQuestionnaireText,
   looksLikePairingAttempt,
   messagingQuestionnaireAnswerDisplay,
+  messagingMultiAnswerWithCustom,
   messagingQuestionnaireActions,
+  messagingQuestionnaireAnswerComplete,
   normalizeMessagingQuestionnaireIntent,
   matchMessagingCommandVerb,
+  toggleMessagingQuestionnaireOption,
 } from "../index";
 
 type FakeProvider = {
@@ -364,5 +368,55 @@ describe("messaging interface package", () => {
       }
       expect(() => extractMessagingPairingToken(payload)).not.toThrow();
     }
+  });
+});
+
+describe("multi-select questionnaire answers", () => {
+  it("hold exactly the toggled options, in listed order, beside the last custom answer (model)", () => {
+    const question = {
+      id: "fruits",
+      question: "Pick fruits",
+      multiSelect: true,
+      allowFreeform: true,
+      options: ["Apple", "Pear", "Plum"].map((label, index) => ({
+        id: `fruits:option:${index + 1}`, label, value: label, fallbackText: String(index + 1),
+      })),
+    };
+    const step = fc.oneof(
+      fc.record({ toggle: fc.constantFrom("fruits:option:1", "fruits:option:2", "fruits:option:3", "other:option:1") }),
+      fc.record({ custom: fc.constantFrom("", " Kiwi ", "Fig") }),
+    );
+    fc.assert(fc.property(fc.array(step, { maxLength: 10 }), (steps) => {
+      let answer: ReturnType<typeof messagingMultiAnswerWithCustom> | null = null;
+      const chosen = new Set<string>();
+      let custom = "";
+      for (const next of steps) {
+        if ("toggle" in next) {
+          const toggled = toggleMessagingQuestionnaireOption(question, answer, next.toggle);
+          if (next.toggle.startsWith("other:")) {
+            // An option the question does not list changes nothing.
+            expect(toggled).toBeUndefined();
+            continue;
+          }
+          answer = toggled!;
+          if (chosen.has(next.toggle)) chosen.delete(next.toggle);
+          else chosen.add(next.toggle);
+        } else {
+          answer = messagingMultiAnswerWithCustom(question, answer, next.custom);
+          custom = next.custom.trim();
+        }
+      }
+      const optionIds = question.options.filter((option) => chosen.has(option.id)).map((option) => option.id);
+      const values = question.options.filter((option) => chosen.has(option.id)).map((option) => option.label);
+      if (answer === null) return;
+      expect(answer).toEqual({
+        kind: "multi",
+        optionIds,
+        values,
+        ...(custom ? { custom } : {}),
+        value: [...values, ...(custom ? [custom] : [])].join(", "),
+      });
+      expect(messagingQuestionnaireAnswerComplete(answer)).toBe(values.length > 0 || custom.length > 0);
+    }));
   });
 });

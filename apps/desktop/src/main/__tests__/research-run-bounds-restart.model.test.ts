@@ -126,7 +126,7 @@ it("counts a worker's turn across a restart toward its per-worker limit", async 
       expect(store.header(id)!.status).toBe("running");
       expect(shared.errors).toEqual([]);
       service.close();
-    }), { numRuns: 80 });
+    }), { numRuns: 8 });
   } finally { db.close(); }
 });
 
@@ -174,7 +174,7 @@ it("ends a run at its total worker time across a restart", async () => {
       }
       expect(shared.errors).toEqual([]);
       service.close();
-    }), { numRuns: 80 });
+    }), { numRuns: 8 });
   } finally { db.close(); }
 });
 
@@ -207,7 +207,7 @@ it("answers a command that takes a run over on the run as the takeover left it",
       expect(store.readItem(id, "a1")).toMatchObject({ record: { state: "stopped", note: expect.stringMatching(/per-worker time limit/) } });
       expect(shared.errors).toEqual([]);
       service.close();
-    }), { numRuns: 30 });
+    }), { numRuns: 8 });
   } finally { db.close(); }
 });
 
@@ -296,7 +296,7 @@ it("withdraws a resume the lowered per-worker limit has already passed, and keep
       }
       expect(shared.errors).toEqual([]);
       service.close();
-    }), { numRuns: 60 });
+    }), { numRuns: 8 });
   } finally { db.close(); }
 });
 

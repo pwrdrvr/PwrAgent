@@ -450,8 +450,15 @@ assertWorkflowStepContainsText(
 for (const jobName of ["test-macos", "desktop-e2e-macos"]) {
   assertWorkflowJobRunner(ciWorkflow, ".github/workflows/ci.yml", jobName, macosRunner);
 }
-for (const expected of ["lane: [1, 2, 3, 4]", "run: pnpm test --shard=${{ matrix.lane }}/4", 'PWRAGENT_REQUIRE_ACTOOL: "1"']) {
-  assertWorkflowJobContainsText(ciWorkflow, ".github/workflows/ci.yml", "test-macos", expected);
+assertWorkflowJobContainsText(
+  ciWorkflow, ".github/workflows/ci.yml", "test-macos",
+  "lane: ${{ fromJSON(needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_macos_lanes || '[1, 2, 3, 4]') }}",
+);
+for (const expected of [
+  'PWRAGENT_REQUIRE_ACTOOL: "1"',
+  "pnpm test --shard=${{ matrix.lane }}/4",
+]) {
+  assertWorkflowStepContainsText(ciWorkflow, ".github/workflows/ci.yml", "test-macos", "Test (unit)", expected);
 }
 for (const expected of [
   "environment: apple-signing",

@@ -1040,6 +1040,10 @@ describe("StarMapScreen", () => {
   });
 
   it("restores an open disconnected chat with its context and terminal", async () => {
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ version: 2, hideOfflineInstances: false }),
+    );
     const desktopApi: DesktopApi = {
       ...buildDesktopApi(),
       readFederationHealth: vi.fn(async () => ({
@@ -1613,6 +1617,10 @@ describe("StarMapScreen", () => {
   });
 
   it("disambiguates two profiles on one machine, local included", async () => {
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ version: 2, hideOfflineInstances: false }),
+    );
     const desktopApi: DesktopApi = {
       readFederationHealth: vi.fn(async () => ({
         health: {
@@ -1993,7 +2001,7 @@ describe("StarMapScreen", () => {
     });
   });
 
-  it("hides offline instances when the view option is set", async () => {
+  it("hides offline instances by default and shows them when toggled in View", async () => {
     window.localStorage.clear();
     const desktopApi: DesktopApi = {
       readFederationHealth: vi.fn(async () => ({
@@ -2026,6 +2034,15 @@ describe("StarMapScreen", () => {
         onFocusLocalInstance={() => undefined}
       />,
     );
+    await waitFor(() => {
+      // The local instance is never hidden by this option.
+      expect(screen.getByText("Local")).toBeTruthy();
+    });
+    // Hidden everywhere by default, arrow included.
+    expect(screen.queryAllByText(/Sleepy-Dev-Box/)).toHaveLength(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "View" }));
+    fireEvent.click(screen.getByLabelText("Show offline instances"));
     // Scoped to the canvas, not the window: the body sits off-screen at
     // the opening view, so its edge arrow names it too, and an unscoped
     // query would resolve to two. Scoping rather than relaxing to
@@ -2038,13 +2055,10 @@ describe("StarMapScreen", () => {
       expect(bodyLabel()).toHaveLength(1);
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "View" }));
-    fireEvent.click(screen.getByLabelText("Hide offline instances"));
+    fireEvent.click(screen.getByLabelText("Show offline instances"));
     await waitFor(() => {
-      // Hidden everywhere, arrow included.
       expect(screen.queryAllByText(/Sleepy-Dev-Box/)).toHaveLength(0);
     });
-    // The local instance is never hidden by this option.
     expect(screen.getByText("Local")).toBeTruthy();
   });
 

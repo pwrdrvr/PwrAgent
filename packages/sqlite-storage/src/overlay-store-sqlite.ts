@@ -26,7 +26,7 @@ export type {
 import { canonicalizeDetachedPrKeys, normalizeDetachedPrKeys } from "@pwragent/owner-core/detached-pr-keys";
 import { patchOwnerThreadMetadata, type OwnerThreadIdentity, type OwnerThreadMetadataPatch, type OwnerThreadRecord, type OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { claimAgentReviewBudget, rearmAgentReviewBudget, type AgentReviewAdmission, type AgentReviewBudget, type AgentReviewRefusal, type OperatorReviewInput } from "@pwragent/owner-core/agent-review-admission";
-import { buildLegacyEncodedThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import { buildLegacyEncodedThreadIdentityKey, pullRequestAttachmentIntent } from "@pwragent/shared/contracts/navigation";
 import { mergeCausalMessagingContext } from "@pwragent/shared/messaging-causal-context";
 import {
   parseUsageLimitObservation,
@@ -43,7 +43,11 @@ import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata"
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
-import { PROJECT_CHECKOUT_GROUPS_META_KEY, sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
+import {
+  PROJECT_CHECKOUT_GROUPS_META_KEY,
+  sqliteNavigationChangeVersion,
+  sqliteOwnerNavigationChangeVersion,
+} from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import { insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared/subthreads";
 import { navigationLaunchpadProviderKey } from "@pwragent/shared/contracts/navigation";
@@ -57,6 +61,7 @@ import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromParent, ThreadSubAgentTable } from "./thread-sub-agents";
 import { managedKeysFromLegacyProjection, prepareScopedManagedMembership } from "./thread-managed-membership";
 import { ThreadDependencyStore } from "./thread-dependency-store";
+import { readTokenMiserLegacyReplayCounts } from "./token-miser-legacy-replays";
 import { prepareSubthreadGroup } from "./subthread-group-sqlite";
 import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
@@ -608,7 +613,7 @@ function mergePrSummariesByStatusKey(
         existing?.linkedDirectoryPaths,
         normalized.linkedDirectoryPaths,
       ),
-      ...((existing?.explicitlyAttached || normalized.explicitlyAttached) ? { explicitlyAttached: true } : {}),
+      ...pullRequestAttachmentIntent(existing, normalized),
     }));
   }
   // Map replacement retains the existing key's position, while a genuinely
@@ -895,6 +900,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return `${external}:${local}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
   }
 
+  /** Owner-only stamp so viewer pin snapshot writes never invalidate native owner scans. */
+  readOwnerNavigationSourceVersion(): string {
+    const external = this.stateDb.raw.pragma("data_version", { simple: true });
+    const local = sqliteOwnerNavigationChangeVersion(this.stateDb.raw);
+    return `${external}:${local}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
+  }
+
   /**
    * Finalize sub-agents whose creating PwrAgent runtime no longer exists.
    *
@@ -1150,6 +1162,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         overlays[key] = { ...child, parentThreadInstanceId: source.parentThreadInstanceId };
       }
     }
+    const activePrAutoDispatchKeys = this.attachNavigationPrAutoDispatchClaims(overlays);
     const launchpads: Record<string, DirectoryLaunchpadOverlayState> = {};
     const launchpadPresenceKeys = new Set<string>();
     const drafts = this.stateDb.raw.prepare(`
@@ -1198,7 +1211,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         // agreement with the saved relationships.
         return { ...thread, parentThreadId: overlay?.parentThreadId,
           parentThreadBackend: overlay?.parentThreadBackend, parentThreadInstanceId: overlay?.parentThreadInstanceId,
-          nativeSubAgentCount: nativeCounts.get(key) ?? 0 };
+          nativeSubAgentCount: nativeCounts.get(key) ?? 0,
+          ...(activePrAutoDispatchKeys.has(key) ? { prAutoDispatchActive: true as const } : {}) };
       });
     const directoryOverlays = this.readAllDirectoryOverlaysSync();
     const directories = buildDirectorySummaries({ threads, launchpadsByKey: launchpads, launchpadPresenceKeys,
@@ -4070,6 +4084,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return stored;
   }
 
+  async readTokenMiserLegacyReplayCounts(
+    params: Parameters<typeof readTokenMiserLegacyReplayCounts>[1],
+  ): Promise<Map<string, Map<string, number>>> {
+    return readTokenMiserLegacyReplayCounts(this.stateDb.raw, params);
+  }
+
   async readThreadToolAccounting(params: {
     backend: ThreadOverlayState["backend"];
     includeAllInvocations?: boolean;
@@ -6732,9 +6752,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       return observed;
     }
     const canonicalizePrKey = params.canonicalizePrKey ?? ((key: string) => key);
-    const explicitKeys = new Set((current.prs ?? [])
-      .filter((pr) => pr.explicitlyAttached)
-      .map((pr) => canonicalizePrKey(buildPullRequestStatusKey(pr))));
+    // Thread-local intent survives a lookup, which reports provider status only.
+    const intentByKey = new Map((current.prs ?? [])
+      .map((pr) => [canonicalizePrKey(buildPullRequestStatusKey(pr)), pullRequestAttachmentIntent(pr)] as const));
     const { detachedPrKeys, releasedPrKeys } = canonicalizeDetachedPrKeys({
       detachedPrKeys: current.detachedPrKeys,
       attachedPrKeys: (current.prs ?? []).map(buildPullRequestStatusKey),
@@ -6750,10 +6770,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       ...current,
       detachedPrKeys,
       detachedPrs,
-      prs: filterDetachedPrs(params.prs, detachedPrKeys).map((pr) => normalizePrSummary({
-        ...pr,
-        ...(explicitKeys.has(buildPullRequestStatusKey(pr)) ? { explicitlyAttached: true } : {}),
-      })),
+      prs: filterDetachedPrs(params.prs, detachedPrKeys).map((pr) => {
+        // Only the operator's switch sets autoFixOff, and it writes the
+        // stored row. A lookup's rows were read before its fetch, so the
+        // stored row decides, or a switch made meanwhile would be undone.
+        const { autoFixOff: _staleAutoFixOff, ...status } = pr;
+        return normalizePrSummary({
+          ...status,
+          ...pullRequestAttachmentIntent(intentByKey.get(canonicalizePrKey(buildPullRequestStatusKey(pr)))),
+        });
+      }),
       prsFetchedAt: fetchedAt,
       prsRefreshKey: params.refreshKey,
     };
@@ -6841,6 +6867,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     };
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  /**
+   * Switch Auto-fix off, or back on, for one attached PR of a thread whose
+   * Auto-fix stays on. `matchesPrKey` takes a stored row's status key, so a
+   * row stored under a renamed repository's old name still matches.
+   */
+  async setThreadPullRequestAutoFixOff(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    matchesPrKey: (prKey: string) => boolean;
+    off: boolean;
+  }): Promise<{ state: ThreadOverlayState | undefined; changed: boolean }> {
+    return this.stateDb.raw.transaction(() => {
+      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const current = this.getThread(threadKey);
+      if (!current?.prs?.length) return { state: current, changed: false };
+      let changed = false;
+      const prs = current.prs.map((pr) => {
+        if (!params.matchesPrKey(buildPullRequestStatusKey(pr)) || (pr.autoFixOff === true) === params.off) return pr;
+        changed = true;
+        const next = { ...pr };
+        if (params.off) next.autoFixOff = true;
+        else delete next.autoFixOff;
+        return normalizePrSummary(next);
+      });
+      if (!changed) return { state: current, changed };
+      const nextState: ThreadOverlayState = { ...current, prs };
+      this.putThread(threadKey, nextState);
+      return { state: nextState, changed };
+    }).immediate();
   }
 
   async readPrStatusCache(): Promise<Record<string, PrStatusCacheEntry>> {
@@ -7101,6 +7158,34 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       rows.forEach((row, index) => entries.push([row.id, overlays[index]]));
     }
     return Object.fromEntries(entries);
+  }
+
+  /**
+   * Auto-fix state for the navigation index's thread rows. The compact
+   * overlay projection is cached by `threads` writes, and a claim lives in
+   * its own table, so this reads claims on every index build. A pending
+   * claim becomes the row's cancellable `prAutoDispatchPending`, as in the
+   * full read. The returned keys also include a claim being tried (between
+   * a dispatch's claim and its busy refund), which marks the row active so
+   * its Scheduled chip does not drop for a refresh that lands mid-attempt.
+   */
+  private attachNavigationPrAutoDispatchClaims(overlays: Record<string, ThreadOverlayState | undefined>): ReadonlySet<string> {
+    // At most one active claim per thread (idx_pr_auto_dispatch_active_thread),
+    // and few at all: read them, not one lookup per listed thread.
+    const claims = this.stateDb.raw.prepare(`
+      SELECT backend, thread_id, status, payload FROM pr_auto_dispatch_claims
+      WHERE status IN ('pending', 'dispatching')
+    `).all() as Array<{ backend: ThreadOverlayState["backend"]; thread_id: string; status: string; payload: string }>;
+    const active = new Set<string>();
+    for (const claim of claims) {
+      const key = buildThreadIdentityKey(claim.backend, claim.thread_id);
+      const overlay = overlays[key];
+      if (!overlay) continue;
+      active.add(key);
+      const record = claim.status === "pending" ? parsePrAutoDispatchPendingRecord(claim.payload) : undefined;
+      if (record) overlays[key] = { ...overlay, prAutoDispatchPending: record.pending };
+    }
+    return active;
   }
 
   /**
@@ -10792,8 +10877,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const row = this.stateDb.raw
       .prepare(
         `SELECT payload
-         FROM pr_auto_dispatch_claims
-         WHERE backend = ? AND thread_id = ? AND status = 'pending'
+         FROM pr_auto_dispatch_claims INDEXED BY idx_pr_auto_dispatch_active_thread
+         WHERE backend = ? AND thread_id = ?
+           AND status IN ('pending', 'dispatching') AND status = 'pending'
          LIMIT 1`,
       )
       .get(params.backend, params.threadId) as { payload: string } | undefined;
@@ -11006,9 +11092,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     now: number,
     options?: { promoteSubthreads: boolean },
   ): Promise<ArchivedThreadAutomationRetirement[]> {
+    if (records.length === 0) return [];
+    // Most of a provider's archived inventory already has a retention date.
+    // Keep those overlays and inactive automation payloads off the JS heap.
+    // Check inside the write transaction so peer changes are visible before
+    // deciding whether to run the existing retirement operations.
+    const needsObservation = options?.promoteSubthreads ? undefined : this.stateDb.raw.prepare(`
+      SELECT 1 WHERE NOT EXISTS (
+        SELECT 1 FROM threads WHERE thread_id = @key
+          AND json_type(payload, '$.archiveRetentionStartedAt') IS NOT NULL
+          AND json_type(payload, '$.prAutoDispatchEnabled') IS NOT 'true'
+      ) OR EXISTS (
+        SELECT 1 FROM pr_status_watches
+        WHERE backend = @backend AND thread_id = @threadId
+          AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
+      ) OR EXISTS (
+        SELECT 1 FROM thread_dependencies
+        WHERE backend = @backend AND thread_id = @threadId AND status IN ('waiting', 'ready', 'dispatching')
+      ) OR EXISTS (
+        SELECT 1 FROM pr_auto_dispatch_claims INDEXED BY idx_pr_auto_dispatch_active_thread
+        WHERE backend = @backend AND thread_id = @threadId
+          AND status IN ('pending', 'dispatching') AND status = 'pending'
+      ) OR EXISTS (
+        SELECT 1 FROM pr_auto_dispatch_candidates WHERE backend = @backend AND thread_id = @threadId
+      )
+    `);
     return this.stateDb.raw.transaction(() => {
       const retired: ArchivedThreadAutomationRetirement[] = [];
       for (const identity of records) {
+        if (needsObservation && !needsObservation.get({
+          ...identity, key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(identity.backend, identity.threadId)),
+        })) continue;
         const retirement = this.observeArchivedThread(identity, now, options);
         if (retirement) retired.push(retirement);
       }
@@ -13203,6 +13317,7 @@ export type OverlayStoreLike = Pick<
   | "readAllDirectoryOverlays"
   | "setThreadPullRequests"
   | "detachThreadPullRequest"
+  | "setThreadPullRequestAutoFixOff"
   | "addThreadPullRequestReference"
   | "readPrStatusCache"
   | "writePrStatusCacheEntries"

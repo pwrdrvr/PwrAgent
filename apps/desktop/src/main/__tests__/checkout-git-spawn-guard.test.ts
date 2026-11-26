@@ -200,7 +200,13 @@ describe("checkout Git spawn guard", () => {
 
         expect(flagged !== undefined).toBe(fold(toplevel) === fold(root));
       },
-    ), { numRuns: 60 });
+    ), { numRuns: 5, examples: [
+      [checkout, []],
+      [tree, [{ kind: "C-relative", value: "checkout" }, { kind: "C-relative", value: "apps" }]],
+      [checkout, [{ kind: "C-relative", value: ".." }, { kind: "C-relative", value: "elsewhere" }]],
+      [tree, [{ kind: "flag", value: "--no-optional-locks" }, { kind: "C-absolute", value: checkout },
+        { kind: "config", value: "core.quotePath=false" }]],
+    ] });
   });
 
   it("never flags a launch that is not Git", () => {

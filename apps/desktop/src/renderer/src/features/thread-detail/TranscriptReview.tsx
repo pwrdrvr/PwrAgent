@@ -17,6 +17,7 @@ import {
   reviewFindingPullRequests,
 } from "../../../../shared/pull-request-review";
 import {
+  isReviewResultEntry,
   parsePlainReview,
   reviewEntryFailure,
   reviewEntryFindings,
@@ -25,6 +26,7 @@ import {
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { isPendingEntryId } from "../../lib/pending-entry-id";
 import type { ThreadLinkSource } from "../../lib/thread-links";
 import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
 import { ReviewProvenance } from "./ReviewProvenance";
@@ -209,15 +211,20 @@ function ReviewVerdictBadge(props: {
 
 export function TranscriptReview(props: TranscriptReviewProps) {
   const failure = reviewEntryFailure(props.entry);
-  const reviewTarget = props.threadLinkSource
-    ? { scope: "remote" as const, instanceId: props.threadLinkSource.instanceId }
-    : props.fileViewerContext?.federationTarget;
+  // Pending text's links are relative to its author. Review operations
+  // belong to the parent thread's owner.
+  const linkSource = props.threadLinkSource;
+  const reviewTarget = props.fileViewerContext?.federationTarget
+    ?? (linkSource && !linkSource.authoredHere
+      ? { scope: "remote" as const, instanceId: linkSource.instanceId }
+      : undefined);
   const reviewThread = props.parentThreadId
     ? { backend: props.parentThreadBackend ?? "codex", threadId: props.parentThreadId,
         ...(reviewTarget?.scope === "remote" ? { federationTarget: reviewTarget } : {}),
       }
     : undefined;
-  const tracking = useTrackedReview(failure ? undefined : reviewThread, { sourceKey: props.entry.id });
+  const trackable = !failure && !isPendingEntryId(props.entry.id) && isReviewResultEntry(props.entry);
+  const tracking = useTrackedReview(trackable ? reviewThread : undefined, { sourceKey: props.entry.id });
   // A review still running: the owner says whether it will auto-fix.
   const runningTurnId = !failure && props.entry.turn?.status === "in_progress" ? props.entry.turn.id : undefined;
   const autoFix = useReviewAutoFix(runningTurnId ? reviewThread : undefined);
@@ -402,7 +409,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
         </div>
       ) : null}
 
-      {!failure && tracking.review ? (
+      {trackable && tracking.review ? (
         <ReviewStatusRow review={tracking.review} busy={tracking.busy} update={tracking.update} />
       ) : null}
       {armed ? (
@@ -412,7 +419,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
           onDisarm={() => void autoFix.disarm(runningTurnId)}
         />
       ) : null}
-      {!failure && tracking.error ? (
+      {trackable && tracking.error ? (
         <p className="review-status__error" role="alert">{tracking.error}</p>
       ) : null}
 

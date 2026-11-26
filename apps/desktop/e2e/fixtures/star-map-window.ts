@@ -10,7 +10,7 @@
 // process never made the window, or Playwright never attached to a window
 // that exists. Those have different fixes and the CI log is usually all
 // anybody has, so the wait now reports which one it was.
-import { expect, type ConsoleMessage, type Page } from "@playwright/test";
+import { expect, type ConsoleMessage, type Locator, type Page } from "@playwright/test";
 import type { DesktopApi } from "../../src/renderer/src/lib/desktop-api";
 import type { launchElectronApp } from "./electron-app";
 import { withProbeTimeout } from "./probe-report";
@@ -27,25 +27,34 @@ const WAIT_INTERVAL_MS = 200;
  * can print what the page said instead of leaving it in a trace artifact
  * nobody downloads.
  */
-type RendererErrorLog = {
-  entries: () => string[];
+type RendererOpenLog = {
+  errors: string[];
+  milestones: string[];
   stop: () => void;
 };
 
-function recordRendererErrors(page: Page): RendererErrorLog {
-  const entries: string[] = [];
+const OPEN_MILESTONE_PREFIX = "[star-map-open] ";
+
+function recordRendererOpen(page: Page): RendererOpenLog {
+  const errors: string[] = [];
+  const milestones: string[] = [];
   const onConsole = (message: ConsoleMessage): void => {
     const type = message.type();
-    if (type !== "error" && type !== "warning") return;
-    entries.push(`console.${type}: ${message.text()}`);
+    const text = message.text();
+    if (type === "debug" && text.startsWith(OPEN_MILESTONE_PREFIX)) {
+      milestones.push(text.slice(OPEN_MILESTONE_PREFIX.length));
+    } else if (type === "error" || type === "warning") {
+      errors.push(`console.${type}: ${text}`);
+    }
   };
   const onPageError = (error: Error): void => {
-    entries.push(`pageerror: ${error.message}`);
+    errors.push(`pageerror: ${error.message}`);
   };
   page.on("console", onConsole);
   page.on("pageerror", onPageError);
   return {
-    entries: () => [...entries],
+    errors,
+    milestones,
     stop: () => {
       page.off("console", onConsole);
       page.off("pageerror", onPageError);
@@ -111,7 +120,8 @@ async function describeMainProcessWindows(app: LaunchedApp): Promise<string> {
  */
 async function waitForStarMapWindow(
   app: LaunchedApp,
-  errorLog?: RendererErrorLog,
+  openLog: RendererOpenLog,
+  route: "header" | "preload",
 ): Promise<Page> {
   for (let attempt = 0; attempt < WAIT_ATTEMPTS; attempt += 1) {
     for (const candidate of app.electronApp.windows()) {
@@ -134,7 +144,6 @@ async function waitForStarMapWindow(
       "the main process",
     ),
   ]);
-  const rendererErrors = errorLog?.entries() ?? [];
   throw new Error(
     [
       `Star Map window did not open after ${
@@ -146,8 +155,9 @@ async function waitForStarMapWindow(
         .join(", ")}`,
       `  windows the main process has: ${mainProcessWindows}`,
       `  preload bridge in the main window: ${bridge}`,
+      `  ${route} open milestones: ${openLog.milestones.join(" → ") || "(none)"}`,
       `  renderer errors during the wait: ${
-        rendererErrors.length > 0 ? rendererErrors.join(" | ") : "(none)"
+        openLog.errors.join(" | ") || "(none)"
       }`,
     ].join("\n"),
   );
@@ -207,24 +217,17 @@ export async function focusStarMapWindow(
 /**
  * Click the main window's header control and wait for the map window.
  *
- * The `expect.poll` is a readiness barrier, and it is the fix for the
- * flake this file was written for. `launchElectronApp` resolves on a
- * MAIN-PROCESS global (the replay driver installed from the
- * `BackendRegistry` constructor) — that says nothing about the renderer,
- * and the main process registers `STAR_MAP_OPEN_WINDOW_CHANNEL` before it
- * creates any window, so the only end that can still be unready when the
- * button is clickable is the preload bridge. Every other star-map spec
- * happened to wait for something the bridge has to serve — a thread row, a
- * completed Settings flow — before clicking, which is why the one spec
- * that clicks straight after launch was the only one that ever failed
- * here. This makes the barrier explicit instead of incidental.
+ * The replay driver is a main-process readiness signal. Wait for the
+ * preload bridge and native visibility before opening. A spec that starts
+ * from a selected thread can scope the click to its settled header so the
+ * loading header cannot be replaced in the middle of the gesture.
  *
  * Specs that exercise behavior inside the native window can opt into the
  * preload call as setup. The default exercises the header control.
  */
 export async function openStarMapWindow(
   app: LaunchedApp,
-  options?: { viaPreload?: boolean },
+  options?: { viaPreload: true } | { viaPreload?: false; header?: Locator },
 ): Promise<Page> {
   // Both barriers read across the Electron RPC boundary, so both are wrapped:
   // `expect.poll` does not retry a THROWING callback, and a round trip can
@@ -261,18 +264,21 @@ export async function openStarMapWindow(
     .toBe(true)
     .catch(nativeWindowShown.rethrowWithLastFailure);
 
-  const errorLog = recordRendererErrors(app.window);
+  const openLog = recordRendererOpen(app.window);
   try {
     if (options?.viaPreload) {
       await app.window.evaluate(async () => {
         const api = (window as unknown as { pwragent: DesktopApi }).pwragent;
+        console.debug("[star-map-open] invoking main");
         await api.openStarMapWindow!();
+        console.debug("[star-map-open] main acknowledged open");
       });
     } else {
-      await app.window.getByRole("button", { name: "Open Star Map" }).click();
+      const header = options?.header ?? app.window;
+      await header.getByRole("button", { name: "Open Star Map", exact: true }).click();
     }
-    return await waitForStarMapWindow(app, errorLog);
+    return await waitForStarMapWindow(app, openLog, options?.viaPreload ? "preload" : "header");
   } finally {
-    errorLog.stop();
+    openLog.stop();
   }
 }

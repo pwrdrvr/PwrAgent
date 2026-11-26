@@ -129,7 +129,7 @@ export class StackOperationsService {
   }
 
   async resumeInterrupted(directories: readonly string[], registry: DesktopBackendRegistry): Promise<string[]> {
-    const observation = new StackReadObservation();
+    const observation = new StackReadObservation({}, "recovery");
     // Recovery keys on the journal because an interrupted adoption may not
     // have written its catalog yet. The locked recovery still verifies it.
     const candidates = await observation.hints.markerCandidates(directories, STACK_OPERATION_JOURNAL);

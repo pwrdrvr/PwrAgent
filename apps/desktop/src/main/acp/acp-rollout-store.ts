@@ -69,6 +69,7 @@ export class AcpRolloutStore {
     }
     const chunkKey = streamingChunkKey(params);
     if (chunkKey) {
+      this.clearSessionFingerprints(params.backendId, params.sessionId);
       this.appendChunk(chunkKey, params);
       return;
     }
@@ -82,6 +83,8 @@ export class AcpRolloutStore {
         return;
       }
       this.lastFingerprints.set(duplicateKey, fingerprint);
+    } else {
+      this.clearSessionFingerprints(params.backendId, params.sessionId);
     }
 
     this.writeRecord(params);
@@ -156,6 +159,11 @@ export class AcpRolloutStore {
       return;
     }
 
+    // Switching chunk kind or message id starts a new transcript stream; flush
+    // any earlier buffered chunk for this session first so rollout.jsonl keeps
+    // wire order even when the new stream hits its flush threshold.
+    this.flushSession(params.backendId, params.sessionId);
+
     this.chunkBuffers.set(chunkKey, {
       backendId: params.backendId,
       receivedAt: params.receivedAt,
@@ -206,8 +214,18 @@ export class AcpRolloutStore {
     );
   }
 
+  private clearSessionFingerprints(backendId: AcpBackendId, sessionId: string): void {
+    const prefix = `${backendId}:${sessionId}:`;
+    for (const key of [...this.lastFingerprints.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.lastFingerprints.delete(key);
+      }
+    }
+  }
+
   deleteSession(backendId: AcpBackendId, sessionId: string): void {
     this.flushSession(backendId, sessionId);
+    this.clearSessionFingerprints(backendId, sessionId);
     fs.rmSync(path.dirname(this.rolloutPath(backendId, sessionId)), { recursive: true, force: true });
   }
 
@@ -348,10 +366,9 @@ function updateDuplicateKey(
     readString(params.update, "tool_call_id") ??
     readString(params.update, "id") ??
     readString(params.update, "itemId") ??
-    readString(params.update, "item_id") ??
-    readString(params.update, "title");
+    readString(params.update, "item_id");
   return id
-    ? `${params.backendId}:${params.sessionId}:${kind}:${id}`
+    ? `${params.backendId}:${params.sessionId}:${id}`
     : undefined;
 }
 

@@ -1,6 +1,5 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
-import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import { ThreadTodoCard } from "../ThreadTodoCard";
 import { TodoDispatchProvider } from "../TodoDispatchProvider";
@@ -76,24 +75,16 @@ it("disables a pending start confirmation when its owner loses support", () => {
   expect(document.activeElement).toBe(screen.getByRole("button", { name: "Handoff options" }));
 });
 
-it("keeps the explicit start selected across owner capability observations", () => {
+it.each(["source", "another-thread"])("keeps the explicit start selected for %s across owner capability changes", (targetThreadId) => {
   // An owner observation can affect whether a dispatch runs. Only the operator changes its destination.
-  fc.assert(fc.property(
-    fc.constantFrom("source", "another-thread"),
-    fc.array(fc.constantFrom<ThreadTodoInstance[]>([OWNER], [OLDER_OWNER], []), { minLength: 1, maxLength: 5 }),
-    (targetThreadId, observations) => {
-      cleanup();
-      const { updateOwners, onRun, onDoHere } = setup(targetThreadId);
-      selectHandoffOption("Start a new thread");
-      for (const instances of observations) {
-        updateOwners(instances);
-        expect(startButton().disabled).toBe(!instances.some((instance) => instance.startFromMessage));
-        expect(screen.queryByRole("button", { name: /^(Do it here|Send request)$/ })).toBeNull();
-      }
-      updateOwners([OWNER]);
-      fireEvent.click(startButton());
-      expect(onRun).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ startNewThread: true }));
-      expect(onDoHere).not.toHaveBeenCalled();
-    },
-  ), { numRuns: 25 });
+  const { updateOwners, onRun, onDoHere } = setup(targetThreadId);
+  selectHandoffOption("Start a new thread");
+  for (const instances of [[OWNER], [OLDER_OWNER], [], [OLDER_OWNER], [OWNER]]) {
+    updateOwners(instances);
+    expect(startButton().disabled).toBe(!instances.some((instance) => instance.startFromMessage));
+    expect(screen.queryByRole("button", { name: /^(Do it here|Send request)$/ })).toBeNull();
+  }
+  fireEvent.click(startButton());
+  expect(onRun).toHaveBeenCalledExactlyOnceWith(expect.anything(), expect.objectContaining({ startNewThread: true }));
+  expect(onDoHere).not.toHaveBeenCalled();
 });

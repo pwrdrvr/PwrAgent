@@ -14,12 +14,15 @@ import { stackAutomationGates } from "@pwragent/shared/stacks/stack-automation";
 import { PR_METADATA_PRIORITY, runPrMetadataFileProbe, runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "../pr-status/pr-metadata-process";
 import { createStoredAttachmentObservation, type PrAttachmentDemand } from "../pr-status/pr-detection";
 import { createStackCheckoutHints, STACK_CHECKOUT_SCAN_LIMITS } from "../git-info/stack-checkout-store";
+import { githubForgeStackCatalog, githubForgeStacksIn, readGithubForgeStack } from "./github-forge-stacks";
 
 type CatalogRead = GhStackCatalogRead | { status: "missing" | "unavailable" };
 
 const CATALOG_BYTES = 1024 * 1024;
 const MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS = 16;
 const MAX_INVENTORY_CHECKOUTS = 2_048;
+// Cover large thread histories without FIFO thrashing while still bounding memory.
+const MAX_INVENTORY_CHECKOUTS_CEILING = 32_768;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 type CatalogObservation = { catalog: CatalogRead; version?: string };
@@ -183,14 +186,14 @@ export class StackReadObservation {
   private backgroundTtlRevalidations = 0;
   private readonly reservedTtlRevalidations = new Set<string>();
 
-  constructor(readonly demand: PrMetadataDemand = {}) {
+  constructor(readonly demand: PrMetadataDemand = {}, purpose: "read" | "recovery" = "read") {
     // A selected request can promote the explicit checkout without putting
     // its speculative inventory work ahead of other selected reads.
     this.inventoryDemand = {
       signal: demand.signal,
       priority: () => Math.min(demand.priority?.() ?? PR_METADATA_PRIORITY.background, PR_METADATA_PRIORITY.page),
     };
-    this.hints = createStackCheckoutHints(this.inventoryDemand);
+    this.hints = createStackCheckoutHints(this.inventoryDemand, purpose);
   }
 
   reserveBackgroundTtlRevalidation(cwd: string, limit: number): boolean {
@@ -631,8 +634,8 @@ async function resolveAttachmentCheckouts(
       const registered = physical && rosteredRoots.get(physical);
       if (registered) return [cwd, registered.checkout] as const;
     }
-    // An unrecognized or inconclusive filesystem result needs Git. Keep the
-    // fallback local to this projection so a retarget is observed on retry.
+    // The selected executable can depend on config outside the checkout.
+    // Ask Git for current provenance when the filesystem cannot prove it.
     return [cwd, await locateCheckout(cwd, inventoryDemand)] as const;
   }, STACK_CHECKOUT_SCAN_LIMITS);
   for await (const [cwd, checkout] of scan) resolved.set(cwd, checkout);
@@ -738,9 +741,8 @@ async function projectClone(
   const observed = new Map<string, PrSummary>();
   if (!repositories.size) return { stacks, worktrees: [], observed };
   const plans = [...repositories].sort().flatMap((repository) => {
-    const catalogStacks = catalog?.repository.toLowerCase() === repository ? catalog.stacks : [];
+    const localStacks = catalog?.repository.toLowerCase() === repository ? catalog.stacks : [];
     const prs = clonePrs(threads, knownPrs, repository);
-    const catalogBranches = new Set(catalogStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
     const bindings: StackThread[] = threads.map(({ row, paths }) => ({
       key: buildThreadIdentityKey(row.source, row.id),
       title: row.title,
@@ -748,10 +750,19 @@ async function projectClone(
       attached: (row.prs ?? []).filter((pr) => prRepository(pr) === repository).map((pr) => pr.number),
     }));
     const attached = new Set(bindings.flatMap((thread) => thread.attached));
+    // A stack that exists on GitHub and holds one of this clone's PRs, unless
+    // a local catalog already records it.
+    const localBranches = new Set(localStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
+    const forgeStacks = githubForgeStacksIn(repository).filter((stack) => stack.layers.some((layer) => attached.has(layer.number))
+      && !localStacks.some((local) => local.number === stack.number)
+      && !stack.layers.some((layer) => localBranches.has(layer.branch)));
+    const forgeNumbers = new Map(forgeStacks.map((stack) => [stack.number, stack] as const));
+    const catalogStacks = [...localStacks, ...forgeStacks.map(githubForgeStackCatalog)];
+    const catalogBranches = new Set(catalogStacks.flatMap((stack) => stack.branches.map((branch) => branch.branch)));
     // Infer from this clone's attachments. The registry is repository-wide and
     // can include PRs observed through a different clone.
     const inferred = inferPullRequestStacks(prs.filter((pr) => attached.has(pr.number) && sameRepositoryHead(pr)), catalogBranches);
-    return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, prs, bindings, inferred }] : [];
+    return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, forgeNumbers, prs, bindings, inferred }] : [];
   });
   if (!plans.length) return { stacks, worktrees: [], observed };
   const [worktreeOutput, refOutput, graphScope] = await Promise.all([
@@ -764,19 +775,37 @@ async function projectClone(
   const refs = parseRefs(refOutput);
   const cloneKey = createHash("sha256").update(clone.commonDir).digest("hex").slice(0, 24);
   const busy = Boolean(catalog?.stacks.length) && await stackJournalInFlight(clone.commonDir);
-  for (const { repository, catalogStacks, prs, bindings, inferred } of plans) {
+  for (const { repository, catalogStacks, forgeNumbers, prs, bindings, inferred } of plans) {
     for (const pr of prs) observed.set(prIdentity(pr), pr);
     const prefix = `${cloneKey}:${repository}`;
     for (const stack of catalogStacks) {
       if (!stack.branches.length) continue;
       const name = stack.branches[0]!.branch;
-      const layers = await projectCatalogLayers({ stack, refs, prs, worktrees, threads: bindings, graph });
+      const forgeStack = stack.number !== undefined ? forgeNumbers.get(stack.number) : undefined;
+      const forge = forgeStack !== undefined;
+      const projected = await projectCatalogLayers({ stack, refs, prs, worktrees, threads: bindings, graph });
+      // Only GitHub records this stack: no fork point is known for its layers,
+      // so it claims no local restack or sync state. A layer no thread polls
+      // takes its state from GitHub's member list.
+      const layers = forgeStack
+        ? projected.map((layer, index) => {
+          const member = forgeStack.layers[index];
+          const lifecycleState = layer.pullRequest?.lifecycleState
+            ?? (member ? member.open ? "open" as const : member.merged ? "merged" as const : "closed" as const : undefined);
+          return {
+            ...layer,
+            ...(layer.health === "parent_merged" || layer.health === "needs_restack" ? { health: "unknown" as const } : {}),
+            ...(layer.pullRequest && lifecycleState ? { pullRequest: { ...layer.pullRequest, lifecycleState } } : {}),
+          };
+        })
+        : projected;
       const identity = stack.id ?? name;
       const key = `${prefix}:catalog:${identity}`;
       stacks.push({
         key: key.length <= 512 ? key : createHash("sha256").update(key).digest("hex"),
         name, repository, inferred: false, trunk: stack.trunk.branch,
-        layers: busy ? layers.map((layer) => ({ ...layer, health: "held" })) : layers,
+        ...(stack.number !== undefined ? { githubStack: stack.number } : {}),
+        layers: busy && !forge ? layers.map((layer) => ({ ...layer, health: "held" })) : layers,
       });
     }
     for (const chain of inferred) {
@@ -823,6 +852,12 @@ function possibleInferredLayers(threads: readonly StackThreadRow[], knownPrs: re
     }
   }
   const eligible = new Set<string>();
+  // A PR in a GitHub stack whose members are known projects that stack.
+  for (const pr of [...attached, ...knownPrs]) {
+    if (pr.githubStack && attachedIds.has(prIdentity(pr)) && readGithubForgeStack(prRepository(pr), pr.githubStack.number)) {
+      eligible.add(prIdentity(pr));
+    }
+  }
   for (const [key, parents] of byHead) {
     const children = byBase.get(key);
     if (!children || (parents.size === 1 && children.size === 1 && children.has(parents.values().next().value!))) continue;
@@ -837,6 +872,7 @@ export class StackReader {
   private readonly inventoryCheckouts = new Map<string, {
     version: string; checkout: CheckoutLookup; expiresAt: number;
   }>();
+  private inventoryCheckoutCapacity = MAX_INVENTORY_CHECKOUTS;
   private readonly deferredTtlRevalidations = new Set<string>();
 
   /** Lives as long as this reader, so every projection it makes shares the answers. */
@@ -878,13 +914,16 @@ export class StackReader {
     return await pending.read(demand);
   }
 
-  private claimBackgroundTtlRevalidation(cwd: string, observation: StackReadObservation): boolean {
+  private claimBackgroundTtlRevalidation(
+    cwd: string,
+    observation: StackReadObservation,
+  ): boolean {
     if (observation.claimBackgroundTtlRevalidation(cwd, this.backgroundTtlRevalidationBudget)) {
       this.deferredTtlRevalidations.delete(cwd);
       return true;
     }
     this.deferredTtlRevalidations.add(cwd);
-    if (this.deferredTtlRevalidations.size > MAX_INVENTORY_CHECKOUTS) {
+    while (this.deferredTtlRevalidations.size > this.inventoryCheckoutCapacity) {
       this.deferredTtlRevalidations.delete(this.deferredTtlRevalidations.values().next().value!);
     }
     return false;
@@ -901,10 +940,11 @@ export class StackReader {
     const hasHints = options.hasHints !== false;
     const allowUnavailableCache = options.allowUnavailableCache === true;
     const budgetTtlRevalidation = options.budgetTtlRevalidation === true;
-    const ready = hasHints && useWorktreeInventory ? observation.readyWorktreeInventory(candidates[0]!) : undefined;
+    const nearest = candidates[0];
+    const ready = nearest && hasHints && useWorktreeInventory ? observation.readyWorktreeInventory(nearest) : undefined;
     const identity = hasHints && candidates.length ? await hints.checkoutIdentity(cwd) : undefined;
     const before = identity && candidates.includes(identity.commonDir) ? identity : undefined;
-    const checkRegistration = hasHints && useWorktreeInventory && before?.registeredWorktree;
+    const checkRegistration = hasHints && useWorktreeInventory && before?.commonDir === nearest && before?.registeredWorktree;
     // If hints find a repository but cannot verify its checkout, the .git
     // marker alone cannot witness changes such as edits to config.worktree.
     const version = before?.version
@@ -929,6 +969,9 @@ export class StackReader {
     ) {
       const fresh = cached.expiresAt > this.now();
       if (fresh || (budgetTtlRevalidation && !this.claimBackgroundTtlRevalidation(cwd, observation))) {
+        // Refresh recency on hits so active directories survive eviction.
+        this.inventoryCheckouts.delete(key);
+        this.inventoryCheckouts.set(key, cached);
         return cached.checkout === "unavailable"
           ? "unavailable"
           : recordWitness(cached.checkout && { ...cached.checkout, cwd }, true);
@@ -947,7 +990,9 @@ export class StackReader {
       this.deferredTtlRevalidations.delete(cwd);
       this.inventoryCheckouts.delete(key);
       this.inventoryCheckouts.set(key, { version, checkout, expiresAt });
-      if (this.inventoryCheckouts.size > MAX_INVENTORY_CHECKOUTS) this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
+      while (this.inventoryCheckouts.size > this.inventoryCheckoutCapacity) {
+        this.inventoryCheckouts.delete(this.inventoryCheckouts.keys().next().value!);
+      }
     };
     if (checkRegistration) {
       const checkout = await observation.registeredCheckout(cwd, before, ready);
@@ -963,7 +1008,10 @@ export class StackReader {
         if (allowUnavailableCache && version) {
           const stillSame = before
             ? (await currentHints.checkoutIdentity(cwd))?.version === version
-            : (await unavailableCheckoutVersion(cwd, currentHints.installedGitVersion, demand)) === version;
+            : hasHints
+              ? currentHints.installedGitVersion === version
+                && (await currentHints.possibleCommonDirs(cwd))?.length === 0
+              : (await unavailableCheckoutVersion(cwd, currentHints.installedGitVersion, demand)) === version;
           demand.signal?.throwIfAborted();
           if (stillSame) remember("unavailable");
         }
@@ -1021,6 +1069,12 @@ export class StackReader {
     }));
     const paths = !directories || wanted.size || eligible.size
       ? [...new Set(local.flatMap(threadDirectories))].sort() : [];
+    // All passes share this cache. A narrow read must preserve the capacity
+    // already established by broader inventory scans.
+    this.inventoryCheckoutCapacity = Math.min(
+      MAX_INVENTORY_CHECKOUTS_CEILING,
+      Math.max(this.inventoryCheckoutCapacity, paths.length),
+    );
     const hinted = new Set<string>();
     const located = new Map<string, Checkout>();
     const unavailablePaths = new Set<string>();
@@ -1091,7 +1145,10 @@ export class StackReader {
       && (demand.priority?.() ?? PR_METADATA_PRIORITY.background) === PR_METADATA_PRIORITY.background) {
       for (const cwd of admitted) {
         const candidates = possible.get(cwd);
-        if (candidates?.length === 1) checkoutCounts.set(candidates[0]!, (checkoutCounts.get(candidates[0]!) ?? 0) + 1);
+        // Enclosing repositories remain possible if Git rejects the nearer
+        // marker, but only a matching registered checkout can use a roster.
+        const nearest = candidates?.[0];
+        if (nearest) checkoutCounts.set(nearest, (checkoutCounts.get(nearest) ?? 0) + 1);
       }
     }
     let retargetedHints: typeof hints | undefined;
@@ -1101,7 +1158,7 @@ export class StackReader {
       const candidates = possible.get(cwd)!;
       // A seed, config read and roster must save work even when the clone
       // has a primary checkout alongside its linked worktrees.
-      const useWorktreeInventory = candidates.length === 1 && (checkoutCounts.get(candidates[0]!) ?? 0) >= 5;
+      const useWorktreeInventory = (checkoutCounts.get(candidates[0]!) ?? 0) >= 5;
       const checkout = hinted.has(cwd)
         ? await this.readInventoryCheckout(cwd, observation, candidates, useWorktreeInventory, {
             allowUnavailableCache: backgroundNavigation,

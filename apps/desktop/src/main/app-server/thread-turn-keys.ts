@@ -41,6 +41,12 @@ export function buildActiveTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+/** ACP prompt IDs are assigned by the owner before dispatch. */
+export function isAcpPromptTurnId(threadId: string, turnId: string): boolean {
+  const prefix = `${buildPendingTurnId(threadId)}:`;
+  return turnId.startsWith(prefix) && /^\d+$/.test(turnId.slice(prefix.length));
+}
+
 export function turnInputAttachmentCacheKey(item: AppServerTurnInputItem): string {
   if (item.type === "localImage" || item.type === "localFile") {
     return `${item.type}:${item.path}`;

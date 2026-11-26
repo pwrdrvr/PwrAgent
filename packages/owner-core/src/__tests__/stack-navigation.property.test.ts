@@ -2,7 +2,11 @@ import fc from "fast-check";
 import { expect, it } from "vitest";
 import { NAVIGATION_QUERY_MAX_RESULT_BYTES, type NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { parseGhStackCatalog } from "@pwragent/shared/stacks/catalog";
-import { compactStackMembership, type StackSummary } from "@pwragent/shared/stacks/stack-status";
+import {
+  compactStackMembership,
+  MAX_GITHUB_STACK_OPEN_BELOW,
+  type StackSummary,
+} from "@pwragent/shared/stacks/stack-status";
 import { createNavigationQuerySnapshot, projectNavigationQuery } from "../navigation-query-projection";
 
 it("keeps stack-membership rows bounded and their total wire size linear at the catalog admission limit", () => {
@@ -16,8 +20,9 @@ it("keeps stack-membership rows bounded and their total wire size linear at the 
     expect(catalogBytes).toBeGreaterThan(920 * 1024);
     expect(parseGhStackCatalog(JSON.stringify(catalog)).status).toBe("ok");
 
+    // A GitHub stack, so each row also lists the open layers below it, up to a cap.
     const stack: StackSummary = { key: "fixture-stack", name: branches[0]!.branch, inferred: false,
-      repository: catalog.repository, trunk: "main",
+      repository: catalog.repository, trunk: "main", githubStack: 4402,
       layers: branches.map(({ branch }, index) => ({
         branch, parent: branches[index - 1]?.branch ?? "main", health: "in_sync", role: "layer",
         pullRequest: { number: 41 + index, lifecycleState: "open" },
@@ -49,8 +54,12 @@ it("keeps stack-membership rows bounded and their total wire size linear at the 
           trunk: "main", hasOpenPr: true,
           ...(offset ? { basePr: { number: 40 + offset, lifecycleState: "open" } } : {}),
           ...(offset ? { heldBy: { number: 41, reason: "CI running", branch: branches[0]!.branch.slice(0, 160) } } : {}),
+          githubStack: 4402,
         }],
       });
+      const openBelow = projection.entries[0]?.row.stackMemberships?.[0]?.openBelow;
+      expect(openBelow).toEqual(offset && offset <= MAX_GITHUB_STACK_OPEN_BELOW
+        ? Array.from({ length: offset }, (_, below) => 41 + below) : undefined);
       expect(projection.entries[0]?.row.stacks).toBeUndefined();
       bytes += pageBytes;
     }

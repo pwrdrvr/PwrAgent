@@ -15,6 +15,9 @@ import type {
 } from "@pwragent/shared/contracts/navigation";
 import { readStatusWithoutNestedWorktrees } from "@pwragent/shared/nested-worktree-pathspec";
 import { GitReadCache, type GitReadRequest } from "../git-info/read-cache";
+import { forgeRepositoryName, repositoryKey } from "../pr-status/forge-repository-names";
+import { parseGitFetchRemotes, readGitHubFetchRemotes } from "../pr-status/git-remote";
+import type { GitHubRepositoryParentLookup } from "../pr-status/github-repository-parent";
 import { streamGitCommand, runGitCommand } from "./git-executable";
 
 function normalizeAbsolutePath(value: string): string {
@@ -57,6 +60,8 @@ type WorktreeBaseState = Pick<
   | "baseBehindCommitCount"
   | "baseAheadCommitCount"
   | "isBehindBase"
+  | "upstreamBranch"
+  | "upstreamBehindCommitCount"
 >;
 
 type ResolvedWorktreeBaseState = {
@@ -176,7 +181,7 @@ function parseGitLines(output: string | undefined): string[] {
 function parseBaseBranchRefStates(output: string | undefined): BaseBranchRefState[] {
   return parseGitLines(output).flatMap((line) => {
     const [rawRef, baseTipCommit, rawAheadBehind] = line.split("\0");
-    const ref = normalizeBaseBranchLabel(rawRef ?? "");
+    const ref = rawRef?.trim();
     if (!ref) {
       return [];
     }
@@ -235,15 +240,16 @@ function addBaseBranchCandidate(
   sourceRank: number,
   refStates: ReadonlyMap<string, BaseBranchRefState>,
 ): void {
-  const normalizedRef = normalizeBaseBranchLabel(ref ?? "");
-  const label = remoteAgnosticBranchName(normalizedRef);
-  if (!normalizedRef || !label || label === "HEAD" || seen.has(label)) {
+  const refName = ref?.trim() ?? "";
+  const label = remoteAgnosticBranchName(refName);
+  if (!refName || !label || label === "HEAD" || seen.has(label)) {
     return;
   }
   seen.add(label);
-  const refState = refStates.get(normalizedRef);
+  const refState = refStates.get(refName) ?? refStates.get(`refs/${refName}`)
+    ?? refStates.get(`refs/heads/${refName}`) ?? refStates.get(`refs/remotes/${refName}`);
   candidates.push({
-    ref: normalizedRef,
+    ref: refState?.ref ?? refName,
     label,
     sourceRank,
     ...(refState?.baseTipCommit
@@ -279,6 +285,8 @@ function isBetterBaseState(
 
 async function resolveWorktreeBaseState(
   runGitNoLocks: (args: string[]) => Promise<string>,
+  remotes: Promise<string | undefined>,
+  resolveRepositoryParent?: GitHubRepositoryParentLookup,
 ): Promise<WorktreeBaseState | undefined> {
   const headCommit = (
     await runGitNoLocks(["rev-parse", "--verify", "HEAD^{commit}"]).catch(
@@ -307,7 +315,7 @@ async function resolveWorktreeBaseState(
           `branch.${currentBranch}.vscode-merge-base`,
         ]).catch(() => "")
       : Promise.resolve(""),
-    runGitNoLocks(["symbolic-ref", "refs/remotes/origin/HEAD", "--short"]).catch(
+    runGitNoLocks(["symbolic-ref", "refs/remotes/origin/HEAD"]).catch(
       () => "",
     ),
     runGitNoLocks([
@@ -315,14 +323,14 @@ async function resolveWorktreeBaseState(
       "refs/heads",
       "refs/remotes",
       "--sort=-committerdate",
-      "--format=%(refname:short)%00%(objectname)%00%(ahead-behind:HEAD)",
+      "--format=%(refname)%00%(objectname)%00%(ahead-behind:HEAD)",
     ]).catch(() =>
       runGitNoLocks([
         "for-each-ref",
         "refs/heads",
         "refs/remotes",
         "--sort=-committerdate",
-        "--format=%(refname:short)",
+        "--format=%(refname)",
       ]).catch(() => ""),
     ),
   ]);
@@ -339,7 +347,7 @@ async function resolveWorktreeBaseState(
   for (const refState of refStates) {
     const label = refState.ref;
     if (
-      label === "origin/HEAD" ||
+      label === "refs/remotes/origin/HEAD" ||
       isCurrentBranchRef(label, currentBranch) ||
       !isLikelyBaseBranch(label)
     ) {
@@ -443,7 +451,63 @@ async function resolveWorktreeBaseState(
     }
   }
   const { sourceRank: _sourceRank, ...state } = best;
-  return state;
+  const baseRef = candidates.find((entry) => entry.label === state.baseBranch)?.ref ?? state.baseBranch;
+  const upstream = resolveUpstreamDrift(refStateByRef, baseRef, (await remotes) ?? "", resolveRepositoryParent);
+  return upstream ? { ...state, ...upstream } : state;
+}
+
+/** Conventional remote name used when the parent cannot be mapped. */
+const UPSTREAM_REMOTE = "upstream";
+
+/** Reuse the ref walk's counts and any forge observation already available. */
+function resolveUpstreamDrift(
+  refStates: ReadonlyMap<string, BaseBranchRefState>,
+  baseRef: string,
+  remotesOutput: string,
+  resolveRepositoryParent?: GitHubRepositoryParentLookup,
+): Pick<WorktreeBaseState, "upstreamBranch" | "upstreamBehindCommitCount"> | undefined {
+  const remotes = parseGitFetchRemotes(remotesOutput);
+  const trackingRef = baseRef.startsWith("refs/remotes/") ? normalizeBaseBranchLabel(baseRef) : undefined;
+  // Remote names can themselves contain slashes. Use the longest configured
+  // prefix before taking the branch suffix.
+  const baseRemote = trackingRef ? remotes.map(({ name }) => name)
+    .filter((name) => trackingRef.startsWith(`${name}/`))
+    .sort((left, right) => right.length - left.length)[0] ?? trackingRef.split("/")[0]
+    : undefined;
+  const branch = trackingRef && baseRemote ? trackingRef.slice(baseRemote.length + 1) : normalizeBaseBranchLabel(baseRef);
+  const upstreamRemote = resolveRepositoryParent && remotes.length > 1
+    ? readForkParentRemote(readGitHubFetchRemotes(remotes), resolveRepositoryParent, baseRemote ?? "origin", branch, refStates)
+    : undefined;
+  const upstreamBranch = `${upstreamRemote ?? UPSTREAM_REMOTE}/${branch}`;
+  const upstreamRef = `refs/remotes/${upstreamBranch}`;
+  if (baseRef === upstreamRef) return undefined;
+  const behind = refStates.get(upstreamRef)?.baseBehindCommitCount;
+  return behind === undefined ? undefined : { upstreamBranch, upstreamBehindCommitCount: behind };
+}
+
+function readForkParentRemote(
+  remotes: ReturnType<typeof readGitHubFetchRemotes>,
+  resolveRepositoryParent: GitHubRepositoryParentLookup,
+  baseRemote: string,
+  branch: string,
+  refStates: ReadonlyMap<string, BaseBranchRefState>,
+): string | undefined {
+  try {
+    const fork = remotes.find(({ name }) => name === baseRemote);
+    if (!fork) return undefined;
+    const forkKey = repositoryKey(fork.repo);
+    if (!remotes.some(({ repo }) => repositoryKey(repo) !== forkKey)) return undefined;
+    const parent = resolveRepositoryParent(fork.repo);
+    if (!parent) return undefined;
+    const parentKey = repositoryKey(parent);
+    const matches = remotes.filter(({ repo }) =>
+      repositoryKey(repo) === parentKey || repositoryKey(forgeRepositoryName(repo)) === parentKey);
+    const counted = matches.filter(({ name }) =>
+      refStates.get(`refs/remotes/${name}/${branch}`)?.baseBehindCommitCount !== undefined);
+    return counted.find(({ name }) => name === UPSTREAM_REMOTE)?.name ?? counted[0]?.name ?? matches[0]?.name;
+  } catch {
+    return undefined;
+  }
 }
 
 function clampPositiveInteger(
@@ -966,6 +1030,7 @@ export async function probeWorktreeWorkingState(
   options: {
     runGit?: GitCommandRunner;
     gitEnv?: NodeJS.ProcessEnv;
+    resolveRepositoryParent?: GitHubRepositoryParentLookup;
   } & AcceptedPushedCommitOptions = {},
 ): Promise<ThreadGitWorkingState | undefined> {
   const runGit = options.runGit ?? defaultRunGit;
@@ -973,13 +1038,15 @@ export async function probeWorktreeWorkingState(
   const runGitNoLocks = (args: string[], input?: string): Promise<string> =>
     runGit(worktreePath, ["--no-optional-locks", ...args], gitEnv, input);
 
+  // The remote-presence check also supplies effective fetch URLs for drift.
+  const remotes = runGitNoLocks(["remote", "--verbose"]).catch(() => undefined);
   const [numstatOutput, statusOutput, remotesOutput, baseState] = await Promise.all([
     // Staged + unstaged line counts vs HEAD. Fails on an unborn HEAD
     // (fresh repo with no commits) — treated as "no tracked changes".
     runGitNoLocks(["diff", "--numstat", "HEAD"]).catch(() => undefined),
     readWorktreeStatus(worktreePath, runGitNoLocks).catch(() => undefined),
-    runGitNoLocks(["remote"]).catch(() => undefined),
-    resolveWorktreeBaseState(runGitNoLocks).catch(() => undefined),
+    remotes,
+    resolveWorktreeBaseState(runGitNoLocks, remotes, options.resolveRepositoryParent).catch(() => undefined),
   ]);
   if (numstatOutput === undefined && statusOutput === undefined) {
     return undefined;
@@ -1052,6 +1119,7 @@ type GitWorkingStateServiceOptions = {
   maxUnread?: number;
   gitEnv?: NodeJS.ProcessEnv;
   runGit?: GitCommandRunner;
+  resolveRepositoryParent?: GitHubRepositoryParentLookup;
 };
 
 /**
@@ -1069,6 +1137,7 @@ export class GitWorkingStateService {
   private readonly maxUnread: number;
   private readonly gitEnv?: NodeJS.ProcessEnv;
   private readonly runGit: GitCommandRunner;
+  private readonly resolveRepositoryParent?: GitHubRepositoryParentLookup;
 
   constructor(options: GitWorkingStateServiceOptions = {}) {
     this.cache = new GitReadCache({ ttlMs: options.cacheTtlMs ?? 3_000 });
@@ -1076,6 +1145,7 @@ export class GitWorkingStateService {
     this.maxUnread = Math.max(options.maxUnread ?? 8, this.concurrency);
     this.gitEnv = options.gitEnv;
     this.runGit = options.runGit ?? defaultRunGit;
+    this.resolveRepositoryParent = options.resolveRepositoryParent;
   }
 
   readWorkingStateEntries(
@@ -1112,6 +1182,7 @@ export class GitWorkingStateService {
     return this.cache.read(cacheKey, () => probeWorktreeWorkingState(key, {
       runGit: this.runGit,
       gitEnv: this.gitEnv,
+      resolveRepositoryParent: this.resolveRepositoryParent,
       acceptedPushedCommitShas: options.acceptedPushedCommitShas,
     }), options);
   }

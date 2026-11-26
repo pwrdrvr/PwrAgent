@@ -17,6 +17,7 @@ export type AppNoticeState = {
 export type AppNoticeAction =
   | ({ type: "codex-stream-event" } & CodexStreamSignal)
   | { type: "show"; notice: AppNoticeToastNotice }
+  | { type: "update-durable"; notice: AppNoticeToastNotice }
   | { type: "backend-error"; signal: BackendErrorSignal }
   | { type: "dismiss"; id: string }
   | { type: "dismiss-prefix"; prefix: string };
@@ -43,6 +44,11 @@ export function appNoticeReducer(
 
   if (action.type === "show") {
     return showNotice(state, action.notice);
+  }
+
+  if (action.type === "update-durable") {
+    const index = state.durable.findIndex((notice) => notice.id === action.notice.id);
+    return index < 0 ? state : { ...state, durable: state.durable.with(index, action.notice) };
   }
 
   if (action.type === "backend-error") {

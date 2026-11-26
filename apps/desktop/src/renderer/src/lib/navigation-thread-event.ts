@@ -112,7 +112,8 @@ export function applyNavigationThreadEvent(thread: NavigationThreadSummary, even
     case "thread/prAutoDispatch/updated":
       return { ...thread, prAutoDispatchEnabled: notification.params.enabled };
     case "thread/prAutoDispatch/pendingUpdated":
-      return { ...thread, prAutoDispatchPending: notification.params.pending ?? undefined };
+      return { ...thread, prAutoDispatchPending: notification.params.pending ?? undefined,
+        prAutoDispatchActive: notification.params.pending ? true : undefined };
     case "navigation/thread/seen": {
       const watermark = notification.params.seenUpdatedAt;
       if (watermark !== undefined && (thread.updatedAt ?? 0) > watermark) return thread;

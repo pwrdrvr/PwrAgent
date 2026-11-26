@@ -635,6 +635,35 @@ describe("agent ipc", () => {
     }
   });
 
+  it("sends one PR's Auto-fix switch only to an owner that reads it, never as a thread toggle", async () => {
+    const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = createAgentIpcHarness();
+    const { AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = { scope: "remote" as const, instanceId: "client_one" };
+    registerAgentIpcHandlers();
+    try {
+      const set = handlers.get(AGENT_SET_THREAD_PR_AUTO_DISPATCH_CHANNEL)!;
+      const request = { backend: "codex", threadId: "thread-1", enabled: false, prKey: "github.com/upstream/app#7" };
+      federationMock.runtime.remoteTargetSupportsCapability.mockImplementation(
+        (_target, capability) => capability !== "thread_pull_request_auto_fix_v1",
+      );
+      // An older owner ignores prKey and would switch the whole thread off.
+      await expect(set({}, { ...request, federationTarget })).rejects.toThrow("cannot switch Auto-fix for one pull request");
+      expect(federationMock.remoteBackend.setThreadPrAutoDispatch).not.toHaveBeenCalled();
+      federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(true);
+      await set({}, { ...request, federationTarget });
+      expect(federationMock.remoteBackend.setThreadPrAutoDispatch).toHaveBeenCalledWith(request);
+      // The thread's own switch needs no capability beyond the existing route.
+      federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(false);
+      await set({}, { backend: "codex", threadId: "thread-1", enabled: true, federationTarget });
+      expect(federationMock.remoteBackend.setThreadPrAutoDispatch).toHaveBeenLastCalledWith({
+        backend: "codex", threadId: "thread-1", enabled: true,
+      });
+      expect(registry.setThreadPrAutoDispatch).not.toHaveBeenCalled();
+    } finally {
+      disposeAgentIpcHandlers();
+    }
+  });
+
   it("refuses a move for a peer that does not advertise reordering, without asking it", async () => {
     const { registerAgentIpcHandlers, disposeAgentIpcHandlers } = createAgentIpcHarness();
     const { AGENT_MOVE_QUEUED_TURN_CHANNEL } = await import("../../shared/ipc");

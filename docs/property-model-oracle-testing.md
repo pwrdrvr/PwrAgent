@@ -110,9 +110,10 @@ against the pre-fix code:
 ## When to write one
 
 - **Fixing a bug.** Write the rule the bug broke as a property or model
-  invariant, and confirm it fails on the pre-fix code before you fix it. Also
-  keep the shrunk counterexample as a plain example test, so the regression
-  has a name.
+  invariant, and confirm it fails on the pre-fix code before you fix it.
+  Commit the shrunk counterexample as a plain example test, so the regression
+  has a name. Commit the property itself only if it fits
+  [What to check in](#what-to-check-in).
 - **A rule already written in prose.** This file, a design doc, a PR
   description and UI copy all make promises: "Unlocking sends what it held, in
   order", "A thread can move at most twice during one turn", "Pins have two
@@ -170,14 +171,10 @@ against the pre-fix code:
   When the rule is a cap, budget, window, attempt limit, page size or
   queue depth, add `size: "max"` or a `minLength` so runs cross the
   bound. Then mutate the bound by one and check that the test fails.
-- **Budget the runs.** The default test timeout is 5 s on Linux and macOS and 30 s on
-  Windows. CI runs unit tests on all three, and Windows desktop-main run time
-  can vary by more than 2× between runs.
-  - Pure properties: keep the default `numRuns` (100), and a file under
-    about 200 ms on Linux.
-  - Models over a real `StateDb`, real git or a mounted hook: keep
-    `numRuns` around 25–50, and each test under about 1 s on Linux. Open
-    databases from the migrated template, as other main-process tests do.
+- **Budget the runs** as [What to check in](#what-to-check-in) describes.
+  The default test timeout is 5 s on Linux and macOS and 30 s on Windows.
+  CI runs unit tests on all three, and Windows desktop-main run time can
+  vary by more than 2× between runs.
 - **Use the scheduler and injected clocks for ordering and time,** not real
   sleeps or fake timers. `ThreadTurnQueue` already takes `now` and its other
   effects as options.
@@ -188,6 +185,25 @@ against the pre-fix code:
 - **Generated data stays generated.** Don't seed a property from Codex
   storage files; the Codex data boundary in [AGENTS.md](../AGENTS.md) applies.
   Recorded fixtures the test owns are fine.
+
+## What to check in
+
+Generated tests find bugs in a few runs: every bug in the table above took
+7 or fewer. In CI they then run on three platforms for every PR, so commit
+only what is cheap:
+
+- Commit each shrunk counterexample as a named example test.
+- Keep properties over in-memory code (pure functions, fakes,
+  `fc.scheduler`, injected clocks) at or below the default `numRuns`, and
+  the file under about 200 ms on Linux.
+- Don't loop over real git, a `StateDb`, a child process or a mounted
+  React tree. Put the property on the pure core and keep one to three
+  examples against the real fixture. If a loop can't move, build the
+  fixture once, cap `numRuns` at 5, and keep the test under about 500 ms.
+- Enumerate small input spaces with `it.each`. When the random values
+  don't change the code path, write one example.
+- Raise `numRuns` locally to search, but don't commit it. Never fit a test
+  by raising its timeout or retrying it.
 
 ## The updater is shared with PwrGit
 

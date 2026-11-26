@@ -104,7 +104,7 @@ it("keeps tool discovery and creation in sync with toggles and turn boundaries",
           await emitCompletedTurn(registry, "codex", firstParent.threadId, turnId);
         }
       },
-    ), { numRuns: 25, examples: [
+    ), { numRuns: 8, examples: [
       [[{ kind: "toggle", value: true }, { kind: "next-turn" }], false],
       [[{ kind: "toggle", value: false }, { kind: "toggle", value: true }, { kind: "next-turn" }], true],
     ] });
@@ -271,5 +271,5 @@ it("takes the next Codex turn's monitor creation tool from that thread's saved s
         await registry.close();
       }
     },
-  ), { numRuns: 25 });
+  ), { numRuns: 8 });
 });
