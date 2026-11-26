@@ -962,8 +962,9 @@ it("preserves loaded rows through refresh and transparently rebuilds an evicted 
   expect(state.error).toBeUndefined();
   expect(Math.min(...sizes)).toBe(110);
   // Demand, one continuation, two to restore the range, then the expired
-  // cursor, its rebaseline and two more to rebuild the range with the block.
-  expect(read).toHaveBeenCalledTimes(8);
+  // cursor, its full-block rebaseline (100 rows) and one more continuation
+  // to finish the 130-row range.
+  expect(read).toHaveBeenCalledTimes(7);
   queries.dispose();
 });
 
@@ -1465,3 +1466,127 @@ it.each(["thread/started", "thread/parent/set"])(
     }
   },
 );
+
+it("recovers loadMore automatically when a continuation cursor mismatches its query or generation", async () => {
+  const serve = owner("fresh", 25);
+  let rejectFirstCursor = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (sent.cursor && rejectFirstCursor) {
+      rejectFirstCursor = false;
+      throw new Error("[navigation_invalid_request] Navigation cursor does not belong to this requester and query.");
+    }
+    return serve(sent);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["directory-pins:project", { protocol: 2, consumer: "main-sidebar", pageSize: 10,
+      query: { kind: "directory", directoryKey: "directory:/project", roots: "pinned" } }]]));
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(10);
+
+    await queries.loadMore("directory-pins:project");
+    const state = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(state.error).toBeUndefined();
+    expect(state.rebaselineRequired).toBeFalsy();
+    expect(state.page?.directories).toHaveLength(25);
+    expect(state.page?.nextCursor).toBeUndefined();
+  } finally {
+    queries.dispose();
+  }
+});
+
+it("recovers loadMore when continuation generation mismatches in applyNavigationPage", async () => {
+  const serve = owner("fresh", 25);
+  let mismatchOnce = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    const result = await serve(sent);
+    if (sent.cursor && mismatchOnce) {
+      mismatchOnce = false;
+      return { ...result, generation: "other-generation" };
+    }
+    return result;
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["directory-pins:project", { protocol: 2, consumer: "main-sidebar", pageSize: 10,
+      query: { kind: "directory", directoryKey: "directory:/project", roots: "pinned" } }]]));
+    await settled(queries, "directory-pins:project");
+
+    await queries.loadMore("directory-pins:project");
+    const state = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(state.error).toBeUndefined();
+    expect(state.rebaselineRequired).toBeFalsy();
+    expect(state.page?.directories).toHaveLength(25);
+    expect(state.page?.nextCursor).toBeUndefined();
+  } finally {
+    queries.dispose();
+  }
+});
+
+it("advances rows on a single slow recovery read after cursor expiry or invalidation", async () => {
+  let now = 1_000;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const serve = owner("fresh", 25);
+  let expireFirstCursor = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (sent.cursor && expireFirstCursor) {
+      expireFirstCursor = false;
+      throw new Error("[navigation_cursor_expired] Navigation cursor expired; rebaseline around the visible anchor.");
+    }
+    const result = serve(sent);
+    if (!sent.cursor && !expireFirstCursor) {
+      // Simulate a slow recovery read that exhausts MAX_LOAD_MORE_MS (10s).
+      now += 11_000;
+    }
+    return result;
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["directory-pins:project", { protocol: 2, consumer: "main-sidebar", pageSize: 10,
+      query: { kind: "directory", directoryKey: "directory:/project", roots: "pinned" } }]]));
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(10);
+
+    await queries.loadMore("directory-pins:project");
+    const state = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(state.error).toBeUndefined();
+    expect(state.page?.directories).toHaveLength(25);
+    expect(state.page?.nextCursor).toBeUndefined();
+  } finally {
+    clock.mockRestore();
+    queries.dispose();
+  }
+});
+
+it("rebuilds cleanly when loadMore runs on a stale baseline and does not persist failed expansion", async () => {
+  const onLoadMore = vi.fn();
+  const serve = owner("fresh", 25);
+  let failOnce = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (sent.cursor && failOnce) {
+      failOnce = false;
+      throw new Error("[navigation_busy] Navigation read cancelled or its deadline expired.");
+    }
+    return serve(sent);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, { onLoadMore });
+  try {
+    queries.setDemand(new Map([["directory-pins:project", { protocol: 2, consumer: "main-sidebar", pageSize: 10,
+      query: { kind: "directory", directoryKey: "directory:/project", roots: "pinned" } }]]));
+    await settled(queries, "directory-pins:project");
+
+    await queries.loadMore("directory-pins:project");
+    expect(onLoadMore).not.toHaveBeenCalled();
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.stale).toBe(true);
+
+    // Retry on the stale baseline rebuilds cleanly without sending the stale cursor.
+    await queries.loadMore("directory-pins:project");
+    const state = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(state.error).toBeUndefined();
+    expect(state.page?.directories).toHaveLength(25);
+    expect(read.mock.calls.at(-1)?.[0].cursor).toBeUndefined();
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  } finally {
+    queries.dispose();
+  }
+});
