@@ -5182,6 +5182,7 @@ function DesktopAppShell(props: {
                           settings.snapshot?.general.appearance.contextMoon?.value
                             ?? DESKTOP_CONTEXT_MOON_STYLE_DEFAULT
                         }
+                        autoCompactionRules={settings.snapshot?.models?.autoCompaction}
                       >
                         <ThreadViewComponent {...threadViewProps} />
                       </ContextMoonPreferencesProvider>

@@ -837,7 +837,7 @@ export type AppServerThreadMessageOrigin = {
   /** Durable cross-thread prerequisite admission. */
   dependencyId?: string;
   stackNotice?: import("./thread-system-messages").StackNotice;
-  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice";
+  systemReason?: "monitor-job-suggestion" | "thread-correspondence" | "app-restart" | "compaction-recovery" | "stack-notice" | "auto-compaction";
   /**
    * The operator sent this agent-routed message by acting on a to-do card,
    * so a paused project's refusal of messages from other threads skips it.
@@ -2722,6 +2722,25 @@ export type AppServerNotification =
         turnId?: string;
         usedTokens: number;
         modelContextWindow: number;
+      };
+    }
+  | {
+      /**
+       * The owner's auto-compaction state for a thread. Transient and never
+       * persisted: sent when the phase or the threshold changes, so a view
+       * opened later shows nothing until the next change.
+       */
+      method: "thread/autoCompaction/updated";
+      params: {
+        threadId: string;
+        phase: "armed" | "due" | "steering" | "starting" | "compacting" | "resume" | "held";
+        triggerTokens?: number;
+        effectiveContextWindow?: number;
+        reportedContextWindow?: number;
+        via?: "steer" | "start";
+        /** The fill when PwrAgent asked for the compaction. */
+        dispatchedAtTokens?: number;
+        heldReason?: "no-shrink" | "refused" | "unsupported";
       };
     }
   | {

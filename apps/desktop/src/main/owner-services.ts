@@ -10,6 +10,7 @@ import { researchToolsOffered } from "./agent-tools/pwragent-research-agent-tool
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { initializeDesktopAutomationService, prepareDesktopAutomationShutdown, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
+import { createRegistryAutoCompactionMonitor } from "./app-server/thread-auto-compaction-monitor";
 import { getThreadTodoService, setThreadTodoHandsOffRuleWriter } from "./thread-todos/thread-todo-runtime";
 import { setManagedGrokSignatureRejectionReporter } from "./acp/grok-managed-runtime";
 import { subscribeManagedRuntimeProgress } from "./managed-runtime-progress";
@@ -721,6 +722,14 @@ wireOwnerRendererEvents();
     mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
   });
   scheduledActions.start();
+  // Compacts threads past their model's auto-compaction threshold.
+  const autoCompaction = createRegistryAutoCompactionMonitor({
+    registry,
+    resolveSavedRules: () => getDesktopSettingsService().resolveAutoCompactionRules(),
+    log: mainLog,
+  });
+  autoCompaction.start();
+  ownerSubscriptions.add(() => autoCompaction.dispose());
   // Windows read the status once at load; this tells them when another
   // instance on the profile takes or hands back scheduled automations.
   ownerSubscriptions.add(automations.onSchedulingStatusChanged((status) => {

@@ -13540,6 +13540,82 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * What owner-driven auto-compaction can do for one thread now. Codex
+   * compacts through its API, between turns. Claude runs a `/compact` prompt
+   * itself. An ACP agent needs `compact` among its advertised commands: one
+   * that has advertised none yet is waited on, and one whose list lacks it
+   * cannot compact. Only Antigravity takes a steered `/compact` mid-turn.
+   */
+  autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }): {
+    canSteer: boolean;
+    canStart: "yes" | "blocked" | "unsupported";
+  } {
+    const gate = this.closed || this.isRestartGateClosed() ? "blocked" as const : "yes" as const;
+    if (!isAcpBackendId(params.backend)) return { canSteer: false, canStart: gate };
+    const commands = this.acpBackend.getSession(params.backend, params.threadId)?.availableCommands;
+    if (!commands?.length) return { canSteer: false, canStart: "blocked" };
+    if (!commands.some((command) => command.name.replace(/^\//u, "") === "compact")) {
+      return { canSteer: false, canStart: "unsupported" };
+    }
+    return {
+      canSteer: params.backend === "acp:antigravity"
+        && this.acpBackend.supportsActiveAntigravitySteering(params.threadId),
+      canStart: gate,
+    };
+  }
+
+  /** The thread's current model, for matching auto-compaction rules. */
+  async resolveAutoCompactionModel(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<string | undefined> {
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    return overlay?.model ?? this.getCachedThreadSummary(params)?.model;
+  }
+
+  /**
+   * Starts an owner-requested compaction on an idle thread: Codex's
+   * compaction API, or a `/compact` prompt for Claude and ACP agents. A lock,
+   * an archive, a running turn or another hold answers `busy`.
+   */
+  async startAutoCompaction(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    messageOrigin: AppServerThreadMessageOrigin;
+  }): Promise<{ status: "started"; turnId?: string } | { status: "busy" }> {
+    if (params.backend === "codex") {
+      // The holds `submitTurnIfIdle` answers busy for, plus a pending retry:
+      // `compactThread` would wake an archived checkout or throw, and a throw
+      // counts as the provider refusing.
+      const identityKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const overlay = await this.overlayStore.getThreadOverlayState(params);
+      const archived = this.getThreadInfo(params)?.archived
+        ?? (overlay?.archiveRetentionStartedAt !== undefined || overlay?.archiveTombstonedAt !== undefined);
+      if (
+        await this.isThreadLocked(params)
+        || archived
+        || this.threadHasActiveTurn(params.threadId, "codex")
+        || this.threadTurnQueue.hasWaitingEntries(params)
+        || this.context.turnState.hasRetry(params.threadId)
+        || this.threadWorkspaceService.threadHandoffReservationRecords.has(identityKey)
+        || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(params)
+        || this.threadArchiveCoordinator.checkoutRestoreRecords.has(identityKey)
+      ) {
+        return { status: "busy" };
+      }
+      const result = await this.compactThread({ backend: "codex", threadId: params.threadId });
+      return { status: "started", turnId: result.turnId };
+    }
+    const result = await this.submitTurnIfIdle({
+      backend: params.backend,
+      threadId: params.threadId,
+      input: [{ type: "text", text: "/compact" }],
+      messageOrigin: params.messageOrigin,
+    });
+    return result.status === "started" ? { status: "started", turnId: result.turnId } : { status: "busy" };
+  }
+
   private async compactThreadNow(params: {
     backend: "codex";
     threadId: string;
