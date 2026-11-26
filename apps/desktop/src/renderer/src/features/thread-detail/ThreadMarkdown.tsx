@@ -69,8 +69,22 @@ import {
 import { remarkEmojiShortcodes, type RemarkEmojiShortcodesOptions } from "./remark-emoji-shortcodes";
 import { remarkTableProfile } from "./remark-table-profile";
 import { useDeferredEmojiShortcodeCatalog } from "../../lib/useEmojiShortcodeCatalog";
-import { buildSelectionClipboard } from "./selection-clipboard";
-import { TableScrollContainer } from "./TableScrollContainer";
+import {
+  buildSelectionClipboard,
+  serializeTableElementToMarkdown,
+} from "./selection-clipboard";
+import { TableScrollContainer, type TableExpandContext } from "./TableScrollContainer";
+import {
+  TableDocumentModal,
+  TableViewerConfigContext,
+  type TableDocumentTarget,
+} from "./TableDocumentModal";
+import {
+  extractTableTitleFromMarkdown,
+  matchesTableRowFilter,
+  normalizeExtractedTableMarkdown,
+  parsePinFirstColumnRecommendation,
+} from "./table-sticky-model";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
@@ -123,6 +137,7 @@ type EditorApplication = DesktopApplicationsSnapshot["editors"][number];
  */
 const CodeBlockContext = createContext(false);
 const MarkdownLinkContext = createContext(false);
+const TableBodySectionContext = createContext(false);
 
 const MarkdownCodeApiContext = createContext<Pick<DesktopApi, "copyText"> | undefined>(undefined);
 
@@ -432,6 +447,7 @@ type MarkdownRenderState = {
   sharedSkillNames: ReturnType<typeof findSharedSkillNames>;
   inlineFiles: Map<string, ResolvedTranscriptFile>;
   viewLocalFile: (target: MarkdownViewerTarget) => void;
+  viewTable: (target: TableDocumentTarget) => void;
   openLocalFileInEditor: (target: LocalFileTarget) => boolean;
   openLocalFileLink: (event: MouseEvent<HTMLAnchorElement>, href: string, label: string) => void;
   openSkillMarkdownInEditor: (skill: SkillActionTarget) => void;
@@ -749,15 +765,81 @@ const markdownComponents: Components = {
     );
   },
   pre: MarkdownPre,
-  table(tableProps) {
+  table: function MarkdownTable(tableProps) {
+    const renderState = useContext(MarkdownRenderContext)!;
+    const viewerConfig = useContext(TableViewerConfigContext);
+    const pinRecommendation = parsePinFirstColumnRecommendation(
+      dataTableProperty(tableProps.node, "dataPinFirstCol", "data-pin-first-col"),
+    );
+    const columnCount = parsePositiveInt(
+      dataTableProperty(tableProps.node, "dataTableCols", "data-table-cols"),
+    );
+    const rowCount = parsePositiveInt(
+      dataTableProperty(tableProps.node, "dataTableRows", "data-table-rows"),
+    );
+    const allowPopout = viewerConfig?.allowPopout !== false;
+    const handleExpand = useCallback(
+      (context: TableExpandContext) => {
+        const rawSource = sourceForNode(renderState.sourceMarkdownText, tableProps.node);
+        const fallbackMarkdown = context.tableElement
+          ? serializeTableElementToMarkdown(context.tableElement)
+          : "";
+        const baseMarkdown = normalizeExtractedTableMarkdown(
+          rawSource,
+          fallbackMarkdown,
+        );
+        if (!baseMarkdown) {
+          return;
+        }
+        const markdown = appendMarkdownReferenceDefinitions(
+          baseMarkdown,
+          renderState.sourceMarkdownText,
+        );
+        const title = extractTableTitleFromMarkdown(
+          renderState.sourceMarkdownText,
+          nodeStartOffset(tableProps.node),
+        );
+        renderState.viewTable({
+          columnCount,
+          initialPinnedFirstColumn: context.pinnedFirstColumn,
+          markdown,
+          pinRecommendation,
+          rowCount,
+          title,
+        });
+      },
+      [
+        columnCount,
+        pinRecommendation,
+        renderState,
+        rowCount,
+        tableProps.node,
+      ],
+    );
+
     return (
-      <TableScrollContainer>
-        <table className="thread-markdown__table">{tableProps.children}</table>
+      <TableScrollContainer
+        onExpand={allowPopout ? handleExpand : undefined}
+        pinRecommendation={pinRecommendation}
+        pinnedFirstColumn={viewerConfig?.pinnedFirstColumn}
+        showToolbar={allowPopout}
+        stickyHeader={viewerConfig?.stickyHeader ?? "scroll-ancestor"}
+      >
+        <table
+          className="thread-markdown__table"
+          data-pin-first-col={pinRecommendation !== "none" ? pinRecommendation : undefined}
+        >
+          {tableProps.children}
+        </table>
       </TableScrollContainer>
     );
   },
   tbody(tableBodyProps) {
-    return <tbody className="thread-markdown__tbody">{tableBodyProps.children}</tbody>;
+    return (
+      <TableBodySectionContext.Provider value={true}>
+        <tbody className="thread-markdown__tbody">{tableBodyProps.children}</tbody>
+      </TableBodySectionContext.Provider>
+    );
   },
   td(tableCellProps) {
     return (
@@ -786,8 +868,17 @@ const markdownComponents: Components = {
   thead(tableHeadProps) {
     return <thead className="thread-markdown__thead">{tableHeadProps.children}</thead>;
   },
-  tr(tableRowProps) {
-    return <tr className="thread-markdown__tr">{tableRowProps.children}</tr>;
+  tr: function MarkdownTableRow(tableRowProps) {
+    const inBody = useContext(TableBodySectionContext);
+    const filterQuery = useContext(TableViewerConfigContext)?.rowFilterQuery ?? "";
+    const hidden = inBody && filterQuery.trim().length > 0
+      ? !matchesTableRowFilter(extractTextContent(tableRowProps.children), filterQuery)
+      : false;
+    return (
+      <tr className="thread-markdown__tr" hidden={hidden || undefined}>
+        {tableRowProps.children}
+      </tr>
+    );
   },
   ul(listProps) {
     return <ul className="transcript-message__list">{listProps.children}</ul>;
@@ -871,6 +962,8 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
   );
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
+  const [tableViewerTarget, setTableViewerTarget] =
+    useState<TableDocumentTarget>();
   const { files: inlineFiles, register: registerInlineFile } = useTranscriptFiles(props.desktopApi, props.fileViewerContext);
   const editorApplication = useMemo(
     () =>
@@ -1008,6 +1101,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     sharedSkillNames,
     inlineFiles,
     viewLocalFile: setMarkdownViewerTarget,
+    viewTable: setTableViewerTarget,
     openLocalFileInEditor,
     openLocalFileLink,
     openSkillMarkdownInEditor,
@@ -1063,6 +1157,29 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
           onOpenTarget={setMarkdownViewerTarget}
           skills={props.skills}
           target={markdownViewerTarget}
+        />
+      ) : null}
+      {tableViewerTarget ? (
+        <TableDocumentModal
+          desktopApi={props.desktopApi}
+          onClose={() => setTableViewerTarget(undefined)}
+          renderTable={(config) => (
+            <TableViewerConfigContext.Provider value={config}>
+              <ThreadMarkdown
+                applications={props.applications}
+                className="table-viewer-modal__markdown"
+                desktopApi={props.desktopApi}
+                fileViewerContext={props.fileViewerContext}
+                imageParts={props.imageParts}
+                onOpenImage={props.onOpenImage}
+                skills={props.skills}
+                text={tableViewerTarget.markdown}
+                threadLinkSource={props.threadLinkSource}
+                variant="summary"
+              />
+            </TableViewerConfigContext.Provider>
+          )}
+          target={tableViewerTarget}
         />
       ) : null}
     </div>
@@ -1380,6 +1497,51 @@ function dataCellMath(node: unknown): string | undefined {
   const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
   const value = properties?.["dataCellMath"] ?? properties?.["data-cell-math"];
   return value === "only" ? value : undefined;
+}
+
+function dataTableProperty(
+  node: unknown,
+  camelKey: string,
+  kebabKey: string,
+): unknown {
+  const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
+  return properties?.[camelKey] ?? properties?.[kebabKey];
+}
+
+function parsePositiveInt(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const parsed = Number.parseInt(value, 10);
+    return parsed > 0 ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function nodeStartOffset(node: unknown): number | undefined {
+  const offset = (
+    node as { position?: { start?: { offset?: number } } } | undefined
+  )?.position?.start?.offset;
+  return typeof offset === "number" && Number.isFinite(offset) && offset >= 0
+    ? offset
+    : undefined;
+}
+
+function appendMarkdownReferenceDefinitions(
+  tableMarkdown: string,
+  sourceMarkdown: string,
+): string {
+  const definitions = sourceMarkdown
+    .split("\n")
+    .filter((line) => /^\s{0,3}\[[^\]]+\]:\s+\S/.test(line));
+  if (definitions.length === 0) {
+    return tableMarkdown;
+  }
+  const missing = definitions.filter((definition) => !tableMarkdown.includes(definition));
+  return missing.length > 0
+    ? `${tableMarkdown}\n\n${missing.join("\n")}`
+    : tableMarkdown;
 }
 
 function tableCellAlignStyle(
