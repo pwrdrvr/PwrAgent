@@ -4,11 +4,12 @@ import {
   type AutoCompactionThreshold,
   type DesktopAutoCompactionRule,
 } from "@pwragent/shared/auto-compaction";
-import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import type { AgentEvent, SteerTurnResponse } from "@pwragent/shared/contracts/agent";
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import type {
   AppServerBackendKind,
   AppServerNotification,
+  AppServerThreadAutoCompactionStatus,
   AppServerThreadMessageOrigin,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
@@ -56,7 +57,7 @@ export type ThreadAutoCompactionHost = {
     threadId: string;
     turnId: string;
     requestId: string;
-  }): Promise<void>;
+  }): Promise<"steered" | "deferred">;
   startCompact(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -163,6 +164,11 @@ export class ThreadAutoCompactionMonitor {
   /** Test seam: the lifecycle state for one thread. */
   stateFor(backend: AppServerBackendKind, threadId: string): AutoCompactionState | undefined {
     return this.threads.get(`${backend}\n${threadId}`)?.state;
+  }
+
+  readStatus(backend: AppServerBackendKind, threadId: string): AppServerThreadAutoCompactionStatus | undefined {
+    const entry = this.threads.get(this.key(backend, threadId));
+    return entry && this.status(entry);
   }
 
   /** Resolves once every input queued so far has been applied. */
@@ -392,20 +398,21 @@ export class ThreadAutoCompactionMonitor {
         this.host.log.info("auto-compaction steering /compact", {
           ...identity, turnId: command.turnId, usedTokens: command.usedTokens, triggerTokens: command.triggerTokens,
         });
-        let accepted = false;
+        let result: Awaited<ReturnType<ThreadAutoCompactionHost["steerCompact"]>> | undefined;
         try {
-          await this.host.steerCompact({
+          result = await this.host.steerCompact({
             ...identity,
             turnId: command.turnId,
             requestId: `auto-compaction:${entry.backend}:${entry.threadId}:${++this.requestSequence}`,
           });
-          accepted = true;
         } catch (error) {
           this.host.log.warn("auto-compaction steer refused", {
             ...identity, error: error instanceof Error ? error.message : String(error),
           });
         }
-        if (accepted) {
+        if (result === "deferred") {
+          await this.apply(entry, { kind: "dispatch-deferred" });
+        } else if (result === "steered") {
           await this.apply(entry, {
             kind: "dispatch-accepted",
             context: await this.context(entry, { includeSupport: false }),
@@ -494,12 +501,15 @@ export class ThreadAutoCompactionMonitor {
     entry.settleTimer = undefined;
   }
 
-  /** Publishes the phase when it, or the threshold it is judged against, changes. */
-  private async publishState(entry: ThreadEntry): Promise<void> {
+  /** The live event and transcript recovery read expose the same owner state. */
+  private status(entry: ThreadEntry): AppServerThreadAutoCompactionStatus | undefined {
     const { state, threshold } = entry;
-    const params = {
+    // A thread no rule covers has nothing to show until a rule applies.
+    if (entry.published === undefined && !threshold && state.phase === "armed") return;
+    return {
       threadId: entry.threadId,
       phase: state.phase,
+      ...(state.turnId && !state.turnEnded ? { turnId: state.turnId } : {}),
       ...(threshold
         ? {
             triggerTokens: threshold.triggerTokens,
@@ -511,10 +521,14 @@ export class ThreadAutoCompactionMonitor {
       ...(state.dispatchedAtTokens !== undefined ? { dispatchedAtTokens: state.dispatchedAtTokens } : {}),
       ...(state.heldReason ? { heldReason: state.heldReason } : {}),
     };
+  }
+
+  /** Publishes when the phase, its active turn or the threshold changes. */
+  private async publishState(entry: ThreadEntry): Promise<void> {
+    const params = this.status(entry);
+    if (!params) return;
     const signature = JSON.stringify(params);
     if (signature === entry.published) return;
-    // A thread no rule covers has nothing to show until a rule applies.
-    if (entry.published === undefined && !threshold && state.phase === "armed") return;
     entry.published = signature;
     await this.host.publish({
       backend: entry.backend,
@@ -548,7 +562,7 @@ export type AutoCompactionRegistry = {
     expectedTurnId: string;
     requestId: string;
     messageOrigin: AppServerThreadMessageOrigin;
-  }): Promise<unknown>;
+  }): Promise<Pick<SteerTurnResponse, "disposition">>;
   steerTurn(
     params: {
       backend: AppServerBackendKind;
@@ -558,7 +572,7 @@ export type AutoCompactionRegistry = {
       input: { type: "text"; text: string }[];
     },
     origin?: AppServerThreadMessageOrigin,
-  ): Promise<unknown>;
+  ): Promise<Pick<SteerTurnResponse, "disposition">>;
   submitTurnIfIdle(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -581,21 +595,11 @@ export function createRegistryAutoCompactionMonitor(params: {
     activeTurnId: (identity) => registry.getActiveTurnForThread(identity)?.turnId,
     support: (identity) => registry.autoCompactionSupport(identity),
     steerCompact: async ({ turnId, requestId, ...identity }) => {
-      if (registry.steerAutoCompaction) {
-        await registry.steerAutoCompaction({
-          ...identity,
-          expectedTurnId: turnId,
-          requestId,
-          messageOrigin: AUTO_COMPACTION_ORIGIN,
-        });
-        return;
-      }
-      await registry.steerTurn({
-        ...identity,
-        expectedTurnId: turnId,
-        requestId,
-        input: [{ type: "text", text: "/compact" }],
-      }, AUTO_COMPACTION_ORIGIN);
+      const request = { ...identity, expectedTurnId: turnId, requestId };
+      const result = registry.steerAutoCompaction
+        ? await registry.steerAutoCompaction({ ...request, messageOrigin: AUTO_COMPACTION_ORIGIN })
+        : await registry.steerTurn({ ...request, input: [{ type: "text", text: "/compact" }] }, AUTO_COMPACTION_ORIGIN);
+      return result.disposition === "steered" ? "steered" : "deferred";
     },
     startCompact: (identity) => registry.startAutoCompaction({ ...identity, messageOrigin: AUTO_COMPACTION_ORIGIN }),
     startContinuation: async (identity) => {

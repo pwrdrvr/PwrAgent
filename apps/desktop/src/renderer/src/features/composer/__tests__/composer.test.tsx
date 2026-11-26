@@ -6612,7 +6612,8 @@ describe("Composer", () => {
       skills={[]}
       thread={thread}
     />);
-    fireEvent.mouseEnter(screen.getByRole("img", { name: /44% full/ }));
+    const meter = screen.getByRole("img", { name: /44% full/ });
+    act(() => meter.focus());
     await flushReactUpdates();
     expect(screen.getByRole("tooltip")).toHaveTextContent("44% full");
 
@@ -6622,7 +6623,8 @@ describe("Composer", () => {
       skills={[]}
       thread={thread}
     />);
-    expect(screen.getByRole("img", { name: "Context usage pending" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Context usage pending" })).toBe(meter);
+    expect(meter).toHaveAccessibleDescription(/The context size updates on the next model call\./);
     expect(screen.getByRole("tooltip")).toHaveTextContent("The context size updates on the next model call.");
     expect(screen.getByRole("tooltip")).not.toHaveTextContent("44% full");
 

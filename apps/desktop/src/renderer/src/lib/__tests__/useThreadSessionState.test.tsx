@@ -427,6 +427,45 @@ describe("useThreadSessionState", () => {
     expect(result.current.contextWindow?.usedPercent).toBe(3);
   });
 
+  it.each(["armed", "held", "live update", "older owner"] as const)(
+    "reconciles a remote verifying phase with %s after a stream gap",
+    async (outcome) => {
+      const backend = "acp:antigravity";
+      const target = { scope: "remote" as const, instanceId: "owner" };
+      const threadId = "thread-1";
+      const thread: NavigationThreadSummary = {
+        ...buildThread({ id: threadId, updatedAt: 100 }), source: backend,
+        federation: { instanceLabel: "Owner", ref: { backend, threadId, target }, capabilities: ["thread_detail", "event_subscriptions"] },
+      };
+      const response: AppServerReadThreadResponse = { ...readThreadResponse({ entries: [], hasPreviousPage: false }), backend };
+      const recovery = Promise.withResolvers<AppServerReadThreadResponse>();
+      const readThread = vi.fn().mockResolvedValueOnce(response).mockReturnValue(recovery.promise);
+      let emit: (event: AgentEvent) => void = () => undefined;
+      const desktopApi: DesktopApi = { readThread, onAgentEvent: (listener) => { emit = listener; return () => undefined; } };
+      const send = (notification: AgentEvent["notification"]) => emit({ backend, federationTarget: target, notification });
+      const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+      await waitForThreadHydration(result);
+      act(() => send({ method: "thread/autoCompaction/updated", params: { threadId, phase: "verifying" } }));
+      expect(result.current.autoCompaction?.phase).toBe("verifying");
+
+      act(() => send({ method: "federation/eventStream/changed", params: { instanceId: target.instanceId, epoch: "reconnected" } }));
+      await waitFor(() => expect(readThread).toHaveBeenCalledTimes(2));
+      const expected = outcome === "live update" ? "held" : outcome === "older owner" ? undefined : outcome;
+      if (outcome === "live update") {
+        act(() => send({ method: "thread/autoCompaction/updated", params: { threadId, phase: "held" } }));
+      }
+      await act(async () => {
+        recovery.resolve({
+          ...response,
+          autoCompaction: outcome === "older owner" ? undefined : { threadId, phase: outcome === "live update" ? "verifying" : outcome },
+        });
+      });
+      act(() => send({ method: "thread/contextWindow/updated", params: { threadId, usedTokens: 30_000, modelContextWindow: 1_000_000 } }));
+      expect(result.current.contextWindow?.usedPercent).toBe(3);
+      expect(result.current.autoCompaction?.phase).toBe(expected);
+    },
+  );
+
   it("keeps a racing Claude live reading until a stream gap revalidates the owner's newer reading", async () => {
     const target = { scope: "remote" as const, instanceId: "owner" };
     const thread: NavigationThreadSummary = {
@@ -12663,13 +12702,21 @@ describe("useThreadSessionState", () => {
     });
     expect(result.current.pendingStatusText).toBe("Thinking");
     await act(async () => {
-      emit({ method: "thread/autoCompaction/updated", params: { threadId: "thread-1", phase: "compacting" } });
+      emit({ method: "thread/autoCompaction/updated", params: { threadId: "thread-1", phase: "compacting", turnId } });
     });
     expect(result.current.pendingStatusText).toBe("Compacting context");
 
-    rerender({ thread: otherThread });
+    const nextTurnId = "pending:thread-1:2";
     await act(async () => {
       emit({ method: "turn/completed", params: { threadId: "thread-1", turnId, turn: { id: turnId, status: "completed", output: [] } } });
+      emit({ method: "turn/started", params: { threadId: "thread-1", turnId: nextTurnId, turn: { id: nextTurnId } } });
+    });
+    // The owner can still be waiting for compaction evidence while this prompt runs.
+    expect(result.current.pendingStatusText).toBe("Thinking");
+
+    rerender({ thread: otherThread });
+    await act(async () => {
+      emit({ method: "turn/completed", params: { threadId: "thread-1", turnId: nextTurnId, turn: { id: nextTurnId, status: "completed", output: [] } } });
       emit({ method: "thread/autoCompaction/updated", params: { threadId: "thread-1", phase: "verifying" } });
     });
     expect(result.current.pendingStatusText).toBeUndefined();

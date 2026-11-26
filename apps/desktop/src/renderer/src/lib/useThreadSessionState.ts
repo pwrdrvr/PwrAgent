@@ -5695,6 +5695,7 @@ export function useThreadSessionState(params: {
   const openedTranscriptsRef = useRef(new Set<string>());
   const liveLifecycleVersionsRef = useRef(new Map<string, ThreadLiveLifecycleVersion>());
   const liveContextWindowVersionsRef = useRef(new Map<string, number>());
+  const liveAutoCompactionVersionsRef = useRef(new Map<string, number>());
   const liveTranscriptVersionsRef = useRef(new Map<string, number>());
   // The live transcript version at which each item was first observed. Only
   // items not yet covered by an adopted read are kept.
@@ -5769,6 +5770,9 @@ export function useThreadSessionState(params: {
     }
     for (const key of liveContextWindowVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) liveContextWindowVersionsRef.current.delete(key);
+    }
+    for (const key of liveAutoCompactionVersionsRef.current.keys()) {
+      if (!retainedThreadKeys.has(key)) liveAutoCompactionVersionsRef.current.delete(key);
     }
     for (const key of liveTranscriptVersionsRef.current.keys()) {
       if (!retainedThreadKeys.has(key)) liveTranscriptVersionsRef.current.delete(key);
@@ -5944,6 +5948,7 @@ export function useThreadSessionState(params: {
       hydrationsRef.current.set(targetThreadKey, hydration);
       const liveTranscriptVersion = liveTranscriptVersionsRef.current.get(targetThreadKey);
       const liveContextWindowVersion = liveContextWindowVersionsRef.current.get(targetThreadKey);
+      const liveAutoCompactionVersion = liveAutoCompactionVersionsRef.current.get(targetThreadKey);
 
       updateSession(targetThreadKey, (current) => ({
         ...current,
@@ -6257,8 +6262,14 @@ export function useThreadSessionState(params: {
               || (response.backend === "claude" && (!fetchedResponse.unchanged || recoveringStream)))
               ? readContextWindowFill(response.replay.contextWindow)
               : undefined;
+          // A live phase received during the read is newer. On stream
+          // recovery, an older owner that omits this field clears the cache.
+          const adoptCompactionSnapshot =
+            liveAutoCompactionVersion === liveAutoCompactionVersionsRef.current.get(targetThreadKey)
+            && (response.autoCompaction !== undefined || recoveringStream);
           return {
             ...currentAfterStaleThinking,
+            ...(adoptCompactionSnapshot ? { autoCompaction: response.autoCompaction ?? undefined } : {}),
             ...(snapshotContextWindow ? { contextWindow: snapshotContextWindow } : {}),
             ...transitionHydratedActiveTurn(current, {
               clear: shouldClearStaleThinking,
@@ -6930,6 +6941,8 @@ export function useThreadSessionState(params: {
         && isUnfocusedThread && !isRetainedRemoteThread) return;
       if (event.notification.method === "thread/autoCompaction/updated") {
         const autoCompaction = event.notification.params as ThreadAutoCompactionStatus;
+        const previous = liveAutoCompactionVersionsRef.current.get(targetThreadKey) ?? 0;
+        liveAutoCompactionVersionsRef.current.set(targetThreadKey, previous + 1);
         updateSession(targetThreadKey, (current) => ({ ...current, autoCompaction, lastTouchedAt: Date.now() }));
         return;
       }
@@ -9340,7 +9353,8 @@ export function useThreadSessionState(params: {
     : undefined;
   const autoCompaction = selectedSession?.autoCompaction;
   const compactingContext = isAutoCompactionActive(autoCompaction)
-    && (selectedSession?.activeTurnId || selectedSession?.backendReportedActive);
+    && autoCompaction?.turnId !== undefined
+    && autoCompaction.turnId === selectedSession?.activeTurnId;
   const pendingStatusText =
     selectedSession?.pendingStatusText &&
     selectedSession.pendingStatusText !== "Thinking"

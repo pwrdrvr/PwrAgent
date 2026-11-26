@@ -242,6 +242,7 @@ import {
   type AppServerPendingRequestNotification,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
+  type AppServerThreadAutoCompactionStatus,
   type AppServerThreadImagePart,
   type AppServerThreadMessageOrigin,
   type AppServerThreadReviewEntry,
@@ -1659,6 +1660,12 @@ export class DesktopBackendRegistry {
     reader: ((backend: AppServerBackendKind, threadId: string) => string | undefined) | undefined,
   ): void {
     this.forgeToolBridge.setThreadPrimaryGitRepositoryReader(reader);
+  }
+
+  private readThreadAutoCompaction?: (backend: AppServerBackendKind, threadId: string) => AppServerThreadAutoCompactionStatus | undefined;
+
+  setThreadAutoCompactionReader(reader: typeof this.readThreadAutoCompaction): void {
+    this.readThreadAutoCompaction = reader;
   }
 
   setLocalPullRequestAuthorityResolver(resolver: LocalPullRequestAuthorityResolver | null | undefined): void {
@@ -7765,11 +7772,14 @@ export class DesktopBackendRegistry {
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
     if (request.display.resource === "transcript") {
       const data = await this.readThreadData(request);
-      return projectThreadDisplay(data, request, {
+      const display = projectThreadDisplay(data, request, {
         ...overlay,
         ...await this.threadUsageLedger.readPricingSubAgents({ backend, threadId: request.threadId, pricing: data.pricing }),
         activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
       });
+      return this.readThreadAutoCompaction
+        ? { ...display, autoCompaction: this.readThreadAutoCompaction(backend, request.threadId) ?? null }
+        : display;
     }
     this.assertNotBootstrap("readThread");
     const pricing = await this.threadUsageLedger.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
@@ -13753,10 +13763,13 @@ export class DesktopBackendRegistry {
     if (!findAdvertisedAcpCompactCommand(commands)) {
       return { canSteer: false, canStart: "unsupported" };
     }
+    const restartBlocked = this.isRestartGateClosed();
     return {
       canSteer: params.backend === "acp:antigravity"
+        && !restartBlocked
+        && !this.threadTurnQueue.hasActiveReviewAutoFix(params)
         && this.acpBackend.supportsActiveAntigravitySteering(params.threadId),
-      canStart: this.isRestartGateClosed() ? "blocked" : "yes",
+      canStart: restartBlocked ? "blocked" : "yes",
       ...(params.backend === "acp:antigravity" ? { reportsFillOnNextTurn: true } : {}),
     };
   }
@@ -13780,7 +13793,7 @@ export class DesktopBackendRegistry {
     expectedTurnId: string;
     requestId: string;
     messageOrigin: AppServerThreadMessageOrigin;
-  }): Promise<unknown> {
+  }): Promise<SteerTurnResponse> {
     let promptText = "/compact";
     if (isAcpBackendId(params.backend)) {
       const commands = await this.resolveAcpThreadAvailableCommands({

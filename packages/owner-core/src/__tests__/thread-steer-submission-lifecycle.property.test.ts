@@ -18,6 +18,22 @@ const scenario = fc.record({
   nextTurn: fc.boolean(), fails: fc.constantFrom("none", "queue", "input", "prepare", "provider", "retain", "bind"),
 });
 
+it.each(["restart", "review auto-fix"] as const)("holds an auto-compaction steer during %s without queuing it", async (gate) => {
+  const trace: string[] = [];
+  const request: SteerTurnRequest = { backend: "acp:antigravity", threadId: "garden", expectedTurnId: "pending:garden:1",
+    requestId: "compact", input: [{ type: "text", text: "/compact" }] };
+  const submission = new ThreadSteerSubmissionLifecycle({
+    assertUnlocked: async () => undefined,
+    isRestartGateClosed: () => gate === "restart",
+    isReviewAutoFixActive: () => gate === "review auto-fix",
+    queue: async () => { trace.push("queue"); return { id: "queue-entry", createdAt: 1 }; },
+    prepareInput: async () => { trace.push("prepare"); return request.input; },
+  });
+  const result = await submission.submit(request, { kind: "pwragent", systemReason: "auto-compaction" });
+  expect(result.response.disposition).toBe("held");
+  expect(trace).toEqual([]);
+});
+
 // Oracle: gates admit no provider work; the selected provider owns the result.
 // A rejected send forgets its prepared context. An accepted send keeps it and
 // runs retention before causal completion, with no inference of active turns.

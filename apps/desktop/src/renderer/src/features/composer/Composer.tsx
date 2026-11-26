@@ -17916,6 +17916,7 @@ function ContextWindowMoon({
   return onOpenUsage ? (
     <button
       aria-label={label}
+      aria-describedby={visible ? tooltipId : undefined}
       className={`context-window-moon context-window-moon--button${moonClassName}`}
       type="button"
       onBlur={hide}
@@ -17932,6 +17933,7 @@ function ContextWindowMoon({
   ) : (
     <div
       aria-label={label}
+      aria-describedby={visible ? tooltipId : undefined}
       className={`context-window-moon${moonClassName}`}
       role="img"
       tabIndex={0}

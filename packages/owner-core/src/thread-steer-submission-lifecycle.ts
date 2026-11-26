@@ -59,6 +59,11 @@ export class ThreadSteerSubmissionLifecycle {
     // The restart notice itself must still be able to reach the running turn.
     const restarting = this.host.isRestartGateClosed?.() && origin;
     if (origin?.systemReason !== "app-restart" && (restarting || this.host.isReviewAutoFixActive?.(request))) {
+      if (origin?.systemReason === "auto-compaction") {
+        // The compaction monitor owns the retry after the active turn ends.
+        return { response: { backend: request.backend, threadId: request.threadId, turnId: request.expectedTurnId,
+          disposition: "held" } };
+      }
       if (!this.host.queue) throw new Error("This host cannot defer steering");
       const entry = await this.host.queue(request, origin, origin?.kind === "messaging" ? "messaging" : "manual");
       return { response: { backend: request.backend, threadId: request.threadId, turnId: request.expectedTurnId,

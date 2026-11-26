@@ -53433,7 +53433,11 @@ button.composer__subthread-source-parent:hover {
 .context-window-moon {
   display: inline-flex;
   min-height: 26px;
-  min-width: 0;
+  /* Reserve the sprite, gap and up to four percentage characters for every phase. */
+  inline-size: calc(26px + 7px + 4ch);
+  box-sizing: content-box;
+  flex-shrink: 0;
+  justify-content: flex-end;
   align-items: center;
   align-self: center;
   gap: 7px;
