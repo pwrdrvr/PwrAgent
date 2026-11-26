@@ -6,7 +6,9 @@ import type { ProfileBootDecision } from "./profile";
 let initialized = false;
 let stdioErrorHandlersInstalled = false;
 let debugCollectionEnabled = false;
-export const MAIN_LOG_MAX_SIZE_BYTES = 1024 * 1024;
+// A single archived segment should cover a two-hour incident investigation at
+// the observed busy-profile rate of roughly 1 MiB per 44 minutes.
+export const MAIN_LOG_MAX_SIZE_BYTES = 4 * 1024 * 1024;
 const MAX_COMPACT_STRING_LENGTH = 320;
 const MAX_COMPACT_FIELDS = 24;
 const MAX_COMPACT_DEPTH = 2;
