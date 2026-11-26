@@ -2,7 +2,7 @@
 // that plan, or the full suite when it says `full`.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
-import { annotateE2ePlatforms, e2eFilesForPlatform, getPrDiff, harnessReferences, listAffectedE2eFiles, listE2eFiles, planE2eLanes, planImpact, separateA11y, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
+import { annotateE2ePlatforms, e2eFilesForPlatform, formatWindowsE2eSummary, getPrDiff, harnessReferences, listAffectedE2eFiles, listE2eFiles, planE2eLanes, planImpact, separateA11y, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
 import { withVitestImpact } from "./pr-test-impact-vitest.mjs";
 
 const directory = ".local/ci/pr-test-impact";
@@ -74,11 +74,10 @@ writeFileSync(`${directory}/outputs`, Object.entries(outputs).map(([key, value])
 const linuxE2eSummary = plan.e2e.mode === "selected"
   ? `${e2eFilesForPlatform(plan.e2e, "linux").length} of ${plan.e2e.total} files`
   : size(plan.e2e);
-const windowsE2eSummary = plan.e2e.mode === "selected"
-  ? (e2eFilesForPlatform(plan.e2e, "win32").length
-    ? `${e2eFilesForPlatform(plan.e2e, "win32").length} of ${plan.e2e.total} files`
-    : "not selected (no affected Windows spec)")
-  : "skipped on PR for full plan (runs on `main`; add `ci:windows-e2e` or `ci:full` to run here)";
+const windowsE2eSummary = formatWindowsE2eSummary(plan.e2e, {
+  windowsE2eRequested: process.env.WINDOWS_E2E_REQUESTED === "true",
+  windowsDiagnostics: process.env.WINDOWS_DIAGNOSTICS === "true",
+});
 if (process.env.GITHUB_STEP_SUMMARY) {
   appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${[
     "### Test plan for this pull request",

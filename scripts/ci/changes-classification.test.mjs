@@ -15,10 +15,11 @@ async function classify(files, {
 } = {}) {
   const outputs = {};
   let lookupCalls = 0;
+  let summaryRaw = "";
   const summary = {
     addHeading() { return this; },
     addTable() { return this; },
-    addRaw() { return this; },
+    addRaw(text) { summaryRaw += text; return this; },
     async write() {},
   };
   const listFiles = () => {};
@@ -46,6 +47,7 @@ async function classify(files, {
     fullPlatforms: outputs.full_platforms === "true",
     a11y: outputs.a11y === "true",
     windowsE2e: outputs.windows_e2e === "true",
+    summaryRaw,
     lookupCalls,
   };
 }
@@ -92,7 +94,7 @@ it("fails closed for missing or incomplete provider data", async () => {
 
 it("always runs full CI for non-PR events without a changed-file lookup", async () => {
   for (const event of ["push", "workflow_dispatch"]) {
-    expect(await classify([], { event })).toEqual({ fullCi: true, fullPlatforms: true, a11y: true, windowsE2e: true, lookupCalls: 0 });
+    expect(await classify([], { event })).toEqual({ fullCi: true, fullPlatforms: true, a11y: true, windowsE2e: true, summaryRaw: "", lookupCalls: 0 });
   }
 });
 
@@ -234,6 +236,14 @@ it("runs full Windows Desktop E2E on PRs when ci:windows-e2e, ci:full, a platfor
       }
     }
   }
+  const labeled = await classify([{ filename: "apps/desktop/src/main/index.ts" }], { labels: ["ci:windows-e2e"] });
+  expect(labeled.summaryRaw).toContain("Windows Desktop E2E runs in full here");
+  expect(labeled.summaryRaw).not.toContain("Windows Desktop E2E run on `main`");
+  const unlabeled = await classify([{ filename: "apps/desktop/src/main/index.ts" }], { labels: [] });
+  expect(unlabeled.summaryRaw).toContain("full Windows Desktop E2E run on `main`");
+  const planJob = jobSection("pr-test-impact-plan");
+  expect(planJob).toContain("WINDOWS_E2E_REQUESTED: ${{ needs.changes.outputs.windows_e2e }}");
+  expect(planJob).toContain("WINDOWS_DIAGNOSTICS: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') }}");
 });
 
 it("reads labels live rather than from the event payload", () => {

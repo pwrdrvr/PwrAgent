@@ -194,10 +194,15 @@ jobs:
                 skipFullCi
                   ? "Only `docs/**`, Markdown, or `.agents/skills/**` changed; expensive CI jobs are skipped."
                   : `Product CI runs because \`${codeImpactingFile.filename}\` requires it. `
-                    + "No platform-specific path changed, so the macOS unit tests, macOS Desktop E2E "
-                    + "and Windows Desktop E2E run on `main`; "
-                    + "to run them here, add the `ci:full` label, then push or use **Re-run all jobs** "
-                    + "(\"Re-run failed jobs\" does not rerun this classifier). "
+                    + (windowsE2e
+                      ? "No platform-specific path changed, so the macOS unit tests and macOS Desktop E2E run on `main`; "
+                        + "to run them here, add the `ci:full` label, then push or use **Re-run all jobs** "
+                        + "(\"Re-run failed jobs\" does not rerun this classifier). "
+                        + "Windows Desktop E2E runs in full here because the `ci:windows-e2e` label is present. "
+                      : "No platform-specific path changed, so the macOS unit tests, macOS Desktop E2E "
+                        + "and full Windows Desktop E2E run on `main` (narrowed E2E plans still run affected Windows specs here); "
+                        + "to run them here, add the `ci:full` (or `ci:windows-e2e` for Windows E2E only) label, then push or use **Re-run all jobs** "
+                        + "(\"Re-run failed jobs\" does not rerun this classifier). ")
                     + (a11y
                       ? "The accessibility audit runs here."
                       : "The accessibility audit (`a11y.spec.ts`) also runs on `main`; "
@@ -1768,6 +1773,9 @@ jobs:
           node-version: "^24.22.1"
 
       - name: Plan the affected tests
+        env:
+          WINDOWS_E2E_REQUESTED: ${{ needs.changes.outputs.windows_e2e }}
+          WINDOWS_DIAGNOSTICS: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') }}
         run: node scripts/ci/write-pr-test-impact.mjs
 
       - name: Upload plan

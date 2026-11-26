@@ -239,7 +239,7 @@ function callbackBody(call) {
 
 function containsTestCall(node) {
   if (ts.isCallExpression(node) && (isTestIdentifier(node.expression)
-    || isTestProperty(node.expression, ["only", "fixme", "skip", "describe"]))) return true;
+    || isTestProperty(node.expression, ["only", "fail", "fixme", "skip", "describe"]))) return true;
   return Boolean(ts.forEachChild(node, containsTestCall));
 }
 
@@ -281,7 +281,7 @@ export function specRunsOnPlatform(sourceText, platform) {
         const call = statement.expression;
         const callee = call.expression;
         if (isTestProperty(callee, hooks)) continue;
-        if (isTestProperty(callee, ["skip"]) && call.arguments.length <= 2
+        if (isTestProperty(callee, ["skip", "fixme"]) && call.arguments.length <= 2
           && !(call.arguments[call.arguments.length - 1] && (ts.isArrowFunction(call.arguments[call.arguments.length - 1])
             || ts.isFunctionExpression(call.arguments[call.arguments.length - 1])))) {
           continue;
@@ -296,7 +296,7 @@ export function specRunsOnPlatform(sourceText, platform) {
           if (dynamic || runnable) return;
           continue;
         }
-        if (isTestIdentifier(callee) || isTestProperty(callee, ["only"])) {
+        if (isTestIdentifier(callee) || isTestProperty(callee, ["only", "fail"])) {
           const body = callbackBody(call);
           if (!body) { dynamic = true; return; }
           testCount++;
@@ -356,6 +356,20 @@ export function planE2eLanes(e2e) {
     linux: e2eFilesForPlatform(e2e, "linux").length ? [1] : [],
     windows: e2eFilesForPlatform(e2e, "win32").length ? [1] : [],
   };
+}
+
+export function formatWindowsE2eSummary(e2e, { windowsE2eRequested = false, windowsDiagnostics = false } = {}) {
+  if (windowsDiagnostics) {
+    return "full — all four lanes × 3 samples (`ci:windows-shutdown-diagnostics` label)";
+  }
+  if (windowsE2eRequested) {
+    return "full — all four lanes (`ci:windows-e2e` label)";
+  }
+  if (e2e.mode === "selected") {
+    const count = e2eFilesForPlatform(e2e, "win32").length;
+    return count ? `${count} of ${e2e.total} files` : "not selected (no affected Windows spec)";
+  }
+  return "skipped on PR for full plan (runs on `main`; add `ci:windows-e2e` or `ci:full` to run here)";
 }
 
 export async function planImpact(files, { fallback, unit, e2e }) {
