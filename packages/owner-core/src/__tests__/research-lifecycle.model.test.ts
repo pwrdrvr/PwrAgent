@@ -586,7 +586,12 @@ describe("native research run lifecycle model", () => {
                 const own = itemById.get(a.id);
                 return Boolean(a.interrupted && a.worker && own?.work.assignmentId && own.work.assignmentId !== a.id);
               });
-              if (run.status === "running" && reassignedCutOff) {
+              if (
+                run.status === "running"
+                && run.ownerId === `owner-${generation}`
+                && (run.deadlineAt === undefined || now < run.deadlineAt)
+                && reassignedCutOff
+              ) {
                 await expect(
                   service.update(runId, `qres-reassigned-${cmdSeq}`, { action: "resume", approachIds: [reassignedCutOff.id] }, OP),
                 ).rejects.toThrow(/cannot be resumed/);
@@ -1334,80 +1339,100 @@ describe("native research run lifecycle model", () => {
 
   // Defense-in-depth: if an unsolicited turn on a reassigned approach's old thread
   // failed to stop (leaving it "unknown" alongside the focused child), cancelling
-  // the approach item via work() stops both before settling to "cancelled".
-  it("cancels both the focused child and an unresolved own-approach turn before settling item cancellation", async () => {
-    const storage = new MemoryResearchStorage();
-    let liveOwner = "owner-1";
-    let workerSeq = 0;
-    let failStop = false;
-    const stopped: Array<{ threadId: string; turnId?: string }> = [];
-    const makePorts = (ownerId: string): ResearchPorts => ({
-      ownerId,
-      ownerPid: 1,
-      ownerStartedAt: START_TIME,
-      isOwnerAlive: (o) => o.ownerId === liveOwner,
-      now: () => START_TIME,
-      schedule: () => () => {},
-      spawn: async (_c, _t, _title, _mode, onCreated) => {
-        const id = ++workerSeq;
-        const w = { backend: "codex" as const, threadId: `w-${id}`, turnId: `t-${id}` };
-        onCreated(w);
-        return w;
-      },
-      stop: async (w) => {
-        stopped.push({ threadId: w.threadId, turnId: w.turnId });
-        if (failStop) throw new Error("Stop lost");
-      },
-      notify: async () => ({}),
-      cancelQueued: async () => ({}),
-      changed: () => {},
-      onError: () => {},
-    });
+  // the approach item via work() must stop both and defer settling to "cancelled"
+  // until BOTH the focused child and the approach itself no longer occupy a slot.
+  it.each(["both-stop", "own-stop-fails-then-ends"] as const)(
+    "cancels both the focused child and an unresolved own-approach turn before settling item cancellation (%s)",
+    async (mode) => {
+      const storage = new MemoryResearchStorage();
+      let liveOwner = "owner-1";
+      let workerSeq = 0;
+      const failStopThreads = new Set<string>();
+      const stopped: Array<{ threadId: string; turnId?: string }> = [];
+      const makePorts = (ownerId: string): ResearchPorts => ({
+        ownerId,
+        ownerPid: 1,
+        ownerStartedAt: START_TIME,
+        isOwnerAlive: (o) => o.ownerId === liveOwner,
+        now: () => START_TIME,
+        schedule: () => () => {},
+        spawn: async (_c, _t, _title, _mode, onCreated) => {
+          const id = ++workerSeq;
+          const w = { backend: "codex" as const, threadId: `w-${id}`, turnId: `t-${id}` };
+          onCreated(w);
+          return w;
+        },
+        stop: async (w) => {
+          stopped.push({ threadId: w.threadId, turnId: w.turnId });
+          if (failStopThreads.has(w.threadId)) throw new Error("Stop lost");
+        },
+        notify: async () => ({}),
+        cancelQueued: async () => ({}),
+        changed: () => {},
+        onError: () => {},
+      });
 
-    const first = new ResearchService(storage, makePorts("owner-1"));
-    const started = await first.start(
-      {
-        objective: "Obj",
-        workspaceMode: "none",
-        approaches: [
-          { title: "A1", task: "T1" },
-          { title: "A2", task: "T2" },
-        ],
-      },
-      COORD_AGENT,
-    );
-    first.close();
+      const first = new ResearchService(storage, makePorts("owner-1"));
+      const started = await first.start(
+        {
+          objective: "Obj",
+          workspaceMode: "none",
+          approaches: [
+            { title: "A1", task: "T1" },
+            { title: "A2", task: "T2" },
+          ],
+        },
+        COORD_AGENT,
+      );
+      first.close();
 
-    liveOwner = "owner-2";
-    const second = new ResearchService(storage, makePorts("owner-2"));
-    second.initialize();
-    const a1Before = second.readItem(started.id, "a1", OP).item;
-    const child = await second.assign(
-      { runId: started.id, itemId: "a1", expectedVersion: a1Before.version, task: "Focus on A1" },
-      { ...COORD_AGENT, callId: "assign-a1" },
-    );
+      liveOwner = "owner-2";
+      const second = new ResearchService(storage, makePorts("owner-2"));
+      second.initialize();
+      const a1Before = second.readItem(started.id, "a1", OP).item;
+      const child = await second.assign(
+        { runId: started.id, itemId: "a1", expectedVersion: a1Before.version, task: "Focus on A1" },
+        { ...COORD_AGENT, callId: "assign-a1" },
+      );
 
-    // Unsolicited start on a1's old worker fails to stop, leaving a1 "unknown" alongside child.
-    failStop = true;
-    await second.observeStart({ backend: "codex", threadId: "w-1" }, "t-stray");
-    expect(second.read(started.id, OP).approaches.find((a) => a.id === "a1")?.state).toBe("unknown");
+      // Unsolicited start on a1's old worker fails to stop, leaving a1 "unknown" alongside child.
+      failStopThreads.add("w-1");
+      await second.observeStart({ backend: "codex", threadId: "w-1" }, "t-stray");
+      expect(second.read(started.id, OP).approaches.find((a) => a.id === "a1")?.state).toBe("unknown");
 
-    // Now stop succeeds: work(cancelled) on a1 must stop both the focused child and a1's stray turn.
-    failStop = false;
-    stopped.length = 0;
-    const a1Current = second.readItem(started.id, "a1", OP).item;
-    const cancelled = await second.work(
-      started.id,
-      "cancel-both",
-      { action: "work", itemId: "a1", expectedVersion: a1Current.version, state: "cancelled", reason: "Cancel A1 and child" },
-      OP,
-    );
-    expect(cancelled.work.state).toBe("cancelled");
-    expect(stopped).toEqual([
-      { threadId: child.worker!.threadId, turnId: child.worker!.turnId },
-      { threadId: "w-1", turnId: "t-stray" },
-    ]);
-    expect(second.read(started.id, OP).activeWorkers).toBe(0);
-    second.close();
-  });
+      if (mode === "both-stop") failStopThreads.clear();
+      stopped.length = 0;
+      const a1Current = second.readItem(started.id, "a1", OP).item;
+      const cancelled = await second.work(
+        started.id,
+        "cancel-both",
+        { action: "work", itemId: "a1", expectedVersion: a1Current.version, state: "cancelled", reason: "Cancel A1 and child" },
+        OP,
+      );
+      expect(stopped).toEqual([
+        { threadId: child.worker!.threadId, turnId: child.worker!.turnId },
+        { threadId: "w-1", turnId: "t-stray" },
+      ]);
+
+      if (mode === "both-stop") {
+        expect(cancelled.work.state).toBe("cancelled");
+        expect(second.read(started.id, OP).activeWorkers).toBe(0);
+        const events = storage.records.get(started.id)!;
+        const childStoppedSeq = events.find((e) => e.commandId === `stopped:${child.assignmentId}:${child.worker!.turnId}`)!.seq;
+        const ownStoppedSeq = events.find((e) => e.commandId === "stopped:a1:t-stray")!.seq;
+        const settledSeq = events.find((e) => e.commandId.startsWith(`item-cancelled:${child.assignmentId}:a1:`))!.seq;
+        expect(settledSeq).toBeGreaterThan(childStoppedSeq);
+        expect(settledSeq).toBeGreaterThan(ownStoppedSeq);
+      } else {
+        // Child stopped cleanly while a1's stray turn stayed "unknown": item must remain
+        // cancel_requested until a1 itself exits.
+        expect(cancelled.work.state).toBe("cancel_requested");
+        expect(second.read(started.id, OP).activeWorkers).toBe(1);
+        second.observeEnd({ backend: "codex", threadId: "w-1" }, "t-stray");
+        expect(second.readItem(started.id, "a1", OP).item.work.state).toBe("cancelled");
+        expect(second.read(started.id, OP).activeWorkers).toBe(0);
+      }
+      second.close();
+    },
+  );
 });
