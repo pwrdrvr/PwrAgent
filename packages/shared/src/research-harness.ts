@@ -241,6 +241,9 @@ export function normalizeResearchHarnessConfig(input: {
   const value: ResearchHarnessConfig = { command, args: [...input.args] };
   const endpoint = input.endpoint?.trim();
   if (endpoint) {
+    if (CONTROL.test(endpoint) || /[\t\r\n]/.test(endpoint)) {
+      return { ok: false, field: "endpoint", error: "The URL contains a control character." };
+    }
     let url: ParsedUrl;
     try { url = new URL(endpoint); } catch { return { ok: false, field: "endpoint", error: "Enter a full URL." }; }
     if (endpoint.length > MAX_ENDPOINT) return { ok: false, field: "endpoint", error: "That URL is too long." };

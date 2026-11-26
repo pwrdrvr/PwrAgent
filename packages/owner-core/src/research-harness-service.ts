@@ -311,9 +311,11 @@ export class ResearchHarnessService {
         if (current.harness!.state !== "reconciling" || current.harness!.cursor !== before.cursor) throw new Error("This run changed while reconciling");
         const normalized = normalizeHarnessRecords({ ...current, approaches: this.approaches(id) }, response.records, (seq) => this.storage.harnessRecord(id, seq));
         if (response.next !== undefined && (response.next !== normalized.state.cursor || normalized.state.cursor <= before.cursor)) throw new Error("Invalid Harness continuation cursor");
-        ended = normalized.ended;
-        resumed ||= ["running", "unknown"].includes(normalized.state.state);
         if (normalized.events.length) {
+          ended = normalized.ended;
+          if (origin.mode === "execute" && normalized.events.some((entry) => entry.data.type === "harness_observation" && entry.data.event === "resumed")) {
+            resumed = true;
+          }
           if (current.revision + normalized.events.length + 3 > RESEARCH_MAX_EVENTS) throw new Error("Research event limit reached; the source has more records than this run can retain");
           const state: ResearchHarnessState = { ...normalized.state, state: "reconciling", observedAt: this.now() };
           const runActor = this.actor(current);

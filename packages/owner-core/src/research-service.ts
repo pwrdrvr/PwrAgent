@@ -99,13 +99,13 @@ export class ResearchService {
    * counting while nobody held the run.
    */
   private adopt(run: ResearchRunHeader): ResearchRunHeader {
-    // A revision turn the gone process had started ended with it too, and its delivery would hold the worker's slot forever.
-    const started = this.storage.deliveries(run.id, { open: true }).filter((delivery) => delivery.state === "started");
+    // A revision turn or in-flight send from the gone process ended with it too, and its delivery would hold the worker's slot forever.
+    const endedWithOwner = this.storage.deliveries(run.id, { open: true }).filter((delivery) => delivery.state === "started" || delivery.state === "pending");
     const cutOff = this.storage.approaches(run.id, { occupying: true })
-      .filter((approach) => !["ended", "stopped", "failed"].includes(approach.state) || started.some((delivery) => delivery.approachId === approach.id));
+      .filter((approach) => !["ended", "stopped", "failed"].includes(approach.state) || endedWithOwner.some((delivery) => delivery.approachId === approach.id));
     this.append(run, `adopted:${this.ports.ownerId}:${run.revision}`, this.operator(run), { type: "adopted", ownerId: this.ports.ownerId, ownerPid: this.ports.ownerPid,
       ...(this.ports.ownerStartedAt !== undefined ? { ownerStartedAt: this.ports.ownerStartedAt } : {}), approachIds: cutOff.map((approach) => approach.id) });
-    for (const delivery of started) {
+    for (const delivery of endedWithOwner) {
       this.append(this.requireHeader(run.id), `adopted-delivery:${delivery.id}:${this.ports.ownerId}`, this.operator(run), { type: "delivery", delivery: { ...delivery, state: "ended" } });
     }
     // A cut-off turn counted until now. A worker already past its per-worker limit is stopped for it, not offered for resume.
@@ -394,7 +394,8 @@ export class ResearchService {
       for (const delivery of this.storage.deliveries(id, { open: true })) {
         if (delivery.approachId === cancellation) await this.cancelDelivery(id, delivery, actor);
       }
-      await this.stopWorker(id, cancellation, actor);
+      if (this.queuedResumes.get(id)?.has(cancellation)) await this.withdrawResume(id, cancellation, actor);
+      else await this.stopWorker(id, cancellation, actor);
       this.settleItemCancellation(id, cancellation);
     }
     return this.storage.readItem(id, item.id)!;
@@ -460,9 +461,11 @@ export class ResearchService {
     validateStartResearch(request);
     if (this.isWorker(context)) throw new Error("Research workers cannot start additional runs. Ask the coordinating thread to change the assignment.");
     const intentKey = JSON.stringify([context.backend, context.threadId]);
-    const intent = this.intents.get(intentKey);
+    const stored = this.intents.get(intentKey);
+    const intent = stored && this.now() < stored.expiresAt ? stored : undefined;
+    if (stored && !intent) this.intents.delete(intentKey);
     if (request.intentId || intent) {
-      if (!intent || request.intentId !== intent.id || this.now() >= intent.expiresAt) throw new Error("Research request expired or was replaced. Submit a fresh request from the Research panel.");
+      if (!intent || request.intentId !== intent.id) throw new Error("Research request expired or was replaced. Submit a fresh request from the Research panel.");
       if (request.objective !== intent.request.objective || request.approaches.length !== intent.request.workers || request.minutes !== intent.request.minutes
         || request.turnMinutes !== intent.request.turnMinutes || request.totalWorkerMinutes !== intent.request.totalWorkerMinutes || request.workspaceMode !== intent.request.workspaceMode) throw new Error("Research must use the exact objective, worker count, time limits and workspace choice the operator requested");
     }

@@ -134,12 +134,12 @@ export class ReplayResearchService {
   }
 
   private adopt(run: ResearchRun): ResearchRun {
-    const started = run.deliveries.filter((delivery) => delivery.state === "started");
+    const endedWithOwner = run.deliveries.filter((delivery) => delivery.state === "started" || delivery.state === "pending");
     const cutOff = run.approaches.filter((approach) => researchApproachOccupiesSlot(approach)
-      && (!["ended", "stopped", "failed"].includes(approach.state) || started.some((delivery) => delivery.approachId === approach.id)));
+      && (!["ended", "stopped", "failed"].includes(approach.state) || endedWithOwner.some((delivery) => delivery.approachId === approach.id)));
     this.append(run, `adopted:${this.ports.ownerId}:${run.revision}`, this.operator(run), { type: "adopted", ownerId: this.ports.ownerId, ownerPid: this.ports.ownerPid,
       ...(this.ports.ownerStartedAt !== undefined ? { ownerStartedAt: this.ports.ownerStartedAt } : {}), approachIds: cutOff.map((approach) => approach.id) });
-    for (const delivery of started) {
+    for (const delivery of endedWithOwner) {
       this.append(this.requireRun(run.id), `adopted-delivery:${delivery.id}:${this.ports.ownerId}`, this.operator(run), { type: "delivery", delivery: { ...delivery, state: "ended" } });
     }
     const limited = this.stopCutOffPastTurnLimit(run.id);
@@ -307,7 +307,8 @@ export class ReplayResearchService {
       for (const delivery of this.requireRun(id).deliveries) {
         if (delivery.approachId === cancellation && !["cancelled", "ended"].includes(delivery.state)) await this.cancelDelivery(id, delivery, actor);
       }
-      await this.stopWorker(id, cancellation, actor);
+      if (this.queuedResumes.has(`${id}:${cancellation}`)) await this.withdrawResume(id, cancellation, actor);
+      else await this.stopWorker(id, cancellation, actor);
       this.settleItemCancellation(id, cancellation);
     }
     return this.storage.readItem(id, item.id)!;
@@ -374,9 +375,11 @@ export class ReplayResearchService {
     validateStartResearch(request);
     if (this.isWorker(context)) throw new Error("Research workers cannot start additional runs. Ask the coordinating thread to change the assignment.");
     const intentKey = JSON.stringify([context.backend, context.threadId]);
-    const intent = this.intents.get(intentKey);
+    const stored = this.intents.get(intentKey);
+    const intent = stored && this.now() < stored.expiresAt ? stored : undefined;
+    if (stored && !intent) this.intents.delete(intentKey);
     if (request.intentId || intent) {
-      if (!intent || request.intentId !== intent.id || this.now() >= intent.expiresAt) throw new Error("Research request expired or was replaced. Submit a fresh request from the Research panel.");
+      if (!intent || request.intentId !== intent.id) throw new Error("Research request expired or was replaced. Submit a fresh request from the Research panel.");
       if (request.objective !== intent.request.objective || request.approaches.length !== intent.request.workers || request.minutes !== intent.request.minutes
         || request.turnMinutes !== intent.request.turnMinutes || request.totalWorkerMinutes !== intent.request.totalWorkerMinutes || request.workspaceMode !== intent.request.workspaceMode) throw new Error("Research must use the exact objective, worker count, time limits and workspace choice the operator requested");
     }
