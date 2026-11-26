@@ -103,20 +103,29 @@ export class FederatedResearchService {
     const request = (input && typeof input === "object" ? { ...input } : {}) as Record<string, unknown>;
     const explicit = request.federationTarget as FederationTarget | undefined;
     delete request.federationTarget;
+    let remoteTarget: FederationRemoteTarget | undefined;
     if (explicit !== undefined) {
+      if (explicit === null || typeof explicit !== "object") {
+        throw new Error("Invalid research owner target.");
+      }
       if (explicit.scope === "local") {
         if (windowTarget) {
           throw new Error("Research owner does not match this window.");
         }
-      } else if (isRemoteFederationTarget(explicit)) {
+      } else if (
+        isRemoteFederationTarget(explicit)
+        && typeof explicit.instanceId === "string"
+        && explicit.instanceId.trim().length > 0
+      ) {
         if (windowTarget && windowTarget.instanceId !== explicit.instanceId) {
           throw new Error("Research owner does not match its target.");
         }
+        remoteTarget = explicit;
       } else {
         throw new Error("Invalid research owner target.");
       }
     }
-    const target = explicit?.scope === "remote" ? explicit : windowTarget;
+    const target = remoteTarget ?? windowTarget;
     if (target) {
       return await this.options.remote(target, operation, request as ResearchOperationRequest<K>);
     }

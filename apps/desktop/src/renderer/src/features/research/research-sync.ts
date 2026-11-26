@@ -14,6 +14,7 @@ import {
   type ResearchThread,
 } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { researchErrorMessage } from "./research-error";
 
 /** What the panel draws from: the thread's runs, its pending request, and the store of the run on screen. */
 export type ResearchSyncState = {
@@ -124,8 +125,7 @@ export class ResearchSync {
       }
     } catch (error) {
       // Leave what was dirty as it is: the next change event retries it.
-      const text = error instanceof Error ? error.message : "Research could not be read";
-      this.emit({ error: text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").replace(/^handler_failed: /, "") });
+      this.emit({ error: researchErrorMessage(error, "Research could not be read") });
     } finally { this.pumping = false; }
   }
 

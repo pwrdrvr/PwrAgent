@@ -1,11 +1,9 @@
 import { useCallback, useState } from "react";
 import type { ResearchCommand, ResearchThread } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { researchErrorMessage } from "./research-error";
 
-export function researchErrorMessage(error: unknown): string {
-  const text = error instanceof Error ? error.message : "Research operation failed";
-  return text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").replace(/^handler_failed: /, "");
-}
+export { researchErrorMessage };
 
 /**
  * What the operator can do to the run on screen, as its coordinating thread:

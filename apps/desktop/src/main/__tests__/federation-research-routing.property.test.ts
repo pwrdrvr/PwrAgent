@@ -136,6 +136,7 @@ import { disposeResearchIpcHandlers, registerResearchIpcHandlers } from "../shel
 import {
   FEDERATION_RESEARCH_CAPABILITIES,
   FEDERATION_RESEARCH_METHODS,
+  FederatedResearchService,
   registerFederationResearchHandlers,
   type ResearchOperations,
 } from "../federation/federation-research";
@@ -432,5 +433,21 @@ describe("research federation protocol authorization and secret safety", () => {
     expect((await send("controller", FEDERATION_RESEARCH_METHODS.snapshot, {
       backend: "codex", threadId: "t1", federationTarget: ownerBTarget,
     })).status).toBe("rejected");
+  });
+
+  it("rejects null and malformed federationTarget values with a validation error instead of throwing TypeError", async () => {
+    const local = ownerOperations();
+    const remote = vi.fn(async () => ({ runs: [], writableRunIds: [] }) as never);
+    const service = new FederatedResearchService({ local, remote });
+
+    for (const invalidTarget of [null, "remote", 42, {}, { scope: "remote" }]) {
+      await expect(service.request("snapshot", {
+        backend: "codex",
+        threadId: "t1",
+        federationTarget: invalidTarget as never,
+      })).rejects.toThrow("Invalid research owner target.");
+    }
+    expect(local.snapshot).not.toHaveBeenCalled();
+    expect(remote).not.toHaveBeenCalled();
   });
 });

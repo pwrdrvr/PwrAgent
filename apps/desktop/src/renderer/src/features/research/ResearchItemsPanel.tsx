@@ -10,6 +10,7 @@ import {
 import { Select, type SelectOption } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { approachTitle, plural, researchLabel, researchReviewStatusLabel, type ResearchRunView } from "./research-view-model";
+import { researchErrorMessage } from "./research-error";
 
 /** Item search filters. Kept by the panel so a detail view or another tab does not reset them. */
 export type ResearchItemsQuery = {
@@ -60,7 +61,7 @@ export function ResearchItemsPanel({ api, thread, run, query, onQueryChange, onO
       state: state || undefined, review: review || undefined, approachId, limit: PAGE_SIZE, cursor };
     void searchResearch({ backend, threadId, runId, query: search }).then((page) => {
       if (!disposed) setResult({ key, page });
-    }, (failure: unknown) => { if (!disposed) setResult({ key, error: failure instanceof Error ? failure.message : "Research items could not be searched" }); });
+    }, (failure: unknown) => { if (!disposed) setResult({ key, error: researchErrorMessage(failure, "Research items could not be searched") }); });
     return () => { disposed = true; };
   }, [searchResearch, backend, threadId, runId, key, queryText, type, kind, state, review, approachId, cursor]);
   useEffect(() => {

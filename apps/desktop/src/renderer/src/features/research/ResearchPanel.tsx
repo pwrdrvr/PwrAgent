@@ -45,6 +45,9 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
     && thread?.federation?.capabilities
     && !thread.federation.capabilities.includes("thread_research"),
   );
+  const canControl = !ownerTarget
+    || !thread?.federation?.capabilities
+    || thread.federation.capabilities.includes("turn_control");
   const identity = thread && !ownerUnsupported ? { backend: thread.source, threadId: thread.id } : undefined;
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const state = useResearchSync(api, identity, selectedRunId, ownerTarget);
@@ -78,7 +81,11 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
   const error = formError || actions.error;
   const pending = state.pending && now < state.pending.expiresAt ? state.pending : undefined;
   const coordinator = Boolean(run && identity && sameResearchThread(run.coordinator, identity));
-  const writable = Boolean(run && state.writableRunIds.includes(run.id));
+  const runOwned = Boolean(run && state.writableRunIds.includes(run.id));
+  const writable = canControl && runOwned;
+  const readOnlyNote = runOwned && !canControl
+    ? `Read-only view of ${ownerLabel}. Controlling or reviewing runs requires turn control.`
+    : undefined;
   const live = Boolean(run && isResearchRunLive(run));
   const views = run?.harness?.source === "discovery" ? DISCOVERY_VIEWS : VIEWS;
   const currentView: View = views.some((entry) => entry.id === view) ? view : views[0]!.id;
@@ -142,7 +149,7 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
   if (!api?.researchSnapshot || !api.researchChanges) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research is unavailable in this window.</p></section>;
 
   const firstRun = Boolean(runs && runs.length === 0 && !pending);
-  const showForm = Boolean(runs) && (creating || firstRun);
+  const showForm = canControl && Boolean(runs) && (creating || firstRun);
   const harnessAvailable = Boolean(api.startResearchHarness);
   const formSource = harnessAvailable ? source : "native";
   const evidenceAvailable = !ownerTarget && Boolean(api.openResearchEvidence);
@@ -152,8 +159,9 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
       <h3>Research</h3>
       {!ownerTarget && api.openResearchWindow && <button type="button" className="research-icon-button tooltip-target" aria-label="Open in Research window" data-tooltip="Open in Research window"
         onClick={() => { void api.openResearchWindow?.(summary ? { runId: summary.id } : undefined).catch((failure: unknown) => setError(message(failure))); }}><PopoutIcon /></button>}
-      {!firstRun && runs && <button type="button" className="research-button" onClick={() => setCreating(!creating)} aria-expanded={creating}>New run</button>}
+      {canControl && !firstRun && runs && <button type="button" className="research-button" onClick={() => setCreating(!creating)} aria-expanded={creating}>New run</button>}
     </div>
+    {firstRun && !canControl && <p className="context-empty">No research runs yet. This connection is read-only on {ownerLabel}.</p>}
     {showForm && harnessAvailable && <div className="research-switch" role="group" aria-label="Run source">
       <button type="button" aria-pressed={formSource === "native"} onClick={() => setSource("native")}>PwrAgent workers</button>
       <button type="button" aria-pressed={formSource === "harness"} onClick={() => setSource("harness")}>Open Math Harness</button>
@@ -164,19 +172,19 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
     {(error || state.error) && <p role="alert" className="research-error">{error || state.error}</p>}
     {notice && <p role="status" className="research-notice">{notice}</p>}
     {!runs && !state.error && <p role="status" className="context-empty">Loading research…</p>}
-    {pending && <ResearchPendingCard pending={pending} busy={busy} onWithdraw={api.withdrawResearch ? () => { void withdraw(); } : undefined} />}
+    {pending && <ResearchPendingCard pending={pending} busy={busy} onWithdraw={canControl && api.withdrawResearch ? () => { void withdraw(); } : undefined} />}
     {runs && runs.length > 1 && summary && <label className="research-run-select">Run
       <Select value={summary.id} onChange={selectRun} className="research-select"
         options={runs.map((r: ResearchRunSummary) => ({ value: r.id, label: excerpt(r.objective, 70), description: researchRunPhase(r).label }))} />
     </label>}
     {loadingRun && !state.error && <p role="status" className="context-empty">Loading run…</p>}
     {run && <>
-      <ResearchRunCard key={run.id} run={run} now={now} coordinator={coordinator} writable={writable} busy={busy}
+      <ResearchRunCard key={run.id} run={run} now={now} coordinator={coordinator} writable={writable} readOnlyNote={readOnlyNote} busy={busy}
         onStop={() => { void update({ action: "stop", reason: "Stopped by the operator" }); }}
         onFinish={() => { void update({ action: "finish", reason: "Completed after operator review" }); }}
         onResume={() => { void update({ action: "resume" }); }}
         onChangeBounds={(bounds) => update({ action: "bounds", ...bounds })}
-        onReconcile={api.reconcileResearchHarness ? () => { void reconcile(); } : undefined} />
+        onReconcile={canControl && api.reconcileResearchHarness ? () => { void reconcile(); } : undefined} />
       <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={reviewCount} onChoose={chooseView} />
       <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${currentView}`} className="research-tabpanel">
         {(currentView === "map" || currentView === "findings" || currentView === "activity") && <input className="research-filter" type="search" aria-label="Filter this view"

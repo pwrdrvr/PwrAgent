@@ -9,6 +9,7 @@ import {
 } from "@pwragent/shared/research-harness";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { Select } from "../../components/Select";
+import { researchErrorMessage } from "./research-error";
 
 type Operation = "import" | "discovery" | "execute";
 type Capability = keyof Extract<ResearchHarnessCheck, { ok: true }>["capabilities"];
@@ -296,7 +297,5 @@ export function ResearchHarnessForm({ api, thread, ownerLabel, onStarted, onCanc
 }
 
 function message(error: unknown): string {
-  const text = error instanceof Error ? error.message : "The Harness request failed";
-  // Electron prefixes remote handler errors with the channel; the owner's sentence is the useful part.
-  return text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").replace(/^handler_failed: /, "");
+  return researchErrorMessage(error, "The Harness request failed");
 }

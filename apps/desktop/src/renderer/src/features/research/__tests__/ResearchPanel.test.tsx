@@ -466,6 +466,91 @@ describe("Research panel", () => {
     expect(screen.queryByRole("button", { name: "Show config.toml" })).not.toBeInTheDocument();
   });
 
+  it("gates write and run-start controls when a remote peer lacks turn_control", async () => {
+    const { api } = apiFor({
+      ...snapshot(),
+      pending: { objective: "Queued run", workers: 2, minutes: 10, workspaceMode: "none", preparedAt: Date.now(), expiresAt: Date.now() + 60_000 },
+    });
+    const readOnlyRemote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "ReadOnly Mac",
+        capabilities: ["thread_detail", "thread_research"],
+      },
+    } as NavigationThreadSummary;
+    render(
+      <ResearchPanel
+        desktopApi={{ ...api, startResearchHarness: vi.fn(), reconcileResearchHarness: vi.fn() } as DesktopApi}
+        thread={readOnlyRemote}
+      />,
+    );
+    await screen.findByLabelText("Research map");
+    expect(screen.queryByRole("button", { name: "New run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Withdraw request" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop run…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Finish run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change bounds…" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Another running PwrAgent process owns this run/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Read-only view of ReadOnly Mac/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /^Review/ }));
+    expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request revision" })).not.toBeInTheDocument();
+  });
+
+  it("shows an empty read-only state instead of the creation form when a read-only remote thread has no runs", async () => {
+    const { api } = apiFor({ runs: [], writableRunIds: [] });
+    const readOnlyRemote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "ReadOnly Mac",
+        capabilities: ["thread_detail", "thread_research"],
+      },
+    } as NavigationThreadSummary;
+    render(<ResearchPanel desktopApi={api} thread={readOnlyRemote} />);
+    expect(await screen.findByText(/No research runs yet\. This connection is read-only on ReadOnly Mac\./)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Objective")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New run" })).not.toBeInTheDocument();
+  });
+
+  it("strips Electron IPC and Federation wire error prefixes in Items, Item Detail, Findings, and Activity", async () => {
+    const { api } = apiFor();
+    const failingApi: DesktopApi = {
+      ...api,
+      searchResearch: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'research:search': Error: target_unavailable: Build Mac is offline");
+      }),
+      readResearchItem: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'research:item': Error: capability_denied: Turn control is required");
+      }),
+      readResearchEvents: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'research:events': Error: instance_shutting_down: Owner is restarting");
+      }),
+    };
+    render(<ResearchPanel desktopApi={failingApi} thread={thread} />);
+    await screen.findByLabelText("Research map");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Build Mac is offline");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("target_unavailable");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Error invoking remote method");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Items" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Build Mac is offline");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Owner is restarting");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("instance_shutting_down");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Map" }));
+    fireEvent.click(screen.getByRole("button", { name: /Counterexample 0/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Turn control is required");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("capability_denied");
+  });
+
   it("keeps a thousand recorded contributions out of the map DOM and links to the rest", async () => {
     const { api, mocks } = apiFor(snapshot(1000));
     render(<ResearchPanel desktopApi={api} thread={thread} />);
