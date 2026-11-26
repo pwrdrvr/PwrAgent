@@ -5705,6 +5705,46 @@ describe("Composer", () => {
       .toHaveAttribute("data-skill-path", "pwragent://thread/codex-thread?backend=codex");
   });
 
+  it.each([
+    { key: "Enter", moveSelection: false },
+    { key: "Tab", moveSelection: true },
+  ])("keeps the highlighted thread when owner results reorder the # picker before $key", async ({ key, moveSelection }) => {
+    const first: NavigationThreadSummary = {
+      id: "loaded-first", source: "codex", title: "Bound model notes", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const second = { ...first, id: "loaded-second", title: "Earlier bound model thread" };
+    const ownerMatch = { ...first, id: "owner-match", title: "Bound model" };
+    const selected = moveSelection ? second : first;
+    const ownerReady = createDeferred<void>();
+    const desktopApi: DesktopApi = {
+      getNavigationQueryPage: async (request) => {
+        if (request.query.kind === "search") await ownerReady.promise;
+        return navigationQueryFixture(request, { threads: [ownerMatch, first, second] });
+      },
+    };
+
+    render(<Composer desktopApi={desktopApi} skills={[]} threads={[first, second]}
+      thread={{ ...first, id: "parent", title: "Parent thread" }} />);
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "See #bound model" } });
+    const picker = await screen.findByRole("listbox", { name: "Threads and pull requests" });
+    const highlighted = within(picker).getByRole("option", { name: new RegExp(selected.title, "i") });
+    if (moveSelection) fireEvent.keyDown(textbox, { key: "ArrowDown" });
+    expect(highlighted).toHaveAttribute("aria-selected", "true");
+
+    await act(async () => ownerReady.resolve());
+    const reordered = within(picker).getAllByRole("option");
+    expect(reordered).toHaveLength(3);
+    expect(reordered[moveSelection ? 2 : 1]).toBe(highlighted);
+    const selectionAfterResponse = highlighted.getAttribute("aria-selected");
+    fireEvent.keyDown(textbox, { key });
+
+    expect(textbox.querySelector('[data-mention-kind="thread"]'))
+      .toHaveAttribute("data-skill-path", `pwragent://thread/${selected.id}?backend=codex`);
+    expect(selectionAfterResponse).toBe("true");
+  });
+
   it("offers matching threads and a precise PR link for a numeric hash query", async () => {
     const earlierPullRequest = {
       provider: "github.com" as const,

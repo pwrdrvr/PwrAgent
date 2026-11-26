@@ -324,6 +324,11 @@ export function hashReferenceThreadIdentity(thread: ThreadJumpCandidate): string
     : buildThreadIdentityKey(thread.source, thread.id);
 }
 
+export function hashReferenceOptionKey(option: HashReferenceOption): string {
+  return option.kind === "thread" ? `thread:${hashReferenceThreadIdentity(option.thread)}`
+    : `pull-request:${buildPullRequestStatusKey(option.pullRequest)}`;
+}
+
 export function buildHashReferenceOptions(params: {
   currentThreadKey?: string;
   currentThread?: ThreadJumpCandidate;
