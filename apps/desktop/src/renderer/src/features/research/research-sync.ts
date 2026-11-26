@@ -56,6 +56,17 @@ export class ResearchSync {
   start(): void { void this.pump(); }
   dispose(): void { this.disposed = true; }
 
+  /** Re-read the run list and selected run after a Federation reconnect or stream recovery. */
+  resync(): void {
+    if (this.disposed) return;
+    this.listDirty = true;
+    if (this.store) {
+      this.runDirty = true;
+      this.runAsked = Number.POSITIVE_INFINITY;
+    }
+    void this.pump();
+  }
+
   /** The run to show: the chosen one while the thread still lists it, else the newest. */
   select(runId: string | undefined): void {
     this.wantedRunId = runId;
@@ -113,7 +124,8 @@ export class ResearchSync {
       }
     } catch (error) {
       // Leave what was dirty as it is: the next change event retries it.
-      this.emit({ error: error instanceof Error ? error.message : "Research could not be read" });
+      const text = error instanceof Error ? error.message : "Research could not be read";
+      this.emit({ error: text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").replace(/^handler_failed: /, "") });
     } finally { this.pumping = false; }
   }
 

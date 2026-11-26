@@ -401,12 +401,69 @@ describe("Research panel", () => {
     expect(screen.queryByText("Stale")).not.toBeInTheDocument();
   });
 
-  it("does not read the local owner's data for a remote thread", () => {
+  it("renders and drives a remote thread's runs through the owner-scoped API without offering local window popout", async () => {
     const { api, mocks } = apiFor();
-    const remote = { ...thread, federation: { ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" } } } as NavigationThreadSummary;
+    const remote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "Build Mac",
+        capabilities: ["thread_detail", "turn_control", "thread_research"],
+      },
+    } as NavigationThreadSummary;
+    render(<ResearchPanel desktopApi={{ ...api, openResearchWindow: vi.fn() } as DesktopApi} thread={remote} />);
+    await screen.findByLabelText("Research map");
+    expect(mocks.researchSnapshot).toHaveBeenCalledWith({ backend: "codex", threadId: "parent" });
+    expect(screen.queryByRole("button", { name: "Open in Research window" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /^Review/ }));
+    fireEvent.change(screen.getByLabelText("Reason for your decision"), { target: { value: "Looks solid" } });
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(mocks.updateResearch).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "parent",
+      command: { action: "review", submissionId: "s1", decision: "accepted", reason: "Looks solid" },
+    })));
+  });
+
+  it("shows an honest state when a remote owner does not support Research runs", () => {
+    const { api, mocks } = apiFor();
+    const remote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "Older Mini",
+        capabilities: ["thread_detail", "turn_control"],
+      },
+    } as NavigationThreadSummary;
     render(<ResearchPanel desktopApi={api} thread={remote} />);
-    expect(screen.getByText(/owning instance/)).toBeInTheDocument();
+    expect(screen.getByText(/Research runs are not supported on Older Mini/)).toBeInTheDocument();
     expect(mocks.researchSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("gives a remote viewer an honest per-instance state when the owner has no Harness configured", async () => {
+    const { api } = apiFor({ runs: [], writableRunIds: [] });
+    const researchHarnessStatus = vi.fn(async () => ({ configured: false, source: "mathos" as const, platformKeyStored: false }));
+    const remote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "Lab Studio",
+        capabilities: ["thread_detail", "turn_control", "thread_research"],
+      },
+    } as NavigationThreadSummary;
+    render(
+      <ResearchPanel
+        desktopApi={{ ...api, researchHarnessStatus, startResearchHarness: vi.fn(), revealResearchHarnessConfig: vi.fn() } as DesktopApi}
+        thread={remote}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+    await screen.findByLabelText("Objective");
+    fireEvent.click(screen.getByRole("button", { name: "Open Math Harness" }));
+    expect(await screen.findByText(/Open Math Harness is not set up on Lab Studio/)).toBeInTheDocument();
+    expect(screen.getByText(/API keys never leave the owning machine/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Harness settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show config.toml" })).not.toBeInTheDocument();
   });
 
   it("keeps a thousand recorded contributions out of the map DOM and links to the rest", async () => {

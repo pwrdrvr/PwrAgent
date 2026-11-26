@@ -2343,6 +2343,14 @@ export type AppServerNotification =
   /** See `THREAD_TODO_FEED_ACKNOWLEDGED_METHOD`. */
   | { method: "thread/todos/feedAcknowledged"; params: { reason: "subscribed" } }
   | {
+      /**
+       * A thread's Research runs or pending request changed on the owning
+       * instance. Viewers sync incremental changes from that owner.
+       */
+      method: "thread/research/changed";
+      params: { backend: AppServerBackendKind; threadId: string; runId?: string; revision?: number };
+    }
+  | {
       method: "thread/dependencies/updated";
       params: { threadId: string; dependencyId: string };
     }

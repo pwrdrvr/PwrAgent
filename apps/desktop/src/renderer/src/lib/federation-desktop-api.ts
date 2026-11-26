@@ -1,4 +1,5 @@
 import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
+import type { ResearchChange } from "@pwragent/shared/research";
 import type { DesktopApi } from "./desktop-api";
 
 export function scopeDesktopApiToFederationTarget(
@@ -26,6 +27,22 @@ export function scopeDesktopApiToFederationTarget(
     desktopApi.listWorktreeUnpublishedCommits;
   const getWorktreeUnpublishedCommitDiff =
     desktopApi.getWorktreeUnpublishedCommitDiff;
+  const submitThreadReply = desktopApi.submitThreadReply;
+  const searchResearch = desktopApi.searchResearch;
+  const readResearchItem = desktopApi.readResearchItem;
+  const updateResearchItem = desktopApi.updateResearchItem;
+  const researchSnapshot = desktopApi.researchSnapshot;
+  const researchChanges = desktopApi.researchChanges;
+  const readResearchEvents = desktopApi.readResearchEvents;
+  const researchHarnessStatus = desktopApi.researchHarnessStatus;
+  const checkResearchHarness = desktopApi.checkResearchHarness;
+  const reconcileResearchHarness = desktopApi.reconcileResearchHarness;
+  const listMathosSwarms = desktopApi.listMathosSwarms;
+  const startResearchHarness = desktopApi.startResearchHarness;
+  const prepareResearch = desktopApi.prepareResearch;
+  const withdrawResearch = desktopApi.withdrawResearch;
+  const updateResearch = desktopApi.updateResearch;
+  const onAgentEvent = desktopApi.onAgentEvent;
 
   return {
     ...desktopApi,
@@ -144,5 +161,80 @@ export function scopeDesktopApiToFederationTarget(
     readHtmlPreviewAssets: undefined,
     readMarkdownFileViewerSnapshot: undefined,
     onMarkdownFileViewerSnapshotChanged: undefined,
+    submitThreadReply: submitThreadReply
+      ? async (request) => await submitThreadReply({ ...request, federationTarget })
+      : undefined,
+    // Research runs live on the thread's owning instance; route every
+    // thread-scoped read and mutation there and follow its bus notifications.
+    searchResearch: searchResearch
+      ? async (request) => await searchResearch({ ...request, federationTarget })
+      : undefined,
+    readResearchItem: readResearchItem
+      ? async (request) => await readResearchItem({ ...request, federationTarget })
+      : undefined,
+    updateResearchItem: updateResearchItem
+      ? async (request) => await updateResearchItem({ ...request, federationTarget })
+      : undefined,
+    researchSnapshot: researchSnapshot
+      ? async (request) => await researchSnapshot({ ...request, federationTarget })
+      : undefined,
+    researchChanges: researchChanges
+      ? async (request) => await researchChanges({ ...request, federationTarget })
+      : undefined,
+    readResearchEvents: readResearchEvents
+      ? async (request) => await readResearchEvents({ ...request, federationTarget })
+      : undefined,
+    researchHarnessStatus: researchHarnessStatus
+      ? async (request) => await researchHarnessStatus({ ...request, federationTarget })
+      : undefined,
+    checkResearchHarness: checkResearchHarness
+      ? async (request) => await checkResearchHarness({ ...request, federationTarget })
+      : undefined,
+    reconcileResearchHarness: reconcileResearchHarness
+      ? async (request) => await reconcileResearchHarness({ ...request, federationTarget })
+      : undefined,
+    listMathosSwarms: listMathosSwarms
+      ? async (request) => await listMathosSwarms({ ...request, federationTarget })
+      : undefined,
+    startResearchHarness: startResearchHarness
+      ? async (request) => await startResearchHarness({ ...request, federationTarget })
+      : undefined,
+    prepareResearch: prepareResearch
+      ? async (request) => await prepareResearch({ ...request, federationTarget })
+      : undefined,
+    withdrawResearch: withdrawResearch
+      ? async (request) => await withdrawResearch({ ...request, federationTarget })
+      : undefined,
+    updateResearch: updateResearch
+      ? async (request) => await updateResearch({ ...request, federationTarget })
+      : undefined,
+    onResearchChanged: onAgentEvent
+      ? (callback) => onAgentEvent((event) => {
+          if (
+            event.federationTarget?.scope === "remote"
+            && event.federationTarget.instanceId === federationTarget.instanceId
+            && event.notification.method === "thread/research/changed"
+          ) {
+            const params = event.notification.params as Partial<ResearchChange>;
+            if (typeof params.backend === "string" && typeof params.threadId === "string") {
+              callback({
+                backend: params.backend,
+                threadId: params.threadId,
+                ...(typeof params.runId === "string" ? { runId: params.runId } : {}),
+                ...(typeof params.revision === "number" ? { revision: params.revision } : {}),
+              });
+            }
+          }
+        })
+      : undefined,
+    // Evidence files, Harness settings, and the local profile Research window
+    // stay on the owning machine only.
+    openResearchEvidence: undefined,
+    revealResearchHarnessConfig: undefined,
+    checkResearchHarnessBridge: undefined,
+    pickResearchHarnessBridge: undefined,
+    listMathosTeams: undefined,
+    researchProfileRuns: undefined,
+    openResearchWindow: undefined,
   };
 }

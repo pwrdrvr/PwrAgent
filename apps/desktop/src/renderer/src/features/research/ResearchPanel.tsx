@@ -4,7 +4,11 @@ import { type NavigationThreadSummary } from "@pwragent/shared/contracts/navigat
 import { PopoutIcon } from "../../icons";
 import { Select } from "../../components/Select";
 import type { DesktopApi } from "../../lib/desktop-api";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import {
+  readRendererFederationLabel,
+  readRendererFederationTarget,
+  resolveThreadOwnerFederationTarget,
+} from "../../lib/federation-window";
 import { ResearchItemDetail } from "./ResearchItemDetail";
 import { ResearchHarnessForm } from "./ResearchHarnessForm";
 import { ResearchDiscoveryPanel } from "./ResearchDiscoveryPanel";
@@ -12,6 +16,7 @@ import { EMPTY_RESEARCH_ITEMS_QUERY, ResearchItemsPanel, type ResearchItemsQuery
 import { ResearchReviewView } from "./ResearchReviewView";
 import { ResearchRunCard } from "./ResearchRunCard";
 import { ResearchPendingCard, ResearchStartForm, type ResearchStartValues } from "./ResearchStartForm";
+import { ResearchThreadOwner } from "./ResearchThreadButton";
 import { ResearchActivityView, ResearchFindingsView, ResearchMapView } from "./ResearchViews";
 import { excerpt, isResearchRunLive, researchRunPhase, researchRunView, researchStartLimits } from "./research-view-model";
 import { useResearchSync } from "./useResearchSync";
@@ -28,10 +33,21 @@ const DISCOVERY_VIEWS = [{ id: "discovery", label: "Discovery" }, { id: "activit
 type View = typeof VIEWS[number]["id"] | typeof DISCOVERY_VIEWS[number]["id"];
 
 export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { desktopApi?: DesktopApi; thread?: NavigationThreadSummary; onOpenSettings?: () => void }) {
-  const remote = Boolean(thread?.federation?.ref.target ?? readRendererFederationTarget());
-  const identity = thread && !remote ? { backend: thread.source, threadId: thread.id } : undefined;
+  const ownerTarget = useMemo(
+    () => (thread ? resolveThreadOwnerFederationTarget(thread, readRendererFederationTarget()?.instanceId) : undefined),
+    [thread],
+  );
+  const ownerLabel = ownerTarget
+    ? (thread?.federation?.instanceLabel ?? readRendererFederationLabel() ?? "the owning instance")
+    : undefined;
+  const ownerUnsupported = Boolean(
+    ownerTarget
+    && thread?.federation?.capabilities
+    && !thread.federation.capabilities.includes("thread_research"),
+  );
+  const identity = thread && !ownerUnsupported ? { backend: thread.source, threadId: thread.id } : undefined;
   const [selectedRunId, setSelectedRunId] = useState<string>();
-  const state = useResearchSync(api, identity, selectedRunId);
+  const state = useResearchSync(api, identity, selectedRunId, ownerTarget);
   const tabsId = useId();
   const [view, setView] = useState<View>("map");
   const [filter, setFilter] = useState("");
@@ -110,19 +126,31 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
     catch (failure) { setError(message(failure)); }
     finally { setBusy(false); }
   }
-  if (remote) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Open this thread on its owning instance to inspect its research runs.</p></section>;
+  if (ownerUnsupported) {
+    return <section className="context-panel__section research-panel" aria-label="Research">
+      <h3>Research</h3>
+      <p className="context-empty">Research runs are not supported on {ownerLabel}. Update that PwrAgent instance.</p>
+    </section>;
+  }
   if (!identity) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Select a thread to see its research runs.</p></section>;
+  if (ownerTarget && !api) {
+    return <section className="context-panel__section research-panel" aria-label="Research">
+      <h3>Research</h3>
+      <p className="context-empty">Research is unavailable while {ownerLabel} is offline.</p>
+    </section>;
+  }
   if (!api?.researchSnapshot || !api.researchChanges) return <section className="context-panel__section"><h3>Research</h3><p className="context-empty">Research is unavailable in this window.</p></section>;
 
   const firstRun = Boolean(runs && runs.length === 0 && !pending);
   const showForm = Boolean(runs) && (creating || firstRun);
   const harnessAvailable = Boolean(api.startResearchHarness);
   const formSource = harnessAvailable ? source : "native";
+  const evidenceAvailable = !ownerTarget && Boolean(api.openResearchEvidence);
   const reviewCount = run?.unreviewed ?? 0;
-  return <section className="context-panel__section research-panel" aria-label="Research">
+  return <ResearchThreadOwner.Provider value={ownerTarget?.instanceId}><section className="context-panel__section research-panel" aria-label="Research">
     <div className="research-heading">
       <h3>Research</h3>
-      {api.openResearchWindow && <button type="button" className="research-icon-button tooltip-target" aria-label="Open in Research window" data-tooltip="Open in Research window"
+      {!ownerTarget && api.openResearchWindow && <button type="button" className="research-icon-button tooltip-target" aria-label="Open in Research window" data-tooltip="Open in Research window"
         onClick={() => { void api.openResearchWindow?.(summary ? { runId: summary.id } : undefined).catch((failure: unknown) => setError(message(failure))); }}><PopoutIcon /></button>}
       {!firstRun && runs && <button type="button" className="research-button" onClick={() => setCreating(!creating)} aria-expanded={creating}>New run</button>}
     </div>
@@ -130,7 +158,7 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
       <button type="button" aria-pressed={formSource === "native"} onClick={() => setSource("native")}>PwrAgent workers</button>
       <button type="button" aria-pressed={formSource === "harness"} onClick={() => setSource("harness")}>Open Math Harness</button>
     </div>}
-    {showForm && formSource === "harness" && <ResearchHarnessForm api={api} thread={identity} onOpenSettings={onOpenSettings} onStarted={harnessStarted} onCancel={firstRun ? undefined : () => setCreating(false)} />}
+    {showForm && formSource === "harness" && <ResearchHarnessForm api={api} thread={identity} ownerLabel={ownerLabel} onOpenSettings={ownerTarget ? undefined : onOpenSettings} onStarted={harnessStarted} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {showForm && formSource === "native" && <ResearchStartForm firstRun={firstRun} busy={busy} disabled={!api.submitThreadReply || !api.prepareResearch} replacesPending={Boolean(pending)}
       onSubmit={start} onCancel={firstRun ? undefined : () => setCreating(false)} />}
     {(error || state.error) && <p role="alert" className="research-error">{error || state.error}</p>}
@@ -156,17 +184,17 @@ export function ResearchPanel({ desktopApi: api, thread, onOpenSettings }: { des
         {currentView === "discovery" && run.harness?.discovery && <ResearchDiscoveryPanel key={run.id} snapshot={run.harness.discovery} />}
         {currentView === "map" && <ResearchMapView run={run} filter={filter} onOpenItem={openItem}
           onShowApproachItems={(approachId) => { setItemsQuery({ ...EMPTY_RESEARCH_ITEMS_QUERY, approachId }); setOpenItemId(undefined); setView("items"); }} />}
-        {currentView === "findings" && <ResearchFindingsView key={run.id} api={api} thread={identity} run={run} filter={filter} evidenceAvailable={Boolean(api.openResearchEvidence)} onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
-        {currentView === "review" && <ResearchReviewView run={run} live={live} canReview={coordinator && writable} busy={busy} evidenceAvailable={Boolean(api.openResearchEvidence)}
+        {currentView === "findings" && <ResearchFindingsView key={run.id} api={api} thread={identity} run={run} filter={filter} evidenceAvailable={evidenceAvailable} onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
+        {currentView === "review" && <ResearchReviewView run={run} live={live} canReview={coordinator && writable} busy={busy} evidenceAvailable={evidenceAvailable}
           onReview={(submissionId, decision, reason) => update({ action: "review", submissionId, decision, reason })}
           onOpenItem={openItem} onOpenEvidence={(itemId, index) => { void openEvidence(itemId, index); }} />}
         {currentView === "items" && (openItemId
-          ? <ResearchItemDetail key={`${run.id}:${openItemId}`} api={api} thread={identity} run={run} itemId={openItemId} writable={writable && !run.harness} coordinator={coordinator}
+          ? <ResearchItemDetail key={`${run.id}:${openItemId}`} api={api} thread={identity} run={run} itemId={openItemId} writable={writable && !run.harness} coordinator={coordinator} evidenceAvailable={evidenceAvailable}
             onBack={() => { setReturnFocusId(openItemId); setOpenItemId(undefined); }} onOpenItem={openItem} />
           : <ResearchItemsPanel key={`${identity.backend}:${identity.threadId}:${run.id}`} api={api} thread={identity} run={run}
             query={itemsQuery} onQueryChange={setItemsQuery} onOpenItem={openItem} returnFocusId={returnFocusId} onFocusReturned={() => setReturnFocusId(undefined)} />)}
         {currentView === "activity" && <ResearchActivityView key={run.id} api={api} thread={identity} run={run} filter={filter} onOpenItem={openItem} />}
       </div>
     </>}
-  </section>;
+  </section></ResearchThreadOwner.Provider>;
 }

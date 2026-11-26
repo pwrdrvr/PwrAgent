@@ -27,6 +27,7 @@ import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION
   registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
   type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
+import { localResearchOperations } from "../research/research-operations";
 import { desktopThreadPullRequestMergeDeps } from "../pr-status/desktop-thread-pull-request-merge";
 import {
   mergeThreadPullRequest,
@@ -36,6 +37,15 @@ import {
 import { mergeThreadPullRequestForPeer } from "../pr-status/thread-pull-request-merge-federation";
 import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
+import {
+  FEDERATION_RESEARCH_CAPABILITIES,
+  FEDERATION_RESEARCH_METHODS,
+  LONG_RUNNING_FEDERATION_RESEARCH_OPERATIONS,
+  registerFederationResearchHandlers,
+  type ResearchOperation,
+  type ResearchOperationRequest,
+  type ResearchOperationResponse,
+} from "./federation-research";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type {
   ServiceThread,
@@ -802,6 +812,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_pull_request_merge_v1",
   "thread_dependencies_v1",
   "thread_dependency_provenance_v1",
+  "thread_research",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -940,8 +951,9 @@ export function federationEventClassForMethod(
   if (method === "thread/scheduledAction/updated") {
     return "scheduled_actions";
   }
-  if (method === "thread/operatorQuestions/changed" || method === "thread/subAgentFailures/dismissed") {
-    // Dismissal state is readable with thread_detail access.
+  if (method === "thread/operatorQuestions/changed" || method === "thread/subAgentFailures/dismissed"
+    || method === "thread/research/changed") {
+    // Dismissal and Research state are readable with thread_detail access.
     return "transcript";
   }
   if (
@@ -2918,6 +2930,23 @@ export class DesktopFederationRuntime {
     });
   }
 
+  async requestResearchOperation<K extends ResearchOperation>(
+    target: FederationRemoteTarget,
+    operation: K,
+    request: ResearchOperationRequest<K>,
+  ): Promise<ResearchOperationResponse<K>> {
+    const unavailable = this.todoQueueUnavailableInstance(target, "thread_research");
+    if (unavailable) {
+      if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
+      throw new Error("This Federation owner does not support Research runs. Update that PwrAgent instance.");
+    }
+    return await this.rpcFor(target).request({
+      method: FEDERATION_RESEARCH_METHODS[operation],
+      params: request,
+      ...(LONG_RUNNING_FEDERATION_RESEARCH_OPERATIONS.has(operation) ? { timeoutMs: null } : {}),
+    });
+  }
+
   publishOperatorQuestionsChanged(params: { backend: AppServerBackendKind; threadId: string }): void {
     this.forwardLocalBackendEvent({ backend: params.backend,
       notification: { method: "thread/operatorQuestions/changed", params } });
@@ -4382,6 +4411,7 @@ export class DesktopFederationRuntime {
         [MESSAGING_ORIGINALS_METHOD]: MESSAGING_ORIGINALS_CAPABILITY,
         ...FEDERATION_THREAD_TODO_CAPABILITIES,
         ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
+        ...FEDERATION_RESEARCH_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
         ...SERVICE_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
@@ -4448,6 +4478,7 @@ export class DesktopFederationRuntime {
     });
     registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
     registerFederationOperatorQuestionHandlers(router);
+    registerFederationResearchHandlers(router, localResearchOperations);
     router.registerHandler(CHECKOUT_FEDERATION_METHOD, (envelope) => {
       if (!this.resourceCheckoutHandler || this.peerRole(envelope.sourceInstanceId) !== "full") {
         throw new Error("This Federation owner does not provide checkout access to the peer.");

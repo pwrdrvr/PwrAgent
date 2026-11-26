@@ -6,7 +6,7 @@ import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../shared/ipc";
 import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import type {
-  ResearchThread,
+  ResearchThreadRequest,
   ResearchUpdateRequest,
   ResearchSnapshot,
   ResearchSnapshotRequest,
@@ -44,6 +44,7 @@ import type {
   ResearchHarnessReconcileRequest,
   ResearchHarnessRequest,
   ResearchHarnessStatus,
+  ResearchMathosSwarmsRequest,
   MathosTeamsResult,
   MathosSwarmsResult,
 } from "@pwragent/shared/research-harness";
@@ -2227,9 +2228,9 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_SNAPSHOT_CHANNEL, request),
   researchChanges: async (request: ResearchChangesRequest): Promise<ResearchChanges> =>
     await ipcRenderer.invoke(RESEARCH_CHANGES_CHANNEL, request),
-  researchHarnessStatus: async (request: ResearchThread): Promise<ResearchHarnessStatus> =>
+  researchHarnessStatus: async (request: ResearchThreadRequest): Promise<ResearchHarnessStatus> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_STATUS_CHANNEL, request),
-  checkResearchHarness: async (request: ResearchThread): Promise<ResearchHarnessCheck> =>
+  checkResearchHarness: async (request: ResearchThreadRequest): Promise<ResearchHarnessCheck> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_CHECK_CHANNEL, request),
   reconcileResearchHarness: async (request: ResearchHarnessReconcileRequest): Promise<ResearchUpdateReceipt> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_RECONCILE_CHANNEL, request),
@@ -2241,8 +2242,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL),
   listMathosTeams: async (): Promise<MathosTeamsResult> =>
     await ipcRenderer.invoke(RESEARCH_MATHOS_TEAMS_CHANNEL),
-  listMathosSwarms: async (): Promise<MathosSwarmsResult> =>
-    await ipcRenderer.invoke(RESEARCH_MATHOS_SWARMS_CHANNEL),
+  listMathosSwarms: async (request?: ResearchMathosSwarmsRequest): Promise<MathosSwarmsResult> =>
+    await ipcRenderer.invoke(RESEARCH_MATHOS_SWARMS_CHANNEL, request),
   researchProfileRuns: async (request?: ResearchProfileRunsQuery): Promise<ResearchProfileRunsPage> =>
     await ipcRenderer.invoke(RESEARCH_PROFILE_RUNS_CHANNEL, request),
   openResearchWindow: async (request?: { runId?: string }): Promise<void> =>
@@ -2259,7 +2260,7 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_EVENTS_CHANNEL, request),
   prepareResearch: async (request: PrepareResearchRequest): Promise<{ intentId: string }> =>
     await ipcRenderer.invoke(RESEARCH_PREPARE_CHANNEL, request),
-  withdrawResearch: async (request: ResearchThread): Promise<void> =>
+  withdrawResearch: async (request: ResearchThreadRequest): Promise<void> =>
     await ipcRenderer.invoke(RESEARCH_WITHDRAW_CHANNEL, request),
   updateResearch: async (request: ResearchUpdateRequest): Promise<ResearchUpdateReceipt> =>
     await ipcRenderer.invoke(RESEARCH_UPDATE_CHANNEL, request),

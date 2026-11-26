@@ -3,7 +3,8 @@ import type { ResearchCommand, ResearchThread } from "@pwragent/shared/research"
 import type { DesktopApi } from "../../lib/desktop-api";
 
 export function researchErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Research operation failed";
+  const text = error instanceof Error ? error.message : "Research operation failed";
+  return text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").replace(/^handler_failed: /, "");
 }
 
 /**

@@ -18,8 +18,9 @@ const WORK_ACTION_LABELS: Partial<Record<ResearchWorkCommand["state"], string>> 
   open: "Release / reopen", claimed: "Claim", in_progress: "In progress", blocked: "Blocked", completed: "Completed", cancelled: "Cancel item",
 };
 
-export function ResearchItemDetail({ api, thread, run, itemId, writable, coordinator, onBack, onOpenItem, backLabel, children }: {
+export function ResearchItemDetail({ api, thread, run, itemId, writable, coordinator, evidenceAvailable, onBack, onOpenItem, backLabel, children }: {
   api: DesktopApi; thread: ResearchThread; run: ResearchRunView; itemId: string; writable: boolean; coordinator: boolean;
+  evidenceAvailable?: boolean;
   onBack: () => void; onOpenItem: (itemId: string) => void;
   /** What leaving this detail is called where it does not replace a result list. */
   backLabel?: string;
@@ -121,7 +122,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       {related && "relation" in record && <button type="button" className="research-link" onClick={() => onOpenItem(related.id)}>{researchLabel(record.relation ?? "related")}: {excerpt(researchItemText(related), 80)}</button>}
       {source && <button type="button" className="research-link" onClick={() => onOpenItem(source.id)}>Investigates: {excerpt(researchItemText(source), 80)}</button>}
       {item.type !== "approach" && item.approachId !== item.id && <button type="button" className="research-link" onClick={() => onOpenItem(item.approachId)}>Approach: {approachTitle(run, item.approachId)}</button>}
-      {"paths" in record && record.paths.length > 0 && <EvidenceList paths={record.paths} available={Boolean(api.openResearchEvidence)} onOpen={(index) => { void openEvidence(index); }} />}
+      {"paths" in record && record.paths.length > 0 && <EvidenceList paths={record.paths} available={evidenceAvailable ?? Boolean(api.openResearchEvidence)} onOpen={(index) => { void openEvidence(index); }} />}
       {item.type === "approach" && item.record.worker && <ResearchThreadButton thread={item.record.worker} title="Open worker thread" />}
       {"author" in record && record.author && <ResearchThreadButton thread={record.author} title="Open source thread" />}
       {item.type === "approach" && researchApproachResumable(item.record, (itemId) => run.items.get(itemId)) && resumable && <div className="research-actions">
