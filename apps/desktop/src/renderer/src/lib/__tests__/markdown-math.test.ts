@@ -163,4 +163,23 @@ describe("normalizeLatexMathDelimiters", () => {
       "$$outside$$",
     ].join("\n"));
   });
+
+  it("stays linear on thousands of unmatched backtick runs and long backslash runs", () => {
+    const unmatchedBackticks = Array.from(
+      { length: 2_000 },
+      (_, index) => `${"`".repeat((index % 5) + 1)}x`,
+    ).join(" ");
+    const backtickInput = `${unmatchedBackticks}\n\n\\(a+b\\)`;
+    const backtickStart = performance.now();
+    const backtickOutput = normalizeLatexMathDelimiters(backtickInput);
+    expect(performance.now() - backtickStart).toBeLessThan(250);
+    expect(backtickOutput.endsWith("$$a+b$$")).toBe(true);
+
+    const manySlashes = `${"\\".repeat(12_000)}(notMath) and ${"\\".repeat(12_001)}(realMath\\)`;
+    const slashStart = performance.now();
+    const slashOutput = normalizeLatexMathDelimiters(manySlashes);
+    expect(performance.now() - slashStart).toBeLessThan(250);
+    expect(slashOutput).toContain("(notMath)");
+    expect(slashOutput.endsWith("$$realMath$$")).toBe(true);
+  });
 });

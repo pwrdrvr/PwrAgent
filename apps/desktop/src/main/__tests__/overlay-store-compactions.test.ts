@@ -45,12 +45,11 @@ describe("SqliteOverlayStore — compaction markers", () => {
       compaction: buildCompaction(),
     })).toBe(true);
 
-    const compactions = await store.listThreadCompactions({
-      backend: "codex",
-      threadId: "thread-1",
-    });
+    const identity = { backend: "codex", threadId: "thread-1" } as const;
+    const compactions = await store.listThreadCompactions(identity);
 
     expect(compactions.map((entry) => entry.observedAt)).toEqual([1000, 2000]);
+    expect(await store.readLatestThreadCompactionAt(identity)).toBe(compactions.at(-1)?.observedAt);
     expect(compactions[0]?.turnId).toBe("turn-1");
     expect(compactions[0]?.coldUsageLineId).toBeUndefined();
   });
@@ -79,6 +78,7 @@ describe("SqliteOverlayStore — compaction markers", () => {
       compaction: buildCompaction({
         compactionId: "codex:thread-2:item-1",
         threadId: "thread-2",
+        observedAt: 2000,
       }),
     });
 
@@ -90,6 +90,8 @@ describe("SqliteOverlayStore — compaction markers", () => {
       backend: "acp:claude",
       threadId: "thread-1",
     })).toHaveLength(0);
+    expect(await store.readLatestThreadCompactionAt({ backend: "codex", threadId: "thread-1" })).toBe(1000);
+    expect(await store.readLatestThreadCompactionAt({ backend: "acp:claude", threadId: "thread-1" })).toBeUndefined();
   });
 
   it("attributes a cold replay to the newest unattributed marker", async () => {

@@ -1071,7 +1071,7 @@ export class TokenMiserStore {
     await this.flushThread(threadId);
   }
 
-  async prune(_params: { maxAgeMs: number; maxBytes: number; now?: number }): Promise<void> {
+  async prune(_params?: { maxAgeMs: number; maxBytes: number; now?: number }): Promise<void> {
     const migrationKey = `token_miser_files_migrated:${createHash("sha256").update(this.rootDir).digest("hex")}`;
     if (this.storage.hasLegacyMigration(migrationKey)) return;
     const metadata: TokenMiserObjectMetadata[] = [];
@@ -1281,7 +1281,6 @@ export class TokenMiserStore {
   async stopReplayTracking(params: {
     objectId: string;
     stoppedAt?: number;
-    restoring?: boolean;
   }): Promise<TokenMiserObjectMetadata | undefined> {
     return await this.updateMetadata(params.objectId, (metadata) => {
       if (
@@ -1292,7 +1291,45 @@ export class TokenMiserStore {
       }
       metadata.replayTrackingStoppedAt = params.stoppedAt ?? Date.now();
       return true;
-    }, params.restoring ? "restore-stop" : "stopped");
+    }, "stopped");
+  }
+
+  /** Restore one page under the same locks as ordinary replay updates. */
+  async restoreReplayTracking(params: {
+    objectIds: readonly string[];
+    stoppedAt: number;
+    threadId: string;
+  }): Promise<TokenMiserObjectMetadata[]> {
+    const entries: TokenMiserObjectMetadata[] = [];
+    const previous = params.objectIds.flatMap((id) => this.updateLocks.get(id) ?? []);
+    const restore = Promise.allSettled(previous).then(async () => {
+      const changed: TokenMiserObjectMetadata[] = [];
+      this.storage.runExclusive(() => {
+        for (const id of params.objectIds) {
+          const row = this.readMetadataRow(id, params.threadId);
+          if (!row) continue;
+          const current = mergeReplayUpdate(row, this.replayUpdates.get(id));
+          if (row.replayTrackingVersion === 2 && row.replayTrackingStoppedAt === undefined
+            && row.createdAt < params.stoppedAt) {
+            current.replayTrackingStoppedAt = params.stoppedAt;
+            this.writeMetadata(current);
+            changed.push(current);
+          }
+          entries.push(current);
+        }
+      });
+      for (const entry of changed) this.replayUpdates.delete(entry.objectId);
+      for (const entry of changed) await this.options.onMetadataUpdated?.(entry, "restore-stop");
+    });
+    for (const id of params.objectIds) this.updateLocks.set(id, restore);
+    try {
+      await restore;
+      return entries;
+    } finally {
+      for (const id of params.objectIds) {
+        if (this.updateLocks.get(id) === restore) this.updateLocks.delete(id);
+      }
+    }
   }
 
   private async updateMetadata(

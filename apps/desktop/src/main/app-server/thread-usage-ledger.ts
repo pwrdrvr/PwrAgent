@@ -2937,20 +2937,25 @@ export class ThreadUsageLedger {
     let persistedBoundary: Promise<number> | undefined;
     for (const page of store.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE, threadId)) {
       if (this.context.lifecycle.closed) return;
-      for (const entry of page) {
-        if (entry.replayTrackingVersion !== 2 || entry.replayTrackingStoppedAt !== undefined) continue;
-        persistedBoundary ??= Promise.resolve(this.context.stores.usage.listThreadCompactions?.({
-          backend: "codex", threadId,
-        })).then((compactions) => compactions?.at(-1)?.observedAt ?? -Infinity);
+      const open = page.filter((entry) => entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined);
+      if (open.length > 0) {
+        const usage = this.context.stores.usage;
+        const thread = { backend: "codex" as const, threadId };
+        persistedBoundary ??= (usage.readLatestThreadCompactionAt
+          ? Promise.resolve(usage.readLatestThreadCompactionAt(thread))
+          : Promise.resolve(usage.listThreadCompactions?.(thread)).then((compactions) => compactions?.at(-1)?.observedAt))
+          .then((observedAt) => observedAt ?? -Infinity);
         const compactedAt = Math.max(await persistedBoundary, this.tokenMiserLiveCompactionBoundaries.get(threadId) ?? -Infinity);
-        if (compactedAt > entry.createdAt) {
-          const stopped = await store.stopReplayTracking({
-            objectId: entry.objectId, stoppedAt: compactedAt, restoring: true,
+        const objectIds: string[] = [];
+        for (const entry of open) {
+          if (compactedAt > entry.createdAt) objectIds.push(entry.objectId);
+          else this.rememberActiveTokenMiserReplayEntry(entry);
+        }
+        if (objectIds.length > 0) {
+          const restored = await store.restoreReplayTracking({
+            objectIds, stoppedAt: compactedAt, threadId,
           });
-          const current = stopped ?? await store.readMetadata(entry.objectId, threadId);
-          if (current) this.rememberActiveTokenMiserReplayEntry(current);
-        } else {
-          this.rememberActiveTokenMiserReplayEntry(entry);
+          for (const entry of restored) this.rememberActiveTokenMiserReplayEntry(entry);
         }
       }
       await yieldToEventLoop();
@@ -3930,6 +3935,9 @@ export class ThreadUsageLedger {
           }))?.invocations ?? [])
         : undefined;
       const subAgents: ThreadSubAgentSummary[] = [];
+      const expectedGateMetadata = options.historical
+        ? new Map<string, { objectId: string; payload: string }>()
+        : undefined;
       const usageLines: ThreadUsageLineRecord[] = [];
 
       for (let offset = 0; offset < entries.length; offset += TOKEN_MISER_LEDGER_BATCH_SIZE) {
@@ -3984,7 +3992,9 @@ export class ThreadUsageLedger {
               { parentTurnId: entry.turnId, tokenMiserAccounting: accounting.tokenMiserAccounting },
             )
           ) {
-            subAgents.push(this.buildTokenMiserLedgerArtifact({ entry, indexes, accounting }).subAgent);
+            const { subAgent } = this.buildTokenMiserLedgerArtifact({ entry, indexes, accounting });
+            subAgents.push(subAgent);
+            expectedGateMetadata?.set(subAgent.monitorId, { objectId: entry.objectId, payload: JSON.stringify(entry) });
           }
           if (
             accounting.gateUsageLine
@@ -4002,6 +4012,7 @@ export class ThreadUsageLedger {
             backend: "codex",
             threadId,
             subAgents,
+            ...(expectedGateMetadata ? { expectedGateMetadata } : {}),
           });
         } else {
           for (const subAgent of subAgents) {

@@ -358,14 +358,13 @@ describe("ThreadUsageLedger", () => {
               yield scoped.slice(offset, offset + 3).map((entry) => ({ ...entry }));
             }
           },
-          readMetadata: async (objectId: string) => entries.find((entry) => entry.objectId === objectId),
-          stopReplayTracking: async ({ objectId, stoppedAt }: { objectId: string; stoppedAt: number }) => {
-            stops.push({ objectId, stoppedAt });
-            if (refuses.has(objectId)) return undefined;
-            const entry = entries.find((candidate) => candidate.objectId === objectId)!;
-            entry.replayTrackingStoppedAt = stoppedAt;
-            return { ...entry };
-          },
+          restoreReplayTracking: async ({ objectIds, stoppedAt }: { objectIds: string[]; stoppedAt: number }) =>
+            objectIds.map((objectId) => {
+              stops.push({ objectId, stoppedAt });
+              const entry = entries.find((candidate) => candidate.objectId === objectId)!;
+              if (!refuses.has(objectId)) entry.replayTrackingStoppedAt = stoppedAt;
+              return { ...entry };
+            }),
         };
         const { ledger, internals } = createLedger({
           host: { tokenMiserStore: tokenMiserStore as never },
@@ -440,6 +439,8 @@ describe("ThreadUsageLedger", () => {
           ledger.rememberActiveTokenMiserReplayEntry(entry);
           return { ...entry };
         },
+        restoreReplayTracking: async ({ objectIds, stoppedAt }: { objectIds: string[]; stoppedAt: number }) =>
+          await Promise.all(objectIds.map((objectId) => tokenMiserStore.stopReplayTracking({ objectId, stoppedAt }))),
       };
       const { ledger, internals } = createLedger({
         host: { tokenMiserStore: tokenMiserStore as never },

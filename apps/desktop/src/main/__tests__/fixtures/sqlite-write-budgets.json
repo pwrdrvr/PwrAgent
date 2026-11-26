@@ -1,4 +1,7 @@
 {
+  "token-miser-restore-before-migration": {"commits": 1, "note": "One explicit restore records a live retention key before a possible legacy import.", "observedWalBytes": 8272, "rowsChanged": 1, "statements": 1},
+  "token-miser-cold-replay-stop": {"commits": 2, "note": "First usage settles 65 gates compacted while closed, at most one commit per 64-gate page.", "observedWalBytes": 57680, "rowsChanged": 65, "statements": 65},
+  "token-miser-history-peer-repair": {"commits": 3, "note": "One peer metadata edit between pages and two repaired cards during an explicit history read.", "observedWalBytes": 53560, "rowsChanged": 3, "statements": 3},
   "thread-launched-child-overlay-rewrite": {"commits": 1, "note": "Unrelated overlay update on a thread with 20 compact launchedThreadLog entries stays one commit (28,840 WAL bytes; no prompt text in threads.payload).", "observedWalBytes": 28840, "rowsChanged": 1, "statements": 1},
   "thread-launched-child-record": {"commits": 1, "note": "One commit records compact launched child-thread metadata on explicit handoff_task or create_instance_thread launch (16,512 WAL bytes/launch; ~1.65 MB/day at 100 launches/day; zero idle or per-turn writes).", "observedWalBytes": 16512, "rowsChanged": 1, "statements": 1},
   "github-pr-mergeability-base-tip-poll": {"commits": 1, "note": "One commit for two confirmed base-tip advances in a poll (~4 MB WAL/day at one advancing batch/minute over eight hours). Repeated observations of the same tips make zero writes.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},

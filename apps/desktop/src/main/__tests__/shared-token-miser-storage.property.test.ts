@@ -126,8 +126,10 @@ it("matches independent object, observation and generation models across WAL hos
           if (!retention.get(command.owner)?.archived) {
             retention.set(command.owner, { generation: String(at), archived: true }); rows = 1;
           }
-        } else if (command.kind === "restore" && retention.get(command.owner)?.archived) {
-          retention.get(command.owner)!.archived = false; rows = 1;
+        } else if (command.kind === "restore") {
+          const previous = retention.get(command.owner);
+          rows = Number(previous === undefined || previous.archived);
+          retention.set(command.owner, { generation: previous?.generation ?? "", archived: false });
         }
         const measured = await measureSqliteWrites(() => {
           if (command.kind === "object" || command.kind === "sameObject") store.writeMetadata(metadata);

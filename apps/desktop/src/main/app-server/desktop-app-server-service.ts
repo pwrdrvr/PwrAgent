@@ -4026,7 +4026,11 @@ class DesktopAppServerService {
     const observation = new StackReadObservation();
     const directories = await observation.hints.markerCandidates(open.flatMap((pr) => this.prStackDirectories(pr)));
     if (!directories.length) return;
-    const { stacks } = await this.readScopedStacks(directories, undefined, observation);
+    // A polled stack position can arrive before its member list.
+    const repositories = open.some((pr) => pr.githubStack)
+      ? undefined
+      : new Set(open.map((pr) => githubForgeStackRepository({ host: pr.provider, owner: pr.org, repo: pr.repo })));
+    const { stacks } = await this.readScopedStacks(directories, undefined, observation, repositories);
     await Promise.all(stacks.flatMap((stack) => {
       const next = !stack.inferred && nextStackAdvance(stack.layers);
       const pr = next && next.pullRequest && byLayer.get(`${stack.repository}#${next.pullRequest.number}`);
@@ -4079,6 +4083,7 @@ class DesktopAppServerService {
     directories: readonly string[],
     scope?: { backend: string; threadId: string; prs: PrSummary[] },
     observation = new StackReadObservation(),
+    trackedPublishingRepositories?: ReadonlySet<string>,
   ) {
     observation.demand.signal?.throwIfAborted();
     if (!directories.length) return { stacks: [], catalogs: [] };
@@ -4096,7 +4101,7 @@ class DesktopAppServerService {
       };
     });
     return await this.stackReader.read(rows, this.knownStackPullRequests(), directories,
-      (key) => this.stackThreadActivity(key), observation);
+      (key) => this.stackThreadActivity(key), observation, undefined, trackedPublishingRepositories);
   }
 
   private forgePrToolService(context?: AgentToolCallContext): ForgePrToolService {
@@ -4883,10 +4888,14 @@ class DesktopAppServerService {
     if (watch || terminalWatch) {
       await this.publishPrWatchesUpdated([{ backend: args.backend, threadId, prKey }]);
     }
-    // A baseline is the outcome the watch must not fire on, so it is never
-    // offered as a snapshot.
-    if (watch && currentOutcomeIsFresh && !watch.baseline) {
-      await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
+    if (watch) {
+      // The last poll can publish a terminal status before it can see the
+      // new watch. Replay canonical evidence after the registration commits.
+      const latest = this.prStatusRegistry.get(this.prRepositoryAliases.canonicalizeKey(prKey));
+      if (latest && (isTerminalPullRequest(latest.pr)
+        || (!watch.baseline && Date.now() - latest.fetchedAt <= PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS))) {
+        await this.getPrStatusWatchCoordinator().handleStatusSnapshot(latest.pr, latest.fetchedAt);
+      }
     }
 
     const coveredByAutoFix: ThreadPullRequestWatchEvent[] =

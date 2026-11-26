@@ -5243,8 +5243,6 @@ export class DesktopBackendRegistry {
     // `close()` already finalized. `maybeRestartCodexForManagedRuntimeChange`
     // guards on `closed` for the same reason.
     if (this.closed || !this.resolveTokenMiserEnabledFn()) return;
-    await this.threadUsageLedger.prepareTokenMiserStorage();
-    if (this.closed || !this.resolveTokenMiserEnabledFn()) return;
     await this.prepareTokenMiserRuntime();
   }
 
@@ -17817,8 +17815,6 @@ export class DesktopBackendRegistry {
     }
     this.assertThreadOwnership();
     try {
-      await this.threadUsageLedger.prepareTokenMiserStorage();
-      if (this.closed) return;
       await this.tokenMiserHookBridge.start();
       const capabilities = await this.readTokenMiserServerCapabilities(
         this.codexClient,

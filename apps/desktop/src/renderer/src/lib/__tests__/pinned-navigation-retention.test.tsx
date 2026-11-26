@@ -123,3 +123,118 @@ it.each(["local", "remote", "mounted"] as const)("retains expanded pins after cr
     expect(view.queryByRole("button", { name: /Fixture pin 21, pinned/ })).toBeNull();
   } finally { view.unmount(); }
 });
+
+it.each(["codex", "claude", "acp:grok", "acp:antigravity"] as const)(
+  "keeps a newly pinned thread visible above Directory threads instead of folding it under Load more pinned threads (%s)",
+  async (backend) => {
+    const { buildPrependPinRank, KEEP_AT_TOP_RANK_BOUNDARY } = await import("@pwragent/shared/thread-pins");
+    const home = { key: "directory:/fixture/project", kind: "directory" as const, label: "Fixture project", path: "/fixture/project" };
+    const keptRank = String(KEEP_AT_TOP_RANK_BOUNDARY - 1024);
+    const makeRow = (id: string, title: string, pinnedRank?: string): NavigationRow => ({
+      id, source: backend, title, titleSource: "explicit",
+      ref: { backend, threadId: id }, rowRevision: pinnedRank ?? "unpinned",
+      ...(pinnedRank ? { pinnedRank } : {}),
+      linkedDirectories: [{ id: home.path, path: home.path, label: home.label, kind: "local" }],
+      inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown",
+    });
+    let threads: NavigationRow[] = [
+      makeRow("kept-0", "Kept pin 0", keptRank),
+      ...Array.from({ length: 14 }, (_, index) => makeRow(`pin-${index}`, `Existing pin ${index}`, String((index + 1) * 1024))),
+      makeRow("unpinned-target", "Unpinned directory thread"),
+    ];
+    const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => ({
+      ...navigationQueryFixture(request, { directories: [home], threads }),
+      ...(request.query.kind === "exact" ? { selectionDirectory: { ...home,
+        counts: { total: threads.length, active: 0, unread: 0, review: 0 },
+        pinnedRootCount: threads.filter((row) => row.pinnedRank).length,
+        unpinnedRootCount: threads.filter((row) => !row.pinnedRank).length,
+        launchpadPresent: false } } : {}),
+    }));
+    const api: DesktopApi = { getNavigationQueryPage: read, releaseNavigationQuery: vi.fn(async () => undefined) };
+    let navigation!: ReturnType<typeof useBoundedNavigationWindow>;
+    function Window({ selected }: { selected: NavigationIdentity }) {
+      const disclosure = useNavigationDirectoryDisclosure();
+      navigation = useBoundedNavigationWindow({ desktopApi: api, enabled: true, visible: true,
+        browseMode: "directories", attentionView: { id: "pin-visibility-window", promoteOnTurnEnd: true }, selectedRef: selected,
+        expandedByKey: disclosure.expandedByKey, unpinnedExpandedByKey: disclosure.unpinnedExpandedByKey });
+      return <Sidebar backends={[]} browseMode="directories" directories={navigation.directories} threads={threads}
+        directoryDisclosure={disclosure} pagedNavigation={navigation} selectedItemKey={navigationThreadSelectionKey(selected)}
+        selectedThreadDirectoryKeys={navigation.selectedDirectoryKeys} loading={false}
+        onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
+        onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
+    }
+    const pinsId = `directory-pins:${home.key}`;
+    const view = render(<Window selected={threads[0]!.ref} />);
+    try {
+      await waitFor(() => expect(navigation.resources.get(pinsId)?.state.page?.entries).toHaveLength(10));
+      expect(view.getByRole("button", { name: "Load more pinned threads" })).toBeTruthy();
+
+      const newRank = buildPrependPinRank(threads.map((row) => row.pinnedRank));
+      threads = threads.map((row) => row.id === "unpinned-target" ? { ...row, pinnedRank: newRank, rowRevision: newRank } : row);
+      act(() => navigation.invalidate());
+      await act(() => navigation.refresh());
+      await waitFor(() => expect(navigation.resources.get(pinsId)?.loading).toBe(false));
+
+      const pinIds = navigation.resources.get(pinsId)?.state.page?.entries.map(({ row }) => row.id) ?? [];
+      expect(pinIds[0]).toBe("kept-0");
+      expect(pinIds[1]).toBe("unpinned-target");
+      expect(view.getByRole("button", { name: /Unpinned directory thread, pinned/ })).toBeTruthy();
+      expect(view.getByRole("button", { name: "Load more pinned threads" })).toBeTruthy();
+    } finally { view.unmount(); }
+  },
+);
+
+it("reveals Load more pinned threads even when the pointer moves inside the directory while the read is in flight", async () => {
+  const home = { key: "directory:/fixture/project", kind: "directory" as const, label: "Fixture project", path: "/fixture/project" };
+  const threads: NavigationRow[] = Array.from({ length: 15 }, (_, index) => ({
+    id: `pin-${index}`, source: "codex" as const, title: `Hover pin ${index}`, titleSource: "explicit" as const,
+    ref: { backend: "codex" as const, threadId: `pin-${index}` }, rowRevision: `pin-${index}`,
+    pinnedRank: String((index + 1) * 1024),
+    linkedDirectories: [{ id: home.path, path: home.path, label: home.label, kind: "local" as const }],
+    inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" as const,
+  }));
+  let releaseContinuation: (() => void) | undefined;
+  const continuationGate = new Promise<void>((resolve) => { releaseContinuation = resolve; });
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+    if (request.query.kind === "directory" && request.query.roots === "pinned" && request.cursor) {
+      await continuationGate;
+    }
+    return {
+      ...navigationQueryFixture(request, { directories: [home], threads }),
+      ...(request.query.kind === "exact" ? { selectionDirectory: { ...home,
+        counts: { total: threads.length, active: 0, unread: 0, review: 0 },
+        pinnedRootCount: threads.length, unpinnedRootCount: 0, launchpadPresent: false } } : {}),
+    };
+  });
+  const api: DesktopApi = { getNavigationQueryPage: read, releaseNavigationQuery: vi.fn(async () => undefined) };
+  let navigation!: ReturnType<typeof useBoundedNavigationWindow>;
+  function Window() {
+    const disclosure = useNavigationDirectoryDisclosure();
+    navigation = useBoundedNavigationWindow({ desktopApi: api, enabled: true, visible: true,
+      browseMode: "directories", attentionView: { id: "hover-load-more-window", promoteOnTurnEnd: true }, selectedRef: threads[0]!.ref,
+      expandedByKey: disclosure.expandedByKey, unpinnedExpandedByKey: disclosure.unpinnedExpandedByKey });
+    return <Sidebar backends={[]} browseMode="directories" directories={navigation.directories} threads={threads}
+      directoryDisclosure={disclosure} pagedNavigation={navigation} selectedItemKey={navigationThreadSelectionKey(threads[0]!.ref)}
+      selectedThreadDirectoryKeys={navigation.selectedDirectoryKeys} loading={false}
+      onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
+  }
+  const view = render(<Window />);
+  try {
+    const loadMoreButton = await view.findByRole("button", { name: "Load more pinned threads" });
+    const firstPin = view.getByRole("button", { name: /Hover pin 0, pinned/ });
+    // Freeze the directory under the pointer, click Load more, then move the
+    // pointer while the async continuation read is still in flight.
+    fireEvent.pointerOver(firstPin, { pointerType: "mouse" });
+    fireEvent.click(loadMoreButton);
+    fireEvent.pointerOver(firstPin, { pointerType: "mouse" });
+    expect(view.queryByRole("button", { name: /Hover pin 14, pinned/ })).toBeNull();
+
+    await act(async () => {
+      releaseContinuation?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.getByRole("button", { name: /Hover pin 14, pinned/ })).toBeTruthy());
+    expect(view.queryByRole("button", { name: "Load more pinned threads" })).toBeNull();
+  } finally { view.unmount(); }
+});

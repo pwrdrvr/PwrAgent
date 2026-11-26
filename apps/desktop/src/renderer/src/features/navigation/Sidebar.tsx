@@ -1287,8 +1287,18 @@ function SidebarContent(props: SidebarProps) {
       handleAddProjectFolder,
     ],
   );
-  const pagedNavigationRef = useRef(props.pagedNavigation);
-  pagedNavigationRef.current = props.pagedNavigation;
+  const revealHoverStableForNavigation = hoverStableSnapshot.reveal;
+  const revealedPagedNavigation = useMemo(() => {
+    const paged = props.pagedNavigation;
+    if (!paged) return undefined;
+    return {
+      ...paged,
+      loadMore: (id: string) => revealHoverStableForNavigation(() => paged.loadMore(id)),
+      restart: (id: string) => revealHoverStableForNavigation(() => paged.restart(id)),
+    };
+  }, [props.pagedNavigation, revealHoverStableForNavigation]);
+  const pagedNavigationRef = useRef(revealedPagedNavigation);
+  pagedNavigationRef.current = revealedPagedNavigation;
   const handleLoadMoreDirectories = useEventCallback(() => {
     void pagedNavigationRef.current?.loadMore("directory-index");
   });
@@ -4083,7 +4093,7 @@ function SidebarContent(props: SidebarProps) {
                 onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
                 projectReveal={projectReveal}
                 onProjectRevealComplete={handleProjectRevealComplete}
-                pagedNavigation={props.pagedNavigation}
+                pagedNavigation={revealedPagedNavigation}
                 presentationOrder={hoverStableSnapshot.value.order}
                 selectedThreadDirectoryKeys={props.selectedThreadDirectoryKeys}
                 directoryDisclosure={props.directoryDisclosure}
@@ -4175,7 +4185,7 @@ function SidebarContent(props: SidebarProps) {
                   startingThreads={startingThreads}
                   onSelectStartingThread={props.onSelectPendingLaunchpad}
                   onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
-                  pagedNavigation={props.pagedNavigation}
+                  pagedNavigation={revealedPagedNavigation}
                   resourceIds={listResourceIds}
                   presentationOrder={hoverStableSnapshot.value.order}
                   loadedThreads={presentedThreads}

@@ -5,6 +5,7 @@ import type {
   TokenMiserStorage,
 } from "@pwragent/owner-core/token-miser-storage";
 import type { StateDb } from "./state-db";
+import { prepareSqliteRead } from "./sqlite-prepared-read";
 
 type MetadataPageRow = { thread_id: string; created_at: number; object_id: string; payload: string };
 
@@ -55,19 +56,19 @@ export class SqliteTokenMiserStorage<
     const db = this.db;
     if (threadId !== undefined) {
       return (after === undefined
-        ? db.prepare(`SELECT thread_id, created_at, object_id, payload
+        ? prepareSqliteRead(db, `SELECT thread_id, created_at, object_id, payload
             FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
             WHERE thread_id = ? ORDER BY created_at, object_id LIMIT ?`).all(threadId, limit)
-        : db.prepare(`SELECT thread_id, created_at, object_id, payload
+        : prepareSqliteRead(db, `SELECT thread_id, created_at, object_id, payload
             FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
             WHERE thread_id = ? AND (created_at, object_id) > (?, ?)
             ORDER BY created_at, object_id LIMIT ?`).all(threadId, after.createdAt, after.objectId, limit)) as MetadataPageRow[];
     }
     return (after === undefined
-      ? db.prepare(`SELECT thread_id, created_at, object_id, payload
+      ? prepareSqliteRead(db, `SELECT thread_id, created_at, object_id, payload
           FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
           ORDER BY thread_id, created_at, object_id LIMIT ?`).all(limit)
-      : db.prepare(`SELECT thread_id, created_at, object_id, payload
+      : prepareSqliteRead(db, `SELECT thread_id, created_at, object_id, payload
           FROM token_miser_objects INDEXED BY idx_token_miser_objects_thread
           WHERE (thread_id, created_at, object_id) > (?, ?, ?)
           ORDER BY thread_id, created_at, object_id LIMIT ?`)
@@ -113,8 +114,10 @@ export class SqliteTokenMiserStorage<
   }
 
   restoreThread(threadKey: string): void {
-    this.db.prepare("UPDATE token_miser_retention SET archived = 0 WHERE thread_key = ? AND archived = 1")
-      .run(threadKey);
+    // An explicit restore wins even if a peer has yet to import the legacy
+    // archive marker. Imports only insert retention keys that are missing.
+    this.db.prepare(`INSERT INTO token_miser_retention (thread_key, generation, archived) VALUES (?, '', 0)
+      ON CONFLICT(thread_key) DO UPDATE SET archived = 0 WHERE token_miser_retention.archived = 1`).run(threadKey);
   }
 
   archiveThread(threadKey: string, generation: string): void {

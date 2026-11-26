@@ -1,16 +1,23 @@
 // Run from the repository root with PWRAGENT_BENCH_STARTUP_LEDGER=1:
 // node --expose-gc node_modules/vitest/vitest.mjs run --config vitest.workspace.mts startup-ledger-benchmark --maxWorkers=1 --silent=false --reporter=verbose
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import { it } from "vitest";
+import { createHook } from "node:async_hooks";
+import { expect, it, vi } from "vitest";
 import { getHeapStatistics } from "node:v8";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { DESKTOP_SPEND_ALERT_POLICY_DEFAULT } from "@pwragent/shared/contracts/settings";
+import type { ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { ThreadUsageLedger, type ThreadUsageLedgerHost } from "../app-server/thread-usage-ledger";
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
-import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
+import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
+import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
+import type { TokenMiserCodeModeObservation, TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 
 const THREAD = "synthetic-long-thread";
 const AT = Date.UTC(2026, 10, 1);
@@ -124,4 +131,256 @@ it.skipIf(process.env.PWRAGENT_BENCH_STARTUP_LEDGER !== "1")(
   "profiles Token Miser persistence and archive re-observation on a large synthetic state.db",
   { timeout: 120_000 },
   main,
+);
+
+function queryCaller(sql: string): string {
+  if (sql.includes("token_miser_objects")) return "metadata";
+  if (sql.includes("idx_thread_usage_lines_gate_usage_turn")) return "gatePricing";
+  if (sql.includes("CROSS JOIN thread_usage_turns")) return "turnMetadata";
+  if (sql.includes("SELECT card FROM thread_sub_agents")) return "cards";
+  if (sql.includes("FROM thread_compactions")) return "compactions";
+  if (sql.includes("FROM thread_tool_invocations")) return "legacyInvocations";
+  if (sql.includes("idx_thread_usage_lines_unpriced_thread")) return "pricingRetry";
+  return /^\s*(INSERT|UPDATE|DELETE)\b/i.test(sql) ? "write" : "other";
+}
+
+function instrumentFleet(db: StateDb) {
+  const stats = new Map<string, { prepares: number; prepareMs: number; reads: number; rows: number; maxRows: number }>();
+  const prepare = db.raw.prepare;
+  db.raw.prepare = ((sql: string) => {
+    const caller = queryCaller(sql);
+    const count = stats.get(caller) ?? { prepares: 0, prepareMs: 0, reads: 0, rows: 0, maxRows: 0 };
+    stats.set(caller, count);
+    count.prepares++;
+    const started = performance.now();
+    const statement = prepare.call(db.raw, sql);
+    count.prepareMs += performance.now() - started;
+    const all = statement.all.bind(statement);
+    const get = statement.get.bind(statement);
+    const iterate = statement.iterate.bind(statement);
+    const record = (rows: number) => {
+      count.rows += rows;
+      count.maxRows = Math.max(count.maxRows, rows);
+    };
+    statement.all = (...args: unknown[]) => {
+      count.reads++;
+      const rows = Reflect.apply(all, undefined, args) as unknown[];
+      record(rows.length);
+      return rows;
+    };
+    statement.get = (...args: unknown[]) => {
+      count.reads++;
+      const row: unknown = Reflect.apply(get, undefined, args);
+      record(Number(row !== undefined));
+      return row;
+    };
+    statement.iterate = function* (...args: unknown[]) {
+      count.reads++;
+      let rows = 0;
+      try {
+        for (const row of Reflect.apply(iterate, undefined, args) as Iterable<unknown>) {
+          rows++;
+          yield row;
+        }
+      } finally { record(rows); }
+    } as typeof statement.iterate;
+    return statement;
+  }) as typeof prepare;
+  return {
+    stats,
+    reset() {
+      for (const count of stats.values()) {
+        Object.assign(count, { prepares: 0, prepareMs: 0, reads: 0, rows: 0, maxRows: 0 });
+      }
+    },
+    finish() { db.raw.prepare = prepare; },
+  };
+}
+
+async function measureFleet(
+  probe: ReturnType<typeof instrumentFleet>,
+  phase: string,
+  run: () => Promise<void>,
+  profileDir?: string,
+): Promise<void> {
+  global.gc?.();
+  const profiler = profileDir ? new Session() : undefined;
+  profiler?.connect();
+  if (profiler) {
+    await profiler.post("Profiler.enable");
+    await profiler.post("Profiler.setSamplingInterval", { interval: 250 });
+    await profiler.post("Profiler.start");
+  }
+  probe.reset();
+  const yields: Record<string, number> = {};
+  const hook = createHook({ init(_id, type) {
+    if (type !== "Immediate") return;
+    const caller = new Error().stack?.match(/\b(reconcileTokenMiserLedger|writeTokenMiserLedgerEntries|repriceThreadUsageHistory|materializeThreadPricing)\b/)?.[1] ?? "other";
+    yields[caller] = (yields[caller] ?? 0) + 1;
+  } });
+  hook.enable();
+  const start = performance.now();
+  const cpu = process.cpuUsage();
+  try {
+    const { writes } = await measureSqliteWrites(run);
+    const elapsedCpu = process.cpuUsage(cpu);
+    console.log(JSON.stringify({
+      phase, wallMs: Math.round(performance.now() - start),
+      cpuMs: Math.round((elapsedCpu.user + elapsedCpu.system) / 1_000),
+      sqlite: Object.fromEntries([...probe.stats].filter(([, count]) => count.prepares > 0 || count.reads > 0)),
+      writes, yields,
+    }));
+    if (phase !== "mixed") expect(writes.commits).toBe(0);
+  } finally {
+    hook.disable();
+    if (profiler && profileDir) {
+      try {
+        const { profile } = await profiler.post("Profiler.stop");
+        writeFileSync(path.join(profileDir, `${phase}.cpuprofile`), JSON.stringify(profile));
+      } finally { profiler.disconnect(); }
+    }
+  }
+}
+
+const FLEET_SIZE = 4_096;
+
+function fleetGate(index: number): TokenMiserObjectMetadata {
+  // Exercise full 64-gate batches, interleaved histories, and distinct threads.
+  const key = index < 512 ? 4 * Math.floor(index / 128) : index < 1_024 ? (index % 32) & ~3 : index;
+  const threadId = `fleet-${key}`;
+  return {
+    version: 1, objectId: `gate-${String(index).padStart(5, "0")}`, threadId, turnId: `turn-${index}`,
+    toolUseId: `tool-${index}`, toolName: "exec_command", createdAt: AT + index,
+    originalCharacters: 12_345, baselineParentTokens: 3_000, replacementCharacters: 400,
+    retrievedCharacters: 0, parentModel: "gpt-5.5", disposition: "summarized",
+    ...((index % 31 === 0) ? {} : { replayTrackingVersion: 2, cachedReplayCount: 0 }),
+    summary: { summary: "Synthetic fixture", usefulDetails: [] },
+    helperUsage: {
+      model: "gpt-5.6-luna", helperThreadId: `helper-${index}`, helperTurnId: `helper-turn-${index}`,
+      tokenUsage: { inputTokens: 100, cachedInputTokens: 0, outputTokens: 10, totalTokens: 110 },
+    },
+  };
+}
+
+function fleetParent(entry: TokenMiserObjectMetadata): ThreadUsageLineRecord {
+  return {
+    backend: "codex", threadId: entry.threadId, turnId: entry.turnId, usageTurnId: entry.turnId,
+    usageLineId: `line-${entry.objectId}`, createdAt: entry.createdAt, provider: "openai",
+    scope: "turn", source: "hydration", status: "finalized", model: "gpt-5.5", currency: "USD",
+    priceStatus: "priced", totalCostMicros: 100, inputTokens: 1_000, uncachedInputTokens: 1_000,
+    cachedInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 0, totalTokens: 1_100,
+    uncachedInputCostMicros: 90, cachedInputCostMicros: 0, outputCostMicros: 10,
+    startedAt: entry.createdAt - 20, completedAt: entry.createdAt + 20,
+  };
+}
+
+function fleetLedger(db: StateDb, root: string) {
+  const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+  const tokenMiserStore = new TokenMiserStore(root, { storage });
+  const store = new SqliteOverlayStore(db);
+  const ledger = new ThreadUsageLedger(registryContextStandIn({ overlayStore: store }), {
+    liveCodexNativeSubAgentUsageRecords: new Map(),
+  } as never, () => ({
+    runtimeInstanceId: "fixture-owner", registrySessionId: "fixture-session", invalidateThreadListCache: () => {},
+    tokenMiserStore, spendAlertPolicy: DESKTOP_SPEND_ALERT_POLICY_DEFAULT, resolveCodexLocalModelIdsFn: () => [],
+  }) as unknown as ThreadUsageLedgerHost);
+  return { ledger, storage, store };
+}
+
+async function runFleet(): Promise<void> {
+  const profileRoot = process.env.PWRAGENT_BENCH_STARTUP_PROFILE_DIR;
+  let profileDir: string | undefined;
+  if (profileRoot) {
+    mkdirSync(profileRoot, { recursive: true });
+    profileDir = mkdtempSync(path.join(profileRoot, "run-"));
+    console.log(JSON.stringify({ profileDir }));
+  }
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-reconciled-fleet-"));
+  const dbPath = path.join(directory, "state.db");
+  const root = path.join(directory, "objects");
+  const gates = Array.from({ length: FLEET_SIZE }, (_, index) => fleetGate(index));
+  let db = StateDb.open(dbPath);
+  try {
+    const seed = fleetLedger(db, root);
+    db.raw.transaction(() => { for (const gate of gates) seed.storage.writeMetadata(gate); })();
+    await seed.store.upsertThreadUsageLines({ lines: gates.map(fleetParent) });
+    const legacy = gates.filter((entry) => entry.replayTrackingVersion !== 2);
+    db.raw.transaction(() => {
+      const invoke = db.raw.prepare(`INSERT INTO thread_tool_invocations (invocation_id, backend, thread_id,
+        turn_id, item_id, tool_name, normalized_command, category, status, observed_at, updated_at, output_chars,
+        output_lines, estimated_output_tokens, warning_lines, error_lines, info_lines, debug_lines,
+        output_truncated, noisy)
+        VALUES (?, 'codex', ?, ?, ?, 'exec_command', 'synthetic', 'command', 'completed', ?, ?,
+          100, 1, 25, 0, 0, 0, 0, 0, 0)`);
+      for (const entry of legacy) {
+        for (let index = 0; index < 6; index++) {
+          invoke.run(`${entry.objectId}-${index}`, entry.threadId, entry.turnId,
+            index === 0 ? entry.toolUseId : `later-${index}`, AT + index, AT + index);
+        }
+      }
+      const marker = db.raw.prepare(`INSERT INTO thread_compactions
+        (compaction_id, backend, thread_id, observed_at, updated_at) VALUES (?, 'codex', ?, ?, ?)`);
+      for (let index = 0; index < 1_024; index++) {
+        marker.run(`historical-${index}`, `fleet-${(index % 8) * 4}`, AT - 1 - index, AT - 1 - index);
+      }
+    })();
+    await seed.ledger.repairTokenMiserHistory();
+    db.raw.pragma("wal_checkpoint(TRUNCATE)");
+    if (profileDir) db.raw.prepare("VACUUM INTO ?").run(path.join(profileDir, "reconciled-fixture.db"));
+    db.close();
+    db = StateDb.open(dbPath);
+    const cold = fleetLedger(db, root);
+    const warm = fleetLedger(db, root);
+    const mixed = fleetLedger(db, root);
+    const { storage, store } = mixed;
+    const probe = instrumentFleet(db);
+    await measureFleet(probe, "cold", () => cold.ledger.repairTokenMiserHistory(), profileDir);
+    await measureFleet(probe, "warm", () => warm.ledger.repairTokenMiserHistory(), profileDir);
+
+    const missing = gates[1]!;
+    const stale = { ...gates[2]!, retrievedCharacters: 400 };
+    const changedByPeer = { ...gates.at(-1)!, retrievedCharacters: 800 };
+    const needsReprice = gates[4]!;
+    db.raw.prepare("DELETE FROM thread_sub_agents WHERE thread_id = ? AND monitor_id = ?")
+      .run(`codex:${missing.threadId}`, `system:token-miser:${missing.objectId}`);
+    db.raw.prepare("DELETE FROM thread_usage_lines WHERE parent_thread_id = ? AND source_item_id = ?")
+      .run(missing.threadId, `system:token-miser:${missing.objectId}`);
+    storage.writeMetadata(stale);
+    db.raw.prepare("UPDATE thread_usage_lines SET price_status = 'unpriced' WHERE thread_id = ? AND scope = 'turn'")
+      .run(needsReprice.threadId);
+    const peer = StateDb.open(dbPath);
+    try {
+      const peerStorage = fleetLedger(peer, root).storage;
+      const readPage = storage.readMetadataPage.bind(storage);
+      let peerChanged = false;
+      vi.spyOn(storage, "readMetadataPage").mockImplementation((after, limit, threadId) => {
+        if (after && !peerChanged) {
+          peerChanged = true;
+          peerStorage.writeMetadata(changedByPeer);
+        }
+        return readPage(after, limit, threadId);
+      });
+      await measureFleet(probe, "mixed", () => mixed.ledger.repairTokenMiserHistory(), profileDir);
+    } finally {
+      probe.finish();
+      peer.close();
+    }
+    for (const gate of [missing, stale, changedByPeer]) {
+      const card = await store.getThreadSubAgent({
+        backend: "codex", threadId: gate.threadId, monitorId: `system:token-miser:${gate.objectId}`,
+      });
+      expect(card?.tokenMiserAccounting?.revealedParentTokens).toBe((400 + gate.retrievedCharacters) / 4);
+    }
+  } finally {
+    db.close();
+    rmSync(directory, { recursive: true, force: true });
+    vi.unstubAllEnvs();
+  }
+}
+
+it.skipIf(process.env.PWRAGENT_BENCH_STARTUP_LEDGER !== "1")(
+  "profiles cold and warm Token Miser history reads and mixed peer repair",
+  { timeout: 120_000 },
+  runFleet,
 );

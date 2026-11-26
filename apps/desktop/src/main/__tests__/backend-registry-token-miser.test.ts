@@ -274,6 +274,23 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await expect(fs.stat(path.join(root, `${legacy.objectId}.txt`))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("starts the live hook even when a legacy import cannot be read", async () => {
+    const tokenMiserStore = new TokenMiserStore(path.join(directory, "legacy-objects"));
+    const prune = vi.spyOn(tokenMiserStore, "prune").mockRejectedValueOnce(new Error("invalid legacy JSON"));
+    const start = vi.fn(async () => {});
+    Object.assign(registry, {
+      tokenMiserStore, resolveTokenMiserEnabledFn: () => true,
+      tokenMiserHookBridge: { start, close: async () => {} },
+      tokenMiserPluginManager: { ensurePluginSource: async () => {} },
+    });
+    await registry.prepareTokenMiserRuntimeAtStartup();
+    expect(start).toHaveBeenCalledOnce();
+    const ledger = registryModules(registry).threadUsageLedger;
+    await expect(ledger.prepareTokenMiserStorage()).rejects.toThrow("invalid legacy JSON");
+    await expect(ledger.prepareTokenMiserStorage()).resolves.toBeUndefined();
+    expect(prune).toHaveBeenCalledTimes(2);
+  });
+
   it.each([false, true])("drains active-turn replay estimates even if another shutdown resource fails (%s)", async (failClose) => {
     const root = path.join(directory, "token-miser-objects");
     const tokenMiserStore = new TokenMiserStore(root);

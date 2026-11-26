@@ -47,6 +47,35 @@ it("skips old archives without inspection history, even when metadata is retaine
   } finally { state.close(); }
 });
 
+it("preserves the last record of a helper charge during archive cleanup", () => {
+  const state = StateDb.open(":memory:");
+  const identity = { backend: "codex", threadId: "fixture" };
+  try {
+    observeStorageArchive(state.raw, identity.backend, identity.threadId, true, 0);
+    const insert = state.raw.prepare("INSERT INTO token_miser_objects VALUES (?, ?, 0, ?)");
+    insert.run("unsettled", identity.threadId, JSON.stringify({ helperUsage: { tokenUsage: { inputTokens: 100 } } }));
+    insert.run("policy", identity.threadId, "{}");
+    const cleanup = () => {
+      for (const op of storageDetailStatements(state.raw, identity)) op.statement.run(...op.parameters);
+    };
+    const gates = () => state.raw.prepare("SELECT object_id FROM token_miser_objects").pluck().all();
+    cleanup();
+    expect(gates()).toEqual(["unsettled"]);
+    expect(eligibleStorageThreads(state.raw, [identity], STORAGE_GRACE_MS)).toEqual([]);
+    state.raw.prepare(`INSERT INTO thread_usage_lines (
+      usage_line_id, backend, thread_id, parent_thread_id, source, scope, status, created_at, updated_at,
+      source_item_id, input_tokens, cached_input_tokens, uncached_input_tokens, output_tokens,
+      reasoning_output_tokens, total_tokens, price_status, currency, uncached_input_cost_micros,
+      cached_input_cost_micros, output_cost_micros, total_cost_micros
+    ) VALUES ('settled-line', 'codex', 'helper', ?, 'monitor', 'monitor', 'finalized', 0, 0,
+      'system:token-miser:unsettled', 100, 0, 100, 0, 0, 100, 'priced', 'USD', 1, 0, 0, 1)`).run(identity.threadId);
+    expect(eligibleStorageThreads(state.raw, [identity], STORAGE_GRACE_MS)).toEqual([identity]);
+    cleanup();
+    expect(gates()).toEqual([]);
+    expect(state.raw.prepare("SELECT usage_line_id FROM thread_usage_lines").pluck().all()).toEqual(["settled-line"]);
+  } finally { state.close(); }
+});
+
 it.each([
   ["invocations", `INSERT INTO thread_tool_invocations (
     invocation_id,backend,thread_id,item_id,tool_name,category,status,observed_at,updated_at,

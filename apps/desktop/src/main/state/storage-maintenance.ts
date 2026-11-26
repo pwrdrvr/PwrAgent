@@ -9,6 +9,7 @@ export type { StorageMaintenanceRecord, StorageThreadIdentity } from "@pwragent/
 export const STORAGE_GRACE_MS = 7 * STORAGE_INTERVAL_MS;
 export const STORAGE_MAINTENANCE_KEY = "storage_maintenance_v1";
 export { STORAGE_RETENTION_SCHEMA } from "@pwragent/sqlite-storage/state-schema";
+
 export function readStorageMaintenance(db: Database.Database): StorageMaintenanceRecord {
   const row = db.prepare("SELECT value FROM meta WHERE key = ?").get(STORAGE_MAINTENANCE_KEY) as { value: string } | undefined;
   try {
@@ -85,6 +86,8 @@ export function eligibleStorageThreads(db: Database.Database, archived: StorageT
   // Archive receipts preserve the grace period, not a permanent cleanup queue.
   // Probe the detail indexes without loading payloads; completed archives drop
   // out naturally, and interrupted cleanup or late writes remain discoverable.
+  // Keep the gate predicate in sync with the deletion query. A preserved
+  // helper charge alone does not make a thread eligible for cleanup.
   const lookup = db.prepare(`SELECT 1 FROM thread_storage_retention
     WHERE backend=@backend AND thread_id=@threadId AND archived_at<=@cutoff
       AND (
@@ -92,7 +95,15 @@ export function eligibleStorageThreads(db: Database.Database, archived: StorageT
         OR EXISTS (SELECT 1 FROM thread_tool_invocations WHERE backend=@backend AND thread_id=@threadId)
         OR EXISTS (SELECT 1 FROM thread_tool_analysis WHERE backend=@backend AND thread_id=@threadId)
         OR (@backend='codex' AND (
-          EXISTS (SELECT 1 FROM token_miser_objects WHERE thread_id=@threadId)
+          EXISTS (SELECT 1 FROM token_miser_objects AS gate WHERE gate.thread_id=@threadId AND (
+            CASE WHEN json_valid(gate.payload) THEN json_type(gate.payload, '$.helperUsage.tokenUsage') IS NOT 'object' ELSE 1 END
+            OR EXISTS (SELECT 1 FROM thread_usage_lines AS line
+              WHERE line.backend='codex' AND line.thread_id=gate.thread_id AND line.status!='superseded'
+                AND line.source_item_id='system:token-miser:' || gate.object_id)
+            OR EXISTS (SELECT 1 FROM thread_usage_lines AS line
+              WHERE line.backend='codex' AND line.parent_thread_id=gate.thread_id AND line.status!='superseded'
+                AND line.source_item_id='system:token-miser:' || gate.object_id)
+          ))
           OR EXISTS (SELECT 1 FROM token_miser_observations WHERE thread_id=@threadId)
         ))
       )`);
@@ -173,6 +184,8 @@ export function storageDetailStatements(db: Database.Database, identity: Storage
     },
     {
       codexOnly: true,
+      // A crash can leave an accepted gate as the only source of a helper
+      // charge. Keep it until a non-superseded ledger line owns that charge.
       sql: `DELETE FROM token_miser_objects WHERE rowid IN (
         SELECT rowid FROM (
           SELECT rowid, SUM(bytes) OVER (ORDER BY rowid) AS total_bytes FROM (
@@ -180,7 +193,15 @@ export function storageDetailStatements(db: Database.Database, identity: Storage
               + COALESCE(length(CAST(object_id AS BLOB)),0)
               + COALESCE(length(CAST(thread_id AS BLOB)),0)
               + COALESCE(length(CAST(payload AS BLOB)),0) AS bytes
-            FROM token_miser_objects WHERE thread_id=? LIMIT ?
+            FROM token_miser_objects AS gate WHERE gate.thread_id=? AND (
+              CASE WHEN json_valid(gate.payload) THEN json_type(gate.payload, '$.helperUsage.tokenUsage') IS NOT 'object' ELSE 1 END
+              OR EXISTS (SELECT 1 FROM thread_usage_lines AS line
+                WHERE line.backend='codex' AND line.thread_id=gate.thread_id AND line.status!='superseded'
+                  AND line.source_item_id='system:token-miser:' || gate.object_id)
+              OR EXISTS (SELECT 1 FROM thread_usage_lines AS line
+                WHERE line.backend='codex' AND line.parent_thread_id=gate.thread_id AND line.status!='superseded'
+                  AND line.source_item_id='system:token-miser:' || gate.object_id)
+            ) LIMIT ?
           ) WHERE bytes <= 262144
         ) WHERE total_bytes <= 262144
       )`,
