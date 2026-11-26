@@ -12,9 +12,7 @@ import {
   type DecisionFileAccess,
 } from "../openai-decisions/decision-io-files";
 import { OpenAIDecisionsError, OpenAIDecisionsService } from "../openai-decisions/openai-decisions-service";
-import { OpenAIDecisionStore } from "../storage/openai-decision-store";
-import type { StateDb } from "../state/state-db";
-import { openInMemoryStateDb } from "./sqlite-test-utils";
+import type { OpenAIDecisionRegistryStorage } from "../storage/openai-decision-store";
 
 const OPENAI_KEY = "sk-test-openai-file-io-0123456789abcdef";
 const JEV_KEY = "sk-test-jev-file-io-0123456789abcdef";
@@ -24,7 +22,18 @@ const PREDICATE = { instructions: "Is it concrete?", question: { type: "predicat
 
 type Wake = { caller: { backend: string; threadId: string }; batchId: string; text: string };
 
-let db: StateDb;
+const EMPTY_STORE: OpenAIDecisionRegistryStorage = {
+  insertFirstVersion: () => { throw new Error("not used"); },
+  insertNextVersion: () => { throw new Error("not used"); },
+  softDelete: () => false,
+  getVersion: () => undefined,
+  getActive: () => undefined,
+  findActiveByName: () => [],
+  listVisible: () => [],
+  listActiveProfile: () => [],
+  hasDeletedName: () => false,
+};
+
 let tempRoot: string;
 let workspaceDir: string;
 let outsideDir: string;
@@ -33,7 +42,6 @@ let resultsDir: string;
 let wakes: Wake[];
 
 beforeEach(async () => {
-  db = openInMemoryStateDb();
   tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-decision-io-"));
   workspaceDir = path.join(tempRoot, "workspace");
   outsideDir = path.join(tempRoot, "outside");
@@ -50,7 +58,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  db.close();
   await rm(tempRoot, { recursive: true, force: true });
 });
 
@@ -67,7 +74,7 @@ function makeService(
 ) {
   let nextBatch = 0;
   return new OpenAIDecisionsService({
-    store: new OpenAIDecisionStore(db),
+    store: EMPTY_STORE,
     readApiKey: async () => OPENAI_KEY,
     readSystemOneTarget: async (provider) => provider === "jev" ? JEV_TARGET : undefined,
     readAccountSettings: () => ({}),
