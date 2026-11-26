@@ -65,7 +65,7 @@ import {
   stageLocalTurnInputAttachment,
   stageTurnInputAttachment,
 } from "./turn-input-attachment-files";
-import type { ThreadAssetOwner } from "./thread-assets";
+import { isThreadAssetPath, type ThreadAssetOwner } from "./thread-assets";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
 import type {
   AgentToolMcpServerLike,
@@ -1116,19 +1116,23 @@ export async function inputToAcpPrompt(
       continue;
     }
 
-    const fileName = item.name?.trim() || path.basename(item.path);
+    const explicitName = item.name?.trim();
+    const fileName = explicitName || path.basename(item.path);
+    const alreadyOwnedAsset = Boolean(options?.owner && isThreadAssetPath(item.path, options.owner));
     const imagePath = options?.owner
       ? (await stageLocalTurnInputAttachment(item, {
           owner: options.owner,
           privateStorageRoots: options.privateStorageRoots,
         })).path
       : item.path;
-    promptContent.push({ type: "text", text: `[Local image: ${fileName}]` });
+    if (explicitName || !alreadyOwnedAsset) {
+      promptContent.push({ type: "text", text: `[Local image: ${fileName}]` });
+    }
     // Record the image itself, as the inline-image branch does. A text
     // placeholder here was all a reopened thread could show.
     parts.push({
       type: "image",
-      alt: fileName,
+      ...(explicitName || !alreadyOwnedAsset ? { alt: fileName } : {}),
       url: toTranscriptImageProtocolUrl(pathToFileURL(imagePath).toString()),
     });
     const fileInfo = await stat(imagePath);
@@ -1139,7 +1143,9 @@ export async function inputToAcpPrompt(
       throw new Error(`Invalid local image attachment: ${fileName}`);
     }
     const data = await readFile(imagePath);
-    const mimeType = detectLocalImageMimeType(data);
+    const mimeType =
+      detectLocalImageMimeType(data)
+      ?? (alreadyOwnedAsset ? inferOwnedImageMimeTypeFromPath(imagePath) : undefined);
     if (!mimeType) {
       throw new Error(`Unsupported local image attachment: ${fileName}`);
     }
@@ -1198,6 +1204,22 @@ function detectLocalImageMimeType(data: Buffer): string | undefined {
     return "image/webp";
   }
   return undefined;
+}
+
+function inferOwnedImageMimeTypeFromPath(imagePath: string): string | undefined {
+  switch (path.extname(imagePath).toLowerCase()) {
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    default:
+      return undefined;
+  }
 }
 
 function formatAcpLocalFileReference(
