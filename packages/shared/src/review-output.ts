@@ -22,6 +22,13 @@ export function reviewEntryFailure(
   return undefined;
 }
 
+/** Review headers have no result for the owner to import into tracking. */
+export function isReviewResultEntry(entry: AppServerThreadReviewEntry): boolean {
+  return !entry.id.endsWith(":started")
+    && entry.turn?.status !== "in_progress"
+    && (entry.displayText === undefined || Boolean(entry.output));
+}
+
 /**
  * The structured review contract a PwrAgent Sub Agent child answers in. Main
  * parses the child's reply into the review card's output and its text form.

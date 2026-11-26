@@ -79,6 +79,35 @@ describe("review status controls", () => {
     expect(api.listThreadReviews).toHaveBeenLastCalledWith({ backend: "codex", threadId: "owner", status: "all" });
   });
 
+  it.each(["before", "after"] as const)(
+    "recovers when a reconnect event arrives %s a failed review read settles",
+    async (ordering) => {
+      const api = installApi(review);
+      const pending = Promise.withResolvers<{ reviews: ThreadReview[] }>();
+      const recovered = Promise.withResolvers<{ reviews: ThreadReview[] }>();
+      vi.mocked(api.listThreadReviews!).mockReturnValueOnce(pending.promise).mockReturnValueOnce(recovered.promise);
+      let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+      vi.mocked(api.onThreadTodosChanged!).mockImplementation((listener) => { changed = listener; return () => {}; });
+      render(<TranscriptReview entry={entry} parentThreadId="owner"
+        threadLinkSource={{ backend: "codex", instanceId: "peer" }} />);
+
+      if (ordering === "before") act(() => changed({ at: 2 }));
+      await act(async () => pending.reject(new Error("Peer is disconnected.")));
+      if (ordering === "after") {
+        expect(screen.getByRole("alert")).toHaveTextContent("Peer is disconnected.");
+        act(() => changed({ at: 2 }));
+      }
+
+      // A reconnect asks for a fresh read even while another one is pending.
+      // Once that read succeeds, the card shows the record and clears the error.
+      if (ordering === "before") expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(api.listThreadReviews).toHaveBeenCalledTimes(2);
+      await act(async () => recovered.resolve({ reviews: [review] }));
+      await screen.findByRole("button", { name: "Dismiss review" });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
+
   it("shares one pending read across two surfaces of the same review", async () => {
     const api = installApi(review);
     render(<>
@@ -448,6 +477,7 @@ describe("review Auto-fix status", () => {
     await waitFor(() => expect(api.readReviewAutoFix).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("Auto-fix armed")).not.toBeInTheDocument();
     rerender(<TranscriptReview entry={{ ...entry, turn: { id: "turn-review", status: "completed" } }} parentThreadId="owner" />);
+    await screen.findByRole("button", { name: "Dismiss review" });
     expect(screen.queryByText("Auto-fix armed")).not.toBeInTheDocument();
     expect(api.readReviewAutoFix).toHaveBeenCalledTimes(1);
   });

@@ -752,6 +752,56 @@ describe("TranscriptList", () => {
     });
   });
 
+  it("reads tracking only for the owner's review result while a local submission header is still visible", async () => {
+    const owner = { scope: "remote" as const, instanceId: "peer" };
+    const prompt = "Review https://github.com/example/atlas/pull/1";
+    const listThreadReviews = vi.fn(async (request: { federationTarget?: { instanceId: string } }) => {
+      if (request.federationTarget?.instanceId !== owner.instanceId) {
+        throw new Error("This viewer is disconnected.");
+      }
+      return { reviews: [] };
+    });
+    vi.stubGlobal("pwragent", { listThreadReviews });
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+
+    const header = { type: "review" as const, id: "optimistic-review-1", review: prompt, displayText: prompt };
+    const pinnedPrompt = `${prompt} at 0123456789`;
+    const started = {
+      ...header, id: "managed-review:turn:started",
+      review: pinnedPrompt, displayText: pinnedPrompt,
+      turn: { id: "turn", status: "in_progress" as const },
+    };
+    const renderEntries = (entries: AppServerThreadEntry[]) => (
+      <ThreadLinkProvider localInstanceId="viewer" onShowThread={vi.fn()} threads={[]}>
+        <TranscriptList
+          entries={entries}
+          loading={false}
+          loadingMore={false}
+          parentThreadId="thread"
+          parentThreadBackend="acp:antigravity"
+          threadLinkSource={{ backend: "acp:antigravity", instanceId: owner.instanceId }}
+          fileViewerContext={{ key: "thread", title: "Thread", federationTarget: owner }}
+          onLoadOlder={async () => undefined}
+        />
+      </ThreadLinkProvider>
+    );
+
+    const view = render(renderEntries([header, started]));
+    await act(async () => {});
+    // Only a result can have a tracking record. The author of the
+    // optimistic header is the viewer, even though the peer owns the thread.
+    expect(listThreadReviews).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    view.rerender(renderEntries([header, {
+      type: "review", id: "managed-review:turn:completed", review: "The patch is ready.",
+      turn: { id: "turn", status: "completed" },
+    }]));
+    await waitFor(() => expect(listThreadReviews).toHaveBeenCalledExactlyOnceWith({
+      backend: "acp:antigravity", threadId: "thread", status: "all", federationTarget: owner,
+    }));
+  });
+
   it("prefers hydrated provenance over a cached fallback thread title", () => {
     const sourceThreadId = "019fde92-318a-7541-9281-029bdc1508b5";
     const sourceThread = {
