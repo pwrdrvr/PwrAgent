@@ -5,6 +5,7 @@ import type {
   TokenMiserStorage,
 } from "@pwragent/owner-core/token-miser-storage";
 import type { StateDb } from "./state-db";
+import { prepareSqliteRead } from "./sqlite-prepared-read";
 
 export class SqliteTokenMiserStorage<
   Metadata extends TokenMiserObjectRecord,
@@ -32,8 +33,8 @@ export class SqliteTokenMiserStorage<
 
   readMetadataPage(afterObjectId: string | undefined, limit: number): Metadata[] {
     const rows = (afterObjectId === undefined
-      ? this.db.prepare("SELECT payload FROM token_miser_objects ORDER BY object_id LIMIT ?").all(limit)
-      : this.db.prepare("SELECT payload FROM token_miser_objects WHERE object_id > ? ORDER BY object_id LIMIT ?")
+      ? prepareSqliteRead(this.db, "SELECT payload FROM token_miser_objects ORDER BY object_id LIMIT ?").all(limit)
+      : prepareSqliteRead(this.db, "SELECT payload FROM token_miser_objects WHERE object_id > ? ORDER BY object_id LIMIT ?")
           .all(afterObjectId, limit)) as Array<{ payload: string }>;
     return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
   }

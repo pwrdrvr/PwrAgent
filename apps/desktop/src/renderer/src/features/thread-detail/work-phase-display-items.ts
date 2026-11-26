@@ -58,6 +58,7 @@ export function isRunnableToolActivity(
     || entry.details.length !== 1
     || entry.detailsRef
     || entry.tone
+    || entry.browserUse
     // A live bucket gains calls as the turn runs. Drawn as a row at one
     // call, it would turn into a collapsed header at the second and hide
     // the row being read.
@@ -66,7 +67,7 @@ export function isRunnableToolActivity(
     return false;
   }
   const detail = entry.details[0];
-  if (!detail || detail.images?.length || detail.fileDiff) {
+  if (!detail || detail.images?.length || detail.fileDiff || detail.browserUse) {
     return false;
   }
   if (detail.command) {

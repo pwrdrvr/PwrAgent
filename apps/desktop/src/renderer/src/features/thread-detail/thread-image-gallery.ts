@@ -30,9 +30,23 @@ export function collectThreadImageGallery(
     }
 
     if (entry?.type === "activity") {
+      if (entry.browserUse?.screenshotUrl) {
+        appendImage({
+          type: "image",
+          url: entry.browserUse.screenshotUrl,
+          alt: `${entry.browserUse.title} screenshot`,
+        });
+      }
       for (const detail of entry.details) {
         for (const image of detail.images ?? []) {
           appendImage(image);
+        }
+        if (detail.browserUse?.screenshotUrl) {
+          appendImage({
+            type: "image",
+            url: detail.browserUse.screenshotUrl,
+            alt: `${detail.label} screenshot`,
+          });
         }
       }
     }

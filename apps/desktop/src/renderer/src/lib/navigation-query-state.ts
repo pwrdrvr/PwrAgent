@@ -199,6 +199,19 @@ export function isNavigationCursorExpired(error: unknown): boolean {
   return message.includes("navigation_cursor_expired") || message.includes("Navigation cursor expired");
 }
 
+/** Continuation cursor rejected by owner or mismatched against the loaded generation. */
+export function isNavigationContinuationInvalid(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("Navigation continuation does not match its loaded generation.")
+    || message.includes("Navigation continuation did not advance.")
+    || message.includes("Navigation range refresh did not advance.")) {
+    return true;
+  }
+  const invalidRequest = (typeof error === "object" && error !== null && "code" in error && error.code === "navigation_invalid_request")
+    || message.includes("navigation_invalid_request");
+  return invalidRequest && (message.includes("Navigation cursor") || message.includes("Navigation generation"));
+}
+
 /** Electron drops the typed code across IPC; the owner prefixes its message with it. */
 export function isNavigationAnchorMissing(error: unknown): boolean {
   if (typeof error === "object" && error !== null && "code" in error && error.code === "navigation_anchor_missing") return true;
@@ -276,7 +289,7 @@ export function failNavigationPageRead(
 ): NavigationPageState {
   if (sequence !== state.pendingSequence) return state;
   const message = error instanceof Error ? error.message : String(error);
-  const expired = isNavigationCursorExpired(error) || message.includes("navigation_anchor_missing");
+  const expired = isNavigationCursorExpired(error) || isNavigationAnchorMissing(error);
   return { ...state, stale: Boolean(state.page), error: message, rebaselineRequired: state.rebaselineRequired || expired };
 }
 

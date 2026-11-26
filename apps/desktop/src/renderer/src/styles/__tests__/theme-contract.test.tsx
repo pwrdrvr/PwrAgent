@@ -2678,6 +2678,51 @@ describe("Tangerine Terminal theme contract", () => {
       ".thread-markdown__table-scroll :where(:focus-visible)",
     );
     expect(innerFocusRule).toContain("scroll-margin-inline:");
+
+    expect(tableRule).toContain("border-collapse: separate;");
+    expect(tableRule).toContain("border-spacing: 0;");
+
+    const stickyWrapRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap[data-sticky-header=\"true\"]",
+    );
+    expect(stickyWrapRule).toContain("z-index: 3;");
+
+    const ancestorStickyThRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap[data-sticky-mode=\"scroll-ancestor\"]\n  .thread-markdown__thead\n  .thread-markdown__th",
+    );
+    expect(ancestorStickyThRule).toContain("transform: translateY(var(--table-sticky-y, 0px));");
+
+    const nativeStickyThRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap--native-sticky\n  .thread-markdown__thead\n  .thread-markdown__th",
+    );
+    expect(nativeStickyThRule).toContain("position: sticky;");
+    expect(nativeStickyThRule).toContain("top: 0;");
+
+    const pinnedColRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap[data-pinned-col-active=\"true\"]\n  .thread-markdown__th:first-child,\n.thread-markdown__table-wrap[data-pinned-col-active=\"true\"]\n  .thread-markdown__td:first-child",
+    );
+    expect(pinnedColRule).toContain("position: sticky;");
+    expect(pinnedColRule).toContain("left: 0;");
+
+    const pinActionVisibleRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap[data-can-pin-col=\"true\"] .thread-markdown__table-action--pin",
+    );
+    expect(pinActionVisibleRule).toContain("display: inline-flex;");
+
+    const emptyActionBarRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap:not([data-can-pin-col=\"true\"])\n  .thread-markdown__table-actions:not(:has(.thread-markdown__table-action--expand))",
+    );
+    expect(emptyActionBarRule).toContain("display: none;");
+
+    const tableViewerRule = extractRuleBody(css, ".table-viewer-modal__content");
+    expect(tableViewerRule).toContain("width:");
+    expect(tableViewerRule).toContain("height:");
   });
 
   it("bounds long transcript code and quote blocks with their own vertical scroll", () => {
