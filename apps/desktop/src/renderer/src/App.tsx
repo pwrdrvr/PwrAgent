@@ -337,10 +337,7 @@ import {
   describeHeapSnapshotResult,
   HEAP_SNAPSHOT_SECRET_WARNING,
 } from "../../shared/heap-snapshot";
-import {
-  buildHotCpuProfileHandoffMessage,
-  formatHotCpuProfileTriggerSummary,
-} from "../../shared/hot-cpu-profile";
+import { useHotCpuProfileNotices } from "./features/notifications/useHotCpuProfileNotices";
 import type { BundledGitLfsAdvisoryEvent } from "../../shared/bundled-git-lfs";
 import {
   githubPrAccessTargetKey,
@@ -1119,45 +1116,7 @@ function DesktopAppShell(props: {
       };
     }, [desktopApi, showPrAutoDispatchBudgetNotice]);
 
-    useEffect(() => {
-      return desktopApi?.onHotCpuProfileCaptured?.((event) => {
-        const heapSnapshotCount = event.heapSnapshotArtifacts?.length ?? 0;
-        const heapSnapshotSummary =
-          heapSnapshotCount > 0
-            ? ` ${heapSnapshotCount} heap snapshots captured.`
-            : "";
-        showAppNotice({
-          autoDismiss: false,
-          copyText: buildHotCpuProfileHandoffMessage(event),
-          facts: [
-            {
-              label: "Source",
-              value: `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
-            },
-            {
-              label: "Captured",
-              value: new Date(event.capturedAt).toLocaleString(undefined, {
-                year: "numeric",
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-                second: "2-digit",
-                timeZoneName: "short",
-              }),
-            },
-            { label: "Session", value: event.sessionDirectoryName },
-          ],
-          dismissGroup: { key: "hot-cpu-profile", label: "CPU profile notices" },
-          id: `hot-cpu-profile:${event.sessionDirectoryName}:${event.profileFilename}`,
-          title: `${event.target === "main" ? "Main" : "Renderer"} CPU profile captured`,
-          message: [
-            `Matched ${formatHotCpuProfileTriggerSummary(event)}. Saved ${event.profileFilename}.`,
-            heapSnapshotSummary,
-          ].join(""),
-        });
-      });
-    }, [desktopApi, showAppNotice]);
+    useHotCpuProfileNotices(desktopApi, dispatchAppNotice);
 
     // On-demand heap snapshots. The capture (and its countdown) run in main, so
     // the result can land here even if Settings was closed to stage the scenario.
