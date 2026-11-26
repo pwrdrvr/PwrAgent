@@ -1,0 +1,135 @@
+name: Benchmark unsigned macOS signing archive
+
+on:
+  push:
+    branches: [bench/macos-signing-archive]
+
+permissions:
+  contents: read
+  id-token: none
+
+jobs:
+  profile:
+    runs-on: macos-26
+    timeout-minutes: 45
+    outputs:
+      baseline: ${{ steps.archive.outputs.baseline }}
+      candidate: ${{ steps.archive.outputs.candidate }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f # v1.7.0
+        timeout-minutes: 10
+        with:
+          node-version: "^24.22.1"
+          cache-electron: "true"
+      - name: Stage pinned Grok ACP runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node apps/desktop/scripts/stage-grok-bundle.mjs --platform macos-universal
+      - name: Prepare universal release stage
+        env:
+          PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
+        run: node apps/desktop/scripts/release.mjs --prepare-only
+      - name: Stage pinned Grok ACP runtime for Apple Silicon
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node apps/desktop/scripts/stage-grok-bundle.mjs --platform macos-aarch64
+      - name: Prepare Apple Silicon release stage
+        env:
+          PWRAGENT_REQUIRE_GROK_BUNDLE: "1"
+        run: node apps/desktop/scripts/release.mjs --prepare-only --mac-arch=arm64
+      - name: Profile signing input archival
+        id: archive
+        run: |
+          set -euo pipefail
+          measure() {
+            local phase="$1"
+            shift
+            local started="$SECONDS"
+            "$@"
+            printf '%s: %ds\n' "$phase" "$((SECONDS - started))" >&2
+          }
+          hash_archive() {
+            shasum -a 256 "$1" | awk '{print $1}'
+          }
+
+          tar --version
+          sw_vers
+          sysctl -n hw.ncpu
+          df -h "$RUNNER_TEMP"
+
+          paths="$RUNNER_TEMP/signing-input-paths.txt"
+          input_root="$(mktemp -d "$RUNNER_TEMP/desktop-release-signing-input.XXXXXX")"
+          measure allowlist node --experimental-vm-modules scripts/release/check-signing-input.mjs macos > "$paths"
+          measure materialize node --experimental-vm-modules scripts/release/materialize-signing-input.mjs macos "$input_root"
+          for variant in baseline candidate; do
+            mkdir "$RUNNER_TEMP/$variant"
+            tarball="$RUNNER_TEMP/$variant/desktop-release-signing-input.tgz"
+            options=()
+            if [[ "$variant" == candidate ]]; then
+              options=(--options gzip:compression-level=1)
+            fi
+            measure "$variant tar/gzip" tar -czf "$tarball" ${options[@]+"${options[@]}"} -C "$input_root" -T "$paths"
+            stat -f "$variant tgz bytes: %z" "$tarball"
+            measure "$variant archive validation" node --experimental-vm-modules scripts/release/verify-signing-input-archive.mjs macos "$tarball"
+            sha256="$(measure "$variant sha256" hash_archive "$tarball")"
+            echo "$variant=$sha256" >> "$GITHUB_OUTPUT"
+            printf '%s  desktop-release-signing-input.tgz\n' "$sha256" > "$tarball.sha256"
+          done
+          measure cleanup rm -rf -- "$input_root"
+      - name: Upload baseline signing input (outer ZIP default)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: baseline
+          path: |
+            ${{ runner.temp }}/baseline/desktop-release-signing-input.tgz
+            ${{ runner.temp }}/baseline/desktop-release-signing-input.tgz.sha256
+          if-no-files-found: error
+          retention-days: 1
+      - name: Upload candidate signing input (outer ZIP store)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: candidate
+          path: |
+            ${{ runner.temp }}/candidate/desktop-release-signing-input.tgz
+            ${{ runner.temp }}/candidate/desktop-release-signing-input.tgz.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - name: Compare exact uncompressed tar streams
+        run: |
+          set -euo pipefail
+          for variant in baseline candidate; do
+            gzip -dc "$RUNNER_TEMP/$variant/desktop-release-signing-input.tgz" | shasum -a 256 | tee "$RUNNER_TEMP/$variant.tar.sha256"
+          done
+          diff -u "$RUNNER_TEMP/baseline.tar.sha256" "$RUNNER_TEMP/candidate.tar.sha256"
+
+  round-trip:
+    name: Round trip (${{ matrix.variant }})
+    needs: profile
+    runs-on: macos-26
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [baseline, candidate]
+    steps:
+      - name: Download signing input
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ matrix.variant }}
+          path: .release-input
+      - name: Verify signing input
+        env:
+          EXPECTED_SHA256: ${{ needs.profile.outputs[matrix.variant] }}
+        run: |
+          set -euo pipefail
+          cd .release-input
+          actual="$(shasum -a 256 desktop-release-signing-input.tgz | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA256"
+          shasum -a 256 --check desktop-release-signing-input.tgz.sha256
+      - name: Expand signing input
+        run: tar -xzf .release-input/desktop-release-signing-input.tgz
