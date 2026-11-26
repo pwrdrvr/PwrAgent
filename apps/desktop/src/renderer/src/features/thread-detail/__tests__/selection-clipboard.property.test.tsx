@@ -11,6 +11,8 @@ const disallowedStyleArb = fc.constantFrom(
   "font-weight: 700; background: yellow",
   "text-align: justify",
   "text-align: start",
+  "text-align: end",
+  "text-align: inherit",
 );
 
 function delimiterFor(align: Alignment): string {

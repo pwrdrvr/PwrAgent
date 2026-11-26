@@ -65,4 +65,39 @@ describe("computeHorizontalScrollEdges properties", () => {
       ),
     );
   });
+
+  it("handles macOS rubber-band overscroll and non-finite layout metrics without flipping edges", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 100, max: 1_600 }),
+        fc.integer({ min: 10, max: 1_200 }),
+        fc.integer({ min: 1, max: 200 }),
+        (clientWidth, overflow, overshoot) => {
+          const scrollWidth = clientWidth + overflow;
+          expect(
+            computeHorizontalScrollEdges({
+              clientWidth,
+              scrollLeft: -overshoot,
+              scrollWidth,
+            }),
+          ).toEqual({ left: false, right: true });
+          expect(
+            computeHorizontalScrollEdges({
+              clientWidth,
+              scrollLeft: overflow + overshoot,
+              scrollWidth,
+            }),
+          ).toEqual({ left: true, right: false });
+        },
+      ),
+    );
+
+    expect(
+      computeHorizontalScrollEdges({
+        clientWidth: Number.NaN,
+        scrollLeft: 0,
+        scrollWidth: 400,
+      }),
+    ).toEqual({ left: false, right: false });
+  });
 });

@@ -2592,6 +2592,7 @@ describe("Tangerine Terminal theme contract", () => {
     const wrapRule = extractRuleBody(css, ".thread-markdown__table-wrap");
     expect(wrapRule).toContain("position: relative;");
     expect(wrapRule).toContain("max-width: 100%;");
+    expect(wrapRule).toContain("isolation: isolate;");
     expect(wrapRule).not.toMatch(/overflow:\s*hidden;/);
 
     const fadeSharedRule = extractRuleBody(

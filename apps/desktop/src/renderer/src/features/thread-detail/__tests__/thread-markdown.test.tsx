@@ -1878,6 +1878,136 @@ describe("ThreadMarkdown", () => {
     }
   });
 
+  it("skips layout reads on height-only table resizes and batches reads before writes across multiple tables", () => {
+    let observerCallback: ResizeObserverCallback | undefined;
+    const observedTargets = new Set<Element>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          observerCallback = callback;
+        }
+        observe(target: Element) {
+          observedTargets.add(target);
+        }
+        unobserve(target: Element) {
+          observedTargets.delete(target);
+        }
+        disconnect() {
+          observedTargets.clear();
+        }
+      },
+    );
+
+    try {
+      const { container } = render(
+        <ThreadMarkdown
+          text={[
+            "| A | B | C |",
+            "| --- | ---: | ---: |",
+            "| 1 | 10 | 20 |",
+            "",
+            "| X | Y | Z |",
+            "| --- | ---: | ---: |",
+            "| 2 | 30 | 40 |",
+          ].join("\n")}
+        />,
+      );
+
+      const wraps = Array.from(
+        container.querySelectorAll<HTMLDivElement>(".thread-markdown__table-wrap"),
+      );
+      const scrollers = Array.from(
+        container.querySelectorAll<HTMLDivElement>(".thread-markdown__table-scroll"),
+      );
+      const tables = Array.from(
+        container.querySelectorAll<HTMLTableElement>(".thread-markdown__table"),
+      );
+      expect(wraps).toHaveLength(2);
+
+      const events: Array<"read" | "write"> = [];
+      let readCount = 0;
+
+      for (let i = 0; i < scrollers.length; i += 1) {
+        const scroller = scrollers[i]!;
+        const wrap = wraps[i]!;
+        Object.defineProperties(scroller, {
+          clientWidth: {
+            configurable: true,
+            get: () => {
+              readCount += 1;
+              events.push("read");
+              return 300;
+            },
+          },
+          scrollWidth: { configurable: true, get: () => 620 },
+          scrollLeft: { configurable: true, get: () => 0 },
+        });
+        const originalSet = wrap.setAttribute.bind(wrap);
+        const originalRemove = wrap.removeAttribute.bind(wrap);
+        wrap.setAttribute = (name: string, value: string) => {
+          events.push("write");
+          originalSet(name, value);
+        };
+        wrap.removeAttribute = (name: string) => {
+          events.push("write");
+          originalRemove(name);
+        };
+      }
+
+      // First batch across both tables: every layout read happens strictly before any attribute write.
+      act(() => {
+        observerCallback?.(
+          [
+            {
+              target: scrollers[0]!,
+              borderBoxSize: [{ inlineSize: 300, blockSize: 120 }],
+            },
+            {
+              target: tables[0]!,
+              borderBoxSize: [{ inlineSize: 620, blockSize: 120 }],
+            },
+            {
+              target: scrollers[1]!,
+              borderBoxSize: [{ inlineSize: 300, blockSize: 120 }],
+            },
+            {
+              target: tables[1]!,
+              borderBoxSize: [{ inlineSize: 620, blockSize: 120 }],
+            },
+          ] as unknown as ResizeObserverEntry[],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wraps[0]).toHaveAttribute("data-scroll-right", "true");
+      expect(wraps[1]).toHaveAttribute("data-scroll-right", "true");
+      const firstWriteIndex = events.indexOf("write");
+      expect(firstWriteIndex).toBeGreaterThan(0);
+      expect(events.slice(firstWriteIndex)).not.toContain("read");
+
+      // Height-only deliveries (e.g. streaming rows appended without changing table width) must do zero layout reads.
+      const readsBeforeHeightOnly = readCount;
+      act(() => {
+        observerCallback?.(
+          [
+            {
+              target: tables[0]!,
+              borderBoxSize: [{ inlineSize: 620, blockSize: 240 }],
+            },
+            {
+              target: tables[1]!,
+              borderBoxSize: [{ inlineSize: 620, blockSize: 360 }],
+            },
+          ] as unknown as ResizeObserverEntry[],
+          {} as ResizeObserver,
+        );
+      });
+      expect(readCount).toBe(readsBeforeHeightOnly);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("skips raw html parsing for oversized html-like messages", () => {
     const oversizedHtml = "<em>safe</em>".repeat(2_000);
     const { container } = render(<ThreadMarkdown text={oversizedHtml} />);

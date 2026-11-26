@@ -32833,6 +32833,7 @@ a.transcript-message__messaging-origin:focus-visible {
 .thread-markdown__table-wrap {
   position: relative;
   max-width: 100%;
+  isolation: isolate;
 }
 
 /* Subtle horizontal scroll-edge fades signal off-screen columns when macOS

@@ -511,8 +511,25 @@ function listToMarkdown(list: Element): string {
   return lines.join("\n");
 }
 
+function directTableRows(table: Element): Element[] {
+  const rows: Element[] = [];
+  for (const child of Array.from(table.children)) {
+    const tag = child.tagName.toLowerCase();
+    if (tag === "tr") {
+      rows.push(child);
+    } else if (tag === "thead" || tag === "tbody" || tag === "tfoot") {
+      for (const row of Array.from(child.children)) {
+        if (row.tagName.toLowerCase() === "tr") {
+          rows.push(row);
+        }
+      }
+    }
+  }
+  return rows;
+}
+
 function tableToMarkdown(table: Element): string {
-  const rowCells = Array.from(table.querySelectorAll("tr"))
+  const rowCells = directTableRows(table)
     .map((row) =>
       Array.from(row.children).filter((cell) => {
         const tag = cell.tagName.toLowerCase();
