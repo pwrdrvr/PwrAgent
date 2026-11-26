@@ -296,6 +296,14 @@ describe("ProviderStatusPanel", () => {
     />);
     expect(within(claudeRow).queryByText(/On pace/)).not.toBeInTheDocument();
     expect(within(antigravityRow).getByText(/On pace for about 70%/)).toBeInTheDocument();
+
+    // If live usage climbs past a cached series's projected end-of-window level
+    // before the usage read refreshes, hide the contradictory stale projection.
+    rerender(<ProviderStatusPanel
+      backends={[{ ...claude, rateLimits: [{ ...claudeLimit, usedPercent: 45 }] }, antigravity]}
+      desktopApi={{ readUsageActivity }}
+    />);
+    expect(within(claudeRow).queryByText(/On pace for about 35%/)).not.toBeInTheDocument();
   });
 
   it("paces Antigravity 5h buckets on their 300-minute window and omits reset text when absent", async () => {

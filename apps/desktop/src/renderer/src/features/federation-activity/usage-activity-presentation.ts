@@ -53,6 +53,8 @@ export function describeLimitPace(series: LimitSeries, now: number, compact = fa
   const projection = projectLimit(series);
   if (series.pacePerHour === undefined || !projection) return undefined;
   const { latest } = series;
+  if (latest.resetAt !== undefined && latest.resetAt <= now) return undefined;
+  if (projection.kind === "full" && projection.at <= now) return undefined;
   const short = projection.kind === "full" && latest.resetAt !== undefined;
   const text = projection.kind === "atReset"
     ? `On pace for about ${Math.round(projection.percent)}% at the ${usageWhen(projection.resetAt, now, compact)} reset`

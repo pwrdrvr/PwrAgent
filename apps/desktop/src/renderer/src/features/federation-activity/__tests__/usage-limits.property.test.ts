@@ -129,4 +129,113 @@ describe("usage limit schedule properties", () => {
       },
     ));
   });
+
+  it("keeps pre-reset percentages from changing the new window's start or pace", () => {
+    fc.assert(fc.property(fc.record({
+      beforeHours: fc.integer({ min: 1, max: 48 }),
+      oldPercentA: fc.double({ min: 0, max: 95, noNaN: true }),
+      oldPercentB: fc.double({ min: 0, max: 95, noNaN: true }),
+      elapsedMinutes: fc.integer({ min: 1, max: 180 }),
+      newPercent: fc.double({ min: 0, max: 90, noNaN: true }),
+      skewMinutes: fc.integer({ min: -5, max: 20 }),
+    }), ({ beforeHours, oldPercentA, oldPercentB, elapsedMinutes, newPercent, skewMinutes }) => {
+      const oldReset = START + 3 * 24 * HOUR;
+      const newReset = START + WEEK + skewMinutes * 60_000;
+      const afterAt = START + elapsedMinutes * 60_000;
+      const [acctA] = buildLimitAccounts([{
+        ...fixtureOwner,
+        history: [weekly(START - beforeHours * HOUR, oldPercentA, oldReset)],
+        current: weekly(afterAt, newPercent, newReset),
+      }]);
+      const [acctB] = buildLimitAccounts([{
+        ...fixtureOwner,
+        history: [weekly(START - beforeHours * HOUR, oldPercentB, oldReset)],
+        current: weekly(afterAt, newPercent, newReset),
+      }]);
+      const seriesA = sinceResetSeries(acctA)!;
+      const seriesB = sinceResetSeries(acctB)!;
+      expect(seriesA.windowStart).toBe(seriesB.windowStart);
+      expect(seriesA.pacePerHour).toBe(seriesB.pacePerHour);
+      expect(seriesA.resets).toHaveLength(1);
+    }));
+  });
+
+  it("measures pace after a mid-window credit from the post-credit floor, never from zero", () => {
+    fc.assert(fc.property(fc.record({
+      beforePercent: fc.integer({ min: 20, max: 99 }),
+      dropToPercent: fc.integer({ min: 1, max: 60 }),
+      extraPercent: fc.integer({ min: 0, max: 35 }),
+      spanHours: fc.integer({ min: 1, max: 24 }),
+    }).filter(({ beforePercent, dropToPercent, extraPercent }) =>
+      dropToPercent < beforePercent - 2 && dropToPercent + extraPercent <= 99,
+    ), ({ beforePercent, dropToPercent, extraPercent, spanHours }) => {
+      const resetAt = START + 4 * 24 * HOUR;
+      const [account] = buildLimitAccounts([{
+        ...fixtureOwner,
+        history: [
+          weekly(START - HOUR, beforePercent, resetAt),
+          weekly(START + HOUR, dropToPercent, resetAt),
+        ],
+        current: weekly(START + (1 + spanHours) * HOUR, dropToPercent + extraPercent, resetAt),
+      }]);
+      const series = sinceResetSeries(account)!;
+      if (extraPercent < 1) {
+        expect(series.pacePerHour).toBeUndefined();
+      } else {
+        expect(series.pacePerHour).toBeCloseTo(extraPercent / spanHours);
+      }
+    }));
+  });
+
+  it("ignores lagging-owner window regressions regardless of source order", () => {
+    fc.assert(fc.property(fc.record({
+      oldPercent: fc.integer({ min: 10, max: 95 }),
+      newPercent: fc.integer({ min: 1, max: 40 }),
+      lagMinutes: fc.integer({ min: 0, max: 30 }),
+    }), ({ oldPercent, newPercent, lagMinutes }) => {
+      const oldReset = START + 3 * 24 * HOUR;
+      const newReset = START + WEEK;
+      const local = {
+        ...fixtureOwner,
+        history: [weekly(START - HOUR, oldPercent, oldReset)],
+        current: weekly(START + 2 * HOUR, newPercent, newReset),
+      };
+      const remote = {
+        owner: "Peer",
+        target: { scope: "remote" as const, instanceId: "peer" },
+        current: weekly(START + 2 * HOUR + lagMinutes * 60_000, oldPercent, oldReset),
+      };
+      const [fwd] = buildLimitAccounts([local, remote]);
+      const [rev] = buildLimitAccounts([remote, local]);
+      const sFwd = sinceResetSeries(fwd)!;
+      const sRev = sinceResetSeries(rev)!;
+      expect(sFwd.latest.resetAt).toBe(newReset);
+      expect(sFwd.latest.usedPercent).toBe(newPercent);
+      expect(sFwd.resets).toHaveLength(1);
+      expect(sRev).toEqual(sFwd);
+    }));
+  });
+
+  it("keeps projectLimit bounded and undefined when exhausted or expired", () => {
+    fc.assert(fc.property(fc.record({
+      usedPercent: fc.integer({ min: 1, max: 100 }),
+      elapsedHours: fc.integer({ min: 1, max: 200 }),
+    }), ({ usedPercent, elapsedHours }) => {
+      const [account] = buildLimitAccounts([{
+        ...fixtureOwner,
+        current: weekly(START + elapsedHours * HOUR, usedPercent, START + WEEK),
+      }]);
+      const series = sinceResetSeries(account)!;
+      const proj = projectLimit(series);
+      if (usedPercent >= 100 || elapsedHours >= 168) {
+        expect(proj).toBeUndefined();
+      } else if (proj?.kind === "atReset") {
+        expect(proj.percent).toBeGreaterThanOrEqual(usedPercent);
+        expect(proj.percent).toBeLessThanOrEqual(100);
+      } else if (proj?.kind === "full") {
+        expect(proj.at).toBeGreaterThan(series.latest.at);
+        expect(proj.at).toBeLessThanOrEqual(START + WEEK - 60_000);
+      }
+    }));
+  });
 });
