@@ -732,6 +732,7 @@ export type ThreadViewProps = {
    */
   terminals: IntegratedTerminalsController;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage: (
     text: string,
     imageParts?: AppServerThreadImagePart[]
@@ -3160,6 +3161,7 @@ export function ThreadView(props: ThreadViewProps) {
       : {
           activeTurnId: props.activeTurnId,
           addOptimisticReviewEntry: props.addOptimisticReviewEntry,
+          beginReviewSubmission: props.beginReviewSubmission,
           addOptimisticUserMessage: props.addOptimisticUserMessage,
           bindOptimisticUserMessageToTurn: props.bindOptimisticUserMessageToTurn,
           onForkThread: props.onForkThread,

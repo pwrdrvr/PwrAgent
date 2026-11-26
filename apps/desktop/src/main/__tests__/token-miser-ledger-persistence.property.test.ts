@@ -1,5 +1,6 @@
 import { registryContextStandIn } from "./helpers/registry-context-stand-in";
 import fc from "fast-check";
+import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
@@ -11,7 +12,9 @@ import { formatTaskMonitorNumber, formatTaskMonitorTokenCount } from "../app-ser
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
-import { estimateTokenCount, type TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
+import { SqliteTokenMiserStorage } from "../storage/token-miser-storage-sqlite";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
+import { estimateTokenCount, type TokenMiserCodeModeObservation, type TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
@@ -46,7 +49,7 @@ function line(index: number, overrides: Partial<ThreadUsageLineRecord> = {}): Th
   };
 }
 
-function fixture(database?: StateDb) {
+function fixture(database?: StateDb, tokenMiserStore?: TokenMiserStore) {
   ledgerOwner.check();
   const db = database ?? openInMemoryStateDb();
   const store = new SqliteOverlayStore(db);
@@ -56,6 +59,7 @@ function fixture(database?: StateDb) {
     emit: async () => {},
   } as unknown as RegistryContext, {} as never, () => ({
     runtimeInstanceId: "fixture-owner", registrySessionId: "fixture-session", invalidateThreadListCache: () => {},
+    tokenMiserStore,
   }) as unknown as ThreadUsageLedgerHost);
   vi.spyOn(ledger, "emitThreadPricingUpdated").mockResolvedValue();
   const internals = ledger as unknown as {
@@ -146,6 +150,42 @@ async function checkOverlappingFlushes(retrievedCharacters: number, failFirst: b
 }
 
 describe("Token Miser persistence work budgets", () => {
+  it("restores 65 persisted gates in two pages and skips all writes on the next startup", ownLedgerTest(async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-token-miser-startup-");
+    const db = StateDb.open(temp.dbPath);
+    try {
+      const storage = new SqliteTokenMiserStorage<TokenMiserObjectMetadata, TokenMiserCodeModeObservation>(db);
+      const tokenMiserStore = new TokenMiserStore(path.join(temp.tempDir, "objects"), { storage });
+      // Migration is independent of reconciliation and occurs only once.
+      await tokenMiserStore.prune({ maxAgeMs: 0, maxBytes: 0 });
+      db.raw.transaction(() => {
+        for (let index = 0; index < 65; index += 1) storage.writeMetadata(gate(index));
+      })();
+      const read = vi.spyOn(storage, "readMetadataPage");
+      const { ledger, store } = fixture(db, tokenMiserStore);
+      const first = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      expectSqliteWriteBudget({
+        scenario: "token-miser-startup-backfill",
+        note: "One startup reconciliation of 65 existing gates without ledger rows, in two pages of at most 64.",
+        writes: first.writes,
+      });
+      expect(read.mock.calls).toEqual([[undefined, 64], ["gate-8", 64]]);
+      expect(await store.listThreadSubAgents({ backend: "codex", threadId: THREAD })).toHaveLength(65);
+      expect(ledger.emitThreadPricingUpdated).toHaveBeenCalledTimes(1);
+      const repeat = await measureSqliteWrites(() => ledger.initializeTokenMiserLedger());
+      expectSqliteWriteBudget({
+        scenario: "token-miser-startup-repeat",
+        note: "Startup reconciliation of 65 unchanged gates after backfill. Zero recurring writes and 0 MB/day.",
+        writes: repeat.writes,
+      });
+      expect(ledger.emitThreadPricingUpdated).toHaveBeenCalledTimes(1);
+    } finally {
+      db.close();
+      removeTempStateDbDir(temp.tempDir);
+    }
+  }));
+
   it("cannot overwrite one later retrieval with an overlapping older flush", ownLedgerTest(async () => {
     await checkOverlappingFlushes(400, false);
   }));
@@ -200,6 +240,7 @@ describe("Token Miser persistence work budgets", () => {
     let done = false;
     const builds = vi.spyOn(internals, "buildTokenMiserLedgerArtifact");
     const batch = vi.spyOn(store, "getThreadSubAgents");
+    const pricing = vi.spyOn(store, "readTokenMiserGatePricingLines");
     const observed = [0];
     const observing = (async () => {
       while (!done) { await yieldToEventLoop(); observed.push(builds.mock.calls.length); }
@@ -212,6 +253,7 @@ describe("Token Miser persistence work budgets", () => {
       expect(builds).toHaveBeenCalledTimes(count);
       expect(batch).toHaveBeenCalledTimes(Math.ceil(count / 64));
       expect(batch.mock.calls.every(([params]) => params.monitorIds.length <= 64)).toBe(true);
+      expect(pricing.mock.calls.every(([params]) => params.sourceItemIds.length <= 64 && params.turnIds.length <= 64)).toBe(true);
       for (let index = 1; index < observed.length; index += 1) {
         expect(observed[index]! - observed[index - 1]!).toBeLessThanOrEqual(64);
       }
@@ -219,6 +261,51 @@ describe("Token Miser persistence work budgets", () => {
       await internals.persistTokenMiserLedgerEntries(entries);
       expect(builds).toHaveBeenCalledTimes(0);
     } finally { done = true; await observing; db.close(); }
+  }));
+
+  it("matches the full legacy replay oracle while streaming a tied timestamp once for all matching gates", ownLedgerTest(async () => {
+    const { db, store, internals } = fixture();
+    try {
+      const entry = { ...gate(0), replayTrackingVersion: undefined, toolUseId: "gate-tool" };
+      const entries = [entry, { ...entry, objectId: "gate-1", toolUseId: "other" },
+        { ...entry, objectId: "gate-2", toolUseId: "same-collation" }];
+      const insert = db.raw.prepare(`INSERT INTO thread_tool_invocations (
+        invocation_id, backend, thread_id, turn_id, item_id, tool_name, category, status,
+        observed_at, updated_at, output_chars, output_lines, estimated_output_tokens, warning_lines,
+        error_lines, info_lines, debug_lines, output_truncated, noisy)
+        VALUES (?, 'codex', ?, ?, ?, 'exec_command', 'command', 'completed', ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)`);
+      for (const [id, item, time] of [
+        ["Z", "gate-tool", 10], ["a", "other", 10], ["ä", "gate-tool", 10],
+        ["a\u0308", "same-collation", 10], ["late", "gate-tool", 20],
+      ] as const) insert.run(id, THREAD, entry.turnId, item, time);
+      insert.run("unrelated", THREAD, "later-turn", "gate-tool", 30);
+      const readAll = vi.spyOn(store, "readThreadToolAccounting");
+      const { invocations } = await store.readThreadToolAccounting({ backend: "codex", threadId: THREAD, includeAllInvocations: true });
+      const expected = indexTokenMiserCachedReplays(invocations);
+      readAll.mockClear();
+      const prepare = db.raw.prepare.bind(db.raw);
+      let streamedRows = 0;
+      vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (!sql.includes("FROM thread_tool_invocations")) return statement;
+        const iterate = statement.iterate.bind(statement);
+        statement.iterate = function* (...args: unknown[]) {
+          for (const row of Reflect.apply(iterate, undefined, args) as Iterable<unknown>) {
+            streamedRows += 1;
+            yield row;
+          }
+        };
+        return statement;
+      });
+      await internals.persistTokenMiserLedgerEntries(entries);
+      for (const gate of entries) {
+        const card = await store.getThreadSubAgent({ backend: "codex", threadId: THREAD, monitorId: `system:token-miser:${gate.objectId}` });
+        expect(card?.tokenMiserAccounting?.cachedReplayCount).toBe(expected.countAfterInvocation(gate));
+      }
+      expect(readAll).not.toHaveBeenCalled();
+      // Five rows in the requested turn plus four in the tied timestamp.
+      expect(streamedRows).toBeLessThanOrEqual(9);
+    } finally { db.close(); }
   }));
 
   // The database owns the persisted comparison. Repeated input must do no

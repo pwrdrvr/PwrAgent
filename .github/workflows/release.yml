@@ -369,7 +369,8 @@ jobs:
           trap 'rm -rf -- "$input_root"' EXIT
           node --experimental-vm-modules scripts/release/check-signing-input.mjs macos > "$RUNNER_TEMP/signing-input-paths.txt"
           node --experimental-vm-modules scripts/release/materialize-signing-input.mjs macos "$input_root"
-          tar -czf "$tarball" -C "$input_root" -T "$RUNNER_TEMP/signing-input-paths.txt"
+          # Use faster gzip compression while keeping the same tar payload.
+          tar -czf "$tarball" --options gzip:compression-level=1 -C "$input_root" -T "$RUNNER_TEMP/signing-input-paths.txt"
           node --experimental-vm-modules scripts/release/verify-signing-input-archive.mjs macos "$tarball"
           sha256="$(shasum -a 256 "$tarball" | awk '{print $1}')"
           echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
@@ -379,6 +380,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-release-signing-input
+          compression-level: 0 # The tarball is already gzip-compressed.
           path: |
             ${{ runner.temp }}/desktop-release-signing-input.tgz
             ${{ runner.temp }}/desktop-release-signing-input.tgz.sha256
