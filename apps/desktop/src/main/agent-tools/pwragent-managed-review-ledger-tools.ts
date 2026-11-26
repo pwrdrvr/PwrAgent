@@ -1,6 +1,7 @@
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import {
   MANAGED_REVIEW_CANDIDATE_CATEGORIES,
+  MANAGED_REVIEW_OUTPUT_MAX_FINDINGS,
   type ManagedReviewCandidateLedger,
   type ManagedReviewCandidateTurnKey,
 } from "../app-server/managed-review-candidate-ledger.js";
@@ -16,6 +17,7 @@ export const MANAGED_REVIEW_LEDGER_TOOL_NAMES = [
   "record_review_candidate",
   "list_review_candidates",
   "dispose_review_candidate",
+  "submit_review_output",
 ] as const;
 
 export type ManagedReviewLedgerToolName =
@@ -209,6 +211,132 @@ export function buildManagedReviewLedgerToolDefinitions(
           priority: args.priority,
           category: args.category,
           reason: args.reason,
+        });
+        return result.ok
+          ? agentToolSuccess(result.data)
+          : agentToolFailure({ code: result.code, message: result.message });
+      },
+    },
+    {
+      namespace: PWRAGENT_TOOL_NAMESPACE,
+      name: "submit_review_output",
+      description:
+        "Submit the final structured code review verdict and findings at the end of Pass 2 so PwrAgent records them directly without parsing free-text JSON.",
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          findings: {
+            type: "array",
+            maxItems: MANAGED_REVIEW_OUTPUT_MAX_FINDINGS,
+            description: "Ordered list of concrete findings to report (empty array when no actionable defects remain).",
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                title: {
+                  type: "string",
+                  description: "Short finding title without a redundant [P0]-[P3] prefix.",
+                },
+                body: {
+                  type: "string",
+                  description: "Markdown explanation leading with the observable consequence, code mechanism, and specific fix.",
+                },
+                confidence_score: {
+                  type: "number",
+                  minimum: 0,
+                  maximum: 1,
+                  description: "Certainty from 0 to 1 that the issue is real and verified in the code.",
+                },
+                priority: {
+                  type: "integer",
+                  minimum: 0,
+                  maximum: 3,
+                  description: "Calibrated priority: 0 (P0) critical to 3 (P3) low-impact.",
+                },
+                category: {
+                  type: "string",
+                  description: "Optional short single-line defect category.",
+                },
+                code_location: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    absolute_file_path: {
+                      type: "string",
+                      description: "Absolute path to the affected file.",
+                    },
+                    line_range: {
+                      type: "object",
+                      additionalProperties: false,
+                      properties: {
+                        start: {
+                          type: "integer",
+                          minimum: 1,
+                          description: "First affected 1-based line number.",
+                        },
+                        end: {
+                          type: "integer",
+                          minimum: 1,
+                          description: "Last affected 1-based line number (>= start).",
+                        },
+                      },
+                      required: ["start", "end"],
+                    },
+                  },
+                  required: ["absolute_file_path", "line_range"],
+                },
+              },
+              required: [
+                "title",
+                "body",
+                "confidence_score",
+                "priority",
+                "code_location",
+              ],
+            },
+          },
+          overall_correctness: {
+            type: "string",
+            enum: ["patch is correct", "patch is incorrect"],
+            description: 'Must be "patch is correct" when no actionable defects remain, or "patch is incorrect" otherwise.',
+          },
+          overall_explanation: {
+            type: "string",
+            description: "Concise summary of the review verdict.",
+          },
+          overall_confidence_score: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+            description: "Optional confidence from 0 to 1 that overall_correctness is the right verdict.",
+          },
+        },
+        required: [
+          "findings",
+          "overall_correctness",
+          "overall_explanation",
+        ],
+      },
+      dispatch: (args, context) => {
+        const turnKey = resolveTurnKey(context, ledger);
+        if (!turnKey) {
+          return agentToolFailure({
+            code: "forbidden",
+            message: "Review candidate tools require an active review turn.",
+          });
+        }
+        const result = ledger.submitOutput(turnKey, {
+          findings: args.findings,
+          overall_correctness: args.overall_correctness,
+          overall_explanation: args.overall_explanation,
+          overall_confidence_score: args.overall_confidence_score,
         });
         return result.ok
           ? agentToolSuccess(result.data)

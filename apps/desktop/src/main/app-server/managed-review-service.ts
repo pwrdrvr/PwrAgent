@@ -18,6 +18,7 @@ import {
   type AppServerBackendKind,
   type AppServerNotification,
   type AppServerReviewContext,
+  type AppServerReviewOutput,
   type AppServerReviewTarget,
   type AppServerThreadReviewEntry,
   type CodexThreadEnvironmentRuntime,
@@ -254,8 +255,10 @@ export class ManagedReviewService {
     if (!turnId) return;
     const turn = { backend: event.backend, threadId: notification.params.threadId, turnId };
     const ledgerSummary = managedReview?.mode === "managed" ? this.candidateLedger.snapshot(turn) : undefined;
-    // Once terminal ingress has fenced the tools, only the counts are needed.
-    // Dispose before any card write or duplicate terminal can intervene.
+    const submittedOutput = managedReview?.mode === "managed" ? this.candidateLedger.submittedOutput(turn) : undefined;
+    // Once terminal ingress has fenced the tools, only the counts and any
+    // tool-submitted review output are needed. Dispose before any card write
+    // or duplicate terminal can intervene.
     this.candidateLedger.clearTurn(turn);
     await this.completeReviewSubAgent({
       ...turn,
@@ -275,7 +278,7 @@ export class ManagedReviewService {
         method: notification.method,
         notification,
         record: managedReview,
-      }, ledgerSummary);
+      }, ledgerSummary, submittedOutput);
     }
   }
 
@@ -1899,20 +1902,23 @@ export class ManagedReviewService {
       record: ReviewSubAgentRecord;
     },
     ledgerSummary: { total: number; pending: number; keep: number; drop: number },
+    submittedOutput?: AppServerReviewOutput,
   ): Promise<void> {
     const completedAt =
       completedAtFromTerminalNotification(params.notification) ?? Date.now();
     const completedItemOutput = this.takeManagedReviewOutput(params.record);
     if (params.method === "turn/completed") {
-      const output = await this.readManagedReviewOutput(
-        params.record,
-        params.notification as Extract<
-          AppServerNotification,
-          { method: "turn/completed" }
-        >,
-        completedItemOutput,
-      );
-      const parsed = parseReviewOutputText(output);
+      const output = submittedOutput
+        ? undefined
+        : await this.readManagedReviewOutput(
+            params.record,
+            params.notification as Extract<
+              AppServerNotification,
+              { method: "turn/completed" }
+            >,
+            completedItemOutput,
+          );
+      const parsed = submittedOutput ?? parseReviewOutputText(output);
       const review = parsed
         ? formatReviewOutputText(parsed)
         : output?.trim() || "Review completed without output.";
@@ -1962,6 +1968,7 @@ export class ManagedReviewService {
         parentThreadId: params.record.parentThreadId,
         reviewThreadId: params.record.reviewThreadId,
         structured: Boolean(parsed),
+        outputSource: submittedOutput ? "tool" : parsed ? "text" : "none",
         turnId: params.record.turnId,
         ...(ledgerSummary.total > 0
           ? {

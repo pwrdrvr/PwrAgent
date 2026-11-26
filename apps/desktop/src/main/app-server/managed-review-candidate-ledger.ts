@@ -1,5 +1,14 @@
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  AppServerBackendKind,
+  AppServerReviewFinding,
+  AppServerReviewOutput,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
+import {
+  normalizeOverallCorrectness,
+  normalizeReviewCategory,
+  normalizeReviewConfidenceScore,
+} from "@pwragent/shared/review-output";
 
 export const MANAGED_REVIEW_CANDIDATE_CATEGORIES = [
   "correctness",
@@ -21,6 +30,7 @@ export type ManagedReviewCandidatePriority = 0 | 1 | 2 | 3;
 
 export const MANAGED_REVIEW_CANDIDATE_MAX_PER_TURN = 100;
 export const MANAGED_REVIEW_CANDIDATE_MAX_FIELD_LENGTH = 2_000;
+export const MANAGED_REVIEW_OUTPUT_MAX_FINDINGS = 100;
 
 export type ManagedReviewCandidateTurnKey = {
   backend: AppServerBackendKind;
@@ -72,6 +82,13 @@ export type ManagedReviewCandidateDisposeInput = {
   reason: unknown;
 };
 
+export type ManagedReviewOutputSubmitInput = {
+  findings: unknown;
+  overall_correctness: unknown;
+  overall_explanation: unknown;
+  overall_confidence_score?: unknown;
+};
+
 export type ManagedReviewCandidateOperationResult<T> =
   | { ok: true; data: T }
   | { ok: false; code: "invalid_arguments" | "not_found" | "limit_exceeded"; message: string };
@@ -82,6 +99,7 @@ type TurnLedgerState = {
   turnId: string;
   nextId: number;
   candidates: ManagedReviewCandidate[];
+  submittedOutput?: AppServerReviewOutput;
 };
 
 const VALID_CATEGORIES = new Set<string>(MANAGED_REVIEW_CANDIDATE_CATEGORIES);
@@ -168,6 +186,150 @@ function cloneCandidate(
   candidate: ManagedReviewCandidate,
 ): ManagedReviewCandidate {
   return { ...candidate };
+}
+
+function cloneReviewFinding(
+  finding: AppServerReviewFinding,
+): AppServerReviewFinding {
+  return {
+    ...finding,
+    code_location: {
+      absolute_file_path: finding.code_location.absolute_file_path,
+      line_range: {
+        start: finding.code_location.line_range.start,
+        end: finding.code_location.line_range.end,
+      },
+    },
+  };
+}
+
+function cloneReviewOutput(
+  output: AppServerReviewOutput,
+): AppServerReviewOutput {
+  return {
+    findings: output.findings.map(cloneReviewFinding),
+    overall_correctness: output.overall_correctness,
+    overall_explanation: output.overall_explanation,
+    ...(output.overall_confidence_score === undefined
+      ? {}
+      : { overall_confidence_score: output.overall_confidence_score }),
+  };
+}
+
+function readNonEmptyString(
+  value: unknown,
+  field: string,
+): { ok: true; value: string } | { ok: false; message: string } {
+  if (typeof value !== "string") {
+    return { ok: false, message: `${field} must be a non-empty string.` };
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { ok: false, message: `${field} must be a non-empty string.` };
+  }
+  return { ok: true, value: trimmed };
+}
+
+function readConfidenceScore(
+  value: unknown,
+  field: string,
+): { ok: true; value: number } | { ok: false; message: string } {
+  if (
+    typeof value !== "number"
+    || !Number.isFinite(value)
+    || value < 0
+    || value > 1
+  ) {
+    return { ok: false, message: `${field} must be a number between 0 and 1.` };
+  }
+  return { ok: true, value };
+}
+
+function asPlainObject(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function parseSubmittedFinding(
+  value: unknown,
+  index: number,
+): { ok: true; value: AppServerReviewFinding } | { ok: false; message: string } {
+  const prefix = `findings[${index}]`;
+  const record = asPlainObject(value);
+  if (!record) {
+    return { ok: false, message: `${prefix} must be an object.` };
+  }
+  const title = readNonEmptyString(record.title, `${prefix}.title`);
+  if (!title.ok) return title;
+  const body = readNonEmptyString(record.body, `${prefix}.body`);
+  if (!body.ok) return body;
+  const confidenceScore = readConfidenceScore(
+    record.confidence_score,
+    `${prefix}.confidence_score`,
+  );
+  if (!confidenceScore.ok) return confidenceScore;
+  const priority = readPriority(record.priority);
+  if (!priority.ok) {
+    return { ok: false, message: `${prefix}.${priority.message}` };
+  }
+  let category: string | undefined;
+  if (record.category !== undefined) {
+    const normalized = normalizeReviewCategory(record.category);
+    if (!normalized) {
+      return {
+        ok: false,
+        message: `${prefix}.category must be a short single-line string.`,
+      };
+    }
+    category = normalized;
+  }
+  const location = asPlainObject(record.code_location);
+  if (!location) {
+    return { ok: false, message: `${prefix}.code_location must be an object.` };
+  }
+  const filePath = readNonEmptyString(
+    location.absolute_file_path,
+    `${prefix}.code_location.absolute_file_path`,
+  );
+  if (!filePath.ok) return filePath;
+  const lineRange = asPlainObject(location.line_range);
+  if (!lineRange) {
+    return { ok: false, message: `${prefix}.code_location.line_range must be an object.` };
+  }
+  const start = readPositiveLine(
+    lineRange.start,
+    `${prefix}.code_location.line_range.start`,
+  );
+  if (!start.ok) return start;
+  const end = readPositiveLine(
+    lineRange.end,
+    `${prefix}.code_location.line_range.end`,
+  );
+  if (!end.ok) return end;
+  if (end.value < start.value) {
+    return {
+      ok: false,
+      message: `${prefix}.code_location.line_range.end must be greater than or equal to start.`,
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      title: title.value,
+      body: body.value,
+      confidence_score: confidenceScore.value,
+      priority: priority.value,
+      ...(category ? { category } : {}),
+      code_location: {
+        absolute_file_path: filePath.value,
+        line_range: {
+          start: start.value,
+          end: end.value,
+        },
+      },
+    },
+  };
 }
 
 /**
@@ -376,6 +538,99 @@ export class ManagedReviewCandidateLedger {
         summary: countDispositions(state.candidates),
       },
     };
+  }
+
+  submitOutput(
+    turn: ManagedReviewCandidateTurnKey,
+    input: ManagedReviewOutputSubmitInput,
+  ): ManagedReviewCandidateOperationResult<{
+    submitted: AppServerReviewOutput;
+    finding_count: number;
+    ledger_summary: ManagedReviewCandidateCounts & { total: number };
+  }> {
+    if (!Array.isArray(input.findings)) {
+      return { ok: false, code: "invalid_arguments", message: "findings must be an array." };
+    }
+    if (input.findings.length > MANAGED_REVIEW_OUTPUT_MAX_FINDINGS) {
+      return {
+        ok: false,
+        code: "limit_exceeded",
+        message: `At most ${MANAGED_REVIEW_OUTPUT_MAX_FINDINGS} review findings may be submitted per review turn.`,
+      };
+    }
+    const findings: AppServerReviewFinding[] = [];
+    for (let index = 0; index < input.findings.length; index += 1) {
+      const parsed = parseSubmittedFinding(input.findings[index], index);
+      if (!parsed.ok) {
+        return { ok: false, code: "invalid_arguments", message: parsed.message };
+      }
+      findings.push(parsed.value);
+    }
+    const correctness = readNonEmptyString(
+      input.overall_correctness,
+      "overall_correctness",
+    );
+    if (!correctness.ok) {
+      return { ok: false, code: "invalid_arguments", message: correctness.message };
+    }
+    const explanation = readNonEmptyString(
+      input.overall_explanation,
+      "overall_explanation",
+    );
+    if (!explanation.ok) {
+      return { ok: false, code: "invalid_arguments", message: explanation.message };
+    }
+    let overallConfidence: number | undefined;
+    if (input.overall_confidence_score !== undefined) {
+      const parsedScore = readConfidenceScore(
+        input.overall_confidence_score,
+        "overall_confidence_score",
+      );
+      if (!parsedScore.ok) {
+        return { ok: false, code: "invalid_arguments", message: parsedScore.message };
+      }
+      overallConfidence = normalizeReviewConfidenceScore(parsedScore.value);
+    }
+
+    const output: AppServerReviewOutput = {
+      findings,
+      overall_correctness: normalizeOverallCorrectness(correctness.value, findings),
+      overall_explanation: explanation.value,
+      ...(overallConfidence === undefined
+        ? {}
+        : { overall_confidence_score: overallConfidence }),
+    };
+
+    const key = buildTurnKey(turn);
+    let state = this.turns.get(key);
+    if (!state) {
+      state = {
+        backend: turn.backend,
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+        nextId: 1,
+        candidates: [],
+      };
+      this.turns.set(key, state);
+    }
+    state.submittedOutput = cloneReviewOutput(output);
+
+    return {
+      ok: true,
+      data: {
+        submitted: cloneReviewOutput(output),
+        finding_count: output.findings.length,
+        ledger_summary: {
+          total: state.candidates.length,
+          ...countDispositions(state.candidates),
+        },
+      },
+    };
+  }
+
+  submittedOutput(turn: ManagedReviewCandidateTurnKey): AppServerReviewOutput | undefined {
+    const submitted = this.turns.get(buildTurnKey(turn))?.submittedOutput;
+    return submitted ? cloneReviewOutput(submitted) : undefined;
   }
 
   snapshot(turn: ManagedReviewCandidateTurnKey): ManagedReviewCandidateCounts & { total: number } {
