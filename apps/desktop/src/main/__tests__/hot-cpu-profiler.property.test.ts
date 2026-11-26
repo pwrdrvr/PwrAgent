@@ -344,7 +344,7 @@ it.each(["written", "start fails", "stop fails", "write fails"] as const)(
       rearm: {
         captureLimit: 1,
         profileFilename: "profile-1.cpuprofile",
-        sessionDirectoryName: profiler.rearmableCapture?.sessionDirectoryName,
+        sessionDirectoryName: "cap-warn",
       },
     });
     expect(logger.warn).toHaveBeenCalledWith(

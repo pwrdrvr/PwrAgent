@@ -120,3 +120,42 @@ it("offers the same Rearm on a post-cap notice when the capture notice is gone",
     },
   });
 });
+
+it("settles every toast that offers the same Rearm when one of them rearms", async () => {
+  let onCaptured: ((event: HotCpuProfileCapturedEvent) => void) | undefined;
+  let onPostCap: ((event: HotCpuPostCapEvent) => void) | undefined;
+  const rearmHotCpuProfile = vi.fn(async () => true);
+  const api = {
+    rearmHotCpuProfile,
+    onHotCpuProfileCaptured: (callback: typeof onCaptured) => { onCaptured = callback; return () => {}; },
+    onHotCpuPostCap: (callback: typeof onPostCap) => { onPostCap = callback; return () => {}; },
+  };
+  const dispatch = vi.fn<(action: AppNoticeAction) => void>();
+  renderHook(() => useHotCpuProfileNotices(api, dispatch));
+  act(() => onCaptured?.(savedCapture));
+  act(() => onPostCap?.({
+    captureCount: 5,
+    capturedAt: finalAttempt.capturedAt,
+    sessionId: "session",
+    target: "main",
+    rearm: {
+      captureLimit: 5,
+      profileFilename: savedCapture.profileFilename,
+      sessionDirectoryName: savedCapture.sessionDirectoryName,
+    },
+  }));
+  const shown = dispatch.mock.calls.flatMap(([action]) => action.type === "show" ? [action.notice] : []);
+  expect(shown).toHaveLength(2);
+  const [capture, postCap] = shown;
+
+  await act(async () => { await postCap.actions?.[0].onClick(); });
+  const settled = dispatch.mock.calls.flatMap(([action]) =>
+    action.type === "update-durable" && action.notice.status?.state === "success" ? [action.notice] : []);
+  // The capture toast no longer offers a Rearm the main process would refuse.
+  expect(settled.map((notice) => notice.id).sort()).toEqual([capture.id, postCap.id].sort());
+  for (const notice of settled) {
+    expect(notice.actions).toBeUndefined();
+    expect(notice.status?.label).toBe("Rearmed for up to 5 more captures.");
+  }
+  expect(rearmHotCpuProfile).toHaveBeenCalledOnce();
+});

@@ -3,7 +3,11 @@ import type { HotCpuFinalCaptureFailedEvent, HotCpuProfileCapturedEvent } from "
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 import type { AppNoticeAction } from "./app-notice-state";
-import { buildHotCpuCaptureNotice, buildHotCpuPostCapNotice } from "./hot-cpu-profile-notice";
+import {
+  buildHotCpuCaptureNotice,
+  buildHotCpuPostCapNotice,
+  type HotCpuRearmGroup,
+} from "./hot-cpu-profile-notice";
 
 export function useHotCpuProfileNotices(
   desktopApi: Pick<
@@ -20,10 +24,11 @@ export function useHotCpuProfileNotices(
     // that session, even if its notice has since been rearmed or dismissed.
     let liveSessions = desktopApi.listRearmableHotCpuProfiles ? new Set<string>() : undefined;
     const updateNotice = (notice: AppNoticeToastNotice) => dispatchNotice({ type: "update-durable", notice });
+    const rearmGroup: HotCpuRearmGroup = new Map();
     const showCapture = (event: HotCpuProfileCapturedEvent | HotCpuFinalCaptureFailedEvent) => {
       dispatchNotice({
         type: "show",
-        notice: buildHotCpuCaptureNotice(event, desktopApi.rearmHotCpuProfile, updateNotice),
+        notice: buildHotCpuCaptureNotice(event, desktopApi.rearmHotCpuProfile, updateNotice, rearmGroup),
       });
     };
     const showLiveCapture = (event: HotCpuProfileCapturedEvent | HotCpuFinalCaptureFailedEvent) => {
@@ -35,7 +40,7 @@ export function useHotCpuProfileNotices(
     const unsubscribePostCap = desktopApi.onHotCpuPostCap?.((event) => {
       dispatchNotice({
         type: "show",
-        notice: buildHotCpuPostCapNotice(event, desktopApi.rearmHotCpuProfile, updateNotice),
+        notice: buildHotCpuPostCapNotice(event, desktopApi.rearmHotCpuProfile, updateNotice, rearmGroup),
       });
     });
     void desktopApi.listRearmableHotCpuProfiles?.().then((captures) => {
