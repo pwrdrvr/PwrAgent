@@ -1,0 +1,25 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "lib": ["ES2023", "ES2024.Promise", "DOM", "DOM.Iterable"],
+    "types": ["node", "vite/client"],
+    "paths": {
+      "@pwragent/shared/*": ["../packages/shared/src/*"],
+      "@pwragent/desktop-main/*": ["../apps/desktop/src/main/*"]
+    }
+  },
+  "include": [
+    "env.d.ts",
+    "shared/**/*.ts",
+    "managed-review/**/*.ts"
+  ],
+  "exclude": [
+    "runs",
+    ".cache",
+    "node_modules"
+  ]
+}
