@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatToolIdentifier } from "../../shared/tool-activity";
 import { buildCodexConnectionMcpConfig } from "../app-server/codex-thread-config";
 import type { McpConnectionBridgeRegistration } from "../mcp-connections/mcp-connection-gateway-service";
 
@@ -17,11 +18,18 @@ function registration(name: string): McpConnectionBridgeRegistration {
 
 describe("buildCodexConnectionMcpConfig", () => {
   it.each([
-    ["a-0", /^pwragent_a_0_[0-9a-f]{32}$/u],
-    ["pwrsuitelab-control", /^pwragent_pwrsuitelab_control_[0-9a-f]{32}$/u],
+    ["a-0", /^pwragent_0_a_h0_[0-9a-f]{32}$/u],
+    ["pwrsuitelab-control", /^pwragent_0_pwrsuitelab_hcontrol_[0-9a-f]{32}$/u],
   ])("registers %s under the namespace Codex exposes to the model", (name, alias) => {
     const config = buildCodexConnectionMcpConfig([registration(name)]);
     expect(Object.keys(config?.mcp_servers ?? {})).toEqual([expect.stringMatching(alias)]);
+  });
+
+  it("preserves punctuation and distinguishes custom connections from PwrSnap in tool activity", () => {
+    const ids = ["a-", "builtin-pwrsnap", "builtin_pwrsnap", "pwrsnap"];
+    const config = buildCodexConnectionMcpConfig(ids.map(registration));
+    const labels = Object.keys(config?.mcp_servers ?? {}).map((alias) => formatToolIdentifier(alias, "inspect"));
+    expect(labels).toEqual(ids.map((id) => `${id}/inspect`));
   });
 
   it("leaves the agent's own servers alone by default", () => {

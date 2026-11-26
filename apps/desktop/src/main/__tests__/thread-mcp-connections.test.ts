@@ -158,7 +158,7 @@ describe("ThreadMcpConnections", () => {
     const { connections } = createConnections({ host: { mcpConnectionService: { peekThreadBridge } as never } });
     expect(connections.threadMcpServerNameInAgent("pwrgit", { backend: "acp:fixture", threadId: "agent" })).toBe(bridge.name);
     expect(connections.threadMcpServerNameInAgent("pwrgit", { backend: "codex", threadId: "agent" }))
-      .toMatch(/^pwragent_pwragent_pwrgit_bridge_[0-9a-f]{32}$/u);
+      .toMatch(/^pwragent_0_pwragent_hpwrgit_hbridge_[0-9a-f]{32}$/u);
     expect(connections.threadMcpServerNameInAgent("pwrgit", { backend: "claude", threadId: "agent" }))
       .toMatch(/^pwragent_pwragent-pwrgit-bridge_[0-9a-f]{32}$/u);
     expect(connections.threadMcpServerNameInAgent("linear", { backend: "codex", threadId: "agent" })).toBeUndefined();
