@@ -547,6 +547,48 @@ describe("RbacPolicyService", () => {
     expect(service.deleteRole(RBAC_BUILT_IN_ROLE_IDS.admin).ok).toBe(false);
   });
 
+  it.each([
+    "upsertRole",
+    "deleteRole",
+    "upsertAttachment",
+    "deleteAttachment",
+    "setEnforced",
+  ] as const)("preserves the saved policy when %s encounters a fail-closed read", (operation) => {
+    const file = resolveRbacConfigPath(storeOptions);
+    const roleId = "custom-role";
+    const subject = { kind: "actor", platform: "slack", ...actor } as const;
+    const source = grantedToml
+      .replace("enforced = true", 'enforced = "invalid"')
+      .replace('["chat_user"]', `["${roleId}"]`)
+      + [
+        "",
+        "[[messaging.rbac.roles]]",
+        `id = "${roleId}"`,
+        'name = "Custom role"',
+        'permissions = ["message.reply"]',
+        "",
+      ].join("\n");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, source);
+    const audit = vi.fn();
+    const service = new RbacPolicyService(storeOptions, audit);
+    const edit = {
+      upsertRole: () => service.upsertRole({
+        id: roleId, name: "Renamed role", builtIn: false, permissions: ["message.reply"],
+      }),
+      deleteRole: () => service.deleteRole(roleId),
+      upsertAttachment: () => service.upsertAttachment({ subject, roleIds: ["chat_user"] }),
+      deleteAttachment: () => service.deleteAttachment(subject),
+      setEnforced: () => service.setEnforced(false),
+    }[operation];
+
+    expect(service.isFailClosed()).toBe(true);
+    const result = edit();
+    expect(fs.readFileSync(file, "utf8")).toBe(source);
+    expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/repair/i) });
+    expect(audit).not.toHaveBeenCalled();
+  });
+
   it("marks a custom role dangerous when it grants full access", () => {
     const service = new RbacPolicyService(storeOptions);
     service.upsertRole({

@@ -278,9 +278,8 @@ when the store affirmatively knows it is off:
   policy with a missing or garbled `enforced` flag. Configured policy requires
   an explicit boolean `false` to disable enforcement.
   The fail-closed state is surfaced explicitly: the policy read carries a
-  `failClosed` flag and the Access Control pane shows a repair callout
-  (fix the file by hand; pane edits may fail while the TOML is malformed)
-  instead of a puzzlingly empty enforced graph.
+  `failClosed` flag and the Access Control pane shows a repair callout.
+  Repair the policy file before making Access Control edits.
 - Individually malformed role/attachment rows are dropped row by row, which is
   itself fail-closed: a dropped attachment grants nothing.
 - A persisted role that **reuses a reserved built-in id** is discarded on read.
