@@ -66,6 +66,38 @@ describe("review status controls", () => {
     await screen.findByText("Handled");
   });
 
+  it("offers tracking controls for a native result replayed before its turn ends", async () => {
+    const api = installApi(review);
+    // Codex can publish the result before its enclosing turn finishes.
+    // Replay carries that turn's status even after the owner records the result.
+    render(<TranscriptReview entry={{ ...entry, output: undefined,
+      turn: { id: "review-turn", status: "in_progress" },
+    }} parentThreadId="owner" parentThreadBackend="codex" />);
+
+    expect(api.listThreadReviews).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex", threadId: "owner", status: "all",
+    });
+    await screen.findByRole("button", { name: "Dismiss review" });
+  });
+
+  it("clears a failed refresh when the owner's update response arrives without a change event", async () => {
+    const api = installApi({ ...review, status: "dismissed" });
+    let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+    vi.mocked(api.onThreadTodosChanged!).mockImplementation((listener) => { changed = listener; return () => {}; });
+    render(<TranscriptReview entry={entry} parentThreadId="owner" />);
+    const dismiss = await screen.findByRole("button", { name: "Dismiss review" });
+    vi.mocked(api.listThreadReviews!).mockRejectedValueOnce(new Error("Peer is disconnected."));
+    await act(async () => changed({ at: 2 }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Peer is disconnected.");
+
+    // The owner may already have applied this change for another viewer.
+    // Its successful response is enough to clear the earlier read error.
+    fireEvent.click(dismiss);
+    await screen.findByRole("button", { name: "Reopen review" });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(api.listThreadReviews).toHaveBeenCalledTimes(2);
+  });
+
   it("reloads transcript status when provider recovery refreshes all To-dos", async () => {
     const api = installApi(review);
     vi.mocked(api.listThreadReviews!).mockResolvedValueOnce({ reviews: [] });
@@ -78,6 +110,35 @@ describe("review status controls", () => {
     await screen.findByRole("button", { name: "Mark addressed: Abort pending exports" });
     expect(api.listThreadReviews).toHaveBeenLastCalledWith({ backend: "codex", threadId: "owner", status: "all" });
   });
+
+  it.each(["before", "after"] as const)(
+    "recovers when a reconnect event arrives %s a failed review read settles",
+    async (ordering) => {
+      const api = installApi(review);
+      const pending = Promise.withResolvers<{ reviews: ThreadReview[] }>();
+      const recovered = Promise.withResolvers<{ reviews: ThreadReview[] }>();
+      vi.mocked(api.listThreadReviews!).mockReturnValueOnce(pending.promise).mockReturnValueOnce(recovered.promise);
+      let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+      vi.mocked(api.onThreadTodosChanged!).mockImplementation((listener) => { changed = listener; return () => {}; });
+      render(<TranscriptReview entry={entry} parentThreadId="owner"
+        threadLinkSource={{ backend: "codex", instanceId: "peer" }} />);
+
+      if (ordering === "before") act(() => changed({ at: 2 }));
+      await act(async () => pending.reject(new Error("Peer is disconnected.")));
+      if (ordering === "after") {
+        expect(screen.getByRole("alert")).toHaveTextContent("Peer is disconnected.");
+        act(() => changed({ at: 2 }));
+      }
+
+      // A reconnect asks for a fresh read even while another one is pending.
+      // Once that read succeeds, the card shows the record and clears the error.
+      if (ordering === "before") expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(api.listThreadReviews).toHaveBeenCalledTimes(2);
+      await act(async () => recovered.resolve({ reviews: [review] }));
+      await screen.findByRole("button", { name: "Dismiss review" });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
 
   it("shares one pending read across two surfaces of the same review", async () => {
     const api = installApi(review);
@@ -448,6 +509,7 @@ describe("review Auto-fix status", () => {
     await waitFor(() => expect(api.readReviewAutoFix).toHaveBeenCalledTimes(1));
     expect(screen.queryByText("Auto-fix armed")).not.toBeInTheDocument();
     rerender(<TranscriptReview entry={{ ...entry, turn: { id: "turn-review", status: "completed" } }} parentThreadId="owner" />);
+    await screen.findByRole("button", { name: "Dismiss review" });
     expect(screen.queryByText("Auto-fix armed")).not.toBeInTheDocument();
     expect(api.readReviewAutoFix).toHaveBeenCalledTimes(1);
   });
