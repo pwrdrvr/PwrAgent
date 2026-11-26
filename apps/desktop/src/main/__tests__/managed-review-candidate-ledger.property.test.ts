@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import fc from "fast-check";
@@ -832,7 +833,8 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
     });
 
     try {
-      const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
+      const repoCwd = path.resolve("/repo");
+      const parent = await registry.startThread({ backend: "codex", cwd: repoCwd });
       const review = await registry.startReview({
         backend: "codex",
         threadId: parent.threadId,
@@ -950,7 +952,8 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
     });
 
     try {
-      const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
+      const repoCwd = path.resolve("/repo");
+      const parent = await registry.startThread({ backend: "codex", cwd: repoCwd });
       const review = await registry.startReview({
         backend: "codex",
         threadId: parent.threadId,
@@ -1099,7 +1102,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
           title: "Lower priority parity bug",
           priority: 2,
           code_location: {
-            absolute_file_path: "/repo/src/b.ts",
+            absolute_file_path: path.resolve(repoCwd, "src/b.ts"),
             line_range: { start: 20, end: 24 },
           },
         });
@@ -1128,7 +1131,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       disposition: fc.constantFrom<"pending" | "keep" | "drop">("pending", "keep", "drop"),
       priority: priorityArb,
     });
-    const cwdArb = fc.constantFrom("/repo", "C:\\work\\repo");
+    const cwdArb = fc.constantFrom("/repo", "C:\\work\\repo", "C:/work/repo");
 
     fc.assert(
       fc.property(fc.array(candidateArb, { maxLength: 15 }), cwdArb, (raw, cwd) => {
@@ -1177,7 +1180,8 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
             expect(resolvedPath.startsWith(`${cwd}/`)).toBe(true);
             expect(resolvedPath).not.toContain("\\");
           } else {
-            expect(resolvedPath.startsWith(`${cwd}\\`)).toBe(true);
+            const winPrefix = `${path.win32.normalize(cwd)}\\`;
+            expect(resolvedPath.startsWith(winPrefix)).toBe(true);
             expect(resolvedPath).not.toContain("/");
           }
           expect(finding.code_location.line_range.end).toBeGreaterThanOrEqual(
