@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -70,7 +70,11 @@ function defaultAccess(): DecisionFileAccess {
 
 function makeService(
   fetch: typeof globalThis.fetch,
-  options: { access?: DecisionFileAccess; includeResultsDir?: boolean } = {},
+  options: {
+    access?: DecisionFileAccess;
+    includeResultsDir?: boolean;
+    onWake?: (wake: Wake) => void;
+  } = {},
 ) {
   let nextBatch = 0;
   return new OpenAIDecisionsService({
@@ -80,13 +84,23 @@ function makeService(
     readAccountSettings: () => ({}),
     profileId: () => "test-profile",
     recordUsageLines: async () => undefined,
-    wakeThread: async (caller, wake) => { wakes.push({ caller, ...wake }); },
+    wakeThread: async (caller, wake) => {
+      const entry = { caller, ...wake };
+      wakes.push(entry);
+      options.onWake?.(entry);
+    },
     newBatchId: () => `io-${(nextBatch += 1)}`,
     ...(options.includeResultsDir === false ? {} : { batchResultsDirectory: () => resultsDir }),
     resolveCallerFileAccess: async () => options.access ?? defaultAccess(),
     fetch,
     endpoint: "https://openai.test/v1/decisions",
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => { resolve = res; });
+  return { promise, resolve };
 }
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {
@@ -182,6 +196,75 @@ describe("local file access boundaries", () => {
       .then(() => undefined, (err: unknown) => err);
     expect((writeViaLinkDir as DecisionFileError).code).toBe("file_access_denied");
   });
+
+  it("canonicalizes nonexistent allowed, denied, and private roots through symlinked ancestors", async () => {
+    const realParent = path.join(tempRoot, "real-parent");
+    const symlinkParent = path.join(tempRoot, "symlink-parent");
+    await mkdir(realParent, { recursive: true });
+    await symlink(realParent, symlinkParent);
+    const canonicalRealParent = await realpath(realParent);
+
+    // Nonexistent allowedRoot under a symlinked ancestor permits writes and returns the canonical path.
+    const futureAllowed = path.join(symlinkParent, "future-scratch");
+    const allowedTarget = path.join(futureAllowed, "nested", "out.json");
+    const resolved = await resolveWritableDecisionOutputFile(allowedTarget, {
+      allowedRoots: [futureAllowed],
+    });
+    expect(resolved).toBe(path.join(canonicalRealParent, "future-scratch", "nested", "out.json"));
+
+    // Nonexistent deniedRoot under a symlinked ancestor still blocks canonical-path writes.
+    const futureDenied = path.join(symlinkParent, "future-allowed", "secret");
+    const deniedTarget = path.join(canonicalRealParent, "future-allowed", "secret", "out.json");
+    const deniedErr = await resolveWritableDecisionOutputFile(deniedTarget, {
+      allowedRoots: [path.join(canonicalRealParent, "future-allowed")],
+      deniedRoots: [futureDenied],
+    }).then(() => undefined, (err: unknown) => err);
+    expect(deniedErr).toBeInstanceOf(DecisionFileError);
+    expect((deniedErr as DecisionFileError).code).toBe("file_access_denied");
+
+    // Nonexistent privateStorageRoot under a symlinked ancestor still blocks canonical-path writes.
+    const futurePrivate = path.join(symlinkParent, "future-home");
+    const privateTarget = path.join(canonicalRealParent, "future-home", "profiles", "default", "state", "out.json");
+    const privateErr = await resolveWritableDecisionOutputFile(privateTarget, {
+      allowedRoots: [canonicalRealParent],
+      privateStorageRoots: [futurePrivate],
+    }).then(() => undefined, (err: unknown) => err);
+    expect(privateErr).toBeInstanceOf(DecisionFileError);
+    expect((privateErr as DecisionFileError).code).toBe("file_access_denied");
+  });
+
+  it("enforces allowedRoots before lstatting outside targets and handles ENOTDIR cleanly", async () => {
+    const access = defaultAccess();
+    const outsideSubDir = path.join(outsideDir, "existing-dir");
+    const outsideFile = path.join(outsideDir, "existing.txt");
+    const outsideLink = path.join(outsideDir, "existing-link.json");
+    await mkdir(outsideSubDir, { recursive: true });
+    await writeFile(outsideFile, "data", "utf8");
+    await symlink(outsideFile, outsideLink);
+
+    for (const outsideTarget of [
+      outsideSubDir,
+      outsideLink,
+      path.join(outsideFile, "sub", "out.json"),
+    ]) {
+      const err = await resolveWritableDecisionOutputFile(outsideTarget, access)
+        .then(() => undefined, (caught: unknown) => caught);
+      expect(err).toBeInstanceOf(DecisionFileError);
+      expect((err as DecisionFileError).code).toBe("file_access_denied");
+    }
+
+    // Two or more segments beneath an existing regular file inside allowedRoots yields clean invalid_input (no raw ENOTDIR).
+    const workspaceFile = path.join(workspaceDir, "existing.txt");
+    await writeFile(workspaceFile, "data", "utf8");
+    const enotdirErr = await resolveWritableDecisionOutputFile(
+      path.join(workspaceFile, "sub", "out.json"),
+      access,
+    ).then(() => undefined, (caught: unknown) => caught);
+    expect(enotdirErr).toBeInstanceOf(DecisionFileError);
+    expect((enotdirErr as DecisionFileError).code).toBe("invalid_input");
+    expect((enotdirErr as DecisionFileError).message).toBe("outputFile must be a valid absolute local file path.");
+    expect((enotdirErr as DecisionFileError).message).not.toContain("ENOTDIR");
+  });
 });
 
 describe("decisions_invoke file I/O", () => {
@@ -262,16 +345,18 @@ describe("decisions_invoke file I/O", () => {
     );
   });
 
-  it("writes outputFile and reports it in wake-up text for background batches", async () => {
+  it("writes outputFile, reports it in wake-up text, and preserves it after reload from resultsFile", async () => {
     const inPath = path.join(workspaceDir, "bg-inputs.jsonl");
     const outPath = path.join(workspaceDir, "bg-out.json");
     await writeFile(inPath, `${["a", "b", "c"].map((item) => JSON.stringify(item)).join("\n")}\n`, "utf8");
 
-    const service = makeService(async () => jsonResponse({
+    const woke = deferred<Wake>();
+    const fetchMock: typeof globalThis.fetch = async () => jsonResponse({
       model: "gpt-6-luna",
       answers: [{ type: "predicate", name: "concrete", probability: 0.85 }],
       usage: { input_tokens: 100, output_tokens: 0 },
-    }, 200, { "x-request-id": "req_bg" }));
+    }, 200, { "x-request-id": "req_bg" });
+    const service = makeService(fetchMock, { onWake: woke.resolve });
 
     const started = await service.invoke(CALLER, {
       definition: { provider: "openai", ...PREDICATE },
@@ -284,10 +369,9 @@ describe("decisions_invoke file I/O", () => {
     expect(started.next).toContain("outputFile");
     expect("results" in started).toBe(false);
 
-    // Wait for the background batch wake-up.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    const wake = await woke.promise;
     expect(wakes).toHaveLength(1);
-    expect(wakes[0]!.text).toContain(started.outputFile);
+    expect(wake.text).toContain(started.outputFile);
 
     const written = JSON.parse(await readFile(started.outputFile, "utf8")) as {
       batchId: string;
@@ -297,6 +381,64 @@ describe("decisions_invoke file I/O", () => {
     };
     expect(written).toMatchObject({ batchId: started.batchId, succeeded: 3, detail: "compact" });
     expect(written.results.map((item) => item.index)).toEqual([0, 1, 2]);
+
+    // A fresh service instance (simulating restart or in-memory eviction) reloads outputFile from resultsFile.
+    const reloadedService = makeService(fetchMock);
+    const reloaded = await reloadedService.batchResults(CALLER, { batchId: started.batchId }) as {
+      outputFile?: string;
+      outputFileError?: string;
+      results: Array<{ index: number }>;
+    };
+    expect(reloaded.outputFile).toBe(started.outputFile);
+    expect(reloaded.outputFileError).toBeUndefined();
+    expect(reloaded.results.map((item) => item.index)).toEqual([0, 1, 2]);
+  });
+
+  it("reports and persists outputFileError when writing outputFile fails at background batch finish", async () => {
+    const outPath = path.join(workspaceDir, "bg-fail-out.json");
+    const woke = deferred<Wake>();
+    const fetchMock: typeof globalThis.fetch = async () => {
+      // Simulate the destination turning into a directory before finishBatch writes outputFile.
+      await mkdir(outPath, { recursive: true });
+      return jsonResponse({
+        model: "jev-latest",
+        answers: { concrete: { noul: 0.7 } },
+      });
+    };
+    const service = makeService(fetchMock, { onWake: woke.resolve });
+
+    const started = await service.invoke(CALLER, {
+      definition: { provider: "jev", ...PREDICATE },
+      inputs: ["alpha"],
+      outputFile: outPath,
+      background: true,
+    }) as { batchId: string; outputFile: string };
+
+    const wake = await woke.promise;
+    expect(wake.text).toContain("Writing outputFile failed");
+    expect(wake.text).toContain("outputFile must be a file path, not a directory.");
+    expect(wake.text).not.toContain(`Output written to ${started.outputFile}.`);
+
+    const live = await service.batchResults(CALLER, { batchId: started.batchId }) as {
+      outputFile?: string;
+      outputFileError?: string;
+      results: Array<{ index: number; ok: boolean }>;
+    };
+    expect(live.outputFile).toBe(started.outputFile);
+    expect(live.outputFileError).toContain("outputFile must be a file path, not a directory.");
+    expect(live.results).toHaveLength(1);
+    expect(live.results[0]!.ok).toBe(true);
+
+    // Reloading from resultsFile after eviction/restart preserves both outputFile and outputFileError.
+    const reloadedService = makeService(fetchMock);
+    const reloaded = await reloadedService.batchResults(CALLER, { batchId: started.batchId }) as {
+      outputFile?: string;
+      outputFileError?: string;
+      results: Array<{ index: number; ok: boolean }>;
+    };
+    expect(reloaded.outputFile).toBe(started.outputFile);
+    expect(reloaded.outputFileError).toBe(live.outputFileError);
+    expect(reloaded.results).toHaveLength(1);
   });
 
   it("supports inlineResults: false without outputFile on a batch and keeps resultsFile readable", async () => {

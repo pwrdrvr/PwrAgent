@@ -1286,12 +1286,14 @@ export class OpenAIDecisionsService {
         ? "cancelled"
         : "completed";
     batch.finishedAt = this.now();
+    // Write caller outputFile before settling the end line so resultsFile
+    // persists both outputFile and any outputFileError across eviction/restart.
+    await this.writeBatchOutputFile(batch);
     // The end line goes out even at shutdown: the file is what survives it.
     const writer = this.writers.get(batch.batchId);
     writer?.append(batchEndEntry(batch));
     await writer?.settle();
     this.writers.delete(batch.batchId);
-    await this.writeBatchOutputFile(batch);
     this.batches.evict();
     this.options.log?.info("decision batch finished", {
       decisionId: batch.decisionId,
