@@ -31,9 +31,11 @@ invisible to that request. The backend and archive filters still apply. A later
 request can rediscover those rows without delete/reinsert churn.
 
 Indexing yields between groups of 64 rows and checks cancellation before the
-next group. Explicit complete-inventory cleanup inspects 64 documents via an
-identity-key cursor, filters backend/archive/retention in that window, and
-batches eligible deletes in one transaction. It creates no background timer
+next group. Explicit complete-inventory cleanup reads up to 64 documents via an
+identity-key cursor and applies backend, archive, and retention filters in that
+window. A window with candidates is reread under the writer lock and eligible
+deletes share that transaction. A window with no candidates advances the cursor
+from the read. Cleanup creates no background timer
 and search never invokes it. A complete sweep requires repeated calls; each
 scope's in-memory cursor wraps at the end. Input inventory normalization still
 costs O(number of retained identities); database work is bounded by the window.
