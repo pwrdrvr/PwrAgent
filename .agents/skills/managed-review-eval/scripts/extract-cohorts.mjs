@@ -16,7 +16,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { baselineProvenance, capturedRange, containsMachinePath, sanitizeItems, sanitizeText } from "./cohort-data.mjs";
 import {
   nativeClaudeCapturedRange,
@@ -56,8 +56,13 @@ function resolveSqliteBinary() {
 
 function readReviewRows(sqlite, db, limit, claudeCollection = false) {
   const where = claudeCollection ? "backend = 'claude'" : "status = 'handled'";
+  // SQLite may need to initialize WAL sidecars after the collection owner exits.
+  // Open the existing file without create permission and keep the SQL read-only.
+  const connection = claudeCollection
+    ? ["-cmd", "PRAGMA query_only=ON;", "-json", `${pathToFileURL(db).href}?mode=rw`]
+    : ["-readonly", "-json", db];
   const rows = execFileSync(sqlite, [
-    "-readonly", "-json", db,
+    ...connection,
     `SELECT status, updated_at, payload FROM thread_reviews WHERE ${where} ORDER BY updated_at DESC LIMIT ${limit};`,
   ], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
   return JSON.parse(rows || "[]");

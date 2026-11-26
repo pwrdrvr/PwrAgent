@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Aggregate PwrAgent Decision-model scoring batches (`decisions_invoke` JSONL
- * files or workflow child transcript fallback) into eval summary JSON and CSVs.
+ * or caller-requested output files) into eval summary JSON and CSVs.
  *
  * Blind test discipline:
  *   When the cohort JSON sets `"blind": true`, this script prints ONLY
@@ -18,8 +18,8 @@
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { completeDecisionAnswers, readDecisionOutput } from "./decision-file-batches.mjs";
 
 function parseArg(name, fallback) {
   const idx = process.argv.indexOf(name);
@@ -33,8 +33,6 @@ const cohortPath = path.resolve(parseArg("--cohort", ""));
 const resultsDir = path.resolve(parseArg("--results", ""));
 const scoringDir = path.resolve(parseArg("--scoring", ""));
 const outDir = path.resolve(parseArg("--out", path.dirname(resultsDir)));
-const workflowLogPath = parseArg("--workflow-log", "");
-const brainDir = parseArg("--brain-dir", path.join(os.homedir(), ".gemini/antigravity-cli/brain"));
 const allowInspectTest = process.argv.includes("--allow-inspect-test");
 
 if (!cohortPath || !resultsDir || !scoringDir) {
@@ -64,84 +62,25 @@ const holisticMeta = JSON.parse(
   fs.readFileSync(path.join(scoringDir, "holistic-meta.json"), "utf8"),
 );
 
-const childConvByKey = new Map();
-if (workflowLogPath && fs.existsSync(workflowLogPath)) {
-  const wfText = fs.readFileSync(workflowLogPath, "utf8");
-  for (const m of wfText.matchAll(/Score (recall|precision|holistic) #(\d+): done \(([0-9a-f-]+)\)/g)) {
-    childConvByKey.set(`${m[1]}:${m[2]}`, m[3]);
-  }
-}
-
 function loadChunkItems(chunk) {
-  if (chunk.resultsFile && fs.existsSync(chunk.resultsFile)) {
+  let rows;
+  if (chunk.outputFile) {
+    const output = readDecisionOutput(chunk.outputFile, chunk.count, definitions[chunk.batchType]);
+    if (output.batchId !== chunk.batchId) throw new Error("Decision output batch ID changed.");
+    rows = output.results;
+  } else {
     const lines = fs.readFileSync(chunk.resultsFile, "utf8").trim().split("\n");
     const header = JSON.parse(lines.shift());
     if (header.type !== "batch" || header.batchId !== chunk.batchId || header.count !== chunk.count) {
       throw new Error(`Decision archive is incomplete or mismatched for ${chunk.batchType}#${chunk.chunkIndex}.`);
     }
-    const items = [];
-    for (const line of lines) {
-      const row = JSON.parse(line);
-      if (row.type === "item") {
-        items.push({
-          localIndex: row.index,
-          ok: row.ok,
-          answers: row.response?.answers ?? [],
-          costUsd: row.usage?.estimatedCostUsd ?? 0,
-        });
-      }
-    }
-    items.sort((a, b) => a.localIndex - b.localIndex);
-    return items;
+    rows = lines.map((line) => JSON.parse(line)).filter((row) => row.type === "item");
   }
-
-  const childId = childConvByKey.get(`${chunk.batchType}:${chunk.chunkIndex}`);
-  if (!childId) {
-    throw new Error(
-      `Missing resultsFile (${chunk.resultsFile}) and no --workflow-log fallback for ${chunk.batchType}#${chunk.chunkIndex}`,
-    );
-  }
-  const transcriptPath = path.join(brainDir, childId, ".system_generated/logs/transcript_full.jsonl");
-  const lines = fs.readFileSync(transcriptPath, "utf8").trim().split("\n");
-  for (const line of lines) {
-    if (!line.includes(chunk.batchId)) continue;
-    const step = JSON.parse(line);
-    const walk = (obj) => {
-      if (typeof obj === "string") {
-        if (obj.includes(chunk.batchId) && obj.includes('"results"')) {
-          try {
-            const startBrace = obj.indexOf("{");
-            const parsed = JSON.parse(startBrace >= 0 ? obj.slice(startBrace) : obj);
-            if (parsed.batchId === chunk.batchId && Array.isArray(parsed.results)) {
-              return parsed;
-            }
-          } catch {
-            // ignore
-          }
-        }
-        return null;
-      }
-      if (obj && typeof obj === "object") {
-        for (const v of Object.values(obj)) {
-          const found = walk(v);
-          if (found) return found;
-        }
-      }
-      return null;
-    };
-    const found = walk(step);
-    if (found) {
-      return found.results
-        .map((r) => ({
-          localIndex: r.index,
-          ok: r.ok,
-          answers: r.answers ?? r.response?.answers ?? [],
-          costUsd: r.usage?.estimatedCostUsd ?? 0,
-        }))
-        .sort((a, b) => a.localIndex - b.localIndex);
-    }
-  }
-  throw new Error(`Could not recover batch ${chunk.batchId} from ${transcriptPath}`);
+  return rows.map((row) => ({
+    localIndex: row.index,
+    ok: row.ok,
+    answers: row.answers ?? row.response?.answers ?? [],
+  })).sort((a, b) => a.localIndex - b.localIndex);
 }
 
 function getAnswer(answers, name) {
@@ -155,23 +94,6 @@ if (definitionSha256 !== manifest.definitionSha256) {
 }
 const definitions = JSON.parse(definitionsBytes);
 const seenBatches = new Set();
-
-function completeAnswers(answers, questions) {
-  return Array.isArray(answers) && answers.length === questions.length && questions.every((question) => {
-    const answer = getAnswer(answers, question.name);
-    if (!answer) return false;
-    switch (question.type) {
-      case "predicate":
-        return Number.isFinite(answer.probability) && answer.probability >= 0 && answer.probability <= 1;
-      case "choice":
-        return question.choices.some((choice) => choice.value === answer.choice);
-      case "score":
-        return Number.isFinite(answer.score) && answer.score >= 0 && answer.score < question.levels.length;
-      default:
-        return false;
-    }
-  });
-}
 
 function loadAllFor(batchType, metaList) {
   const chunks = summary[batchType];
@@ -198,7 +120,7 @@ function loadAllFor(batchType, metaList) {
     seenBatches.add(chunk.batchId);
     const items = loadChunkItems(chunk);
     if (items.length !== chunk.count || items.some((item, i) =>
-      item.localIndex !== i || item.ok !== true || !completeAnswers(item.answers, definitions[batchType].questions)
+      item.localIndex !== i || item.ok !== true || !completeDecisionAnswers(item.answers, definitions[batchType].questions)
     )) {
       throw new Error(`Decision answers are incomplete at ${batchType}#${index}.`);
     }
@@ -485,7 +407,8 @@ const report = {
   cohortName: Array.isArray(rawCohort) ? path.basename(cohortPath, ".json") : rawCohort.name,
   blind: isBlind,
   decisionScoring: {
-    model: "gpt-6-luna",
+    provider: definitions.precision.provider,
+    ...(definitions.precision.provider === "openai" ? { model: "gpt-6-luna" } : {}),
     totalItems: recallRows.length + precisionRows.length + holisticRows.length,
     totalCostUsd: totalDecisionCostUsd,
     unverifiedBaselineCount,

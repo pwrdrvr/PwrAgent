@@ -12,31 +12,28 @@ scoring="$run/scoring"
 
 node "$skill/scripts/prepare-scoring-batches.mjs" \
   --repo "$PWD" --cohort "$cohort" --results "$run/results" \
-  --out "$scoring" --arms codex,neon --allow-legacy-baselines
+  --out "$scoring" --arms codex,neon --judge-provider openai --allow-legacy-baselines
 ```
 
 Preparation uses the same pinned merge-base-to-head range as the reviewer, writes anonymous holistic findings, and splits serialized chunks at 37 KiB. An input that exceeds the limit on its own requires a decision about what evidence to include before scoring.
 
 ## Invoke Decision batches
 
-Use PwrAgent's built-in Decision tools. They send scoring evidence to the configured OpenAI provider and bill the operator's API project. If neither route is available, keep the chunks for a Decision-enabled PwrAgent session.
+Use PwrAgent's built-in `decisions_invoke` tool. Choose `--judge-provider openai` or `--judge-provider jev` at preparation and keep that choice fixed across comparisons. Coordinate provider usage with the operator before invoking batches. The selected provider receives the evidence.
 
-- **From Decision-enabled Codex for development cohorts**, discover `decisions_invoke` through PwrAgent tool search. Process each entry of `recall`, `precision`, and `holistic` in `chunks-manifest.json` in order. Use the matching entry from the prepared `scoring-definitions.json` as `definition` and pass the unchanged chunk array as `inputs`. Use `detail: "compact"`. If a batch runs in the background, use its `batchId` with `decisions_batch_results` after it finishes. Archive the files as described below.
-- **With Antigravity's `run_workflow` available**, pass [run-decision-scoring.py](../scripts/run-decision-scoring.py) with `Args: { "scoringDir": "/absolute/path/to/scoring" }`. It archives results under `jsonl/` and creates the summary. It reuses completed archives only when the chunk and definitions match. For a blind cohort, use a runner that keeps case-level evidence and tool responses out of the tuning context.
+1. Discover `decisions_invoke` through PwrAgent tool search. The connected owner must advertise `inputsFile`, `outputFile`, and `inlineResults`. If those fields are missing, keep the prepared files for a session connected to an updated owner.
+2. Print the pending call arguments. The plan contains definitions and file paths. The case evidence and answers stay in files.
 
-### Record direct Decision results
+   ```bash
+   node "$skill/scripts/decision-file-batches.mjs" --scoring "$scoring"
+   ```
 
-Copy each completed batch's `resultsFile` to a stable path under `<scoring>/jsonl/` before launching more batches. PwrAgent rotates its own copies. Save `<scoring>/decision-batches-summary.json` as an object with `recall`, `precision`, and `holistic` arrays. Use one entry per manifest chunk in manifest order.
+3. For each `pending` entry, call `decisions_invoke` with its `arguments` object. Each call uses one file-backed batch with `inlineResults: false`. Keep the input and output paths in the active thread workspace, scratch directory, or temporary directory. During blind scoring, keep the contents of those files out of the tuning context.
+4. Record the finished batches. This checks the input and definition hashes, provider, and answers before creating `decision-batches-summary.json`. Repeat the plan command to find remaining batches. Output filenames include both hashes, so changes to evidence or definitions get new batches.
 
-| Field | Source |
-| --- | --- |
-| `batchType` | The manifest key |
-| `chunkIndex` | Zero-based position in that manifest array |
-| `start`, `count`, `inputsSha256` | The manifest chunk entry |
-| `definitionSha256` | The top-level manifest field |
-| `batchId`, `succeeded`, `failed` | The final Decision batch response |
-| `resultsFile` | Absolute path to the archived JSONL |
-| `estimatedCostUsd` | The response's `usage.estimatedCostUsd`, when available |
+   ```bash
+   node "$skill/scripts/decision-file-batches.mjs" --scoring "$scoring" --record
+   ```
 
 ## Aggregate and interpret
 

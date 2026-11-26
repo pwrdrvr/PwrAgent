@@ -201,3 +201,53 @@ test("cannot aggregate failed answers, missing chunks, or judgments for differen
     assert.match(result.stderr, /incomplete|different inputs/i);
   }
 });
+
+test("file-backed Decision batches round trip without inline evidence and are keyed by content", (t) => {
+  const f = fixture(t);
+  const prepared = f.prepare("--judge-provider", "jev");
+  assert.equal(prepared.status, 0, prepared.stderr);
+  const plan = (...args) => spawnSync(process.execPath, [
+    path.join(scripts, "decision-file-batches.mjs"), "--scoring", f.scoring, ...args,
+  ], { encoding: "utf8" });
+  const first = plan();
+  assert.equal(first.status, 0, first.stderr);
+  const { pending } = JSON.parse(first.stdout);
+  assert.deepEqual([...new Set(pending.map(({ batchType }) => batchType))], ["recall", "precision", "holistic"]);
+  assert.notEqual(plan("--record").status, 0);
+  const compactAnswers = {
+    recall: [{ name: "same_root_cause", probability: 0.9 }, { name: "match_grade", choice: "exact_match" }],
+    precision: [{ name: "matches_baseline", probability: 0.9 }, { name: "concrete_defect", probability: 0.9 }, { name: "defect_value", score: 3 }],
+    holistic: ["signal_to_noise", "actionability", "overall_quality"].map((name) => ({ name, score: 3 })),
+  };
+  for (const { batchType, chunkIndex, count, arguments: args } of pending) {
+    assert.equal(args.definition.provider, "jev");
+    assert.equal(args.inlineResults, false);
+    assert.equal(Object.hasOwn(args, "inputs"), false);
+    assert.equal(read(args.inputsFile).length, count);
+    fs.mkdirSync(path.dirname(args.outputFile), { recursive: true });
+    write(args.outputFile, {
+      batchId: `batch_${batchType}-${chunkIndex}`, state: "completed", provider: "jev", count, succeeded: count, failed: 0,
+      results: Array.from({ length: count }, (_, index) => ({ index, ok: true, answers: compactAnswers[batchType] })),
+    });
+  }
+  const recorded = plan("--record");
+  assert.equal(recorded.status, 0, recorded.stderr);
+  assert.deepEqual(JSON.parse(plan().stdout), { complete: pending.length, pending: [] });
+  const complete = f.aggregate();
+  assert.equal(complete.status, 0, complete.stderr);
+  const precision = pending.find(({ batchType }) => batchType === "precision").arguments.outputFile;
+  const invalid = read(precision);
+  invalid.results[0].answers[0] = { name: "matches_baseline", type: "refusal" };
+  write(precision, invalid);
+  assert.notEqual(plan("--record").status, 0);
+  assert.notEqual(f.aggregate().status, 0);
+
+  const changed = f.prepare("--judge-provider", "openai");
+  assert.equal(changed.status, 0, changed.stderr);
+  const regenerated = JSON.parse(plan().stdout);
+  assert.equal(regenerated.complete, 0);
+  assert.equal(regenerated.pending.length, pending.length);
+  for (const [index, item] of regenerated.pending.entries()) {
+    assert.notEqual(item.arguments.outputFile, pending[index].arguments.outputFile);
+  }
+});

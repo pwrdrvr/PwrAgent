@@ -29,6 +29,8 @@ const cohortPath = path.resolve(parseArg("--cohort", ""));
 const resultsDir = path.resolve(parseArg("--results", ""));
 const scoringDir = path.resolve(parseArg("--out", ""));
 const remote = parseArg("--remote", "origin");
+const judgeProvider = parseArg("--judge-provider", "openai");
+if (!["openai", "jev"].includes(judgeProvider)) throw new Error("Choose openai or jev for --judge-provider.");
 const arms = parseArg("--arms", "codex,neon")
   .split(",")
   .map((s) => s.trim())
@@ -46,7 +48,10 @@ if (unverifiedBaselineCount && (rawCohort.blind || !process.argv.includes("--all
   throw new Error(`Cohort contains ${unverifiedBaselineCount} baseline(s) without a verified original range.`);
 }
 const definitionsFile = new URL("./scoring-definitions.json", import.meta.url);
-const definitionSha256 = createHash("sha256").update(fs.readFileSync(definitionsFile)).digest("hex");
+const definitions = JSON.parse(fs.readFileSync(definitionsFile, "utf8"));
+for (const definition of Object.values(definitions)) definition.provider = judgeProvider;
+const definitionBytes = JSON.stringify(definitions, null, 2) + "\n";
+const definitionSha256 = createHash("sha256").update(definitionBytes).digest("hex");
 
 const repoRoot = fs.realpathSync(repoCwd);
 
@@ -354,7 +359,7 @@ fs.writeFileSync(path.join(scoringDir, "recall-meta.json"), JSON.stringify(recal
 fs.writeFileSync(path.join(scoringDir, "precision-meta.json"), JSON.stringify(precisionMeta, null, 2));
 fs.writeFileSync(path.join(scoringDir, "holistic-meta.json"), JSON.stringify(holisticMeta, null, 2));
 
-fs.copyFileSync(definitionsFile, path.join(scoringDir, "scoring-definitions.json"));
+fs.writeFileSync(path.join(scoringDir, "scoring-definitions.json"), definitionBytes);
 fs.writeFileSync(
   path.join(scoringDir, "chunks-manifest.json"),
   `${JSON.stringify(manifest, null, 2)}\n`,

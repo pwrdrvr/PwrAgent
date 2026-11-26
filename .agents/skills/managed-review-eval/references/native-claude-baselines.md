@@ -29,7 +29,9 @@ node "$work/dist/review-matrix-driver.js" --repo "$PWD" --cohort "$plan" \
   --out "$run" --arms claude-native --concurrency 2
 ```
 
-The collector reports aggregate counts for a collection plan. Each run retains the dispatch receipts and its own `eval` profile. After the collector exits, an independent curator opens that profile on the same PwrAgent revision with `PWRAGENT_HOME` set to `$run/pwragent-home` and `PWRAGENT_PROFILE=eval`. Settle findings through the normal review workflow. Keep the cases and findings out of any tuning thread. Preserve the outcomes the curator actually reached. [Review outcomes](../../../../docs/thread-reviews.md#finding-outcomes) · [Isolated profiles](../../../../docs/runtime-configuration.md)
+The collector reports aggregate counts for a collection plan. Each run retains the dispatch receipts and its own `eval` profile. The existing split recipe uses recorded review outcomes to select cases. Keep new findings pending until those outcomes are available. When curating the collection, open its isolated profile with `PWRAGENT_HOME` set to `$run/pwragent-home` and `PWRAGENT_PROFILE=eval`. Keep case evidence out of tuning threads. [Review outcomes](../../../../docs/thread-reviews.md#finding-outcomes) · [Isolated profiles](../../../../docs/runtime-configuration.md)
+
+Use the [file-backed Decision workflow](scoring.md) to score reviewer quality on the staged cases. Those judgments measure recall against the selected baseline and score candidate findings and reviews. The collector imports recorded outcomes from the isolated profile for cohort membership.
 
 ## Stage and verify
 
