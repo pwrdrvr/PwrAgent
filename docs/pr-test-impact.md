@@ -20,7 +20,7 @@ Documentation-only pull requests still skip the test jobs.
 ## Jobs
 
 - `Test plan` runs as soon as dependencies are installed, and the lanes wait
-  for it. It writes `plan.json` to the `pr-test-impact-plan` artifact, a
+  for it. It writes `plan.json` to the `pr-test-impact-plan` artifact,
   exact Playwright test lists, a summary, and one lane inventory shared by
   the workflow matrices and the consolidated retry report.
 - `Test (lane N of 4)` runs the selected Vitest files on Linux. A lane holds
@@ -38,6 +38,10 @@ Documentation-only pull requests still skip the test jobs.
   evaluates its own skips. The verifier requires every listed file to be
   collected, including when all its tests intentionally skip. A required
   Linux or macOS lane can skip only when the plan selected no files there.
+  Windows uses the four-lane matrix when the selected files exceed eight
+  minutes of recorded test time in total or a file has no timing. The
+  remaining seven minutes of the job budget cover setup, reporting, and
+  runner variance.
 - Windows Desktop E2E remains advisory. Full Windows E2E on PRs runs with
   `ci:windows-e2e`, `ci:full`, `ci:windows-shutdown-diagnostics`, or a
   platform-specific path. A test-only E2E diff whose E2E plan is unavailable

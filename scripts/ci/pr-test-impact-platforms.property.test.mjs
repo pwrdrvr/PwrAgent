@@ -52,7 +52,7 @@ it("schedules exactly the work the suites and platform policy require", () => {
         && (fullUnit || (lane - 1) * 150 < counts[`unit-${platform}`]);
       if (platform === "linux-a11y") return auditRequested || (fullE2e ? allPlatforms : audit);
       if (platform === "windows") return windowsFull || diagnostics || ((allPlatforms || e2eOnly) && fullE2e)
-        || (!fullE2e && nativeCount > 0 && lane === 1);
+        || (!fullE2e && (specs > 0 || (nativeCount > 0 && lane === 1)));
       if (platform === "macos") return allPlatforms && (fullE2e || (nativeCount > 0 && lane === 1));
       return fullE2e || (specs > 0 && lane === 1);
     });
@@ -66,7 +66,9 @@ it("schedules exactly the work the suites and platform policy require", () => {
 });
 
 it("collects affected specs on Windows even when their runtime controls whether they skip", () => {
-  const plan = { unit: unit(0, 0), e2e: e2e(1, false) };
+  const plan = { unit: unit(0, 0), e2e: {
+    mode: "selected", selected: [{ file: "apps/desktop/e2e/todo-dispatch-model.spec.ts" }],
+  } };
   const policy = { allPlatforms: false, windowsFull: false, auditRequested: false };
   const scheduled = scheduleImpact(plan, policy);
   expect(scheduled.lanes["unit-linux"]).toEqual([]);
@@ -81,4 +83,22 @@ it("does not silently reinterpret filename syntax as a Playwright test title or 
   for (const name of ["a\nb.spec.ts", "a>b.spec.ts", "#note.spec.ts", "[project].spec.ts", "a:b.spec.ts"]) {
     expect(playwrightListPath(`apps/desktop/e2e/${name}`)).toBeUndefined();
   }
+});
+
+it("widens Windows E2E when the audit and one long spec exceed a single lane's test budget", () => {
+  const selected = [a11ySpec, "apps/desktop/e2e/rendering-diagnostics.spec.ts"].map((file) => ({ file }));
+  const plan = { unit: unit(0, 0), e2e: { mode: "selected", selected } };
+  const schedule = scheduleImpact(plan, { allPlatforms: true });
+  expect(schedule.windowsMode).toBe("full");
+  expect(schedule.lanes["e2e-windows"]).toEqual([1, 2, 3, 4]);
+  expect(schedule.lanes["e2e-linux"]).toEqual([1]);
+  expect(schedule.lanes["e2e-macos"]).toEqual([1]);
+});
+
+it("widens Windows when a selected spec lacks a timing", () => {
+  const plan = { unit: unit(0, 0), e2e: e2e(1, false) };
+  const schedule = scheduleImpact(plan, { allPlatforms: false });
+  expect(schedule.windowsMode).toBe("full");
+  expect(schedule.lanes["e2e-windows"]).toEqual([1, 2, 3, 4]);
+  expect(schedule.lanes["e2e-linux"]).toEqual([1]);
 });

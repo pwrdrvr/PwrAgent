@@ -15,7 +15,7 @@ test("release and full macOS CI use the same reporters, completion checks, and r
   expect(ci).toHaveLength(3);
   expect(release).toHaveLength(3);
   const full = ci[0].replace(/\n\s+UNIT_MODE: [^\n]+/, "").replace(
-    /run: \|\n\s+if [^\n]+\n\s+node scripts\/ci\/run-pr-test-impact\.mjs unit macos [^\n]+\n\s+else\n\s+([^\n]+)\n\s+fi$/,
+    /run: \|\n\s+if [^\n]+\n\s+pnpm exec node scripts\/ci\/run-pr-test-impact\.mjs unit macos [^\n]+\n\s+else\n\s+([^\n]+)\n\s+fi$/,
     "run: $1",
   );
   expect([full, ...ci.slice(1)]).toEqual(release);

@@ -146,7 +146,7 @@ jobs:
             }
 
             const isNonProductPath = (path) =>
-              path.startsWith("docs/")
+              (path.startsWith("docs/") && path !== "docs/desktop-e2e-shard-durations.json")
               || path.toLowerCase().endsWith(".md")
               || path.startsWith(".agents/skills/");
             // Changes that require native platform coverage: the lockfile
@@ -1298,7 +1298,7 @@ jobs:
           PWRAGENT_NATIVE_ORACLE_PROFILE: ${{ github.workspace }}/.local/ci/native-relay-profile.jsonl
         run: |
           if [[ "$UNIT_MODE" == "selected" ]]; then
-            node scripts/ci/run-pr-test-impact.mjs unit macos ${{ matrix.lane }}
+            pnpm exec node scripts/ci/run-pr-test-impact.mjs unit macos ${{ matrix.lane }}
           else
             pnpm test --shard=${{ matrix.lane }}/4 --reporter=default --reporter=json --reporter=./scripts/ci/vitest-ci-reporter.mjs --outputFile=.local/ci/macos-unit-results.json
           fi

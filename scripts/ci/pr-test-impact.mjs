@@ -3,6 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import desktopE2eTimings from "../../docs/desktop-e2e-shard-durations.json" with { type: "json" };
 
 const codeFile = /\.[cm]?[jt]sx?$/;
 // Unit-test inputs that the application bundle never loads.
@@ -105,7 +106,8 @@ export function wholeSuiteReason(files) {
     if (status !== "A" && status !== "M" && status !== "D") return "type change or unsupported Git status";
     if (file === "pnpm-lock.yaml" || file === "pnpm-workspace.yaml" || /(?:^|\/)package\.json$/.test(file)
       || /^\.(?:npmrc|nvmrc|pnpmfile\.cjs)$/.test(file) || file.startsWith("patches/")) return "dependency metadata or patch";
-    if (/^\.github\/|^scripts\/ci\/|(?:^|\/)(?:electron\.)?(?:vitest|vite|playwright|tsconfig)[.-]|(?:^|\/)\.env(?:\.|$)/.test(file)) {
+    if (file === "docs/desktop-e2e-shard-durations.json"
+      || /^\.github\/|^scripts\/ci\/|(?:^|\/)(?:electron\.)?(?:vitest|vite|playwright|tsconfig)[.-]|(?:^|\/)\.env(?:\.|$)/.test(file)) {
       return "CI or test/build configuration";
     }
     if (/^apps\/desktop\/(?:native|build)\/|^apps\/desktop\/scripts\/(?:macos-|assemble-mac-|app-icon)|\.swift$|^apps\/desktop\/e2e\/(?:macos-|windows-|visual-regression\.spec\.ts|get-started\.spec\.ts|fixtures\/detached-profile-instances\.ts)/.test(file)) {
@@ -228,6 +230,18 @@ export function separateA11y(e2e) {
 
 const range = (count) => Array.from({ length: count }, (_, index) => index + 1);
 
+// Full Windows lanes model about eight minutes of tests. Leave the rest
+// of the fifteen-minute job for setup, reporting, retries, and runner variance.
+const windowsE2eTestBudgetSeconds = 8 * 60;
+const windowsTimingColumn = desktopE2eTimings.platforms.indexOf("windows");
+const windowsE2eSecondsBySpec = new Map();
+for (const { spec, seconds } of desktopE2eTimings.groups) {
+  const duration = seconds[windowsTimingColumn];
+  const file = `${e2eDirectory}${spec}`;
+  const estimate = Number.isFinite(duration) && duration >= 0 ? duration : Infinity;
+  windowsE2eSecondsBySpec.set(file, (windowsE2eSecondsBySpec.get(file) ?? 0) + estimate);
+}
+
 // Every matrix and the retry report consume the same lane inventory.
 export function scheduleImpact(plan, { allPlatforms, windowsFull, auditRequested, e2eOnly }) {
   const { e2e, a11y } = separateA11y(plan.e2e);
@@ -236,8 +250,13 @@ export function scheduleImpact(plan, { allPlatforms, windowsFull, auditRequested
     : unitGroups[group].lanes);
   const e2eLanes = (suite, fullLanes) => suite.mode === "full" ? range(fullLanes) : range(suite.selected.length ? 1 : 0);
   const nativeE2e = allPlatforms ? plan.e2e : e2e;
-  const windowsMode = windowsFull || ((allPlatforms || e2eOnly) && nativeE2e.mode === "full") ? "full"
-    : nativeE2e.mode === "selected" && nativeE2e.selected.length ? "selected" : "off";
+  let windowsMode = "off";
+  if (windowsFull || ((allPlatforms || e2eOnly) && nativeE2e.mode === "full")) {
+    windowsMode = "full";
+  } else if (nativeE2e.mode === "selected" && nativeE2e.selected.length) {
+    const seconds = nativeE2e.selected.reduce((sum, { file }) => sum + (windowsE2eSecondsBySpec.get(file) ?? Infinity), 0);
+    windowsMode = seconds <= windowsE2eTestBudgetSeconds ? "selected" : "full";
+  }
   return {
     e2e,
     nativeE2e,
