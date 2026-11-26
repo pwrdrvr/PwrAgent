@@ -34,6 +34,7 @@ Read the task-specific references below before doing the work they cover. They c
 ## Ownership and Data Boundaries
 
 - PwrAgent code must not read Codex-owned session JSONL, rollout files, or SQLite databases. They are private implementation details; use the Codex App Server protocol for Codex data.
+- Never extract or refresh a harness's credentials, call its provider with them, or spoof its User-Agent; use its protocol or CLI. Before touching usage limits, account probes, or harness auth, read [the rules](docs/harness-and-provider-usage.md).
 - Features may read PwrAgent-owned files under `~/.pwragent/`; tests may read repository-local fixtures they own. Do not bypass `pnpm lint:codex-storage` with variable renames or shell commands.
 - PwrDrvr LLC authorizes only `apps/desktop/src/main/codex-app-server/invalid-response-message-id-recovery.ts` for a narrow repair: only protocol-identified rollouts, only the Responses API invalid message-ID-prefix failure. Validate the thread first, create a backup, make the repair atomic, and remove only invalid `id` fields from response items of type `message`.
 - Store desktop configuration and state under the **PwrAgent root**, `~/.pwragent/`. Isolate E2E/development with `PWRAGENT_HOME=/path/to/root`; select `PWRAGENT_PROFILE=<name>` (default: `default`). Settings live in `profiles/<name>/config.toml`; state in `profiles/<name>/state/state.db` under that root.
