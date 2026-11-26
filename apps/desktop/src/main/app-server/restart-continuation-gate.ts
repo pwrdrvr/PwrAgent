@@ -131,11 +131,11 @@ export type RestartDispatchPlanOptions = {
   now: number;
   /** Threads that start together. */
   batchSize?: number;
-  /** Before the first batch, so backends finish starting. */
+  /** Optional delay before the first batch; defaults to 0 because dispatch begins once providers are ready. */
   firstDelayMs?: number;
   /** Between batches. */
   intervalMs?: number;
-  /** Random spread added to each continuation's time. */
+  /** Random spread added to continuations after the first. */
   jitterMs?: number;
   /** After the last dispatch time, the gate opens regardless. */
   releaseGraceMs?: number;
@@ -144,7 +144,7 @@ export type RestartDispatchPlanOptions = {
 
 export const RESTART_DISPATCH_DEFAULTS = {
   batchSize: 4,
-  firstDelayMs: 20_000,
+  firstDelayMs: 0,
   intervalMs: 45_000,
   jitterMs: 15_000,
   releaseGraceMs: 180_000,
@@ -152,29 +152,37 @@ export const RESTART_DISPATCH_DEFAULTS = {
 
 /**
  * Staggers continuations so a restart does not start every thread at once:
- * `batchSize` threads per batch, `intervalMs` apart, each with its own
- * jitter. Order is kept, so the oldest stopped turn goes first.
+ * `batchSize` threads per batch, `intervalMs` apart. The first continuation
+ * starts at `now + firstDelayMs` with no jitter so work resumes immediately
+ * and the oldest stopped turn goes first; later continuations add jitter
+ * within their batch window.
  */
 export function planRestartDispatch(
   entries: ReadonlyArray<{ entryId: string; threadKey: string }>,
   options: RestartDispatchPlanOptions,
 ): { schedule: RestartContinuationSchedule[]; releaseBy: number } {
-  const batchSize = Math.max(1, Math.floor(options.batchSize ?? RESTART_DISPATCH_DEFAULTS.batchSize));
-  const firstDelayMs = Math.max(0, options.firstDelayMs ?? RESTART_DISPATCH_DEFAULTS.firstDelayMs);
-  const intervalMs = Math.max(0, options.intervalMs ?? RESTART_DISPATCH_DEFAULTS.intervalMs);
-  const jitterMs = Math.max(0, options.jitterMs ?? RESTART_DISPATCH_DEFAULTS.jitterMs);
-  const releaseGraceMs = Math.max(0, options.releaseGraceMs ?? RESTART_DISPATCH_DEFAULTS.releaseGraceMs);
+  const finiteOr = (value: number | undefined, fallback: number): number =>
+    value !== undefined && Number.isFinite(value) ? value : fallback;
+  const batchSize = Math.max(1, Math.floor(finiteOr(options.batchSize, RESTART_DISPATCH_DEFAULTS.batchSize)));
+  const firstDelayMs = Math.max(0, finiteOr(options.firstDelayMs, RESTART_DISPATCH_DEFAULTS.firstDelayMs));
+  const intervalMs = Math.max(0, finiteOr(options.intervalMs, RESTART_DISPATCH_DEFAULTS.intervalMs));
+  const jitterMs = Math.max(0, finiteOr(options.jitterMs, RESTART_DISPATCH_DEFAULTS.jitterMs));
+  const releaseGraceMs = Math.max(0, finiteOr(options.releaseGraceMs, RESTART_DISPATCH_DEFAULTS.releaseGraceMs));
   const random = options.random ?? Math.random;
-  const schedule = entries.map((entry, index) => ({
-    entryId: entry.entryId,
-    threadKey: entry.threadKey,
-    dispatchAt: Math.round(
-      options.now
-      + firstDelayMs
-      + Math.floor(index / batchSize) * intervalMs
-      + Math.min(1, Math.max(0, random())) * jitterMs,
-    ),
-  }));
+  const schedule = entries.map((entry, index) => {
+    const sample = index === 0 ? 0 : random();
+    const jitter = Number.isFinite(sample) ? Math.min(1, Math.max(0, sample)) * jitterMs : 0;
+    return {
+      entryId: entry.entryId,
+      threadKey: entry.threadKey,
+      dispatchAt: Math.round(
+        options.now
+        + firstDelayMs
+        + Math.floor(index / batchSize) * intervalMs
+        + jitter,
+      ),
+    };
+  });
   const last = schedule.reduce((latest, item) => Math.max(latest, item.dispatchAt), options.now);
   return { schedule, releaseBy: last + releaseGraceMs };
 }
