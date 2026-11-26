@@ -99,6 +99,7 @@ import { readLocalNavigationDirectoryIndex } from "./app-server/navigation-direc
 import { setNavigationDetailPendingWakesProjector } from "./app-server/navigation-detail-service";
 import { appServerService } from "./app-server/desktop-app-server-service";
 import { startOwnerQueues } from "./owner-queue-services";
+import { changesOperatorQueueMounts } from "./operator-requests/operator-request-mount-change";
 import { disposeOperatorRequestService } from "./operator-requests/operator-request-runtime";
 
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
@@ -735,6 +736,11 @@ wireOwnerRendererEvents();
       ...federationAgentToolOptions, operatorApproved: true, resolveMessageOrigin: () => messageOrigin,
     }),
   });
+  ownerSubscriptions.add(registry.onEvent((event) => {
+    if (changesOperatorQueueMounts(event)) {
+      queues.events.emit("operatorRequestsChanged", { reason: "questions" });
+    }
+  }));
   void startAppServerOwnerNavigation().catch((error) => {
     mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
   });

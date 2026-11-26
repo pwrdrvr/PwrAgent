@@ -1,4 +1,5 @@
 import { act, cleanup, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   ListOperatorRequestsResponse,
@@ -29,7 +30,7 @@ describe("operator queue owner identity", () => {
   it("loads in a remote window, reloads invalidations and records owner-qualified seen keys", async () => {
     Object.assign(window, { __pwragentFederationTarget: target });
     const { api, changed } = fixture();
-    const { result, rerender } = renderHook(({ mounts }) => useOperatorRequests(api, mounts), { initialProps: { mounts: "" } });
+    const { result, rerender } = renderHook(() => useOperatorRequests(api));
     await waitFor(() => expect(result.current.waits).toHaveLength(2));
     const remote = result.current.waits.find((wait) => wait.federationTarget)!;
     expect(remote.threadKey).toBe(threadTodoThreadKey({ ...question, federationTarget: target }));
@@ -38,8 +39,8 @@ describe("operator queue owner identity", () => {
     expect(api.markOperatorItemsSeen).toHaveBeenCalledExactlyOnceWith({ keys: [operatorQuestionItemKey("codex", "same", "same", target)] });
     act(() => changed({ reason: "seen", federationTarget: target }));
     await waitFor(() => expect(api.listOperatorRequests).toHaveBeenCalledTimes(2));
-    rerender({ mounts: "new-mount" });
-    await waitFor(() => expect(api.listOperatorRequests).toHaveBeenCalledTimes(3));
+    rerender();
+    expect(api.listOperatorRequests).toHaveBeenCalledTimes(2);
   });
 
   it("updates owner-qualified titles without replacing unchanged waits", async () => {
@@ -135,6 +136,13 @@ describe("operator queue owner identity", () => {
 });
 
 describe("operator queue refresh", () => {
+  it("admits one initial read when React replays effect setup", async () => {
+    const { api } = fixture();
+    const { result } = renderHook(() => useOperatorRequests(api), { wrapper: StrictMode });
+    await waitFor(() => expect(result.current.ready).toBe(true));
+    expect(api.listOperatorRequests).toHaveBeenCalledTimes(1);
+  });
+
   it("resolves only after a read that started after the call", async () => {
     const { api } = fixture();
     const reads: Array<() => void> = [];

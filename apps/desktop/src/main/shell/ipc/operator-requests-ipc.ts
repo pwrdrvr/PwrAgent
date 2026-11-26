@@ -29,16 +29,29 @@ let unsubscribeLocal: (() => void) | undefined;
 let unsubscribeRemote: (() => void) | undefined;
 let unsubscribePeers: (() => void) | undefined;
 
-function broadcastOperatorRequestsChanged(event: OperatorRequestsChangedEvent): void {
+function broadcastOperatorRequestsChanged(event: OperatorRequestsChangedEvent, includeLocal = true): void {
   for (const webContents of subscribersForChannel(
     OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL,
   )) {
     const target = federationTargetForChannelSubscriber(webContents);
-    if (target && target.instanceId !== event.federationTarget?.instanceId) continue;
+    if (target ? target.instanceId !== event.federationTarget?.instanceId : !includeLocal) continue;
     if (!webContents.isDestroyed()) {
       webContents.send(OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL, event);
     }
   }
+}
+
+async function broadcastPeerQueueChange(instanceId: string): Promise<void> {
+  let includeLocal = true;
+  try {
+    const counts = await getDesktopOverlayStore().countRemoteThreadPinsByInstance();
+    includeLocal = (counts.get(instanceId)?.live ?? 0) > 0;
+  } catch (error) {
+    operatorRequestLog.warn("Could not scope operator queue refresh to mounted threads", { error: String(error) });
+  }
+  broadcastOperatorRequestsChanged({
+    reason: "questions", federationTarget: { scope: "remote", instanceId },
+  }, includeLocal);
 }
 
 export function registerOperatorRequestIpcHandlers({ operatorRequests, events }: {
@@ -70,11 +83,9 @@ export function registerOperatorRequestIpcHandlers({ operatorRequests, events }:
     });
   });
   unsubscribePeers?.();
-  unsubscribePeers = runtime.onPeerStatusChanged(() => {
-    // Reconnected viewers reload owner state, including events missed offline.
-    for (const webContents of subscribersForChannel(OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL)) {
-      if (!webContents.isDestroyed()) webContents.send(OPERATOR_REQUESTS_CHANGED_EVENT_CHANNEL, { reason: "questions" });
-    }
+  unsubscribePeers = runtime.onPeerStatusChanged((instanceId) => {
+    // An owner transition can change coverage or expose changes missed offline.
+    void broadcastPeerQueueChange(instanceId);
   });
 
   ipcMain.removeHandler(OPERATOR_QUESTIONS_LIST_DISMISSED_CHANNEL);

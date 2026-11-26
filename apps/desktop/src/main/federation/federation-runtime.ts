@@ -1573,7 +1573,7 @@ export class DesktopFederationRuntime {
   private readonly remoteBackendEventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
-  private readonly peerStatusListeners = new Set<() => void>();
+  private readonly peerStatusListeners = new Set<(instanceId: FederationInstanceId) => void>();
   private readonly shortNameListeners = new Set<() => void>();
   private readonly desiredEventSubscriptions = new Map<
     string,
@@ -1875,7 +1875,7 @@ export class DesktopFederationRuntime {
    * Fires whenever any peer's connection status changes. Used by the
    * application menu to keep its Remote Instances listing current.
    */
-  onPeerStatusChanged(listener: () => void): () => void {
+  onPeerStatusChanged(listener: (instanceId: FederationInstanceId) => void): () => void {
     this.peerStatusListeners.add(listener);
     return () => {
       this.peerStatusListeners.delete(listener);
@@ -7292,7 +7292,7 @@ export class DesktopFederationRuntime {
     }
     for (const listener of this.peerStatusListeners) {
       try {
-        listener();
+        listener(instanceId);
       } catch (error) {
         log.warn("federation peer status listener failed", {
           error: error instanceof Error ? error.message : String(error),

@@ -2517,7 +2517,7 @@ function DesktopAppShell(props: {
     !readRendererFederationTarget() && selectedTodoThread && selectedTodoTarget?.scope === "remote"
       ? { backend: selectedTodoThread.source, threadId: selectedTodoThread.id, federationTarget: selectedTodoTarget }
       : undefined);
-  const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
+  const operatorRequests = useOperatorRequests(desktopApi);
   // Providers with threads, from the directory index that counts them all.
   // Keyed by the joined list so a refreshed page keeps one array identity.
   // Each row names a Codex model provider from its owner's catalog.
