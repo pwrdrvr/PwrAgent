@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -32,6 +32,8 @@ export type AppNoticeToastNotice = {
     };
   }[];
   autoDismiss?: boolean;
+  /** Select this durable notice when it first enters the stack. */
+  revealOnArrival?: boolean;
   /** Retain only the highest-priority durable notice in this logical slot. */
   coalescing?: {
     key: string;
@@ -112,7 +114,9 @@ export function AppNoticeToast(props: {
     onNext?: () => void;
   };
   notice?: AppNoticeToastNotice;
+  noticeRef?: Ref<HTMLElement>;
   onDismiss: () => void;
+  onFocusLeave?: () => void;
   onOpenThread?: (link: ResolvedThreadLink) => void;
   onSuppressSkillQuestionsWarning?: () => Promise<boolean>;
   onSuppressCodexWarning?: (id: string) => Promise<boolean>;
@@ -269,6 +273,7 @@ export function AppNoticeToast(props: {
 
   return (
     <aside
+      ref={props.noticeRef}
       className="app-notice-toast"
       data-navigable={props.navigation ? "true" : undefined}
       // The stack holds several notices at once — a durable backend warning
@@ -285,6 +290,7 @@ export function AppNoticeToast(props: {
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) {
           setPaused(false);
+          props.onFocusLeave?.();
         }
       }}
     >
@@ -424,7 +430,7 @@ export function AppNoticeToast(props: {
                 />
               ) : (
                 <button
-                  key={action.label}
+                  key={`${noticeId}:${action.label}`}
                   className={`button button--${action.tone ?? "secondary"} app-notice-toast__button`}
                   type="button"
                   onClick={recordAction(action.onClick)}

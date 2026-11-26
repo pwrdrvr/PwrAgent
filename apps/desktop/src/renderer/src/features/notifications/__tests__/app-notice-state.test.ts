@@ -7,6 +7,21 @@ import {
 import type { AppNoticeToastNotice } from "../AppNoticeToast";
 
 describe("appNoticeReducer", () => {
+  it("applies a Rearm result only while its capture notice remains open", () => {
+    const notice = {
+      id: "cpu-final",
+      title: "Main CPU profile captured",
+      message: "Capture limit reached",
+      autoDismiss: false,
+    };
+    const state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, { type: "show", notice });
+    const update = { type: "update-durable" as const, notice: { ...notice, message: "Rearmed" } };
+    expect(appNoticeReducer(state, update).durable).toEqual([update.notice]);
+
+    const dismissed = appNoticeReducer(state, { type: "dismiss", id: notice.id });
+    expect(appNoticeReducer(dismissed, update)).toBe(dismissed);
+  });
+
   it("keeps failed turns in arrival order instead of overwriting them", () => {
     let state: AppNoticeState = INITIAL_APP_NOTICE_STATE;
     state = appNoticeReducer(state, {

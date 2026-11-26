@@ -6,11 +6,14 @@ import {
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
   DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
+  HOT_CPU_PROFILE_REARM_CHANNEL,
+  HOT_CPU_PROFILE_REARMABLE_CHANNEL,
 } from "../../../shared/ipc";
 import type {
   CaptureHeapSnapshotRequest,
   CaptureHeapSnapshotResult,
 } from "../../../shared/heap-snapshot";
+import type { HotCpuRearmableCapture } from "../../../shared/hot-cpu-profile";
 import { captureHeapSnapshot } from "../diagnostics/manual-heap-snapshot";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { getMainLogger } from "../../log";
@@ -76,7 +79,10 @@ async function runCapture(
   }
 }
 
-export function registerDiagnosticsIpcHandlers(): void {
+export function registerDiagnosticsIpcHandlers(
+  rearmHotCpuProfile?: (sessionDirectoryName: string, profileFilename: string) => boolean,
+  listRearmableHotCpuProfiles?: () => Promise<HotCpuRearmableCapture[]>,
+): void {
   ipcMain.removeAllListeners(RECORD_TOAST_HISTORY_CHANNEL);
   ipcMain.on(RECORD_TOAST_HISTORY_CHANNEL, (event, observation: unknown) => {
     if (event.senderFrame && event.senderFrame === event.sender.mainFrame
@@ -91,6 +97,19 @@ export function registerDiagnosticsIpcHandlers(): void {
       throw new Error("Operator alert history is available in the local main window.");
     }
     return operatorAlertHistory.read();
+  });
+  ipcMain.removeHandler(HOT_CPU_PROFILE_REARMABLE_CHANNEL);
+  ipcMain.handle(HOT_CPU_PROFILE_REARMABLE_CHANNEL, (event) =>
+    isLocalMainWindowWebContents(event.sender) ? listRearmableHotCpuProfiles?.() ?? [] : []);
+  ipcMain.removeHandler(HOT_CPU_PROFILE_REARM_CHANNEL);
+  ipcMain.handle(HOT_CPU_PROFILE_REARM_CHANNEL, (event, request?: {
+    sessionDirectoryName?: unknown;
+    profileFilename?: unknown;
+  }) => {
+    if (!isLocalMainWindowWebContents(event.sender)
+      || typeof request?.sessionDirectoryName !== "string"
+      || typeof request.profileFilename !== "string") return false;
+    return rearmHotCpuProfile?.(request.sessionDirectoryName, request.profileFilename) ?? false;
   });
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_STOP_RENDERING_CHANNEL);
@@ -155,6 +174,8 @@ export function disposeDiagnosticsIpcHandlers(): void {
   ipcMain.removeAllListeners(RECORD_TOAST_HISTORY_CHANNEL);
   ipcMain.removeHandler(READ_OPERATOR_ALERT_HISTORY_CHANNEL);
   operatorAlertHistory.flushBestEffort();
+  ipcMain.removeHandler(HOT_CPU_PROFILE_REARMABLE_CHANNEL);
+  ipcMain.removeHandler(HOT_CPU_PROFILE_REARM_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_STOP_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL);
