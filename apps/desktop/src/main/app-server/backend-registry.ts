@@ -76,6 +76,7 @@ import { checkAgentAccessRequest, isAgentAccessRefusalMessage } from "../agent-t
 
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import { getReviewAutoFixRuns } from "../thread-reviews/review-auto-fix";
+import { isReviewFixTurnInput } from "./agent-review-submission";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import type { ForgeReadRequest } from "../pr-status/forge-tool-contract";
@@ -1545,6 +1546,25 @@ export class DesktopBackendRegistry {
     return starting?.turnInputSource ?? "unknown";
   };
 
+  private readonly isReviewFixTurn = (context: {
+    backend: AppServerBackendKind; threadId: string; turnId?: string;
+  }): boolean => {
+    if (!context.turnId) return false;
+    const turn = { ...context, turnId: context.turnId };
+    const exact = this.context.turnState.readTurnReviewFix(turn);
+    if (exact !== undefined) return exact;
+    const observedSequence = turn.backend === "codex"
+      ? this.codexMessageContextTurnObservations.get(turn.threadId)?.get(turn.turnId) : undefined;
+    if (turn.backend === "codex" && this.context.turnState.pendingStartedTurnId(turn.threadId) === turn.turnId) {
+      const pending = this.context.turnState.readPendingCodexTurnReviewFix(turn.threadId, observedSequence);
+      if (pending !== undefined) return pending;
+    }
+    const starting = this.findStartingTurnOrigin(turn);
+    if (starting?.turnId === undefined && observedSequence !== undefined
+      && observedSequence <= (starting?.admittedCodexTurnSequence ?? -1)) return false;
+    return starting?.reviewFix === true;
+  };
+
   /**
    * Call before the provider starts the turn. Every path must end in
    * `persistStartingTurnOrigin` or `dropStartingTurnOrigin`.
@@ -1554,12 +1574,20 @@ export class DesktopBackendRegistry {
     threadId: string;
     origin?: AppServerThreadMessageOrigin;
     turnInputSource?: TurnInputSource;
+    reviewFix?: boolean;
+    input?: readonly AppServerTurnInputItem[];
   }): StartingTurnOrigin | undefined {
-    if (!params.origin && params.turnInputSource === undefined) return undefined;
+    const reviewFix = isReviewFixTurnInput({
+      reviewFix: params.reviewFix,
+      messageOrigin: params.origin,
+      input: params.input,
+    });
+    if (!params.origin && params.turnInputSource === undefined && !reviewFix) return undefined;
     const entry: StartingTurnOrigin = {
       backend: params.backend, threadId: params.threadId, origin: params.origin,
       ...(params.backend === "codex" ? { admittedCodexTurnSequence: this.codexMessageContextTurnSequence } : {}),
       turnInputSource: resolveTurnInputSource({ turnInputSource: params.turnInputSource, messageOrigin: params.origin }),
+      ...(reviewFix ? { reviewFix: true } : {}),
     };
     this.context.turnState.addStartingOrigin(entry);
     return entry;
@@ -1574,10 +1602,18 @@ export class DesktopBackendRegistry {
     if (!entry) return;
     this.context.turnState.bindStartingOrigin(entry, turn);
     const identity = { ...turn, backend: entry.backend };
-    this.managedReviewService.observeOperatorReviewInput(identity, entry.turnInputSource);
-    if (entry.turnInputSource !== undefined && !terminalObserved
+    const isPendingCodexTurn = entry.backend === "codex" && isPendingTurnId(turn.threadId, turn.turnId);
+    if (!entry.reviewFix && !isPendingCodexTurn) {
+      this.managedReviewService.observeOperatorReviewInput(identity, entry.turnInputSource);
+    }
+    if ((entry.turnInputSource !== undefined || entry.reviewFix) && !terminalObserved
       && (entry.backend === "codex" || this.context.turnState.hasRegisteredTurn(identity))) {
-      this.context.turnState.rememberTurnInputSource(identity, entry.turnInputSource, entry.admittedCodexTurnSequence);
+      this.context.turnState.rememberTurnInputSource(
+        identity,
+        entry.turnInputSource ?? "unknown",
+        entry.admittedCodexTurnSequence,
+        entry.reviewFix,
+      );
     }
   }
 
@@ -2132,6 +2168,7 @@ export class DesktopBackendRegistry {
       get agentThreadActions() { return current().agentThreadActions; },
       get appManagementHandler() { return current().appManagementHandler; },
       get currentTurnInputSource() { return current().currentTurnInputSource; },
+      get isReviewFixTurn() { return current().isReviewFixTurn; },
       get messagingWorkingUpdatesHandler() { return current().messagingWorkingUpdatesHandler; },
       applyAcpRuntimeSelection: (...args: Parameters<typeof this.applyAcpRuntimeSelection>) => this.applyAcpRuntimeSelection(...args),
       applyQueuedMessageTitle: (...args: Parameters<typeof this.applyQueuedMessageTitle>) => this.applyQueuedMessageTitle(...args),
@@ -3728,15 +3765,17 @@ export class DesktopBackendRegistry {
 
   async stackRepairActive(thread: StackThreadRef): Promise<boolean> {
     const active = this.getActiveTurnForThread(thread);
-    const starting = this.findStartingTurnOrigin(active ?? thread)?.origin;
-    const isRepair = (origin?: AppServerThreadMessageOrigin) =>
-      origin?.prAutomation?.kind === "auto-fix"
+    const starting = this.findStartingTurnOrigin(active ?? thread);
+    const isRepair = (origin?: AppServerThreadMessageOrigin, reviewFix?: boolean) =>
+      reviewFix === true
+      || origin?.prAutomation?.kind === "auto-fix"
       || (origin?.prAutomation?.kind === "watch" && origin.prAutomation.outcome === "failure")
       || origin?.reviewAutoFix !== undefined;
-    if (isRepair(starting)) return true;
+    if (isRepair(starting?.origin, starting?.reviewFix)) return true;
+    if (active && this.isReviewFixTurn({ ...thread, turnId: active.turnId })) return true;
     if (Object.values(getReviewAutoFixRuns().of(thread)).some(({ phase }) => phase === "queued")) return true;
     for (const entry of this.threadTurnQueue.iterateQueuedEntries(thread)) {
-      if (isRepair(entry.messageOrigin)) return true;
+      if (isRepair(entry.messageOrigin, entry.reviewFix)) return true;
     }
     if (!active) return false;
     const messageId = buildTurnUserMessageOriginId(active.turnId);
@@ -10025,6 +10064,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
@@ -11993,6 +12033,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }, turnInputSource?: TurnInputSource): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
@@ -12041,6 +12082,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
     agentMessageOrigins?: AppServerThreadMessageOrigin[];
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
@@ -12106,6 +12148,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
     agentMessageOrigins?: AppServerThreadMessageOrigin[];
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
@@ -12187,6 +12230,7 @@ export class DesktopBackendRegistry {
         beginOrigin: () => this.beginStartingTurnOrigin({
           backend: params.backend, threadId: params.threadId,
           origin: prepared.messageOrigin, turnInputSource: resolveTurnInputSource(params),
+          reviewFix: params.reviewFix, input: params.input,
         }),
         submit: async (onSessionClosed) => {
           try { return await this.claudeBackend.startTurn({ ...prepared, onSessionClosed }); }
@@ -12292,6 +12336,7 @@ export class DesktopBackendRegistry {
         }),
         beginOrigin: () => this.beginStartingTurnOrigin({
           ...identity, origin: resolveThreadMessageOrigin(params), turnInputSource: resolveTurnInputSource(params),
+          reviewFix: params.reviewFix, input: params.input,
         }),
         submit: () => this.startAcpTurn({
           ...identity, input,
@@ -12485,6 +12530,7 @@ export class DesktopBackendRegistry {
               input: params.input,
               origin: params.origin,
               turnInputSource: params.turnInputSource,
+              reviewFix: params.reviewFix,
               executionMode: params.executionMode,
               approvalPolicy: params.approvalPolicy,
               sandbox: params.sandbox,
@@ -12510,6 +12556,8 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       origin: resolveThreadMessageOrigin(params),
       turnInputSource: resolveTurnInputSource(params),
+      reviewFix: params.reviewFix,
+      input: params.input,
     });
     const submitted = await this.threadStarts.submitCodex({
       identity: params,
@@ -23299,9 +23347,20 @@ export class DesktopBackendRegistry {
         const pendingTurnId = buildPendingTurnId(threadId);
         const pendingActiveKey = buildActiveTurnKey("codex", threadId, pendingTurnId);
         const pendingModeKey = buildActiveTurnModeKey(threadId, pendingTurnId);
-        const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId,
-          this.codexMessageContextTurnObservations.get(threadId)?.get(turnId));
-        if (canTransferPending) this.bindDeferredJobMonitorCreation(threadId, turnId);
+        const observedTurnSequence = this.codexMessageContextTurnObservations.get(threadId)?.get(turnId);
+        const pendingSource = !isPendingTurnId(threadId, turnId)
+          ? this.context.turnState.readPendingCodexTurnInputSource(threadId, observedTurnSequence)
+          : undefined;
+        const pendingReviewFix = pendingSource !== undefined
+          ? this.context.turnState.readPendingCodexTurnReviewFix(threadId, observedTurnSequence)
+          : undefined;
+        const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId, observedTurnSequence);
+        if (canTransferPending) {
+          if (pendingSource !== undefined && !pendingReviewFix) {
+            this.managedReviewService.observeOperatorReviewInput({ backend: "codex", threadId, turnId }, pendingSource);
+          }
+          this.bindDeferredJobMonitorCreation(threadId, turnId);
+        }
         const collaborationMode = canTransferPending ? this.context.turnState.collaborationMode(pendingActiveKey) : undefined;
         const pendingMode = collaborationMode ? this.context.turnState.executionMode(pendingModeKey) : undefined;
         if (collaborationMode) {

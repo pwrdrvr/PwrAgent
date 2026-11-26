@@ -299,6 +299,8 @@ export type StartTurnRequest = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  /** True when submitted from a review card's Auto-fix / Fix control. */
+  reviewFix?: boolean;
   acpRuntime?: BackendAcpSessionRuntimeState;
 };
 

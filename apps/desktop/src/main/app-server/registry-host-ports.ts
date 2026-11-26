@@ -276,6 +276,7 @@ export interface RegistryHostPorts {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }, turnInputSource?: TurnInputSource): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
   submitTurn(params: {
@@ -292,6 +293,7 @@ export interface RegistryHostPorts {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";

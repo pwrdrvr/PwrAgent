@@ -10876,6 +10876,28 @@ describe("Composer", () => {
       expect(startTurn).toHaveBeenCalledTimes(1);
     });
 
+    it("forwards reviewFix on review card fix submissions", async () => {
+      const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: thread.id, turnId: "turn-fix" }));
+      const onReplySubmissionSettled = vi.fn();
+      const props = {
+        backends: [backendSummary("codex")],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+        onReplySubmissionSettled,
+        skills: [],
+        thread,
+      };
+      const view = render(<Composer {...props} />);
+      view.rerender(<Composer {...props} replySubmission={{
+        id: 1, threadId: thread.id, backend: "codex", text: "Auto-fix the finding from Review of PR #4493.",
+        busyBehavior: "queue", reviewFix: true,
+      }} />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: thread.id,
+        reviewFix: true,
+      }));
+    });
+
     it("still steers question replies during an active turn", async () => {
       const startTurn = vi.fn();
       const steerTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: thread.id, turnId: "turn-active" }));

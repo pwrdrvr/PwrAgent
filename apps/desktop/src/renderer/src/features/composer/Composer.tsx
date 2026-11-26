@@ -524,6 +524,8 @@ export type ComposerProps = {
     text: string;
     /** Queue behind an active turn even when the backend supports steering. */
     busyBehavior?: "queue";
+    /** True when submitted from a review card's Auto-fix / Fix control. */
+    reviewFix?: boolean;
   };
   onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
   /**
@@ -984,6 +986,7 @@ type QueuedTurnDraft = {
   paused?: boolean;
   pauseRevision?: number;
   title?: string;
+  reviewFix?: boolean;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
@@ -5055,7 +5058,7 @@ function useComposerController(props: ComposerProps) {
     // that gate opens instead of consuming its id and rejecting it silently.
     if (props.disabled) return;
     appliedReplySubmissionId.current = submission.id;
-    void submitReplyText(submission.text, submission.busyBehavior)
+    void submitReplyText(submission.text, submission.busyBehavior, submission.reviewFix)
       .catch(() => false)
       .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
     // submitReplyText is recreated each render; the id guard sends once.
@@ -8945,6 +8948,7 @@ function useComposerController(props: ComposerProps) {
         fastMode: props.thread.source === "codex" && supportsFast
           ? Boolean(currentSettings?.fastMode)
           : undefined,
+        ...(queued?.reviewFix ? { reviewFix: true } : {}),
       });
       // Only once the turn is actually accepted. Reporting the reply before
       // the await would clear the thread out of the Attention work queue even
@@ -10261,7 +10265,11 @@ function useComposerController(props: ComposerProps) {
    * as its own queued draft, so a failure never restores it into the
    * operator's reply and a success never clears what they were typing.
    */
-  const submitReplyText = async (text: string, busyBehavior?: "queue"): Promise<boolean> => {
+  const submitReplyText = async (
+    text: string,
+    busyBehavior?: "queue",
+    reviewFix?: boolean,
+  ): Promise<boolean> => {
     if (
       !props.thread
       || props.launchpad
@@ -10277,6 +10285,7 @@ function useComposerController(props: ComposerProps) {
     const reply: QueuedTurnDraft = {
       id: createQueuedTurnId(),
       text,
+      ...(reviewFix ? { reviewFix: true } : {}),
       imageAttachments: [],
       fileAttachments: [],
       input,

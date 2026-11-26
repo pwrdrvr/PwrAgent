@@ -4,9 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AppServerReviewPullRequestSnapshot, AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
+import { buildPendingTurnId } from "@pwragent/shared/turn-placeholder";
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { immutableReviewDiffHash } from "../app-server/agent-review-submission";
+import { autoFixReviewFindingsPrompt, fixReviewFindingsPrompt, isReviewFixPromptText } from "../../shared/review-fix-prompts";
 import * as gitExecutable from "../app-server/git-executable";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -30,12 +32,15 @@ function commit(value: number): AppServerReviewTarget {
 async function withReviewOwner<T>(run: (owner: {
   registry: DesktopBackendRegistry;
   ask: (turnId: string, target: AppServerReviewTarget, callId: string, cwd?: string) => Promise<boolean>;
+  askDetail: (turnId: string, target: AppServerReviewTarget, callId: string, cwd?: string) => Promise<{ accepted: boolean; text: string }>;
+  emitStarted: (turnId: string) => Promise<void>;
   complete: (turnId: string) => Promise<void>;
   start: (source: "automation" | "desktop") => Promise<string>;
   providerStarts: () => number;
 }) => Promise<T>, options: {
   overlayStore?: ReturnType<typeof createOverlayStoreMock> | SqliteOverlayStore;
   turnPrefix?: string;
+  startTurnResults?: Array<{ threadId: string; turnId: string }>;
   beforeReview?: () => Promise<void>;
   cwd?: string;
 } = {}): Promise<T> {
@@ -46,7 +51,7 @@ async function withReviewOwner<T>(run: (owner: {
       id: thread.threadId, source: thread.backend, title: "Review parent", titleSource: "explicit",
       linkedDirectories: [{ id: options.cwd, kind: "local", label: "Project", path: options.cwd }],
     }] } : {}),
-    startTurnResults: Array.from({ length: 20 }, (_, index) => ({
+    startTurnResults: options.startTurnResults ?? Array.from({ length: 20 }, (_, index) => ({
       threadId: thread.threadId, turnId: `${options.turnPrefix ?? "turn"}-${index}`,
     })),
   });
@@ -58,15 +63,33 @@ async function withReviewOwner<T>(run: (owner: {
   const registry = createDesktopBackendRegistry({
     codexClient, overlayStore: options.overlayStore ?? createOverlayStoreMock(), threadTitleGenerationService: null,
   });
+  const emitStarted = async (turnId: string) => await codexClient.emit({
+    method: "turn/started",
+    params: { threadId: thread.threadId, turnId, turn: { id: turnId } },
+  });
+  const askDetail = async (
+    turnId: string,
+    target: AppServerReviewTarget,
+    callId: string,
+    cwd?: string,
+  ): Promise<{ accepted: boolean; text: string }> => {
+    const result = await callRegistryMcpTool({
+      registry, ...thread, turnId, tool: "start_review", args: { target, ...(cwd ? { cwd } : {}) }, callId,
+    });
+    const text = result?.content
+      ?.flatMap((item) => (item.type === "text" && typeof item.text === "string" ? [item.text] : []))
+      .join("\n") ?? "";
+    return {
+      accepted: result?.isError !== true && result?.structuredContent?.status === "scheduled",
+      text,
+    };
+  };
   try {
     return await run({
       registry,
-      ask: async (turnId, target, callId, cwd) => {
-        const result = await callRegistryMcpTool({
-          registry, ...thread, turnId, tool: "start_review", args: { target, ...(cwd ? { cwd } : {}) }, callId,
-        });
-        return result?.isError !== true && result?.structuredContent?.status === "scheduled";
-      },
+      ask: async (turnId, target, callId, cwd) => (await askDetail(turnId, target, callId, cwd)).accepted,
+      askDetail,
+      emitStarted,
       complete: async (turnId) => await codexClient.emit({
         method: "turn/completed",
         params: { threadId: thread.threadId, turnId, turn: { id: turnId, status: "completed", output: [] } },
@@ -76,10 +99,7 @@ async function withReviewOwner<T>(run: (owner: {
           ...thread, input: [{ type: "text", text: "Review the current change" }],
           ...(source === "automation" ? { messageOrigin: { kind: "pwragent" } } : {}),
         }, source);
-        await codexClient.emit({
-          method: "turn/started",
-          params: { threadId: thread.threadId, turnId, turn: { id: turnId } },
-        });
+        await emitStarted(turnId);
         return turnId;
       },
       providerStarts: () => started,
@@ -324,5 +344,297 @@ describe("agent review submission", () => {
       removeTempStateDbDir(tempDir);
       vi.unstubAllEnvs();
     }
+  });
+
+  it("recognizes single-finding and multi-finding canonical review-fix prompts", () => {
+    const single = [{ title: "Keep search available", priority: 2 }];
+    const multi = [
+      { title: "Keep search available", priority: 2 },
+      { title: "Avoid duplicate writes", priority: 3 },
+    ];
+    expect(isReviewFixPromptText(autoFixReviewFindingsPrompt("Review of PR #4493", single))).toBe(true);
+    expect(isReviewFixPromptText(autoFixReviewFindingsPrompt("Review of PR #4493", multi))).toBe(true);
+    expect(isReviewFixPromptText(`  \n${autoFixReviewFindingsPrompt("Review of PR #4493", multi)}`)).toBe(true);
+    expect(isReviewFixPromptText(fixReviewFindingsPrompt("Review of PR #4493", single))).toBe(true);
+    expect(isReviewFixPromptText(fixReviewFindingsPrompt("Review of PR #4493", multi))).toBe(true);
+    expect(isReviewFixPromptText("Auto-fix the lint warnings and run tests")).toBe(false);
+    expect(isReviewFixPromptText("Use PwrAgent's `list_reviews` tool to inspect open findings.")).toBe(false);
+  });
+
+  it("refuses start_review from review-fix turns and never lets review-card Auto-fix or Fix turns reset the cap", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { dbPath, tempDir } = createTempStateDb("review-fix-loop-");
+    const stateDb = StateDb.open(dbPath);
+    const reviewFixRefusal = "PwrAgent does not schedule another review from a review-fix turn.";
+    try {
+      await withReviewOwner(async (owner) => {
+        // Reproduce PR #4493: agent handoff + PR watch wakes interleaved with
+        // desktop/federation Review card Auto-fix, Fix, and automatic Auto-fix turns.
+        const handoff = await owner.start("automation");
+        expect(await owner.ask(handoff, commit(1), "handoff-1")).toBe(true);
+        await owner.complete(handoff);
+        await owner.complete("review-1");
+
+        const watch1 = await owner.start("automation");
+        expect(await owner.ask(watch1, commit(2), "watch-1")).toBe(true);
+        await owner.complete(watch1);
+        await owner.complete("review-2");
+
+        // Card-clicked Auto-fix from desktop (explicit reviewFix: true):
+        // must NOT reset attempts (still 2/3) and must refuse start_review with 0 SQLite writes.
+        const cardAutoFix = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: autoFixReviewFindingsPrompt("Review of PR #4493", [{ title: "Keep search available", priority: 2 }]) }],
+          reviewFix: true,
+        }, "desktop");
+        await owner.emitStarted(cardAutoFix.turnId);
+        const refusedCard = await measureSqliteWrites(() => owner.askDetail(cardAutoFix.turnId, commit(3), "card-autofix-review"));
+        expect(refusedCard.result.accepted).toBe(false);
+        expect(refusedCard.result.text).toContain(reviewFixRefusal);
+        expectSqliteWriteBudget({
+          scenario: "agent-review-refusal",
+          note: "A review refused inside a review-fix turn makes no writes.",
+          writes: refusedCard.writes,
+        });
+        await owner.complete(cardAutoFix.turnId);
+
+        // Card-clicked multi-finding Auto-fix from an older Federation viewer (no reviewFix flag):
+        // must ALSO refuse start_review and must NOT reset attempts (still 2/3).
+        const legacyFedAutoFix = await owner.registry.startTurn({
+          ...thread,
+          input: [{
+            type: "text",
+            text: autoFixReviewFindingsPrompt("Review of PR #4493", [
+              { title: "Keep search available", priority: 2 },
+              { title: "Avoid duplicate writes", priority: 3 },
+            ]),
+          }],
+        }, "federation");
+        await owner.emitStarted(legacyFedAutoFix.turnId);
+        const refusedLegacyAutoFix = await owner.askDetail(legacyFedAutoFix.turnId, commit(3), "legacy-fed-autofix-review");
+        expect(refusedLegacyAutoFix.accepted).toBe(false);
+        expect(refusedLegacyAutoFix.text).toContain(reviewFixRefusal);
+        await owner.complete(legacyFedAutoFix.turnId);
+
+        // Card-clicked Fix from an older Federation viewer (no reviewFix flag, canonical prompt only):
+        // must ALSO refuse start_review and must NOT reset attempts (still 2/3).
+        const legacyFedFix = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: fixReviewFindingsPrompt("Review of PR #4493", [{ title: "Keep search available", priority: 2 }]) }],
+        }, "federation");
+        await owner.emitStarted(legacyFedFix.turnId);
+        const refusedLegacyFix = await owner.askDetail(legacyFedFix.turnId, commit(4), "legacy-fed-fix-review");
+        expect(refusedLegacyFix.accepted).toBe(false);
+        expect(refusedLegacyFix.text).toContain(reviewFixRefusal);
+        await owner.complete(legacyFedFix.turnId);
+
+        // Automatic review Auto-fix (messageOrigin.reviewAutoFix):
+        // must refuse start_review and must NOT reset attempts (still 2/3).
+        const automaticAutoFix = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: "Fix review findings" }],
+          messageOrigin: { kind: "pwragent", reviewAutoFix: { reviewId: "rev-2", title: "Review of PR #4493", findingCount: 1 } },
+        }, "automation");
+        await owner.emitStarted(automaticAutoFix.turnId);
+        const refusedAutomatic = await owner.askDetail(automaticAutoFix.turnId, commit(5), "auto-autofix-review");
+        expect(refusedAutomatic.accepted).toBe(false);
+        expect(refusedAutomatic.text).toContain(reviewFixRefusal);
+        await owner.complete(automaticAutoFix.turnId);
+
+        // Next PR watch wake consumes the 3rd and final slot (3/3).
+        const watch2 = await owner.start("automation");
+        expect(await owner.ask(watch2, commit(6), "watch-2")).toBe(true);
+        await owner.complete(watch2);
+        await owner.complete("review-3");
+
+        // Another Review card Auto-fix click after hitting the limit still does NOT reset!
+        const cardAutoFixAtCap = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: autoFixReviewFindingsPrompt("Review of PR #4493", [{ title: "Still failing", priority: 2 }]) }],
+          reviewFix: true,
+        }, "desktop");
+        await owner.emitStarted(cardAutoFixAtCap.turnId);
+        const refusedAtCap = await owner.askDetail(cardAutoFixAtCap.turnId, commit(7), "card-at-cap");
+        expect(refusedAtCap.accepted).toBe(false);
+        expect(refusedAtCap.text).toContain(reviewFixRefusal);
+        await owner.complete(cardAutoFixAtCap.turnId);
+
+        // Next PR watch wake is hard-stopped at 3/3 (loop broken!).
+        const watch3 = await owner.start("automation");
+        const refusedLimit = await owner.askDetail(watch3, commit(8), "watch-3");
+        expect(refusedLimit.accepted).toBe(false);
+        expect(refusedLimit.text).toContain("stopped after 3 agent-requested reviews");
+        await owner.complete(watch3);
+
+        expect(owner.providerStarts()).toBe(3);
+
+        // A genuine typed operator turn still rearms the allowance.
+        const genuineOperator = await owner.start("desktop");
+        expect(await owner.ask(genuineOperator, commit(8), "after-genuine-operator")).toBe(true);
+        await owner.complete(genuineOperator);
+        await owner.complete("review-4");
+        expect(owner.providerStarts()).toBe(4);
+      }, { overlayStore: new SqliteOverlayStore(stateDb) });
+    } finally {
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rearms on a genuine operator turn even when Date.now ties or steps backwards", async () => {
+    const baseTime = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(baseTime);
+    try {
+      await withReviewOwner(async (owner) => {
+        // Anchor a persisted operator turn at baseTime first so both clock-tie
+        // (baseTime === baseTime) and backward-step (baseTime - 50 < baseTime)
+        // falsify wall-clock comparisons.
+        const seed = await owner.start("automation");
+        expect(await owner.ask(seed, commit(1), "seed-1")).toBe(true);
+        await owner.complete(seed);
+        await owner.complete("review-1");
+
+        const anchorOperator = await owner.start("desktop");
+        await owner.complete(anchorOperator);
+
+        for (const value of [1, 2, 3]) {
+          const turn = await owner.start("automation");
+          expect(await owner.ask(turn, commit(value), `tie-auto-${value}`)).toBe(true);
+          await owner.complete(turn);
+          await owner.complete(`review-${value + 1}`);
+        }
+
+        // Same-millisecond tie: Date.now() is still baseTime.
+        const sameMsOperator = await owner.start("desktop");
+        expect(await owner.ask(sameMsOperator, commit(1), "rearmed-same-ms")).toBe(true);
+        await owner.complete(sameMsOperator);
+        await owner.complete("review-5");
+
+        for (const value of [2, 3]) {
+          const turn = await owner.start("automation");
+          expect(await owner.ask(turn, commit(value), `skew-auto-${value}`)).toBe(true);
+          await owner.complete(turn);
+          await owner.complete(`review-${value + 4}`);
+        }
+
+        // Backward clock step: Date.now() moves earlier than baseTime.
+        nowSpy.mockReturnValue(baseTime - 50);
+        const backwardOperator = await owner.start("desktop");
+        expect(await owner.ask(backwardOperator, commit(1), "rearmed-backward-clock")).toBe(true);
+        await owner.complete(backwardOperator);
+        await owner.complete("review-8");
+        expect(owner.providerStarts()).toBe(8);
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("rearms across Codex turns whose turn/start RPC returns a pending placeholder before turn/started", async () => {
+    const { dbPath, tempDir } = createTempStateDb("review-pending-codex-turn-");
+    const pendingTurnId = buildPendingTurnId(thread.threadId);
+    const stateDb = StateDb.open(dbPath);
+    try {
+      await withReviewOwner(async (owner) => {
+        // First automated review, followed by a genuine operator turn whose
+        // turn/start RPC omits the turn ID and falls back to pending:<threadId>.
+        const seed = await owner.start("automation");
+        expect(await owner.ask(seed, commit(1), "seed-review")).toBe(true);
+        await owner.complete(seed);
+        await owner.complete("review-1");
+
+        const firstOpStart = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: "Try again" }],
+        }, "desktop");
+        expect(firstOpStart.turnId).toBe(pendingTurnId);
+        await owner.emitStarted("real-op-1");
+        await owner.complete("real-op-1");
+
+        // Exhaust the 3-review cap after the first pending-RPC operator turn.
+        for (const value of [1, 2, 3]) {
+          const turn = await owner.start("automation");
+          expect(await owner.ask(turn, commit(value), `post-op1-${value}`)).toBe(true);
+          await owner.complete(turn);
+          await owner.complete(`review-${value + 1}`);
+        }
+
+        // Second genuine operator turn whose turn/start RPC also returns pending:<threadId>.
+        // Because the placeholder was never persisted as operatorTurnId, real-op-2 rearms the budget.
+        const secondOpStart = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: "One more review pass" }],
+        }, "desktop");
+        expect(secondOpStart.turnId).toBe(pendingTurnId);
+        await owner.emitStarted("real-op-2");
+        await owner.complete("real-op-2");
+
+        const next = await owner.start("automation");
+        expect(await owner.ask(next, commit(1), "after-op2")).toBe(true);
+        await owner.complete(next);
+        await owner.complete("review-5");
+        expect(owner.providerStarts()).toBe(5);
+      }, {
+        overlayStore: new SqliteOverlayStore(stateDb),
+        startTurnResults: [
+          { threadId: thread.threadId, turnId: "auto-0" },
+          { threadId: thread.threadId, turnId: pendingTurnId },
+          { threadId: thread.threadId, turnId: "auto-1" },
+          { threadId: thread.threadId, turnId: "auto-2" },
+          { threadId: thread.threadId, turnId: "auto-3" },
+          { threadId: thread.threadId, turnId: pendingTurnId },
+          { threadId: thread.threadId, turnId: "auto-4" },
+        ],
+      });
+    } finally {
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+    }
+  });
+
+  it("preserves reviewFix across queued turns so a queued review-card Auto-fix still refuses start_review and keeps the cap", async () => {
+    await withReviewOwner(async (owner) => {
+      for (const value of [1, 2, 3]) {
+        const turn = await owner.start("automation");
+        expect(await owner.ask(turn, commit(value), `auto-${value}`)).toBe(true);
+        await owner.complete(turn);
+        await owner.complete(`review-${value}`);
+      }
+      // Start an active turn so the reviewFix submission queues behind it.
+      const active = await owner.start("automation");
+      const queuedStarted = createDeferred<string>();
+      owner.registry.onEvent(({ notification }) => {
+        if (notification.method === "thread/turnQueue/updated" && notification.params.status === "started"
+          && typeof notification.params.turnId === "string") {
+          queuedStarted.resolve(notification.params.turnId);
+        }
+      });
+      // Use non-matching text so this test falsifies queue reviewFix propagation
+      // directly instead of relying on the prompt-text fallback.
+      const queued = await owner.registry.submitTurn({
+        ...thread,
+        input: [{ type: "text", text: "Fix the findings" }],
+        origin: "manual",
+        reviewFix: true,
+      }, "desktop");
+      expect(queued.status).toBe("queued");
+
+      await owner.complete(active);
+      const queuedTurnId = await queuedStarted.promise;
+      await owner.emitStarted(queuedTurnId);
+      const refusedQueued = await owner.askDetail(queuedTurnId, commit(4), "queued-review-fix");
+      expect(refusedQueued.accepted).toBe(false);
+      expect(refusedQueued.text).toContain("PwrAgent does not schedule another review from a review-fix turn.");
+      await owner.complete(queuedTurnId);
+
+      // Next automated wake is still refused at 3/3.
+      const watch = await owner.start("automation");
+      const refusedWatch = await owner.askDetail(watch, commit(5), "watch-after-queued-fix");
+      expect(refusedWatch.accepted).toBe(false);
+      expect(refusedWatch.text).toContain("stopped after 3 agent-requested reviews");
+      await owner.complete(watch);
+      expect(owner.providerStarts()).toBe(3);
+    });
   });
 });
