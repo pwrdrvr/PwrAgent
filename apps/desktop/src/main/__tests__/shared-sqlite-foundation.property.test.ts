@@ -20,10 +20,11 @@ function schemaAtV80(db: StateDb): { sha256: string; objects: number; userVersio
   // automation turn, and PR watch indexes, plus pricing summary deltas and scheduled
   // action projections, app update notices, targeted managed membership,
   // subthread lookup indexes, pin mount tokens, lifetime automation cost,
-  // and transcript accounting indexes.
+  // transcript accounting indexes, and operator alert history.
   // Restore the v80 SQL for the indexes replaced by v83 and v84.
   const compared = rows.filter(row =>
     row.tbl_name !== "owner_jobs"
+    && row.tbl_name !== "operator_alert_history"
     && row.tbl_name !== "openai_decision_versions"
     && row.tbl_name !== "thread_compaction_recovery_guards"
     && row.tbl_name !== "thread_automatic_wake_guards"

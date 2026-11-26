@@ -281,6 +281,7 @@ import { isStreamNoticeEvent } from "./features/notifications/codex-stream-notic
 import {
   appNoticeReducer,
   INITIAL_APP_NOTICE_STATE,
+  type AppNoticeState,
 } from "./features/notifications/app-notice-state";
 import {
   resolveThreadActionErrorNotice,
@@ -2630,40 +2631,14 @@ function DesktopAppShell(props: {
     ...(submitServerRequest ? { respond: respondToOperatorWait } : {}),
   });
   const monitorWakeNotices = useJobMonitorWakeNotices(desktopApi, showAppNotice);
-  const durableNotices = useMemo(
-    () => [...approvalNotices, ...monitorWakeNotices, ...appNotices.durable],
-    [appNotices.durable, approvalNotices, monitorWakeNotices],
-  );
-  const transientNotices = useMemo(() => [
-    { notice: claudeSignIn.notice, onDismiss: claudeSignIn.dismissNotice },
-    {
-      notice: navigation.archiveCleanupSummaryNotice,
-      onDismiss: navigation.dismissArchiveCleanupSummaryNotice,
-    },
-    {
-      notice: navigation.archiveCleanupProgressNotice,
-      onDismiss: navigation.dismissArchiveCleanupProgressNotice,
-    },
-    {
-      notice: navigation.archiveThreadNotice,
-      onDismiss: navigation.dismissArchiveThreadNotice,
-    },
-    ...appNotices.transient.map((notice) => ({
-      notice,
-      onDismiss: () => dismissAppNotice(notice.id),
-    })),
-  ], [
-    appNotices.transient,
-    claudeSignIn.dismissNotice,
-    claudeSignIn.notice,
+  const { durableNotices, transientNotices } = useAppNoticeLists(
+    appNotices,
+    approvalNotices,
+    monitorWakeNotices,
+    claudeSignIn,
+    navigation,
     dismissAppNotice,
-    navigation.archiveCleanupProgressNotice,
-    navigation.archiveCleanupSummaryNotice,
-    navigation.archiveThreadNotice,
-    navigation.dismissArchiveCleanupProgressNotice,
-    navigation.dismissArchiveCleanupSummaryNotice,
-    navigation.dismissArchiveThreadNotice,
-  ]);
+  );
   const listThreadTodos = desktopApi?.listThreadTodos;
   const listThreadTodoProjects = desktopApi?.listThreadTodoProjects;
   const setThreadTodoProject = desktopApi?.setThreadTodoProject;
@@ -5805,6 +5780,58 @@ function useMainView() {
   return { mainView, layerRef, layerView, setMainView, registerSettingsLeaveGuard,
     settingsInitialSection, settingsInitialSubsection, profileCreateRequested, setProfileCreateRequested, clearProfileCreateRequest, openSettingsSection,
   };
+}
+
+function useAppNoticeLists(
+  appNotices: AppNoticeState,
+  approvalNotices: readonly AppNoticeToastNotice[],
+  monitorWakeNotices: readonly AppNoticeToastNotice[],
+  claudeSignIn: Pick<ReturnType<typeof useClaudeSignIn>, "notice" | "dismissNotice">,
+  navigation: Pick<ReturnType<typeof useThreadNavigation>,
+    | "archiveCleanupProgressNotice"
+    | "archiveCleanupSummaryNotice"
+    | "archiveThreadNotice"
+    | "dismissArchiveCleanupProgressNotice"
+    | "dismissArchiveCleanupSummaryNotice"
+    | "dismissArchiveThreadNotice"
+  >,
+  dismissAppNotice: (id: string) => void,
+) {
+  const durableNotices = useMemo(
+    () => [...approvalNotices, ...monitorWakeNotices, ...appNotices.durable],
+    [appNotices.durable, approvalNotices, monitorWakeNotices],
+  );
+  const transientNotices = useMemo(() => [
+    { notice: claudeSignIn.notice, onDismiss: claudeSignIn.dismissNotice },
+    {
+      notice: navigation.archiveCleanupSummaryNotice,
+      onDismiss: navigation.dismissArchiveCleanupSummaryNotice,
+    },
+    {
+      notice: navigation.archiveCleanupProgressNotice,
+      onDismiss: navigation.dismissArchiveCleanupProgressNotice,
+    },
+    {
+      notice: navigation.archiveThreadNotice,
+      onDismiss: navigation.dismissArchiveThreadNotice,
+    },
+    ...appNotices.transient.map((notice) => ({
+      notice,
+      onDismiss: () => dismissAppNotice(notice.id),
+    })),
+  ], [
+    appNotices.transient,
+    claudeSignIn.dismissNotice,
+    claudeSignIn.notice,
+    dismissAppNotice,
+    navigation.archiveCleanupProgressNotice,
+    navigation.archiveCleanupSummaryNotice,
+    navigation.archiveThreadNotice,
+    navigation.dismissArchiveCleanupProgressNotice,
+    navigation.dismissArchiveCleanupSummaryNotice,
+    navigation.dismissArchiveThreadNotice,
+  ]);
+  return { durableNotices, transientNotices };
 }
 
 // Own the authentication/configuration notice producers and login dialog state.
