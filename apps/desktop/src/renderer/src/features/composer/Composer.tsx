@@ -366,7 +366,12 @@ import {
 import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./EnvironmentSetupRow";
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
-import { findSlashCommandTrigger } from "./composer-slash-commands";
+import {
+  findComposerCompactCommand,
+  findSlashCommandTrigger,
+  isComposerCompactDraft,
+  isComposerCompactSuggestion,
+} from "./composer-slash-commands";
 import {
   forkCommandCompletion,
   forkCommandHint,
@@ -4393,20 +4398,11 @@ function useComposerController(props: ComposerProps) {
     backend?.kind.startsWith("acp:") === true
       ? backend.capabilities.startReview !== false
       : true;
-  const supportsCompactCommand = Boolean(
-    props.providerCommands?.some((command) => {
-      const commandName = command.name.startsWith("/")
-        ? command.name.slice(1)
-        : command.name;
-      // Claude runs `/compact` itself when it arrives as a prompt; the
-      // compaction API below is Codex's.
-      return (
-        commandName === "compact" &&
-        command.backend !== "claude" &&
-        (!props.thread || !command.backend || command.backend === props.thread.source)
-      );
-    })
+  const compactCommand = findComposerCompactCommand(
+    props.providerCommands,
+    props.thread?.source,
   );
+  const supportsCompactCommand = Boolean(compactCommand);
   const supportsForkCommand = Boolean(
     !isLaunchpad
     && props.thread
@@ -6738,7 +6734,7 @@ function useComposerController(props: ComposerProps) {
   const forkCommand = supportsForkCommand || supportsSubthreadCommand
     ? parseForkCommand(draft)
     : undefined;
-  const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
+  const isCompactCommand = isComposerCompactDraft(draft, compactCommand);
   const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
     supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"
       ? "toolsAndAuthOnly"
@@ -13112,7 +13108,7 @@ function useComposerController(props: ComposerProps) {
         return true;
       }
 
-      if (command.label.toLowerCase() === "/compact") {
+      if (isComposerCompactSuggestion(command, compactCommand)) {
         void submitCompactThread();
         return true;
       }

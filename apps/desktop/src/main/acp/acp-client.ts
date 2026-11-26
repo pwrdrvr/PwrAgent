@@ -11,6 +11,7 @@ import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { ACP_AGENT_ELICITATION_META_KEY } from "@pwragent/shared/mcp-elicitation-purpose";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
+import { isAcpCompactPromptBlocks } from "./acp-compact";
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
@@ -341,6 +342,8 @@ type AcpActiveTurn = {
   assistantText: string;
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
+  /** The prompt itself is a leading `/compact` slash command. */
+  isCompactCommand?: boolean;
   sentAgentMemory?: boolean;
   sentWorkspaceContext?: boolean;
   cancelBeforePrompt?: () => void;
@@ -1752,12 +1755,21 @@ export class AcpAgentClient {
      */
     agentInstructions?: string;
     readAgentMemory?: () => Promise<string | undefined>;
+    /** Explicit marker when the caller already resolved this turn as a compact command. */
+    isCompactCommand?: boolean;
   }): Promise<{ sessionId: string; turnId: string }> {
     this.assertPromptAccess(params.sessionId);
     const session = this.options.store.getSession(this.options.backendId, params.sessionId);
-    const needsWorkspaceContext = session?.antigravityWorkspaceRebound && !session.antigravityWorkspaceContextDelivered;
     const prompt = params.promptContent ? [...params.promptContent] : textPrompt(params.prompt);
-    if (needsWorkspaceContext) {
+    const isCompactCommand =
+      params.isCompactCommand === true
+      || isAcpCompactPromptBlocks(prompt, session?.availableCommands);
+    const needsWorkspaceContext = Boolean(
+      !isCompactCommand
+      && session?.antigravityWorkspaceRebound
+      && !session.antigravityWorkspaceContextDelivered,
+    );
+    if (needsWorkspaceContext && session) {
       const priorWorkspace = this.workspaceHistory(session).previous;
       if (!priorWorkspace) throw new Error("Couldn't recover this thread's previous workspace history.");
       prompt.push({
@@ -1767,6 +1779,7 @@ export class AcpAgentClient {
     }
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
+    activeTurn.isCompactCommand = isCompactCommand;
     activeTurn.sentWorkspaceContext = needsWorkspaceContext;
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
@@ -1778,6 +1791,7 @@ export class AcpAgentClient {
       turnId,
       agentInstructions: params.agentInstructions?.trim(),
       readAgentMemory: params.readAgentMemory,
+      isCompactCommand,
       onDispatch: () => {
         const receivedAt = this.now();
         this.normalizerFor(params.sessionId).recordUserPrompt({
@@ -1875,6 +1889,14 @@ export class AcpAgentClient {
           throw responseError;
         }
         const receivedAt = this.now();
+        // A completed `/compact` command summarizes earlier turns (including
+        // any prior instruction block) even when the token drop is under 50%.
+        // Cancelled compactions leave history intact. Fold clearing the digest
+        // into finishTrackedTurn's idle write so no extra SQLite commit occurs.
+        const clearAgentInstructionsDigest = !cancelled && Boolean(activeTurn.isCompactCommand);
+        if (clearAgentInstructionsDigest) {
+          activeTurn.compacted = true;
+        }
         // A prompt that session/cancel stopped settles normally, with
         // stopReason cancelled. Carry that through, so the transcript and
         // the terminal event say the turn was interrupted, not completed.
@@ -1883,6 +1905,7 @@ export class AcpAgentClient {
           receivedAt,
           cancelled ? "interrupted" : "completed",
           !cancelled && activeTurn.sentWorkspaceContext,
+          clearAgentInstructionsDigest,
         );
         this.appendHistoryUpdate(sessionId, receivedAt, {
           kind: "turn_finished",
@@ -3490,6 +3513,7 @@ export class AcpAgentClient {
     turnId: string;
     agentInstructions?: string;
     readAgentMemory?: () => Promise<string | undefined>;
+    isCompactCommand?: boolean;
     onDispatch?: () => void;
   }): Promise<unknown> {
     const activeTurn = this.activeTurns.get(params.sessionId);
@@ -3525,16 +3549,25 @@ export class AcpAgentClient {
       // The agent keeps the block in the session's history, so a session
       // loaded again (after an idle close or an app restart) is not sent it
       // a second time. The stored record says what this agent session holds.
-      const instructions = params.agentInstructions;
+      // Never prepend instructions or append memory to a `/compact` command:
+      // ACP agents such as Antigravity require `/compact` as leading text,
+      // and appending memory would turn bare `/compact` into compact-and-continue.
+      const storedSession = this.options.store.getSession(
+        this.options.backendId,
+        params.sessionId,
+      );
+      const isCompactCommand =
+        params.isCompactCommand === true
+        || isAcpCompactPromptBlocks(params.prompt, storedSession?.availableCommands);
+      const instructions = isCompactCommand ? undefined : params.agentInstructions;
       const digest = instructions === undefined
         ? undefined
         : agentInstructionsDigest(params.protocolSessionId, instructions);
       const sendInstructions = instructions !== undefined
-        && digest !== this.options.store.getSession(
-          this.options.backendId,
-          params.sessionId,
-        )?.agentInstructionsDigest;
-      const memory = params.readAgentMemory ? await params.readAgentMemory() : undefined;
+        && digest !== storedSession?.agentInstructionsDigest;
+      const memory = !isCompactCommand && params.readAgentMemory
+        ? await params.readAgentMemory()
+        : undefined;
       if (cancelledBeforePrompt) return cancelled;
       if (this.jobMonitorCatalogs.has(params.sessionId)) {
         await this.prepareJobMonitorCatalog(params.sessionId);
@@ -3579,6 +3612,7 @@ export class AcpAgentClient {
     completedAt: number,
     status: "completed" | "interrupted" = "completed",
     workspaceContextDelivered?: boolean,
+    clearAgentInstructionsDigest?: boolean,
   ): {
     assistantText: string;
     replay: AppServerThreadReplay;
@@ -3595,8 +3629,12 @@ export class AcpAgentClient {
       status,
     );
     // Use the existing idle write so remembering one accepted context block
-    // does not introduce another per-turn commit.
-    this.updateSessionStatus(sessionId, "idle", this.now(), { workspaceContextDelivered });
+    // or clearing delivered instructions after `/compact` does not introduce
+    // another per-turn commit.
+    this.updateSessionStatus(sessionId, "idle", this.now(), {
+      workspaceContextDelivered,
+      clearAgentInstructionsDigest,
+    });
     return {
       assistantText: activeTurn?.assistantText ?? "",
       replay,
@@ -3612,7 +3650,11 @@ export class AcpAgentClient {
       return;
     }
     const activeTurn = this.activeTurns.get(sessionId);
-    if (activeTurn?.assistantText.trim()) {
+    if (
+      activeTurn?.assistantText.trim()
+      || activeTurn?.isCompactCommand
+      || activeTurn?.compacted
+    ) {
       return;
     }
 
@@ -3771,14 +3813,21 @@ export class AcpAgentClient {
     sessionId: string,
     status: AcpSessionMetadata["status"],
     receivedAt = this.now(),
-    options: AcpSessionMetadataUpdateOptions & { workspaceContextDelivered?: boolean } = {},
+    options: AcpSessionMetadataUpdateOptions & {
+      workspaceContextDelivered?: boolean;
+      clearAgentInstructionsDigest?: boolean;
+    } = {},
   ): void {
     const metadata = this.options.store.getSession(this.options.backendId, sessionId);
     if (!metadata) {
       return;
     }
+    const { agentInstructionsDigest, ...rest } = metadata;
     this.options.store.upsertSession({
-      ...metadata,
+      ...rest,
+      ...(!options.clearAgentInstructionsDigest && agentInstructionsDigest !== undefined
+        ? { agentInstructionsDigest }
+        : {}),
       status,
       ...(options.workspaceContextDelivered ? { antigravityWorkspaceContextDelivered: true } : {}),
       updatedAt:
