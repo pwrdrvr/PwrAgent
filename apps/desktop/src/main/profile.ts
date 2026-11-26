@@ -439,7 +439,16 @@ export function writeProfilesRegistry(
   fs.mkdirSync(path.dirname(registryPath), { recursive: true });
   const tmpPath = `${registryPath}.${process.pid}.tmp`;
   fs.writeFileSync(tmpPath, stringifyProfilesToml(registry), "utf8");
-  fs.renameSync(tmpPath, registryPath);
+  try {
+    fs.renameSync(tmpPath, registryPath);
+  } catch (error) {
+    try {
+      fs.rmSync(tmpPath, { force: true });
+    } catch {
+      // Keep the original replacement error for the caller.
+    }
+    throw error;
+  }
 }
 
 export function writeDockProfileSnapshot(
@@ -541,6 +550,23 @@ export function ensureNamedProfileExists(
     homeDir?: string;
   },
 ): { profileDir: string; profileName: string; created: boolean } {
+  const profile = ensureNamedProfileDirectory(profileName, options);
+  const registry = readProfilesRegistry(options);
+  if (!registry.profiles.some((entry) => entry.name === profile.profileName)) {
+    registry.profiles.push({ name: profile.profileName });
+    writeProfilesRegistry(registry, options);
+  }
+  return profile;
+}
+
+export function ensureActiveProfileDirectory(): { profileName: string; profileDir: string; created: boolean } {
+  return ensureNamedProfileDirectory(resolveActiveProfileName());
+}
+
+function ensureNamedProfileDirectory(
+  profileName: string,
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): { profileDir: string; profileName: string; created: boolean } {
   const normalizedProfileName = normalizeProfileName(profileName);
   if (!normalizedProfileName) {
     throw new Error(
@@ -553,13 +579,6 @@ export function ensureNamedProfileExists(
   if (created) {
     fs.mkdirSync(path.join(profileDir, "state"), { recursive: true });
     writeInitialOnboardingMarker(path.join(profileDir, "config.toml"));
-  }
-
-  const registry = readProfilesRegistry(options);
-  const existing = registry.profiles.find((p) => p.name === normalizedProfileName);
-  if (!existing) {
-    registry.profiles.push({ name: normalizedProfileName });
-    writeProfilesRegistry(registry, options);
   }
 
   return { profileDir, profileName: normalizedProfileName, created };
