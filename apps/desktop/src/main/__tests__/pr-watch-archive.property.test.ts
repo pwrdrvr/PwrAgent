@@ -149,6 +149,27 @@ describe("PR watches end at archive", () => {
     } finally { await registry.close(); db.close(); }
   });
 
+  it("rechecks durable dependencies when a peer writes to an already observed archive", async () => {
+    const db = openInMemoryStateDb();
+    const store = new SqliteOverlayStore(db);
+    const dependencies = new ThreadDependencyStore(db.raw);
+    try {
+      await store.observeArchivedThreads([identity], 1);
+      // A legacy writer predates the registration guard for archived consumers.
+      const late = dependency("late-dependency");
+      db.raw.prepare(`INSERT INTO thread_dependencies
+        (dependency_id, backend, thread_id, status, created_at, payload) VALUES (?, ?, ?, ?, ?, ?)`)
+        .run(late.id, late.backend, late.threadId, late.status, late.createdAt, JSON.stringify(late));
+      const retired = await store.observeArchivedThreads([identity], 2);
+      expect(retired).toEqual([{
+        ...identity, prWatchesChanged: false, autoFixChanged: false,
+        dependencies: [{ id: late.id, conditions: late.conditions }],
+      }]);
+      expect(dependencies.active()).toEqual([]);
+      expect((await store.getThreadOverlayState(identity))?.archiveRetentionStartedAt).toBe(1);
+    } finally { db.close(); }
+  });
+
   it("publishes no retirement updates when archive rolls back", async () => {
     const db = openInMemoryStateDb();
     const store = new SqliteOverlayStore(db);

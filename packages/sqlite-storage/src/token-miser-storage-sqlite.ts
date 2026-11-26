@@ -30,6 +30,14 @@ export class SqliteTokenMiserStorage<
     return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
   }
 
+  readMetadataPage(afterObjectId: string | undefined, limit: number): Metadata[] {
+    const rows = (afterObjectId === undefined
+      ? this.db.prepare("SELECT payload FROM token_miser_objects ORDER BY object_id LIMIT ?").all(limit)
+      : this.db.prepare("SELECT payload FROM token_miser_objects WHERE object_id > ? ORDER BY object_id LIMIT ?")
+          .all(afterObjectId, limit)) as Array<{ payload: string }>;
+    return rows.map(({ payload }) => JSON.parse(payload) as Metadata);
+  }
+
   writeMetadata(metadata: Metadata): void {
     this.db.prepare(`INSERT INTO token_miser_objects (object_id, thread_id, created_at, payload)
       VALUES (?, ?, ?, ?) ON CONFLICT(object_id) DO UPDATE SET payload = excluded.payload

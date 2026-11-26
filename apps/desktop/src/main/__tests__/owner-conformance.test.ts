@@ -1,4 +1,3 @@
-import { buildOwnerFixture } from "./helpers/built-owner-fixture";
 import { openClaudeOwnerCliReleases, type ClaudeOwnerCliReleases } from "./helpers/claude-owner-cli-releases";
 import { LocalOwnerNavigationTransport } from "../federation/local-owner-navigation-transport";
 import fc from "fast-check";
@@ -11,7 +10,8 @@ import { createServer, type AddressInfo, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, inject, it, vi } from "vitest";
+import type { OwnerFixtures } from "../../test-setup/owner-conformance-fixtures";
 import type { AgentEvent, InterruptTurnRequest } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type { FederationCapability } from "@pwragent/shared/contracts/federation";
@@ -94,11 +94,10 @@ const BASELINE_PATH = path.join(process.cwd(), "apps/desktop/src/main/__tests__/
 /** The event classes the Outpost publishes. */
 const EVENT_CLASSES = ["navigation", "transcript"];
 const VIEWER_CAPABILITIES: FederationCapability[] = [...OUTPOST_VIEWER_CAPABILITIES, "event_subscriptions"];
-const fixturePackages = new Map<"desktop" | "headless", { directory: string; preload: string }>();
+let fixturePackages: OwnerFixtures;
 
 async function startConformanceDaemon(options: Parameters<typeof startOutpostDaemon>[0] = {}) {
-  const fixture = fixturePackages.get(options.hostKind ?? "headless");
-  if (!fixture) throw new Error("The conformance suite must build its owner fixture before starting a daemon.");
+  const fixture = fixturePackages[options.hostKind ?? "headless"];
   return await startOutpostDaemon({ ...options, packageRoot: fixture.directory, fixturePreload: fixture.preload });
 }
 
@@ -357,16 +356,20 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
-  beforeAll(async () => {
-    await Promise.all((["desktop", "headless"] as const).map(async kind => {
-      const directory = await mkdtemp(path.join(os.tmpdir(), `pa-conformance-${kind}-`));
-      const preload = await buildOwnerFixture(directory, kind);
-      fixturePackages.set(kind, { directory, preload });
-    }));
+  beforeAll(() => {
+    const result = inject("ownerConformanceFixtures");
+    if (!result) throw new Error("Vitest did not prepare the owner conformance fixtures");
+    if ("error" in result) throw new Error(`Owner conformance fixture build failed:\n${result.error}`);
+    fixturePackages = result.fixtures;
   });
-  afterAll(async () => {
-    await Promise.all([...fixturePackages.values()].map(fixture => rm(fixture.directory, { recursive: true, force: true })));
-    fixturePackages.clear();
+
+  it("receives both built owner packages from global setup", () => {
+    for (const kind of ["desktop", "headless"] as const) {
+      const { directory, preload } = fixturePackages[kind];
+      expect(existsSync(path.join(directory, "bin/pwragent.js"))).toBe(true);
+      expect(existsSync(path.join(directory, "dist/index.js"))).toBe(true);
+      expect(existsSync(preload)).toBe(true);
+    }
   });
 
   it.each([false, true])("scheduler retries its original acceptance after provider refusal or a thread lock (locked=%s)", async locked => {

@@ -99,9 +99,41 @@ it("navigation stamp admission and unchanged reads add no SQLite commits", async
   try {
     const measured = await measureSqliteWrites(() => {
       const first = store.readNavigationSourceVersion();
-      for (let i = 0; i < 40; i++) expect(store.readNavigationSourceVersion()).toBe(first);
+      const ownerFirst = store.readOwnerNavigationSourceVersion();
+      for (let i = 0; i < 40; i++) {
+        expect(store.readNavigationSourceVersion()).toBe(first);
+        expect(store.readOwnerNavigationSourceVersion()).toBe(ownerFirst);
+      }
     });
     expect({ commits: measured.writes.commits, rows: measured.writes.rowsChanged, statements: measured.writes.statements })
       .toEqual({ commits: 0, rows: 0, statements: 0 });
   } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
+});
+
+it("keeps owner navigation source version stable across remote pin and remote overlay writes while fencing owner tables", () => {
+  const db = openInMemoryStateDb();
+  const store = new SqliteOverlayStore(db);
+  try {
+    const ownerInitial = store.readOwnerNavigationSourceVersion();
+    const viewerInitial = store.readNavigationSourceVersion();
+    for (const sql of [
+      "INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload) VALUES ('peer', 'codex', 'fixture', 1, '{}')",
+      "UPDATE remote_thread_pins SET payload = '{\"changed\":true}'",
+      "DELETE FROM remote_thread_pins",
+      "INSERT INTO remote_directory_overlay(instance_id, directory_key, payload) VALUES ('peer', 'fixture', '{}')",
+      "UPDATE remote_directory_overlay SET payload = '{\"changed\":true}'",
+      "DELETE FROM remote_directory_overlay",
+    ]) {
+      db.raw.exec(sql);
+      expect(store.readOwnerNavigationSourceVersion()).toBe(ownerInitial);
+    }
+    expect(store.readNavigationSourceVersion()).not.toBe(viewerInitial);
+
+    db.raw.exec("INSERT INTO threads(thread_id, payload) VALUES ('codex:fixture', '{}')");
+    const ownerAfterThread = store.readOwnerNavigationSourceVersion();
+    expect(ownerAfterThread).not.toBe(ownerInitial);
+
+    db.setMeta("navigation-unread-baseline-v2", "{}");
+    expect(store.readOwnerNavigationSourceVersion()).not.toBe(ownerAfterThread);
+  } finally { db.close(); }
 });

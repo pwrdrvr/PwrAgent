@@ -89,6 +89,8 @@ export function autoCompactionStatusLine(
       return "Past the compaction point. PwrAgent compacts when this turn ends.";
     case "resume":
       return "Compacted. PwrAgent asks the agent to continue when this turn ends.";
+    case "verifying":
+      return "Compacted. The context size updates on the next turn.";
     case "held":
       if (status.heldReason === "unsupported") return "This agent has no /compact command, so PwrAgent cannot compact it.";
       if (status.heldReason === "refused") return "The agent refused /compact. PwrAgent will not try again until the context drops.";

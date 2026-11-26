@@ -12,7 +12,10 @@ import {
   reviewTargetInstructions,
   MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
 } from "../../shared/review-command";
-import { REVIEW_OUTPUT_INSTRUCTIONS } from "../../shared/review-output";
+import {
+  REVIEW_OUTPUT_INSTRUCTIONS,
+  REVIEW_OUTPUT_TOOL_INSTRUCTIONS,
+} from "../../shared/review-output";
 import managedReviewLedgerGuidanceMarkdown from "./managed-review-guidance-ledger.md?raw";
 import managedReviewStaticGuidanceMarkdown from "./managed-review-guidance-static.md?raw";
 
@@ -31,8 +34,8 @@ const MANAGED_REVIEW_STATIC_GUIDANCE = normalizeGuidanceMarkdown(
 export type BuildManagedReviewPromptOptions = {
   /**
    * Include the two-pass in-memory candidate ledger workflow when the review
-   * child has `record_review_candidate`, `list_review_candidates`, and
-   * `dispose_review_candidate` attached.
+   * child has `record_review_candidate`, `list_review_candidates`,
+   * `dispose_review_candidate`, and `submit_review_output` attached.
    */
   candidateLedger?: boolean;
 };
@@ -41,13 +44,16 @@ export function buildManagedReviewPrompt(
   target: AppServerReviewTarget,
   options?: BuildManagedReviewPromptOptions,
 ): string {
+  const useLedgerTools = options?.candidateLedger === true;
   return [
     "Perform a code review. Do not modify files or mutate git state. Do not run commands that require elevated permissions.",
     reviewTargetInstructions(target),
-    options?.candidateLedger === true
+    useLedgerTools
       ? MANAGED_REVIEW_LEDGER_GUIDANCE
       : MANAGED_REVIEW_STATIC_GUIDANCE,
-    REVIEW_OUTPUT_INSTRUCTIONS,
+    useLedgerTools
+      ? REVIEW_OUTPUT_TOOL_INSTRUCTIONS
+      : REVIEW_OUTPUT_INSTRUCTIONS,
   ].join("\n\n");
 }
 

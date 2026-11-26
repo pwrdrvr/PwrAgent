@@ -2733,7 +2733,7 @@ export type AppServerNotification =
       method: "thread/autoCompaction/updated";
       params: {
         threadId: string;
-        phase: "armed" | "due" | "steering" | "starting" | "compacting" | "resume" | "held";
+        phase: "armed" | "due" | "steering" | "starting" | "compacting" | "resume" | "verifying" | "held";
         triggerTokens?: number;
         effectiveContextWindow?: number;
         reportedContextWindow?: number;

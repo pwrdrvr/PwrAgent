@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { applyContextWindowBudget, autoCompactionStatusLine } from "../context-window-budget";
+import {
+  applyContextWindowBudget,
+  autoCompactionStatusLine,
+  isAutoCompactionActive,
+} from "../context-window-budget";
 
 const neonAt400k = {
   modelContextWindow: 1_048_576,
@@ -61,6 +65,11 @@ describe("context window budget", () => {
       { threadId: "t", phase: "held", heldReason: "no-shrink", triggerTokens: 409_600 },
       format,
     )).toBe("Compaction ran but the context stayed above 410k. PwrAgent will not compact again until it drops.");
+    expect(autoCompactionStatusLine(
+      { threadId: "t", phase: "verifying", via: "steer", dispatchedAtTokens: 412_000 },
+      format,
+    )).toBe("Compacted. The context size updates on the next turn.");
+    expect(isAutoCompactionActive({ threadId: "t", phase: "verifying" })).toBe(false);
     expect(autoCompactionStatusLine({ threadId: "t", phase: "armed" }, format)).toBeUndefined();
   });
 });
