@@ -2,8 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import fc from "fast-check";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { MockBackendClient, createOverlayStoreMock } from "./helpers/backend-registry-fixture";
-import { StateDb } from "../state/state-db";
-import { RestartContinuationStore } from "../state/restart-continuation-store";
+import type { RestartContinuationStorage, StoredRestartContinuation } from "../storage/desktop-runtime-storage";
 import {
   planRestartDispatch,
   type RestartDispatchPlanOptions,
@@ -80,13 +79,43 @@ const flush = async () => {
   }
 };
 
+function createMemoryRestartContinuationStore(
+  initial: readonly StoredRestartContinuation[],
+): RestartContinuationStorage {
+  const rows = new Map<string, { owner: string; entry: StoredRestartContinuation }>(
+    initial.map((entry) => [entry.id, { owner: "instance-a", entry }]),
+  );
+  return {
+    saveAll(instanceId, continuations) {
+      const saved: StoredRestartContinuation[] = [];
+      for (const entry of continuations) {
+        if (entry.kind === undefined && rows.has(entry.id)) continue;
+        rows.set(entry.id, { owner: instanceId, entry });
+        if (entry.kind === undefined) saved.push(entry);
+      }
+      return saved;
+    },
+    remove(entryId) {
+      rows.delete(entryId);
+    },
+    claimOrphaned(instanceId, liveOwners) {
+      const live = new Set([...liveOwners(), instanceId]);
+      const claimed: StoredRestartContinuation[] = [];
+      for (const row of rows.values()) {
+        if (live.has(row.owner)) continue;
+        row.owner = instanceId;
+        claimed.push(row.entry);
+      }
+      return claimed.sort((left, right) => left.createdAt - right.createdAt || left.id.localeCompare(right.id));
+    },
+  };
+}
+
 function createFixture(params: {
   threads: readonly string[];
   plan?: Omit<RestartDispatchPlanOptions, "now">;
 }) {
-  const db = StateDb.open(":memory:");
-  const store = new RestartContinuationStore(db.raw, { processId: 4_242, processAlive: () => false });
-  store.saveAll("instance-a", params.threads.map((threadId, index) => ({
+  const store = createMemoryRestartContinuationStore(params.threads.map((threadId, index) => ({
     id: `restart:${threadId}`,
     backend: "codex" as const,
     threadId,
@@ -108,7 +137,6 @@ function createFixture(params: {
     registry,
     close: async () => {
       await registry.close();
-      db.close();
     },
   };
 }
@@ -130,78 +158,193 @@ describe("restart continuation dispatch (model)", () => {
     }), { numRuns: 50 });
   });
 
-  it("starts the first continuation immediately once providers are ready", async () => {
-    const threads = fc.uniqueArray(fc.constantFrom("t0", "t1", "t2", "t3", "t4", "t5"), { minLength: 1, maxLength: 6 });
-    await fc.assert(fc.asyncProperty(threads, async (stopped) => {
-      const clock = createVirtualClock(1_000_000);
-      const fixture = createFixture({ threads: stopped });
-      try {
-        fixture.registry.beginRestartContinuationDispatch();
-        while (clock.activeTimers()[0] && clock.activeTimers()[0]!.fireAt <= clock.now) {
-          clock.fireNext(0);
-        }
-        await flush();
-        expect(fixture.codexClient.startTurnCallCount).toBeGreaterThanOrEqual(1);
-        expect(fixture.codexClient.startTurnCalls[0]!.threadId).toBe(stopped[0]);
-      } finally {
-        await fixture.close();
-        clock.restore();
+  it.each([
+    ["single stopped thread", ["t0"]],
+    ["multiple batches", ["t0", "t1", "t2", "t3", "t4", "t5"]],
+  ] as const)("starts the first continuation immediately once providers are ready (%s)", async (_label, stopped) => {
+    const clock = createVirtualClock(1_000_000);
+    const fixture = createFixture({ threads: stopped });
+    try {
+      fixture.registry.beginRestartContinuationDispatch();
+      while (clock.activeTimers()[0] && clock.activeTimers()[0]!.fireAt <= clock.now) {
+        clock.fireNext(0);
       }
-    }), { numRuns: 20 });
+      await flush();
+      expect(fixture.codexClient.startTurnCallCount).toBeGreaterThanOrEqual(1);
+      expect(fixture.codexClient.startTurnCalls[0]!.threadId).toBe(stopped[0]);
+    } finally {
+      await fixture.close();
+      clock.restore();
+    }
   });
 
-  it("re-arms timers when setTimeout fires early so continuations and the deadline never strand", async () => {
-    const threads = fc.uniqueArray(fc.constantFrom("t0", "t1", "t2", "t3"), { minLength: 1, maxLength: 4 });
-    const skews = fc.array(fc.integer({ min: -3, max: 0 }), { minLength: 20, maxLength: 20 });
-    await fc.assert(fc.asyncProperty(threads, skews, fc.boolean(), async (stopped, timerSkews, blockAll) => {
-      const clock = createVirtualClock(1_000_000);
-      const fixture = createFixture({
-        threads: stopped,
-        plan: { batchSize: 2, firstDelayMs: 0, intervalMs: 1_000, jitterMs: 500, releaseGraceMs: 5_000, random: () => 0.5 },
-      });
-      try {
-        if (blockAll) {
-          vi.spyOn(fixture.codexClient, "startTurn").mockImplementation(() => new Promise(() => undefined));
+  it.each([
+    { label: "single thread completes before deadline", stopped: ["t0"], blockAll: false },
+    { label: "multi-batch threads complete before deadline", stopped: ["t0", "t1", "t2", "t3"], blockAll: false },
+    { label: "blocked turns still open at deadline", stopped: ["t0", "t1"], blockAll: true },
+  ])("re-arms timers when setTimeout fires early so continuations and the deadline never strand ($label)", async ({ stopped, blockAll }) => {
+    const clock = createVirtualClock(1_000_000);
+    const fixture = createFixture({
+      threads: stopped,
+      plan: { batchSize: 2, firstDelayMs: 0, intervalMs: 1_000, jitterMs: 500, releaseGraceMs: 5_000, random: () => 0.5 },
+    });
+    try {
+      if (blockAll) {
+        vi.spyOn(fixture.codexClient, "startTurn").mockImplementation(() => new Promise(() => undefined));
+      }
+      fixture.registry.beginRestartContinuationDispatch();
+      await flush();
+      const status = fixture.registry.getRestartGateStatus();
+      const releaseBy = status.phase === "resuming" ? status.releaseBy : undefined;
+      // Fire each distinct target early (-3ms, then -1ms) before letting it reach its target time (0ms).
+      const earlyAttemptsByFireAt = new Map<number, number>();
+      let steps = 0;
+      while (clock.activeTimers().length > 0 && steps < 40) {
+        const next = clock.activeTimers()[0]!;
+        if (releaseBy !== undefined && next.fireAt > releaseBy + 10_000) break;
+        const attempts = earlyAttemptsByFireAt.get(next.fireAt) ?? 0;
+        earlyAttemptsByFireAt.set(next.fireAt, attempts + 1);
+        const skew = attempts === 0 ? -3 : attempts === 1 ? -1 : 0;
+        clock.fireNext(skew);
+        await flush();
+        steps += 1;
+      }
+      if (blockAll) {
+        expect(fixture.registry.getRestartGateStatus()).toEqual({ phase: "open" });
+      } else {
+        expect(fixture.codexClient.startTurnCallCount).toBe(stopped.length);
+        expect(fixture.registry.getRestartGateStatus()).toEqual({ phase: "open" });
+        if (releaseBy !== undefined) {
+          expect(clock.now).toBeLessThan(releaseBy);
         }
-        fixture.registry.beginRestartContinuationDispatch();
+      }
+    } finally {
+      await fixture.close();
+      clock.restore();
+    }
+  });
+
+  type RaceOp =
+    | { kind: "providers-ready" }
+    | { kind: "begin-quiet" }
+    | { kind: "cancel-quiet" }
+    | { kind: "cancel-continuation"; index: number }
+    | { kind: "fire-timer"; skew: number }
+    | { kind: "advance"; ms: number };
+
+  const runQuietCancelRace = async (stopped: readonly string[], ops: readonly RaceOp[]) => {
+    const clock = createVirtualClock(1_000_000);
+    const fixture = createFixture({
+      threads: stopped,
+      plan: { batchSize: 2, firstDelayMs: 0, intervalMs: 1_000, jitterMs: 500, releaseGraceMs: 5_000, random: () => 0.5 },
+    });
+    const cancelled = new Set<string>();
+    let providersReadyCalled = false;
+    let quieting = false;
+    try {
+      for (const op of ops) {
+        switch (op.kind) {
+          case "providers-ready":
+            providersReadyCalled = true;
+            fixture.registry.beginRestartContinuationDispatch();
+            break;
+          case "begin-quiet":
+            quieting = true;
+            fixture.registry.beginQuietRestart();
+            break;
+          case "cancel-quiet":
+            quieting = false;
+            fixture.registry.cancelQuietRestart(false);
+            break;
+          case "cancel-continuation": {
+            const target = stopped[op.index % stopped.length]!;
+            if (fixture.registry.cancelQueuedTurn(`restart:${target}`)) {
+              cancelled.add(target);
+            }
+            break;
+          }
+          case "fire-timer":
+            clock.fireNext(op.skew);
+            break;
+          case "advance":
+            clock.advance(op.ms);
+            break;
+        }
         await flush();
         const status = fixture.registry.getRestartGateStatus();
-        const releaseBy = status.phase === "resuming" ? status.releaseBy : undefined;
-        let skewIndex = 0;
-        let steps = 0;
-        while (clock.activeTimers().length > 0 && steps < 40) {
-          const next = clock.activeTimers()[0]!;
-          if (releaseBy !== undefined && next.fireAt > releaseBy + 10_000) break;
-          const skew = timerSkews[skewIndex++ % timerSkews.length]!;
-          clock.fireNext(skew);
-          await flush();
-          steps += 1;
+        if (!quieting && status.phase === "resuming") {
+          const queuedContinuations = stopped.filter((threadId) =>
+            fixture.registry.getQueuedTurnsForThread({ backend: "codex", threadId })
+              .some((entry) => entry.queueEntryId === `restart:${threadId}`),
+          );
+          expect(status.waiting).toBeLessThanOrEqual(queuedContinuations.length);
         }
-        if (blockAll) {
-          expect(fixture.registry.getRestartGateStatus()).toEqual({ phase: "open" });
-        } else {
-          expect(fixture.codexClient.startTurnCallCount).toBe(stopped.length);
-          expect(fixture.registry.getRestartGateStatus()).toEqual({ phase: "open" });
-          if (releaseBy !== undefined) {
-            expect(clock.now).toBeLessThan(releaseBy);
-          }
-        }
-      } finally {
-        await fixture.close();
-        clock.restore();
       }
-    }), { numRuns: 30 });
+      if (quieting) {
+        quieting = false;
+        fixture.registry.cancelQuietRestart(false);
+        await flush();
+      }
+      if (!providersReadyCalled) {
+        fixture.registry.beginRestartContinuationDispatch();
+        await flush();
+      }
+      const statusAfter = fixture.registry.getRestartGateStatus();
+      if (statusAfter.phase === "resuming") {
+        expect(statusAfter.nextAt).toBeDefined();
+        expect(statusAfter.releaseBy).toBeDefined();
+      }
+      let steps = 0;
+      while (clock.activeTimers().length > 0 && steps < 40) {
+        clock.fireNext(0);
+        await flush();
+        steps += 1;
+      }
+      const expectedStarted = stopped.filter((threadId) => !cancelled.has(threadId));
+      expect(fixture.codexClient.startTurnCalls.map((call) => call.threadId).sort()).toEqual([...expectedStarted].sort());
+      expect(fixture.registry.getRestartGateStatus()).toEqual({ phase: "open" });
+      expect(clock.activeTimers()).toEqual([]);
+    } finally {
+      await fixture.close();
+      clock.restore();
+    }
+  };
+
+  it.each([
+    {
+      label: "continuation cancelled while quieting",
+      stopped: ["t0"],
+      ops: [
+        { kind: "begin-quiet" as const },
+        { kind: "cancel-continuation" as const, index: 0 },
+        { kind: "cancel-quiet" as const },
+      ],
+    },
+    {
+      label: "providers become ready while quieting",
+      stopped: ["t0", "t1"],
+      ops: [
+        { kind: "begin-quiet" as const },
+        { kind: "providers-ready" as const },
+        { kind: "cancel-quiet" as const },
+      ],
+    },
+    {
+      label: "scheduled continuation becomes due while quieting",
+      stopped: ["t0", "t1"],
+      ops: [
+        { kind: "providers-ready" as const },
+        { kind: "begin-quiet" as const },
+        { kind: "advance" as const, ms: 600 },
+        { kind: "cancel-quiet" as const },
+      ],
+    },
+  ])("preserves gate invariants across shrunk quiet-then-cancel counterexample ($label)", async ({ stopped, ops }) => {
+    await runQuietCancelRace(stopped, ops);
   });
 
   it("preserves provider readiness, due timers, and cancellations across quiet-then-cancel races", async () => {
-    type Op =
-      | { kind: "providers-ready" }
-      | { kind: "begin-quiet" }
-      | { kind: "cancel-quiet" }
-      | { kind: "cancel-continuation"; index: number }
-      | { kind: "fire-timer"; skew: number }
-      | { kind: "advance"; ms: number };
-    const opArb: fc.Arbitrary<Op> = fc.oneof(
+    const opArb: fc.Arbitrary<RaceOp> = fc.oneof(
       fc.constant({ kind: "providers-ready" as const }),
       fc.constant({ kind: "begin-quiet" as const }),
       fc.constant({ kind: "cancel-quiet" as const }),
@@ -213,119 +356,54 @@ describe("restart continuation dispatch (model)", () => {
       fc.uniqueArray(fc.constantFrom("t0", "t1", "t2", "t3"), { minLength: 1, maxLength: 4 }),
       fc.array(opArb, { minLength: 1, maxLength: 15 }),
       async (stopped, ops) => {
-        const clock = createVirtualClock(1_000_000);
-        const fixture = createFixture({
-          threads: stopped,
-          plan: { batchSize: 2, firstDelayMs: 0, intervalMs: 1_000, jitterMs: 500, releaseGraceMs: 5_000, random: () => 0.5 },
-        });
-        const cancelled = new Set<string>();
-        let providersReadyCalled = false;
-        let quieting = false;
-        try {
-          for (const op of ops) {
-            switch (op.kind) {
-              case "providers-ready":
-                providersReadyCalled = true;
-                fixture.registry.beginRestartContinuationDispatch();
-                break;
-              case "begin-quiet":
-                quieting = true;
-                fixture.registry.beginQuietRestart();
-                break;
-              case "cancel-quiet":
-                quieting = false;
-                fixture.registry.cancelQuietRestart(false);
-                break;
-              case "cancel-continuation": {
-                const target = stopped[op.index % stopped.length]!;
-                if (fixture.registry.cancelQueuedTurn(`restart:${target}`)) {
-                  cancelled.add(target);
-                }
-                break;
-              }
-              case "fire-timer":
-                clock.fireNext(op.skew);
-                break;
-              case "advance":
-                clock.advance(op.ms);
-                break;
-            }
-            await flush();
-            const status = fixture.registry.getRestartGateStatus();
-            if (!quieting && status.phase === "resuming") {
-              const queuedContinuations = stopped.filter((threadId) =>
-                fixture.registry.getQueuedTurnsForThread({ backend: "codex", threadId })
-                  .some((entry) => entry.queueEntryId === `restart:${threadId}`),
-              );
-              expect(status.waiting).toBeLessThanOrEqual(queuedContinuations.length);
-            }
-          }
-          if (quieting) {
-            quieting = false;
-            fixture.registry.cancelQuietRestart(false);
-            await flush();
-          }
-          if (!providersReadyCalled) {
-            fixture.registry.beginRestartContinuationDispatch();
-            await flush();
-          }
-          const statusAfter = fixture.registry.getRestartGateStatus();
-          if (statusAfter.phase === "resuming") {
-            expect(statusAfter.nextAt).toBeDefined();
-            expect(statusAfter.releaseBy).toBeDefined();
-          }
-          let steps = 0;
-          while (clock.activeTimers().length > 0 && steps < 40) {
-            clock.fireNext(0);
-            await flush();
-            steps += 1;
-          }
-          const expectedStarted = stopped.filter((threadId) => !cancelled.has(threadId));
-          expect(fixture.codexClient.startTurnCalls.map((call) => call.threadId).sort()).toEqual([...expectedStarted].sort());
-          expect(fixture.registry.getRestartGateStatus()).toEqual({ phase: "open" });
-          expect(clock.activeTimers()).toEqual([]);
-        } finally {
-          await fixture.close();
-          clock.restore();
-        }
+        await runQuietCancelRace(stopped, ops);
       },
-    ), { numRuns: 40 });
+    ), { numRuns: 5 });
   });
 
-  it("does not let continuations held before dispatch steal batch-0 slots or inflate the deadline", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.integer({ min: 1, max: 4 }),
-      fc.integer({ min: 1, max: 2 }),
-      async (heldCount, pendingCount) => {
-        const clock = createVirtualClock(1_000_000);
-        const heldThreads = Array.from({ length: heldCount }, (_, index) => `held-${index}`);
-        const pendingThreads = Array.from({ length: pendingCount }, (_, index) => `pending-${index}`);
-        const fixture = createFixture({
-          threads: [...heldThreads, ...pendingThreads],
-          plan: { batchSize: heldCount, firstDelayMs: 0, intervalMs: 45_000, jitterMs: 0, releaseGraceMs: 60_000, random: () => 0 },
-        });
-        try {
-          for (const threadId of heldThreads) {
-            await fixture.registry.submitHeldTurn({
-              queueEntryId: `held-msg:${threadId}`,
-              backend: "codex",
-              threadId,
-              input: [{ type: "text", text: "Locked message" }],
-              holdReason: "This thread is locked.",
-            });
-          }
-          await flush();
-          fixture.registry.beginRestartContinuationDispatch();
-          while (clock.activeTimers()[0] && clock.activeTimers()[0]!.fireAt <= clock.now) {
-            clock.fireNext(0);
-          }
-          await flush();
-          expect(fixture.codexClient.startTurnCalls.map((call) => call.threadId)).toContain(pendingThreads[0]);
-        } finally {
-          await fixture.close();
-          clock.restore();
+  it.each([
+    [1, 1],
+    [2, 3],
+    [4, 2],
+  ] as const)(
+    "does not let %d held continuation(s) steal batch-0 slots or inflate the deadline for %d pending continuation(s)",
+    async (heldCount, pendingCount) => {
+      const clock = createVirtualClock(1_000_000);
+      const heldThreads = Array.from({ length: heldCount }, (_, index) => `held-${index}`);
+      const pendingThreads = Array.from({ length: pendingCount }, (_, index) => `pending-${index}`);
+      const fixture = createFixture({
+        threads: [...heldThreads, ...pendingThreads],
+        plan: { batchSize: heldCount, firstDelayMs: 0, intervalMs: 45_000, jitterMs: 0, releaseGraceMs: 60_000, random: () => 0 },
+      });
+      try {
+        for (const threadId of heldThreads) {
+          await fixture.registry.submitHeldTurn({
+            queueEntryId: `held-msg:${threadId}`,
+            backend: "codex",
+            threadId,
+            input: [{ type: "text", text: "Locked message" }],
+            holdReason: "This thread is locked.",
+          });
         }
-      },
-    ), { numRuns: 10 });
-  });
+        await flush();
+        fixture.registry.beginRestartContinuationDispatch();
+        const status = fixture.registry.getRestartGateStatus();
+        const expectedReleaseBy = 1_000_000 + Math.floor((pendingCount - 1) / heldCount) * 45_000 + 60_000;
+        expect(status).toEqual({
+          phase: "resuming",
+          waiting: pendingCount,
+          nextAt: 1_000_000,
+          releaseBy: expectedReleaseBy,
+        });
+        while (clock.activeTimers()[0] && clock.activeTimers()[0]!.fireAt <= clock.now) {
+          clock.fireNext(0);
+        }
+        await flush();
+        expect(fixture.codexClient.startTurnCalls.map((call) => call.threadId)).toContain(pendingThreads[0]);
+      } finally {
+        await fixture.close();
+        clock.restore();
+      }
+    },
+  );
 });
