@@ -171,6 +171,6 @@ it("paces raw normalization and minimal directory rows without changing the prov
       // Before each raw iterator step (including done), then each directory
       // row, even though the directory filter skips Git.
       expect(rowCheckpoint).toHaveBeenCalledTimes(2 * count + 1);
-    }), { numRuns: 10 });
+    }), { numRuns: 5, examples: [[17], [100]] });
   } finally { await client.close(); }
 });

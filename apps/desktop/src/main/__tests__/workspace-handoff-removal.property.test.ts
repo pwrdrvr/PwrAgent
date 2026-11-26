@@ -205,12 +205,12 @@ describe("workspace handoff source removal", () => {
   });
 
   // One real Git fixture per test. These cases distinguish each kind of
-  // workspace use, including a blocker after an unrelated thread.
+  // workspace use, including a blocker at the end of a four-thread inventory.
   const workspaceCases: { scenario: string; workspaces: OtherThreadWorkspace[] }[] = [
     { scenario: "no other thread", workspaces: [] },
     { scenario: "an unrelated thread", workspaces: ["unrelated"] },
     { scenario: "a thread at the worktree root", workspaces: ["source"] },
-    { scenario: "a descendant thread after an unrelated thread", workspaces: ["unrelated", "descendant"] },
+    { scenario: "a descendant thread after three unrelated threads", workspaces: ["unrelated", "unrelated", "unrelated", "descendant"] },
   ];
   const removalCases = (["worktree-to-worktree", "worktree-to-local"] as const).flatMap((direction) =>
     (["paged", "aggregate"] as const).flatMap((inventory) =>

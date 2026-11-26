@@ -3,7 +3,6 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import fc from "fast-check";
 import { expect, it } from "vitest";
 import {
   discoverRendererBytecodeSources,
@@ -31,10 +30,11 @@ it("includes Composer and all three extracted hooks in the shared operational bu
   ]));
 });
 
-it("follows newly extracted helpers, reexports, cycles, aliases and lazy imports", () => {
-  const directory = mkdtempSync(path.join(os.tmpdir(), "renderer-bytecode-graph-"));
-  try {
-    fc.assert(fc.property(fc.integer({ min: 2, max: 12 }), (count) => {
+it.each(Array.from({ length: 11 }, (_, index) => index + 2))(
+  "follows a cycle of %i helpers through reexports, aliases and lazy imports",
+  (count) => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "renderer-bytecode-graph-"));
+    try {
       for (let index = 0; index < count; index++) {
         const next = (index + 1) % count;
         const importKind = index % 3;
@@ -47,13 +47,13 @@ it("follows newly extracted helpers, reexports, cycles, aliases and lazy imports
       }
       const sources = discoverRendererBytecodeSources(directory, ["helper-0.ts"], []);
       expect(sources).toEqual(Array.from({ length: count }, (_, index) => `helper-${index}.ts`).sort());
-    }));
-    expect(() => discoverRendererBytecodeSources(directory, ["helper-0.ts"], ["helper-0.ts"]))
-      .toThrow("A bytecode root cannot be a boundary");
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
+      expect(() => discoverRendererBytecodeSources(directory, ["helper-0.ts"], ["helper-0.ts"]))
+        .toThrow("A bytecode root cannot be a boundary");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 it("rejects an oversized anonymous function extracted into a new module", () => {
   // Exercise the same SSR transform, Oxc compressor, discovery and V8 oracle

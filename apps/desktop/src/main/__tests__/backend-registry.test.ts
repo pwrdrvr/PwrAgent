@@ -156,7 +156,9 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("refuses generated thread/turn admissions before host preparation when another profile owner holds the lease", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("codex", "claude", "acp:kimi"), fc.boolean(), async (backend, turn) => {
+    const cases = (["codex", "claude", "acp:kimi"] as const).flatMap(backend =>
+      [false, true].map(turn => ({ backend, turn })));
+    for (const { backend, turn } of cases) {
       const client = new MockBackendClient({ threads: [] });
       const assertOwnership = vi.fn(() => { throw new Error("fixture profile owner holds the lease"); });
       const close = vi.fn();
@@ -171,7 +173,7 @@ describe("DesktopBackendRegistry", () => {
         expect(client.startTurnCalls).toHaveLength(0);
       } finally { await registry.close(); }
       expect(close).toHaveBeenCalledOnce();
-    }), { numRuns: 12 });
+    }
   });
 
   it.each([false, true])("delivers a text final and dispatches Telegram input through the real lifecycle pipeline (legacy=%s)", async (legacy) => {
@@ -752,8 +754,11 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("releases projected preparation activity while preserving newer provider observations", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("preparing", "same:thread"), fc.constantFrom("idle" as const, "provider-active" as const),
-      (threadId, discovery) => assertFailedTurnPreparationRetires(threadId, "Continue", discovery)), { numRuns: 12 });
+    for (const threadId of ["preparing", "same:thread"]) {
+      for (const discovery of ["idle", "provider-active"] as const) {
+        await assertFailedTurnPreparationRetires(threadId, "Continue", discovery);
+      }
+    }
   });
 
   it("releases an idle status reprojected during start preparation", async () => {
@@ -4978,7 +4983,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("drains admitted runtime work after synchronous creation preparation refuses", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (runtimeRejects) => {
+    for (const runtimeRejects of [false, true]) {
       const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore: createOverlayStoreMock() });
       const internal = registry as unknown as {
         gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
@@ -5005,7 +5010,7 @@ describe("DesktopBackendRegistry", () => {
         expect(await outcome).toBe(refusal);
         expect(rollback).toHaveBeenCalledOnce();
       } finally { await registry.close(); }
-    }), { numRuns: 4 });
+    }
   });
 
   async function assertAcceptedThreadCreationSurvives(backend: AppServerBackendKind, failure: "pr" | "parent" | "event" | "workspace"): Promise<void> {

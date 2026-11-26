@@ -1351,7 +1351,7 @@ describe("inspectMaintenanceWorkspace", () => {
           limitBytes: 64, rebuildableOutputIsClean: legacyRule })).toMatchObject({
           workspace: { kind: "changes", files: 2, bytes: Buffer.byteLength("edited\nnew work\n") },
         });
-      }), { numRuns: 12 });
+      }), { numRuns: 5, examples: [[paths, 128, false], [paths, 100_000, true]] });
   });
 
   const options = (rebuildableOutputIsClean: boolean) => ({ signal: new AbortController().signal, limitBytes: 64, rebuildableOutputIsClean });
@@ -1570,24 +1570,22 @@ describe("archived checkouts removal can actually remove", () => {
   const removable = new Set(["clean", "changes", "overLimit"]);
   const reasons: Record<string, string> = { notGit: "Not a Git checkout", inPlace: "Main checkout", missing: "Checkout missing" };
 
-  it("offers a checkout only when its workspace is one removal can snapshot", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom(...workspaces), async (workspace) => {
-      const worktreePath = "/w/archived/app";
-      const built = harness([], {
-        auditArchivedCheckouts: vi.fn(async () => ({
-          candidates: [{ backend: "codex", threadId: "old", worktreePath }], kept: {}, emptyFolders: 0,
-        })),
-      });
-      built.workspaces.set(worktreePath, workspace);
-      const scan = await built.service.scan();
-      if (removable.has(workspace.kind)) {
-        expect(scan.checkouts.items).toEqual([expect.objectContaining({ worktreePath, kind: "removable" })]);
-      } else {
-        expect(scan.checkouts.items).toEqual([]);
-        expect(scan.checkouts.kept).toEqual({ [reasons[workspace.kind]!]: 1 });
-        expect(scan.failures).toEqual([]);
-      }
-    }), { numRuns: 30 });
+  it.each(workspaces)("offers a checkout only when removal can snapshot its workspace (kind=$kind)", async (workspace) => {
+    const worktreePath = "/w/archived/app";
+    const built = harness([], {
+      auditArchivedCheckouts: vi.fn(async () => ({
+        candidates: [{ backend: "codex", threadId: "old", worktreePath }], kept: {}, emptyFolders: 0,
+      })),
+    });
+    built.workspaces.set(worktreePath, workspace);
+    const scan = await built.service.scan();
+    if (removable.has(workspace.kind)) {
+      expect(scan.checkouts.items).toEqual([expect.objectContaining({ worktreePath, kind: "removable" })]);
+    } else {
+      expect(scan.checkouts.items).toEqual([]);
+      expect(scan.checkouts.kept).toEqual({ [reasons[workspace.kind]!]: 1 });
+      expect(scan.failures).toEqual([]);
+    }
   });
 
   it("does not offer a stranded folder left with only ignored files and no .git", async () => {

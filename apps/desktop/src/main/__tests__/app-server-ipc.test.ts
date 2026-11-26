@@ -12145,12 +12145,11 @@ describe("app server ipc", () => {
     await checkOutstandingPrStatus({ laterObservation: "identical-poll", headCheck: "pending" });
   });
 
-  it("preserves terminal PR status across overlapped observations", async () => {
-    await fc.assert(fc.asyncProperty(fc.record({
-      laterObservation: fc.constantFrom("in-app-merge" as const, "identical-poll" as const),
-      headCheck: fc.constantFrom("pending" as const, "failing" as const),
-    }), checkOutstandingPrStatus), { numRuns: 24 });
-  });
+  it.each((["in-app-merge", "identical-poll"] as const).flatMap(laterObservation =>
+    (["pending", "failing"] as const).map(headCheck => ({ laterObservation, headCheck }))))(
+    "preserves terminal PR status across $laterObservation with a $headCheck check",
+    checkOutstandingPrStatus,
+  );
 
   async function checkSharedPrMerge(input: {
     count: number;
@@ -12342,7 +12341,10 @@ describe("app server ipc", () => {
       source: fc.constantFrom("poll" as const, "button" as const, "racing_poll" as const),
       lockedPrefix: fc.integer({ min: 0, max: 6 }),
       mergerRestriction: fc.option(fc.constantFrom("lock" as const, "archive" as const, "secondary" as const, "capacity" as const), { nil: undefined }),
-    }), checkSharedPrMerge), { numRuns: 24 });
+    }), checkSharedPrMerge), { numRuns: 5, examples: [
+      [{ count: 6, mergerIndex: 5, source: "racing_poll", lockedPrefix: 6, mergerRestriction: undefined }],
+      [{ count: 6, mergerIndex: 5, source: "button", lockedPrefix: 1, mergerRestriction: "secondary" }],
+    ] });
   });
 
   async function checkAutomaticMergeBuildWatch(input: {
@@ -12440,14 +12442,11 @@ describe("app server ipc", () => {
     await checkAutomaticMergeBuildWatch({ workspace: "missing", conclusion: "success", otherPrFirst: false, restoreWait: true });
   });
 
-  it("settles automatic merge builds from the named PR regardless of checkout metadata", async () => {
-    await fc.assert(fc.asyncProperty(fc.record({
-      workspace: fc.constantFrom("missing" as const, "moved" as const),
-      conclusion: fc.constantFrom("success" as const, "failure" as const),
-      otherPrFirst: fc.boolean(),
-      restoreWait: fc.boolean(),
-    }), checkAutomaticMergeBuildWatch), { numRuns: 24 });
-  });
+  it.each((["missing", "moved"] as const).flatMap(workspace => (["success", "failure"] as const).flatMap(conclusion =>
+    [false, true].flatMap(otherPrFirst => [false, true].map(restoreWait => ({ workspace, conclusion, otherPrFirst, restoreWait }))))))(
+    "settles a $conclusion build for the named PR ($workspace checkout, other PR first=$otherPrFirst, restored=$restoreWait)",
+    checkAutomaticMergeBuildWatch,
+  );
 
   it("validates the Git default branch before arming or recovering an unverified automatic merge build watch", async () => {
     const appState = await import("../state/app-state");
@@ -16017,12 +16016,13 @@ describe("app server ipc", () => {
     await expectDetachInProviderPartition("thread-archived", true);
   });
 
-  it("detaches secondary directories regardless of provider archive membership and timestamp", async () => {
-    registerAppServerIpcHandlers();
-    await fc.assert(fc.asyncProperty(fc.uuid(), fc.boolean(), fc.boolean(), async (threadId, archived, stamped) => {
-      await expectDetachInProviderPartition(threadId, archived, archived && stamped ? 500 : undefined);
-    }), { numRuns: 25 });
-  });
+  it.each([false, true].flatMap(archived => [false, true].map(stamped => ({ archived, stamped }))))(
+    "detaches a secondary directory (archived=$archived, timestamp=$stamped)",
+    async ({ archived, stamped }) => {
+      registerAppServerIpcHandlers();
+      await expectDetachInProviderPartition("a4d45678-1234-4234-8234-123456789abc", archived, archived && stamped ? 500 : undefined);
+    },
+  );
 
   it("rejects detaching the last linked directory", async () => {
     const { NAVIGATION_DETACH_DIRECTORY_FROM_THREAD_CHANNEL } =

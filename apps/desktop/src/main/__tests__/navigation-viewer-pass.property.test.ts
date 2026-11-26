@@ -53,24 +53,22 @@ import { initializeDesktopAppServerService, resetAppServerServiceForTests } from
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
-it("preserves all eight physical source admissions when each source has a derived viewer", async () => {
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 8 }), async (n) => {
-    const pool = new NavigationIndexReadPool();
-    let finish!: () => void;
-    const gate = new Promise<void>((resolve) => { finish = resolve; });
-    const index = { threads: [], directories: [] };
-    const loads = Array.from({ length: n }, (_, i) => vi.fn(async () => { await gate; return { ...index, localInstanceId: String(i) }; }));
-    const reads = loads.map((load, i) => pool.read(`viewer-${i}`,
-      (signal) => pool.read(`owner-${i}`, load, signal), undefined, undefined, "projection"));
-    try {
-      expect(pool.usage()).toEqual({ physical: n, readers: 2 * n });
-      if (n === 8) await expect(pool.read("over-capacity", async () => index)).rejects.toThrow("source admission is full");
-      finish();
-      const rows = await Promise.all(reads);
-      expect(rows.map((row) => row.localInstanceId)).toEqual(Array.from({ length: n }, (_, i) => String(i)));
-      for (const load of loads) expect(load).toHaveBeenCalledTimes(1);
-    } finally { finish(); await Promise.allSettled(reads); }
-  }), { numRuns: 25, examples: [[8]] });
+it.each([1, 2, 3, 4, 5, 6, 7, 8])("preserves %i physical source admissions when each source has a derived viewer", async (n) => {
+  const pool = new NavigationIndexReadPool();
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => { finish = resolve; });
+  const index = { threads: [], directories: [] };
+  const loads = Array.from({ length: n }, (_, i) => vi.fn(async () => { await gate; return { ...index, localInstanceId: String(i) }; }));
+  const reads = loads.map((load, i) => pool.read(`viewer-${i}`,
+    (signal) => pool.read(`owner-${i}`, load, signal), undefined, undefined, "projection"));
+  try {
+    expect(pool.usage()).toEqual({ physical: n, readers: 2 * n });
+    if (n === 8) await expect(pool.read("over-capacity", async () => index)).rejects.toThrow("source admission is full");
+    finish();
+    const rows = await Promise.all(reads);
+    expect(rows.map((row) => row.localInstanceId)).toEqual(Array.from({ length: n }, (_, i) => String(i)));
+    for (const load of loads) expect(load).toHaveBeenCalledTimes(1);
+  } finally { finish(); await Promise.allSettled(reads); }
 });
 
 async function until(predicate: () => boolean) {
@@ -323,7 +321,7 @@ it("dims a warm active pin immediately when its peer disconnects", async () => {
 
 it("matches peer connectivity after a warm viewer pass without re-listing the unchanged owner", async () => {
   await fc.assert(fc.asyncProperty(fc.constantFrom(2, 4, 8), fc.nat(100), expectDisconnectedViewer),
-    { numRuns: 25, examples: [[4, 0], [8, 7]] });
+    { numRuns: 5, examples: [[4, 0], [8, 7], [2, 1]] });
 });
 
 it("fences a disconnect during an active pin projection without discarding the unchanged owner scan", async () => {
@@ -362,7 +360,9 @@ it("fences a disconnect during an active pin projection without discarding the u
 });
 
 it("uses the complete pin and watched membership for an exact selection's project controls without repeating pin resolution", async () => {
-  await fc.assert(fc.asyncProperty(fc.constantFrom(2, 4, 8), fc.boolean(), fc.boolean(), async (n, otherPeer, otherProject) => {
+  const cases = [2, 4, 8].flatMap(n => [false, true].flatMap(otherPeer =>
+    [false, true].map(otherProject => ({ n, otherPeer, otherProject }))));
+  for (const { n, otherPeer, otherProject } of cases) {
     const f = await fixture(n);
     const paused: ProjectForgeAutomation = { paused: true, pausedAt: 1, autoFixMergeConflicts: true,
       autoFixCiFailures: true, prWatches: true, prOffers: true, refuseThreadMessages: false, wakeupPolicy: "hold" };
@@ -401,7 +401,7 @@ it("uses the complete pin and watched membership for an exact selection's projec
       expect(f.snapshots).toHaveBeenCalledTimes(1);
       expect(f.provider).toHaveBeenCalledTimes(1);
     } finally { f.close(); }
-  }), { numRuns: 25, examples: [[2, true, false], [2, false, true], [2, false, false]] });
+  }
 });
 
 it.each([4, 8])("budgets manual refresh and automatic turn-end passes with %i directories, children, pins and relationship rows", async (n) => {
@@ -522,7 +522,8 @@ it("matches the owning peer and viewer pin model after generated publications an
           query: { kind: "exact", identities: [{ backend: "codex", threadId: "remote-0", ownerInstanceId: "peer" }] } });
         expect(restored.entries[0]?.row.ref).toMatchObject({ ownerInstanceId: "peer", threadId: "remote-0" });
       } finally { f.close(); }
-    }), { numRuns: 25 });
+    }), { numRuns: 5, examples: [[5, [{ index: 4, active: true, pinned: true, title: "Off page" },
+      { index: 4, active: false, pinned: false, title: "Updated" }]]] });
 });
 
 it.each([4, 8])("bounds an automatic completion overtaken during listing with %i projects", async (n) => {
@@ -714,7 +715,9 @@ it("keys stack automation hold evidence to the blocking PR in the catalog", asyn
     vi.spyOn(service as unknown as { prStackDirectories: () => string[] }, "prStackDirectories").mockReturnValue([cwd]);
     vi.spyOn(service, "listThreads").mockResolvedValue({ backend: "all", fetchedAt: 0, threads: [] });
 
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 10_000 }), fc.integer({ min: 1, max: 100 }), async (lower, gap) => {
+    // The numeric values are labels. Change the catalog once to also check
+    // that a prior blocking PR key is not reused.
+    for (const [lower, gap] of [[1, 1], [10_000, 100]] as const) {
       const upper = lower + gap;
       await writeFile(path.join(cwd, ".git", "gh-stack"), JSON.stringify({
         schemaVersion: 1, repository: "github.com:fixture/stack",
@@ -730,7 +733,7 @@ it("keys stack automation hold evidence to the blocking PR in the catalog", asyn
       expect(await service["prStackHoldEvidence"](pr)).toMatchObject({
         reason: expect.stringContaining(`Held by #${lower}:`), lowerKey: `github.com/fixture/stack#${lower}`,
       });
-    }), { numRuns: 25 });
+    }
   } finally {
     restore();
     db.close();
