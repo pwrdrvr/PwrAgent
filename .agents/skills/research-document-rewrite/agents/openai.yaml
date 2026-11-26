@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Document Evaluation & Rewrite"
+  short_description: "Run a live Research pass to evaluate and rewrite a .tex or .pdf document"
+  default_prompt: "Use $research-document-rewrite to drive a live PwrAgent Research run evaluating and rewriting a .tex or .pdf document in an isolated worktree."
