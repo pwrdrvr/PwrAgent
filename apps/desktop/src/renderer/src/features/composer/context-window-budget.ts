@@ -3,13 +3,8 @@ import {
   resolveAutoCompactionThreshold,
   type DesktopAutoCompactionRule,
 } from "@pwragent/shared/auto-compaction";
-import type { AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadAutoCompactionStatus } from "../../lib/thread-session-transitions";
 import type { ThreadContextWindowState } from "../../lib/useThreadSessionState";
-
-export type ThreadAutoCompactionStatus = Extract<
-  AppServerNotification,
-  { method: "thread/autoCompaction/updated" }
->["params"];
 
 /** What the moon and its card add when a rule sets a context budget. */
 export type ContextWindowBudget = {
@@ -90,7 +85,7 @@ export function autoCompactionStatusLine(
     case "resume":
       return "Compacted. PwrAgent asks the agent to continue when this turn ends.";
     case "verifying":
-      return "Compacted. The context size updates on the next turn.";
+      return "Compacted. The context size updates on the next model call.";
     case "held":
       if (status.heldReason === "unsupported") return "This agent has no /compact command, so PwrAgent cannot compact it.";
       if (status.heldReason === "refused") return "The agent refused /compact. PwrAgent will not try again until the context drops.";
@@ -100,9 +95,4 @@ export function autoCompactionStatusLine(
     default:
       return undefined;
   }
-}
-
-/** Phases where PwrAgent's own compaction is open. */
-export function isAutoCompactionActive(status: ThreadAutoCompactionStatus | undefined): boolean {
-  return status?.phase === "steering" || status?.phase === "starting" || status?.phase === "compacting";
 }

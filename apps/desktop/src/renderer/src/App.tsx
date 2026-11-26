@@ -4321,6 +4321,7 @@ function DesktopAppShell(props: {
         loading: session.loading,
         loadingMore: session.loadingMore,
         messageCount: session.messages.length,
+        autoCompaction: session.autoCompaction,
         contextWindow: session.contextWindow,
         pricing: session.response?.pricing,
         tokenMiserAccounting: session.response?.toolAccounting?.tokenMiser,
