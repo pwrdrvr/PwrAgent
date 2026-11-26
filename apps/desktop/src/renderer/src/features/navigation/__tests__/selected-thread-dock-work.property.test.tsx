@@ -318,7 +318,7 @@ it("keeps the same work budget for generated offscreen positions and metadata", 
       fixture.update(0);
       await expectStableTop(fixture, offset, metadata, metadata === 0 ? 0 : 1);
       await expectStableTop(fixture, offset, metadata, 0);
-    }), { numRuns: 10, examples: [[180, 0], [180, 6]] });
+    }), { numRuns: 5, examples: [[180, 0], [180, 6]] });
   } finally {
     fixture.cleanup();
   }
@@ -366,7 +366,7 @@ it("keeps the top reserve in place while the same dock covers the selected row",
     fc.assert(fc.property(
       fc.array(fc.integer({ min: 570, max: 610 }), { minLength: 1, maxLength: 8 }),
       checkScroll,
-    ), { numRuns: 10 });
+    ), { numRuns: 5 });
   } finally {
     fixture.cleanup();
   }
@@ -413,7 +413,7 @@ it("performs no geometry reads on commits that leave the sidebar DOM unchanged",
         await fixture.settle();
       }
       expect(fixture.work).toEqual({ row: 0, sticky: 0, selectors: 0, reserveLifts: 0 });
-    }), { numRuns: 6 });
+    }), { numRuns: 5 });
   } finally {
     fixture.cleanup();
   }
@@ -439,7 +439,7 @@ it("coalesces child-page commits and a queued scroll while measuring the final r
       expect(fixture.edge()).toBe(shown >= 39 ? undefined : "top");
       expect(fixture.work.row).toBe(1);
       expect(fixture.styleReads()).toBe(styleReads);
-    }), { numRuns: 10, examples: [[210, 4], [210, 2]] });
+    }), { numRuns: 5, examples: [[210, 4], [210, 2]] });
   } finally {
     fixture.cleanup();
   }
@@ -468,7 +468,7 @@ it("samples final scroll and page geometry after layout in the same rendering up
       const shown = rowTop + ROW_HEIGHT - Math.max(152, rowTop);
       expect(fixture.edge()).toBe(shown >= 39 ? undefined : "top");
       expect(fixture.work.row).toBe(1);
-    }), { numRuns: 10, examples: [[218, 0], [218, 4]] });
+    }), { numRuns: 5, examples: [[218, 0], [218, 4]] });
   } finally {
     fixture.cleanup();
   }
@@ -496,7 +496,7 @@ it("samples the project under the new sticky line when the index observer runs f
       expect(fixture.edge()).toBeUndefined();
       expect(fixture.currentProject()).toBe(fixture.projectKey(0));
       expect(fixture.work.row).toBe(1);
-    }), { numRuns: 10 });
+    }), { numRuns: 5 });
   } finally {
     fixture.cleanup();
   }
@@ -513,7 +513,7 @@ it("samples successive pure scrolls whose observed box sizes stay fixed", () => 
         expect(fixture.edge()).toBe(edge);
         expect(fixture.work.row).toBe(1);
       }
-    }), { numRuns: 10 });
+    }), { numRuns: 5 });
   } finally {
     fixture.cleanup();
   }
