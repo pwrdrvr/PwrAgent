@@ -48,6 +48,7 @@ function fixture(t, candidateCount = 1) {
   write(cohort, { blind: false, cases: [{
     id: "fixture", pr: 1, backend: "codex", baseline: {
       baseCommit: base, headCommit: head, reviewedRangeVerified: true,
+      reviewMode: "codex-native", rangeEvidence: "codex-pr-snapshot",
       counts: { total: 1, addressed: 1, declined: 0 },
       items: Array.from({ length: 9 }, () => baselineItem),
     },
@@ -148,7 +149,7 @@ test("a single oversized input requires an explicit evidence decision", (t) => {
 test("uncaptured baseline ranges cannot be used for blind validation", (t) => {
   const f = fixture(t);
   const data = read(f.cohort);
-  data.cases[0].baseline.reviewedRangeVerified = false;
+  delete data.cases[0].baseline.rangeEvidence;
   write(f.cohort, data);
   assert.match(f.prepare().stderr, /without a verified original range/);
   assert.equal(f.prepare("--allow-legacy-baselines").status, 0);
@@ -157,6 +158,21 @@ test("uncaptured baseline ranges cannot be used for blind validation", (t) => {
   const result = f.prepare("--allow-legacy-baselines");
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /without a verified original range/);
+});
+
+test("blind scoring requires a complete and matching candidate snapshot", (t) => {
+  const f = fixture(t);
+  write(f.cohort, { ...read(f.cohort), blind: true });
+  for (const pins of [{}, { headCommit: f.head }, { mergeBaseCommit: f.base, headCommit: f.head }]) {
+    write(f.cell, { ...f.record, ...pins });
+    const result = f.prepare();
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /different snapshot at a blind cell/);
+  }
+  const mergeBaseCommit = f.git("merge-base", f.base, f.head);
+  write(f.cell, { ...f.record, mergeBaseCommit, headCommit: f.head });
+  const result = f.prepare();
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test("cannot aggregate failed answers, missing chunks, or judgments for different inputs", (t) => {
@@ -235,6 +251,25 @@ test("file-backed Decision batches round trip without inline evidence and are ke
   assert.deepEqual(JSON.parse(plan().stdout), { complete: pending.length, pending: [] });
   const complete = f.aggregate();
   assert.equal(complete.status, 0, complete.stderr);
+  write(f.cell, { ...f.record, elapsedSec: 99 });
+  assert.match(f.aggregate().stderr, /scoring sources changed/i);
+  write(f.cell, f.record);
+  const cohort = read(f.cohort);
+  write(f.cohort, { ...cohort, name: "changed-source" });
+  assert.match(f.aggregate().stderr, /scoring sources changed/i);
+  write(f.cohort, { ...cohort, blind: true });
+  write(f.cell, { ...f.record, mergeBaseCommit: f.git("merge-base", f.base, f.head), headCommit: f.head });
+  assert.equal(f.prepare("--judge-provider", "jev").status, 0);
+  assert.equal(plan("--record").status, 0);
+  fs.unlinkSync(f.cell);
+  const missing = f.aggregate();
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /blind cell/i);
+  assert.doesNotMatch(missing.stdout + missing.stderr, /fixture--codex/);
+  write(f.cohort, cohort);
+  write(f.cell, f.record);
+  assert.equal(f.prepare("--judge-provider", "jev").status, 0);
+  assert.equal(plan("--record").status, 0);
   const precision = pending.find(({ batchType }) => batchType === "precision").arguments.outputFile;
   const invalid = read(precision);
   invalid.results[0].answers[0] = { name: "matches_baseline", type: "refusal" };

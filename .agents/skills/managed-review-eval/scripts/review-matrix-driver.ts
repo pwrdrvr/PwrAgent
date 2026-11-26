@@ -20,7 +20,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { isNativeClaudeSourceKey, nativeClaudeReviewCommand } from "./native-claude-capture.mjs";
 import { reviewedMergeBase } from "./review-range.mjs";
-import { checkoutReviewSnapshot, initReviewWorkspace } from "./review-workspace.mjs";
+import { checkoutReviewSnapshot, initReviewWorkspace, writePinnedReviewPatch } from "./review-workspace.mjs";
 import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
 import type {
   AgentEvent,
@@ -210,6 +210,7 @@ async function main() {
   const codexModelOverride = parseArg("--codex-model", "gpt-6.2-sol");
   const codexEffortOverride = parseArg("--codex-effort", "xhigh");
   const neonModelOverride = parseArg("--neon-model", "gemini-4-neon");
+  const explicitNeonModel = process.argv.includes("--neon-model");
   const neonEffortOverride = parseArg("--neon-effort", "high");
   const claudeModel = parseArg("--claude-model", "") || undefined;
   const claudeEffort = parseArg("--claude-effort", "high");
@@ -230,6 +231,12 @@ async function main() {
     throw new Error("Arms must be codex, neon, or claude-native.");
   }
   const nativeCollection = requestedArms.includes("claude-native");
+  if (blind && !(nativeCollection && parsedCohort.split === "collection"
+    && allCases.every(({ baseline }) => !Object.hasOwn(baseline, "items")))) {
+    process.stderr.write("[eval] Blind evaluation requires a separate reviewer environment. This local driver cannot hide baseline files.\n");
+    process.exitCode = 1;
+    return;
+  }
   if (nativeCollection && (requestedArms.length !== 1 || allowFullAccess)) {
     throw new Error("Native Claude baseline collection runs on its own with Default Access.");
   }
@@ -239,6 +246,10 @@ async function main() {
   if (!selectedCases.length || selectedCases.some((c) => !/^[A-Za-z0-9_-]+$/.test(c.id))
     || new Set(selectedCases.map((c) => c.id)).size !== selectedCases.length) {
     throw new Error("Select at least one case with a unique, valid case ID.");
+  }
+  const snapshotKeys = selectedCases.map((c) => `${c.baseline.prNumber ?? c.pr}:${c.baseline.headCommit}`);
+  if (new Set(snapshotKeys).size !== selectedCases.length) {
+    throw new Error("Each PR head must appear in only one matrix case.");
   }
   const bundleSha256 = createHash("sha256").update(fs.readFileSync(__filename)).digest("hex");
   const requiredBackends: AppServerBackendKind[] = requestedArms.map((arm) => armBackend[arm]);
@@ -357,6 +368,11 @@ async function main() {
       entry?.launchpadOptions?.models?.length
         ? entry.launchpadOptions.models
         : (entry?.acp?.runtime?.models?.availableModels ?? []);
+    function selectNeonModel(entry: (typeof backendsList)[number] | undefined) {
+      const models = getModels(entry);
+      return models.find((model) => model.id === neonModelOverride)?.id
+        ?? (explicitNeonModel ? undefined : models.find((model) => /neon/i.test(model.id))?.id);
+    }
 
     const waitStart = Date.now();
     let refreshedAgy = false;
@@ -395,7 +411,11 @@ async function main() {
         !requestedArms.includes("neon")
         || (() => {
           const e = backendsList.find((b) => b.kind === "acp:antigravity");
-          return Boolean(e?.available && getModels(e).some((m) => m.id === neonModelOverride || /neon/i.test(m.id)));
+          const selected = selectNeonModel(e);
+          if (explicitNeonModel && e?.available && getModels(e).length && !selected) {
+            throw new Error(`Requested Neon model ${neonModelOverride} is unavailable.`);
+          }
+          return Boolean(e?.available && selected);
         })();
       const claudeEntry = backendsList.find((b) => b.kind === "claude");
       const claudeOk = !nativeCollection || Boolean(claudeEntry?.available
@@ -417,13 +437,9 @@ async function main() {
     }
 
     const codexModels = getModels(backendsList.find((b) => b.kind === "codex"));
-    const agyModels = getModels(backendsList.find((b) => b.kind === "acp:antigravity"));
     const codexModel =
       codexModels.find((m) => m.id === codexModelOverride)?.id ?? codexModelOverride;
-    const neonModel =
-      agyModels.find((m) => m.id === neonModelOverride)?.id
-      ?? agyModels.find((m) => /neon/i.test(m.id))?.id
-      ?? neonModelOverride;
+    const neonModel = selectNeonModel(backendsList.find((b) => b.kind === "acp:antigravity")) ?? neonModelOverride;
     const neonEffort = neonModel.endsWith("-high") ? undefined : neonEffortOverride;
 
     console.log(
@@ -560,6 +576,11 @@ async function main() {
             source: repoCwd, parent: workspacesDir, name: `${c.id}--${arm}`,
             base: c.baseline.baseCommit, head: c.baseline.headCommit, mergeBase, signal,
           });
+          const antigravityAccess = arm === "neon" && !allowFullAccess ? {
+            mode: "plan" as const,
+            fullAccess: false,
+            pinnedPatchFile: await writePinnedReviewPatch(cwd, mergeBase, c.baseline.headCommit, signal),
+          } : undefined;
           signal.throwIfAborted();
           const parent = await registry.startThread({
             backend, cwd, executionMode, ...(model ? { model } : {}),
@@ -591,7 +612,7 @@ async function main() {
             fetchedAt: Date.now(),
           });
 
-          return { parent, prUrl, mergeBase, cwd };
+          return { parent, prUrl, mergeBase, cwd, antigravityAccess };
         })(), remaining());
         if (setup === deadlineExceeded) {
           setupAbort.abort();
@@ -599,7 +620,7 @@ async function main() {
         } else if (stopReason) {
           outcome = { status: "cancelled", error: stopReason };
         } else {
-          const { parent, prUrl, mergeBase, cwd } = setup;
+          const { parent, prUrl, mergeBase, cwd, antigravityAccess } = setup;
           mergeBaseCommit = mergeBase;
           workspacePath = cwd;
           key = `${backend}:${parent.threadId}`;
@@ -638,9 +659,6 @@ async function main() {
             },
           };
 
-          const antigravityAccess = arm === "neon" && !allowFullAccess
-            ? { mode: "plan" as const, fullAccess: false }
-            : undefined;
           let starting: Promise<StartReviewResponse>;
           if (arm === "claude-native") {
             const command = nativeClaudeReviewCommand(mergeBase, c.baseline.headCommit, claudeEffort);
@@ -731,10 +749,15 @@ async function main() {
           nextIdx += 1;
           if (idx >= selectedCases.length) return;
           const c = selectedCases[idx]!;
-          await Promise.all(requestedArms.map((arm) => runOne(c, arm).catch((error) => {
-            stopReason = "Could not persist a matrix cell.";
-            if (!blind) console.error(stopReason, error);
-          })));
+          for (const arm of requestedArms) {
+            if (stopReason) break;
+            try {
+              await runOne(c, arm);
+            } catch (error) {
+              stopReason = "Could not persist a matrix cell.";
+              if (!blind) console.error(stopReason, error);
+            }
+          }
         }
       },
     );

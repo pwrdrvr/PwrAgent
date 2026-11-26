@@ -49,3 +49,15 @@ export async function checkoutReviewSnapshot({ source, parent, name, base, head,
     throw error;
   }
 }
+
+export async function writePinnedReviewPatch(workspace, mergeBase, head, signal) {
+  const name = "pwragent-eval-review.patch";
+  const { stdout } = await runFile("git", ["-C", workspace, "diff", "--no-ext-diff", "--no-textconv", "--no-color",
+    mergeBase, head, "--"], { encoding: "buffer", maxBuffer: 64 * 1024 * 1024, signal, timeout: 60_000 });
+  signal.throwIfAborted();
+  fs.writeFileSync(path.join(workspace, name), stdout, { flag: "wx" });
+  const info = path.join(workspace, ".git", "info");
+  fs.mkdirSync(info, { recursive: true });
+  fs.appendFileSync(path.join(info, "exclude"), `\n/${name}\n`);
+  return name;
+}

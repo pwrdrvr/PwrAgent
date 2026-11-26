@@ -33,7 +33,7 @@ The PR ref can retain the commit chain after branch deletion or a squash merge. 
 
 Measured on 2026-11-25 with PwrAgent's PR #4394 in-memory candidate ledger + two-pass managed review prompt (`decisions_invoke` / `gpt-6-luna`, 208 items, `$0.0249` total).
 
-The original review range could be confirmed for 21 of 40 historical cases. The remaining cases are marked `reviewedRangeVerified: false`. These splits retain their original membership. Use unverified development baselines for exploratory scoring and use newly verified cohorts for blind validation.
+The original export marked 21 of 40 ranges verified under its earlier criteria. These historical splits retain their original membership and are provisional under the current proof requirement. Use `--allow-legacy-baselines` for exploratory scoring on the development splits. Blind scoring requires newly verified baselines.
 
 Treat the recorded precision and holistic columns as provisional until reproduced with verified ranges and anonymous judge inputs.
 

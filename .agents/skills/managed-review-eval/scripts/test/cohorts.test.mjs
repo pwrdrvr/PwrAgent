@@ -6,8 +6,28 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { capturedRange, containsMachinePath, sanitizeText } from "../cohort-data.mjs";
 
 const script = fileURLToPath(new URL("../extract-cohorts.mjs", import.meta.url));
+
+test("a PR association does not prove that a native review used its pinned tree", () => {
+  const context = {
+    pullRequest: { url: "https://github.com/pwrdrvr/PwrAgent/pull/8004" },
+    baseCommit: "a".repeat(40), headCommit: "b".repeat(40),
+  };
+  assert.equal(capturedRange(context), null);
+  assert.equal(capturedRange({ ...context, pullRequestSnapshot: {
+    pullRequest: context.pullRequest, baseCommit: context.baseCommit, headCommit: context.headCommit,
+  } }), null);
+});
+
+test("redaction consumes quoted Unix paths with spaces up to their matching delimiter", () => {
+  for (const quote of ["`", '"', "'"]) {
+    const raw = `See ${quote}/Users/Fixture User/Private Project/example.ts:12${quote} for details.`;
+    assert.equal(containsMachinePath({ body: raw }), true);
+    assert.equal(sanitizeText(raw), `See ${quote}<local-path>${quote} for details.`);
+  }
+});
 
 test("cohort mining excludes existing splits and accepts only provenance-backed captured ranges", (t) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "review-cohort-"));
@@ -61,6 +81,11 @@ test("cohort mining excludes existing splits and accepts only provenance-backed 
         },
       })),
     };
+    if (backend === "codex") {
+      payload.context.pullRequestSnapshot = {
+        pullRequest: payload.context.pullRequest, baseCommit, headCommit, mergeBaseCommit: baseCommit,
+      };
+    }
     Object.assign(payload, overrides);
     if (backend === "claude") {
       fixtureDb.prepare("INSERT INTO thread_reviews VALUES (?, 'handled', ?, ?)")

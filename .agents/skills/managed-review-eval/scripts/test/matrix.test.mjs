@@ -15,6 +15,7 @@ const driver = fileURLToPath(new URL("../review-matrix-driver.ts", import.meta.u
 // No provider commands or PwrAgent profiles are used.
 const registryStub = `
   import fs from "node:fs";
+  import path from "node:path";
   const scenario = process.env.MATRIX_TEST_SCENARIO;
   const backend = scenario === "neon" ? "acp:antigravity" : scenario === "claude" ? "claude" : "codex";
   const audit = (record) => fs.appendFileSync(process.env.MATRIX_TEST_AUDIT, JSON.stringify(record) + "\\n");
@@ -22,8 +23,12 @@ const registryStub = `
   let parents = 0;
   let live;
   let pending;
-  const send = (method, params) => listener({ backend, notification: { method, params } });
+  const activeHeads = new Map();
+  const reviewers = new Map();
+  const firstArms = [];
+  const send = (method, params) => listener({ backend: reviewers.get(params.threadId) ?? backend, notification: { method, params } });
   const terminal = (threadId, turnId, method = "turn/completed") => {
+    activeHeads.delete(turnId);
     audit({ terminal: turnId });
     return send(method, { threadId, turn: { id: turnId, status: method.split("/")[1] } });
   };
@@ -35,8 +40,9 @@ const registryStub = `
     await terminal(threadId, turnId);
   }
   const registry = {
-    listBackends: async () => ({ backends: [{ kind: backend, available: true,
-      launchpadOptions: { models: [{ id: scenario === "neon" ? "gemini-4-neon" : "gpt-6.2-sol" }] } }] }),
+    listBackends: async () => ({ backends: (scenario === "matrix" ? ["codex", "acp:antigravity"] : [backend]).map((kind) => ({
+      kind, available: true, launchpadOptions: { models: [{ id: kind === "acp:antigravity" ? "gemini-4-neon" : "gpt-6.2-sol" }] },
+    })) }),
     onEvent: (callback) => { listener = callback; return () => {}; },
     startTurn: async ({ threadId, input }) => {
       const turnId = "native-" + threadId;
@@ -50,16 +56,27 @@ const registryStub = `
         systemConfig: process.env.GIT_CONFIG_NOSYSTEM, globalConfig: process.env.GIT_CONFIG_GLOBAL,
       });
       if (scenario === "setup" && parents === 1) throw Error("setup rejected");
+      reviewers.set(String(parents), options.backend);
       return { threadId: String(parents) };
     },
-    startReview: async ({ threadId, cwd, target }, _trusted, _attribution, access) => {
+    startReview: async ({ backend, threadId, cwd, target }, _trusted, _attribution, access) => {
       const turnId = "turn-" + threadId;
       const reviewThreadId = "child-" + threadId;
-      audit({ start: turnId, access, cwd, snapshot: target.snapshot });
+      const { pullRequest, headCommit } = target.snapshot;
+      const headKey = pullRequest.number + ":" + headCommit;
+      audit({ start: turnId, access, cwd, snapshot: target.snapshot, backend, patch: access?.pinnedPatchFile
+        ? fs.readFileSync(path.join(cwd, access.pinnedPatchFile), "utf8") : undefined });
+      if ([...activeHeads.values()].includes(headKey)) throw Error("Snapshot already reserved");
+      activeHeads.set(turnId, headKey);
       live = { backend, threadId, turnId, reviewThreadId };
       if (scenario === "start-timeout") return new Promise(() => {});
       if (scenario === "approvals") {
         pending = { method: "item/commandExecution/requestApproval", params: { threadId: reviewThreadId, turnId, requestId: "request-" + threadId } };
+      } else if (scenario === "matrix" && backend === "codex") {
+        firstArms.push([threadId, turnId]);
+        if (firstArms.length === 2) {
+          setTimeout(() => firstArms.forEach(([thread, turn]) => void finish(thread, turn)), 25);
+        }
       } else if (scenario !== "turn-timeout" || threadId !== "1") {
         setTimeout(() => void finish(threadId, turnId), 5);
       }
@@ -128,14 +145,14 @@ test("matrix ownership, permissions, setup isolation and resume identity", async
   git("worktree", "add", "--detach", candidate, baseCommit);
   const cohort = path.join(tmp, "cohort.json");
   const cases = [1, 2].map((pr) => ({ id: `private-case-${pr}`, pr, baseline: { baseCommit, headCommit } }));
-  const run = (scenario, { blind = false, extra = [], out = scenario, arm = "codex" } = {}) => {
-    fs.writeFileSync(cohort, JSON.stringify({ blind, cases }));
+  const run = (scenario, { blind = false, split, extra = [], out = scenario, arm = "codex" } = {}) => {
+    fs.writeFileSync(cohort, JSON.stringify({ blind, split, cases }));
     const audit = path.join(tmp, "audit.jsonl");
     fs.writeFileSync(audit, "");
     const resultDir = path.join(tmp, out);
     const child = spawnSync(process.execPath, [
       bundle, "--repo", candidate, "--cohort", cohort, "--out", resultDir, "--arms", arm,
-      "--concurrency", "1", "--timeout-ms", "750", ...extra,
+      ...extra, "--concurrency", "1", "--timeout-ms", "750",
     ], {
       env: { ...process.env, MATRIX_TEST_SCENARIO: scenario, MATRIX_TEST_AUDIT: audit },
       encoding: "utf8", timeout: 5000,
@@ -143,7 +160,7 @@ test("matrix ownership, permissions, setup isolation and resume identity", async
     return {
       ...child,
       logs: fs.readFileSync(audit, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse),
-      cell: (n) => JSON.parse(fs.readFileSync(path.join(resultDir, "results", `private-case-${n}--${arm}.json`))),
+      cell: (n, selectedArm = arm) => JSON.parse(fs.readFileSync(path.join(resultDir, "results", `private-case-${n}--${selectedArm}.json`))),
     };
   };
 
@@ -171,6 +188,8 @@ test("matrix ownership, permissions, setup isolation and resume identity", async
       assert.equal(git("-C", parent.cwd, "rev-parse", "HEAD"), headCommit);
       assert.equal(git("-C", parent.cwd, "merge-base", baseCommit, headCommit), mergeBaseCommit);
       assert.equal(git("-C", parent.cwd, "diff", mergeBaseCommit, headCommit), git("diff", mergeBaseCommit, headCommit));
+      assert.equal(review.patch?.trim(), git("diff", mergeBaseCommit, headCommit));
+      assert.equal(git("-C", parent.cwd, "status", "--porcelain"), "");
       assert.equal(review.snapshot.mergeBaseCommit, mergeBaseCommit);
       assert.equal(fs.readFileSync(path.join(parent.cwd, "fixture.txt"), "utf8"), "reviewed-head\n");
       workspaces.add(parent.cwd);
@@ -180,7 +199,7 @@ test("matrix ownership, permissions, setup isolation and resume identity", async
   });
 
   await t.test("native Claude receives an exact commit range and capture identifies its automatic artifact", () => {
-    const result = run("claude", { arm: "claude-native", blind: true });
+    const result = run("claude", { arm: "claude-native", blind: true, split: "collection" });
     assert.equal(result.status, 0, result.stderr);
     const command = `/code-review high ${mergeBaseCommit}..${headCommit}`;
     assert.equal(result.logs.find((row) => row.command)?.command, command);
@@ -193,19 +212,41 @@ test("matrix ownership, permissions, setup isolation and resume identity", async
     assert.doesNotMatch(result.stdout + result.stderr, /private-case/);
   });
 
-  await t.test("default read-only access, explicit Full Access, and no blind case metadata", () => {
+  await t.test("shared-host blind candidates fail closed and development keeps its access policy", () => {
     const blind = run("clean", { blind: true });
-    assert.equal(blind.status, 0, blind.stderr);
-    assert.equal(blind.logs.find((row) => row.parent)?.mode, "default");
-    assert.equal(blind.logs[0].policy.sandboxByMode.default, "read-only");
-    assert.equal(blind.logs[0].policy.executionModes.includes("full-access"), false);
+    assert.equal(blind.status, 1, blind.stderr);
+    assert.match(blind.stderr, /separate reviewer environment/i);
+    assert.deepEqual(blind.logs, []);
     assert.doesNotMatch(blind.stdout + blind.stderr, /private-case|turn-1|\[DONE\]/);
+    const codex = run("clean-default");
+    assert.equal(codex.status, 0, codex.stderr);
+    assert.equal(codex.logs.find((row) => row.parent)?.mode, "default");
+    assert.equal(codex.logs[0].policy.sandboxByMode.default, "read-only");
+    assert.equal(codex.logs[0].policy.executionModes.includes("full-access"), false);
     const neon = run("neon", { arm: "neon" });
     assert.equal(neon.status, 0, neon.stderr);
-    assert.deepEqual(neon.logs.find((row) => row.start)?.access, { mode: "plan", fullAccess: false });
+    assert.equal(neon.logs.find((row) => row.start)?.access.mode, "plan");
+    assert.equal(neon.logs.find((row) => row.start)?.access.fullAccess, false);
     const full = run("full", { extra: ["--allow-full-access"] });
     assert.equal(full.status, 0, full.stderr);
     assert.equal(full.logs.find((row) => row.parent)?.mode, "full-access");
+  });
+  await t.test("different cases overlap while the same PR head releases each arm before the next", () => {
+    const result = run("matrix", { arm: "codex,neon", extra: ["--concurrency", "2", "--timeout-ms", "3500"] });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.logs.filter((row) => row.start).length, 4);
+    const firstTerminal = result.logs.findIndex((row) => row.terminal);
+    assert.equal(result.logs.slice(0, firstTerminal).filter((row) => row.start).length, 2);
+    for (const index of [1, 2]) {
+      assert.equal(result.cell(index, "codex").status, "completed");
+      assert.equal(result.cell(index, "neon").status, "completed");
+    }
+  });
+  await t.test("an explicit unavailable Neon model fails before starting any review", () => {
+    const result = run("neon", { arm: "neon", extra: ["--neon-model", "gemini-4-neon-missing"] });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(result.stderr, /Requested Neon model .* is unavailable/);
+    assert.equal(result.logs.some((row) => row.start), false);
   });
   await t.test("a real pending child approval is declined once", () => {
     const result = run("approvals");

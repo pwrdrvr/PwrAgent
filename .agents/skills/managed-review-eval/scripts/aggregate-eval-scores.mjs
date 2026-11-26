@@ -19,6 +19,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { hasVerifiedBaselineRange } from "./cohort-data.mjs";
 import { completeDecisionAnswers, readDecisionOutput } from "./decision-file-batches.mjs";
 
 function parseArg(name, fallback) {
@@ -39,7 +40,8 @@ if (!cohortPath || !resultsDir || !scoringDir) {
   throw new Error("Required flags: --cohort <file> --results <dir> --scoring <dir>");
 }
 
-const rawCohort = JSON.parse(fs.readFileSync(cohortPath, "utf8"));
+const cohortBytes = fs.readFileSync(cohortPath);
+const rawCohort = JSON.parse(cohortBytes);
 const isBlind = !Array.isArray(rawCohort) && Boolean(rawCohort.blind);
 const cohortCases = Array.isArray(rawCohort) ? rawCohort : rawCohort.cases;
 
@@ -49,7 +51,10 @@ const summary = JSON.parse(
 const manifest = JSON.parse(
   fs.readFileSync(path.join(scoringDir, "chunks-manifest.json"), "utf8"),
 );
-const unverifiedBaselineCount = cohortCases.filter(({ baseline }) => baseline.reviewedRangeVerified !== true).length;
+if (manifest.cohortSha256 !== createHash("sha256").update(cohortBytes).digest("hex") || !manifest.cellSha256) {
+  throw new Error("Scoring sources changed or the manifest lacks source digests. Prepare the batches again.");
+}
+const unverifiedBaselineCount = cohortCases.filter(({ baseline }) => !hasVerifiedBaselineRange(baseline)).length;
 if (unverifiedBaselineCount !== manifest.unverifiedBaselineCount || (isBlind && unverifiedBaselineCount)) {
   throw new Error("Decision scoring prerequisites changed or the blind cohort has an unverified baseline range.");
 }
@@ -194,14 +199,32 @@ const median = (arr) => {
   return s.length % 2 ? s[m] : Number(((s[m - 1] + s[m]) / 2).toFixed(1));
 };
 
+function readScoredCell(caseId, arm) {
+  const name = `${caseId}--${arm}.json`;
+  try {
+    const bytes = fs.readFileSync(path.join(resultsDir, name));
+    if (manifest.cellSha256[name] !== createHash("sha256").update(bytes).digest("hex")) {
+      throw new Error(`Scoring sources changed at ${name}. Prepare the batches again.`);
+    }
+    return JSON.parse(bytes);
+  } catch (error) {
+    if (!isBlind || allowInspectTest) throw error;
+    try {
+      fs.mkdirSync(outDir, { recursive: true });
+      fs.appendFileSync(path.join(outDir, "aggregation-error.log"), `${new Date().toISOString()} ${name}: ${error}\n`, { mode: 0o600 });
+    } catch {
+      // Keep the diagnostic private even when the output directory is unusable.
+    }
+    throw new Error("Scoring sources changed or are unreadable at a blind cell. See the local aggregation error log.");
+  }
+}
+
 const caseRows = [];
 for (const c of cohortCases) {
   const baseH = holisticRows.find((h) => h.caseId === c.id && h.arm === "baseline");
   const armStats = {};
   for (const arm of arms) {
-    const raw = JSON.parse(
-      fs.readFileSync(path.join(resultsDir, `${c.id}--${arm}.json`), "utf8"),
-    );
+    const raw = readScoredCell(c.id, arm);
     const recAll = recallRows.filter((r) => r.caseId === c.id && r.arm === arm);
     const recAddr = recAll.filter(
       (r) => r.baselineStatus === "addressed" || r.baselineStatus === "deferred",

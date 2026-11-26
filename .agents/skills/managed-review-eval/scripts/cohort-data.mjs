@@ -1,9 +1,12 @@
 import path from "node:path";
 
 const localPath = /(?<![\w./-])\/(?:Users|home|root|private|tmp|var|Volumes|mnt|etc|opt|workspaces?)(?=\/|$)[^\s"'`<>)\]]*|(?<![\w])(?:[A-Za-z]:[\\/]|\\\\)[^\r\n"'`<>)\]]*/gi;
+const quotedUnixPath = /(["'`])\/(?:Users|home|root|private|tmp|var|Volumes|mnt|etc|opt|workspaces?)(?:\/[^\r\n]*?)?\1/gi;
 
 export function sanitizeText(value) {
-  return typeof value === "string" ? value.replace(localPath, "<local-path>").trim() : "";
+  return typeof value === "string"
+    ? value.replace(quotedUnixPath, "$1<local-path>$1").replace(localPath, "<local-path>").trim()
+    : "";
 }
 
 export function containsMachinePath(value) {
@@ -69,16 +72,21 @@ export function baselineProvenance(payload) {
   return null;
 }
 
+export function hasVerifiedBaselineRange(baseline) {
+  return baseline.reviewedRangeVerified === true
+    && ((baseline.reviewMode === "codex-native" && baseline.rangeEvidence === "codex-pr-snapshot")
+      || (baseline.reviewMode === "claude-code-review" && baseline.rangeEvidence === "claude-native-dispatch"));
+}
+
 export function capturedRange(context) {
   if (context.reviewedTree || (context.pullRequests?.length ?? 0) > 1
     || (context.pullRequestSnapshots?.length ?? 0) > 1) return null;
   const snapshot = context.pullRequestSnapshot;
-  const pr = snapshot?.pullRequest ?? context.pullRequest;
-  const match = /^https:\/\/github\.com\/pwrdrvr\/PwrAgent\/pull\/([1-9]\d*)\/?$/i.exec(pr?.url ?? "");
-  const baseCommit = snapshot?.mergeBaseCommit ?? context.baseCommit;
-  const headCommit = snapshot?.headCommit ?? context.headCommit;
+  if (!snapshot) return null;
+  const match = /^https:\/\/github\.com\/pwrdrvr\/PwrAgent\/pull\/([1-9]\d*)\/?$/i.exec(snapshot.pullRequest?.url ?? "");
+  const { mergeBaseCommit: baseCommit, headCommit } = snapshot;
   const sha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
-  if (!match || !sha(baseCommit) || !sha(headCommit) || baseCommit === headCommit
+  if (!match || !sha(snapshot.baseCommit) || !sha(baseCommit) || !sha(headCommit) || baseCommit === headCommit
     || (context.baseCommit && context.baseCommit !== baseCommit)
     || (context.headCommit && context.headCommit !== headCommit)) return null;
   return { pr: Number(match[1]), baseCommit, headCommit };

@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { reviewedMergeBase } from "./review-range.mjs";
+import { hasVerifiedBaselineRange } from "./cohort-data.mjs";
 
 function parseArg(name, fallback) {
   const idx = process.argv.indexOf(name);
@@ -41,9 +42,11 @@ if (!cohortPath || !resultsDir || !scoringDir) {
 }
 
 fs.mkdirSync(scoringDir, { recursive: true });
-const rawCohort = JSON.parse(fs.readFileSync(cohortPath, "utf8"));
+const cohortBytes = fs.readFileSync(cohortPath);
+const cohortSha256 = createHash("sha256").update(cohortBytes).digest("hex");
+const rawCohort = JSON.parse(cohortBytes);
 const cohortCases = Array.isArray(rawCohort) ? rawCohort : rawCohort.cases;
-const unverifiedBaselineCount = cohortCases.filter(({ baseline }) => baseline.reviewedRangeVerified !== true).length;
+const unverifiedBaselineCount = cohortCases.filter(({ baseline }) => !hasVerifiedBaselineRange(baseline)).length;
 if (unverifiedBaselineCount && (rawCohort.blind || !process.argv.includes("--allow-legacy-baselines"))) {
   throw new Error(`Cohort contains ${unverifiedBaselineCount} baseline(s) without a verified original range.`);
 }
@@ -173,6 +176,7 @@ const precisionMeta = [];
 const precisionInputs = [];
 const holisticMeta = [];
 const holisticInputs = [];
+const cellSha256 = {};
 
 for (const c of cohortCases) {
   ensureCommit(c.pr, c.baseline.baseCommit);
@@ -181,14 +185,17 @@ for (const c of cohortCases) {
   const mergeBase = reviewedMergeBase(repoCwd, c.baseline.baseCommit, c.baseline.headCommit);
   const resultsByArm = {};
   for (const arm of arms) {
-    const file = path.join(resultsDir, `${c.id}--${arm}.json`);
-    const res = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : null;
+    const name = `${c.id}--${arm}.json`;
+    const file = path.join(resultsDir, name);
+    const bytes = fs.existsSync(file) ? fs.readFileSync(file) : null;
+    const res = bytes ? JSON.parse(bytes) : null;
     if (res?.status !== "completed" || res.structured !== true || !Array.isArray(res.findings)
       || res.findingsCount !== res.findings.length
-      || (res.mergeBaseCommit !== undefined && res.mergeBaseCommit !== mergeBase)
-      || (res.headCommit !== undefined && res.headCommit !== c.baseline.headCommit)) {
+      || ((rawCohort.blind || res.mergeBaseCommit !== undefined) && res.mergeBaseCommit !== mergeBase)
+      || ((rawCohort.blind || res.headCommit !== undefined) && res.headCommit !== c.baseline.headCommit)) {
       throw new Error(`Review matrix is incomplete or has a different snapshot at ${rawCohort.blind ? "a blind cell" : `${c.id}/${arm}`}`);
     }
+    cellSha256[name] = createHash("sha256").update(bytes).digest("hex");
     resultsByArm[arm] = res;
   }
 
@@ -347,7 +354,7 @@ const plans = {
   precision: planChunks("precision", precisionInputs, 8),
   holistic: planChunks("holistic", holisticInputs, 12),
 };
-const manifest = { arms, definitionSha256, unverifiedBaselineCount };
+const manifest = { arms, definitionSha256, unverifiedBaselineCount, cohortSha256, cellSha256 };
 for (const [name, chunks] of Object.entries(plans)) {
   manifest[name] = chunks.map(({ data, ...chunk }) => {
     fs.writeFileSync(chunk.file, data);

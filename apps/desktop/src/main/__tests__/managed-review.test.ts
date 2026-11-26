@@ -85,6 +85,14 @@ describe("managed review", () => {
     expect(prompt).not.toContain("list_review_candidates");
     expect(prompt).not.toContain("dispose_review_candidate");
     expect(prompt).not.toContain("submit_review_output");
+
+    if (target.type === "pullRequest") {
+      const filePrompt = buildManagedReviewPrompt(target, { pinnedPatchFile: "pwragent-eval-review.patch" });
+      expect(filePrompt).toContain(target.snapshot.mergeBaseCommit);
+      expect(filePrompt).toContain(target.snapshot.headCommit);
+      expect(filePrompt).toContain('Open "pwragent-eval-review.patch" in the review workspace with a file-reading tool');
+      expect(filePrompt).not.toContain(expected);
+    }
   });
 
   it("builds the two-pass candidate ledger prompt when candidateLedger is enabled", () => {

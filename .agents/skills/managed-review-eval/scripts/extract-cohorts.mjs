@@ -17,7 +17,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { baselineProvenance, capturedRange, containsMachinePath, sanitizeItems, sanitizeText } from "./cohort-data.mjs";
+import { baselineProvenance, capturedRange, containsMachinePath, hasVerifiedBaselineRange, sanitizeItems, sanitizeText } from "./cohort-data.mjs";
 import {
   nativeClaudeCapturedRange,
   nativeClaudeCaptureKey,
@@ -270,7 +270,7 @@ function verifyCohorts(repo, outDir, remote, staged) {
     if (staged) {
       if (Object.hasOwn(splits, cohort.split)) splits[cohort.split] += 1;
       if (cohort.blind !== (cohort.split === "test")
-        || cases.length !== 10 || cases.some((c) => c.baseline.reviewedRangeVerified !== true)
+        || cases.length !== 10 || cases.some((c) => !hasVerifiedBaselineRange(c.baseline))
         || Object.entries(splitRecipe).some(([bucket, count]) =>
           cases.filter((c) => c.bucket === bucket).length !== count)) {
         console.error(`[FAIL] ${file}: verification, blinding, or the balanced split recipe is incomplete.`);
@@ -420,8 +420,7 @@ function main() {
     if (rawDev1.blind) throw new Error("A blind cohort cannot be used as a development seed.");
     for (const c of Array.isArray(rawDev1) ? rawDev1 : rawDev1.cases) {
       if (lockedPrs.has(c.pr)) throw new Error("The development seed overlaps a blind cohort.");
-      if (!["codex-native", "claude-code-review"].includes(c.baseline.reviewMode)
-        || c.baseline.reviewedRangeVerified !== true) {
+      if (!hasVerifiedBaselineRange(c.baseline)) {
         throw new Error("The development seed requires verified reviewer and range provenance.");
       }
       const surv = checkSurvivability(repo, c.pr, c.baseline.baseCommit, c.baseline.headCommit, prHeads, true, remote);
@@ -449,6 +448,7 @@ function main() {
           baseCommit: c.baseline.baseCommit,
           headCommit: c.baseline.headCommit,
           reviewedRangeVerified: true,
+          rangeEvidence: c.baseline.rangeEvidence,
           diffFiles: stats.files,
           diffAdds: stats.adds,
           diffDels: stats.dels,
@@ -529,6 +529,7 @@ function main() {
         baseCommit,
         headCommit,
         reviewedRangeVerified: true,
+        rangeEvidence: backend === "codex" ? "codex-pr-snapshot" : "claude-native-dispatch",
         diffFiles: stats.files,
         diffAdds: stats.adds,
         diffDels: stats.dels,

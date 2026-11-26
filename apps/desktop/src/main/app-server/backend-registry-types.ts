@@ -868,7 +868,12 @@ export type ReviewTerminal = {
   turnId: string;
 };
 
-export type AgentAntigravityReviewAccess = { mode: string; fullAccess: boolean };
+export type AgentAntigravityReviewAccess = {
+  mode: string;
+  fullAccess: boolean;
+  /** Owner-provided patch for a pinned PR, relative to the review workspace. */
+  pinnedPatchFile?: string;
+};
 
 export type PendingReviewStartRecord = {
   agentRequestKey?: string;
