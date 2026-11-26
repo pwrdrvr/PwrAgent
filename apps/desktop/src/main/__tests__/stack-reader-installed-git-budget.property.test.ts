@@ -54,6 +54,49 @@ function row(cwd: string, id: string): NavigationThreadSummary {
 }
 
 describe("StackReader installed-Git and unavailable checkout budgets", () => {
+  it("revalidates attachment checkouts without repeating Git on unrelated repositories", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-witnesses-")));
+    restoreGit = isolateProcessGitEnvironment(sandbox);
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      const stacked = path.join(sandbox, "stacked");
+      const secondary = path.join(sandbox, "secondary");
+      const unrelated = path.join(sandbox, "unrelated");
+      for (const cwd of [stacked, secondary, unrelated]) {
+        await mkdir(cwd);
+        initialize(cwd);
+      }
+      await writeCatalog(stacked, "stacked");
+      await writeCatalog(unrelated, "unrelated");
+      const layer = row(stacked, "layer");
+      layer.linkedDirectories.push(row(secondary, "other-link").linkedDirectories[0]!);
+      layer.prs = [{ number: 1, provider: "github.com", org: "fixture", repo: "stacked", state: "passing",
+        lifecycleState: "open", url: "https://github.com/fixture/stacked/pull/1", explicitlyAttached: true,
+        headRefName: "feat", linkedDirectoryPaths: [stacked] }];
+      layer.prs.push({ ...layer.prs[0]!, number: 2, url: "https://github.com/fixture/stacked/pull/2", linkedDirectoryPaths: undefined });
+      // Explicit Git with config overrides supplies the checkout oracle. There
+      // are no filesystem witnesses to substitute for its live observations.
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      const validate = async (candidate: Pick<NavigationThreadSummary, "prs">) => candidate.prs ?? [];
+      const oracle = await new StackReader().read([layer], [], undefined, undefined, undefined, validate);
+      const other = row(unrelated, "unrelated");
+      const independent = await new StackReader().read([other], []);
+      starts.mockClear();
+      const actual = await new StackReader().read([layer, other], [], undefined, undefined, undefined, validate);
+      expect(actual.stacks).toEqual([...oracle.stacks, ...independent.stacks]);
+      expect(actual.catalogs).toEqual([...oracle.catalogs, ...independent.catalogs]);
+      expect(actual.stacks[0]?.layers[0]?.pullRequest?.number).toBe(1);
+      const checkoutReads = (cwd: string) => starts.mock.calls.filter(([directory, [verb], purpose]) =>
+        directory === cwd && verb === "rev-parse" && purpose === "stack-checkout").length;
+      expect(checkoutReads(stacked)).toBeGreaterThan(1);
+      expect(checkoutReads(secondary)).toBeGreaterThan(1);
+      expect(checkoutReads(unrelated)).toBe(1);
+    } finally {
+      starts.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("drops an alias-backed attachment when selected Git rejects changed global config", async () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-installed-alias-")));
     restoreGit = isolateProcessGitEnvironment();
