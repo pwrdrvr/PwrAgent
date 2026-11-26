@@ -67,7 +67,11 @@ import {
 } from "./claude-permissions";
 import { createClaudeElicitationHandler } from "./claude-elicitation";
 import { claudeHarnessOptions, discoverClaudeModels, readClaudeMcpServerStatus, readClaudeMetadata } from "./claude-models";
-import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "./claude-commands";
+import {
+  CLAUDE_TERMINAL_COMMANDS_SEED,
+  claudeCommandSummaries,
+  isClaudeCompactCommandAvailable,
+} from "./claude-commands";
 import {
   CLAUDE_RESET_TOLERANCE_MS, canonicalClaudeRateLimit, claudeCreditsRenewTogether, claudeRateLimits,
   claudeStreamRateLimits, claudeTelemetry,
@@ -1424,7 +1428,12 @@ export class ClaudeBackend {
       // The environment's toolchain (PATH, NVM_DIR, …) reaches every command
       // Claude runs, as it does for Codex and ACP threads.
       const providerEnv = await this.options.resolveEnv?.() ?? process.env;
-      const env = claudeEnvironment({ ...providerEnv, ...config.shellEnvironment });
+      const env = claudeEnvironment({
+        ...providerEnv,
+        ...config.shellEnvironment,
+        PWRAGENT_BACKEND: "claude",
+        PWRAGENT_THREAD_ID: threadId,
+      });
       controller.signal.throwIfAborted();
       current.titleEnv = env;
       // Only the account the Settings sign-in can reach may affect its status.
@@ -2598,6 +2607,17 @@ export class ClaudeBackend {
     return this.sessions.has(threadId);
   }
 
+  /** Whether this thread has a running turn, session startup, or rewind in flight. */
+  hasActiveOperation(threadId: string): boolean {
+    const live = this.sessions.get(threadId);
+    return Boolean(
+      live?.turn
+      || (!live && this.starting.has(threadId))
+      || this.rewinding.has(threadId)
+      || this.rewindQueries.has(threadId),
+    );
+  }
+
   /**
    * Threads running background commands or sub-agents. Each change to that
    * set emits `thread/backgroundTasks/updated`, including the clear when the
@@ -2908,6 +2928,16 @@ export class ClaudeBackend {
     if (summaries.length === 0) return;
     this.commandsByCwd.set(session.cwd, summaries);
     await this.emit({ method: "thread/availableCommands/updated", params: { threadId: session.thread.id, commands: summaries } });
+  }
+
+  /**
+   * Whether observed slash commands allow `/compact` for this thread without
+   * spawning an extra metadata probe process.
+   */
+  async supportsCompactCommand(threadId: string): Promise<boolean> {
+    const cwd = await this.store.read(threadId).then((session) => session.cwd, () => undefined);
+    const known = cwd ? this.commandsByCwd.get(cwd) : undefined;
+    return isClaudeCompactCommandAvailable(known, this.terminalCommands);
   }
 
   /**

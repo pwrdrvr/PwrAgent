@@ -120,6 +120,7 @@ export function batchHeaderEntry(record: DecisionBatchRecord): Record<string, un
     concurrency: record.concurrency,
     background: record.background,
     createdAt: record.createdAt,
+    ...(record.outputFile ? { outputFile: record.outputFile } : {}),
     ...(record.definition ? { definition: record.definition } : {}),
   };
 }
@@ -139,6 +140,8 @@ export function batchEndEntry(record: DecisionBatchRecord): Record<string, unkno
     ...(record.cancelReason ? { cancelReason: record.cancelReason } : {}),
     ...(record.startedAt !== undefined ? { startedAt: record.startedAt } : {}),
     ...(record.finishedAt !== undefined ? { finishedAt: record.finishedAt } : {}),
+    ...(record.outputFile ? { outputFile: record.outputFile } : {}),
+    ...(record.outputFileError ? { outputFileError: record.outputFileError } : {}),
   };
 }
 
@@ -205,6 +208,10 @@ export async function readDecisionBatchFile(
     if (typeof end.cancelReason === "string") record.cancelReason = end.cancelReason;
     if (typeof end.startedAt === "number") record.startedAt = end.startedAt;
     record.finishedAt = typeof end.finishedAt === "number" ? end.finishedAt : record.createdAt;
+    if (typeof end.outputFile === "string" && end.outputFile.length > 0) record.outputFile = end.outputFile;
+    if (typeof end.outputFileError === "string" && end.outputFileError.length > 0) {
+      record.outputFileError = end.outputFileError;
+    }
   } else {
     record.state = "cancelled";
     record.cancelReason = "PwrAgent stopped before the batch finished";
@@ -266,6 +273,7 @@ function headerRecord(
     state: "running",
     createdAt: entry.createdAt,
     resultsFile: file,
+    ...(typeof entry.outputFile === "string" && entry.outputFile.length > 0 ? { outputFile: entry.outputFile } : {}),
     ...definitionField(parseBatchDefinition(entry.definition)),
     results: new Array<DecisionBatchItem | undefined>(count).fill(undefined),
     succeeded: 0,

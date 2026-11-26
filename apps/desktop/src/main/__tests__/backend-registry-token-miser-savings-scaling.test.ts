@@ -171,10 +171,7 @@ describe("Token Miser savings scaling", () => {
       summaries: [],
     });
     vi.spyOn(store, "readTokenMiserGatePricingLines").mockResolvedValue(work.persistedLines);
-    vi.spyOn(store, "readThreadToolAccounting").mockImplementation(async (params) => ({
-      ...await (SqliteOverlayStore.prototype.readThreadToolAccounting.call(store, params)),
-      invocations: work.invocations,
-    }));
+    for (const invocation of work.invocations) await store.upsertThreadToolInvocation({ invocation });
     await internals.persistTokenMiserLedgerEntries(work.entries);
     const subAgents = await store.listThreadSubAgents({ backend: "codex", threadId: THREAD_ID });
     expect(subAgents.map(projectSubAgent)).toMatchSnapshot("persisted sub-agents");
@@ -203,8 +200,10 @@ describe("Token Miser savings scaling", () => {
     });
     vi.spyOn(store, "readTokenMiserGatePricingLines").mockResolvedValue(work.persistedLines);
     const readInvocations = vi.spyOn(store, "readThreadToolAccounting");
+    const readLegacy = vi.spyOn(store, "readTokenMiserLegacyReplayCounts");
     await internals.persistTokenMiserLedgerEntries(observed);
     expect(readInvocations).not.toHaveBeenCalled();
+    expect(readLegacy).not.toHaveBeenCalled();
     const subAgents = await store.listThreadSubAgents({ backend: "codex", threadId: THREAD_ID });
     expect(subAgents.map((subAgent) => subAgent.monitorId).sort()).toEqual(
       observed.map((entry) => `system:token-miser:${entry.objectId}`).sort(),

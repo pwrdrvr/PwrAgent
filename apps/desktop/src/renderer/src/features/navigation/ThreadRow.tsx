@@ -42,9 +42,9 @@ import { readCompactStackMemberships } from "@pwragent/shared/stacks/stack-statu
 import {
   getThreadRowStatus,
   isThreadRemoteWorkHere,
-  isThreadTurnRunning,
   ThreadRowStatus,
 } from "./ThreadRowStatus";
+import { shouldHoldThreadRowWorkProgress } from "./thread-row-work-progress";
 import { InlineRenameInput } from "./InlineRenameInput";
 import { matchMoveHotkey } from "./thread-action-hotkeys";
 import { revealThreadRowAtNearestEdge } from "./reveal-selected-thread-row";
@@ -812,7 +812,11 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
             // Mid-turn and not open: hold the git and to-do chips until the
             // turn ends or the operator opens the thread. Background tasks
             // left running after the turn do not hold them.
-            holdWorkProgress={!active && isThreadTurnRunning(props.thread, props.thinkingThreadKeys)}
+            holdWorkProgress={shouldHoldThreadRowWorkProgress(
+              props.thread,
+              props.selectedThreadKey,
+              props.thinkingThreadKeys,
+            )}
             includeLinkedDirectories={props.includeLinkedDirectories}
             linkedDirectoryMode={props.linkedDirectoryMode}
             // One chip for the lead PR, then one `+N PRs` chip whose list

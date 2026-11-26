@@ -30,6 +30,7 @@ import {
 import type { GithubTerminalNode } from "./pr-terminal-details";
 import { githubMergeQueueStatus } from "./pr-merge-queue";
 import { isMergeQueueRepository, noteMergeQueueRepository } from "./merge-queue-repositories";
+import { readsHandsOffLabels } from "./hands-off-label-repositories";
 import {
   hasForgeRepositoryName,
   recordForgeRepositoryName,
@@ -307,6 +308,16 @@ fragment PrQueueEvents on PullRequest {
   }
 }`;
 
+/**
+ * The PR's label names, for a Forge Automation hands-off rule. A connection,
+ * so only a PR in a repository such a rule names asks for it
+ * (`readsHandsOffLabels`). GitHub caps a PR at 100 labels.
+ */
+const PR_LABELS_FRAGMENT = `
+fragment PrLabels on PullRequest {
+  labels(first: 100) { nodes { name } }
+}`;
+
 type GraphqlCheckContext = GhCheckRunPayload;
 
 type PrCheckResolution = {
@@ -367,6 +378,9 @@ export type GraphqlPrNode = {
   } | null;
   stack?: { number?: number | null; size?: number | null } | null;
   stackEntry?: { position?: number | null } | null;
+  labels?: {
+    nodes?: ({ name?: string | null } | null)[] | null;
+  } | null;
   queueEvents?: {
     nodes?: ({
       __typename?: string | null;
@@ -413,6 +427,7 @@ export function buildBatchedPrQuery(refs: PrRef[]): {
   const selections: string[] = [];
   const variables: Record<string, string | number> = {};
   let queueEvents = false;
+  let labels = false;
 
   refs.forEach((ref, index) => {
     const owner = `o${index}`;
@@ -420,10 +435,12 @@ export function buildBatchedPrQuery(refs: PrRef[]): {
     const number = `p${index}`;
     const queued = isMergeQueueRepository("github.com", ref.owner, ref.repo);
     queueEvents ||= queued;
+    const labeled = readsHandsOffLabels(ref.owner, ref.repo);
+    labels ||= labeled;
     variableDecls.push(`$${owner}: String!`, `$${name}: String!`, `$${number}: Int!`);
     selections.push(
       `  r${index}: repository(owner: $${owner}, name: $${name}) {`
-      + ` pullRequest(number: $${number}) { ...PrStatus${queued ? " ...PrQueueEvents" : ""} } }`,
+      + ` pullRequest(number: $${number}) { ...PrStatus${queued ? " ...PrQueueEvents" : ""}${labeled ? " ...PrLabels" : ""} } }`,
     );
     variables[owner] = ref.owner;
     variables[name] = ref.repo;
@@ -434,7 +451,7 @@ export function buildBatchedPrQuery(refs: PrRef[]): {
   const query = `query PollPullRequests(${variableDecls.join(", ")}) {
 ${selections.join("\n")}
 }
-${PR_STATUS_FRAGMENT}${queueEvents ? PR_QUEUE_EVENTS_FRAGMENT : ""}`;
+${PR_STATUS_FRAGMENT}${queueEvents ? PR_QUEUE_EVENTS_FRAGMENT : ""}${labels ? PR_LABELS_FRAGMENT : ""}`;
 
   return { query, variables };
 }
@@ -521,11 +538,14 @@ export function buildBranchPrQuery(refs: BranchRef[]): {
   const variableDecls: string[] = [];
   const selections: string[] = [];
   const variables: Record<string, string | number> = {};
+  let labels = false;
 
   refs.forEach((ref, index) => {
     const owner = `o${index}`;
     const name = `n${index}`;
     const branch = `b${index}`;
+    const labeled = readsHandsOffLabels(ref.owner, ref.repo);
+    labels ||= labeled;
     variableDecls.push(
       `$${owner}: String!`,
       `$${name}: String!`,
@@ -535,7 +555,7 @@ export function buildBranchPrQuery(refs: BranchRef[]): {
       `  r${index}: repository(owner: $${owner}, name: $${name}) {`
       + ` nameWithOwner pullRequests(headRefName: $${branch}, first: ${PRS_PER_BRANCH},`
       + ` orderBy: { field: CREATED_AT, direction: DESC },`
-      + ` states: [OPEN, MERGED, CLOSED]) { nodes { ...PrStatus } } }`,
+      + ` states: [OPEN, MERGED, CLOSED]) { nodes { ...PrStatus${labeled ? " ...PrLabels" : ""} } } }`,
     );
     variables[owner] = ref.owner;
     variables[name] = ref.repo;
@@ -545,7 +565,7 @@ export function buildBranchPrQuery(refs: BranchRef[]): {
   const query = `query DiscoverPullRequestsByBranch(${variableDecls.join(", ")}) {
 ${selections.join("\n")}
 }
-${PR_STATUS_FRAGMENT}`;
+${PR_STATUS_FRAGMENT}${labels ? PR_LABELS_FRAGMENT : ""}`;
 
   return { query, variables };
 }
@@ -574,11 +594,14 @@ export function buildCommitPrQuery(refs: CommitRef[]): {
   const variableDecls: string[] = [];
   const selections: string[] = [];
   const variables: Record<string, string | number> = {};
+  let labels = false;
 
   refs.forEach((ref, index) => {
     const owner = `o${index}`;
     const name = `n${index}`;
     const sha = `s${index}`;
+    const labeled = readsHandsOffLabels(ref.owner, ref.repo);
+    labels ||= labeled;
     variableDecls.push(
       `$${owner}: String!`,
       `$${name}: String!`,
@@ -588,7 +611,7 @@ export function buildCommitPrQuery(refs: CommitRef[]): {
       `  r${index}: repository(owner: $${owner}, name: $${name}) {`
       + ` nameWithOwner object(oid: $${sha}) { ... on Commit {`
       + ` associatedPullRequests(first: ${PRS_PER_BRANCH},`
-      + ` orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...PrStatus } } } } }`,
+      + ` orderBy: { field: CREATED_AT, direction: DESC }) { nodes { ...PrStatus${labeled ? " ...PrLabels" : ""} } } } } }`,
     );
     variables[owner] = ref.owner;
     variables[name] = ref.repo;
@@ -598,7 +621,7 @@ export function buildCommitPrQuery(refs: CommitRef[]): {
   const query = `query DiscoverPullRequestsByCommit(${variableDecls.join(", ")}) {
 ${selections.join("\n")}
 }
-${PR_STATUS_FRAGMENT}`;
+${PR_STATUS_FRAGMENT}${labels ? PR_LABELS_FRAGMENT : ""}`;
 
   return { query, variables };
 }
@@ -717,6 +740,7 @@ export function mapGraphqlPrNode(
       url: node.url,
     }),
     ...(node.title?.trim() ? { title: node.title.trim() } : {}),
+    ...readGraphqlLabels(node.labels),
     ...(node.baseRefOid ? { baseSha: node.baseRefOid } : {}),
     ...(node.baseRefName?.trim() ? { baseRefName: node.baseRefName.trim() } : {}),
     ...(node.headRefName?.trim() ? { headRefName: node.headRefName.trim() } : {}),
@@ -742,6 +766,19 @@ export function mapGraphqlPrNode(
     ...readPrTimestamp(node.closedAt, "closedAt"),
     url: node.url,
   };
+}
+
+/**
+ * Label names when the query asked for them, sorted so a reorder is not a
+ * change. Absent when it did not ask: unread, not "no labels".
+ */
+function readGraphqlLabels(labels: GraphqlPrNode["labels"]): { labels?: string[] } {
+  if (!labels) return {};
+  const names = (labels.nodes ?? [])
+    .map((node) => node?.name?.trim())
+    .filter((name): name is string => Boolean(name))
+    .sort();
+  return { labels: names };
 }
 
 /**

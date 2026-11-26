@@ -42,6 +42,7 @@ import type {
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
 import { TOOLTIP_GAP } from "../../../lib/tooltip-placement";
 import { PROJECT_CARD_HOVER_DELAY_MS } from "../ProjectHeaderCard";
+import { TOP_DOCK_CLASS, TOP_DOCK_RESERVE_PROPERTY, topDockReserve } from "../selected-thread-dock-reserve";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadDependencyIndicatorsContext } from "../../thread-dependencies/useThreadDependencyIndicators";
 import { ThreadMaintenanceLauncherContext } from "../../maintenance/thread-maintenance-launcher";
@@ -50,7 +51,11 @@ import {
   ThreadPrWatchIndicatorsContext,
 } from "../../pr-watches/useThreadPrWatchIndicators";
 import { FixtureSidebar as Sidebar } from "../../../test/navigation-presentation-fixture";
-import { useState, type ComponentProps } from "react";
+import { useRef, useState, type ComponentProps, type ReactNode } from "react";
+import {
+  ThreadForgeAutomationProvider,
+  useForgeAutomationOpener,
+} from "../../forge-automation/thread-hands-off";
 import type { Editor } from "@tiptap/react";
 import { ComposerTiptapInput } from "../../composer/ComposerTiptapInput";
 import {
@@ -1591,6 +1596,75 @@ describe("Sidebar", () => {
     expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex", true);
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(target, false);
     expect(shell("Target thread")).not.toHaveClass("is-drop-target-inside");
+  });
+
+  it.each(["top", "bottom"] as const)("hit-tests a stationary nesting drag through the former %s dock", async (edge) => {
+    const loose = { ...sharedThread, id: "loose", title: "Loose thread" };
+    const target = { ...sharedThread, id: "target", title: "Target thread" };
+    const selected = { ...sharedThread, id: "selected", title: "Selected thread" };
+    const threads = [loose, target, selected];
+    const selectedKey = threadSummaryIdentityKey(selected);
+    const targetY = edge === "top" ? 125 : 475;
+    const onSetThreadParent = vi.fn(async () => undefined);
+    const rect = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.matches(".sidebar__scroll-region, .sidebar-list--dense")) return new DOMRect(0, 100, 300, 400);
+      if (this.matches(".thread-row") && this.parentElement?.dataset.threadKey === selectedKey) {
+        return new DOMRect(0, edge === "top" ? 0 : 550, 300, 40);
+      }
+      return rect.call(this);
+    });
+    // Hold layout delivery until after the first drag hit test.
+    vi.stubGlobal("ResizeObserver", class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    });
+    const previousHitTest = Object.getOwnPropertyDescriptor(document, "elementFromPoint");
+    try {
+      const { container } = render(
+        <Sidebar
+          backends={backends}
+          browseMode="recents"
+          directories={[]}
+          inboxThreads={threads}
+          loading={false}
+          selectedItemKey={selectedKey}
+          threads={threads}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+          onSetThreadParent={onSetThreadParent}
+        />,
+      );
+      const dock = screen.getByTestId("selected-thread-dock");
+      expect(dock).toHaveAttribute("data-edge", edge);
+      const row = screen.getByRole("button", { name: "Target thread" }).closest(".thread-row-shell")!;
+      const source = screen.getByRole("button", { name: "Loose thread" }).closest(".thread-row-shell")!;
+      mockElementRect(source, 200, 40);
+      Object.defineProperty(document, "elementFromPoint", {
+        configurable: true,
+        value: () => dock.isConnected ? dock : row,
+      });
+
+      fireEvent.scroll(container.querySelector(".sidebar__scroll-region > .sidebar-list--dense")!);
+      startThreadPinPointerDrag(source, { x: 50, y: 220 });
+      moveThreadPinPointer({ x: 50, y: targetY });
+      await act(async () => {
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+      });
+      expect(row).toHaveClass("is-drop-target-inside");
+      expect(document.querySelector(".thread-row__drop-label")).toHaveTextContent("Make sub-thread");
+      await act(async () => {
+        releaseThreadPinPointer({ x: 50, y: targetY });
+      });
+      expect(onSetThreadParent).toHaveBeenCalledWith(loose, "target", "codex", true);
+    } finally {
+      if (previousHitTest) Object.defineProperty(document, "elementFromPoint", previousHitTest);
+      else Reflect.deleteProperty(document, "elementFromPoint");
+      vi.unstubAllGlobals();
+    }
   });
 
   it("moves a sole sub-thread to another row but never under its own parent or its own sub-thread", async () => {
@@ -9774,6 +9848,7 @@ describe("Sidebar directory pinning", () => {
       platform?: string;
       onRevealPath?: (path: string) => void;
       projectIndex?: boolean;
+      wrapper?: (props: { children: ReactNode }) => ReactNode;
     } = {},
   ): { rerender: (next: typeof initialOverrides) => void } {
     const element = (overrides: typeof initialOverrides) => (
@@ -9810,7 +9885,10 @@ describe("Sidebar directory pinning", () => {
         onProjectIndexWidthChange={overrides.projectIndex ? () => undefined : undefined}
       />
     );
-    const result = render(element(initialOverrides));
+    const result = render(
+      element(initialOverrides),
+      initialOverrides.wrapper ? { wrapper: initialOverrides.wrapper } : undefined,
+    );
     return { rerender: (next) => result.rerender(element(next)) };
   }
 
@@ -10168,6 +10246,33 @@ describe("Sidebar directory pinning", () => {
     expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
     expect(onReorderDirectoryPins).not.toHaveBeenCalled();
     expect(list.querySelector(".directories-pin-slot")).toBeNull();
+  });
+
+  it.each([46, 58, 86])("hits the Pin slot before layout can clear a %ipx dock reserve", async (reserve) => {
+    const onSetDirectoryPin = vi.fn(async () => undefined);
+    renderSidebar([projectADirectory, projectBDirectory], {
+      onSetDirectoryPin, onReorderDirectoryPins: async () => undefined,
+    });
+    layoutDirectoryHeaders([[/ProjectA/i, 40], [/ProjectB/i, 70]]);
+    const region = document.querySelector<HTMLElement>(".sidebar__scroll-region")!;
+    region.classList.add(TOP_DOCK_CLASS);
+    region.style.setProperty(TOP_DOCK_RESERVE_PROPERTY, `${reserve}px`);
+
+    startThreadPinPointerDrag(directoryHeader(/ProjectB/i), { x: 50, y: 80 });
+    moveThreadPinPointer({ x: 50, y: 12 });
+    const slot = region.querySelector<HTMLElement>(".directories-pin-slot")!;
+    // CSS puts the slot below the sticky inset. Keep the pointer stationary
+    // from lift through drop so a later move cannot repair stale feedback.
+    vi.spyOn(slot, "getBoundingClientRect").mockImplementation(() =>
+      new DOMRect(0, 2 + topDockReserve(slot), 300, 34));
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    expect(slot).toHaveClass("is-drop-target");
+    await act(async () => {
+      releaseThreadPinPointer({ x: 50, y: 12 });
+    });
+    expect(onSetDirectoryPin).toHaveBeenCalledWith(expect.objectContaining({ key: projectBDirectory.key }), true);
   });
 
   it("keeps the directory launchpad button a single click and puts machines behind the chevron", async () => {
@@ -11472,6 +11577,88 @@ describe("Sidebar directory pinning", () => {
         { reportError: false },
       ));
       await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    });
+
+    describe("from another surface", () => {
+      const threadInProjectB = {
+        linkedDirectories: [
+          { id: "dir-b", label: "ProjectB", path: projectBDirectory.path!, kind: "local" as const },
+        ],
+      };
+      /**
+       * The composer menu's view of the opener: its item goes away as the
+       * dialog opens, so focus has to go back to the menu's trigger.
+       */
+      function OpenerProbe() {
+        const opener = useForgeAutomationOpener();
+        const trigger = useRef<HTMLButtonElement>(null);
+        const [menuOpen, setMenuOpen] = useState(true);
+        const project = opener?.projectFor(threadInProjectB);
+        if (!project) return <span>No opener</span>;
+        return (
+          <>
+            <button ref={trigger} type="button">Menu trigger</button>
+            {menuOpen ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  opener!.open(threadInProjectB, trigger);
+                }}
+              >
+                {`Open for ${project}`}
+              </button>
+            ) : null}
+          </>
+        );
+      }
+      const wrapper = ({ children }: { children: ReactNode }) => (
+        <ThreadForgeAutomationProvider directories={[projectBDirectory]}>
+          {children}
+          <OpenerProbe />
+        </ThreadForgeAutomationProvider>
+      );
+
+      it("opens this sidebar's dialog for the thread's project, and returns focus to the opener", async () => {
+        renderSidebar([projectBDirectory], {
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+          wrapper,
+        });
+        const opener = await screen.findByRole("button", { name: "Open for ProjectB" });
+        opener.focus();
+        fireEvent.click(opener);
+        const dialog = await screen.findByRole("dialog", { name: "Forge Automation" });
+        expect(within(dialog).getByText(/^ProjectB/)).toBeInTheDocument();
+        expect(screen.getAllByRole("dialog")).toHaveLength(1);
+        fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.getByRole("button", { name: "Menu trigger" })).toHaveFocus());
+      });
+
+      it("offers nothing where the sidebar's menu would not: no owner to save to, or a peer window whose owner does not advertise it", async () => {
+        renderSidebar([projectBDirectory], { onSetDirectoryPin: async () => undefined, wrapper });
+        expect(await screen.findByText("No opener")).toBeInTheDocument();
+        cleanup();
+
+        (window as unknown as { __pwragentFederationTarget?: unknown }).__pwragentFederationTarget = {
+          scope: "remote",
+          instanceId: "remote-instance",
+        };
+        const { rerender } = renderSidebar([projectBDirectory], {
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+          wrapper,
+        });
+        expect(await screen.findByText("No opener")).toBeInTheDocument();
+        rerender({
+          onSetDirectoryPin: async () => undefined,
+          onSetProjectForgeAutomation: vi.fn(async () => undefined),
+          federationOwnerForgeAutomation: true,
+          wrapper,
+        });
+        expect(await screen.findByRole("button", { name: "Open for ProjectB" })).toBeInTheDocument();
+      });
     });
 
     it("opens Forge Automation… as a dialog and saves it", async () => {

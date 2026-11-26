@@ -88,6 +88,7 @@ import type {
   DesktopHelperModelSettings,
   DesktopTaskMonitorModelChoice,
 } from "@pwragent/shared/helper-models";
+import type { DesktopAutoCompactionRule } from "@pwragent/shared/auto-compaction";
 import type { DesktopDecisionModelSettings, DecisionProviderId } from "@pwragent/shared/decision-models";
 import type { FederationPeerRole } from "@pwragent/shared/contracts/federation";
 import type { MessagingToolUpdateMode } from "@pwragent/shared/contracts/messaging";
@@ -1751,6 +1752,7 @@ export class DesktopSettingsService {
           config.models?.providerThreadMigrations ?? {},
         helperModels: config.models?.helperModels ?? { helpers: {} },
         taskMonitorModels: config.models?.taskMonitorModels ?? {},
+        autoCompaction: config.models?.autoCompaction ?? [],
         decisionModels: config.models?.decisionModels ?? {},
         decisionSecrets: { localApiKey: decisionLocalApiKey, jevApiKey: typesafeJevApiKey },
         openaiDecisions: {
@@ -3769,6 +3771,11 @@ export class DesktopSettingsService {
 
   resolveTaskMonitorModels(): Record<string, DesktopTaskMonitorModelChoice> {
     return this.readModelsConfig().taskMonitorModels ?? {};
+  }
+
+  /** Saved `[[models.auto_compaction]]` rules, defaults excluded. */
+  resolveAutoCompactionRules(): DesktopAutoCompactionRule[] {
+    return this.readModelsConfig().autoCompaction ?? [];
   }
 
   resolveUsageAccountGroups(): Record<string, string> {

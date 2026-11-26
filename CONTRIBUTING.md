@@ -196,8 +196,8 @@ are fallback paths only when MCP is unavailable, under the lab's current
 runbook and existing scoped authorization. Do not provision a product-local lab.
 
 The small macOS/ARM64 visual-regression suite has lossless WebP baselines under
-`apps/desktop/e2e/*.spec.ts-snapshots/`. They are Git LFS objects, not ordinary
-Git blobs. They must match the CI renderer, a GitHub-hosted `macos-26` runner.
+`apps/desktop/e2e/*.spec.ts-snapshots/` stored as ordinary Git binary blobs.
+They must match the CI renderer, a GitHub-hosted `macos-26` runner.
 The simplest source is the `*-actual.webp` files in a failing
 `desktop-e2e-macos-lane-*-artifacts` upload. To iterate before pushing, run the
 spec inside the lab VM. A `lab_e2e_run` request has this shape (replace the
@@ -234,7 +234,7 @@ Save the request ID and run ID, poll launch completion, then collect with
 logs, test exit code, and artifacts before reporting success.
 
 Review the retrieved `*-actual.webp` artifacts, promote the approved files to
-their `*-darwin.webp` baseline names, and check `git lfs status`. The launcher
+their `*-darwin.webp` baseline names, and check `git status`. The launcher
 requires a clean worktree and transports only committed `HEAD`, so commit the
 promoted references as a disposable checkpoint before rerunning the focused
 spec. Amend or squash that checkpoint only after the VM verifies it. CI is

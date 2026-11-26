@@ -42,6 +42,7 @@ it("persists ordinary ACP activity but strips review ledger payloads across tool
     { name: "mcp_pwragent_record_review_candidate" },
     { title: "dispose_review_candidate" },
     { rawInput: { variant: "UseTool", tool_name: "list_review_candidates" } },
+    { name: "mcp_pwragent_submit_review_output" },
   ), async (identity) => {
     const transport = new FakeAcpAgentTransport();
     const rolloutStore = new AcpRolloutStore(mkdtempSync(path.join(tempDir, "review-rollout-")));
@@ -84,10 +85,11 @@ it("persists ordinary ACP activity but strips review ledger payloads across tool
     } finally {
       await client.dispose();
     }
-  }), { numRuns: 3, examples: [
+  }), { numRuns: 4, examples: [
     [{ name: "mcp_pwragent_record_review_candidate" }],
     [{ title: "dispose_review_candidate" }],
     [{ rawInput: { variant: "UseTool", tool_name: "list_review_candidates" } }],
+    [{ name: "mcp_pwragent_submit_review_output" }],
   ] });
 });
 

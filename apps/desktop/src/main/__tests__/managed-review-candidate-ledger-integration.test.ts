@@ -1,9 +1,10 @@
-import path from "node:path";
+import path, { resolve } from "node:path";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import fc from "fast-check";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
@@ -23,8 +24,20 @@ import { AcpSessionStore } from "../storage/acp-session-store";
 import { createOverlayStoreMock, git, MockBackendClient } from "./helpers/backend-registry-fixture";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
+const { registryLogInfo } = vi.hoisted(() => ({ registryLogInfo: vi.fn() }));
+vi.mock("../log", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../log")>();
+  return {
+    ...actual,
+    getMainLogger: (scope: string) => {
+      const logger = actual.getMainLogger(scope);
+      return scope === "pwragent:backend-registry" ? { ...logger, info: registryLogInfo } : logger;
+    },
+  };
+});
+
 describe("managed review ledger MCP isolation and approval", () => {
-  it("exposes only the 3 auto-approved ledger tools to managedReview Antigravity clients and hides them from normal clients", async () => {
+  it("exposes only the 4 auto-approved managed review tools to managedReview Antigravity clients and hides them from normal clients", async () => {
     const ledger = new ManagedReviewCandidateLedger();
     const reviewRouter = buildManagedReviewLedgerToolRouter(ledger);
     let retireAtDispatch = false;
@@ -142,12 +155,48 @@ describe("managed review ledger MCP isolation and approval", () => {
           updated: { id: "C1", disposition: "keep", priority: 2 },
           summary: { pending: 0, keep: 1, drop: 0 },
         });
+        const submitted = await reviewClient.callTool({
+          name: "submit_review_output",
+          arguments: {
+            findings: [
+              {
+                title: "Keep session database reads off the ACP streaming path",
+                body: 'Calls synchronous `getSession()` on `"agent_message_chunk"` updates.',
+                confidence_score: 0.96,
+                priority: 2,
+                code_location: {
+                  absolute_file_path: resolve("/repo/apps/desktop/src/main/app-server/acp-backend-adapter.ts"),
+                  line_range: { start: 3585, end: 3586 },
+                },
+              },
+            ],
+            overall_correctness: "patch is incorrect",
+            overall_explanation: "Synchronous database read on streaming path.",
+            overall_confidence_score: 0.95,
+          },
+        });
+        expect(submitted.isError).not.toBe(true);
+        const receipt = {
+          finding_count: 1,
+          ledger_summary: { total: 1, pending: 0, keep: 1, drop: 0 },
+        };
+        expect(submitted.structuredContent).toEqual(receipt);
+        expect(JSON.stringify(submitted.content)).not.toContain("Calls synchronous");
         retireAtDispatch = true;
         await expect(reviewClient.callTool({
           name: "dispose_review_candidate",
           arguments: { id: "C1", disposition: "drop", reason: "Arrived after terminal" },
         })).resolves.toMatchObject({ isError: true });
+        await expect(reviewClient.callTool({
+          name: "submit_review_output",
+          arguments: {
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "Arrived after terminal.",
+          },
+        })).resolves.toMatchObject({ isError: true });
         expect(ledger.snapshot(turn)).toMatchObject({ keep: 1, drop: 0 });
+        expect(ledger.submittedOutput(turn)?.findings).toHaveLength(1);
 
         // General tools remain unreachable from a managed review client.
         await expect(
@@ -167,6 +216,23 @@ class ReviewListingAcpTransport extends FakeAcpAgentTransport {
   readonly sessions = new Map<string, { client?: Client; tools: string[]; serverNames: string[] }>();
   readonly prompts: string[] = [];
   private nextSession = 0;
+  private readonly onPrompt?: (params: {
+    sessionId: string;
+    client?: Client;
+    emitText: (text: string) => void;
+  }) => Promise<void>;
+
+  constructor(
+    options?: ConstructorParameters<typeof FakeAcpAgentTransport>[0],
+    onPrompt?: (params: {
+      sessionId: string;
+      client?: Client;
+      emitText: (text: string) => void;
+    }) => Promise<void>,
+  ) {
+    super(options);
+    this.onPrompt = onPrompt;
+  }
 
   override async request(
     method: string,
@@ -208,53 +274,57 @@ class ReviewListingAcpTransport extends FakeAcpAgentTransport {
       const promptBlocks = (params?.prompt ?? []) as Array<{ text?: string }>;
       this.prompts.push(promptBlocks.map((block) => block.text ?? "").join("\n"));
       const session = this.sessions.get(sessionId);
-      if (session?.client) {
-        const recorded = await session.client.callTool({
-          name: "record_review_candidate",
-          arguments: {
-            file: "/repo/src/main.ts",
-            start_line: 10,
-            end_line: 12,
-            category: "correctness",
-            summary: "Guard null path",
-            mechanism: "Throws when input is empty.",
-          },
+      const emitText = (text: string) => {
+        this.emitSessionUpdate(sessionId, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text },
         });
-        expect(recorded.isError).not.toBe(true);
-        const disposed = await session.client.callTool({
-          name: "dispose_review_candidate",
-          arguments: {
-            id: "C1",
-            disposition: "keep",
-            priority: 2,
-            reason: "Reproducible on empty input.",
-          },
-        });
-        expect(disposed.isError).not.toBe(true);
-      }
-      this.emitSessionUpdate(sessionId, {
-        sessionUpdate: "agent_message_chunk",
-        content: {
-          type: "text",
-          text: JSON.stringify({
-            findings: [
-              {
-                title: "[P2] Guard null path",
-                body: "Throws when input is empty.",
-                confidence_score: 0.95,
-                priority: 2,
-                code_location: {
-                  absolute_file_path: "/repo/src/main.ts",
-                  line_range: { start: 10, end: 12 },
-                },
+      };
+      if (this.onPrompt) {
+        await this.onPrompt({ sessionId, client: session?.client, emitText });
+      } else {
+        if (session?.client) {
+          const recorded = await session.client.callTool({
+            name: "record_review_candidate",
+            arguments: {
+              file: "/repo/src/main.ts",
+              start_line: 10,
+              end_line: 12,
+              category: "correctness",
+              summary: "Guard null path",
+              mechanism: "Throws when input is empty.",
+            },
+          });
+          expect(recorded.isError).not.toBe(true);
+          const disposed = await session.client.callTool({
+            name: "dispose_review_candidate",
+            arguments: {
+              id: "C1",
+              disposition: "keep",
+              priority: 2,
+              reason: "Reproducible on empty input.",
+            },
+          });
+          expect(disposed.isError).not.toBe(true);
+        }
+        emitText(JSON.stringify({
+          findings: [
+            {
+              title: "[P2] Guard null path",
+              body: "Throws when input is empty.",
+              confidence_score: 0.95,
+              priority: 2,
+              code_location: {
+                absolute_file_path: "/repo/src/main.ts",
+                line_range: { start: 10, end: 12 },
               },
-            ],
-            overall_correctness: "patch is incorrect",
-            overall_explanation: "Missing null guard.",
-            overall_confidence_score: 0.95,
-          }),
-        },
-      });
+            },
+          ],
+          overall_correctness: "patch is incorrect",
+          overall_explanation: "Missing null guard.",
+          overall_confidence_score: 0.95,
+        }));
+      }
       this.requests.push({ method, params });
       return { stopReason: "end_turn" };
     }
@@ -273,6 +343,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
   let stateDb: StateDb;
 
   beforeEach(() => {
+    registryLogInfo.mockClear();
     stateDb = openInMemoryStateDb();
   }, 60_000);
 
@@ -359,6 +430,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       expect(transport.prompts.at(-1)).toContain("record_review_candidate");
       expect(transport.prompts.at(-1)).toContain("list_review_candidates");
       expect(transport.prompts.at(-1)).toContain("dispose_review_candidate");
+      expect(transport.prompts.at(-1)).toContain("submit_review_output");
 
       expect.soft(await lateCall.promise).toBe(true);
       await vi.waitFor(() => {
@@ -430,6 +502,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       expect(transport.prompts.at(-1)).not.toContain("record_review_candidate");
       expect(transport.prompts.at(-1)).not.toContain("list_review_candidates");
       expect(transport.prompts.at(-1)).not.toContain("dispose_review_candidate");
+      expect(transport.prompts.at(-1)).not.toContain("submit_review_output");
     } finally {
       await transport.closeAll();
       await registry.close();
@@ -504,17 +577,20 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       threadId: `codex-thread-${++nextThreadNumber}`,
     }));
     const startTurnSpy = vi.spyOn(codexClient, "startTurn");
+    const overlayStore = createOverlayStoreMock();
+    const upsertReview = vi.spyOn(overlayStore, "upsertManagedReviewEntry");
     const registry = createDesktopBackendRegistry({
       codexClient,
       acpAgentStore: new AcpAgentStore(stateDb),
       acpSessionStore: new AcpSessionStore(stateDb),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       threadTitleGenerationService: null,
     });
+    const onEvent = vi.fn<(event: AgentEvent) => void>();
+    const unsubscribe = registry.onEvent(onEvent);
 
     try {
-      const repoCwd = path.resolve("/repo");
-      const parent = await registry.startThread({ backend: "codex", cwd: repoCwd });
+      const parent = await registry.startThread({ backend: "codex", cwd: resolve("/repo") });
       const review = await registry.startReview({
         backend: "codex",
         threadId: parent.threadId,
@@ -587,7 +663,34 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       expect(refused.success).toBe(false);
       expect(refused.contentItems?.[0]?.text).toContain("forbidden");
 
-      // Terminal failure/completion clears the in-memory ledger.
+      // Active managed review child can also call submit_review_output, and a
+      // failed terminal discards it without publishing.
+      const submitResponse = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          requestId: "req-submit",
+          callId: "call-submit",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tool: "submit_review_output",
+          arguments: {
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "No defects found before failure.",
+          },
+        },
+      }) as { success: boolean };
+      expect(submitResponse.success).toBe(true);
+      expect(
+        registryModules(registry).managedReviewService.candidateLedger.submittedOutput({
+          backend: "codex",
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+        }),
+      ).toMatchObject({ overall_correctness: "patch is correct" });
+
+      // A failed provider turn must forward the failure and discard the submission.
       await codexClient.emit({
         method: "turn/failed",
         params: {
@@ -600,11 +703,323 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
           },
         },
       });
+      const parentReviewEvents = onEvent.mock.calls.map(([event]) => event.notification)
+        .filter(({ params }) => "threadId" in params && params.threadId === parent.threadId
+          && "turnId" in params && params.turnId === review.turnId);
+      expect(parentReviewEvents.filter(({ method }) => method === "turn/failed")).toHaveLength(1);
+      const resultId = `managed-review:${review.turnId}:result`;
+      expect(parentReviewEvents).not.toContainEqual(expect.objectContaining({ method: "turn/completed" }));
+      expect(parentReviewEvents).not.toContainEqual(expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({ item: expect.objectContaining({ id: resultId }) }),
+      }));
+      expect(upsertReview).not.toHaveBeenCalledWith(expect.objectContaining({
+        threadId: parent.threadId,
+        entry: expect.objectContaining({ id: resultId }),
+      }));
+      expect(registryModules(registry).managedReviewService.candidateLedger.activeTurnCount).toBe(0);
+      expect(
+        registryModules(registry).managedReviewService.candidateLedger.submittedOutput({
+          backend: "codex",
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+        }),
+      ).toBeUndefined();
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
+  });
+
+  it("publishes structured findings submitted via submit_review_output even when body contains quotes and trailing text is not valid JSON", async () => {
+    const backend = "acp:antigravity";
+    const agentStore = new AcpAgentStore(stateDb);
+    const sessionStore = new AcpSessionStore(stateDb);
+    agentStore.upsertInstalledAgent({
+      backendId: backend,
+      registryId: "antigravity",
+      name: "Antigravity",
+      version: "1.5.15",
+      distributionKind: "local",
+      distributionSource: "antigravity",
+      installStatus: "installed",
+      authStatus: "not-required",
+      verificationStatus: "not-applicable",
+      allowlistRuleId: "fixture-antigravity",
+      installedAt: 1,
+      updatedAt: 1,
+      launchDescriptor: {
+        backendId: backend,
+        registryId: "antigravity",
+        distributionKind: "local",
+        command: "/fixture/agy",
+        args: ["acp"],
+        env: {},
+      },
+    });
+    const findingBody = 'The `"remote-pin"` step and `"local-name"` step omit version checks.';
+    let submitResult: { isError?: boolean; structuredContent?: unknown } | undefined;
+    const transport = new ReviewListingAcpTransport(
+      {
+        initialize: {
+          protocolVersion: 1,
+          agentCapabilities: {
+            loadSession: true,
+            mcpCapabilities: { http: true },
+          },
+        },
+      },
+      async ({ client, emitText }) => {
+        submitResult = await client!.callTool({
+          name: "submit_review_output",
+          arguments: {
+            findings: [
+              {
+                title: "Remote-pin test leaves owner-version wiring unfalsified",
+                body: findingBody,
+                confidence_score: 0.94,
+                priority: 2,
+                code_location: {
+                  absolute_file_path: resolve("/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts"),
+                  line_range: { start: 1260, end: 1342 },
+                },
+              },
+            ],
+            overall_correctness: "patch is incorrect",
+            overall_explanation: "One unfalsified test gap remains.",
+            overall_confidence_score: 0.93,
+          },
+        }) as { isError?: boolean; structuredContent?: unknown };
+        // Even if the model also emits invalid JSON with unescaped quotes (the
+        // real PR #4453 failure mode) or a short confirmation, the structured
+        // tool submission wins.
+        emitText('{"findings":[{"body":"broken `"remote-pin"` json"}]}');
+      },
+    );
+    const overlayStore = createOverlayStoreMock();
+    const publishedEntries: Array<{ id: string; review: string; output?: unknown }> = [];
+    const upsertReview = overlayStore.upsertManagedReviewEntry.bind(overlayStore);
+    vi.spyOn(overlayStore, "upsertManagedReviewEntry").mockImplementation(async (params) => {
+      if (params.entry.id.endsWith(":result")) {
+        publishedEntries.push(params.entry);
+      }
+      return await upsertReview(params);
+    });
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      acpAgentStore: agentStore,
+      acpSessionStore: sessionStore,
+      createAcpTransport: () => transport,
+      overlayStore,
+      createScratchProjectDirectory: async () => "/tmp/pwragent-review-submit-tool",
+      threadTitleGenerationService: null,
+    });
+    try {
+      const parent = await registry.startThread({ backend, cwd: "/repo" });
+      await registry.startReview({
+        backend,
+        threadId: parent.threadId,
+        target: { type: "uncommittedChanges" },
+      });
+
+      await vi.waitFor(() => {
+        expect(publishedEntries).toHaveLength(1);
+      });
+      expect(submitResult?.isError).not.toBe(true);
+      expect(publishedEntries[0]?.output).toEqual({
+        findings: [
+          {
+            title: "Remote-pin test leaves owner-version wiring unfalsified",
+            body: findingBody,
+            confidence_score: 0.94,
+            priority: 2,
+            code_location: {
+              absolute_file_path: resolve("/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts"),
+              line_range: { start: 1260, end: 1342 },
+            },
+          },
+        ],
+        overall_correctness: "patch is incorrect",
+        overall_explanation: "One unfalsified test gap remains.",
+        overall_confidence_score: 0.93,
+      });
+      expect(publishedEntries[0]?.review).toContain("[P2] Remote-pin test leaves owner-version wiring unfalsified");
+      expect(publishedEntries[0]?.review).not.toContain('{"findings"');
       await vi.waitFor(() => {
         expect(
           registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
         ).toBe(0);
       });
+    } finally {
+      await transport.closeAll();
+      await registry.close();
+    }
+  });
+
+  it("publishes Codex submit_review_output ahead of kept candidates when terminal text is empty", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
+    });
+    let nextThreadNumber = 0;
+    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
+      threadId: `codex-submit-thread-${++nextThreadNumber}`,
+    }));
+    const overlayStore = createOverlayStoreMock();
+    const publishedEntries: Array<{ id: string; review: string; output?: unknown }> = [];
+    const upsertReview = overlayStore.upsertManagedReviewEntry.bind(overlayStore);
+    vi.spyOn(overlayStore, "upsertManagedReviewEntry").mockImplementation(async (params) => {
+      if (params.entry.id.endsWith(":result")) {
+        publishedEntries.push(params.entry);
+      }
+      return await upsertReview(params);
+    });
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      acpAgentStore: new AcpAgentStore(stateDb),
+      acpSessionStore: new AcpSessionStore(stateDb),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    try {
+      const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
+      const review = await registry.startReview({
+        backend: "codex",
+        threadId: parent.threadId,
+        target: { type: "uncommittedChanges" },
+        runMode: "pwragent-sub-agent",
+      });
+
+      const { candidateLedger } = registryModules(registry).managedReviewService;
+      const turn = { backend: "codex" as const, threadId: review.reviewThreadId, turnId: review.turnId };
+      const candidate = candidateLedger.record(turn, {
+        file: resolve("/repo/src/earlier.ts"),
+        start_line: 1,
+        end_line: 2,
+        category: "correctness",
+        summary: "Earlier candidate",
+        mechanism: "The final review revises this observation.",
+      });
+      expect(candidate).toMatchObject({ ok: true, data: { recorded: { id: "C1" } } });
+      expect(candidateLedger.dispose(turn, {
+        id: "C1",
+        disposition: "keep",
+        priority: 2,
+        reason: "Verified during triage.",
+      })).toMatchObject({ ok: true });
+
+      const submitResponse = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          requestId: "req-codex-submit",
+          callId: "call-codex-submit",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tool: "submit_review_output",
+          arguments: {
+            findings: [
+              {
+                title: "Preserve quoted code span",
+                body: 'Keeps `"remote-pin"` intact.',
+                confidence_score: 0.91,
+                priority: 1,
+                code_location: {
+                  absolute_file_path: resolve("/repo/src/review.ts"),
+                  line_range: { start: 5, end: 9 },
+                },
+              },
+            ],
+            overall_correctness: "patch is incorrect",
+            overall_explanation: "One defect found.",
+            overall_confidence_score: 0.9,
+          },
+        },
+      }) as { success: boolean };
+      expect(submitResponse.success).toBe(true);
+
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          turn: {
+            id: review.turnId,
+            status: "completed",
+            output: [],
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(publishedEntries).toHaveLength(1);
+      });
+      expect(publishedEntries[0]?.output).toMatchObject({
+        overall_correctness: "patch is incorrect",
+        overall_explanation: "One defect found.",
+        findings: [
+          {
+            title: "Preserve quoted code span",
+            body: 'Keeps `"remote-pin"` intact.',
+            priority: 1,
+          },
+        ],
+      });
+      expect(publishedEntries[0]?.review).toContain("[P1] Preserve quoted code span");
+      expect(
+        registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
+      ).toBe(0);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([
+    { source: "text", text: '{"findings":[', published: '{"findings":[' },
+    { source: "none", text: "  ", published: "Review completed without output." },
+  ])("attributes unstructured fallback reviews to $source", async ({ source, text, published }) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
+    });
+    let nextThreadNumber = 0;
+    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
+      threadId: `codex-fallback-thread-${++nextThreadNumber}`,
+    }));
+    const overlayStore = createOverlayStoreMock();
+    const upsertReview = vi.spyOn(overlayStore, "upsertManagedReviewEntry");
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      acpAgentStore: new AcpAgentStore(stateDb),
+      acpSessionStore: new AcpSessionStore(stateDb),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    try {
+      const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
+      const review = await registry.startReview({
+        backend: "codex",
+        threadId: parent.threadId,
+        target: { type: "uncommittedChanges" },
+        runMode: "pwragent-sub-agent",
+      });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          turn: { id: review.turnId, status: "completed", output: [{ type: "text", text }] },
+        },
+      });
+      expect(upsertReview).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: parent.threadId,
+        entry: expect.objectContaining({ id: `managed-review:${review.turnId}:result`, review: published }),
+      }));
+      expect(registryLogInfo).toHaveBeenCalledWith("managed review artifact published", expect.objectContaining({
+        turnId: review.turnId,
+        structured: false,
+        outputSource: source,
+      }));
     } finally {
       await registry.close();
     }

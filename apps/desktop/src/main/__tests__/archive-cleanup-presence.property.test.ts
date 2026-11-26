@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import fc from "fast-check";
 import { expect, it, vi } from "vitest";
 import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import * as gitBoundary from "../app-server/git-executable";
@@ -133,19 +132,16 @@ it("rechecks the folder before claiming a missing-repository checkout was kept",
   await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, disappearsDuringArchive: true });
 });
 
-it("keeps files in a residual folder after Git removed its checkout", async () => {
-  await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker: "removed-with-checkout" });
-});
-
 it("keeps a Git-less folder inside the repository where Git discovers the primary checkout", async () => {
   await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker: "marker-only", nested: true, stalePrimaryRegistration: true });
 });
 
-it("reports and preserves Git-less worktree folders regardless of remaining registration", async () => {
-  await fc.assert(fc.asyncProperty(fc.constantFrom("removed-with-checkout" as const, "marker-only" as const, "during-probe" as const),
-    fc.string({ minLength: 1, maxLength: 40 }), fc.boolean(), async (missingGitMarker, residualFile, nested) => {
-      await cleanupScenario({ additionalExists: true, activeOwner: false, external: false, missingGitMarker, residualFile, nested });
-    }), { numRuns: 5, examples: [
-    ["removed-with-checkout", "remaining data", true], ["marker-only", "unsaved work", true], ["during-probe", "remaining data", false],
-  ] });
-});
+it.each((["removed-with-checkout", "marker-only", "during-probe"] as const).flatMap(missingGitMarker =>
+  [false, true].map(nested => ({ missingGitMarker, nested }))))(
+  "reports and preserves Git-less folders after $missingGitMarker (nested=$nested)",
+  async ({ missingGitMarker, nested }) => {
+    await cleanupScenario({
+      additionalExists: true, activeOwner: false, external: false, missingGitMarker, residualFile: "remaining data", nested,
+    });
+  },
+);

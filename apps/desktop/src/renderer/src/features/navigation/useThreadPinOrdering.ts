@@ -12,6 +12,7 @@ import {
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { beginNativeDragInteraction, endNativeDragInteraction } from "../../lib/native-drag-interaction";
 import type { DropIndicatorController } from "./drag-drop";
+import { dismissThreadDockForDrag } from "./selected-thread-dock-reserve";
 import { isInNestBand, NEST_DROP_LABEL, nestDropKey, resolveThreadNestTarget, threadDragLane } from "./thread-nest-drop";
 import { createThreadRowPointerDragPreview, type ThreadRowPointerDragPreview } from "./thread-row-drag-preview";
 
@@ -535,6 +536,7 @@ export function useThreadPinOrdering(params: {
         session.sourceElement,
         startPoint,
       );
+      dismissThreadDockForDrag(session.sourceElement);
       setThreadPinAppendTargetActive(session, true);
       armClickSuppression();
       session.scrollElement?.addEventListener("scroll", onScroll, {

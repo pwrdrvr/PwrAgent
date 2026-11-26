@@ -76,12 +76,27 @@ export function insertTranscriptEntry(
   }
 
   if (typeof entry.createdAt === "number") {
-    const timedIndex = nextEntries.findIndex(
+    let timedIndex = nextEntries.findIndex(
       (candidate) =>
         typeof candidate.createdAt === "number" &&
         candidate.createdAt > (entry.createdAt as number),
     );
     if (timedIndex !== -1) {
+      // Never split an existing turn when placing an entry from another turn
+      // (or a turnless entry). If the first later-stamped row sits inside a
+      // turn that already started earlier in the transcript, place this entry
+      // after that turn finishes.
+      const splitTurnId = nextEntries[timedIndex]?.turn?.id;
+      if (
+        splitTurnId
+        && timedIndex > 0
+        && nextEntries.slice(0, timedIndex).some((prior) => prior.turn?.id === splitTurnId)
+      ) {
+        const lastSplitTurnIndex = nextEntries.findLastIndex(
+          (candidate) => candidate.turn?.id === splitTurnId,
+        );
+        timedIndex = lastSplitTurnIndex + 1;
+      }
       nextEntries.splice(timedIndex, 0, entry);
       return nextEntries;
     }

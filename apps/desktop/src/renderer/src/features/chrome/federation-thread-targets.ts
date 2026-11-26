@@ -120,8 +120,9 @@ export function buildFederationPeerTargets<Availability extends string>(
  * `keepInstanceId` is the machine already chosen, kept even while offline so
  * the list agrees with the chip or row that names it.
  *
- * The Star Map, the Federation popover and Settings → Federation describe the
- * federation itself and still show every peer.
+ * The Federation popover and Settings → Federation describe the federation
+ * itself and still show every peer; the Star Map hides offline peers by
+ * default behind a View toggle.
  */
 export function listedFederationPeerTargets<
   Target extends { instanceId: string; availability: string },

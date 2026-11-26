@@ -1,11 +1,13 @@
+import { resolve } from "node:path";
 import fc from "fast-check";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerBackendKind, AppServerReviewOutput } from "@pwragent/shared/contracts/normalized-app-server";
 import { describe, expect, it } from "vitest";
 import {
   buildReviewOutputFromCandidateLedger,
   MANAGED_REVIEW_CANDIDATE_CATEGORIES,
   MANAGED_REVIEW_CANDIDATE_MAX_FIELD_LENGTH,
   MANAGED_REVIEW_CANDIDATE_MAX_PER_TURN,
+  MANAGED_REVIEW_OUTPUT_MAX_FINDINGS,
   ManagedReviewCandidateLedger,
   type ManagedReviewCandidate,
   type ManagedReviewCandidateCategory,
@@ -18,6 +20,7 @@ import {
 } from "../../shared/review-output";
 
 const BACKENDS: readonly AppServerBackendKind[] = ["codex", "acp:antigravity", "acp:grok"];
+const ABSOLUTE_FINDING_PATH = resolve("/repo/a.ts");
 
 const turnKeyArb: fc.Arbitrary<ManagedReviewCandidateTurnKey> = fc.record({
   backend: fc.constantFrom(...BACKENDS),
@@ -68,6 +71,16 @@ type LedgerStep =
       category?: ManagedReviewCandidateCategory;
       reason: string;
     }
+  | {
+      kind: "submitOutput";
+      turn: ManagedReviewCandidateTurnKey;
+      invalidField: "title" | "path" | "verdict" | undefined;
+      hasFinding: boolean;
+      priority: ManagedReviewCandidatePriority;
+      body: string;
+      explanation: string;
+      confidenceScore?: number;
+    }
   | { kind: "list"; turn: ManagedReviewCandidateTurnKey }
   | { kind: "clearTurn"; turn: ManagedReviewCandidateTurnKey }
   | { kind: "clearThread"; backend: AppServerBackendKind; threadId: string };
@@ -93,6 +106,20 @@ const stepArb: fc.Arbitrary<LedgerStep> = fc.oneof(
     reason: nonEmptyTextArb,
   }),
   fc.record({
+    kind: fc.constant("submitOutput" as const),
+    turn: turnKeyArb,
+    invalidField: fc.option(fc.constantFrom("title" as const, "path" as const, "verdict" as const), { nil: undefined }),
+    hasFinding: fc.boolean(),
+    priority: priorityArb,
+    body: fc.constantFrom(
+      'The `"remote-pin"` step skips owner-version checks.',
+      'Quoted `"local-name"` and backslash \\n remain intact.',
+      "Plain finding body.",
+    ),
+    explanation: nonEmptyTextArb,
+    confidenceScore: fc.constantFrom<number | undefined>(undefined, 0, 0.5, 0.93),
+  }),
+  fc.record({
     kind: fc.constant("list" as const),
     turn: turnKeyArb,
   }),
@@ -112,7 +139,7 @@ function modelTurnKey(turn: ManagedReviewCandidateTurnKey): string {
 }
 
 describe("ManagedReviewCandidateLedger model properties", () => {
-  it("preserves per-turn isolation, monotonic IDs, disposition transitions, and complete cleanup across arbitrary sequences", () => {
+  it("preserves per-turn isolation, monotonic IDs, disposition transitions, submitted outputs, and complete cleanup across arbitrary sequences", () => {
     fc.assert(
       fc.property(fc.array(stepArb, { minLength: 1, maxLength: 60 }), (steps) => {
         const ledger = new ManagedReviewCandidateLedger();
@@ -122,6 +149,7 @@ describe("ManagedReviewCandidateLedger model properties", () => {
             turn: ManagedReviewCandidateTurnKey;
             nextId: number;
             candidates: ModelCandidate[];
+            submittedOutput?: AppServerReviewOutput;
           }
         >();
 
@@ -196,6 +224,58 @@ describe("ManagedReviewCandidateLedger model properties", () => {
                 },
               });
             }
+          } else if (step.kind === "submitOutput") {
+            const key = modelTurnKey(step.turn);
+            const hasFinding = step.hasFinding || step.invalidField === "title" || step.invalidField === "path";
+            const findings = hasFinding
+              ? [{
+                  title: step.invalidField === "title" ? "" : "Quoted finding",
+                  body: step.body,
+                  confidence_score: 0.9,
+                  priority: step.priority,
+                  code_location: {
+                    absolute_file_path: step.invalidField === "path" ? "src/a.ts" : ABSOLUTE_FINDING_PATH,
+                    line_range: { start: 10, end: 12 },
+                  },
+                }]
+              : [];
+            const claimsClean = step.invalidField === "verdict" ? hasFinding : !hasFinding;
+            const correctness = claimsClean ? "patch is correct" : "patch is incorrect";
+            const actual = ledger.submitOutput(step.turn, {
+              findings,
+              overall_correctness: correctness,
+              overall_explanation: step.explanation,
+              ...(step.confidenceScore !== undefined
+                ? { overall_confidence_score: step.confidenceScore }
+                : {}),
+            });
+            // An invalid submission must leave the previous accepted review intact.
+            if (step.invalidField) {
+              expect(actual).toMatchObject({ ok: false, code: "invalid_arguments" });
+              expect(ledger.submittedOutput(step.turn)).toEqual(model.get(key)?.submittedOutput);
+            } else {
+              let state = model.get(key);
+              if (!state) {
+                state = { turn: step.turn, nextId: 1, candidates: [] };
+                model.set(key, state);
+              }
+              const expectedOutput: AppServerReviewOutput = {
+                findings,
+                overall_correctness: correctness,
+                overall_explanation: step.explanation.trim(),
+                ...(step.confidenceScore !== undefined && step.confidenceScore > 0
+                  ? { overall_confidence_score: step.confidenceScore }
+                  : {}),
+              };
+              state.submittedOutput = expectedOutput;
+              expect(actual).toMatchObject({
+                ok: true,
+                data: {
+                  finding_count: findings.length,
+                },
+              });
+              expect(ledger.submittedOutput(step.turn)).toEqual(expectedOutput);
+            }
           } else if (step.kind === "list") {
             const expected = model.get(modelTurnKey(step.turn))?.candidates ?? [];
             const listed = ledger.list(step.turn);
@@ -206,9 +286,13 @@ describe("ManagedReviewCandidateLedger model properties", () => {
               keep: expected.filter((item) => item.disposition === "keep").length,
               drop: expected.filter((item) => item.disposition === "drop").length,
             });
+            expect(ledger.submittedOutput(step.turn)).toEqual(
+              model.get(modelTurnKey(step.turn))?.submittedOutput,
+            );
           } else if (step.kind === "clearTurn") {
             const key = modelTurnKey(step.turn);
             expect(ledger.clearTurn(step.turn)).toBe(model.delete(key));
+            expect(ledger.submittedOutput(step.turn)).toBeUndefined();
           } else {
             let expectedRemoved = 0;
             for (const [key, state] of model.entries()) {
@@ -237,6 +321,44 @@ describe("ManagedReviewCandidateLedger model properties", () => {
       { numRuns: 100 },
     );
   });
+
+  it.each([
+    { count: 1, verdict: "patch is correct", expected: "patch is incorrect" },
+    { count: 0, verdict: "patch is incorrect", expected: "patch is correct" },
+  ])("rejects '$verdict' with $count findings", ({ count, verdict, expected }) => {
+    const ledger = new ManagedReviewCandidateLedger();
+    const turn = { backend: "codex", threadId: "review", turnId: "turn" } as const;
+    const finding = {
+      title: "Guard null input",
+      body: "An empty request throws before validation.",
+      confidence_score: 0.95,
+      priority: 1,
+      code_location: { absolute_file_path: ABSOLUTE_FINDING_PATH, line_range: { start: 1, end: 1 } },
+    };
+    expect(ledger.submitOutput(turn, {
+      findings: count ? [finding] : [],
+      overall_correctness: verdict,
+      overall_explanation: "Reviewed the request path.",
+    })).toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining(expected) });
+  });
+
+  it.each(["src/a.ts", ...(process.platform === "win32" ? ["C:src/a.ts", "/src/a.ts"] : [])])(
+    "rejects a finding path that depends on the current directory or drive (%s)", (file) => {
+      const ledger = new ManagedReviewCandidateLedger();
+      const turn = { backend: "codex", threadId: "review", turnId: "turn" } as const;
+      expect(ledger.submitOutput(turn, {
+        findings: [{
+          title: "Guard null input",
+          body: "An empty request throws before validation.",
+          confidence_score: 0.95,
+          priority: 1,
+          code_location: { absolute_file_path: file, line_range: { start: 1, end: 1 } },
+        }],
+        overall_correctness: "patch is incorrect",
+        overall_explanation: "Found an unhandled request.",
+      })).toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining("absolute_file_path") });
+    },
+  );
 
   it("enforces field validation, bounding, and per-turn capacity limits without mutating state", () => {
     const ledger = new ManagedReviewCandidateLedger();
@@ -322,6 +444,60 @@ describe("ManagedReviewCandidateLedger model properties", () => {
     });
     expect(overflow).toMatchObject({ ok: false, code: "limit_exceeded" });
     expect(ledger.list(turn).total).toBe(MANAGED_REVIEW_CANDIDATE_MAX_PER_TURN);
+
+    const tooManyFindings = Array.from(
+      { length: MANAGED_REVIEW_OUTPUT_MAX_FINDINGS + 1 },
+      (_, index) => ({
+        title: `Finding ${index}`,
+        body: "Detail",
+        confidence_score: 0.9,
+        priority: 2,
+        code_location: {
+          absolute_file_path: ABSOLUTE_FINDING_PATH,
+          line_range: { start: 1, end: 2 },
+        },
+      }),
+    );
+    expect(
+      ledger.submitOutput(turn, {
+        findings: tooManyFindings,
+        overall_correctness: "patch is incorrect",
+        overall_explanation: "Too many findings.",
+      }),
+    ).toMatchObject({ ok: false, code: "limit_exceeded" });
+    expect(ledger.submittedOutput(turn)).toBeUndefined();
+
+    expect(
+      ledger.submitOutput(turn, {
+        findings: [
+          {
+            title: "Inverted range",
+            body: "End before start.",
+            confidence_score: 0.9,
+            priority: 2,
+            code_location: {
+              absolute_file_path: ABSOLUTE_FINDING_PATH,
+              line_range: { start: 20, end: 10 },
+            },
+          },
+        ],
+        overall_correctness: "patch is incorrect",
+        overall_explanation: "Bad range.",
+      }),
+    ).toMatchObject({ ok: false, code: "invalid_arguments" });
+
+    const submitted = ledger.submitOutput(turn, {
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "No concrete defects.",
+      overall_confidence_score: 0,
+    });
+    expect(submitted.ok).toBe(true);
+    expect(ledger.submittedOutput(turn)).toEqual({
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "No concrete defects.",
+    });
   });
 });
 

@@ -6,7 +6,11 @@ import type { Query, SDKMessage, SlashCommand, query } from "@anthropic-ai/claud
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { AppServerAvailableCommandSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import { ClaudeBackend, type ClaudeBackendOptions } from "../claude/claude-backend";
-import { CLAUDE_TERMINAL_COMMANDS_SEED, claudeCommandSummaries } from "../claude/claude-commands";
+import {
+  CLAUDE_TERMINAL_COMMANDS_SEED,
+  claudeCommandSummaries,
+  isClaudeCompactCommandAvailable,
+} from "../claude/claude-commands";
 import { readClaudeMcpServerStatus } from "../claude/claude-models";
 import { ClaudeSessionStore } from "../claude/claude-session-store";
 
@@ -104,6 +108,31 @@ describe("claudeCommandSummaries", () => {
     ], new Set());
     expect(summaries[0]?.argumentHint).toBe("[low|medium|high] [--fix]");
     expect(summaries[1]).not.toHaveProperty("argumentHint");
+  });
+
+  it("checks observed commands and terminal_slash_commands for /compact availability", () => {
+    const seed = new Set(CLAUDE_TERMINAL_COMMANDS_SEED);
+    // Unobserved workspace allows compact without forcing an extra probe.
+    expect(isClaudeCompactCommandAvailable(undefined, seed)).toBe(true);
+    // Terminal-only compact is always refused, even before a command list arrives.
+    expect(isClaudeCompactCommandAvailable(undefined, new Set(["compact"]))).toBe(false);
+    expect(isClaudeCompactCommandAvailable(
+      [{ name: "compact", backend: "claude", scope: "session", source: "provider" }],
+      new Set(["/compact"]),
+    )).toBe(false);
+    // Observed command list must include compact (by name or alias).
+    expect(isClaudeCompactCommandAvailable(
+      [{ name: "compact", backend: "claude", scope: "session", source: "provider" }],
+      seed,
+    )).toBe(true);
+    expect(isClaudeCompactCommandAvailable(
+      [{ name: "summarize", aliases: ["compact"], backend: "claude", scope: "session", source: "provider" }],
+      seed,
+    )).toBe(true);
+    expect(isClaudeCompactCommandAvailable(
+      [{ name: "init", backend: "claude", scope: "session", source: "provider" }],
+      seed,
+    )).toBe(false);
   });
 });
 

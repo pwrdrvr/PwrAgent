@@ -1,6 +1,6 @@
 import { describeStackAutomationBlock } from "@pwragent/shared/stacks/stack-automation";
 import { stackHoldForPr } from "../../stacks/stack-presentation";
-import { memo, useEffect, useState } from "react";
+import { memo, useContext, useEffect, useState } from "react";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadPrWatchHistoryEntry } from "@pwragent/shared/contracts/thread-pr-watches";
 import type { ThreadPullRequestWatchSummary } from "@pwragent/shared/contracts/thread-tools";
@@ -18,6 +18,7 @@ import {
 import { PrChip } from "../../pr-status/PrChip";
 import { openExternalUrl } from "../../../lib/open-external-url";
 import { PullRequestWatchList } from "../../pr-watches/PullRequestWatchList";
+import { describePrHandsOff, ThreadForgeAutomationContext } from "../../forge-automation/thread-hands-off";
 import {
   canManageThreadPrWatches,
   canWatchPrCi,
@@ -35,7 +36,8 @@ type PullRequestsPanelProps = {
   desktopApi?: Pick<DesktopApi, "detachThreadPullRequest" | "manageThreadPrWatches" | "getNavigationSelectedDetail" | "getNavigationQueryPage">;
   onRefreshNavigation?: () => Promise<void>;
   /** Backs the Auto-fix row's Turn Off. */
-  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean, prKey?: string) => Promise<void>;
   thread: NavigationThreadSummary;
 };
 
@@ -168,6 +170,16 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
     byRepo.set(label, group);
   }
   const prs = [...byRepo.values()].flatMap((group) => orderPullRequestSet(group, (pr) => pr).ordered);
+  // One PR's switch matters only beside another PR Auto-fix covers. A peer
+  // that predates it would toggle the whole thread, so it offers none.
+  const setThreadPrAutoDispatch = props.onSetThreadPrAutoDispatch;
+  const projectAutomation = useContext(ThreadForgeAutomationContext)?.(props.thread);
+  const perPrAutoFix = setThreadPrAutoDispatch
+    && (!props.thread.federation
+      || props.thread.federation.capabilities?.includes("thread_pull_request_auto_fix_v1") === true)
+    && prs.filter((pr) => resolveLifecycleState(pr) === "open"
+      && pullRequestMatchesRepositoryKey(pr, autoFixRepository)
+      && !describePrHandsOff(projectAutomation, pr)).length > 1;
   const stacks = selectedStacks.stacks ?? [...new Map(props.thread.stacks?.map(({ stack }) => [stack.key, stack])).values()];
   const detachPr = async (pr: PrSummary): Promise<void> => {
     if (!props.desktopApi?.detachThreadPullRequest) {
@@ -213,6 +225,8 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
             const prWatches = watches?.filter((watch) => watch.prKey === statusKey) ?? NO_WATCHES;
             const held = stackHoldForPr(props.thread, pr);
             const chipWatch = resolvePrChipWatch(chipWatches, pr, autoFixRepository);
+            // The project, not main's election, decides a hands-off PR.
+            const handsOff = describePrHandsOff(projectAutomation, pr);
             return (
               <li key={prKey(pr)} className="rail-card">
                 <p className="rail-card__status-line">
@@ -266,16 +280,21 @@ export const PullRequestsPanel = memo(function PullRequestsPanel(props: PullRequ
                     onStopMergeBuild={manageable && watchContext?.stopMergeBuild
                       ? async (wait) => await watchContext.stopMergeBuild!(props.thread, wait)
                       : undefined}
-                    autoFix={chipWatch
+                    autoFix={handsOff ? false : chipWatch
                       ? chipWatch.autoFix === true
                       : pullRequestMatchesRepositoryKey(pr, autoFixRepository)}
-                    autoFixBlocked={chipWatch?.autoFixBlocked}
+                    autoFixBlocked={handsOff && (chipWatch?.autoFix || chipWatch?.autoFixBlocked)
+                      ? { reason: "hands_off", detail: handsOff }
+                      : chipWatch?.autoFixBlocked}
                     ownerLabel={ownerLabel}
                     onStop={manageable && watchContext?.stop
                       ? async (watch) => await watchContext.stop!(watch, props.thread)
                       : undefined}
-                    onTurnOffAutoFix={props.onSetThreadPrAutoDispatch
-                      ? () => void props.onSetThreadPrAutoDispatch!(false)
+                    onTurnOffAutoFix={setThreadPrAutoDispatch
+                      ? () => void setThreadPrAutoDispatch(false)
+                      : undefined}
+                    onSetPrAutoFix={setThreadPrAutoDispatch && (perPrAutoFix || pr.autoFixOff === true)
+                      ? (enabled) => void setThreadPrAutoDispatch(enabled, statusKey)
                       : undefined}
                     onWatchCi={manageable && watchContext?.watchCi && canWatchPrCi(props.thread, pr)
                       ? async () => await watchContext.watchCi!(props.thread, pr)

@@ -57,7 +57,15 @@ import {
 import { hydrateComposerDraft } from "./composer-draft-hydration";
 import { resolveComposerThreadDestinations } from "./composer-thread-references";
 import { contextWindowMoonFace } from "./context-window-moon";
-import { useContextMoonStyle } from "../../lib/context-moon-preferences";
+import {
+  applyContextWindowBudget,
+  autoCompactionStatusLine,
+  isAutoCompactionActive,
+  type ContextWindowBudget,
+  type ThreadAutoCompactionStatus,
+} from "./context-window-budget";
+import { useAutoCompactionRules, useContextMoonStyle } from "../../lib/context-moon-preferences";
+import { useThreadAutoCompaction } from "../../lib/useThreadAutoCompaction";
 import {
   getShortTermRateLimitResetAt,
   getRateLimitResetSendAt,
@@ -172,6 +180,7 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import { DEFAULT_WATCH_MERGE_BUILDS } from "@pwragent/shared/contracts/settings";
 import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automation";
+import { describeAutoFixCoverage } from "./auto-fix-coverage";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
 import { mergeBuildPullRequestUrl } from "../pr-watches/merge-build-watches";
@@ -365,7 +374,12 @@ import {
 import { EnvironmentSetupRow, type EnvironmentSetupRowModel } from "./EnvironmentSetupRow";
 import { LinkedTurnFailureMessage } from "../notifications/LinkedTurnFailureMessage";
 import { turnFailureAcknowledgements, turnFailureScopeKey } from "../notifications/turn-failure-acknowledgements";
-import { findSlashCommandTrigger } from "./composer-slash-commands";
+import {
+  findComposerCompactCommand,
+  findSlashCommandTrigger,
+  isComposerCompactDraft,
+  isComposerCompactSuggestion,
+} from "./composer-slash-commands";
 import {
   forkCommandCompletion,
   forkCommandHint,
@@ -451,6 +465,7 @@ export type ComposerProps = {
   onOpenCodexSkillProfiles?: () => void;
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage?: (
     text: string,
     imageParts?: AppServerThreadImagePart[],
@@ -796,7 +811,8 @@ export type ComposerProps = {
       >
     >
   ) => Promise<void>;
-  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean, prKey?: string) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
   onSendThreadPrAutoDispatchNow?: (fingerprint: string) => Promise<void>;
   threadModelSettingsError?: string;
@@ -3460,7 +3476,7 @@ function useComposerController(props: ComposerProps) {
     terminalTurnKeysRef,
     queuedRowActionIdsRef,
     activeReviewTurnIdRef,
-    inFlightReviewSubmissionKeyRef,
+    inFlightReviewSubmissionRef,
     autocompleteOptionRefs,
     reviewOptionRefs,
     reviewCommitInputRef,
@@ -3697,7 +3713,7 @@ function useComposerController(props: ComposerProps) {
     // waiting.
     const queuedRowActionIdsRef = useRef(new Set<string>());
     const activeReviewTurnIdRef = useRef<string | undefined>(undefined);
-    const inFlightReviewSubmissionKeyRef = useRef<string | undefined>(undefined);
+    const inFlightReviewSubmissionRef = useRef<{ key: string; scopeKey: string } | undefined>(undefined);
     const autocompleteOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
     const reviewOptionRefs = useRef<Array<HTMLButtonElement | null>>([]);
     const reviewCommitInputRef = useRef<HTMLInputElement | null>(null);
@@ -4193,7 +4209,7 @@ function useComposerController(props: ComposerProps) {
       terminalTurnKeysRef,
       queuedRowActionIdsRef,
       activeReviewTurnIdRef,
-      inFlightReviewSubmissionKeyRef,
+      inFlightReviewSubmissionRef,
       autocompleteOptionRefs,
       reviewOptionRefs,
       reviewCommitInputRef,
@@ -4391,20 +4407,11 @@ function useComposerController(props: ComposerProps) {
     backend?.kind.startsWith("acp:") === true
       ? backend.capabilities.startReview !== false
       : true;
-  const supportsCompactCommand = Boolean(
-    props.providerCommands?.some((command) => {
-      const commandName = command.name.startsWith("/")
-        ? command.name.slice(1)
-        : command.name;
-      // Claude runs `/compact` itself when it arrives as a prompt; the
-      // compaction API below is Codex's.
-      return (
-        commandName === "compact" &&
-        command.backend !== "claude" &&
-        (!props.thread || !command.backend || command.backend === props.thread.source)
-      );
-    })
+  const compactCommand = findComposerCompactCommand(
+    props.providerCommands,
+    props.thread?.source,
   );
+  const supportsCompactCommand = Boolean(compactCommand);
   const supportsForkCommand = Boolean(
     !isLaunchpad
     && props.thread
@@ -6736,7 +6743,7 @@ function useComposerController(props: ComposerProps) {
   const forkCommand = supportsForkCommand || supportsSubthreadCommand
     ? parseForkCommand(draft)
     : undefined;
-  const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
+  const isCompactCommand = isComposerCompactDraft(draft, compactCommand);
   const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
     supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"
       ? "toolsAndAuthOnly"
@@ -7679,8 +7686,9 @@ function useComposerController(props: ComposerProps) {
         statusRecord?.type === "idle"
       ) {
         if (
-          activeReviewTurnIdRef.current &&
-          activeTurnIdRef.current === activeReviewTurnIdRef.current
+          inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey ||
+          (activeReviewTurnIdRef.current &&
+            activeTurnIdRef.current === activeReviewTurnIdRef.current)
         ) {
           return;
         }
@@ -7774,7 +7782,8 @@ function useComposerController(props: ComposerProps) {
     const submissionKey = reviewSubmissionKey(reviewCommand);
     if (
       sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === submissionKey
+      inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey &&
+      inFlightReviewSubmissionRef.current.key === submissionKey
     ) {
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
       releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -7819,7 +7828,13 @@ function useComposerController(props: ComposerProps) {
     }
 
     setSendError(undefined);
-    inFlightReviewSubmissionKeyRef.current = submissionKey;
+    const submission = { key: submissionKey, scopeKey: composerScopeKey };
+    inFlightReviewSubmissionRef.current = submission;
+    const clearReviewSubmission = () => {
+      if (inFlightReviewSubmissionRef.current === submission) {
+        inFlightReviewSubmissionRef.current = undefined;
+      }
+    };
     updateSending(true);
     props.onPendingStatusChange?.("Reviewing");
 
@@ -7855,7 +7870,6 @@ function useComposerController(props: ComposerProps) {
         } else {
           draftStore.pushDraft(submittedScopeKey, submittedSnapshot);
         }
-        inFlightReviewSubmissionKeyRef.current = undefined;
         props.onPendingStatusChange?.(undefined);
         restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
         releaseQueuedTurnScopeLockIfClaimed(options?.queued, options?.queueClaimed);
@@ -7863,12 +7877,14 @@ function useComposerController(props: ComposerProps) {
           setSendError(error instanceof Error ? error.message : String(error));
         }
       } finally {
+        clearReviewSubmission();
         updateSending(false);
       }
       return;
     }
 
     if (!props.thread || !props.desktopApi?.startReview) {
+      clearReviewSubmission();
       props.onPendingStatusChange?.(undefined);
       updateSending(false);
       restoreQueuedTurnIfClaimed(options?.queued, options?.queueClaimed);
@@ -7912,6 +7928,7 @@ function useComposerController(props: ComposerProps) {
       resetComposerDraftAndState(submittedScopeKey);
       setReviewConfig(undefined);
     }
+    const releaseReviewReservation = props.beginReviewSubmission?.();
     try {
       const response = await props.desktopApi.startReview({
         backend: props.thread.source,
@@ -7973,7 +7990,6 @@ function useComposerController(props: ComposerProps) {
           },
         })?.catch(() => undefined);
       }
-      inFlightReviewSubmissionKeyRef.current = undefined;
       props.onReviewStarted?.(threadSummaryIdentityKey(props.thread), submittedReviewRequestId);
       if (updateActiveTurnId(response.turnId, { review: true })) {
         props.onActiveTurnIdChange?.(response.turnId);
@@ -7993,7 +8009,6 @@ function useComposerController(props: ComposerProps) {
       if (optimisticReviewId) {
         props.removeOptimisticMessage?.(optimisticReviewId);
       }
-      inFlightReviewSubmissionKeyRef.current = undefined;
       if (!options?.queued) {
         if (restoreRejectedReviewDraft(submittedScopeKey, submittedSnapshot)) {
           setReviewConfig(submittedReviewConfig ?? createReviewConfig({
@@ -8017,6 +8032,9 @@ function useComposerController(props: ComposerProps) {
         message,
         tone: "error",
       });
+    } finally {
+      clearReviewSubmission();
+      releaseReviewReservation?.();
     }
   };
 
@@ -10342,7 +10360,8 @@ function useComposerController(props: ComposerProps) {
     if (
       reviewCommand &&
       sendingRef.current &&
-      inFlightReviewSubmissionKeyRef.current === reviewSubmissionKey(reviewCommand)
+      inFlightReviewSubmissionRef.current?.scopeKey === composerScopeKey &&
+      inFlightReviewSubmissionRef.current.key === reviewSubmissionKey(reviewCommand)
     ) {
       return;
     }
@@ -12070,6 +12089,7 @@ function useComposerController(props: ComposerProps) {
     prAutoDispatchIdleTooltip,
     prAutoDispatchTooltip,
     prAutoDispatchProjectMuted,
+    prAutoDispatchProjectAutomation,
     prMergeBuildWatchDefault,
     prAutoDispatchIdle,
     environmentMenuAction,
@@ -13109,7 +13129,7 @@ function useComposerController(props: ComposerProps) {
         return true;
       }
 
-      if (command.label.toLowerCase() === "/compact") {
+      if (isComposerCompactSuggestion(command, compactCommand)) {
         void submitCompactThread();
         return true;
       }
@@ -13679,6 +13699,7 @@ function useComposerController(props: ComposerProps) {
       prAutoDispatchIdleTooltip,
       prAutoDispatchTooltip,
       prAutoDispatchProjectMuted,
+      prAutoDispatchProjectAutomation: prAutoDispatchProject?.forgeAutomation,
       prMergeBuildWatchDefault,
       prAutoDispatchIdle,
       environmentMenuAction,
@@ -16216,6 +16237,13 @@ function useComposerController(props: ComposerProps) {
                 available: prAutoDispatchAvailable,
                 unavailableDetail: !backgroundPrPollingEnabled ? "PR polling is off" : "Not allowed in Git settings",
                 onToggle: (enabled) => { void props.onSetThreadPrAutoDispatch?.(enabled); },
+                coverage: describeAutoFixCoverage(props.thread, prAutoDispatchProjectAutomation),
+                // A peer that predates one PR's switch would toggle the thread.
+                onTogglePr: props.onSetThreadPrAutoDispatch
+                  && (!props.thread.federation
+                    || props.thread.federation.capabilities?.includes("thread_pull_request_auto_fix_v1") === true)
+                  ? (prKey, enabled) => { void props.onSetThreadPrAutoDispatch?.(enabled, prKey); }
+                  : undefined,
               }}
             />
           ) : null}
@@ -16596,6 +16624,9 @@ function useComposerController(props: ComposerProps) {
           ) : null}
           <ContextWindowMoon
             contextWindow={props.contextWindow}
+            desktopApi={props.desktopApi}
+            model={selectedModelOption?.id ?? currentSettings?.model}
+            thread={props.thread}
             onOpenUsage={props.desktopApi?.openUsageActivity
               ? () => void props.desktopApi?.openUsageActivity?.({
                 provider: usageLimitProviderForBackend(props.thread?.source),
@@ -17749,10 +17780,17 @@ function AttachmentTooltip({
 }
 
 function ContextWindowMoon({
-  contextWindow,
+  contextWindow: reportedContextWindow,
+  desktopApi,
+  model,
+  thread,
   onOpenUsage,
 }: {
   contextWindow?: ThreadContextWindowState;
+  desktopApi?: DesktopApi;
+  /** The thread's model, matched against auto-compaction rules. */
+  model?: string;
+  thread?: NavigationThreadSummary;
   /** Opens Usage Activity; the moon is a button only when this is given. */
   onOpenUsage?: () => void;
 }) {
@@ -17762,6 +17800,19 @@ function ContextWindowMoon({
   // The card's copy depends on availability, not the callback identity.
   const opensUsage = Boolean(onOpenUsage);
   const moonStyle = useContextMoonStyle();
+  const savedRules = useAutoCompactionRules();
+  const autoCompaction = useThreadAutoCompaction(desktopApi, thread);
+  const backend = thread?.source;
+  const ownedElsewhere = Boolean(thread?.federation?.ref);
+  // A rule's budget, when one matches, is the window the moon measures.
+  const measured = useMemo(
+    () => reportedContextWindow
+      ? applyContextWindowBudget({ contextWindow: reportedContextWindow, savedRules, backend, model, ownedElsewhere })
+      : undefined,
+    [backend, model, ownedElsewhere, reportedContextWindow, savedRules],
+  );
+  const contextWindow = measured?.contextWindow;
+  const budget = measured?.budget;
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
@@ -17780,13 +17831,15 @@ function ContextWindowMoon({
     recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
     update(
       <ContextWindowUsageCard
+        autoCompaction={autoCompaction}
+        budget={budget}
         contextWindow={contextWindow}
         critical={moonFace.critical}
         opensUsage={opensUsage}
         phaseLabel={moonFace.phaseLabel}
       />,
     );
-  }, [contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
+  }, [autoCompaction, budget, contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
 
   if (!contextWindow) {
     return null;
@@ -17798,9 +17851,15 @@ function ContextWindowMoon({
   const tokenLabel = `${formatCompactNumber(
     contextWindow.totalTokens
   )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
-  const label = `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const compacting = isAutoCompactionActive(autoCompaction);
+  const label = budget
+    ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : phaseLabel}`
+    : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const moonClassName = compacting ? " context-window-moon--compacting" : "";
   const card = (
     <ContextWindowUsageCard
+      autoCompaction={autoCompaction}
+      budget={budget}
       contextWindow={contextWindow}
       critical={moonFace.critical}
       opensUsage={opensUsage}
@@ -17834,7 +17893,7 @@ function ContextWindowMoon({
   return onOpenUsage ? (
     <button
       aria-label={label}
-      className="context-window-moon context-window-moon--button"
+      className={`context-window-moon context-window-moon--button${moonClassName}`}
       type="button"
       onBlur={hide}
       onClick={() => {
@@ -17850,7 +17909,7 @@ function ContextWindowMoon({
   ) : (
     <div
       aria-label={label}
-      className="context-window-moon"
+      className={`context-window-moon${moonClassName}`}
       role="img"
       tabIndex={0}
       onBlur={hide}
@@ -17864,16 +17923,21 @@ function ContextWindowMoon({
 }
 
 function ContextWindowUsageCard({
+  autoCompaction,
+  budget,
   contextWindow,
   critical,
   opensUsage,
   phaseLabel,
 }: {
+  autoCompaction?: ThreadAutoCompactionStatus;
+  budget?: ContextWindowBudget;
   contextWindow: ThreadContextWindowState;
   critical: boolean;
   opensUsage?: boolean;
   phaseLabel: string;
 }) {
+  const statusLine = budget ? autoCompactionStatusLine(autoCompaction, formatCompactNumber) : undefined;
   const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
   const hasBreakdown =
     typeof contextWindow.inputTokens === "number"
@@ -17884,14 +17948,20 @@ function ContextWindowUsageCard({
   return (
     <>
       <div className="context-usage-card__header">
-        <span className="context-usage-card__eyebrow">Context window</span>
+        <span className="context-usage-card__eyebrow">{budget ? "Context budget" : "Context window"}</span>
         <span className="context-usage-card__phase">{phaseLabel}</span>
       </div>
       <div className="context-usage-card__headline">
         <span className="context-usage-card__percent">
           {Math.round(usedPercent)}% full
         </span>
-        {typeof contextWindow.remainingTokens === "number" ? (
+        {budget ? (
+          <span className="context-usage-card__remaining">
+            {budget.tokensToTrigger > 0
+              ? `${formatCompactNumber(budget.tokensToTrigger)} to compaction`
+              : `past ${budget.compactAtPercent}%`}
+          </span>
+        ) : typeof contextWindow.remainingTokens === "number" ? (
           <span className="context-usage-card__remaining">
             {formatCompactNumber(contextWindow.remainingTokens)} left
           </span>
@@ -17906,12 +17976,35 @@ function ContextWindowUsageCard({
           }
           style={{ width: `${usedPercent}%` }}
         />
+        {budget ? (
+          <span
+            className="context-usage-card__meter-mark"
+            style={{ left: `${budget.compactAtPercent}%` }}
+          />
+        ) : null}
       </div>
       <div className="context-usage-card__caption">
         {`${formatCompactNumber(contextWindow.totalTokens)} of ${formatCompactNumber(
           contextWindow.modelContextWindow
-        )} tokens`}
+        )} ${budget ? "budget" : "tokens"}`}
       </div>
+      {budget ? (
+        <div className="context-usage-card__budget">
+          <ContextUsageRow
+            label="Compacts at"
+            value={`${formatCompactNumber(budget.triggerTokens)} · ${budget.compactAtPercent}%`}
+          />
+          {budget.reportedContextWindow !== budget.effectiveContextWindow ? (
+            <ContextUsageRow
+              label="Model window"
+              value={formatCompactNumber(budget.reportedContextWindow)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+      {statusLine ? (
+        <div className="context-usage-card__status">{statusLine}</div>
+      ) : null}
       {hasBreakdown ? (
         <div className="context-usage-card__section">
           <span className="context-usage-card__section-title">Current request</span>

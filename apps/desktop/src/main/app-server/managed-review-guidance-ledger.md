@@ -5,7 +5,7 @@ Pass 1 — Systematic static inspection and immediate candidate capture:
 - Stay purely static and bounded: use read-only git/file inspection only (batch related file/hunk reads across changed files, direct callers/tests, and governing rules). Do not run lint, typecheck, build, or test suites, do not launch ad-hoc reproduction or runtime probe scripts, do not search the web to chase speculative framework internals, and do not audit unrelated modules. Only run a targeted read-only command if a concrete ambiguity in repository source cannot be resolved by reading files.
 - Audit every changed production file systematically before ending Pass 1 — do not stop exploring after finding your first one or two issues. Mentally execute each changed path across boundary inputs, error/cancellation/cleanup paths, concurrency/ordering interleavings, and process or lifecycle boundaries.
 - Whenever you notice a plausible concrete defect, regression, contract or telemetry mismatch, hot-path performance regression, live/replay parity bug, non-falsifying regression test, or explicit repository-rule violation, call `record_review_candidate` IMMEDIATELY before moving to the next file. Skip obvious duplicates of candidates already recorded and defer uncertain overlaps and final keep/drop triage to Pass 2. Prefer absolute file paths when recording candidates.
-- If `record_review_candidate` returns `limit_exceeded`, keep inspecting every remaining changed file. Keep notes on unrecorded candidates, triage them against the same evidence and deduplication rules in Pass 2, and include verified findings in the final JSON.
+- If `record_review_candidate` returns `limit_exceeded`, keep inspecting every remaining changed file. Keep notes on unrecorded candidates, triage them against the same evidence and deduplication rules in Pass 2, and include verified findings when calling `submit_review_output`.
 - Move to Pass 2 only after every changed production file, its direct callers/tests, and governing rules have been inspected.
 
 What to check during Pass 1:
@@ -16,7 +16,7 @@ What to check during Pass 1:
 Pass 2 — Bucket, prioritize, and strictly triage every candidate:
 - Call `list_review_candidates` to review every candidate recorded in Pass 1.
 - Group related candidates by category and root cause so overlapping observations or secondary symptoms of the same bug collapse into one canonical finding.
-- Call `dispose_review_candidate` on EVERY candidate before emitting your final JSON:
+- Call `dispose_review_candidate` on EVERY recorded candidate before calling `submit_review_output`:
   - Mark `keep` with a calibrated `priority` (`0`–`3`) for every concrete, reachable defect backed by verified code evidence. Do NOT drop a concrete P2 or P3 defect with a verified reachable failure path simply because it feels minor, is a narrow edge case, or works in the common case.
   - Mark `drop` with a concrete, code-grounded justification whenever a candidate fails the bar:
     - a verified caller, guard, or invariant already prevents the bug, or the failure path is unreachable or purely speculative;
@@ -29,4 +29,4 @@ Evidence and signal discipline:
 - Ground every finding in the reviewed code; verify callers, guards, and surrounding context before keeping a candidate.
 - Lead each finding's body with the concrete observable consequence or failure scenario, explain the mechanism in the code, and propose a specific fix when clear.
 - Suppress noise: do not report style or formatting nitpicks, feature/UX suggestions, speculative hypotheticals without a reachable failure path, issues already handled elsewhere, or unrelated pre-existing issues in untouched code that the diff does not newly expose. Each kept finding must independently earn its place — do not pad a clean or well-tested change with low-value P3s.
-- Emit one finding in your final JSON for every candidate marked `keep` and every distinct, verified finding that could not be recorded because the ledger was full, ordered by priority. Zero findings is valid when the change has no concrete defects (including when every Pass 1 candidate was legitimately dropped with code-grounded reasons).
+- Call `submit_review_output` with one finding for every candidate marked `keep` and every distinct, verified finding that could not be recorded because the ledger was full. Order by priority and, if the findings exceed the tool's limit, include the highest-priority findings that fit. Zero findings is valid when the change has no concrete defects (including when every Pass 1 candidate was legitimately dropped with code-grounded reasons).

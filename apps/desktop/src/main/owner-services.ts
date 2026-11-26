@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { ApprovedLabCheckout } from "./resource-checkouts/pwrsuitelab-checkout-adapter";
 import { createResourceCheckoutToolHandler } from "./agent-tools/pwragent-resource-checkout-agent-tools";
 import { disposeResourceCheckouts, initializeResourceCheckouts } from "./resource-checkouts/checkout-runtime";
@@ -10,7 +11,8 @@ import { researchToolsOffered } from "./agent-tools/pwragent-research-agent-tool
 import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import { initializeDesktopAutomationService, prepareDesktopAutomationShutdown, disposeDesktopAutomationService } from "./automations/desktop-automation-service";
 import { initializeScheduledThreadActionService } from "./scheduled-actions/scheduled-thread-action-service";
-import { getThreadTodoService } from "./thread-todos/thread-todo-runtime";
+import { createRegistryAutoCompactionMonitor } from "./app-server/thread-auto-compaction-monitor";
+import { getThreadTodoService, setThreadTodoHandsOffRuleWriter } from "./thread-todos/thread-todo-runtime";
 import { setManagedGrokSignatureRejectionReporter } from "./acp/grok-managed-runtime";
 import { subscribeManagedRuntimeProgress } from "./managed-runtime-progress";
 import { setInboundPreviewSink } from "./messaging/inbound-preview-bus";
@@ -468,6 +470,19 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       federationRuntime, options.approvedLabCheckouts, host.application.isPackaged,
       ({ backend, threadId }) => getExistingDesktopBackendRegistry()?.getThreadInfo({ backend, threadId })?.title,
       resourceCheckoutsEnabled,
+      ({ backend, threadId }) => {
+        const summary = getExistingDesktopBackendRegistry()?.getCachedThreadSummary({ backend, threadId });
+        if (!summary) return undefined;
+        const directories: string[] = [];
+        for (const directory of summary.linkedDirectories ?? []) {
+          const candidate = directory.kind === "worktree" ? directory.worktreePath : directory.path;
+          if (candidate) directories.push(candidate);
+        }
+        if (summary.projectKey && path.isAbsolute(summary.projectKey)) {
+          directories.push(summary.projectKey);
+        }
+        return directories;
+      },
     )
     : undefined;
   if (resourceCheckouts) registry.setResourceCheckoutHandler(
@@ -517,6 +532,9 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         await getDesktopBackendRegistry().publishDecisionBatchUpdate(update),
       wakeThread: async (caller, wake) =>
         await getDesktopBackendRegistry().deliverDecisionBatchWakeup({ ...caller, ...wake }),
+      resolveThreadRoots: async (caller) =>
+        await getDesktopBackendRegistry().resolveThreadFileAccessRoots(caller.backend, caller.threadId),
+      privateStorageRoots: () => getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
     }),
   );
   const researchEnabled = () => getDesktopSettingsService().resolveResearchEnabled?.() === true;
@@ -721,6 +739,14 @@ wireOwnerRendererEvents();
     mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
   });
   scheduledActions.start();
+  // Compacts threads past their model's auto-compaction threshold.
+  const autoCompaction = createRegistryAutoCompactionMonitor({
+    registry,
+    resolveSavedRules: () => getDesktopSettingsService().resolveAutoCompactionRules(),
+    log: mainLog,
+  });
+  autoCompaction.start();
+  ownerSubscriptions.add(() => autoCompaction.dispose());
   // Windows read the status once at load; this tells them when another
   // instance on the profile takes or hands back scheduled automations.
   ownerSubscriptions.add(automations.onSchedulingStatusChanged((status) => {
@@ -963,6 +989,7 @@ export async function disposeAppServerOwnerServices(): Promise<void> {
   registry?.setThreadPullRequestWatchToolHandler(undefined);
   registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
+  setThreadTodoHandsOffRuleWriter(undefined);
   registry?.setThreadPullRequestDetachHandler(undefined);
   registry?.setThreadPrWatchesPeerHandler(undefined);
   registry?.setThreadPullRequestRefreshHandler(undefined);
@@ -1175,6 +1202,8 @@ export function wireAppServerOwnerServices(): void {
     async (request) =>
       await appServerService.refreshThreadGitWorkingState(request),
   );
+  setThreadTodoHandsOffRuleWriter(async (request) =>
+    await appServerService.addThreadProjectHandsOffRule(request));
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
@@ -1182,6 +1211,8 @@ export function wireAppServerOwnerServices(): void {
       await appServerService.handleThreadPrAutoDispatchPreferences(requests),
     cancelPending: async (request) =>
       await appServerService.cancelThreadPrAutoDispatch(request),
+    pullRequestChanged: async (request) =>
+      await appServerService.setThreadPullRequestAutoFix(request),
     lockChanged: async (request) =>
       await appServerService.handleThreadLockChanged(request),
     sendPendingNow: async (request) =>

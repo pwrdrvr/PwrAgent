@@ -12,7 +12,75 @@ export type ComposerSlashCommand = {
 };
 
 export function normalizeSlashCommandName(name: string): string {
-  return name.startsWith("/") ? name.slice(1) : name;
+  return name.trim().replace(/^\/+/, "");
+}
+
+export type ProviderCompactCommandLike = {
+  readonly aliases?: readonly string[];
+  readonly backend?: string;
+  readonly name: string;
+};
+
+/**
+ * Find the advertised provider command that triggers compaction via
+ * `compactThread` (Codex or an ACP backend advertising `compact` by name or
+ * alias). Claude runs `/compact` itself when sent as a prompt.
+ */
+export function findComposerCompactCommand<T extends ProviderCompactCommandLike>(
+  providerCommands: readonly T[] | undefined,
+  threadSource: string | undefined,
+): T | undefined {
+  return providerCommands?.find((command) => {
+    if (command.backend === "claude") {
+      return false;
+    }
+    if (threadSource && command.backend && command.backend !== threadSource) {
+      return false;
+    }
+    const normalized = normalizeSlashCommandName(command.name).toLowerCase();
+    if (normalized === "compact") {
+      return true;
+    }
+    return (command.aliases ?? []).some(
+      (alias) => normalizeSlashCommandName(alias).toLowerCase() === "compact",
+    );
+  });
+}
+
+/** True when a trimmed draft invokes the resolved compact command with no arguments. */
+export function isComposerCompactDraft(
+  draft: string,
+  compactCommand: ProviderCompactCommandLike | undefined,
+): boolean {
+  if (!compactCommand) {
+    return false;
+  }
+  const trimmed = draft.trim().toLowerCase();
+  const canonical = `/${normalizeSlashCommandName(compactCommand.name).toLowerCase()}`;
+  if (trimmed === canonical) {
+    return true;
+  }
+  return (compactCommand.aliases ?? []).some(
+    (alias) => trimmed === `/${normalizeSlashCommandName(alias).toLowerCase()}`,
+  );
+}
+
+/** True when a slash-menu suggestion corresponds to the resolved compact command. */
+export function isComposerCompactSuggestion(
+  suggestion: { readonly aliases?: readonly string[]; readonly label: string },
+  compactCommand: ProviderCompactCommandLike | undefined,
+): boolean {
+  if (!compactCommand) {
+    return false;
+  }
+  const normalizedLabel = normalizeSlashCommandName(suggestion.label).toLowerCase();
+  const canonical = normalizeSlashCommandName(compactCommand.name).toLowerCase();
+  if (normalizedLabel === canonical || normalizedLabel === "compact") {
+    return true;
+  }
+  return (suggestion.aliases ?? []).some(
+    (alias) => normalizeSlashCommandName(alias).toLowerCase() === "compact",
+  );
 }
 
 export function findSlashCommandTrigger(

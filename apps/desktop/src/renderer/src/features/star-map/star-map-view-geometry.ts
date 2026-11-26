@@ -1,3 +1,8 @@
+import type {
+  StarMapWorkspaceView,
+  StarMapWorkspaceViewAnchor,
+} from "@pwragent/shared/contracts/star-map";
+
 /**
  * Geometry for the star map's pan/zoom view.
  *
@@ -12,6 +17,19 @@
 export type StarMapView = { x: number; y: number; scale: number };
 
 export type StarMapViewBox = { width: number; height: number };
+
+export type StarMapViewAnchorPoint = {
+  anchor: StarMapWorkspaceViewAnchor;
+  x: number;
+  y: number;
+};
+
+export type StarMapContentBox = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
 
 /**
  * How far out the map can be pulled.
@@ -312,4 +330,185 @@ export function placeStarMapView(params: {
     canvas: params.canvas,
     viewport: params.viewport,
   });
+}
+
+function viewAnchorMatches(
+  saved: StarMapWorkspaceViewAnchor,
+  candidate: StarMapWorkspaceViewAnchor,
+  localInstanceId?: string,
+  localPlaceholderId?: string,
+): boolean {
+  if (saved.kind === "project") {
+    return (
+      candidate.kind === "project" && candidate.projectKey === saved.projectKey
+    );
+  }
+  if (candidate.kind !== "instance") return false;
+  if (candidate.instanceId === saved.instanceId) return true;
+  return Boolean(
+    localPlaceholderId
+    && localInstanceId
+    && saved.instanceId === localPlaceholderId
+    && candidate.instanceId === localInstanceId,
+  );
+}
+
+/**
+ * Whether any drawn body, cloud, or card overlaps the window under `view`.
+ *
+ * `clampStarMapView` only guarantees overlap with the canvas bounding box,
+ * whose diagonal corners are empty sky in a radial layout. Checking actual
+ * drawn content stops a restored view from stranding the operator on an
+ * empty star field.
+ */
+export function hasVisibleStarMapContentInView(params: {
+  view: StarMapView;
+  viewport: StarMapViewBox;
+  contentBoxes: readonly StarMapContentBox[];
+}): boolean {
+  const { view, viewport, contentBoxes } = params;
+  if (
+    !(viewport.width > 0)
+    || !(viewport.height > 0)
+    || !(view.scale > 0)
+    || !Number.isFinite(view.x)
+    || !Number.isFinite(view.y)
+    || !Number.isFinite(view.scale)
+  ) {
+    return false;
+  }
+  for (const box of contentBoxes) {
+    if (
+      !Number.isFinite(box.left)
+      || !Number.isFinite(box.top)
+      || !Number.isFinite(box.right)
+      || !Number.isFinite(box.bottom)
+    ) {
+      continue;
+    }
+    const screenLeft = box.left * view.scale + view.x;
+    const screenRight = box.right * view.scale + view.x;
+    const screenTop = box.top * view.scale + view.y;
+    const screenBottom = box.bottom * view.scale + view.y;
+    if (
+      screenRight > 0
+      && screenLeft < viewport.width
+      && screenBottom > 0
+      && screenTop < viewport.height
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Persist a camera view anchored to the nearest body on the map.
+ *
+ * Orbit and projects re-base their canvas origin whenever peers connect,
+ * offline peers are hidden, or clouds grow. Recording the viewport centre's
+ * canvas-space offset from the nearest body lets restore put the same body
+ * back in the same place on screen regardless of how far the canvas shifted.
+ */
+export function serializeStarMapWorkspaceView(params: {
+  view: StarMapView;
+  viewport: StarMapViewBox;
+  anchors: readonly StarMapViewAnchorPoint[];
+}): StarMapWorkspaceView {
+  const { view, viewport, anchors } = params;
+  const base: StarMapWorkspaceView = {
+    x: view.x,
+    y: view.y,
+    scale: view.scale,
+  };
+  if (
+    !(viewport.width > 0)
+    || !(viewport.height > 0)
+    || !(view.scale > 0)
+    || !Number.isFinite(view.x)
+    || !Number.isFinite(view.y)
+    || !Number.isFinite(view.scale)
+    || anchors.length === 0
+  ) {
+    return base;
+  }
+  const centerX = (viewport.width / 2 - view.x) / view.scale;
+  const centerY = (viewport.height / 2 - view.y) / view.scale;
+  let nearest: StarMapViewAnchorPoint | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of anchors) {
+    if (!Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) {
+      continue;
+    }
+    const distance = Math.hypot(candidate.x - centerX, candidate.y - centerY);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = candidate;
+    }
+  }
+  if (!nearest) return base;
+  return {
+    ...base,
+    anchor: nearest.anchor,
+    anchorDx: centerX - nearest.x,
+    anchorDy: centerY - nearest.y,
+  };
+}
+
+/**
+ * Resolve a saved workspace view onto the current layout, or return
+ * `undefined` when restoring it would strand the operator on empty sky.
+ */
+export function resolveRestoredStarMapView(params: {
+  saved: StarMapWorkspaceView;
+  anchors: readonly StarMapViewAnchorPoint[];
+  contentBoxes: readonly StarMapContentBox[];
+  canvas: StarMapViewBox;
+  viewport: StarMapViewBox;
+  localInstanceId?: string;
+  localPlaceholderId?: string;
+}): StarMapView | undefined {
+  const { saved, anchors, contentBoxes, canvas, viewport } = params;
+  let candidate: StarMapView;
+  if (
+    saved.anchor !== undefined
+    && saved.anchorDx !== undefined
+    && saved.anchorDy !== undefined
+  ) {
+    const matched = anchors.find((entry) =>
+      viewAnchorMatches(
+        saved.anchor!,
+        entry.anchor,
+        params.localInstanceId,
+        params.localPlaceholderId,
+      ),
+    );
+    if (!matched) return undefined;
+    const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, saved.scale));
+    candidate = clampStarMapView({
+      view: {
+        scale,
+        x: viewport.width / 2 - (matched.x + saved.anchorDx) * scale,
+        y: viewport.height / 2 - (matched.y + saved.anchorDy) * scale,
+      },
+      canvas,
+      viewport,
+    });
+  } else {
+    candidate = clampStarMapView({
+      view: { x: saved.x, y: saved.y, scale: saved.scale },
+      canvas,
+      viewport,
+    });
+  }
+  if (
+    !hasVisibleStarMapContentInView({
+      view: candidate,
+      viewport,
+      contentBoxes,
+    })
+  ) {
+    return undefined;
+  }
+  return candidate;
 }

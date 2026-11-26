@@ -7,6 +7,7 @@ import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { annotateBytecode } from "./bytecode-attribution.mjs";
 import { bytecodeBudget, compileBytecode, wrapVitestModule } from "./bytecode-compiler.mjs";
+import { resolveLocalCpuBudget } from "./local-cpu-budget.mjs";
 import { discoverMainBytecodeSources, sourceFiles } from "./main-bytecode-scope.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -52,10 +53,27 @@ async function check() {
     }
     console.log(`Transform complete: ${modules.length} test modules, ${production.length} production chunks`);
     const executable = createRequire(resolve(root, "apps/desktop/package.json"))("electron");
-    const [node, electron] = await Promise.all([
-      compileBytecode([...modules, ...production]),
-      production.length ? compileBytecode(production, { executable, env: { ELECTRON_RUN_AS_NODE: "1" } }) : undefined,
-    ]);
+    const localBudget = resolveLocalCpuBudget({ cwd: root });
+    let node;
+    let electron;
+    if (!production.length) {
+      node = await compileBytecode(modules, { cwd: root, ...(localBudget ? { maxProcesses: localBudget.units } : {}) });
+    } else if (localBudget && localBudget.units < 2) {
+      node = await compileBytecode([...modules, ...production], { cwd: root, maxProcesses: 1 });
+      electron = await compileBytecode(production, { cwd: root, executable, env: { ELECTRON_RUN_AS_NODE: "1" }, maxProcesses: 1 });
+    } else if (localBudget) {
+      const electronMax = Math.max(1, Math.floor(localBudget.units / 2));
+      const nodeMax = Math.max(1, localBudget.units - electronMax);
+      [node, electron] = await Promise.all([
+        compileBytecode([...modules, ...production], { cwd: root, maxProcesses: nodeMax }),
+        compileBytecode(production, { cwd: root, executable, env: { ELECTRON_RUN_AS_NODE: "1" }, maxProcesses: electronMax }),
+      ]);
+    } else {
+      [node, electron] = await Promise.all([
+        compileBytecode([...modules, ...production], { cwd: root }),
+        compileBytecode(production, { cwd: root, executable, env: { ELECTRON_RUN_AS_NODE: "1" } }),
+      ]);
+    }
     console.log(`Node compilation complete: ${node.records.length} records`);
     console.log(`Electron compilation complete: ${electron?.records.length ?? 0} records`);
     const runtimeFiles = production.filter((module) => !module.map && /\/rolldown-runtime-[^/]+\.js$/.test(module.file)).map(({ file }) => file);

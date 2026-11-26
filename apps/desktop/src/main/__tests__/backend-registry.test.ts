@@ -156,7 +156,9 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("refuses generated thread/turn admissions before host preparation when another profile owner holds the lease", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("codex", "claude", "acp:kimi"), fc.boolean(), async (backend, turn) => {
+    const cases = (["codex", "claude", "acp:kimi"] as const).flatMap(backend =>
+      [false, true].map(turn => ({ backend, turn })));
+    for (const { backend, turn } of cases) {
       const client = new MockBackendClient({ threads: [] });
       const assertOwnership = vi.fn(() => { throw new Error("fixture profile owner holds the lease"); });
       const close = vi.fn();
@@ -171,7 +173,7 @@ describe("DesktopBackendRegistry", () => {
         expect(client.startTurnCalls).toHaveLength(0);
       } finally { await registry.close(); }
       expect(close).toHaveBeenCalledOnce();
-    }), { numRuns: 12 });
+    }
   });
 
   it.each([false, true])("delivers a text final and dispatches Telegram input through the real lifecycle pipeline (legacy=%s)", async (legacy) => {
@@ -752,8 +754,11 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("releases projected preparation activity while preserving newer provider observations", async () => {
-    await fc.assert(fc.asyncProperty(fc.constantFrom("preparing", "same:thread"), fc.constantFrom("idle" as const, "provider-active" as const),
-      (threadId, discovery) => assertFailedTurnPreparationRetires(threadId, "Continue", discovery)), { numRuns: 12 });
+    for (const threadId of ["preparing", "same:thread"]) {
+      for (const discovery of ["idle", "provider-active"] as const) {
+        await assertFailedTurnPreparationRetires(threadId, "Continue", discovery);
+      }
+    }
   });
 
   it("releases an idle status reprojected during start preparation", async () => {
@@ -948,7 +953,10 @@ describe("DesktopBackendRegistry", () => {
       expect(events.filter((event) => event.notification.method === "turn/failed")).toEqual([]);
       expect(registryModules(registry).turnState.startingOrigins().length).toBe(0);
       expect(internal.reservedAcpStartThreadKeys.size).toBe(0);
-      expect(forgot).toHaveBeenCalledExactlyOnceWith("accepted-context");
+      // A context bound to the accepted turn waits for the prompt's own item
+      // to claim it; only a start that could not bind one forgets it here.
+      if (failure === "context") expect(forgot).toHaveBeenCalledExactlyOnceWith("accepted-context");
+      else expect(forgot).not.toHaveBeenCalled();
       for (const effect of [review, origin, title, context, attachments]) expect(effect).toHaveBeenCalledOnce();
     } finally {
       await registry.close();
@@ -2900,6 +2908,7 @@ describe("DesktopBackendRegistry", () => {
           "record_review_candidate",
           "list_review_candidates",
           "dispose_review_candidate",
+          "submit_review_output",
         ],
       );
       expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual([
@@ -4263,7 +4272,7 @@ describe("DesktopBackendRegistry", () => {
         ],
         parts: [
           { type: "text", text: "What's in this image?" },
-          { type: "image", url: imageUrl },
+          { type: "image", url: expect.stringMatching(/^pwragent-image:\/\/file\//) },
         ],
         turnId: imageTurn.turnId,
         agentInstructions: "",
@@ -4978,7 +4987,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("drains admitted runtime work after synchronous creation preparation refuses", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (runtimeRejects) => {
+    for (const runtimeRejects of [false, true]) {
       const registry = createDesktopBackendRegistry({ codexClient: new MockBackendClient({ threads: [] }), overlayStore: createOverlayStoreMock() });
       const internal = registry as unknown as {
         gitDirectoryService: { prepareLaunchpadWorkspace: () => Promise<unknown> };
@@ -5005,7 +5014,7 @@ describe("DesktopBackendRegistry", () => {
         expect(await outcome).toBe(refusal);
         expect(rollback).toHaveBeenCalledOnce();
       } finally { await registry.close(); }
-    }), { numRuns: 4 });
+    }
   });
 
   async function assertAcceptedThreadCreationSurvives(backend: AppServerBackendKind, failure: "pr" | "parent" | "event" | "workspace"): Promise<void> {
@@ -15714,6 +15723,29 @@ command = "pnpm dev"
         threadId: "thread-direct-compact", model: "gpt-6.1-sol", reasoningEffort: "high",
       });
       expect(codexClient.startTurnCallCount).toBe(0);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("answers busy for auto-compaction on an archived Codex thread instead of compacting it", async () => {
+    const codexClient = new MockBackendClient({ models: [] });
+    const threadId = "thread-auto-compact-archived";
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ overlays: {
+        [`codex:${threadId}`]: {
+          backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [],
+          archiveRetentionStartedAt: 1_700_000_000_000,
+        },
+      } }),
+      threadTitleGenerationService: null,
+    });
+    try {
+      await expect(registry.startAutoCompaction({
+        backend: "codex", threadId, messageOrigin: { kind: "pwragent", systemReason: "auto-compaction" },
+      })).resolves.toEqual({ status: "busy" });
+      expect(codexClient.lastCompactThreadParams).toBeUndefined();
     } finally {
       await registry.close();
     }

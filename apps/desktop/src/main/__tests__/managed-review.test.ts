@@ -84,6 +84,7 @@ describe("managed review", () => {
     expect(prompt).not.toContain("record_review_candidate");
     expect(prompt).not.toContain("list_review_candidates");
     expect(prompt).not.toContain("dispose_review_candidate");
+    expect(prompt).not.toContain("submit_review_output");
   });
 
   it("builds the two-pass candidate ledger prompt when candidateLedger is enabled", () => {
@@ -96,16 +97,20 @@ describe("managed review", () => {
     expect(prompt).toContain("record_review_candidate");
     expect(prompt).toContain("list_review_candidates");
     expect(prompt).toContain("dispose_review_candidate");
+    expect(prompt).toContain("submit_review_output");
     expect(prompt).toMatch(/pass 1/i);
     expect(prompt).toMatch(/pass 2/i);
     expect(prompt).toMatch(/audit every changed production file systematically/i);
     expect(prompt).toMatch(/do not stop exploring after finding your first one or two issues/i);
     expect(prompt).toMatch(/skip obvious duplicates/i);
-    expect(prompt).toMatch(/limit_exceeded.*include verified findings in the final JSON/i);
+    expect(prompt).toMatch(/limit_exceeded.*include verified findings when calling `submit_review_output`/i);
     expect(prompt).toMatch(/do not drop a concrete P2 or P3 defect/i);
     expect(prompt).toMatch(/feature request, UX preference, or alternative-design suggestion/i);
     expect(prompt).toMatch(/if the core fix were reverted to the broken behavior/i);
-    expect(prompt).toContain("Return only one JSON object");
+    expect(prompt).toContain('"patch is correct"');
+    expect(prompt).toContain('"patch is incorrect"');
+    expect(prompt).toContain("Omit the field entirely if you cannot distinguish");
+    expect(prompt).not.toContain("Return only one JSON object");
   });
 
   it("calibrates P0-P3 priorities in the managed review prompt", () => {

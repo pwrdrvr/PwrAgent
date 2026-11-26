@@ -630,6 +630,12 @@ export type PrSummary = {
   /** Last observed pull request title, when the provider returns one. */
   title?: string;
   /**
+   * Label names, read only for a repository that a project's Forge
+   * Automation hands-off rule names with a label pattern
+   * (`handsOffLabelRepositories`). Absent means not read, never "no labels".
+   */
+  labels?: string[];
+  /**
    * Branch the PR is proposing to merge into. Used to default a review to the
    * PR's actual target, including stacked pull requests.
    */
@@ -647,6 +653,12 @@ export type PrSummary = {
   linkedDirectoryPaths?: string[];
   /** Thread-local operator/agent attachment intent; never provider status. */
   explicitlyAttached?: true;
+  /**
+   * Thread-local operator intent: Auto-fix stays off for this one PR while
+   * the thread's Auto-fix is on. Never provider status; every merge of an
+   * attachment list carries it through `pullRequestAttachmentIntent`.
+   */
+  autoFixOff?: true;
   /**
    * Deprecated compatibility alias for `checkState`. New writers keep this
    * check-only so review/lifecycle/mergeability never collide with checks.
@@ -832,6 +844,23 @@ export function pullRequestMatchesRepositoryKey(
       .map((part) => part.trim().toLowerCase()).join("/");
   return key(identity.sourceRepository ?? identity) === repositoryKey
     || (pr.explicitlyAttached === true && key(identity) === repositoryKey);
+}
+
+/** Thread-local intent fields that live on an attachment, not provider status. */
+export type PullRequestAttachmentIntent = Pick<PrSummary, "explicitlyAttached" | "autoFixOff">;
+
+/**
+ * The thread-local intent of one or more rows for the same PR, unioned. A
+ * merge that rebuilds an attachment from provider status spreads this so the
+ * thread's own choices survive the refresh.
+ */
+export function pullRequestAttachmentIntent(
+  ...rows: Array<PullRequestAttachmentIntent | undefined>
+): PullRequestAttachmentIntent {
+  return {
+    ...(rows.some((row) => row?.explicitlyAttached === true) ? { explicitlyAttached: true } : {}),
+    ...(rows.some((row) => row?.autoFixOff === true) ? { autoFixOff: true } : {}),
+  };
 }
 
 export type DirectorySummaryKind = "directory" | "workspace" | "unlinked";
@@ -3512,6 +3541,12 @@ export type ReadThreadPullRequestMergeResponse = {
    * older owner leaves it out.
    */
   neverMergeProject?: string;
+  /**
+   * With `neverMergeProject`, the base branches the project still merges
+   * into: a PR into one of them is offered as in any project. An older
+   * owner leaves it out, and then no PR is offered.
+   */
+  mergeBranches?: string[];
 };
 
 export type MergeThreadPullRequestRequest = ThreadPullRequestMergeTarget & {

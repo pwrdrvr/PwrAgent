@@ -920,6 +920,12 @@ export type SetThreadPrAutoDispatchRequest = {
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   enabled: boolean;
+  /**
+   * Switch Auto-fix for this one attached PR (its status key) and leave the
+   * thread's own Auto-fix as it is. A remote owner needs
+   * `thread_pull_request_auto_fix_v1`; an older one would toggle the thread.
+   */
+  prKey?: string;
 };
 
 export type SetThreadPrAutoDispatchResponse = SetThreadPrAutoDispatchRequest;

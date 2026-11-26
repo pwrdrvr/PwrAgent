@@ -732,6 +732,7 @@ export type ThreadViewProps = {
    */
   terminals: IntegratedTerminalsController;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage: (
     text: string,
     imageParts?: AppServerThreadImagePart[]
@@ -1044,7 +1045,8 @@ export type ThreadViewProps = {
       >
     >
   ) => Promise<void>;
-  onSetThreadPrAutoDispatch?: (enabled: boolean) => Promise<void>;
+  /** With `prKey`, switches Auto-fix for that one PR and leaves the thread's. */
+  onSetThreadPrAutoDispatch?: (enabled: boolean, prKey?: string) => Promise<void>;
   /** Locks (or re-notes) the selected thread when `locked`, else unlocks it. */
   onSetThreadLock?: (locked: boolean, note?: string) => Promise<void>;
   onCancelThreadPrAutoDispatch?: (fingerprint: string) => Promise<void>;
@@ -3159,6 +3161,7 @@ export function ThreadView(props: ThreadViewProps) {
       : {
           activeTurnId: props.activeTurnId,
           addOptimisticReviewEntry: props.addOptimisticReviewEntry,
+          beginReviewSubmission: props.beginReviewSubmission,
           addOptimisticUserMessage: props.addOptimisticUserMessage,
           bindOptimisticUserMessageToTurn: props.bindOptimisticUserMessageToTurn,
           onForkThread: props.onForkThread,

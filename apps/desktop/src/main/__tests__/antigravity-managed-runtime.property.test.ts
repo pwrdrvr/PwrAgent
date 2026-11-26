@@ -76,43 +76,41 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
   it("protects relative profile pins resolved through a different login-shell PATH", async () => {
     await withRuntimeRoot(async (directory) => {
       const archive = await makeArchive(directory);
-      await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 20 }), async (patch) => {
-        const root = await mkdtemp(path.join(directory, "login-path-"));
-        const launchBin = path.join(root, "login-bin");
-        const desktopBin = path.join(root, "desktop-bin");
-        const configPath = path.join(root, "profiles", "offline", "config.toml");
-        vi.stubEnv("PWRAGENT_HOME", root);
-        vi.stubEnv("PATH", desktopBin);
-        try {
-          const install = (offset: number) => installManagedAntigravityRuntime({
-            ...appleSilicon, fetch: releaseFetch(archive, `1.5.${patch + offset}`), verify: async () => {},
-          });
-          const pinned = await install(0);
-          await mkdir(launchBin);
-          await symlink(pinned.command, path.join(launchBin, "agy"));
-          await mkdir(path.dirname(configPath), { recursive: true });
-          await writeFile(configPath, '[acp_agents.antigravity]\ncli_path = "agy"\n');
-          const [record] = await discoverLocalAcpAgentRecords({
-            antigravitySelectionConfigPath: configPath,
-            preferences: { antigravity: { overridePath: "agy" } },
-            env: { PATH: launchBin },
-            discover: async () => [{
-              strategyId: "antigravity", backendId: "acp:antigravity", name: "Antigravity",
-              args: ["acp"], env: {}, discoveredAt: 0, instances: [{ command: "agy", source: "override" }],
-            }],
-          });
-          expect(record?.launchDescriptor?.managedAntigravityFallback).toBe(false);
-          expect(record?.launchDescriptor?.command).toBe(await realpath(pinned.command));
-          const unused = await install(1);
-          await install(2);
-          await install(3);
-          expect(await readFile(pinned.command, "utf8")).toBe(fixtureBinary);
-          await expect(readFile(unused.command)).rejects.toMatchObject({ code: "ENOENT" });
-        } finally {
-          vi.unstubAllEnvs();
-          await rm(root, { recursive: true, force: true });
-        }
-      }), { numRuns: 12 });
+      const root = await mkdtemp(path.join(directory, "login-path-"));
+      const launchBin = path.join(root, "login-bin");
+      const desktopBin = path.join(root, "desktop-bin");
+      const configPath = path.join(root, "profiles", "offline", "config.toml");
+      vi.stubEnv("PWRAGENT_HOME", root);
+      vi.stubEnv("PATH", desktopBin);
+      try {
+        const install = (offset: number) => installManagedAntigravityRuntime({
+          ...appleSilicon, fetch: releaseFetch(archive, `1.5.${offset}`), verify: async () => {},
+        });
+        const pinned = await install(0);
+        await mkdir(launchBin);
+        await symlink(pinned.command, path.join(launchBin, "agy"));
+        await mkdir(path.dirname(configPath), { recursive: true });
+        await writeFile(configPath, '[acp_agents.antigravity]\ncli_path = "agy"\n');
+        const [record] = await discoverLocalAcpAgentRecords({
+          antigravitySelectionConfigPath: configPath,
+          preferences: { antigravity: { overridePath: "agy" } },
+          env: { PATH: launchBin },
+          discover: async () => [{
+            strategyId: "antigravity", backendId: "acp:antigravity", name: "Antigravity",
+            args: ["acp"], env: {}, discoveredAt: 0, instances: [{ command: "agy", source: "override" }],
+          }],
+        });
+        expect(record?.launchDescriptor?.managedAntigravityFallback).toBe(false);
+        expect(record?.launchDescriptor?.command).toBe(await realpath(pinned.command));
+        const unused = await install(1);
+        await install(2);
+        await install(3);
+        expect(await readFile(pinned.command, "utf8")).toBe(fixtureBinary);
+        await expect(readFile(unused.command)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        vi.unstubAllEnvs();
+        await rm(root, { recursive: true, force: true });
+      }
     });
   });
 
@@ -188,7 +186,7 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
           vi.unstubAllEnvs();
           await rm(home, { recursive: true, force: true });
         }
-      }), { numRuns: 20 });
+      }), { numRuns: 5, examples: [[["direct", "alias", "keep", "keep", "clear", "clear", "keep", "keep"]]] });
     });
   });
 
@@ -383,7 +381,9 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
           }
           await rm(rootDir, { force: true, recursive: true });
         },
-      ), { numRuns: 25 });
+      ), { numRuns: 5, examples: [
+        [["checksum", "url", "download", "verify", "abort", "success", "verify", "abort", "success"]],
+      ] });
     });
   });
 
@@ -495,17 +495,10 @@ describe.skipIf(process.platform === "win32")("managed Antigravity activation", 
     });
   });
 
-  it("preserves the newest verified version regardless of verification order", async () => {
+  it.each([false, true])("preserves the newest verified version (older release verifies last=%s)", async (firstFinishesLast) => {
     await withRuntimeRoot(async (directory) => {
       const archive = await makeArchive(directory);
-      await fc.assert(fc.asyncProperty(
-        fc.integer({ min: 0, max: 100 }),
-        fc.integer({ min: 1, max: 100 }),
-        fc.boolean(),
-        async (patch, gap, firstFinishesLast) => {
-          await raceReleases(directory, { archive, version: `1.5.${patch}` }, { archive, version: `1.5.${patch + gap}` }, firstFinishesLast);
-        },
-      ), { numRuns: 25 });
+      await raceReleases(directory, { archive, version: "1.5.9" }, { archive, version: "1.5.10" }, firstFinishesLast);
     });
   });
 

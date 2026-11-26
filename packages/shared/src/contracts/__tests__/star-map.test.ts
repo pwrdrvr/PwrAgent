@@ -89,6 +89,38 @@ describe("isStarMapWorkspaceSnapshot", () => {
     expect(isStarMapWorkspaceSnapshot(halfOffset)).toBe(false);
   });
 
+  it("accepts complete finite anchored views and rejects partial anchor fields", () => {
+    const anchoredInstance = workspace();
+    Object.assign(anchoredInstance.views.orbit, {
+      anchor: { kind: "instance", instanceId: "pwr_m5" },
+      anchorDx: 42,
+      anchorDy: -18,
+    });
+    expect(isStarMapWorkspaceSnapshot(anchoredInstance)).toBe(true);
+
+    const anchoredProject = workspace();
+    Object.assign(anchoredProject.views.orbit, {
+      anchor: { kind: "project", projectKey: "repo:pwragent" },
+      anchorDx: 0,
+      anchorDy: 12,
+    });
+    expect(isStarMapWorkspaceSnapshot(anchoredProject)).toBe(true);
+
+    const partial = workspace();
+    Object.assign(partial.views.orbit, {
+      anchor: { kind: "instance", instanceId: "pwr_m5" },
+    });
+    expect(isStarMapWorkspaceSnapshot(partial)).toBe(false);
+
+    const emptyAnchorId = workspace();
+    Object.assign(emptyAnchorId.views.orbit, {
+      anchor: { kind: "instance", instanceId: "" },
+      anchorDx: 0,
+      anchorDy: 0,
+    });
+    expect(isStarMapWorkspaceSnapshot(emptyAnchorId)).toBe(false);
+  });
+
   it("recovers valid cards and views from a partially corrupt payload", () => {
     const partial = workspace();
     partial.cards.push({

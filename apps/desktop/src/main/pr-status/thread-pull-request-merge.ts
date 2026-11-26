@@ -9,6 +9,10 @@ import {
   isThreadTodoMergeMethod,
   type ThreadTodoMergeMethod,
 } from "@pwragent/shared/contracts/thread-todos";
+import {
+  buildProjectNeverMergeError,
+  type ProjectNeverMergePolicy,
+} from "@pwragent/shared/project-forge-automation";
 import { MAX_GITHUB_STACK_OPEN_BELOW } from "@pwragent/shared/stacks/stack-status";
 import { parsePullRequestReferenceUrl } from "./forge-reference";
 
@@ -30,8 +34,13 @@ export type ThreadPullRequestMergeDeps = {
     remember?: (method: ThreadTodoMergeMethod) => void;
   }>;
   defaultMethod: () => ThreadTodoMergeMethod;
-  /** The thread's project label when its Forge Automation never merges. */
-  neverMergeProject?: (thread: ThreadPullRequestMergeTarget) => string | undefined;
+  /**
+   * The thread's project when its Forge Automation never merges, with the
+   * base branches it still merges into.
+   */
+  neverMergePolicy?: (thread: ThreadPullRequestMergeTarget) => ProjectNeverMergePolicy | undefined;
+  /** The base this owner last read for one of the thread's PRs; undefined when unknown. */
+  readPullRequestBase?: (thread: ThreadPullRequestMergeTarget, url: string) => string | undefined;
   resolveCwd: (thread: ThreadPullRequestMergeTarget) => Promise<string | undefined>;
   /** Throws while a Continue After wait holds this thread's merge of `url`. */
   assertNotHeld: (thread: ThreadPullRequestMergeTarget, url: string) => void;
@@ -93,11 +102,12 @@ export async function readThreadPullRequestMerge(
 ): Promise<ReadThreadPullRequestMergeResponse> {
   const thread = readTarget(request);
   const preference = await deps.readPreference(thread);
-  const neverMergeProject = deps.neverMergeProject?.(thread);
+  const never = deps.neverMergePolicy?.(thread);
   return {
     ...(preference.remembered ? { remembered: preference.remembered } : {}),
     fallback: deps.defaultMethod(),
-    ...(neverMergeProject ? { neverMergeProject } : {}),
+    ...(never ? { neverMergeProject: never.projectLabel } : {}),
+    ...(never?.mergeBranches.length ? { mergeBranches: [...never.mergeBranches] } : {}),
   };
 }
 
@@ -125,9 +135,11 @@ export async function mergeThreadPullRequest(
   const attached = deps.readThreadPullRequestUrls(thread)
     .find((candidate) => pullRequestIdentity(candidate) === identity);
   if (!attached) throw new Error(`#${reference.number} is not attached to this thread.`);
-  const neverMergeProject = deps.neverMergeProject?.(thread);
-  if (neverMergeProject) {
-    throw new Error(`${neverMergeProject} never merges its pull requests. Change it from the project menu: Forge Automation.`);
+  const never = deps.neverMergePolicy?.(thread);
+  // The base comes from this owner's PR status, never the request: a PR
+  // whose base was not read counts as one the project does not merge into.
+  if (never && !never.mergeBranches.includes(deps.readPullRequestBase?.(thread, attached)?.trim() ?? "")) {
+    throw new Error(buildProjectNeverMergeError(never));
   }
   deps.assertNotHeld(thread, attached);
   // GitHub lands the chosen layers below with this one, so a wait that holds

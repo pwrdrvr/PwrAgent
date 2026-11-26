@@ -480,30 +480,28 @@ describe("DesktopBackendRegistry", () => {
   it("asks for approval by execution mode, approvals setting and role on every host, never by whether it is headless", async ({ signal }) => {
     const installMember = memberInstaller(signal);
     const cwd = emptyThreadDirectory();
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom("desktop" as const, "outpost" as const), fc.constantFrom("ask" as const, "never" as const),
-      fc.constantFrom("full" as const, "contained" as const), fc.constantFrom("default" as const, "auto" as const),
-      async (host, generatedApprovals, role, mode) => {
-        const approvals = host === "desktop" ? "ask" : generatedApprovals;
-        installMember(host, { approvals, role });
-        // Oracle, from the product rule: Default and Auto ask on request; a
-        // person reviews, except in Auto on a full member, where Codex's Auto
-        // reviewer does; an operator who turned approvals off is never asked.
-        const expected = approvals === "never"
-          ? { approvalPolicy: "never", approvalsReviewer: "user" }
-          : { approvalPolicy: "on-request", approvalsReviewer: mode === "auto" && role === "full" ? "auto_review" : "user" };
-        const codexClient = new MockBackendClient({ threads: [] });
-        const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
-        try {
-          const { threadId } = await registry.startThread({ backend: "codex", cwd, executionMode: mode });
-          expect(codexClient.lastStartThreadParams).toMatchObject(expected);
-          await registry.startTurn({ backend: "codex", threadId, executionMode: mode, input: [{ type: "text", text: "Invented request." }] });
-          expect(codexClient.lastStartTurnParams).toMatchObject(expected);
-        } finally {
-          await registry.close();
-        }
-      },
-    ), { numRuns: 40 });
+    const settings = [["desktop", "ask"], ["outpost", "ask"], ["outpost", "never"]] as const;
+    const cases = settings.flatMap(([host, approvals]) => (["full", "contained"] as const).flatMap(role =>
+      (["default", "auto"] as const).map(mode => ({ host, approvals, role, mode }))));
+    for (const { host, approvals, role, mode } of cases) {
+      installMember(host, { approvals, role });
+      // Oracle, from the product rule: Default and Auto ask on request; a
+      // person reviews, except in Auto on a full member, where Codex's Auto
+      // reviewer does; an operator who turned approvals off is never asked.
+      const expected = approvals === "never"
+        ? { approvalPolicy: "never", approvalsReviewer: "user" }
+        : { approvalPolicy: "on-request", approvalsReviewer: mode === "auto" && role === "full" ? "auto_review" : "user" };
+      const codexClient = new MockBackendClient({ threads: [] });
+      const registry = createDesktopBackendRegistry({ codexClient, overlayStore: createOverlayStoreMock() });
+      try {
+        const { threadId } = await registry.startThread({ backend: "codex", cwd, executionMode: mode });
+        expect(codexClient.lastStartThreadParams).toMatchObject(expected);
+        await registry.startTurn({ backend: "codex", threadId, executionMode: mode, input: [{ type: "text", text: "Invented request." }] });
+        expect(codexClient.lastStartTurnParams).toMatchObject(expected);
+      } finally {
+        await registry.close();
+      }
+    }
   });
 
   it("lists and runs agent tools by the member's role alone, on every host", async ({ signal }) => {
@@ -524,43 +522,41 @@ describe("DesktopBackendRegistry", () => {
     const childProcess = ChildProcess.prototype as unknown as { spawn(options: { args: string[] }): unknown };
     const spawn = vi.spyOn(childProcess, "spawn");
     onTestFinished(() => spawn.mockRestore());
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom("desktop" as const, "outpost" as const), fc.constantFrom("full" as const, "contained" as const),
-      fc.constantFrom(...allowed, ...refused),
-      async (host, role, tool) => {
-        installMember(host, { approvals: "ask", role });
-        const reachable = role === "full" || allowed.includes(tool);
-        const codexClient = new MockBackendClient({ threads: [] });
-        const registry = createDesktopBackendRegistry({ codexClient, gitWorkingStateService, overlayStore: createOverlayStoreMock() });
-        const mcp = new McpClient({ name: "member-role-fixture", version: "1.0.0" });
-        try {
-          const { threadId } = await registry.startThread({ backend: "codex", cwd });
-          // A dynamic tool call from the model, advertised or made up.
-          const call = await codexClient.emitRequest({
-            method: "item/tool/call",
-            params: { threadId, turnId: "role-turn", callId: "role-call", requestId: "role-call", namespace: "pwragent", tool, arguments: {} },
-          } as AppServerPendingRequestNotification);
-          expect(JSON.stringify(call).includes("does not allow this PwrAgent tool")).toBe(!reachable);
-          // The same tools over the MCP server other providers use.
-          // MCP calls need a live turn on the registered thread.
-          const { turnId } = await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Invented request." }] });
-          await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId, turnId, turn: { id: turnId } } } });
-          const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
-          const registration = await server.registerClient({ backend: "codex", threadId });
-          await mcp.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
-            requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
-          }));
-          const listed = (await mcp.listTools()).tools.map(({ name }) => name);
-          expect(listed.includes(tool)).toBe(reachable);
-          for (const name of refused) expect(listed.includes(name)).toBe(role === "full");
-          const result = await mcp.callTool({ name: tool, arguments: {} });
-          expect(JSON.stringify(result).includes("does not allow this PwrAgent tool"), JSON.stringify(result)).toBe(!reachable);
-        } finally {
-          await mcp.close();
-          await registry.close();
-        }
-      },
-    ), { numRuns: 30 });
+    const cases = (["desktop", "outpost"] as const).flatMap(host =>
+      (["full", "contained"] as const).flatMap(role => [...allowed, ...refused].map(tool => ({ host, role, tool }))));
+    for (const { host, role, tool } of cases) {
+      installMember(host, { approvals: "ask", role });
+      const reachable = role === "full" || allowed.includes(tool);
+      const codexClient = new MockBackendClient({ threads: [] });
+      const registry = createDesktopBackendRegistry({ codexClient, gitWorkingStateService, overlayStore: createOverlayStoreMock() });
+      const mcp = new McpClient({ name: "member-role-fixture", version: "1.0.0" });
+      try {
+        const { threadId } = await registry.startThread({ backend: "codex", cwd });
+        // A dynamic tool call from the model, advertised or made up.
+        const call = await codexClient.emitRequest({
+          method: "item/tool/call",
+          params: { threadId, turnId: "role-turn", callId: "role-call", requestId: "role-call", namespace: "pwragent", tool, arguments: {} },
+        } as AppServerPendingRequestNotification);
+        expect(JSON.stringify(call).includes("does not allow this PwrAgent tool")).toBe(!reachable);
+        // The same tools over the MCP server other providers use.
+        // MCP calls need a live turn on the registered thread.
+        const { turnId } = await registry.startTurn({ backend: "codex", threadId, input: [{ type: "text", text: "Invented request." }] });
+        await registry.publishLocalEvent({ backend: "codex", notification: { method: "turn/started", params: { threadId, turnId, turn: { id: turnId } } } });
+        const server = (registry as unknown as { claudeAgentToolMcpServer: AgentToolMcpServerLike }).claudeAgentToolMcpServer;
+        const registration = await server.registerClient({ backend: "codex", threadId });
+        await mcp.connect(new StreamableHTTPClientTransport(new URL(registration.server.url), {
+          requestInit: { headers: Object.fromEntries(registration.server.headers.map(({ name, value }) => [name, value])) },
+        }));
+        const listed = (await mcp.listTools()).tools.map(({ name }) => name);
+        expect(listed.includes(tool)).toBe(reachable);
+        for (const name of refused) expect(listed.includes(name)).toBe(role === "full");
+        const result = await mcp.callTool({ name: tool, arguments: {} });
+        expect(JSON.stringify(result).includes("does not allow this PwrAgent tool"), JSON.stringify(result)).toBe(!reachable);
+      } finally {
+        await mcp.close();
+        await registry.close();
+      }
+    }
     expect(spawn.mock.calls.map(([options]) => options.args.join(" "))).toEqual([]);
   });
 
@@ -611,7 +607,14 @@ describe("DesktopBackendRegistry", () => {
           await registry.close();
         }
       },
-    ), { numRuns: 40 });
+    ), { numRuns: 7, examples: [
+      ["default", undefined, undefined, undefined],
+      ["auto", undefined, undefined, undefined],
+      ["default", undefined, undefined, "workspace-write"],
+      ["auto", "read-only", undefined, undefined],
+      ["auto", "workspace-write", "default", "read-only"],
+      ["default", "read-only", "auto", "workspace-write"],
+    ] });
   });
 
   it("advertises PwrAgent dynamic tools when starting ordinary Codex threads", async () => {

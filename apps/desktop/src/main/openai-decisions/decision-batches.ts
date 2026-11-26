@@ -132,6 +132,12 @@ export type DecisionBatchRecord = {
   controller: AbortController;
   /** The batch's JSONL file in its thread's storage; absent when it could not be written. */
   resultsFile?: string;
+  /** Caller-requested destination file written when the batch settles. */
+  outputFile?: string;
+  /** Detail level written to `outputFile` ("compact" or "full"). */
+  outputDetail?: DecisionBatchDetail;
+  /** Error message when writing `outputFile` failed after the batch finished. */
+  outputFileError?: string;
   /** The prompt every item shared. Absent in a file written before it was kept. */
   definition?: DecisionsRailDefinition;
 };
@@ -401,6 +407,8 @@ export function summarizeBatch(record: DecisionBatchRecord) {
       : {}),
     usage: batchUsage(record.results),
     ...(record.resultsFile ? { resultsFile: record.resultsFile } : {}),
+    ...(record.outputFile ? { outputFile: record.outputFile } : {}),
+    ...(record.outputFileError ? { outputFileError: record.outputFileError } : {}),
   };
 }
 
@@ -545,6 +553,8 @@ export function batchWakeupText(record: DecisionBatchRecord): string {
     `${record.succeeded} of ${record.count} items answered, ${record.failed} failed (${record.skipped} skipped).${cost}`,
     `Read the answers with decisions_batch_results { "batchId": "${record.batchId}" }.`,
     "Pass status \"failed\" to see only the failures, and from to read the next page.",
+    ...(record.outputFile && !record.outputFileError ? [`Output written to ${record.outputFile}.`] : []),
+    ...(record.outputFileError ? [`Writing outputFile failed (${record.outputFileError}); read answers from resultsFile or decisions_batch_results.`] : []),
     ...(record.resultsFile ? [`Every item is also in ${record.resultsFile} (JSONL, one line per item).`] : []),
   ].join("\n");
 }

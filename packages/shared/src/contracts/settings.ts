@@ -10,6 +10,7 @@ import type {
   DesktopTaskMonitorModelChoice,
 } from "../helper-models";
 import type { DesktopDecisionModelSettings } from "../decision-models";
+import type { DesktopAutoCompactionRule } from "../auto-compaction";
 import type { ResearchHarnessConfig, ResearchHarnessSource, ResearchMathosConfig } from "../research-harness";
 import type {
   CodexModelProviderSettings,
@@ -1762,6 +1763,11 @@ export type DesktopSettingsSnapshot = {
     helperModels?: DesktopHelperModelSettings;
     /** Task monitor model per parent provider. Absent = Automatic for every provider. */
     taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
+    /**
+     * Saved auto-compaction rules, built-in defaults excluded. Absent on older
+     * builds. `effectiveAutoCompactionRules` merges the two.
+     */
+    autoCompaction?: DesktopAutoCompactionRule[];
     /** The decision model and its providers. Absent on older builds. */
     decisionModels?: DesktopDecisionModelSettings;
     decisionSecrets?: {
@@ -2162,6 +2168,8 @@ export type DesktopSettingsConfigPatch = {
     helperModels?: DesktopHelperModelSettings;
     /** Replaces every provider's task monitor choice; omit a provider for Automatic. */
     taskMonitorModels?: Record<string, DesktopTaskMonitorModelChoice>;
+    /** Replaces every saved auto-compaction rule. An empty list keeps only the defaults. */
+    autoCompaction?: DesktopAutoCompactionRule[];
     /** Replaces the whole decision model section. */
     decisionModels?: DesktopDecisionModelSettings;
     /** Replaces the OpenAI Decisions account ids. Omit a field to clear it. */

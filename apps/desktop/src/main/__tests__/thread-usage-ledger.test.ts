@@ -33,9 +33,9 @@ type LedgerInternals = {
     current: ThreadToolInvocationRecord;
     previousOutputChars: number;
   };
-  persistTokenMiserLedgerEntries(entries: readonly TokenMiserObjectMetadata[]): Promise<void>;
+  persistTokenMiserLedgerEntries(entries: readonly TokenMiserObjectMetadata[]): Promise<string[]>;
   publishLiveTokenMiserLedgerEntry(entry: TokenMiserObjectMetadata): Promise<void>;
-  stopTokenMiserReplayTrackingAtCompaction(event: AgentEvent): Promise<void>;
+  stopTokenMiserReplayTrackingAtCompaction(event: AgentEvent, observedAt: number): Promise<void>;
 };
 
 /** A ledger over a fixture context and host; nothing here touches SQLite. */
@@ -358,13 +358,18 @@ describe("ThreadUsageLedger", () => {
         const stops: Array<{ objectId: string; stoppedAt: number }> = [];
         const tokenMiserStore = {
           prune: async () => {},
-          listMetadata: async () => entries.map((entry) => ({ ...entry })),
-          stopReplayTracking: async (params: { objectId: string; stoppedAt: number }) => {
-            stops.push(params);
-            if (refuses.has(params.objectId)) return false;
-            const entry = entries.find((candidate) => candidate.objectId === params.objectId)!;
-            entry.replayTrackingStoppedAt = params.stoppedAt;
-            return true;
+          *listMetadataPages() {
+            for (let offset = 0; offset < entries.length; offset += 3) {
+              yield entries.slice(offset, offset + 3).map((entry) => ({ ...entry }));
+            }
+          },
+          readMetadata: async (objectId: string) => entries.find((entry) => entry.objectId === objectId),
+          stopReplayTracking: async ({ objectId, stoppedAt }: { objectId: string; stoppedAt: number }) => {
+            stops.push({ objectId, stoppedAt });
+            if (refuses.has(objectId)) return undefined;
+            const entry = entries.find((candidate) => candidate.objectId === objectId)!;
+            entry.replayTrackingStoppedAt = stoppedAt;
+            return { ...entry };
           },
         };
         const { ledger, internals } = createLedger({
@@ -377,6 +382,7 @@ describe("ThreadUsageLedger", () => {
         const persisted: TokenMiserObjectMetadata[][] = [];
         vi.spyOn(internals, "persistTokenMiserLedgerEntries").mockImplementation(async (metadata) => {
           persisted.push([...metadata]);
+          return [];
         });
 
         // The oracle, from the inputs alone.
@@ -401,9 +407,90 @@ describe("ThreadUsageLedger", () => {
         const open = new Map([...internals.activeTokenMiserReplayEntries].map(([threadId, active]) =>
           [threadId, new Set(active.keys())]));
         expect(open).toEqual(expectedOpen);
-        expect(persisted).toEqual([entries]);
+        expect(persisted.flat()).toEqual(entries);
       },
     ), { numRuns: 300 });
+  });
+
+  it.each(["between pages", "during the initial read", "after a marker write failure"] as const)(
+    "restores active gates against compaction %s",
+    async (timing) => {
+      const entries = [
+        gate({ objectId: "first", threadId: "thread", createdAt: 1, replayTrackingVersion: 2 }),
+        gate({ objectId: "later-page", threadId: "thread", createdAt: 2, replayTrackingVersion: 2 }),
+        gate({ objectId: "after-compaction", threadId: "thread", createdAt: 11, replayTrackingVersion: 2 }),
+      ];
+      const event: AgentEvent = {
+        backend: "codex",
+        notification: { method: "thread/compacted", params: { itemId: "boundary", threadId: "thread" } },
+      };
+      const observedAt = 10;
+      vi.spyOn(Date, "now").mockReturnValue(observedAt);
+      let persistedBoundary: number | undefined;
+      let delivered = false;
+      const deliverCompaction = async () => {
+        if (delivered) return;
+        delivered = true;
+        await ledger.handleThreadCompactionReplayBoundary(event);
+      };
+      const tokenMiserStore = {
+        prune: async () => {},
+        *listMetadataPages() {
+          yield [{ ...entries[0]! }];
+          yield entries.slice(1).map((entry) => ({ ...entry }));
+        },
+        stopReplayTracking: async ({ objectId, stoppedAt = observedAt }: { objectId: string; stoppedAt?: number }) => {
+          const entry = entries.find((candidate) => candidate.objectId === objectId)!;
+          entry.replayTrackingStoppedAt = stoppedAt;
+          ledger.rememberActiveTokenMiserReplayEntry(entry);
+          return { ...entry };
+        },
+      };
+      const { ledger, internals } = createLedger({
+        host: { tokenMiserStore: tokenMiserStore as never },
+        stores: { usage: {
+          listThreadCompactions: async () => {
+            const snapshot = persistedBoundary;
+            if (timing === "during the initial read") await deliverCompaction();
+            return snapshot === undefined ? [] : [{ observedAt: snapshot }];
+          },
+          recordThreadCompaction: async ({ compaction }: { compaction: { observedAt: number } }) => {
+            if (timing === "after a marker write failure") throw new Error("fixture marker write failure");
+            persistedBoundary = compaction.observedAt;
+            return true;
+          },
+        } },
+      });
+      vi.spyOn(internals, "persistTokenMiserLedgerEntries").mockImplementation(async () => {
+        if (timing !== "during the initial read") await deliverCompaction();
+        return [];
+      });
+
+      await ledger.initializeTokenMiserLedger();
+
+      expect(entries.map((entry) => entry.replayTrackingStoppedAt)).toEqual([observedAt, observedAt, undefined]);
+      expect([...internals.activeTokenMiserReplayEntries.get("thread")!.keys()]).toEqual(["after-compaction"]);
+    },
+  );
+
+  it("restores later pages and publishes their usage after a ledger page write fails", async () => {
+    const entries = ["first", "second", "third"].map((threadId) =>
+      gate({ objectId: threadId, threadId, createdAt: 1, replayTrackingVersion: 2 }));
+    const tokenMiserStore = {
+      prune: async () => {},
+      *listMetadataPages() { for (const entry of entries) yield [entry]; },
+    };
+    const { ledger, internals } = createLedger({ host: { tokenMiserStore: tokenMiserStore as never } });
+    const persist = vi.spyOn(internals, "persistTokenMiserLedgerEntries")
+      .mockRejectedValueOnce(new Error("fixture ledger write failure"))
+      .mockImplementation(async ([entry]) => [entry!.threadId]);
+    const publish = vi.spyOn(ledger, "emitThreadPricingUpdated").mockResolvedValue();
+
+    await ledger.initializeTokenMiserLedger();
+
+    expect([...internals.activeTokenMiserReplayEntries.keys()]).toEqual(["first", "second", "third"]);
+    expect(persist.mock.calls.map(([page]) => page[0]?.threadId)).toEqual(["first", "second", "third"]);
+    expect(publish.mock.calls.map(([params]) => params.threadId)).toEqual(["second", "third"]);
   });
 
   it("does not stop newer Token Miser replay gates for a duplicate compaction", async () => {
@@ -494,11 +581,14 @@ describe("ThreadUsageLedger", () => {
     const released = new Promise<void>((resolve) => { release = resolve; });
     const tokenMiserStore = {
       prune: async () => {},
-      listMetadata: async () => { await released; return []; },
+      *listMetadataPages() { yield [gate({ objectId: "gate", threadId: "thread", createdAt: 1 })]; },
       stopReplayTracking: async () => false,
     };
     const { ledger, internals } = createLedger({ host: { tokenMiserStore: tokenMiserStore as never } });
-    vi.spyOn(internals, "persistTokenMiserLedgerEntries").mockResolvedValue();
+    vi.spyOn(internals, "persistTokenMiserLedgerEntries").mockImplementation(async () => {
+      await released;
+      return [];
+    });
     await expect(ledger.currentTokenMiserLedgerReconciliation).resolves.toBeUndefined();
     const reconciliation = ledger.initializeTokenMiserLedger();
     expect(ledger.currentTokenMiserLedgerReconciliation).toBe(reconciliation);

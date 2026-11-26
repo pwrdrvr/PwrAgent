@@ -307,6 +307,85 @@ describe("useStarMapChatCards", () => {
     });
   });
 
+  it("remaps placeholder local view anchors to the durable instance id even without placeholder cards", async () => {
+    const writeStarMapWorkspace = vi.fn(
+      async ({ baseRevision, workspace }: WriteStarMapWorkspaceRequest) => ({
+        workspace: {
+          ...workspace,
+          revision: baseRevision + 1,
+          updatedAt: 200,
+        },
+      }),
+    );
+    const desktopApi: DesktopApi = {
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: STAR_MAP_WORKSPACE_VERSION,
+          revision: 2,
+          updatedAt: 100,
+          cards: [],
+          views: {
+            orbit: {
+              x: -120,
+              y: 40,
+              scale: 0.9,
+              anchor: {
+                kind: "instance" as const,
+                instanceId: STAR_MAP_PLACEHOLDER_INSTANCE_ID,
+              },
+              anchorDx: 15,
+              anchorDy: -25,
+            },
+            projects: {
+              x: 0,
+              y: 0,
+              scale: 1,
+              anchor: {
+                kind: "project" as const,
+                projectKey: "repo:pwragent",
+              },
+              anchorDx: 0,
+              anchorDy: 0,
+            },
+          },
+        },
+      })),
+      writeStarMapWorkspace,
+    };
+    const { result } = renderHook(() => useStarMapChatCards({ desktopApi }));
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    act(() =>
+      result.current.remapOwner(STAR_MAP_PLACEHOLDER_INSTANCE_ID, "pwr_local"),
+    );
+
+    expect(result.current.viewFor("orbit")).toEqual({
+      x: -120,
+      y: 40,
+      scale: 0.9,
+      anchor: { kind: "instance", instanceId: "pwr_local" },
+      anchorDx: 15,
+      anchorDy: -25,
+    });
+    expect(result.current.viewFor("projects")?.anchor).toEqual({
+      kind: "project",
+      projectKey: "repo:pwragent",
+    });
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(1));
+    expect(writeStarMapWorkspace).toHaveBeenCalledWith({
+      baseRevision: 2,
+      workspace: expect.objectContaining({
+        views: expect.objectContaining({
+          orbit: expect.objectContaining({
+            anchor: { kind: "instance", instanceId: "pwr_local" },
+            anchorDx: 15,
+            anchorDy: -25,
+          }),
+        }),
+      }),
+    });
+  });
+
   it("advances the optimistic base revision after each queued write", async () => {
     const writeStarMapWorkspace = vi.fn(
       async ({ baseRevision, workspace }: WriteStarMapWorkspaceRequest) => ({

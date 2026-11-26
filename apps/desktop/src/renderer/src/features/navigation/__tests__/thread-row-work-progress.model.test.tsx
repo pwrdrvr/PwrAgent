@@ -1,13 +1,16 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
-import fc from "fast-check";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { ThreadGitWorkingState } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { ThreadTodoCountsContext } from "../../thread-todos/useThreadTodos";
 import { ThreadRow } from "../ThreadRow";
+import {
+  stepThreadRowWorkProgress,
+  type ThreadRowWorkProgressState,
+} from "../thread-row-work-progress";
 
 afterEach(cleanup);
 
@@ -20,8 +23,10 @@ afterEach(cleanup);
 // backend says so, an owned worker runs, or the renderer is waiting on the
 // turn's status; background tasks left running after it do not count.
 //
-// Oracle: a second, idle row rendered from the model's expected summary. The
-// two chip flows must match, so the test never restates how a chip renders.
+// Generated sequences over the pure model live in
+// `thread-row-work-progress.property.test.ts` (desktop-renderer-node). This
+// file ties that pure model to a real mounted `ThreadRow` against an idle
+// oracle row, and keeps the shrunk counterexamples.
 
 const thread: NavigationThreadSummary = {
   id: "quiet-row",
@@ -36,35 +41,23 @@ const thread: NavigationThreadSummary = {
 };
 const threadKey = threadSummaryIdentityKey(thread);
 
-type Progress = {
-  gitWorkingState?: ThreadGitWorkingState;
-  gitBranch?: string;
-  observedGitBranch?: string;
-  todos: ThreadTodo[];
+type Activity = {
+  thinking?: boolean;
+  turnActive?: boolean;
+  subAgent?: boolean;
+  background?: boolean;
 };
 
-const branch = fc.constantFrom(undefined, "HEAD", "main", "fix/contrived-branch", "test/another-contrived-branch");
-type Activity = { thinking: boolean; turnActive: boolean; subAgent: boolean; background: boolean };
-const IDLE: Activity = { thinking: false, turnActive: false, subAgent: false, background: false };
-
-const command = fc.oneof(
-  fc.record({ kind: fc.constant("activity" as const), source: fc.constantFrom<keyof Activity>("thinking", "turnActive", "subAgent", "background") }),
-  fc.record({ kind: fc.constant("select" as const) }),
-  fc.record({ kind: fc.constant("approval" as const) }),
-  fc.record({ kind: fc.constant("remount" as const) }),
-  fc.record({
-    kind: fc.constant("git" as const),
-    dirty: fc.nat({ max: 3 }),
-    additions: fc.nat({ max: 400 }),
-    deletions: fc.nat({ max: 60 }),
-    untracked: fc.nat({ max: 2 }),
-    unpushed: fc.nat({ max: 3 }),
-    ahead: fc.nat({ max: 3 }),
-  }),
-  fc.record({ kind: fc.constant("clean" as const) }),
-  fc.record({ kind: fc.constant("branch" as const), gitBranch: branch, observedGitBranch: branch }),
-  fc.record({ kind: fc.constant("todo" as const), add: fc.boolean() }),
-);
+type MountedStep = {
+  activity?: Activity;
+  selected?: boolean;
+  approval?: boolean;
+  gitBranch?: string;
+  observedGitBranch?: string;
+  gitWorkingState?: ThreadGitWorkingState;
+  todos?: ThreadTodo[];
+  remount?: boolean;
+};
 
 /** What a reader compares between two rows: each chip's kind, text and name. */
 function chipFlow(container: HTMLElement): string[] {
@@ -72,101 +65,118 @@ function chipFlow(container: HTMLElement): string[] {
     [chip.className, chip.textContent ?? "", chip.getAttribute("aria-label") ?? ""].join(" | "));
 }
 
-it("holds a working, unopened row's progress chips until it is opened or idle", () => {
-  fc.assert(fc.property(fc.array(command, { minLength: 10, maxLength: 40, size: "max" }), (commands) => {
-    let activity: Activity = IDLE;
-    let selected = false;
-    let approval = false;
-    let live: Progress = { gitBranch: thread.gitBranch, todos: [] };
-    let shown: Progress = live;
-    let nextTodo = 0;
+function makeTodo(index: number): ThreadTodo {
+  return {
+    id: `todo-${index}`,
+    backend: "codex",
+    threadId: thread.id,
+    kind: "reminder",
+    status: "open",
+    title: `Contrived card ${index}`,
+    createdAt: index,
+    updatedAt: index,
+  };
+}
 
-    const row = (progress: Progress, rowActivity: Activity, rowSelected: boolean) => {
-      const { todos, ...git } = progress;
-      return (
-        <ThreadTodoCountsContext.Provider value={new Map([[threadKey, todos]])}>
-          <ThreadRow
-            approvalRequestThreadKeys={approval ? { [threadKey]: true } : undefined}
-            selectedThreadKey={rowSelected ? threadKey : undefined}
-            thinkingThreadKeys={rowActivity.thinking ? { [threadKey]: true } : undefined}
-            thread={{
-              ...thread,
-              ...git,
-              threadStatus: rowActivity.turnActive ? "active" : "idle",
-              hasActiveSubAgent: rowActivity.subAgent,
-              hasBackgroundTasks: rowActivity.background,
-            }}
-            onOpenContextMenu={() => undefined}
-            onSelectThread={() => undefined}
-          />
-        </ThreadTodoCountsContext.Provider>
-      );
-    };
+function renderOracleOrSubject(params: {
+  summary: NavigationThreadSummary;
+  todos: readonly ThreadTodo[];
+  selected: boolean;
+  approval: boolean;
+  thinking: boolean;
+}) {
+  return (
+    <ThreadTodoCountsContext.Provider value={new Map([[threadKey, [...params.todos]]])}>
+      <ThreadRow
+        approvalRequestThreadKeys={params.approval ? { [threadKey]: true } : undefined}
+        selectedThreadKey={params.selected ? threadKey : undefined}
+        thinkingThreadKeys={params.thinking ? { [threadKey]: true } : undefined}
+        thread={params.summary}
+        onOpenContextMenu={() => undefined}
+        onSelectThread={() => undefined}
+      />
+    </ThreadTodoCountsContext.Provider>
+  );
+}
 
-    let subject = render(row(live, activity, selected));
-    try {
-      for (const step of commands) {
-        switch (step.kind) {
-          case "activity": activity = { ...activity, [step.source]: !activity[step.source] }; break;
-          case "select": selected = !selected; break;
-          case "approval": approval = !approval; break;
-          case "git":
-            live = {
-              ...live,
-              gitWorkingState: {
-                dirtyFiles: step.dirty,
-                dirtyAdditions: step.dirty ? step.additions : 0,
-                dirtyDeletions: step.dirty ? step.deletions : 0,
-                untrackedFiles: step.untracked,
-                unpushedCommits: step.unpushed,
-                baseBranch: "main",
-                baseAheadCommitCount: step.ahead,
-              },
-            };
-            break;
-          case "clean": live = { ...live, gitWorkingState: undefined }; break;
-          case "branch": live = { ...live, gitBranch: step.gitBranch, observedGitBranch: step.observedGitBranch }; break;
-          case "todo": {
-            const todos = step.add
-              ? [...live.todos, {
-                id: `todo-${nextTodo}`, backend: "codex", threadId: thread.id, kind: "reminder",
-                status: "open", title: `Contrived card ${nextTodo}`, createdAt: nextTodo, updatedAt: nextTodo,
-              } satisfies ThreadTodo]
-              : live.todos.slice(1);
-            nextTodo++;
-            live = { ...live, todos };
-            break;
-          }
-          case "remount": break;
-        }
+/**
+ * Replays a sequence through both the real mounted `ThreadRow` and the pure
+ * `stepThreadRowWorkProgress` model, checking that the row's chip flow matches
+ * an idle oracle row rendered from the model's expected summary at every step.
+ */
+function expectMountedRowMatchesPureModel(steps: readonly MountedStep[]): void {
+  let modelState: ThreadRowWorkProgressState | undefined;
+  let subject: ReturnType<typeof render> | undefined;
+  let oracle: ReturnType<typeof render> | undefined;
+  try {
+    for (const step of steps) {
+      const activity = step.activity ?? {};
+      const selected = step.selected === true;
+      const approval = step.approval === true;
+      const thinking = activity.thinking === true;
+      const todos = step.todos ?? [];
+      const liveThread: NavigationThreadSummary = {
+        ...thread,
+        gitBranch: step.gitBranch,
+        observedGitBranch: step.observedGitBranch,
+        gitWorkingState: step.gitWorkingState,
+        threadStatus: activity.turnActive ? "active" : "idle",
+        hasActiveSubAgent: activity.subAgent === true,
+        hasBackgroundTasks: activity.background === true,
+      };
+      const { state, shown } = stepThreadRowWorkProgress(modelState, {
+        thread: liveThread,
+        openTodos: todos,
+        selectedThreadKey: selected ? threadKey : undefined,
+        thinkingThreadKeys: thinking ? { [threadKey]: true } : undefined,
+        remount: step.remount,
+      });
+      modelState = state;
 
-        if (step.kind === "remount") {
-          subject.unmount();
-          subject = render(row(live, activity, selected));
-          // A row that mounts mid-turn has nothing older to show.
-          shown = live;
-        } else {
-          subject.rerender(row(live, activity, selected));
-        }
-        const turnRunning = activity.thinking || activity.turnActive || activity.subAgent;
-        if (!turnRunning || selected) shown = live;
-
-        const oracle = render(row(shown, IDLE, false));
-        try {
-          expect(chipFlow(subject.container)).toEqual(chipFlow(oracle.container));
-        } finally {
-          oracle.unmount();
-        }
-        // Waiting on the operator is never held.
-        expect(Boolean(subject.container.querySelector(".thread-row__chip--approval"))).toBe(approval);
-        // The drift warning lives in the open thread, not the row.
-        expect(chipFlow(subject.container).some((chip) => chip.includes("| now "))).toBe(false);
+      const subjectTree = renderOracleOrSubject({
+        summary: liveThread,
+        todos,
+        selected,
+        approval,
+        thinking,
+      });
+      if (!subject || step.remount) {
+        subject?.unmount();
+        subject = render(subjectTree);
+      } else {
+        subject.rerender(subjectTree);
       }
-    } finally {
-      subject.unmount();
+
+      const oracleTree = renderOracleOrSubject({
+        summary: {
+          ...shown.thread,
+          threadStatus: "idle",
+          hasActiveSubAgent: false,
+          hasBackgroundTasks: false,
+        },
+        todos: shown.openTodos,
+        selected: false,
+        approval,
+        thinking: false,
+      });
+      if (!oracle) {
+        oracle = render(oracleTree);
+      } else {
+        oracle.rerender(oracleTree);
+      }
+
+      const chips = chipFlow(subject.container);
+      expect(chips).toEqual(chipFlow(oracle.container));
+      // Waiting on the operator is never held.
+      expect(Boolean(subject.container.querySelector(".thread-row__chip--approval"))).toBe(approval);
+      // The drift warning lives in the open thread, not the row.
+      expect(chips.some((chip) => chip.includes("| now "))).toBe(false);
     }
-  }), { numRuns: 25 });
-});
+  } finally {
+    subject?.unmount();
+    oracle?.unmount();
+  }
+}
 
 const unpushed = (count: number): ThreadGitWorkingState => ({
   dirtyFiles: 0,
@@ -174,6 +184,135 @@ const unpushed = (count: number): ThreadGitWorkingState => ({
   dirtyDeletions: 0,
   untrackedFiles: 0,
   unpushedCommits: count,
+});
+
+const dirtyAndAhead: ThreadGitWorkingState = {
+  dirtyFiles: 2,
+  dirtyAdditions: 42,
+  dirtyDeletions: 7,
+  untrackedFiles: 1,
+  unpushedCommits: 2,
+  baseBranch: "main",
+  baseAheadCommitCount: 2,
+};
+
+it("matches the pure hold model across active turns, selection, approvals, drift and background tasks", () => {
+  const firstTodo = makeTodo(1);
+  const secondTodo = makeTodo(2);
+  const thirdTodo = makeTodo(3);
+  expectMountedRowMatchesPureModel([
+    // Two consecutive idle updates before the hold begins: ensures `useHeldWhile`
+    // refreshes its committed snapshot across unheld renders rather than snapping
+    // back to the initial mount when a turn later starts.
+    { gitBranch: "HEAD" },
+    {
+      gitBranch: "main",
+      gitWorkingState: unpushed(1),
+      todos: [firstTodo],
+    },
+    // Two consecutive progress-changing updates while held: ensures `useHeldWhile`
+    // keeps the pre-turn snapshot (`committed.current = shown`) instead of lagging
+    // by one render (`committed.current = value`). Approvals stay live throughout.
+    {
+      activity: { turnActive: true },
+      approval: true,
+      gitBranch: "fix/contrived-branch",
+      observedGitBranch: "test/another-contrived-branch",
+      gitWorkingState: dirtyAndAhead,
+      todos: [firstTodo, secondTodo],
+    },
+    {
+      activity: { turnActive: true },
+      approval: true,
+      gitBranch: "test/another-contrived-branch",
+      observedGitBranch: "fix/contrived-branch",
+      gitWorkingState: unpushed(4),
+      todos: [firstTodo, secondTodo, thirdTodo],
+    },
+    // Opening the thread reveals every live chip while the turn still runs.
+    {
+      activity: { turnActive: true },
+      selected: true,
+      approval: false,
+      gitBranch: "test/another-contrived-branch",
+      observedGitBranch: "fix/contrived-branch",
+      gitWorkingState: unpushed(4),
+      todos: [firstTodo, secondTodo, thirdTodo],
+    },
+    // Leaving it holds what was shown while open across multiple mid-turn updates.
+    {
+      activity: { turnActive: true },
+      selected: false,
+      gitBranch: "main",
+      observedGitBranch: "main",
+      gitWorkingState: unpushed(5),
+      todos: [firstTodo],
+    },
+    {
+      activity: { turnActive: true },
+      selected: false,
+      gitBranch: "fix/contrived-branch",
+      observedGitBranch: "fix/contrived-branch",
+      gitWorkingState: dirtyAndAhead,
+      todos: [],
+    },
+    // Turn finishes with a background task still running: live chips appear at once.
+    {
+      activity: { background: true },
+      gitBranch: "fix/contrived-branch",
+      observedGitBranch: "fix/contrived-branch",
+      gitWorkingState: dirtyAndAhead,
+      todos: [],
+    },
+  ]);
+});
+
+it("matches the pure hold model across owned workers, thinking state and mid-turn remounts", () => {
+  const firstTodo = makeTodo(1);
+  const secondTodo = makeTodo(2);
+  expectMountedRowMatchesPureModel([
+    // Mounted mid-turn with an owned worker: shows its initial live values.
+    {
+      activity: { subAgent: true },
+      gitBranch: "HEAD",
+      gitWorkingState: dirtyAndAhead,
+      todos: [firstTodo],
+    },
+    // Multiple subsequent changes while the worker runs stay held at the mount snapshot.
+    {
+      activity: { subAgent: true },
+      gitBranch: "fix/contrived-branch",
+      gitWorkingState: undefined,
+      todos: [],
+    },
+    {
+      activity: { subAgent: true },
+      gitBranch: "main",
+      gitWorkingState: unpushed(3),
+      todos: [firstTodo, secondTodo],
+    },
+    // Remounting mid-turn drops the prior held snapshot and shows live values.
+    {
+      activity: { subAgent: true },
+      gitBranch: "fix/contrived-branch",
+      gitWorkingState: unpushed(1),
+      todos: [firstTodo],
+      remount: true,
+    },
+    // Pending renderer thinking holds new changes until thinking clears.
+    {
+      activity: { thinking: true },
+      gitBranch: "main",
+      gitWorkingState: unpushed(2),
+      todos: [],
+    },
+    {
+      activity: {},
+      gitBranch: "main",
+      gitWorkingState: unpushed(2),
+      todos: [],
+    },
+  ]);
 });
 
 function renderRow(params: {

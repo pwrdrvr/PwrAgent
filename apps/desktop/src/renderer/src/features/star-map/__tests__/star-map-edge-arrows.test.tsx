@@ -150,7 +150,7 @@ async function renderMap(
 ) {
   window.localStorage.setItem(
     "pwragent.starMap.viewPreferences",
-    JSON.stringify({ layout }),
+    JSON.stringify({ version: 2, layout, hideOfflineInstances: false }),
   );
   await act(async () => {
     render(

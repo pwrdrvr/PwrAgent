@@ -35,6 +35,11 @@ import { InstanceChip } from "../federation/InstanceGlyph";
 import { reservePlainTooltipRequest, useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { AgentThreadChip } from "./AgentThreadChip";
+import {
+  applyHeldThreadWorkProgress,
+  extractThreadWorkProgress,
+  resolveHeldValue,
+} from "./thread-row-work-progress";
 
 const NO_WAITS: OperatorWait[] = [];
 
@@ -129,7 +134,7 @@ function ThreadMetaTooltip({ request, dismiss }: {
  */
 function useHeldWhile<T>(value: T, hold: boolean): T {
   const committed = useRef(value);
-  const shown = hold ? committed.current : value;
+  const shown = resolveHeldValue(committed.current, value, hold);
   // Only a committed render updates what a later hold shows.
   useLayoutEffect(() => {
     committed.current = shown;
@@ -137,23 +142,14 @@ function useHeldWhile<T>(value: T, hold: boolean): T {
   return shown;
 }
 
-type WorkProgress = Pick<
-  NavigationThreadSummary,
-  "gitBranch" | "gitWorkingState" | "observedGitBranch"
->;
-
 function useHeldWorkProgressThread(
   thread: NavigationThreadSummary,
   hold: boolean,
 ): NavigationThreadSummary {
-  const held = useHeldWhile<WorkProgress>({
-    gitBranch: thread.gitBranch,
-    gitWorkingState: thread.gitWorkingState,
-    observedGitBranch: thread.observedGitBranch,
-  }, hold);
+  const held = useHeldWhile(extractThreadWorkProgress(thread), hold);
   // Every other field stays live: identity, PRs, federation, agent.
   return useMemo(
-    () => hold ? { ...thread, ...held } : thread,
+    () => applyHeldThreadWorkProgress(thread, held, hold),
     [hold, held, thread],
   );
 }

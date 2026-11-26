@@ -53,6 +53,22 @@ export type ProjectForgeAutomation = {
    * Present only when on; an older owner never stores it.
    */
   neverMerge?: true;
+  /**
+   * With `neverMerge` on, the base branches whose pull requests still merge:
+   * the fork's own integration branches, such as `pwrdrvr`. Exact names.
+   * Present only with `neverMerge` and at least one branch. An owner that
+   * predates it drops it and merges none, so it never merges more.
+   */
+  mergeBranches?: string[];
+  /**
+   * Pull requests PwrAgent leaves to the destination repository's
+   * maintainers, such as an upstream PR a maintainer labeled
+   * `takeover:in-progress`. Auto-fix does not repair a matching PR and
+   * PwrAgent raises no Review or Merge card for it; the operator's own
+   * turns and an agent's PR watches are unaffected. Present only when it
+   * holds a rule; an older owner never stores it.
+   */
+  handsOff?: ProjectForgeHandsOffRule[];
   /** While paused, refuse agent messages from other threads. */
   refuseThreadMessages: boolean;
   /**
@@ -63,6 +79,26 @@ export type ProjectForgeAutomation = {
 };
 
 export type ProjectForgeAutomationWakeupPolicy = "hold" | "discard";
+
+/**
+ * One hands-off rule: a destination repository, and optionally a label
+ * pattern a PR into it must carry. Without a label, every PR into the
+ * repository is hands-off.
+ */
+export type ProjectForgeHandsOffRule = {
+  /** Destination `owner/name`, compared without case. */
+  repository: string;
+  /**
+   * Label name pattern, compared without case. `*` matches any run of
+   * characters, so `takeover:*` matches `takeover:in-progress`.
+   */
+  label?: string;
+};
+
+/** Longest repository or label pattern a rule keeps. */
+export const MAX_HANDS_OFF_RULE_TEXT = 200;
+/** Most hands-off rules a project keeps. */
+export const MAX_HANDS_OFF_RULES = 20;
 
 export type ProjectMergeBuildWatches = "default" | "on" | "off";
 
@@ -110,6 +146,8 @@ export function resolveProjectForgeAutomation(value: unknown): ProjectForgeAutom
       : {}),
     prOffers: flag("prOffers"),
     ...(record.neverMerge === true ? { neverMerge: true as const } : {}),
+    ...(record.neverMerge === true ? resolveMergeBranchesField(record.mergeBranches) : {}),
+    ...withHandsOff(normalizeHandsOffRules(record.handsOff)),
     refuseThreadMessages: flag("refuseThreadMessages"),
     wakeupPolicy: record.wakeupPolicy === "discard" ? "discard" : "hold",
   };
@@ -124,6 +162,7 @@ export function isDefaultProjectForgeAutomation(value: ProjectForgeAutomation): 
     && (value.mergeBuildWatches ?? "default") === "default"
     && value.prOffers !== false
     && value.neverMerge !== true
+    && !value.handsOff?.length
     && value.refuseThreadMessages === DEFAULT_PROJECT_FORGE_AUTOMATION.refuseThreadMessages
     && value.wakeupPolicy === DEFAULT_PROJECT_FORGE_AUTOMATION.wakeupPolicy;
 }
@@ -174,16 +213,292 @@ export function projectNeverMerges(value: Pick<ProjectForgeAutomation, "neverMer
   return value?.neverMerge === true;
 }
 
+/** Most branches one project lists; more is a mistake, not a workflow. */
+export const MAX_PROJECT_MERGE_BRANCHES = 20;
+
+const MAX_MERGE_BRANCH_LENGTH = 255;
+
+/**
+ * A branch name as the Merging list stores it, trimmed; undefined when it
+ * cannot be a Git branch name the forge reports as a base: empty, too long,
+ * or holding whitespace or control characters.
+ */
+export function normalizeProjectMergeBranch(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const branch = value.trim();
+  if (!branch || branch.length > MAX_MERGE_BRANCH_LENGTH) return undefined;
+  if (/\s/.test(branch) || [...branch].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)) {
+    return undefined;
+  }
+  return branch;
+}
+
+/** The stored list, cleaned: valid names, each once, in order, capped. */
+function resolveMergeBranchesField(value: unknown): { mergeBranches?: string[] } {
+  if (!Array.isArray(value)) return {};
+  const branches: string[] = [];
+  for (const entry of value) {
+    const branch = normalizeProjectMergeBranch(entry);
+    if (branch && !branches.includes(branch)) branches.push(branch);
+    if (branches.length === MAX_PROJECT_MERGE_BRANCHES) break;
+  }
+  return branches.length ? { mergeBranches: branches } : {};
+}
+
+/**
+ * The base branches that still merge in a never-merge project; empty when
+ * the project merges everything or nothing is listed.
+ */
+export function projectMergeBranches(
+  value: Pick<ProjectForgeAutomation, "neverMerge" | "mergeBranches"> | undefined,
+): string[] {
+  return projectNeverMerges(value) ? resolveMergeBranchesField(value?.mergeBranches).mergeBranches ?? [] : [];
+}
+
+/**
+ * Whether PwrAgent may merge, or offer to merge, a pull request into
+ * `baseRefName` in this project: always when the project merges, and in a
+ * never-merge project only into a listed branch. A base not read yet is not
+ * listed.
+ */
+export function projectMergesPullRequest(
+  value: Pick<ProjectForgeAutomation, "neverMerge" | "mergeBranches"> | undefined,
+  baseRefName: string | undefined,
+): boolean {
+  if (!projectNeverMerges(value)) return true;
+  const base = baseRefName?.trim();
+  return Boolean(base) && projectMergeBranches(value).includes(base!);
+}
+
+/** A never-merge project as a merge path reports it. */
+export type ProjectNeverMergePolicy = {
+  projectLabel: string;
+  /** Base branches it still merges into; empty merges none. */
+  mergeBranches: string[];
+};
+
+/** The project's never-merge policy; undefined when it merges. */
+export function resolveProjectNeverMergePolicy(
+  project: { label: string; automation: Pick<ProjectForgeAutomation, "neverMerge" | "mergeBranches"> } | undefined,
+): ProjectNeverMergePolicy | undefined {
+  return project && projectNeverMerges(project.automation)
+    ? { projectLabel: project.label, mergeBranches: projectMergeBranches(project.automation) }
+    : undefined;
+}
+
+/** `a`, `a or b`, `a, b or c`. */
+export function formatProjectMergeBranches(branches: readonly string[]): string {
+  if (branches.length <= 1) return branches[0] ?? "";
+  return `${branches.slice(0, -1).join(", ")} or ${branches.at(-1)}`;
+}
+
+function withHandsOff(
+  rules: ProjectForgeHandsOffRule[],
+): { handsOff?: ProjectForgeHandsOffRule[] } {
+  return rules.length > 0 ? { handsOff: rules } : {};
+}
+
+/**
+ * Keeps the well-formed rules: a trimmed `owner/name` repository and an
+ * optional trimmed label pattern, each at most `MAX_HANDS_OFF_RULE_TEXT`
+ * long. Drops duplicates (ignoring case) and keeps the first
+ * `MAX_HANDS_OFF_RULES`. Never throws.
+ */
+export function normalizeHandsOffRules(value: unknown): ProjectForgeHandsOffRule[] {
+  if (!Array.isArray(value)) return [];
+  const rules: ProjectForgeHandsOffRule[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (rules.length >= MAX_HANDS_OFF_RULES) break;
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const repository = normalizeHandsOffRepository(record.repository);
+    if (!repository) continue;
+    const label = typeof record.label === "string" ? record.label.trim() : "";
+    if (label.length > MAX_HANDS_OFF_RULE_TEXT) continue;
+    const key = `${repository}\n${label}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rules.push(label ? { repository, label } : { repository });
+  }
+  return rules;
+}
+
+/** What follows `owner/name` in a GitHub URL for something in the repository. */
+const GITHUB_RESOURCE_SEGMENTS = new Set([
+  "pull", "pulls", "issues", "tree", "blob", "commit", "commits", "compare", "actions", "releases", "tags", "wiki",
+]);
+
+/**
+ * `owner/name` from what the operator typed, or undefined. Accepts a pasted
+ * repository URL (`https://github.com/owner/name`) or a host-prefixed key
+ * (`github.com/owner/name`) and drops a trailing `.git` or slash. GitLab
+ * subgroups (`group/sub/name`) keep every segment.
+ */
+export function normalizeHandsOffRepository(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let text = value.trim();
+  const url = /^https?:\/\/[^/]+\/(.+)$/i.exec(text);
+  if (url?.[1]) text = url[1];
+  text = text.replace(/\/+$/, "").replace(/\.git$/i, "");
+  if (text.length === 0 || text.length > MAX_HANDS_OFF_RULE_TEXT) return undefined;
+  const segments = text.split("/");
+  // `github.com/owner/name`, as the Forge Automation subtitle shows it: a
+  // first segment with a dot is a host, never an owner, when two remain.
+  if (segments.length >= 3 && segments[0]!.includes(".")) segments.shift();
+  // A pasted PR, issue or file URL names its repository first: GitLab ends
+  // the project path at `-`, and on GitHub a resource follows owner/name.
+  const projectEnd = segments.indexOf("-");
+  if (projectEnd >= 2) segments.length = projectEnd;
+  else if (segments.length > 2 && GITHUB_RESOURCE_SEGMENTS.has(segments[2]!.toLowerCase())) segments.length = 2;
+  if (segments.length < 2) return undefined;
+  if (segments.some((segment) => !/^[\w.-]+$/.test(segment))) return undefined;
+  return segments.join("/");
+}
+
+/**
+ * Whether a label pattern matches a label name, ignoring case. `*` matches
+ * any run of characters. A linear two-pointer match, never a RegExp: a
+ * backtracking `.*` per star made `*a*a*a…b` take seconds on one label.
+ */
+export function handsOffLabelMatches(pattern: string, label: string): boolean {
+  const p = pattern.toLowerCase();
+  const t = label.toLowerCase();
+  let i = 0;
+  let j = 0;
+  let star = -1;
+  let resume = 0;
+  while (j < t.length) {
+    if (i < p.length && p[i] === "*") {
+      star = i++;
+      resume = j;
+    } else if (i < p.length && p[i] === t[j]) {
+      i++;
+      j++;
+    } else if (star >= 0) {
+      i = star + 1;
+      j = ++resume;
+    } else {
+      return false;
+    }
+  }
+  while (i < p.length && p[i] === "*") i++;
+  return i === p.length;
+}
+
+/** The part of a PR a hands-off rule reads. */
+export type HandsOffPullRequest = {
+  /** Destination repository owner (`PrSummary.org`). */
+  org: string;
+  /** Destination repository name (`PrSummary.repo`). */
+  repo: string;
+  /** Label names, when the poll read them. */
+  labels?: readonly string[];
+};
+
+/** The rule a PR matched, and the label that matched it. */
+export type HandsOffMatch = {
+  rule: ProjectForgeHandsOffRule;
+  /** The PR's label that matched `rule.label`; absent for a repository rule. */
+  label?: string;
+};
+
+/**
+ * The first rule that makes a PR hands-off, or undefined. A label rule
+ * matches only labels the poll read: a PR whose labels are unknown is not
+ * hands-off by a label rule.
+ */
+export function findHandsOffMatch(
+  value: Pick<ProjectForgeAutomation, "handsOff"> | undefined,
+  pr: HandsOffPullRequest,
+): HandsOffMatch | undefined {
+  const rules = value?.handsOff;
+  if (!rules?.length) return undefined;
+  const repository = `${pr.org}/${pr.repo}`.toLowerCase();
+  for (const rule of rules) {
+    if (rule.repository.toLowerCase() !== repository) continue;
+    if (!rule.label) return { rule };
+    const label = pr.labels?.find((name) => handsOffLabelMatches(rule.label!, name));
+    if (label !== undefined) return { rule, label };
+  }
+  return undefined;
+}
+
+/**
+ * The repositories whose PRs must have their labels read, lowercased: those
+ * with a label rule in any of the given projects. A repository rule alone
+ * needs no labels.
+ */
+export function handsOffLabelRepositories(
+  values: Iterable<Pick<ProjectForgeAutomation, "handsOff"> | undefined>,
+): Set<string> {
+  const repositories = new Set<string>();
+  for (const value of values) {
+    for (const rule of value?.handsOff ?? []) {
+      if (rule.label) repositories.add(rule.repository.toLowerCase());
+    }
+  }
+  return repositories;
+}
+
+/**
+ * Why PwrAgent leaves a PR alone, as a phrase for the PR activity log
+ * ("Cancelled: hands-off, labeled takeover:in-progress") and the PR card.
+ */
+export function describeHandsOffMatch(match: HandsOffMatch): string {
+  return match.label !== undefined
+    ? `hands-off, labeled ${match.label}`
+    : `hands-off, PRs into ${match.rule.repository}`;
+}
+
+/** Thread status guidance for a hands-off PR. */
+export function buildHandsOffGuidance(params: {
+  projectLabel: string;
+  pullRequest: string;
+  match: HandsOffMatch;
+}): string {
+  const reason = params.match.label !== undefined
+    ? `it carries the ${params.match.label} label`
+    : `it targets ${params.match.rule.repository}`;
+  return `${params.pullRequest} is hands-off in ${params.projectLabel}'s Forge Automation because ${reason}: its maintainers own it now. Auto-fix will not repair it and no Review or Merge card is raised. Do not push fixes, rebase, or resolve conflicts on it unless the operator asks in this turn.`;
+}
+
 /**
  * Why an agent may not merge, or raise a merge card for, a pull request in
  * a never-merge project. Used as the tool refusal and the readiness line.
+ * With `mergeBranches`, it names the branches that still merge, and with
+ * `baseUnknown` it says the PR's base has not been read, which counts as a
+ * branch the project does not list.
  */
 export function buildProjectNeverMergeRefusal(params: {
   projectLabel: string;
   pullRequest?: string;
+  mergeBranches?: readonly string[];
+  baseUnknown?: boolean;
 }): string {
+  const listed = Boolean(params.mergeBranches?.length);
   const subject = params.pullRequest ? `${params.pullRequest} is in` : "This thread is in";
-  return `${subject} ${params.projectLabel}, where Forge Automation is set to never merge pull requests: they land upstream. Do not merge it, offer a merge, or raise a merge card. The operator can change this from the project menu: Forge Automation.`;
+  const object = params.pullRequest ?? (listed ? "a pull request into any other branch" : "it");
+  const rule = listed
+    ? `merges only pull requests into ${formatProjectMergeBranches(params.mergeBranches!)}: the rest land upstream`
+    : "is set to never merge pull requests: they land upstream";
+  const unread = listed && params.pullRequest && params.baseUnknown
+    ? ` PwrAgent has not read ${params.pullRequest}'s base branch yet, so it counts as another branch.`
+    : "";
+  return `${subject} ${params.projectLabel}, where Forge Automation ${rule}.${unread} Do not merge ${object}, offer a merge, or raise a merge card. The operator can change this from the project menu: Forge Automation.`;
+}
+
+/**
+ * The owner's refusal for a merge from a PR card or a merge card in a
+ * never-merge project.
+ */
+export function buildProjectNeverMergeError(params: {
+  projectLabel: string;
+  mergeBranches?: readonly string[];
+}): string {
+  return params.mergeBranches?.length
+    ? `${params.projectLabel} merges only pull requests into ${formatProjectMergeBranches(params.mergeBranches)}. Change it from the project menu: Forge Automation.`
+    : `${params.projectLabel} never merges its pull requests. Change it from the project menu: Forge Automation.`;
 }
 
 /** Whether the project's pull requests should be polled at all. */

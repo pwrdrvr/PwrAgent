@@ -1,6 +1,5 @@
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import fc from "fast-check";
 import { execFile } from "node:child_process";
 import { cp, mkdtemp, mkdir, readFile, realpath, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -1536,8 +1535,9 @@ describe("archive cleanup and finished helper threads", () => {
   // Rule: a hidden ACP helper (thread naming, command discovery, a managed
   // review) uses its parent's checkout only while it runs. Stored and idle,
   // it must not keep an archived thread's checkout.
-  it("keeps a checkout for a visible ACP session but never for an idle hidden helper", async () => {
-    await fc.assert(fc.asyncProperty(fc.integer({ min: 0, max: 3 }), fc.boolean(), async (helpers, visibleUser) => {
+  it.each([0, 1, 2, 3].flatMap(helpers => [false, true].map(visibleUser => ({ helpers, visibleUser }))))(
+    "keeps a checkout for a visible ACP session (visible=$visibleUser, idle hidden helpers=$helpers)",
+    async ({ helpers, visibleUser }) => {
       const fixture = await createFixture();
       ArchiveWorktreeTransport.threads = [{ id: "old-target", cwd: fixture.worktree, source: "cli" }];
       const instance = fixture.reopen();
@@ -1550,8 +1550,9 @@ describe("archive cleanup and finished helper threads", () => {
       expect(result.cleanup[0]?.removedWorktree).toBe(!visibleUser);
       expect((result.cleanup[0]?.blockingThreads ?? []).map((thread) => thread.threadId))
         .toEqual(visibleUser ? [acpOwner.threadId] : []);
-    }), { numRuns: 8 });
-  }, 120_000);
+    },
+    120_000,
+  );
 
   it("keeps a checkout while a hidden helper's process is running a turn", async () => {
     const fixture = await createFixture();
@@ -1575,46 +1576,49 @@ describe("archive cleanup and finished helper threads", () => {
   // Rule: a PwrAgent monitor worker runs in its parent's checkout. Once every
   // card that names it has ended, it no longer uses that checkout. A running
   // card, or a provider-native sub-agent (the provider's own thread), still does.
-  it("marks and releases a monitor worker only when all of its cards are finished monitor cards", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.array(fc.record({ native: fc.boolean(), finished: fc.boolean() }), { maxLength: 3 }),
-      async (cards) => {
-        const fixture = await createFixture();
-        ArchiveWorktreeTransport.threads = [
-          { id: "old-target", cwd: fixture.worktree, source: "cli" },
-          { id: "worker", cwd: fixture.worktree, source: "cli" },
-        ];
-        const input: Parameters<SqliteOverlayStore["upsertThreadSubAgents"]>[0] = { backend: "codex", threadId: "old-target", subAgents: cards.map((card, index) => ({
-          monitorId: card.native ? `codex-native:call-${index}` : `monitor-${index}`, task: "Watch CI",
-          status: card.finished ? "success" : "running", createdAt: 1, updatedAt: 1, backend: "codex", monitorThreadId: "worker",
-          ...(card.finished ? { completedAt: 2 } : {}),
-        })) };
+  const finishedMonitor = { native: false, finished: true };
+  const runningMonitor = { native: false, finished: false };
+  const finishedNative = { native: true, finished: true };
+  const runningNative = { native: true, finished: false };
+  it.each([
+    { label: "no cards", cards: [] },
+    { label: "one finished monitor card", cards: [finishedMonitor] },
+    { label: "three finished monitor cards", cards: [finishedMonitor, finishedMonitor, finishedMonitor] },
+    { label: "one running monitor card", cards: [runningMonitor] },
+    { label: "a running monitor card after finished cards", cards: [finishedMonitor, finishedMonitor, runningMonitor] },
+    { label: "a finished native card after a finished monitor card", cards: [finishedMonitor, finishedNative] },
+    { label: "a running native card before a finished monitor card", cards: [runningNative, finishedMonitor] },
+  ])("classifies a monitor worker with $label", async ({ cards }) => {
+    const fixture = await createFixture();
+    ArchiveWorktreeTransport.threads = [
+      { id: "old-target", cwd: fixture.worktree, source: "cli" },
+      { id: "worker", cwd: fixture.worktree, source: "cli" },
+    ];
+    const input: Parameters<SqliteOverlayStore["upsertThreadSubAgents"]>[0] = { backend: "codex", threadId: "old-target", subAgents: cards.map((card, index) => ({
+      monitorId: card.native ? `codex-native:call-${index}` : `monitor-${index}`, task: "Watch CI",
+      status: card.finished ? "success" : "running", createdAt: 1, updatedAt: 1, backend: "codex", monitorThreadId: "worker",
+      ...(card.finished ? { completedAt: 2 } : {}),
+    })) };
 
-        const finished = cards.length > 0 && cards.every((card) => !card.native && card.finished);
-        // Thread maintenance needs the same classification for hibernation.
-        const inspector = fixture.reopen();
-        await inspector.store.upsertThreadSubAgents(input);
-        const candidates = await inspector.registry.listAutoArchiveCandidates();
-        const flag = (id: string) => candidates.find((candidate) => candidate.thread.id === id)?.finishedMonitorWorker === true;
-        expect(flag("worker")).toBe(finished);
-        expect(flag("old-target")).toBe(false);
-        await inspector.registry.close();
+    const finished = cards.length > 0 && cards.every((card) => !card.native && card.finished);
+    // Thread maintenance needs the same classification for hibernation.
+    const inspector = fixture.reopen();
+    await inspector.store.upsertThreadSubAgents(input);
+    const candidates = await inspector.registry.listAutoArchiveCandidates();
+    const flag = (id: string) => candidates.find((candidate) => candidate.thread.id === id)?.finishedMonitorWorker === true;
+    expect(flag("worker")).toBe(finished);
+    expect(flag("old-target")).toBe(false);
+    await inspector.registry.close();
 
-        // Reuse Git setup, but seed a fresh database so startup reconciliation
-        // cannot retire the other registry's unfinished cards.
-        const archiver = fixture.reopen(fixture.directory, false, undefined, [], {
-          stateDatabasePath: path.join(fixture.root, "archive-state.db"),
-        });
-        await archiver.store.upsertThreadSubAgents(input);
-        const result = await archiver.registry.archiveThread({ backend: "codex", threadId: "old-target" });
-        expect(result.cleanup[0]?.removedWorktree).toBe(finished);
-        expect((result.cleanup[0]?.blockingThreads ?? []).map((thread) => thread.threadId)).toEqual(finished ? [] : ["worker"]);
-      },
-    ), { numRuns: 10, examples: [
-      [[{ native: false, finished: true }]],
-      [[{ native: false, finished: true }, { native: true, finished: true }]],
-      [[{ native: false, finished: false }]],
-    ] });
+    // Reuse Git setup, but seed a fresh database so startup reconciliation
+    // cannot retire the other registry's unfinished cards.
+    const archiver = fixture.reopen(fixture.directory, false, undefined, [], {
+      stateDatabasePath: path.join(fixture.root, "archive-state.db"),
+    });
+    await archiver.store.upsertThreadSubAgents(input);
+    const result = await archiver.registry.archiveThread({ backend: "codex", threadId: "old-target" });
+    expect(result.cleanup[0]?.removedWorktree).toBe(finished);
+    expect((result.cleanup[0]?.blockingThreads ?? []).map((thread) => thread.threadId)).toEqual(finished ? [] : ["worker"]);
   }, 120_000);
 
   // Rule: Thread maintenance can remove an archived checkout over the
@@ -1665,45 +1669,40 @@ describe("archive cleanup and finished helper threads", () => {
   // (a parent and its sub-thread share one); a thread that does not link it
   // is refused and the checkout is kept, still locked, even when the
   // approval matches its lock text.
-  it("unlocks and removes a locked checkout only for an archived thread that owns it", async () => {
-    await fc.assert(fc.asyncProperty(
-      fc.constantFrom("archived-owner", "archived-sibling", "another-archived-thread"),
-      fc.boolean(),
-      fc.stringMatching(/^[a-z][a-z ,]{0,16}[a-z]$/),
-      async (requested, shared, reason) => {
-        const fixture = await createFixture();
-        ArchiveWorktreeTransport.threads = [
-          { id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true },
-          ...(shared ? [{ id: "archived-sibling", cwd: fixture.worktree, source: "cli", archived: true }] : []),
-          { id: "another-archived-thread", cwd: path.join(fixture.root, "elsewhere"), source: "cli", archived: true },
-        ];
-        await fixture.git(fixture.repo, ["worktree", "lock", "--reason", reason, fixture.worktree]);
-        const instance = fixture.reopen();
-        try {
-          const { results } = await instance.registry.removeLockedThreadWorktrees({ worktrees: [{
-            backend: "codex", threadId: requested, worktreePath: fixture.worktree, approvedLockReason: reason,
-          }] });
-          const owned = requested === "archived-owner" || (shared && requested === "archived-sibling");
-          expect(results).toHaveLength(1);
-          expect(results[0]).toMatchObject({ status: owned ? "removed" : "kept", worktreePath: fixture.worktree });
-          const present = await stat(fixture.worktree).then(() => true, () => false);
-          expect(present).toBe(!owned);
-          if (!owned) {
-            const lock = await readFile(path.join(fixture.repo, ".git", "worktrees", path.basename(fixture.worktree), "locked"), "utf8");
-            expect(lock.trim()).toBe(reason);
-          }
-        } finally {
-          await instance.registry.close();
-          instance.db.close();
-          ArchiveWorktreeTransport.threads = [];
+  it.each(["archived-owner", "archived-sibling", "another-archived-thread"].flatMap(requested =>
+    [false, true].map(shared => ({ requested, shared }))))(
+    "requires $requested to own the locked checkout before unlocking it (shared=$shared)",
+    async ({ requested, shared }) => {
+      const reason = "release prep, do not remove";
+      const fixture = await createFixture();
+      ArchiveWorktreeTransport.threads = [
+        { id: "archived-owner", cwd: fixture.worktree, source: "cli", archived: true },
+        ...(shared ? [{ id: "archived-sibling", cwd: fixture.worktree, source: "cli", archived: true }] : []),
+        { id: "another-archived-thread", cwd: path.join(fixture.root, "elsewhere"), source: "cli", archived: true },
+      ];
+      await fixture.git(fixture.repo, ["worktree", "lock", "--reason", reason, fixture.worktree]);
+      const instance = fixture.reopen();
+      try {
+        const { results } = await instance.registry.removeLockedThreadWorktrees({ worktrees: [{
+          backend: "codex", threadId: requested, worktreePath: fixture.worktree, approvedLockReason: reason,
+        }] });
+        const owned = requested === "archived-owner" || (shared && requested === "archived-sibling");
+        expect(results).toHaveLength(1);
+        expect(results[0]).toMatchObject({ status: owned ? "removed" : "kept", worktreePath: fixture.worktree });
+        const present = await stat(fixture.worktree).then(() => true, () => false);
+        expect(present).toBe(!owned);
+        if (!owned) {
+          const lock = await readFile(path.join(fixture.repo, ".git", "worktrees", path.basename(fixture.worktree), "locked"), "utf8");
+          expect(lock.trim()).toBe(reason);
         }
-      },
-    ), { numRuns: 4, examples: [
-      ["another-archived-thread", true, "release prep, do not remove"],
-      ["archived-owner", true, "release prep"],
-      ["archived-sibling", true, "release prep"],
-    ] });
-  }, 120_000);
+      } finally {
+        await instance.registry.close();
+        instance.db.close();
+        ArchiveWorktreeTransport.threads = [];
+      }
+    },
+    120_000,
+  );
 
   // Rule: the background report names the archived thread. Its window rarely
   // has it loaded, so the owner must say what it was called.

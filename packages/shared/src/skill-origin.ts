@@ -46,6 +46,54 @@ export function classifySkillOrigin(
   directories: readonly SkillOriginDirectory[],
   options: SkillOriginOptions = {},
 ): AppServerSkillOrigin | undefined {
+  return classifySkillOriginCore(skill, directories, options, undefined, undefined);
+}
+
+/**
+ * Attaches `origin` to every skill. The skills keep their order and every
+ * other field; a skill that already carries an origin is reclassified, since
+ * the directories are what changed.
+ */
+export function withSkillOrigins<T extends AppServerSkillSummary>(
+  skills: readonly T[],
+  directories: readonly SkillOriginDirectory[],
+  options: SkillOriginOptions = {},
+): T[] {
+  let directoryIndex: DirectoryIndex | undefined;
+  let bundledRoots: PreparedBundledRoot[] | undefined;
+
+  return skills.map((skill) => {
+    const origin = classifySkillOriginCore(
+      skill,
+      directories,
+      options,
+      () => {
+        directoryIndex ??= buildDirectoryIndex(directories);
+        return directoryIndex;
+      },
+      () => {
+        bundledRoots ??= prepareBundledSkillRoots(options.bundledSkillRoots);
+        return bundledRoots;
+      },
+    );
+    if (!origin) {
+      if (!skill.origin) {
+        return skill;
+      }
+      const { origin: _origin, ...rest } = skill;
+      return rest as T;
+    }
+    return { ...skill, origin };
+  });
+}
+
+function classifySkillOriginCore(
+  skill: Pick<AppServerSkillSummary, "path" | "pluginId" | "scope">,
+  directories: readonly SkillOriginDirectory[],
+  options: SkillOriginOptions,
+  getDirectoryIndex: (() => DirectoryIndex) | undefined,
+  getBundledRoots: (() => readonly PreparedBundledRoot[]) | undefined,
+): AppServerSkillOrigin | undefined {
   const skillPath = skill.path?.trim();
   if (!skillPath) {
     return undefined;
@@ -65,28 +113,42 @@ export function classifySkillOrigin(
       return { kind: "built-in", label: "Built-in" };
     case "admin":
       return { kind: "admin", label: "Admin" };
-    case "user":
+    case "user": {
+      const normalizedSkillPath = normalizeTrimmedPath(skillPath);
       // PwrAgent hands Codex its own bundled skill folder, which Codex lists
       // as a user root. Without this check those skills read as Codex home,
       // where the operator then looks for a copy that does not exist.
-      if (
-        options.bundledSkillRoots?.some(
-          (root) => root.trim() && isPathInside(skillPath, root),
-        )
-      ) {
-        return { kind: "pwragent", label: "PwrAgent" };
+      const preparedRoots = getBundledRoots
+        ? getBundledRoots()
+        : prepareBundledSkillRoots(options.bundledSkillRoots);
+      if (preparedRoots.length > 0) {
+        const isWindowsSkill = isTrimmedWindowsPath(skillPath);
+        let foldedSkillPath: string | undefined;
+        for (const root of preparedRoots) {
+          const caseInsensitive = isWindowsSkill || root.isWindows;
+          const target = caseInsensitive
+            ? (foldedSkillPath ??= normalizedSkillPath.toLowerCase())
+            : normalizedSkillPath;
+          const prefix = caseInsensitive ? root.folded : root.normalized;
+          if (isNormalizedPathInside(target, prefix)) {
+            return { kind: "pwragent", label: "PwrAgent" };
+          }
+        }
       }
       // Codex has two user roots, `~/.agents/skills` and
       // `$CODEX_HOME/skills`. The second one moves with the Codex profile, so
       // it is recognized as "not the first" rather than by name.
-      return normalizePath(skillPath).includes("/.agents/skills/")
+      return normalizedSkillPath.includes("/.agents/skills/")
         ? { kind: "personal", label: "Personal" }
         : { kind: "codex-home", label: "Codex home" };
+    }
     default:
       break;
   }
 
-  const project = matchLinkedDirectory(skillPath, directories);
+  const project = getDirectoryIndex
+    ? matchIndexedLinkedDirectory(skillPath, getDirectoryIndex(), directories)
+    : matchLinkedDirectory(skillPath, directories);
   if (project) {
     return project;
   }
@@ -97,29 +159,6 @@ export function classifySkillOrigin(
     };
   }
   return { kind: "other", label: skillRootLabel(skillPath) ?? "Other" };
-}
-
-/**
- * Attaches `origin` to every skill. The skills keep their order and every
- * other field; a skill that already carries an origin is reclassified, since
- * the directories are what changed.
- */
-export function withSkillOrigins<T extends AppServerSkillSummary>(
-  skills: readonly T[],
-  directories: readonly SkillOriginDirectory[],
-  options: SkillOriginOptions = {},
-): T[] {
-  return skills.map((skill) => {
-    const origin = classifySkillOrigin(skill, directories, options);
-    if (!origin) {
-      if (!skill.origin) {
-        return skill;
-      }
-      const { origin: _origin, ...rest } = skill;
-      return rest as T;
-    }
-    return { ...skill, origin };
-  });
 }
 
 /**
@@ -299,24 +338,205 @@ export function readSkillOrigin(value: unknown): AppServerSkillOrigin | undefine
   };
 }
 
+type IndexedRoot = {
+  order: number;
+  origin: AppServerSkillOrigin;
+};
+
+type DirectoryIndex = {
+  allFoldedRoots: Map<string, IndexedRoot>;
+  exactRoots: Map<string, IndexedRoot>;
+  hasUnicodeCaseLengthChange: boolean;
+  windowsFoldedRoots: Map<string, IndexedRoot>;
+};
+
+type PreparedBundledRoot = {
+  folded: string;
+  isWindows: boolean;
+  normalized: string;
+};
+
+function prepareBundledSkillRoots(
+  roots: readonly string[] | undefined,
+): PreparedBundledRoot[] {
+  if (!roots?.length) {
+    return [];
+  }
+  const prepared: PreparedBundledRoot[] = [];
+  for (const raw of roots) {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const normalized = normalizeTrimmedPath(trimmed);
+    if (!normalized) {
+      continue;
+    }
+    prepared.push({
+      folded: normalized.toLowerCase(),
+      isWindows: isTrimmedWindowsPath(trimmed),
+      normalized,
+    });
+  }
+  return prepared;
+}
+
+function buildDirectoryIndex(
+  directories: readonly SkillOriginDirectory[],
+): DirectoryIndex {
+  const exactRoots = new Map<string, IndexedRoot>();
+  const windowsFoldedRoots = new Map<string, IndexedRoot>();
+  const allFoldedRoots = new Map<string, IndexedRoot>();
+  let hasUnicodeCaseLengthChange = false;
+  let nextOrder = 0;
+
+  for (let directoryIndex = 0; directoryIndex < directories.length; directoryIndex += 1) {
+    const directory = directories[directoryIndex]!;
+    const trimmedLabel = directory.label.trim();
+    for (let slot = 0; slot < 2; slot += 1) {
+      const worktree = slot === 0;
+      const root = (worktree ? directory.worktreePath : directory.path)?.trim();
+      if (!root) {
+        continue;
+      }
+      const normalized = normalizeTrimmedPath(root);
+      if (!normalized) {
+        continue;
+      }
+      const isWindows = isTrimmedWindowsPath(root);
+      const folded = normalized.toLowerCase();
+      if (folded.length !== normalized.length) {
+        hasUnicodeCaseLengthChange = true;
+      }
+      const entry: IndexedRoot = {
+        order: nextOrder,
+        origin: {
+          kind: "project",
+          label: trimmedLabel || lastSegmentNormalized(normalized) || "Project",
+          directoryIndex,
+          ...(worktree ? { worktree: true } : {}),
+        },
+      };
+      nextOrder += 1;
+
+      if (!allFoldedRoots.has(folded)) {
+        allFoldedRoots.set(folded, entry);
+      }
+      if (isWindows) {
+        if (!windowsFoldedRoots.has(folded)) {
+          windowsFoldedRoots.set(folded, entry);
+        }
+      } else if (!exactRoots.has(normalized)) {
+        exactRoots.set(normalized, entry);
+      }
+    }
+  }
+
+  return {
+    allFoldedRoots,
+    exactRoots,
+    hasUnicodeCaseLengthChange,
+    windowsFoldedRoots,
+  };
+}
+
+function matchIndexedLinkedDirectory(
+  skillPath: string,
+  index: DirectoryIndex,
+  directories: readonly SkillOriginDirectory[],
+): AppServerSkillOrigin | undefined {
+  if (index.allFoldedRoots.size === 0) {
+    return undefined;
+  }
+  const normalizedValue = normalizeTrimmedPath(skillPath);
+  if (!normalizedValue) {
+    return undefined;
+  }
+  const isWindowsValue = isTrimmedWindowsPath(skillPath);
+  const needsFolded = isWindowsValue || index.windowsFoldedRoots.size > 0;
+  const foldedValue = needsFolded ? normalizedValue.toLowerCase() : normalizedValue;
+  if (
+    needsFolded
+    && (index.hasUnicodeCaseLengthChange || foldedValue.length !== normalizedValue.length)
+  ) {
+    return matchLinkedDirectory(skillPath, directories);
+  }
+
+  const lookupPrefix = (prefix: string, foldedPrefix: string): IndexedRoot | undefined => {
+    if (isWindowsValue) {
+      return index.allFoldedRoots.get(foldedPrefix);
+    }
+    const exactHit = index.exactRoots.get(prefix);
+    if (index.windowsFoldedRoots.size === 0) {
+      return exactHit;
+    }
+    const windowsHit = index.windowsFoldedRoots.get(foldedPrefix);
+    if (!exactHit) {
+      return windowsHit;
+    }
+    if (!windowsHit) {
+      return exactHit;
+    }
+    return exactHit.order <= windowsHit.order ? exactHit : windowsHit;
+  };
+
+  let slashPos = normalizedValue.lastIndexOf("/");
+  while (slashPos > 0) {
+    const hit = lookupPrefix(
+      normalizedValue.slice(0, slashPos),
+      needsFolded ? foldedValue.slice(0, slashPos) : "",
+    );
+    if (hit) {
+      return { ...hit.origin };
+    }
+    slashPos = normalizedValue.lastIndexOf("/", slashPos - 1);
+  }
+
+  if (normalizedValue.charCodeAt(0) === 47) {
+    const rootHit = lookupPrefix("/", "/");
+    if (rootHit) {
+      return { ...rootHit.origin };
+    }
+  }
+
+  return undefined;
+}
+
 function matchLinkedDirectory(
   skillPath: string,
   directories: readonly SkillOriginDirectory[],
 ): AppServerSkillOrigin | undefined {
+  if (directories.length === 0) {
+    return undefined;
+  }
+  const isWindowsSkill = isTrimmedWindowsPath(skillPath);
+  const normalizedSkill = normalizeTrimmedPath(skillPath);
+  let foldedSkill: string | undefined;
+
   let best:
     | { length: number; origin: AppServerSkillOrigin }
     | undefined;
-  directories.forEach((directory, directoryIndex) => {
-    const candidates: Array<{ root: string | undefined; worktree: boolean }> = [
-      { root: directory.worktreePath, worktree: true },
-      { root: directory.path, worktree: false },
-    ];
-    for (const candidate of candidates) {
-      const root = candidate.root?.trim();
-      if (!root || !isPathInside(skillPath, root)) {
+  for (let directoryIndex = 0; directoryIndex < directories.length; directoryIndex += 1) {
+    const directory = directories[directoryIndex]!;
+    for (let slot = 0; slot < 2; slot += 1) {
+      const worktree = slot === 0;
+      const root = (worktree ? directory.worktreePath : directory.path)?.trim();
+      if (!root) {
         continue;
       }
-      const length = normalizePath(root).length;
+      const normalizedRoot = normalizeTrimmedPath(root);
+      if (!normalizedRoot) {
+        continue;
+      }
+      const caseInsensitive = isWindowsSkill || isTrimmedWindowsPath(root);
+      const target = caseInsensitive
+        ? (foldedSkill ??= normalizedSkill.toLowerCase())
+        : normalizedSkill;
+      const prefix = caseInsensitive ? normalizedRoot.toLowerCase() : normalizedRoot;
+      if (!isNormalizedPathInside(target, prefix)) {
+        continue;
+      }
+      const length = normalizedRoot.length;
       // Longest root wins, so a linked subdirectory beats the repository that
       // contains it. On a tie the earlier directory keeps it.
       if (!best || length > best.length) {
@@ -324,14 +544,14 @@ function matchLinkedDirectory(
           length,
           origin: {
             kind: "project",
-            label: directory.label.trim() || lastSegment(root) || "Project",
+            label: directory.label.trim() || lastSegmentNormalized(normalizedRoot) || "Project",
             directoryIndex,
-            ...(candidate.worktree ? { worktree: true } : {}),
+            ...(worktree ? { worktree: true } : {}),
           },
         };
       }
     }
-  });
+  }
   return best?.origin;
 }
 
@@ -362,32 +582,50 @@ function skillRootLabel(skillPath: string): string | undefined {
   return label || undefined;
 }
 
-function isPathInside(value: string, root: string): boolean {
-  const caseInsensitive = isWindowsPath(value) || isWindowsPath(root);
-  const normalizedValue = caseFold(normalizePath(value), caseInsensitive);
-  const normalizedRoot = caseFold(normalizePath(root), caseInsensitive);
+function isNormalizedPathInside(normalizedValue: string, normalizedRoot: string): boolean {
   if (!normalizedRoot) {
     return false;
   }
-  return normalizedRoot === "/"
-    ? normalizedValue.startsWith("/")
-    : normalizedValue.startsWith(`${normalizedRoot}/`);
+  if (normalizedRoot === "/") {
+    return normalizedValue.charCodeAt(0) === 47;
+  }
+  return normalizedValue.length > normalizedRoot.length
+    && normalizedValue.charCodeAt(normalizedRoot.length) === 47
+    && normalizedValue.startsWith(normalizedRoot);
 }
 
-function caseFold(value: string, caseInsensitive: boolean): string {
-  return caseInsensitive ? value.toLowerCase() : value;
+function isTrimmedWindowsPath(trimmed: string): boolean {
+  if (trimmed.length >= 3 && trimmed.charCodeAt(1) === 58) {
+    const drive = trimmed.charCodeAt(0);
+    const sep = trimmed.charCodeAt(2);
+    if (
+      ((drive >= 65 && drive <= 90) || (drive >= 97 && drive <= 122))
+      && (sep === 47 || sep === 92)
+    ) {
+      return true;
+    }
+  }
+  return trimmed.length >= 2
+    && trimmed.charCodeAt(0) === 92
+    && trimmed.charCodeAt(1) === 92;
 }
 
-function isWindowsPath(value: string): boolean {
-  const trimmed = value.trim();
-  return /^[a-z]:[\\/]/i.test(trimmed) || /^\\\\/.test(trimmed);
+function normalizeTrimmedPath(trimmed: string): string {
+  const normalized = trimmed.includes("\\") ? trimmed.replace(/\\/g, "/") : trimmed;
+  if (normalized.length <= 1 || normalized.charCodeAt(normalized.length - 1) !== 47) {
+    return normalized;
+  }
+  let end = normalized.length;
+  while (end > 0 && normalized.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return normalized.slice(0, end);
 }
 
 function normalizePath(value: string): string {
-  const normalized = value.trim().replace(/\\/g, "/");
-  return normalized.length > 1 ? normalized.replace(/\/+$/, "") : normalized;
+  return normalizeTrimmedPath(value.trim());
 }
 
-function lastSegment(value: string): string | undefined {
-  return normalizePath(value).split("/").filter(Boolean).pop();
+function lastSegmentNormalized(normalized: string): string | undefined {
+  return normalized.split("/").filter(Boolean).pop();
 }

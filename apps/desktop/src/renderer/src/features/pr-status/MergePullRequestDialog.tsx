@@ -9,6 +9,7 @@ import { Select } from "../../components/Select";
 import { useModalDialog } from "../../lib/useModalDialog";
 import type { CompactStackMembership } from "@pwragent/shared/stacks/stack-status";
 import { githubStackMergeNote } from "@pwragent/shared/pull-request-merge-offer";
+import { buildProjectNeverMergeError } from "@pwragent/shared/project-forge-automation";
 import {
   pullRequestMergeButtonLabel,
   pullRequestMergeCheckWarning,
@@ -114,7 +115,7 @@ export function MergePullRequestDialog(props: {
           <p role="status">Merge waits for {offer.waitingFor.join("; ")}.</p>
         ) : offer.kind === "never_merge" ? (
           <p role="status">
-            {offer.projectLabel} never merges its pull requests. Change it from the project menu: Forge Automation.
+            {buildProjectNeverMergeError(offer)}
           </p>
         ) : offer.kind === "none" ? (
           <p role="status">This pull request cannot be merged now.</p>

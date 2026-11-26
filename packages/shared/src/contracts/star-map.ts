@@ -251,10 +251,30 @@ export type StarMapWorkspaceCard = {
   terminalHeight?: number;
 };
 
+export type StarMapWorkspaceViewAnchor =
+  | {
+      kind: "instance";
+      instanceId: string;
+    }
+  | {
+      kind: "project";
+      projectKey: string;
+    };
+
 export type StarMapWorkspaceView = {
   x: number;
   y: number;
   scale: number;
+  /**
+   * Body the camera was framed against when saved, with the viewport centre's
+   * offset from that body in canvas units. Orbit and projects re-base their
+   * canvas origin whenever clouds or peers change, so raw `(x, y)` drifts into
+   * empty sky between sessions. Optional for version-1 rows written before
+   * view anchoring existed.
+   */
+  anchor?: StarMapWorkspaceViewAnchor;
+  anchorDx?: number;
+  anchorDy?: number;
 };
 
 export type StarMapWorkspaceSnapshot = {
@@ -416,14 +436,41 @@ function buildThreadKey(thread: StarMapWorkspaceThreadSnapshot): string {
   return `${thread.source}:${thread.id}`;
 }
 
+function isStarMapWorkspaceViewAnchor(
+  value: unknown,
+): value is StarMapWorkspaceViewAnchor {
+  if (!value || typeof value !== "object") return false;
+  const anchor = value as Partial<StarMapWorkspaceViewAnchor> & {
+    instanceId?: unknown;
+    projectKey?: unknown;
+  };
+  if (anchor.kind === "instance") {
+    return typeof anchor.instanceId === "string" && anchor.instanceId.length > 0;
+  }
+  if (anchor.kind === "project") {
+    return typeof anchor.projectKey === "string" && anchor.projectKey.length > 0;
+  }
+  return false;
+}
+
 function isStarMapWorkspaceView(value: unknown): value is StarMapWorkspaceView {
   if (!value || typeof value !== "object") return false;
   const view = value as Partial<StarMapWorkspaceView>;
+  const hasAnchor =
+    view.anchor !== undefined
+    || view.anchorDx !== undefined
+    || view.anchorDy !== undefined;
   return (
     isFiniteNumber(view.x)
     && isFiniteNumber(view.y)
     && isFiniteNumber(view.scale)
     && view.scale > 0
+    && (!hasAnchor
+      || (
+        isStarMapWorkspaceViewAnchor(view.anchor)
+        && isFiniteNumber(view.anchorDx)
+        && isFiniteNumber(view.anchorDy)
+      ))
   );
 }
 

@@ -1,7 +1,6 @@
 import { cp, lstat, open, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import fc from "fast-check";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as gitExecutable from "../app-server/git-executable";
@@ -58,14 +57,20 @@ async function writeCatalog(cwd: string, name: string) {
 
 describe("stack checkout demand", () => {
   it.each([
-    { kind: "attached", worktreeConfig: false },
-    { kind: "detached", worktreeConfig: false },
-    { kind: "attached", worktreeConfig: true },
-    { kind: "detached", worktreeConfig: true },
-  ])("reuses Git's registered inventory for $kind checkouts with worktree config $worktreeConfig", async ({ kind, worktreeConfig }) => {
+    { kind: "attached", worktreeConfig: false, nested: false },
+    { kind: "detached", worktreeConfig: false, nested: false },
+    { kind: "attached", worktreeConfig: true, nested: false },
+    { kind: "detached", worktreeConfig: true, nested: false },
+    { kind: "attached", worktreeConfig: true, nested: true },
+  ])("reuses Git's registered inventory for $kind checkouts with worktree config $worktreeConfig and enclosing checkout $nested", async ({ kind, worktreeConfig, nested }) => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-worktree-inventory-")));
-    const primary = path.join(sandbox, "primary");
+    const fleet = nested ? path.join(sandbox, "outer") : sandbox;
+    const primary = path.join(fleet, "primary");
     try {
+      if (nested) {
+        await mkdir(fleet);
+        initialize(fleet);
+      }
       const home = path.join(sandbox, "home");
       await Promise.all([mkdir(primary), mkdir(home)]);
       vi.stubEnv("HOME", home);
@@ -77,7 +82,7 @@ describe("stack checkout demand", () => {
       await writeCatalog(primary, "registered");
       const worktrees = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
         const branch = `sibling-${index}`;
-        const cwd = path.join(sandbox, branch);
+        const cwd = path.join(fleet, branch);
         if (kind === "detached") git(primary, "worktree", "add", "--detach", cwd);
         else git(primary, "worktree", "add", "-b", branch, cwd);
         const [root, common] = git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split("\n");
@@ -87,16 +92,15 @@ describe("stack checkout demand", () => {
       }));
       const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
       try {
-        await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.integer({ min: 0, max: 6 }), { minLength: 4, maxLength: 7 }),
-          async (indices) => {
-            start.mockClear();
-            const result = await new StackReader().read([row(primary, "tracked"), ...indices.map((index) => worktrees[index]!)], []);
-            expect(result.stacks[0]?.layers[0]?.thread?.key).toBe("codex:tracked");
-            // Once Git has verified a checkout in this clone, its live roster
-            // can corroborate each standard linked checkout's disk identity.
-            expect(start.mock.calls.filter(([, args, purpose]) => args[0] === "rev-parse" && purpose === "stack-checkout").length)
-              .toBeLessThanOrEqual(2);
-          }), { numRuns: 6 });
+        for (const indices of [[6, 4, 1, 3], [6, 5, 4, 3, 2, 1, 0]]) {
+          start.mockClear();
+          const result = await new StackReader().read([row(primary, "tracked"), ...indices.map((index) => worktrees[index]!)], []);
+          expect(result.stacks[0]?.layers[0]?.thread?.key).toBe("codex:tracked");
+          // Once Git has verified a checkout in this clone, its live roster
+          // can corroborate each standard linked checkout's disk identity.
+          expect(start.mock.calls.filter(([, args, purpose]) => args[0] === "rev-parse" && purpose === "stack-checkout").length)
+            .toBeLessThanOrEqual(2);
+        }
       } finally {
         start.mockRestore();
       }
@@ -803,14 +807,15 @@ describe("stack checkout demand", () => {
       };
       const scoped = await run([]);
       expect(scoped.result.stacks[0]?.layers[0]?.thread?.key).toBe("codex:selected");
-      await fc.assert(fc.asyncProperty(fc.uniqueArray(fc.nat({ max: 31 }), { minLength: 2, maxLength: 12 }), async (inventory) => {
+      // Include paths below a different repository, ordinary paths, and missing paths.
+      for (const inventory of [[0, 2], [11, 4, 3, 6, 1, 8, 7, 9, 5, 10, 12, 13]]) {
         const extra = await Promise.all(inventory.map(async (index) => {
           const cwd = path.join(index % 3 === 0 ? unrelated : sandbox, "fixture-" + index);
           if (index % 3 !== 2) await mkdir(cwd, { recursive: true });
           return row(cwd, "fixture-" + index);
         }));
         expect(await run(extra)).toEqual(scoped);
-      }), { numRuns: 12 });
+      }
       const ordinary = path.join(sandbox, "ordinary");
       await mkdir(ordinary);
       expect(await run([row(ordinary, "ordinary")])).toEqual(scoped);

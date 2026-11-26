@@ -13,6 +13,7 @@ import { resolveGitLabReposForDirectory } from "./git-remote";
 import { FORGE_JSON_MAX_BYTES, FORGE_LOG_MAX_BYTES } from "./forge-read-limits";
 import type { GitLabTerminalPayload } from "./pr-terminal-details";
 import { gitlabMergeTrainStatus } from "./pr-merge-queue";
+import { readsHandsOffLabels } from "./hands-off-label-repositories";
 
 const execFileAsync = promisify(execFile);
 /** How long a project whose merge train setting could not be read waits before it is asked again. */
@@ -111,6 +112,8 @@ export type GitLabMrPayload = {
   created_at?: string;
   merged_at?: string;
   closed_at?: string;
+  /** REST sends label names; the poll sends them only when it asked. */
+  labels?: string[];
   head_pipeline?: { status?: string; web_url?: string; sha?: string; ref?: string; project_id?: number } | null;
 };
 
@@ -123,10 +126,11 @@ type GitLabObservation = {
 
 function compactMrPayload(payload: GitLabMrPayload): GitLabMrPayload {
   const { iid, web_url, state, title, draft, source_branch, target_branch, sha,
-    detailed_merge_status, has_conflicts, created_at, merged_at, closed_at, head_pipeline } = payload;
+    detailed_merge_status, has_conflicts, created_at, merged_at, closed_at, labels, head_pipeline } = payload;
   return {
     iid, web_url, state, title, draft, source_branch, target_branch, sha,
     detailed_merge_status, has_conflicts, created_at, merged_at, closed_at,
+    ...(Array.isArray(labels) ? { labels: labels.filter((label) => typeof label === "string") } : {}),
     head_pipeline: head_pipeline ? {
       status: head_pipeline.status, sha: head_pipeline.sha, ref: head_pipeline.ref,
       project_id: head_pipeline.project_id, web_url: head_pipeline.web_url,
@@ -148,6 +152,8 @@ type GitLabPollNode = {
   createdAt: string;
   mergedAt: string | null;
   closedAt: string | null;
+  /** Asked for only in a project a hands-off label rule names. */
+  labels?: { nodes?: Array<{ title?: string | null } | null> | null } | null;
   headPipeline: {
     status: string; sha: string | null; ref: string | null; path: string | null;
     project: { id: string } | null;
@@ -162,7 +168,22 @@ type GitLabPollGraphql = {
   errors?: Array<{ message?: string; path?: Array<string | number>; extensions?: { code?: string } }>;
 };
 
-function pollQuery(project: string, refs: readonly GitLabRef[], first: number, after: string | null): string {
+/** Labels one poll reads per MR; GitLab charges the connection by this. */
+export const GITLAB_POLL_LABELS_FIRST = 20;
+/**
+ * MRs per page when the poll reads labels. Each MR's label connection costs
+ * up to GITLAB_POLL_LABELS_FIRST more points, so a full eight-MR page would
+ * exceed the default budget and spend a request on the refusal first.
+ */
+export const GITLAB_POLL_LABELED_PAGE = 4;
+
+export function pollQuery(
+  project: string,
+  refs: readonly GitLabRef[],
+  first: number,
+  after: string | null,
+  withLabels = false,
+): string {
   // GitLab 19.4 charges an IID-filtered connection by first as well as field
   // cost. The eight-node cap leaves room in its default complexity budget.
   const iids = JSON.stringify(refs.map((ref) => String(ref.number)));
@@ -172,7 +193,9 @@ function pollQuery(project: string, refs: readonly GitLabRef[], first: number, a
         pageInfo { hasNextPage endCursor }
         nodes {
           iid webUrl state title draft sourceBranch targetBranch diffHeadSha
-          detailedMergeStatus conflicts createdAt mergedAt closedAt
+          detailedMergeStatus conflicts createdAt mergedAt closedAt${withLabels
+            ? `\n          labels(first: ${GITLAB_POLL_LABELS_FIRST}) { nodes { title } }`
+            : ""}
           headPipeline { status sha ref path project { id } }
         }
       }
@@ -208,6 +231,9 @@ function toPolledMr(node: GitLabPollNode, ref: GitLabRef): GitLabMrPayload | und
     sha: node.diffHeadSha, detailed_merge_status: mergeStatus,
     has_conflicts: node.conflicts, created_at: node.createdAt,
     merged_at: node.mergedAt ?? undefined, closed_at: node.closedAt ?? undefined,
+    ...(node.labels ? {
+      labels: (node.labels.nodes ?? []).flatMap((label) => typeof label?.title === "string" ? [label.title] : []),
+    } : {}),
     head_pipeline: {
       sha: pipeline.sha, status, ref: pipeline.ref ?? undefined,
       web_url: pipelineUrl, project_id: projectId ? Number(projectId) : undefined,
@@ -259,6 +285,11 @@ export function parseGitLabMr(payload: GitLabMrPayload, pipelineSourceHeadSha?: 
     createdAt: timestamp(payload.created_at),
     mergedAt: lifecycleState === "merged" ? timestamp(payload.merged_at) : undefined,
     closedAt: lifecycleState === "closed" ? timestamp(payload.closed_at) : undefined,
+    // Only where a label rule names the project, as for GitHub: absent
+    // labels mean not read, never "no labels".
+    ...(Array.isArray(payload.labels) && readsHandsOffLabels(ref.owner, ref.repo)
+      ? { labels: payload.labels.map((label) => label.trim()).filter(Boolean).sort() }
+      : {}),
   };
 }
 
@@ -760,7 +791,8 @@ export class GitLabPrFetcher {
   private async *pollGraphqlPages(host: string, project: string, refs: readonly GitLabRef[], poll: GitLabPollRoute) {
     const route = `${poll.command}\0${host}`;
     if ((this.graphqlUnavailableUntil.get(route) ?? 0) > Date.now()) return;
-    let first = refs.length;
+    const withLabels = refs[0] ? readsHandsOffLabels(refs[0].owner, refs[0].repo) : false;
+    let first = withLabels ? Math.min(refs.length, GITLAB_POLL_LABELED_PAGE) : refs.length;
     let after: string | null = null;
     const cursors = new Set<string>();
     while (cursors.size < refs.length) {
@@ -768,7 +800,7 @@ export class GitLabPrFetcher {
       let fetchedAt = 0;
       try {
         response = await this.api<GitLabPollGraphql>(host, "graphql", {
-          reportFailure: true, poll, query: pollQuery(project, refs, first, after),
+          reportFailure: true, poll, query: pollQuery(project, refs, first, after, withLabels),
           onStarted: (at) => { fetchedAt = at; },
         });
       } catch (error) {
