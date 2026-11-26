@@ -700,7 +700,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Check prAutomation.reviewReadiness first, and do not duplicate its offer.",
         "A merge card for a PR head that is unreviewed, or whose review has unsettled findings, is refused.",
         "Use start_thread for follow-up work. For Git work, set action.workMode=worktree unless the instructions require sharing a checkout. Give the child its task in the assigned checkout.",
-        "Set action.continueAfter when the started thread should automatically resume after a prerequisite (such as this thread's PR merging); omit backend and threadId in a condition to wait on this thread.",
+        "Set action.continueAfter when the new thread should resume after a prerequisite. Omit backend and threadId in a condition to wait on this thread.",
         "Leave action.placement as sibling unless the work belongs to this thread alone, which is sub_thread.",
         "Set action.backend for a cross-provider proposal. handoff_task creates a thread immediately and does not configure a card.",
         "Find registered backend ids and modelOptions in list_instance_projects. Models are validated against the destination provider.",
@@ -886,7 +886,7 @@ function inputSchemaForOperation(
                 description: `start_thread only: ${PLACEMENT_DESCRIPTION}`,
               },
               continueAfter: buildInitialContinueAfterInputSchema(
-                "start_thread only: durable Continue After wait registered on the started thread right when the operator launches it on this machine, so follow-up work after prerequisites (such as this thread's PR merging) is never lost in prose.",
+                "start_thread only: Continue After wait registered when the new thread starts on this machine.",
               ),
             },
           },
@@ -964,7 +964,7 @@ function inputSchemaForOperation(
             description: `Handoff cards: ${PLACEMENT_DESCRIPTION} Empty clears the proposal.`,
           },
           continueAfter: buildInitialContinueAfterInputSchema(
-            "Handoff cards: replace or add the Continue After wait registered when the operator starts the new thread.",
+            "Handoff cards: set or replace the Continue After wait registered when the new thread starts.",
           ),
           clearContinueAfter: {
             type: "boolean",
