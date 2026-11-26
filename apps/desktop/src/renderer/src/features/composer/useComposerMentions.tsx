@@ -32,6 +32,12 @@ import {
 } from "../../lib/hash-references";
 import { buildSkillTooltip, findSkillTrigger } from "../../lib/skill-mentions";
 import {
+  EMOJI_AUTOCOMPLETE_LIMIT,
+  findEmojiShortcodeTrigger,
+  searchEmojiShortcodes,
+} from "../../lib/emoji-shortcodes";
+import { useEmojiShortcodeCatalog } from "../../lib/useEmojiShortcodeCatalog";
+import {
   FEDERATED_THREAD_SEARCH_LIMIT,
   useFederatedThreadSearch,
 } from "../../lib/useFederatedThreadSearch";
@@ -168,7 +174,7 @@ export type ComposerMentions = {
   text: string;
 };
 
-type MentionKind = "commands" | "directories" | "hash" | "skills";
+type MentionKind = "commands" | "directories" | "emoji" | "hash" | "skills";
 
 const NO_COMMANDS: readonly ComposerSlashCommand[] = [];
 const NO_DIRECTORIES: readonly NavigationDirectorySummary[] = [];
@@ -274,6 +280,9 @@ export function useComposerMentions(params: {
   const directoryTrigger = referenceTriggers
     ? referenceTriggers["@"]
     : findDirectoryReferenceTrigger(draft, selectionStart);
+  const emojiTrigger = inputRef.current
+    ? inputRef.current.getEmojiTrigger()
+    : findEmojiShortcodeTrigger(draft, selectionStart);
   const rawHashTrigger = referenceTriggers
     ? referenceTriggers["#"]
     : findHashReferenceTrigger(draft, selectionStart);
@@ -286,7 +295,9 @@ export function useComposerMentions(params: {
   const skillQuery = skillTrigger?.query;
   const slashQuery = slashTrigger?.query;
   const directoryQuery = directoryTrigger?.query;
+  const emojiQuery = emojiTrigger?.query;
   const hashQuery = hashTrigger?.query;
+  const emojiCatalog = useEmojiShortcodeCatalog(emojiTrigger !== undefined);
 
   // Opt-in, and gated on the query as well as the callback: the shared
   // search hook otherwise resolves this window's own bridge, which would
@@ -326,6 +337,13 @@ export function useComposerMentions(params: {
         : filterAtReferenceCandidates(directories, instances, directoryQuery, ownerRankedDirectoryQuery),
     [directories, instances, directoryQuery, ownerRankedDirectoryQuery],
   );
+  const emojiOptions = useMemo(
+    () =>
+      emojiQuery === undefined
+        ? []
+        : searchEmojiShortcodes(emojiQuery, emojiCatalog, EMOJI_AUTOCOMPLETE_LIMIT),
+    [emojiCatalog, emojiQuery],
+  );
   const hashOptions = useMemo(
     () =>
       hashQuery === undefined
@@ -351,9 +369,11 @@ export function useComposerMentions(params: {
         ? "commands"
       : directoryTrigger && directoryOptions.length > 0
         ? "directories"
-        : hashTrigger && hashOptions.length > 0
-          ? "hash"
-          : undefined;
+        : emojiTrigger && emojiOptions.length > 0
+          ? "emoji"
+          : hashTrigger && hashOptions.length > 0
+            ? "hash"
+            : undefined;
   const query =
     kind === "skills"
       ? (skillQuery ?? "")
@@ -361,7 +381,9 @@ export function useComposerMentions(params: {
         ? (slashQuery ?? "")
       : kind === "directories"
         ? (directoryQuery ?? "")
-        : (hashQuery ?? "");
+        : kind === "emoji"
+          ? (emojiQuery ?? "")
+          : (hashQuery ?? "");
   const optionCount =
     kind === "skills"
       ? skillOptions.length
@@ -369,9 +391,11 @@ export function useComposerMentions(params: {
         ? commandOptions.length
       : kind === "directories"
         ? directoryOptions.length
-        : kind === "hash"
-          ? hashOptions.length
-          : 0;
+        : kind === "emoji"
+          ? emojiOptions.length
+          : kind === "hash"
+            ? hashOptions.length
+            : 0;
   const activeTrigger =
     kind === "skills"
       ? skillTrigger
@@ -379,9 +403,11 @@ export function useComposerMentions(params: {
         ? slashTrigger
       : kind === "directories"
         ? directoryTrigger
-        : kind === "hash"
-          ? hashTrigger
-          : undefined;
+        : kind === "emoji"
+          ? emojiTrigger
+          : kind === "hash"
+            ? hashTrigger
+            : undefined;
   /**
    * Identity of the popover Escape retires: its kind, the trigger's
    * position, and the query.
@@ -648,6 +674,26 @@ export function useComposerMentions(params: {
       }
       return;
     }
+    if (kind === "emoji" && emojiTrigger) {
+      const entry = emojiOptions[index] ?? emojiOptions[0];
+      if (!entry) return;
+      if (inputRef.current) {
+        inputRef.current.replaceEmojiTrigger(entry.emoji);
+        return;
+      }
+      const before = draft.slice(0, emojiTrigger.start);
+      const after = draft.slice(emojiTrigger.end);
+      const trailingSpace = /^\s/.test(after) || /^[\p{Pe}\p{Pf}]/u.test(after) ? "" : " ";
+      const nextDraft = `${before}${entry.emoji}${trailingSpace}${after}`;
+      const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
+        currentDraft: draft,
+        nextDraft,
+        skillTokens,
+      });
+      setContent({ draft: nextDraft, skillTokens: nextSkillTokens });
+      setActiveIndex(0);
+      return;
+    }
     if (kind === "hash" && hashTrigger) {
       const option = hashOptions[index] ?? hashOptions[0];
       if (!option) return;
@@ -663,7 +709,14 @@ export function useComposerMentions(params: {
   };
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLElement>): boolean => {
-    if (!open || event.defaultPrevented) return false;
+    const composing = Boolean(
+      (event as { isComposing?: boolean }).isComposing
+      || event.nativeEvent?.isComposing
+      || event.keyCode === 229,
+    );
+    if (!open || event.defaultPrevented || composing) {
+      return false;
+    }
 
     if (event.key === "Escape") {
       event.preventDefault();
@@ -721,6 +774,7 @@ export function useComposerMentions(params: {
   const optionId = (index: number): string => `${listboxId}-option-${index}`;
 
   const renderOption = (index: number, content: ReactNode, extra?: {
+    className?: string;
     describedBy?: string;
     keyShortcuts?: string;
     title?: string;
@@ -730,8 +784,8 @@ export function useComposerMentions(params: {
       aria-keyshortcuts={extra?.keyShortcuts}
       aria-selected={index === activeOption}
       className={`compact-composer__mention-option${
-        index === activeOption ? " is-active" : ""
-      }`}
+        extra?.className ? ` ${extra.className}` : ""
+      }${index === activeOption ? " is-active" : ""}`}
       id={optionId(index)}
       key={optionId(index)}
       ref={(node) => {
@@ -843,6 +897,29 @@ export function useComposerMentions(params: {
         directory.kind === "instance"
           ? { title: `${directory.label} · ${directory.status}` }
           : undefined,
+      ),
+    );
+  } else if (kind === "emoji") {
+    label = "Emoji";
+    options = emojiOptions.map((entry, index) =>
+      renderOption(
+        index,
+        <>
+          <span className="compact-composer__mention-emoji" aria-hidden="true">
+            {entry.emoji}
+          </span>
+          <span className="compact-composer__mention-title">
+            <HighlightedAutocompleteLabel
+              label={`:${entry.shortcode}:`}
+              matchAnywhere
+              query={query}
+            />
+          </span>
+          <span className="compact-composer__mention-meta">
+            {entry.name}
+          </span>
+        </>,
+        { className: "compact-composer__mention-option--emoji" },
       ),
     );
   } else if (kind === "hash") {
@@ -969,9 +1046,8 @@ export function useComposerMentions(params: {
     handleKeyDown,
     inputRef,
     listboxId: open ? listboxId : undefined,
-    onReferenceSelectionChange: sources
-      ? () => setReferenceSelectionRevision((revision) => revision + 1)
-      : undefined,
+    onReferenceSelectionChange: () =>
+      setReferenceSelectionRevision((revision) => revision + 1),
     onSkillChipPointerEnter: skillOriginCard.hoverAnchor,
     onSkillChipPointerLeave: skillOriginCard.leaveAnchor,
     open,

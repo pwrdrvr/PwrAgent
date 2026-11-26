@@ -14,6 +14,10 @@ import { SearchIcon } from "../../icons/SearchIcon";
 import { SmileyIcon } from "../../icons/SmileyIcon";
 import { UserIcon } from "../../icons/UserIcon";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
+import {
+  getCachedEmojiCatalog,
+  loadEmojiCatalog,
+} from "../../lib/emoji-shortcodes";
 import type { ReactionEmojiCatalog } from "./reaction-emoji-catalog";
 import {
   BASE_REACTION_ENTRIES,
@@ -23,7 +27,6 @@ import {
   REACTION_CATEGORIES,
   REACTION_PICKER_COLUMNS,
   computeReactionPickerPosition,
-  createLazyValueCache,
   moveReactionGridIndex,
   normalizeEmojiKey,
   readRecentReactions,
@@ -37,12 +40,6 @@ import {
 
 const DEFAULT_PICKER_WIDTH = 316;
 const DEFAULT_PICKER_HEIGHT = 378;
-
-const catalogCache = createLazyValueCache<ReactionEmojiCatalog>(() =>
-  import("./reaction-emoji-catalog").then((module) =>
-    module.loadReactionEmojiCatalog(),
-  ),
-);
 
 const BASE_BY_KEY = new Map<string, ReactionEmojiEntry>(
   BASE_REACTION_ENTRIES.map((entry) => [normalizeEmojiKey(entry.emoji), entry]),
@@ -180,7 +177,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<ReactionCategoryId>("quick");
   const [catalog, setCatalog] = useState<ReactionEmojiCatalog | undefined>(() =>
-    catalogCache.getCached(),
+    getCachedEmojiCatalog(),
   );
   const [recents, setRecents] = useState<string[]>(() => readRecentReactions());
   const [previewEntry, setPreviewEntry] = useState<ReactionEmojiEntry | undefined>();
@@ -188,14 +185,13 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
   // Warm the full emoji catalog chunk lazily on first open so startup stays lean.
   // A transient import failure clears the cached promise so the next open retries.
   useEffect(() => {
-    const cached = catalogCache.getCached();
+    const cached = getCachedEmojiCatalog();
     if (cached) {
       setCatalog(cached);
       return;
     }
     let cancelled = false;
-    void catalogCache
-      .load()
+    void loadEmojiCatalog()
       .then((loaded) => {
         if (!cancelled) {
           setCatalog(loaded);

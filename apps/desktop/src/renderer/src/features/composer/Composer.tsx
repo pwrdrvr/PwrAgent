@@ -356,6 +356,9 @@ import {
   type ComposerImageFile,
 } from "./composer-image-files";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
+import { EmojiAutocompleteList } from "./EmojiAutocompleteList";
+import { useComposerEmojiAutocomplete } from "./useComposerEmojiAutocomplete";
+import { resolveComposerAutocompleteProjection } from "./composer-autocomplete-projection";
 import { SkillPickerHeader } from "./SkillPickerHeader";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
 import {
@@ -1059,11 +1062,6 @@ type SlashCommandSuggestion = {
   sourceLabel: string;
 };
 
-type AutocompleteKind =
-  | "directories"
-  | "hash-references"
-  | "skills"
-  | "slash";
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 type ReviewConfigState = {
@@ -6180,6 +6178,12 @@ function useComposerController(props: ComposerProps) {
   const directoryRefTrigger = referenceTriggers
     ? referenceTriggers["@"]
     : findDirectoryReferenceTrigger(draft, selectionStart);
+  const emojiAutocomplete = useComposerEmojiAutocomplete({
+    draft,
+    input: inputRef.current,
+    scopeKey: `${props.launchpad?.directoryKey ?? ""}:${props.thread?.id ?? ""}`,
+    selectionStart,
+  });
   // `#` is the one trigger whose query spans spaces — thread titles have
   // spaces in them — so unlike `@` and `$` nothing retires it. Left alone,
   // a `#` anywhere in a sentence keeps the picker armed and the federated
@@ -6348,66 +6352,41 @@ function useComposerController(props: ComposerProps) {
     mentionNavigation.settledQuery,
   ]);
   const hashReferenceCount = filteredHashReferenceOptions.length;
-  const availableAutocompleteKind: AutocompleteKind | undefined = trigger && (matchingSkills.length > 0 || props.onEnsureSkillsLoaded)
-    ? "skills"
-    : slashTrigger && filteredSlashCommands.length > 0
-      ? "slash"
-      : directoryRefTrigger && filteredDirectoryRefs.length > 0
-        ? "directories"
-        : hashReferenceTrigger
-            && (hashReferenceCount > 0 || federatedHashSearchLoading)
-          ? "hash-references"
-          : undefined;
-  const autocompleteKey =
-    availableAutocompleteKind === "skills" && trigger
-      ? `skills:${trigger.start}:${trigger.end}:${trigger.query}`
-      : availableAutocompleteKind === "slash" && slashTrigger
-        ? `slash:${slashTrigger.start}:${slashTrigger.end}:/${slashTrigger.query}`
-        : availableAutocompleteKind === "directories" && directoryRefTrigger
-          ? `directories:${directoryRefTrigger.start}:${directoryRefTrigger.end}:@${directoryRefTrigger.query}`
-          : availableAutocompleteKind === "hash-references" && hashReferenceTrigger
-            ? `hash-references:${hashReferenceTrigger.start}:${hashReferenceTrigger.end}:#${hashReferenceTrigger.query}`
-          : undefined;
-  const displayedAutocompleteKind =
-    autocompleteKey && autocompleteKey === dismissedAutocompleteKey
-      ? undefined
-      : availableAutocompleteKind;
-  const autocompleteKind: AutocompleteKind | undefined = reviewConfig
-    ? undefined
-    : displayedAutocompleteKind;
-  const activeAutocompleteIndex =
-    autocompleteKind === "skills"
-      ? activeSkillIndex
-      : autocompleteKind === "directories"
-        ? activeDirectoryRefIndex
-        : autocompleteKind === "hash-references"
-          ? activeHashReferenceIndex
-          : activeSlashIndex;
-  const autocompleteLength =
-    autocompleteKind === "skills"
-      ? filteredSkills.length
-      : autocompleteKind === "directories"
-        ? filteredDirectoryRefs.length
-        : autocompleteKind === "hash-references"
-          ? hashReferenceCount
-          : filteredSlashCommands.length;
-  const hasAutocompleteOptions = Boolean(
-    autocompleteKind && autocompleteLength > 0,
-  );
-  const autocompleteListboxId =
-    autocompleteKind === "skills"
-      ? skillListboxId
-      : autocompleteKind === "slash"
-        ? slashListboxId
-        : autocompleteKind === "directories"
-          ? directoryRefListboxId
-          : autocompleteKind === "hash-references"
-            ? hashReferenceListboxId
-          : undefined;
-  const activeAutocompleteOptionId =
-    autocompleteListboxId && autocompleteKind && autocompleteLength > 0
-      ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
-      : undefined;
+  const {
+    activeAutocompleteIndex,
+    activeAutocompleteOptionId,
+    autocompleteKey,
+    autocompleteKind,
+    autocompleteLength,
+    autocompleteListboxId,
+    hasAutocompleteOptions,
+  } = resolveComposerAutocompleteProjection({
+    activeDirectoryRefIndex,
+    activeEmojiIndex: emojiAutocomplete.activeIndex,
+    activeHashReferenceIndex,
+    activeSkillIndex,
+    activeSlashIndex,
+    directoryRefCount: filteredDirectoryRefs.length,
+    directoryRefListboxId,
+    directoryRefTrigger,
+    dismissedAutocompleteKey,
+    emojiCount: emojiAutocomplete.options.length,
+    emojiListboxId: emojiAutocomplete.listboxId,
+    emojiTrigger: emojiAutocomplete.trigger,
+    federatedHashSearchLoading,
+    filteredSkillCount: filteredSkills.length,
+    hashReferenceCount,
+    hashReferenceListboxId,
+    hashReferenceTrigger,
+    hasEnsureSkillsLoaded: Boolean(props.onEnsureSkillsLoaded),
+    matchingSkillCount: matchingSkills.length,
+    reviewConfigActive: Boolean(reviewConfig),
+    skillListboxId,
+    skillTrigger: trigger,
+    slashCount: filteredSlashCommands.length,
+    slashListboxId,
+    slashTrigger,
+  });
   // Directories the draft references: `@` chips only, from the token state
   // and the chips serialized in the draft. A path typed or pasted as plain
   // text is not a reference. Deleting a chip drops the reference.
@@ -10942,6 +10921,11 @@ function useComposerController(props: ComposerProps) {
     setActiveHashReferenceIndex(0);
   };
 
+  const applyEmojiShortcode = (emoji: string): void => {
+    inputRef.current?.replaceEmojiTrigger(emoji);
+    emojiAutocomplete.setActiveIndex(0);
+  };
+
   /**
    * "@ → Add directory…" / "+"-menu action: run the OS picker (which also
    * registers the pick as a tracked directory, without navigating) and
@@ -13119,6 +13103,16 @@ function useComposerController(props: ComposerProps) {
         return;
       }
 
+      if (autocompleteKind === "emoji") {
+        const entry =
+          emojiAutocomplete.options[emojiAutocomplete.activeIndex]
+          ?? emojiAutocomplete.options[0];
+        if (entry) {
+          applyEmojiShortcode(entry.emoji);
+        }
+        return;
+      }
+
       if (autocompleteKind === "hash-references") {
         const option =
           filteredHashReferenceOptions[activeHashReferenceIndex]
@@ -13234,14 +13228,23 @@ function useComposerController(props: ComposerProps) {
       setActiveSlashIndex(0);
       setActiveDirectoryRefIndex(0);
       setActiveHashReferenceIndex(0);
+      emojiAutocomplete.setActiveIndex(0);
       if (restoreFocus) {
         requestAnimationFrame(() => inputRef.current?.focus());
       }
-    }, [autocompleteKey]);
+    }, [autocompleteKey, emojiAutocomplete.setActiveIndex]);
 
     const handleAutocompleteKeyDown = (
       event: ReactKeyboardEvent<HTMLElement>,
     ): void => {
+      const composing = Boolean(
+        (event as { isComposing?: boolean }).isComposing
+        || event.nativeEvent?.isComposing
+        || event.keyCode === 229,
+      );
+      if (composing) {
+        return;
+      }
       if (!hasAutocompleteOptions && event.key !== "Escape") {
         return;
       }
@@ -13263,6 +13266,8 @@ function useComposerController(props: ComposerProps) {
           setActiveSkillIndex(updater);
         } else if (autocompleteKind === "directories") {
           setActiveDirectoryRefIndex(updater);
+        } else if (autocompleteKind === "emoji") {
+          emojiAutocomplete.setActiveIndex(updater);
         } else if (autocompleteKind === "hash-references") {
           setActiveHashReferenceIndex(updater);
         } else {
@@ -13462,11 +13467,17 @@ function useComposerController(props: ComposerProps) {
       setActiveSkillIndex(0);
       setActiveSlashIndex(0);
       setActiveDirectoryRefIndex(0);
+      emojiAutocomplete.setActiveIndex(0);
     };
     const handlePlainComposerKeyDown = (
       event: ReactKeyboardEvent<HTMLElement>,
     ): void => {
-      if (event.defaultPrevented) {
+      if (
+        event.defaultPrevented
+        || (event as { isComposing?: boolean }).isComposing
+        || event.nativeEvent?.isComposing
+        || event.keyCode === 229
+      ) {
         return;
       }
 
@@ -15403,6 +15414,20 @@ function useComposerController(props: ComposerProps) {
             </button>
           ) : null}
         </div>
+      ) : autocompleteKind === "emoji" ? (
+        <EmojiAutocompleteList
+          activeIndex={emojiAutocomplete.activeIndex}
+          listboxId={emojiAutocomplete.listboxId}
+          listRef={autocompleteListRef}
+          maxHeight={autocompleteLayout.maxHeight}
+          onKeyDown={handleAutocompleteKeyDown}
+          onSelect={(entry) => applyEmojiShortcode(entry.emoji)}
+          onSetActiveIndex={emojiAutocomplete.setActiveIndex}
+          optionRefs={autocompleteOptionRefs}
+          options={emojiAutocomplete.options}
+          placement={autocompleteLayout.placement}
+          query={emojiAutocomplete.trigger?.query ?? ""}
+        />
       ) : autocompleteKind === "hash-references" ? (
         <div
           className={`composer__autocomplete composer__autocomplete--hash-references composer__autocomplete--${autocompleteLayout.placement}`}

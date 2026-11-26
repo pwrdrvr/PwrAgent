@@ -349,11 +349,6 @@ function scoreEntry(
   if (
     lowerShortcode === rawLower
     || (hasNormalizedQuery && (lowerName === normalizedQuery || normalizedShortcode === normalizedQuery))
-    || entry.keywords.some(
-      (keyword) =>
-        keyword.toLowerCase() === rawLower
-        || (hasNormalizedQuery && normalizeSearchToken(keyword) === normalizedQuery),
-    )
   ) {
     return 1;
   }
@@ -363,8 +358,24 @@ function scoreEntry(
     || (hasNormalizedQuery
       && (lowerName.startsWith(normalizedQuery)
         || normalizedShortcode.startsWith(normalizedQuery)))
+    || (entry.isQuick === true
+      && entry.keywords.some(
+        (keyword) =>
+          keyword.toLowerCase() === rawLower
+          || (hasNormalizedQuery && normalizeSearchToken(keyword) === normalizedQuery),
+      ))
   ) {
     return 2;
+  }
+
+  if (
+    entry.keywords.some(
+      (keyword) =>
+        keyword.toLowerCase() === rawLower
+        || (hasNormalizedQuery && normalizeSearchToken(keyword) === normalizedQuery),
+    )
+  ) {
+    return 3;
   }
 
   const words = lowerName.split(/\s+/);
@@ -376,13 +387,13 @@ function scoreEntry(
         || (hasNormalizedQuery && normalizeSearchToken(keyword).startsWith(normalizedQuery)),
     )
   ) {
-    return 3;
+    return 4;
   }
 
   if (queryTokens.length > 0) {
     const searchable = `${lowerName} ${lowerShortcode} ${normalizedShortcode} ${entry.keywords.join(" ").toLowerCase()}`;
     if (queryTokens.every((token) => searchable.includes(token))) {
-      return 4;
+      return 5;
     }
   }
 

@@ -63,7 +63,11 @@ import {
   parsePullRequestNumberHref,
   remarkPullRequestReferences,
 } from "./remark-pull-request-references";
+import { remarkEmojiShortcodes } from "./remark-emoji-shortcodes";
 import { remarkTableProfile } from "./remark-table-profile";
+import { hasPotentialEmojiShortcode } from "../../lib/emoji-shortcodes";
+import { useEmojiShortcodeCatalog } from "../../lib/useEmojiShortcodeCatalog";
+import type { ReactionEmojiCatalog } from "../navigation/reaction-emoji-catalog";
 import { buildSelectionClipboard } from "./selection-clipboard";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
@@ -789,6 +793,8 @@ const markdownComponents: Components = {
 const MarkdownDocument = memo(function MarkdownDocument(props: {
   text: string;
   mathRuntime?: MarkdownMathRuntime;
+  emojiShortcodesEnabled: boolean;
+  emojiCatalog?: ReactionEmojiCatalog;
 }) {
   const availableRenderer = useIncrementalMarkdownRenderer();
   const [selection, setSelection] = useState(() => ({
@@ -808,6 +814,8 @@ const MarkdownDocument = memo(function MarkdownDocument(props: {
 const MarkdownDocumentContent = memo(function MarkdownDocumentContent(props: {
   text: string;
   mathRuntime?: MarkdownMathRuntime;
+  emojiShortcodesEnabled: boolean;
+  emojiCatalog?: ReactionEmojiCatalog;
   IncrementalRenderer: ReturnType<typeof useIncrementalMarkdownRenderer>;
 }) {
   const { IncrementalRenderer } = props;
@@ -816,8 +824,11 @@ const MarkdownDocumentContent = memo(function MarkdownDocumentContent(props: {
     remarkBreaks,
     [remarkGfm, { singleTilde: false }],
     remarkPullRequestReferences,
+    ...(props.emojiShortcodesEnabled
+      ? [[remarkEmojiShortcodes, props.emojiCatalog] as [typeof remarkEmojiShortcodes, ReactionEmojiCatalog | undefined]]
+      : []),
     remarkTableProfile,
-  ], [props.mathRuntime]);
+  ], [props.emojiCatalog, props.emojiShortcodesEnabled, props.mathRuntime]);
   const components = useMemo(() => ({
     ...markdownComponents, ...props.mathRuntime?.components,
   }), [props.mathRuntime]);
@@ -849,6 +860,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     () => mathRuntime?.normalize(sourceMarkdownText) ?? sourceMarkdownText,
     [mathRuntime, sourceMarkdownText]
   );
+  const emojiShortcodesEnabled = useMemo(
+    () => hasPotentialEmojiShortcode(markdownText),
+    [markdownText],
+  );
+  const emojiCatalog = useEmojiShortcodeCatalog(emojiShortcodesEnabled);
   const [markdownViewerTarget, setMarkdownViewerTarget] =
     useState<MarkdownViewerTarget>();
   const { files: inlineFiles, register: registerInlineFile } = useTranscriptFiles(props.desktopApi, props.fileViewerContext);
@@ -1017,7 +1033,12 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         <TranscriptFileRegistrationContext.Provider value={registerInlineFile}>
           <MarkdownCodeApiContext.Provider value={props.desktopApi}>
             <MathClipboardApiContext.Provider value={props.desktopApi}>
-              <MarkdownDocument text={markdownText} mathRuntime={mathRuntime} />
+              <MarkdownDocument
+                text={markdownText}
+                mathRuntime={mathRuntime}
+                emojiShortcodesEnabled={emojiShortcodesEnabled}
+                emojiCatalog={emojiCatalog}
+              />
             </MathClipboardApiContext.Provider>
           </MarkdownCodeApiContext.Provider>
         </TranscriptFileRegistrationContext.Provider>

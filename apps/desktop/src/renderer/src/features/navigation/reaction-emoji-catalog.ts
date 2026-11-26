@@ -27,6 +27,61 @@ export type ReactionEmojiCatalog = {
   all: readonly ReactionEmojiEntry[];
   byCategory: Readonly<Record<ReactionCategoryId, readonly ReactionEmojiEntry[]>>;
   byKey: ReadonlyMap<string, ReactionEmojiEntry>;
+  byShortcode: ReadonlyMap<string, ReactionEmojiEntry>;
+};
+
+const EXTRA_SHORTCODE_ALIASES: Readonly<Record<string, string>> = {
+  thumbsup: "👍",
+  thumbsdown: "👎",
+  "100": "💯",
+  smile: "😄",
+  smiley: "😃",
+  grinning: "😀",
+  grin: "😁",
+  joy: "😂",
+  rofl: "🤣",
+  wink: "😉",
+  blush: "😊",
+  sob: "😭",
+  cry: "😢",
+  sweat_smile: "😅",
+  laughing: "😆",
+  wave: "👋",
+  clap: "👏",
+  muscle: "💪",
+  shrug: "🤷",
+  facepalm: "🤦",
+  zap: "⚡",
+  heavy_check_mark: "✔️",
+  ballot_box_with_check: "☑️",
+  hankey: "💩",
+  poo: "💩",
+  lock: "🔒",
+  unlock: "🔓",
+  mag: "🔍",
+  pencil2: "✏️",
+  rotating_light: "🚨",
+  hourglass: "⌛",
+  hourglass_flowing_sand: "⏳",
+  checkered_flag: "🏁",
+  coffee: "☕",
+  sunny: "☀️",
+  computer: "💻",
+  mind_blown: "🤯",
+  point_up: "☝️",
+  point_down: "👇",
+  point_left: "👈",
+  point_right: "👉",
+  raised_hands: "🙌",
+  boom: "💥",
+  exclamation: "❗",
+  question: "❓",
+  no_entry_sign: "🚫",
+  email: "✉️",
+  mega: "📣",
+  star2: "🌟",
+  book: "📖",
+  dart: "🎯",
 };
 
 const GROUP_SLUG_TO_CATEGORY: Readonly<Record<string, ReactionCategoryId>> = {
@@ -93,12 +148,30 @@ export function buildReactionEmojiCatalog(): ReactionEmojiCatalog {
 
   const all: ReactionEmojiEntry[] = [];
   const byKey = new Map<string, ReactionEmojiEntry>();
+  const byShortcode = new Map<string, ReactionEmojiEntry>();
 
-  const registerEntry = (entry: ReactionEmojiEntry): void => {
+  const registerShortcode = (shortcode: string, entry: ReactionEmojiEntry): void => {
+    const normalized = shortcode.trim().toLowerCase();
+    if (!normalized || byShortcode.has(normalized)) {
+      return;
+    }
+    byShortcode.set(normalized, entry);
+  };
+
+  for (const quick of QUICK_REACTIONS) {
+    registerShortcode(quick.shortcode, quick);
+  }
+
+  const registerEntry = (entry: ReactionEmojiEntry, slug?: string): void => {
     const key = normalizeEmojiKey(entry.emoji);
     if (!byKey.has(key)) {
       byKey.set(key, entry);
       all.push(entry);
+    }
+    const canonical = byKey.get(key) ?? entry;
+    registerShortcode(canonical.shortcode, canonical);
+    if (slug) {
+      registerShortcode(slug, canonical);
     }
   };
 
@@ -131,7 +204,7 @@ export function buildReactionEmojiCatalog(): ReactionEmojiCatalog {
         ...(quickOverride ? { isQuick: true } : {}),
       };
       byCategory[category].push(entry);
-      registerEntry(entry);
+      registerEntry(entry, item.slug);
     }
   }
 
@@ -149,12 +222,25 @@ export function buildReactionEmojiCatalog(): ReactionEmojiCatalog {
       if (idx >= 0) {
         all[idx] = merged;
       }
+      registerShortcode(entry.shortcode, merged);
+      for (const keyword of entry.keywords) {
+        if (/^(?:keycap_\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten)$/.test(keyword)) {
+          registerShortcode(keyword, merged);
+        }
+      }
     } else {
       registerEntry(entry);
     }
   }
 
-  cachedCatalog = { all, byCategory, byKey };
+  for (const [alias, emoji] of Object.entries(EXTRA_SHORTCODE_ALIASES)) {
+    const target = byKey.get(normalizeEmojiKey(emoji));
+    if (target) {
+      registerShortcode(alias, target);
+    }
+  }
+
+  cachedCatalog = { all, byCategory, byKey, byShortcode };
   return cachedCatalog;
 }
 
