@@ -39,7 +39,14 @@ feature completeness, test coverage, quality, or engineering effort.
 
 Use `cloc` from PATH (on the operator's Mac it has been at
 `/opt/homebrew/bin/cloc`). Make one file list from the pinned tracked selection
-and run `cloc --list-file=<list> --by-file --csv --report-file=<csv>` once.
+and choose a delimiter absent from every path passed to `cloc` and from its
+language names. Run `cloc --list-file=<list> --by-file --csv
+--csv-delimiter=<delimiter> --report-file=<report>` once. `cloc` may emit
+filenames without CSV quoting, so commas and quotes in filenames can break a
+standard CSV parser. Split data rows on the chosen literal delimiter instead;
+verify each row's fields and reconcile their numeric totals to SUM. If no safe
+delimiter can be selected, report the limitation rather than guessing.
+
 Capture diagnostics as well as the exit status; `cloc` can exit successfully
 while omitting timed-out files. Do not pass lockfiles or the excluded license
 report in the list. A list file is line-delimited: detect filenames containing
