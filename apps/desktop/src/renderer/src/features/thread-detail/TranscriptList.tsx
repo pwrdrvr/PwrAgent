@@ -57,12 +57,12 @@ import { injectMessagingBindingTransitions } from "./messaging-binding-transitio
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
 import {
-  injectLaunchedThreads,
+  injectPreparedLaunchedThreads,
   isLaunchedTodoEntry,
   launchedTodoIdFromEntry,
-  mergeLaunchedThreadRecords,
-  type LaunchedThreadRecord,
+  prepareLaunchedThreadEntries,
 } from "./launched-todo-entries";
+import { useThreadLinks } from "../../lib/thread-links";
 import { TranscriptLaunchedTodo } from "./TranscriptLaunchedTodo";
 import {
   injectRewindMarkers,
@@ -925,18 +925,23 @@ export function TranscriptList(props: TranscriptListProps) {
     [props.pendingRequest],
   );
 
-  const launchedRecordById = useMemo(() => {
-    const map = new Map<string, LaunchedThreadRecord>();
-    const merged = mergeLaunchedThreadRecords({
-      launchedTodos: props.launchedTodos,
-      launchedThreads: props.launchedThreads,
-      ownerInstanceId: props.threadLinkSource?.instanceId,
-    });
-    for (const record of merged) {
-      map.set(record.id, record);
-    }
-    return map;
-  }, [props.launchedThreads, props.launchedTodos, props.threadLinkSource?.instanceId]);
+  const threadLinks = useThreadLinks();
+  const preparedLaunched = useMemo(
+    () =>
+      prepareLaunchedThreadEntries({
+        launchedTodos: props.launchedTodos,
+        launchedThreads: props.launchedThreads,
+        ownerInstanceId: props.threadLinkSource?.instanceId,
+        localInstanceId: threadLinks?.localInstanceId,
+      }),
+    [
+      props.launchedThreads,
+      props.launchedTodos,
+      props.threadLinkSource?.instanceId,
+      threadLinks?.localInstanceId,
+    ],
+  );
+  const launchedRecordById = preparedLaunched.byId;
 
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
@@ -958,12 +963,12 @@ export function TranscriptList(props: TranscriptListProps) {
       insertPendingEntry(entries, pendingEntry);
     }
     // Pending rows (a pending total included) and synthetic rows (transitions,
-    // questionnaires, turn failures, launched to-dos) are placed by time. A
-    // row of a turn placed after that turn's total would leave the total
-    // mid-turn, so the rendered list ends with each total back at the end of
-    // its turn.
+    // questionnaires, turn failures, launched child threads) are placed by
+    // time. A row of a turn placed after that turn's total would leave the
+    // total mid-turn, so the rendered list ends with each total back at the
+    // end of its turn.
     return anchorTurnUsageEntries(
-      injectLaunchedThreads(
+      injectPreparedLaunchedThreads(
         injectRewindMarkers(
           injectTurnFailures(
             injectQuestionnaireActivities(
@@ -977,11 +982,7 @@ export function TranscriptList(props: TranscriptListProps) {
           ),
           props.rewinds,
         ),
-        {
-          launchedTodos: props.launchedTodos,
-          launchedThreads: props.launchedThreads,
-          ownerInstanceId: props.threadLinkSource?.instanceId,
-        },
+        preparedLaunched.syntheticEntries,
         {
           hasPreviousPage: canLoadOlder,
           prependAnchorId: props.prependAnchorId,
@@ -990,15 +991,13 @@ export function TranscriptList(props: TranscriptListProps) {
     );
   }, [
     canLoadOlder,
+    preparedLaunched.syntheticEntries,
     props.entries,
-    props.launchedThreads,
-    props.launchedTodos,
     props.pendingActivityEntry,
     props.pendingProtocolActivityEntries,
     props.pendingUsageActivityEntry,
     pendingAssistantPreview,
     props.prependAnchorId,
-    props.threadLinkSource?.instanceId,
     props.transientMessage,
     props.transientMessages,
     props.pendingPlanEntry,

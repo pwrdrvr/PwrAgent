@@ -216,8 +216,8 @@ const MemoizedActiveDecisionBatchesStrip = memo(ActiveDecisionBatchesStrip);
 /** Monotonic across every card this renderer mounts; see `data-card-mount`. */
 let starMapCardMounts = 0;
 
-/** The card reads the thread's configuration, never a history collection. */
-const NO_HISTORY_COLLECTIONS = [] as const;
+/** The card reads the thread's configuration plus launched-thread markers. */
+const STAR_MAP_CHAT_COLLECTIONS = ["launchedThreadLog"] as const;
 
 /**
  * One chat card, anchored in the star map.
@@ -423,7 +423,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     federationTarget,
   });
   const selectedDetail = useNavigationSelectedDetail({
-    collections: NO_HISTORY_COLLECTIONS,
+    collections: STAR_MAP_CHAT_COLLECTIONS,
     desktopApi,
     enabled: props.active !== false,
     ref: { backend: thread.source, threadId: thread.id, ownerInstanceId: remoteInstanceId },
@@ -2224,7 +2224,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             desktopApi={desktopApi}
             entries={transcriptWindow.visibleEntries}
             error={session.error}
-            launchedThreads={thread.launchedThreadLog}
+            launchedThreads={selectedConfiguration?.launchedThreadLog ?? thread.launchedThreadLog}
             launchedTodos={launchedTodos}
             loading={session.loading}
             loadingMore={session.loadingMore}

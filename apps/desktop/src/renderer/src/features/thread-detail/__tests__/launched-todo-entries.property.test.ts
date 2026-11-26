@@ -20,6 +20,7 @@ import {
   filterAndMergeLaunchedTodos,
   injectLaunchedThreads,
   injectLaunchedTodos,
+  injectPreparedLaunchedThreads,
   isLaunchedTodo,
   isLaunchedTodoEntry,
   LAUNCHED_TODO_ENTRY_PREFIX,
@@ -27,6 +28,7 @@ import {
   launchedTodosTargetKey,
   launchedTodoTimestamp,
   mergeLaunchedThreadRecords,
+  prepareLaunchedThreadEntries,
   resolveLaunchedTodoLinkRef,
   visibleLaunchedTodosForWindow,
   type LaunchedTodo,
@@ -1263,6 +1265,135 @@ describe("mergeLaunchedThreadRecords and injectLaunchedThreads unified propertie
           expect(presentation.facts).toContain("atlas");
           expect(presentation.facts).toContain("Worktree");
           expect(presentation.facts).toContain("Subthread");
+        },
+      ),
+    );
+  });
+
+  it("matches fast prepared injection to reference injection across non-monotonic clocks, prepend anchors, localInstanceId dedup, and corrupt entries", () => {
+    fc.assert(
+      fc.property(
+        fc.array(
+          fc.record({
+            id: fc.integer({ min: 1, max: 30 }).map((n) => `e-${n}`),
+            createdAt: fc.option(
+              fc.oneof(
+                fc.integer({ min: -50, max: 1_200 }),
+                fc.constant(Number.NaN),
+                fc.constant(Number.POSITIVE_INFINITY),
+              ),
+              { nil: undefined },
+            ),
+            isCollision: fc.boolean(),
+          }),
+          { minLength: 0, maxLength: 25 },
+        ),
+        fc.array(
+          fc.record({
+            id: fc.integer({ min: 1, max: 6 }).map((n) => `todo-${n}`),
+            childId: fc.integer({ min: 1, max: 5 }).map((n) => `c-${n}`),
+            at: fc.integer({ min: 0, max: 1_200 }),
+          }),
+          { maxLength: 8 },
+        ),
+        fc.array(
+          fc.record({
+            id: fc.integer({ min: 1, max: 6 }).map((n) => `tool-${n}`),
+            childId: fc.integer({ min: 1, max: 6 }).map((n) => `c-${n}`),
+            explicitLocal: fc.boolean(),
+            at: fc.oneof(fc.integer({ min: 0, max: 1_200 }), fc.constant(Number.NaN)),
+          }),
+          { maxLength: 8 },
+        ),
+        fc.boolean(),
+        fc.option(fc.integer({ min: 1, max: 30 }).map((n) => `e-${n}`), { nil: undefined }),
+        (entrySpecs, todoSpecs, toolSpecs, hasPreviousPage, prependAnchorId) => {
+          const seenEntryIds = new Set<string>();
+          const entries: AppServerThreadEntry[] = [];
+          for (const spec of entrySpecs) {
+            const id = spec.isCollision ? `${LAUNCHED_TODO_ENTRY_PREFIX}todo-1` : spec.id;
+            if (seenEntryIds.has(id)) continue;
+            seenEntryIds.add(id);
+            entries.push({
+              type: "message",
+              id,
+              role: "assistant",
+              text: "Chunk",
+              ...(spec.createdAt !== undefined ? { createdAt: spec.createdAt } : {}),
+            });
+          }
+
+          const localInstanceId = "inst-local";
+          const launchedTodos: ThreadTodo[] = todoSpecs.map((spec) => ({
+            id: spec.id,
+            backend: "codex",
+            threadId: "parent-1",
+            kind: "handoff",
+            status: "done",
+            title: `Card ${spec.id}`,
+            startedThread: { backend: "codex", threadId: spec.childId },
+            createdAt: spec.at,
+            updatedAt: spec.at,
+            resolvedAt: spec.at,
+          }));
+          const launchedThreads: ThreadLaunchedThread[] = toolSpecs.map((spec) => ({
+            id: spec.id,
+            source: "handoff_task",
+            occurredAt: spec.at,
+            title: `Handoff ${spec.id}`,
+            startedThread: {
+              backend: "codex",
+              threadId: spec.childId,
+              ...(spec.explicitLocal ? { instanceId: localInstanceId, instanceLabel: "Local" } : {}),
+            },
+          }));
+
+          const prepared = prepareLaunchedThreadEntries({
+            launchedTodos,
+            launchedThreads,
+            localInstanceId,
+          });
+          // Local to-do (instanceId: undefined) and tool carrying explicit localInstanceId must deduplicate.
+          const todoChildIds = new Set(
+            prepared.records
+              .filter((r) => r.kind === "todo")
+              .map((r) => r.todo.startedThread.threadId),
+          );
+          for (const record of prepared.records) {
+            if (record.kind === "tool") {
+              expect(todoChildIds.has(record.launch.startedThread.threadId)).toBe(false);
+            }
+          }
+
+          const options = { hasPreviousPage, prependAnchorId };
+          const fast = injectPreparedLaunchedThreads(entries, prepared.syntheticEntries, options);
+          const ref = injectLaunchedThreads(
+            entries,
+            { launchedTodos, launchedThreads, localInstanceId },
+            options,
+          );
+          expect(fast).toEqual(ref);
+
+          // Non-monotonic clock check: if hasPreviousPage is true, any card >= min finite createdAt
+          // from prependAnchorId onward (and not colliding) MUST be present.
+          if (hasPreviousPage && entries.length > 0) {
+            const anchorIdx = prependAnchorId
+              ? entries.findIndex((e) => e.id === prependAnchorId)
+              : -1;
+            const startIdx = anchorIdx >= 0 ? anchorIdx : 0;
+            const finiteTimes = entries
+              .slice(startIdx)
+              .map((e) => e.createdAt)
+              .filter((t): t is number => typeof t === "number" && Number.isFinite(t));
+            const minTime = finiteTimes.length > 0 ? Math.min(...finiteTimes) : undefined;
+            if (minTime !== undefined) {
+              for (const synth of prepared.syntheticEntries) {
+                if (seenEntryIds.has(synth.id)) continue;
+                const present = fast.some((e) => e.id === synth.id);
+                expect(present).toBe((synth.createdAt ?? 0) >= minTime);
+              }
+            }
+          }
         },
       ),
     );

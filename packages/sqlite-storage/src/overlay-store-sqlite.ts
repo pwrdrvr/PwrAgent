@@ -7453,7 +7453,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
-    const existing = current.launchedThreadLog ?? [];
+    const existing = Array.isArray(current.launchedThreadLog)
+      ? current.launchedThreadLog
+      : [];
     const withoutDup = existing.filter((entry) => entry.id !== params.launch.id);
     const nextLog = [
       ...withoutDup,

@@ -808,14 +808,24 @@ async function createInstanceThread(
   ) {
     const sourceThread = messageOrigin.sourceThread;
     const launchId = `create_instance_thread:${instance.instanceId}:${response.backend}:${response.threadId}`;
-    const trimmedInput = args.input?.trim();
+    const rawInput = args.input ?? "";
+    // Skip leading whitespace in O(ws) before slicing so giant prompts stay O(1)
+    // and never drop content behind long leading whitespace.
+    let inputStart = 0;
+    while (inputStart < rawInput.length && rawInput.charCodeAt(inputStart) <= 32) {
+      inputStart += 1;
+    }
+    const remainingLength = rawInput.length - inputStart;
+    const trimmedInput = remainingLength > 0
+      ? rawInput.slice(inputStart, inputStart + 4_001).trimEnd()
+      : "";
     const boundedPrompt = trimmedInput
-      ? trimmedInput.length > 4_000
-        ? `${trimmedInput.slice(0, 3_999)}…`
+      ? remainingLength > 4_000 || trimmedInput.length > 4_000
+        ? `${trimmedInput.slice(0, 3_999).trimEnd()}…`
         : trimmedInput
       : undefined;
     const title =
-      (trimmedInput ? shortenDerivedThreadTitle(trimmedInput) : undefined)
+      (trimmedInput ? shortenDerivedThreadTitle(trimmedInput.slice(0, 512)) : undefined)
       || directory.label;
     try {
       await targetStore.appendLaunchedThread({

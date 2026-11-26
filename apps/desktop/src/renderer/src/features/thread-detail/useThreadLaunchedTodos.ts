@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FederationRemoteTarget } from "@pwragent/shared/contracts/federation";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useThreadTodoLaunches } from "../thread-todos/thread-todo-launches";
 import {
@@ -82,13 +83,28 @@ export function useThreadLaunchedTodos(params: {
 
   // Also read settled launches from the stack tray so a newly launched card
   // appears immediately in the transcript before the IPC reload settles.
+  // Stabilize the derived array reference because `useThreadTodoLaunches`
+  // allocates a fresh array per render whenever any launch is active anywhere.
   const { launches } = useThreadTodoLaunches(params.threadKey ?? "");
-  const settledTransient = useMemo(
-    () => launches
-      .filter((launch) => launch.phase === "started" || launch.phase === "setup_failed")
-      .map((launch) => launch.todo),
-    [launches],
-  );
+  const settledTransientRef = useRef<readonly ThreadTodo[]>(EMPTY_LAUNCHED_TODOS);
+  const settledTransient = useMemo(() => {
+    let next: ThreadTodo[] | undefined;
+    for (const launch of launches) {
+      if (launch.phase === "started" || launch.phase === "setup_failed") {
+        (next ??= []).push(launch.todo);
+      }
+    }
+    const candidate: readonly ThreadTodo[] = next ?? EMPTY_LAUNCHED_TODOS;
+    const previous = settledTransientRef.current;
+    if (
+      candidate.length === previous.length
+      && candidate.every((todo, index) => todo === previous[index])
+    ) {
+      return previous;
+    }
+    settledTransientRef.current = candidate;
+    return candidate;
+  }, [launches]);
 
   const fetched = snapshot.threadKey === targetKey ? snapshot.todos : EMPTY_LAUNCHED_TODOS;
 

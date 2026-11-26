@@ -976,7 +976,52 @@ function launchedThreadLogsEqual(
   left: NavigationThreadSummary["launchedThreadLog"],
   right: NavigationThreadSummary["launchedThreadLog"]
 ): boolean {
-  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+  if (left === right) {
+    return true;
+  }
+  const a = left ?? [];
+  const b = right ?? [];
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    const x = a[index]!;
+    const y = b[index]!;
+    if (
+      x.id !== y.id
+      || x.source !== y.source
+      || x.occurredAt !== y.occurredAt
+      || x.title !== y.title
+      || x.detail !== y.detail
+      || x.prompt !== y.prompt
+      || x.projectLabel !== y.projectLabel
+      || x.seedMode !== y.seedMode
+      || x.groupingMode !== y.groupingMode
+      || x.workspaceMode !== y.workspaceMode
+      || x.turnStartFailure !== y.turnStartFailure
+      || x.todoId !== y.todoId
+      || x.startedThread.backend !== y.startedThread.backend
+      || x.startedThread.threadId !== y.startedThread.threadId
+      || x.startedThread.instanceId !== y.startedThread.instanceId
+      || x.startedThread.instanceLabel !== y.startedThread.instanceLabel
+      || x.startedThread.setupFailure !== y.startedThread.setupFailure
+    ) {
+      return false;
+    }
+    const xSteps = x.steps;
+    const ySteps = y.steps;
+    if (xSteps !== ySteps) {
+      if (!xSteps || !ySteps || xSteps.length !== ySteps.length) {
+        return false;
+      }
+      for (let stepIndex = 0; stepIndex < xSteps.length; stepIndex += 1) {
+        if (xSteps[stepIndex] !== ySteps[stepIndex]) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
 }
 
 function threadSummariesEqual(

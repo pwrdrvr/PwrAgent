@@ -237,8 +237,9 @@ export function visibleLaunchedTodosForWindow(
   for (let index = startIndex; index < entries.length; index += 1) {
     const createdAt = entries[index]?.createdAt;
     if (typeof createdAt === "number" && Number.isFinite(createdAt)) {
-      windowStartAt = createdAt;
-      break;
+      if (windowStartAt === undefined || createdAt < windowStartAt) {
+        windowStartAt = createdAt;
+      }
     }
   }
   if (windowStartAt === undefined) {
@@ -270,8 +271,13 @@ function startedThreadDedupeKey(params: {
   backend: AppServerBackendKind;
   threadId: string;
   instanceId?: string;
+  localInstanceId?: string;
 }): string {
-  return `${params.instanceId ?? ""}:${params.backend}:${params.threadId.trim()}`;
+  const normalizedInstance =
+    params.instanceId && params.instanceId !== params.localInstanceId
+      ? params.instanceId
+      : "";
+  return `${normalizedInstance}:${params.backend}:${params.threadId.trim()}`;
 }
 
 function compareLaunchedRecords(
@@ -297,6 +303,7 @@ export function mergeLaunchedThreadRecords(params: {
   launchedTodos?: readonly ThreadTodo[];
   launchedThreads?: readonly ThreadLaunchedThread[];
   ownerInstanceId?: string;
+  localInstanceId?: string;
   scope?: LaunchedTodoThreadScope;
 }): LaunchedThreadRecord[] {
   const todos = filterAndMergeLaunchedTodos({
@@ -316,6 +323,7 @@ export function mergeLaunchedThreadRecords(params: {
         backend: todo.startedThread.backend,
         threadId: todo.startedThread.threadId,
         instanceId: todo.startedThread.instanceId ?? todo.federationTarget?.instanceId,
+        localInstanceId: params.localInstanceId,
       }),
     );
     records.push({
@@ -356,6 +364,7 @@ export function mergeLaunchedThreadRecords(params: {
       backend: launch.startedThread.backend,
       threadId: launch.startedThread.threadId,
       instanceId: launch.startedThread.instanceId ?? params.ownerInstanceId,
+      localInstanceId: params.localInstanceId,
     });
     if (seenStartedThreads.has(startedKey)) {
       continue;
@@ -383,8 +392,9 @@ export function visibleLaunchedThreadRecordsForWindow(
   if (!records || records.length === 0 || entries.length === 0) {
     return [];
   }
+  const sorted = [...records].sort(compareLaunchedRecords);
   if (!options?.hasPreviousPage) {
-    return [...records].sort(compareLaunchedRecords);
+    return sorted;
   }
   const anchorIndex = options.prependAnchorId
     ? entries.findIndex((entry) => entry.id === options.prependAnchorId)
@@ -394,15 +404,131 @@ export function visibleLaunchedThreadRecordsForWindow(
   for (let index = startIndex; index < entries.length; index += 1) {
     const createdAt = entries[index]?.createdAt;
     if (typeof createdAt === "number" && Number.isFinite(createdAt)) {
-      windowStartAt = createdAt;
-      break;
+      if (windowStartAt === undefined || createdAt < windowStartAt) {
+        windowStartAt = createdAt;
+      }
     }
   }
-  const sorted = [...records].sort(compareLaunchedRecords);
   if (windowStartAt === undefined) {
     return sorted;
   }
   return sorted.filter((record) => record.launchedAt >= windowStartAt);
+}
+
+export type PreparedLaunchedThreads = {
+  byId: ReadonlyMap<string, LaunchedThreadRecord>;
+  records: readonly LaunchedThreadRecord[];
+  syntheticEntries: readonly AppServerThreadActivityEntry[];
+};
+
+const EMPTY_PREPARED_LAUNCHED: PreparedLaunchedThreads = {
+  byId: new Map(),
+  records: [],
+  syntheticEntries: [],
+};
+
+/**
+ * Pre-merges, deduplicates, sorts, and materializes synthetic activity entries
+ * for a thread's launched cards once when launched inputs change, so streamed
+ * transcript chunks pay zero merge/sort/Set-allocation overhead.
+ */
+export function prepareLaunchedThreadEntries(params: {
+  launchedTodos?: readonly ThreadTodo[];
+  launchedThreads?: readonly ThreadLaunchedThread[];
+  ownerInstanceId?: string;
+  localInstanceId?: string;
+  scope?: LaunchedTodoThreadScope;
+}): PreparedLaunchedThreads {
+  if (
+    (!params.launchedTodos || params.launchedTodos.length === 0)
+    && (!params.launchedThreads || params.launchedThreads.length === 0)
+  ) {
+    return EMPTY_PREPARED_LAUNCHED;
+  }
+  const records = mergeLaunchedThreadRecords(params);
+  if (records.length === 0) {
+    return EMPTY_PREPARED_LAUNCHED;
+  }
+  const byId = new Map<string, LaunchedThreadRecord>();
+  const syntheticEntries: AppServerThreadActivityEntry[] = [];
+  for (const record of records) {
+    byId.set(record.id, record);
+    syntheticEntries.push(buildLaunchedThreadActivityEntry(record));
+  }
+  return { byId, records, syntheticEntries };
+}
+
+/**
+ * Fast-path streaming injector for already-prepared, canonically sorted
+ * launched-thread entries. Runs in O(1) with zero allocations when there are
+ * no launched entries or no transcript entries, and avoids allocating an O(N)
+ * id Set on every streamed chunk.
+ */
+export function injectPreparedLaunchedThreads(
+  entries: AppServerThreadEntry[],
+  syntheticEntries: readonly AppServerThreadActivityEntry[],
+  options?: InjectLaunchedTodosOptions,
+): AppServerThreadEntry[] {
+  if (syntheticEntries.length === 0 || entries.length === 0) {
+    return entries;
+  }
+  const hasPreviousPage = Boolean(options?.hasPreviousPage);
+  const prependAnchorId = options?.prependAnchorId;
+  let anchorFound = !hasPreviousPage || !prependAnchorId;
+  let windowStartAt: number | undefined;
+  let existingLaunchedIds: Set<string> | undefined;
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    if (entry.id.startsWith(LAUNCHED_TODO_ENTRY_PREFIX)) {
+      (existingLaunchedIds ??= new Set()).add(entry.id);
+    }
+    if (hasPreviousPage) {
+      if (!anchorFound && entry.id === prependAnchorId) {
+        anchorFound = true;
+      }
+      if (anchorFound) {
+        const createdAt = entry.createdAt;
+        if (typeof createdAt === "number" && Number.isFinite(createdAt)) {
+          if (windowStartAt === undefined || createdAt < windowStartAt) {
+            windowStartAt = createdAt;
+          }
+        }
+      }
+    }
+  }
+  // If prependAnchorId was specified but absent, fall back to scanning all entries for min timestamp.
+  if (hasPreviousPage && !anchorFound) {
+    for (let index = 0; index < entries.length; index += 1) {
+      const createdAt = entries[index]?.createdAt;
+      if (typeof createdAt === "number" && Number.isFinite(createdAt)) {
+        if (windowStartAt === undefined || createdAt < windowStartAt) {
+          windowStartAt = createdAt;
+        }
+      }
+    }
+  }
+
+  let toInsert: AppServerThreadActivityEntry[] | undefined;
+  for (let index = 0; index < syntheticEntries.length; index += 1) {
+    const entry = syntheticEntries[index]!;
+    if (existingLaunchedIds?.has(entry.id)) {
+      continue;
+    }
+    if (
+      hasPreviousPage
+      && windowStartAt !== undefined
+      && typeof entry.createdAt === "number"
+      && entry.createdAt < windowStartAt
+    ) {
+      continue;
+    }
+    (toInsert ??= []).push(entry);
+  }
+  if (!toInsert || toInsert.length === 0) {
+    return entries;
+  }
+  return insertSyntheticEntriesByTime(entries, toInsert);
 }
 
 export function buildLaunchedThreadActivityEntry(
@@ -432,22 +558,12 @@ export function injectLaunchedThreads(
     launchedTodos?: readonly ThreadTodo[];
     launchedThreads?: readonly ThreadLaunchedThread[];
     ownerInstanceId?: string;
+    localInstanceId?: string;
   },
   options?: InjectLaunchedTodosOptions,
 ): AppServerThreadEntry[] {
-  const merged = mergeLaunchedThreadRecords(params);
-  const visible = visibleLaunchedThreadRecordsForWindow(entries, merged, options);
-  if (visible.length === 0) {
-    return entries;
-  }
-  const existingIds = new Set(entries.map((entry) => entry.id));
-  const synthetic = visible
-    .map(buildLaunchedThreadActivityEntry)
-    .filter((entry) => !existingIds.has(entry.id));
-  if (synthetic.length === 0) {
-    return entries;
-  }
-  return insertSyntheticEntriesByTime(entries, synthetic);
+  const prepared = prepareLaunchedThreadEntries(params);
+  return injectPreparedLaunchedThreads(entries, prepared.syntheticEntries, options);
 }
 
 export function buildLaunchedTodoActivityEntry(todo: LaunchedTodo): AppServerThreadActivityEntry {
@@ -951,6 +1067,14 @@ function sameLaunchedTodoList(
   for (let index = 0; index < left.length; index += 1) {
     const a = left[index]!;
     const b = right[index]!;
+    const aPrompt =
+      a.action?.type === "start_thread" || a.action?.type === "send_message"
+        ? a.action.prompt
+        : undefined;
+    const bPrompt =
+      b.action?.type === "start_thread" || b.action?.type === "send_message"
+        ? b.action.prompt
+        : undefined;
     if (
       a.id !== b.id
       || a.updatedAt !== b.updatedAt
@@ -958,6 +1082,10 @@ function sameLaunchedTodoList(
       || a.title !== b.title
       || a.detail !== b.detail
       || a.result !== b.result
+      || a.targetProject?.label !== b.targetProject?.label
+      || (a.items?.length ?? 0) !== (b.items?.length ?? 0)
+      || a.action?.type !== b.action?.type
+      || aPrompt !== bPrompt
       || a.startedThread.backend !== b.startedThread.backend
       || a.startedThread.threadId !== b.startedThread.threadId
       || a.startedThread.instanceId !== b.startedThread.instanceId

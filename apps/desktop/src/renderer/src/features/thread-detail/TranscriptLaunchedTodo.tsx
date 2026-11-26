@@ -1,4 +1,4 @@
-import { Fragment, memo, useId, useMemo, useState } from "react";
+import { Fragment, memo, useCallback, useId, useMemo, useState } from "react";
 import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   DesktopApplicationsSnapshot,
@@ -23,6 +23,13 @@ import {
 import { ThreadChip } from "./ThreadChip";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
+
+const LAUNCHED_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
 
 export type TranscriptLaunchedTodoProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -109,20 +116,34 @@ export const TranscriptLaunchedTodo = memo(function TranscriptLaunchedTodo(
     };
   }, [presentation, threadLinks]);
 
+  const todoForFallbackOpen = record?.kind === "todo" ? record.todo : undefined;
+  const handleOpen = useCallback(
+    (link: ResolvedThreadLink): void => {
+      if (threadLinks) {
+        threadLinks.show(link);
+        return;
+      }
+      if (todoForFallbackOpen) {
+        onOpenStartedThread?.(todoForFallbackOpen);
+      }
+    },
+    [onOpenStartedThread, threadLinks, todoForFallbackOpen],
+  );
+
+  const formattedTime = useMemo(() => {
+    if (!presentation || presentation.launchedAt <= 0) {
+      return undefined;
+    }
+    const iso = new Date(presentation.launchedAt).toISOString();
+    return {
+      iso,
+      label: LAUNCHED_TIME_FORMATTER.format(presentation.launchedAt),
+    };
+  }, [presentation]);
+
   if (!record || !presentation || !chipLink) {
     return null;
   }
-
-  const todoForFallbackOpen = record.kind === "todo" ? record.todo : undefined;
-  const handleOpen = (link: ResolvedThreadLink): void => {
-    if (threadLinks) {
-      threadLinks.show(link);
-      return;
-    }
-    if (todoForFallbackOpen) {
-      onOpenStartedThread?.(todoForFallbackOpen);
-    }
-  };
 
   const canOpenChip = Boolean(threadLinks || (todoForFallbackOpen && onOpenStartedThread));
   const failurePreview = presentation.setupFailure ?? presentation.turnStartFailure;
@@ -184,18 +205,13 @@ export const TranscriptLaunchedTodo = memo(function TranscriptLaunchedTodo(
             label="Copy launched thread"
             text={presentation.copyText}
           />
-          {presentation.launchedAt > 0 ? (
+          {formattedTime ? (
             <time
               className="transcript-activity__time tooltip-target"
-              dateTime={new Date(presentation.launchedAt).toISOString()}
-              data-tooltip={new Date(presentation.launchedAt).toISOString()}
+              dateTime={formattedTime.iso}
+              data-tooltip={formattedTime.iso}
             >
-              {new Intl.DateTimeFormat(undefined, {
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-              }).format(presentation.launchedAt)}
+              {formattedTime.label}
             </time>
           ) : null}
         </span>
