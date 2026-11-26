@@ -244,8 +244,9 @@ function buildActiveWorkGroups(
     ) {
       break;
     }
-    activeEntries.unshift(entry);
+    activeEntries.push(entry);
   }
+  activeEntries.reverse();
 
   if (!hasConcreteWork(activeEntries)) {
     return [];

@@ -528,6 +528,10 @@ function directTableRows(table: Element): Element[] {
   return rows;
 }
 
+export function serializeTableElementToMarkdown(table: Element): string {
+  return tableToMarkdown(table);
+}
+
 function tableToMarkdown(table: Element): string {
   const rowCells = directTableRows(table)
     .map((row) =>
