@@ -267,6 +267,9 @@ export default defineConfig({
             // Only the selected native-helper consumers compile, into isolated
             // outputs owned until their build trees and test workers drain.
             "apps/desktop/src/test-setup/native-helper-fixtures.ts",
+            // Prepare the selected conformance suite's two owner bundles
+            // before starting workers, outside the suite's hook budget.
+            "apps/desktop/src/test-setup/owner-conformance-fixtures.ts",
             // PDF.js's 1 MB first read: 3,943ms in the first process on a
             // Windows runner against 111ms in every process after it.
             "apps/desktop/src/test-setup/pdf-runtime-prewarm.ts",
