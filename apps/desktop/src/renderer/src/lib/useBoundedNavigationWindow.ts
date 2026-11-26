@@ -113,27 +113,76 @@ export function useBoundedNavigationWindow(params: Demand & {
   [selectedHome?.key, remoteViewerSelection, selectedRoot?.row.linkedDirectories, params.selectedDirectoryKeys]);
   const indexedDirectories = state.resources.get("directory-index")?.state.page?.directories;
   const selectedContextReady = Boolean(presentedSelection);
+  const baseDemandParams = useMemo(() => ({
+    browseMode: params.browseMode, target: params.target, attentionView: params.attentionView,
+    expandedByKey: params.expandedByKey, unpinnedExpandedByKey: params.unpinnedExpandedByKey,
+    selectedRef: params.selectedRef, removedDirectoryKeys: params.removedDirectoryKeys, draftRefs: params.draftRefs,
+    pinnedThreadsOnTop: params.pinnedThreadsOnTop, attentionScope: params.attentionScope, directories, selectedDirectoryKeys,
+    selectedRootRef: selectedRoot?.row.ref, selectedContextReady,
+    indexedDirectoryKeys: new Set((indexedDirectories ?? []).map((directory) => directory.key)),
+  }), [params.browseMode, params.target, params.attentionView, params.expandedByKey, params.unpinnedExpandedByKey,
+    params.selectedRef, params.removedDirectoryKeys, params.draftRefs, params.pinnedThreadsOnTop, params.attentionScope,
+    directories, selectedDirectoryKeys, selectedRoot?.row.ref, selectedContextReady, indexedDirectories]);
+  const baseCollections = useMemo(
+    () => buildNavigationWindowDemand({ ...baseDemandParams, disclosedParents: [] }),
+    [baseDemandParams],
+  );
+  // Derive page-dependent additions (disclosed parents and visible remote
+  // owners) cheaply so ordinary page arrivals do not re-serialize the entire
+  // demand map through prepareNavigationDemand.
+  const pageDerivedDemandRef = useRef<{
+    baseCollections: typeof baseCollections;
+    signature: string;
+    prepared: ReturnType<typeof prepareNavigationDemand>;
+  } | undefined>(undefined);
   const demand = useMemo(() => {
-    const demandParams = { browseMode: params.browseMode, target: params.target, attentionView: params.attentionView,
-      expandedByKey: params.expandedByKey, unpinnedExpandedByKey: params.unpinnedExpandedByKey,
-      selectedRef: params.selectedRef, removedDirectoryKeys: params.removedDirectoryKeys, draftRefs: params.draftRefs,
-      pinnedThreadsOnTop: params.pinnedThreadsOnTop, attentionScope: params.attentionScope, directories, selectedDirectoryKeys,
-      selectedRootRef: selectedRoot?.row.ref, selectedContextReady,
-      indexedDirectoryKeys: new Set((indexedDirectories ?? []).map((directory) => directory.key)),
-    };
-    const collections = buildNavigationWindowDemand({ ...demandParams, disclosedParents: [] });
     const disclosedParentDirectoryKeys = new Map<string, string>();
-    const disclosedParents = visibleDisclosedNavigationParents({ collectionIds: collections.keys(), pages,
-      selectionAncestry: presentedSelection ?? null,
-      disclosedParents: params.disclosedParents ?? [],
-      directoryKeysByParent: disclosedParentDirectoryKeys,
-    });
-    const requests = buildNavigationWindowDemand({ ...demandParams, disclosedParents, disclosedParentDirectoryKeys });
+    const disclosedParents = params.disclosedParents?.length
+      ? visibleDisclosedNavigationParents({
+        collectionIds: baseCollections.keys(),
+        pages,
+        selectionAncestry: presentedSelection ?? null,
+        disclosedParents: params.disclosedParents,
+        directoryKeysByParent: disclosedParentDirectoryKeys,
+      })
+      : [];
+    const requests = disclosedParents.length > 0
+      ? buildNavigationWindowDemand({ ...baseDemandParams, disclosedParents, disclosedParentDirectoryKeys })
+      : new Map(baseCollections);
     addVisibleMountedOwnerDemand({ demand: requests, pages, target: params.target, selectedRef: params.selectedRef });
-    return prepareNavigationDemand(requests);
-  }, [params.browseMode, params.target, params.attentionView, params.expandedByKey, params.unpinnedExpandedByKey,
-    params.selectedRef, params.removedDirectoryKeys, params.draftRefs, params.pinnedThreadsOnTop, params.attentionScope, params.disclosedParents,
-    directories, selectedDirectoryKeys, selectedRoot?.row.ref, selectedContextReady, indexedDirectories, pages, presentedSelection]);
+    let pageAdditionsSignature = "";
+    if (disclosedParents.length > 0 || requests.size !== baseCollections.size) {
+      const extraParts: string[] = [];
+      for (const [id, request] of requests) {
+        if (!baseCollections.has(id)) {
+          extraParts.push(`${id}:${JSON.stringify(request.query)}`);
+        }
+      }
+      pageAdditionsSignature = extraParts.join("|");
+    }
+    const prev = pageDerivedDemandRef.current;
+    if (prev && prev.baseCollections === baseCollections && prev.signature === pageAdditionsSignature) {
+      return prev.prepared;
+    }
+    const prepared = prepareNavigationDemand(requests);
+    if (prev
+      && prev.prepared.admissionError === prepared.admissionError
+      && prev.prepared.entries.size === prepared.entries.size) {
+      let identical = true;
+      for (const [id, entry] of prepared.entries) {
+        if (prev.prepared.entries.get(id)?.requestKey !== entry.requestKey) {
+          identical = false;
+          break;
+        }
+      }
+      if (identical) {
+        pageDerivedDemandRef.current = { baseCollections, signature: pageAdditionsSignature, prepared: prev.prepared };
+        return prev.prepared;
+      }
+    }
+    pageDerivedDemandRef.current = { baseCollections, signature: pageAdditionsSignature, prepared };
+    return prepared;
+  }, [baseCollections, baseDemandParams, pages, presentedSelection, params.disclosedParents, params.target, params.selectedRef]);
   // A previous lens can still own the snapshot during the render that changes
   // demand. Empty Drafts and collapsed Directories are ready only after that
   // transition, just like lenses with collection pages.

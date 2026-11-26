@@ -1016,29 +1016,47 @@ export function TranscriptList(props: TranscriptListProps) {
     () => (directoryPathsKey ? directoryPathsKey.split("\u0000") : undefined),
     [directoryPathsKey],
   );
-  const transcriptRenderItems = useMemo(
-    () =>
-      buildTranscriptRenderItems({
-        entries: transcriptEntries,
-        backend: props.parentThreadBackend,
-        activeTurnId: props.activeTurnId,
-        activeTurnStartedAt: props.activeTurnStartedAt,
-        activeMessageId:
-          props.transientMessage?.id ?? props.pendingAssistantMessage?.id,
-        alwaysVisibleEntryIds: alwaysVisibleTransientMessageIds,
-        now: renderNow,
-      }),
-    [
-      props.activeTurnId,
-      props.activeTurnStartedAt,
-      props.parentThreadBackend,
-      props.pendingAssistantMessage?.id,
-      props.transientMessage?.id,
-      alwaysVisibleTransientMessageIds,
-      renderNow,
-      transcriptEntries,
-    ]
-  );
+  const previousWorkGroupEntriesRef = useRef<Map<string, AppServerThreadEntry[]>>(new Map());
+  const transcriptRenderItems = useMemo(() => {
+    const items = buildTranscriptRenderItems({
+      entries: transcriptEntries,
+      backend: props.parentThreadBackend,
+      activeTurnId: props.activeTurnId,
+      activeTurnStartedAt: props.activeTurnStartedAt,
+      activeMessageId:
+        props.transientMessage?.id ?? props.pendingAssistantMessage?.id,
+      alwaysVisibleEntryIds: alwaysVisibleTransientMessageIds,
+      now: renderNow,
+    });
+    const prevById = previousWorkGroupEntriesRef.current;
+    const nextById = new Map<string, AppServerThreadEntry[]>();
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i]!;
+      if (item.type !== "workPhaseGroup") continue;
+      const prevEntries = prevById.get(item.id);
+      if (
+        prevEntries
+        && prevEntries.length === item.entries.length
+        && prevEntries.every((entry, idx) => entry === item.entries[idx])
+      ) {
+        items[i] = { ...item, entries: prevEntries };
+        nextById.set(item.id, prevEntries);
+      } else {
+        nextById.set(item.id, item.entries);
+      }
+    }
+    previousWorkGroupEntriesRef.current = nextById;
+    return items;
+  }, [
+    props.activeTurnId,
+    props.activeTurnStartedAt,
+    props.parentThreadBackend,
+    props.pendingAssistantMessage?.id,
+    props.transientMessage?.id,
+    alwaysVisibleTransientMessageIds,
+    renderNow,
+    transcriptEntries,
+  ]);
   const visibleItemCount =
     transcriptEntries.length +
     (props.pendingStatusText || props.runningTurnUsageText ? 1 : 0) +
@@ -1088,7 +1106,14 @@ export function TranscriptList(props: TranscriptListProps) {
     };
   }, [props.activeTurnId, props.activeTurnStartedAt, transcriptEntries]);
 
-  const toggleCommentaryGroup = useCallback((groupId: string) => {
+  const controlledExpandedCommentaryGroupIdsRef = useRef(controlledExpandedCommentaryGroupIds);
+  controlledExpandedCommentaryGroupIdsRef.current = controlledExpandedCommentaryGroupIds;
+  const onExpandedWorkPhaseGroupIdsChangeRef = useRef(onExpandedWorkPhaseGroupIdsChange);
+  onExpandedWorkPhaseGroupIdsChangeRef.current = onExpandedWorkPhaseGroupIdsChange;
+  const toggleCommentaryGroup = useCallback((groupId?: string) => {
+    if (!groupId) {
+      return;
+    }
     const toggle = (current: Set<string>): Set<string> => {
       const next = new Set(current);
       if (next.has(groupId)) {
@@ -1099,18 +1124,16 @@ export function TranscriptList(props: TranscriptListProps) {
       return next;
     };
 
-    if (controlledExpandedCommentaryGroupIds) {
-      onExpandedWorkPhaseGroupIdsChange?.([
-        ...toggle(controlledExpandedCommentaryGroupIds),
+    const controlled = controlledExpandedCommentaryGroupIdsRef.current;
+    if (controlled) {
+      onExpandedWorkPhaseGroupIdsChangeRef.current?.([
+        ...toggle(controlled),
       ]);
       return;
     }
 
     setUncontrolledExpandedCommentaryGroupIds(toggle);
-  }, [
-    controlledExpandedCommentaryGroupIds,
-    onExpandedWorkPhaseGroupIdsChange,
-  ]);
+  }, []);
 
   const setActivityExpanded = useCallback((activityId: string, expanded: boolean) => {
     if (!controlledExpandedActivityIds) {
@@ -1468,13 +1491,37 @@ export function TranscriptList(props: TranscriptListProps) {
       return undefined;
     }
 
-    const observer = new ResizeObserver(() => {
+    const lastBlockSizes = new WeakMap<Element, number>();
+    const observer = new ResizeObserver((entries) => {
       // While the sidebar is being dragged the main pane reflows every frame.
       // Reading/writing scroll geometry + re-rendering on each of those frames
       // is a layout-thrash amplifier; skip it here and re-sync once when the
       // drag ends (see the subscribeSidebarResizing effect below).
       if (isSidebarResizing()) {
         return;
+      }
+      if (entries && entries.length > 0) {
+        let blockChanged = false;
+        for (const entry of entries) {
+          const blockSize = entry.borderBoxSize?.[0]?.blockSize
+            ?? entry.contentBoxSize?.[0]?.blockSize;
+          if (blockSize === undefined) {
+            blockChanged = true;
+            continue;
+          }
+          const prev = lastBlockSizes.get(entry.target);
+          if (prev !== blockSize) {
+            lastBlockSizes.set(entry.target, blockSize);
+            // Skip the initial ResizeObserver delivery when useLayoutEffect
+            // already measured the mounted transcript.
+            if (prev !== undefined || snapshotRef.current === undefined) {
+              blockChanged = true;
+            }
+          }
+        }
+        if (!blockChanged) {
+          return;
+        }
       }
       const { scrollToBottom, syncScrollState, requestOlderPageIfUnderflowing } = resizeActionsRef.current;
       if (isGluedToBottomRef.current) {
@@ -1642,11 +1689,10 @@ export function TranscriptList(props: TranscriptListProps) {
                   skills={skills}
                   subAgents={props.subAgents}
                   threadLinkSource={props.threadLinkSource}
+                  toggleKey={workPhaseGroupToggleKey(item)}
                   onActivityExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
-                  onToggle={() => {
-                    toggleCommentaryGroup(workPhaseGroupToggleKey(item));
-                  }}
+                  onToggle={toggleCommentaryGroup}
                 />
               ) : isRewindMarkerEntry(item.entry) && item.entry.type === "activity" ? (
                 <TranscriptRewindMarker

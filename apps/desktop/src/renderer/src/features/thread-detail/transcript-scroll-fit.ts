@@ -17,6 +17,22 @@ export const TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY = "--transcript-scrollport-he
  * element of a long transcript. Outside a transcript nothing is written and
  * the rule's viewport-unit fallback applies.
  */
+type ScrollerHeightState = {
+  observer: ResizeObserver | undefined;
+  elements: Set<HTMLElement>;
+  height: number;
+};
+
+const scrollerHeightStates = new WeakMap<HTMLElement, ScrollerHeightState>();
+
+function applyScrollportHeight(element: HTMLElement, height: number): void {
+  if (height <= 0) return;
+  const value = `${height}px`;
+  if (element.style.getPropertyValue(TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY) !== value) {
+    element.style.setProperty(TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY, value);
+  }
+}
+
 export function useTranscriptScrollportHeight(
   ref: RefObject<HTMLElement | null>,
   /** Changes when the element `ref` names mounts later than its component. */
@@ -29,23 +45,47 @@ export function useTranscriptScrollportHeight(
       return undefined;
     }
 
-    const publish = () => {
-      const height = scroller.clientHeight;
-      if (height > 0) {
-        element.style.setProperty(
-          TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY,
-          `${height}px`,
-        );
+    let state = scrollerHeightStates.get(scroller);
+    if (!state) {
+      const initialHeight = scroller.clientHeight;
+      const elements = new Set<HTMLElement>();
+      let observer: ResizeObserver | undefined;
+      state = { observer: undefined, elements, height: initialHeight };
+      if (typeof ResizeObserver !== "undefined") {
+        const sharedState = state;
+        observer = new ResizeObserver((entries) => {
+          const entryBlockSize = entries?.[0]?.contentBoxSize?.[0]?.blockSize;
+          const next = entryBlockSize !== undefined && entryBlockSize > 0
+            ? Math.round(entryBlockSize)
+            : scroller.clientHeight;
+          if (next <= 0 || next === sharedState.height) {
+            return;
+          }
+          sharedState.height = next;
+          for (const target of sharedState.elements) {
+            applyScrollportHeight(target, next);
+          }
+        });
+        observer.observe(scroller);
+        state.observer = observer;
       }
-    };
-    publish();
-    if (typeof ResizeObserver === "undefined") {
-      return undefined;
+      scrollerHeightStates.set(scroller, state);
+    } else if (state.height <= 0) {
+      state.height = scroller.clientHeight;
     }
-    const observer = new ResizeObserver(publish);
-    observer.observe(scroller);
+
+    state.elements.add(element);
+    applyScrollportHeight(element, state.height);
+
+    const activeState = state;
     return () => {
-      observer.disconnect();
+      activeState.elements.delete(element);
+      if (activeState.elements.size === 0) {
+        activeState.observer?.disconnect();
+        if (scrollerHeightStates.get(scroller) === activeState) {
+          scrollerHeightStates.delete(scroller);
+        }
+      }
     };
   }, [mounted, ref]);
 }

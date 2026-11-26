@@ -834,6 +834,8 @@ export function Sidebar(props: SidebarProps) {
   return <MemoSidebarContent {...props} {...events} />;
 }
 
+const EMPTY_DIRECTORY_KEYS: readonly string[] = [];
+
 const MemoSidebarContent = memo(SidebarContent);
 
 function SidebarContent(props: SidebarProps) {
@@ -844,9 +846,13 @@ function SidebarContent(props: SidebarProps) {
   // so the header reads as the lens the operator picked.
   const ListSectionIcon = pinnedGroupShown && props.browseMode !== "attention"
     ? browseModeIcons[props.browseMode] : undefined;
-  const listSection = ListSectionIcon
-    ? { title: browseModeLabels[props.browseMode], icon: <ListSectionIcon size={12} /> }
-    : undefined;
+  const listSection = useMemo(
+    () =>
+      ListSectionIcon
+        ? { title: browseModeLabels[props.browseMode], icon: <ListSectionIcon size={12} /> }
+        : undefined,
+    [ListSectionIcon, props.browseMode],
+  );
   const federationLabel = readRendererFederationLabel();
   const federationTarget = readRendererFederationTarget();
   const copyableThreadUrl = (thread: NavigationThreadSummary): string => buildThreadUrl({
@@ -1059,13 +1065,58 @@ function SidebarContent(props: SidebarProps) {
       : resource.id === "lens" || (pinnedGroupShown && resource.id === PINNED_GROUP_RESOURCE_ID));
   // The Pinned group pages on its own and renders its own continuation.
   const listResources = lensResources.filter((resource) => resource.id !== PINNED_GROUP_RESOURCE_ID);
+  const listResourceIdsKey = listResources.map((resource) => resource.id).join("\0");
+  const listResourceIds = useMemo(
+    () => (listResourceIdsKey ? listResourceIdsKey.split("\0") : []),
+    [listResourceIdsKey],
+  );
   const directoryIndexResource = props.pagedNavigation?.resources.get("directory-index");
   const rowsByKey = useMemo(() => new Map(props.threads.map((thread) => [threadSummaryIdentityKey(thread), thread])), [props.threads]);
-  const sidebarSnapshot = useMemo(() => {
-    const resources = [...props.pagedNavigation?.resources.values() ?? []]
+  // Reuse the previous page-derived presentation snapshot when a navigation
+  // update only flips resource loading/stale flags without changing any page.
+  const resourcePagesRef = useRef<{
+    pagesById: Map<string, unknown>;
+    browseMode: SidebarProps["browseMode"];
+    pinnedGroupShown: boolean;
+    rowsByKey: Map<string, NavigationThreadSummary>;
+    attentionScope: SidebarProps["attentionScope"];
+    result: {
+      visibleKeys: string[];
+      order: ReturnType<typeof readNavigationPresentationOrder>;
+    };
+  } | undefined>(undefined);
+  const sidebarPageState = useMemo(() => {
+    const resources = props.pagedNavigation?.resources;
+    const prev = resourcePagesRef.current;
+    let pagesSame = Boolean(
+      prev
+      && prev.browseMode === props.browseMode
+      && prev.pinnedGroupShown === pinnedGroupShown
+      && prev.rowsByKey === rowsByKey
+      && prev.attentionScope === attentionScope
+      && prev.pagesById.size === (resources?.size ?? 0),
+    );
+    if (pagesSame && prev && resources) {
+      for (const [id, resource] of resources) {
+        if (!prev.pagesById.has(id) || prev.pagesById.get(id) !== resource.state.page) {
+          pagesSame = false;
+          break;
+        }
+      }
+    }
+    if (pagesSame && prev) {
+      return prev.result;
+    }
+    const pagesById = new Map<string, unknown>();
+    if (resources) {
+      for (const [id, resource] of resources) {
+        pagesById.set(id, resource.state.page);
+      }
+    }
+    const scopedResources = [...resources?.values() ?? []]
       .filter((resource) => props.browseMode === "drafts" ? resource.id.startsWith("drafts:")
         : resource.id === "lens" || (pinnedGroupShown && resource.id === PINNED_GROUP_RESOURCE_ID));
-    const keys = new Set(resources.flatMap((resource) => resource.state.page?.entries ?? [])
+    const keys = new Set(scopedResources.flatMap((resource) => resource.state.page?.entries ?? [])
       .map((entry) => navigationThreadSelectionKey(entry.row.ref)));
     // An owner that predates the scope answers with the whole queue. Its
     // page goes through the owner's own predicate here, so a narrowed lens
@@ -1075,10 +1126,29 @@ function SidebarContent(props: SidebarProps) {
       const row = rowsByKey.get(key);
       return Boolean(row) && (!attentionScope || navigationThreadInAttentionScope(row!, attentionScope));
     };
-    return { directories: props.directories, threads: props.threads,
+    const result = {
       visibleKeys: [...keys].filter(inScope),
-      order: readNavigationPresentationOrder(props.pagedNavigation?.resources ?? new Map()) };
-  }, [props.directories, props.threads, props.pagedNavigation?.resources, props.browseMode, pinnedGroupShown, rowsByKey, attentionScope]);
+      order: readNavigationPresentationOrder(resources ?? new Map()),
+    };
+    resourcePagesRef.current = {
+      pagesById,
+      browseMode: props.browseMode,
+      pinnedGroupShown,
+      rowsByKey,
+      attentionScope,
+      result,
+    };
+    return result;
+  }, [props.pagedNavigation?.resources, props.browseMode, pinnedGroupShown, rowsByKey, attentionScope]);
+  const sidebarSnapshot = useMemo(
+    () => ({
+      directories: props.directories,
+      threads: props.threads,
+      visibleKeys: sidebarPageState.visibleKeys,
+      order: sidebarPageState.order,
+    }),
+    [props.directories, props.threads, sidebarPageState],
+  );
   // One hydrator per Sidebar instance: it holds the previous hydrated result
   // so a render that changes nothing hands the rows back their existing
   // object identities, which is what lets the memoized rows bail out while
@@ -1131,9 +1201,19 @@ function SidebarContent(props: SidebarProps) {
   }, [creationRevision, revealCreation]);
   const renderedDirectories = hoverStableSnapshot.value.directories;
   const presentedThreads = hoverStableSnapshot.value.threads;
-  const presentedByKey = new Map(presentedThreads.map((thread) => [threadSummaryIdentityKey(thread), thread]));
-  const renderedThreads = props.browseMode === "directories" ? presentedThreads
-    : hoverStableSnapshot.value.visibleKeys.map((key) => presentedByKey.get(key)).filter((thread): thread is NavigationThreadSummary => Boolean(thread));
+  const presentedByKey = useMemo(
+    () => new Map(presentedThreads.map((thread) => [threadSummaryIdentityKey(thread), thread])),
+    [presentedThreads],
+  );
+  const renderedThreads = useMemo(
+    () =>
+      props.browseMode === "directories"
+        ? presentedThreads
+        : hoverStableSnapshot.value.visibleKeys
+          .map((key) => presentedByKey.get(key))
+          .filter((thread): thread is NavigationThreadSummary => Boolean(thread)),
+    [props.browseMode, presentedThreads, hoverStableSnapshot.value.visibleKeys, presentedByKey],
+  );
   // A starting thread renders where its thread will land, and a sub-thread
   // being written renders in the same slot. Drafts holds only threads with
   // unsent replies, which a new thread never is, so neither lands there.
@@ -1157,36 +1237,74 @@ function SidebarContent(props: SidebarProps) {
   const canStartFromList = !props.loading
     && props.backends.some((backend) => backend.available)
     && Boolean(onCreateThreadWithoutDirectory || onAddProjectDirectory);
-  const lensEmptyMessage = (
-    <p className="sidebar-empty">
-      {props.browseMode === "attention"
-        ? attentionScope ? attentionScopeEmptyMessages[attentionScope] : "Nothing running, nothing to review."
-        : props.browseMode === "drafts"
-          // "replies", not "drafts": launchpad (new-thread) composer
-          // text is equally unsent but belongs to a directory rather
-          // than a thread, so this lens cannot show it and must not
-          // claim there is nothing to find.
-          ? props.unassignedThreadDraftCount
-            ? "Older drafts are available. Use Recover Draft in a composer to choose one."
-            : "No unsent replies."
-          : "No threads yet."}
-    </p>
+  const lensEmptyMessage = useMemo(
+    () => (
+      <p className="sidebar-empty">
+        {props.browseMode === "attention"
+          ? attentionScope ? attentionScopeEmptyMessages[attentionScope] : "Nothing running, nothing to review."
+          : props.browseMode === "drafts"
+            // "replies", not "drafts": launchpad (new-thread) composer
+            // text is equally unsent but belongs to a directory rather
+            // than a thread, so this lens cannot show it and must not
+            // claim there is nothing to find.
+            ? props.unassignedThreadDraftCount
+              ? "Older drafts are available. Use Recover Draft in a composer to choose one."
+              : "No unsent replies."
+            : "No threads yet."}
+      </p>
+    ),
+    [props.browseMode, attentionScope, props.unassignedThreadDraftCount],
   );
   // Handed to whichever list renders, which places it after its last row,
   // inside the scrolling lane; an empty lens shows it under its empty line.
-  const startActions = canStartFromList ? (
-    <SidebarStartActions
-      lead={Boolean(props.threadLensesEmpty)}
-      creatingThread={Boolean(props.creatingThread)}
-      addingProjectDirectory={Boolean(props.addingProjectDirectory)}
-      onStartChat={onCreateThreadWithoutDirectory
-        ? () => void onCreateThreadWithoutDirectory()
-        : undefined}
-      onAddProjectFolder={onAddProjectDirectory
-        ? () => void onAddProjectDirectory()
-        : undefined}
-    />
-  ) : null;
+  const handleStartChat = useEventCallback(() => {
+    void onCreateThreadWithoutDirectory?.();
+  });
+  const handleAddProjectFolder = useEventCallback(() => {
+    void onAddProjectDirectory?.();
+  });
+  const hasStartChat = Boolean(onCreateThreadWithoutDirectory);
+  const hasAddProjectFolder = Boolean(onAddProjectDirectory);
+  const startActions = useMemo(
+    () =>
+      canStartFromList ? (
+        <SidebarStartActions
+          lead={Boolean(props.threadLensesEmpty)}
+          creatingThread={Boolean(props.creatingThread)}
+          addingProjectDirectory={Boolean(props.addingProjectDirectory)}
+          onStartChat={hasStartChat ? handleStartChat : undefined}
+          onAddProjectFolder={hasAddProjectFolder ? handleAddProjectFolder : undefined}
+        />
+      ) : null,
+    [
+      canStartFromList,
+      props.threadLensesEmpty,
+      props.creatingThread,
+      props.addingProjectDirectory,
+      hasStartChat,
+      handleStartChat,
+      hasAddProjectFolder,
+      handleAddProjectFolder,
+    ],
+  );
+  const pagedNavigationRef = useRef(props.pagedNavigation);
+  pagedNavigationRef.current = props.pagedNavigation;
+  const handleLoadMoreDirectories = useEventCallback(() => {
+    void pagedNavigationRef.current?.loadMore("directory-index");
+  });
+  const directoryIndexHasNextCursor = Boolean(directoryIndexResource?.state.page?.nextCursor);
+  const directoryIndexLoading = Boolean(directoryIndexResource?.loading);
+  const listPagerKey = listResources
+    .filter((resource) => !isNavigationPeerUnavailable(resource.state.error))
+    .map((resource) =>
+      resource.state.rebaselineRequired
+        ? `${resource.id}:reload`
+        : resource.state.page?.nextCursor
+          ? `${resource.id}:more:${resource.loading ? 1 : 0}`
+          : "",
+    )
+    .filter(Boolean)
+    .join("|");
   // The lens's own continuation, handed to the list beside `startActions` so
   // it sits right under the last row, inside the scrolling lane. It used to
   // render after the list as a sibling in the scroll region. The lane is
@@ -1194,22 +1312,59 @@ function SidebarContent(props: SidebarProps) {
   // actions' hairline, which already reads as the end of the list. A short
   // list left hundreds of pixels of empty rail between the last row and the
   // control, and a long one parked it under the scroller like a status line.
-  const lensPager = props.browseMode === "directories"
-    // `loadMore` has no reentrancy guard of its own — it awaits any
-    // pending read and then unconditionally starts another — so the
-    // in-flight guard is the only thing standing between a double
-    // click and two page advances. This was the one load-more control
-    // without it.
-    ? directoryIndexResource?.state.page?.nextCursor ? (
-      <SidebarShowMore busy={directoryIndexResource.loading} label="Load more directories" onClick={() => void props.pagedNavigation?.loadMore("directory-index")} />
-    ) : null
-    : listResources.filter((resource) => !isNavigationPeerUnavailable(resource.state.error)).map((resource) => (
-      resource.state.rebaselineRequired ? (
-        <SidebarShowMore key={resource.id} kind="reload" label="Reload this lens" onClick={() => void props.pagedNavigation?.restart(resource.id)} />
-      ) : resource.state.page?.nextCursor ? (
-        <SidebarShowMore key={resource.id} busy={resource.loading} label="Load more threads" onClick={() => void props.pagedNavigation?.loadMore(resource.id)} />
-      ) : null
-    ));
+  const lensPager = useMemo(() => {
+    if (props.browseMode === "directories") {
+      // `loadMore` has no reentrancy guard of its own — it awaits any
+      // pending read and then unconditionally starts another — so the
+      // in-flight guard is the only thing standing between a double
+      // click and two page advances. This was the one load-more control
+      // without it.
+      return directoryIndexHasNextCursor ? (
+        <SidebarShowMore
+          busy={directoryIndexLoading}
+          label="Load more directories"
+          onClick={handleLoadMoreDirectories}
+        />
+      ) : null;
+    }
+    if (!listPagerKey) return null;
+    return listPagerKey.split("|").map((entry) => {
+      const [id, kind, busy] = entry.split(":");
+      return kind === "reload" ? (
+        <SidebarShowMore
+          key={id}
+          kind="reload"
+          label="Reload this lens"
+          onClick={() => void pagedNavigationRef.current?.restart(id!)}
+        />
+      ) : (
+        <SidebarShowMore
+          key={id}
+          busy={busy === "1"}
+          label="Load more threads"
+          onClick={() => void pagedNavigationRef.current?.loadMore(id!)}
+        />
+      );
+    });
+  }, [
+    props.browseMode,
+    directoryIndexHasNextCursor,
+    directoryIndexLoading,
+    handleLoadMoreDirectories,
+    listPagerKey,
+  ]);
+  const directoriesFooter = useMemo(
+    () => (
+      <>
+        {lensPager}
+        {startActions}
+      </>
+    ),
+    [lensPager, startActions],
+  );
+  const handleProjectRevealComplete = useCallback(() => {
+    setProjectReveal(undefined);
+  }, []);
   // Shown in place of the list, which then takes no footer.
   const listStatus = props.loading ? (
     <p className="sidebar-empty">Loading threads…</p>
@@ -1446,22 +1601,25 @@ function SidebarContent(props: SidebarProps) {
   const dockedThread = selectedItemKey
     ? presentedByKey.get(selectedItemKey) ?? navigationThreadByKey.get(selectedItemKey)
     : undefined;
-  const dockedThreadProjectLabel = (directoryKey: string | undefined): string | undefined => {
+  const dockedThreadProjectLabel = useEventCallback((directoryKey: string | undefined): string | undefined => {
     const key = directoryKey ?? props.selectedThreadDirectoryKeys?.[0];
     return (key ? props.directories.find((directory) => directory.key === key)?.label : undefined)
       ?? dockedThread?.linkedDirectories[0]?.label;
-  };
+  });
   // Its parents, nearest first: a collapsed one hides the row, and the dock
   // then stands in for the parent's.
-  const dockedThreadAncestorKeys: string[] = [];
-  for (let current = dockedThread; current?.parentThreadId;) {
-    const parentKey = resolveThreadParentKey(current, navigationThreadByKey);
-    if (!parentKey || dockedThreadAncestorKeys.includes(parentKey)) {
-      break;
+  const dockedThreadAncestorKeys = useMemo(() => {
+    const keys: string[] = [];
+    for (let current = dockedThread; current?.parentThreadId;) {
+      const parentKey = resolveThreadParentKey(current, navigationThreadByKey);
+      if (!parentKey || keys.includes(parentKey)) {
+        break;
+      }
+      keys.push(parentKey);
+      current = navigationThreadByKey.get(parentKey);
     }
-    dockedThreadAncestorKeys.push(parentKey);
-    current = navigationThreadByKey.get(parentKey);
-  }
+    return keys;
+  }, [dockedThread, navigationThreadByKey]);
   const revealSelectedThread = props.onRevealSelectedThread;
   const revealDockedThread = useEventCallback((): void => {
     // A flat lens can open only what it lists. Directories lists every
@@ -1599,7 +1757,7 @@ function SidebarContent(props: SidebarProps) {
     });
   });
 
-  const selectDirectoryFromList = (
+  const selectDirectoryFromList = useEventCallback((
     directory: NavigationDirectorySummary,
     event: ReactMouseEvent<HTMLButtonElement>,
     selectionOrder: string[],
@@ -1649,7 +1807,7 @@ function SidebarContent(props: SidebarProps) {
       }
       return next;
     });
-  };
+  });
 
   useEffect(() => {
     const request = revealSelectedThreadRequest ?? 0;
@@ -2238,7 +2396,7 @@ function SidebarContent(props: SidebarProps) {
     });
   };
 
-  const openDirectoryContextMenu = (
+  const openDirectoryContextMenu = useEventCallback((
     directory: NavigationDirectorySummary,
     position: ThreadContextMenuPosition,
   ): void => {
@@ -2255,7 +2413,7 @@ function SidebarContent(props: SidebarProps) {
         ? [directory]
         : resolveDirectoryContextMenuDirectories(directory),
     });
-  };
+  });
 
   const peerForgeAutomationInstanceIds = props.peerForgeAutomationInstanceIds;
   const peerAdvertisesForgeAutomation = useCallback(
@@ -2319,7 +2477,7 @@ function SidebarContent(props: SidebarProps) {
     openDirectoryContextMenu(directory, position);
   });
 
-  const openSubthreadDraftMenu = (
+  const openSubthreadDraftMenu = useEventCallback((
     draft: SubthreadLaunchpadDraft,
     position: ThreadContextMenuPosition,
   ): void => {
@@ -2329,9 +2487,9 @@ function SidebarContent(props: SidebarProps) {
     setDirectoryTargetMenu(undefined);
     setProfileMenuOpen(false);
     setSubthreadDraftMenu({ requestedPosition: position, draft });
-  };
+  });
 
-  const openDirectoryTargetMenu = (
+  const openDirectoryTargetMenu = useEventCallback((
     directory: NavigationDirectorySummary,
     position: ThreadContextMenuPosition,
   ): void => {
@@ -2345,7 +2503,7 @@ function SidebarContent(props: SidebarProps) {
       directoryLabel: directory.label,
       directory: federationProjectDirectory(directory),
     });
-  };
+  });
 
   // The project header card's actions. Stable, so the card's options only
   // change when what it lists does.
@@ -3921,15 +4079,10 @@ function SidebarContent(props: SidebarProps) {
                 startingThreads={startingThreads}
                 onSelectStartingThread={props.onSelectPendingLaunchpad}
                 emptyLabel={props.threadLensesEmpty ? "No threads yet." : undefined}
-                footer={(
-                  <>
-                    {lensPager}
-                    {startActions}
-                  </>
-                )}
+                footer={directoriesFooter}
                 onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
                 projectReveal={projectReveal}
-                onProjectRevealComplete={() => setProjectReveal(undefined)}
+                onProjectRevealComplete={handleProjectRevealComplete}
                 pagedNavigation={props.pagedNavigation}
                 presentationOrder={hoverStableSnapshot.value.order}
                 selectedThreadDirectoryKeys={props.selectedThreadDirectoryKeys}
@@ -4023,7 +4176,7 @@ function SidebarContent(props: SidebarProps) {
                   onSelectStartingThread={props.onSelectPendingLaunchpad}
                   onOpenSubthreadDraftContextMenu={openSubthreadDraftMenu}
                   pagedNavigation={props.pagedNavigation}
-                  resourceIds={listResources.map((resource) => resource.id)}
+                  resourceIds={listResourceIds}
                   presentationOrder={hoverStableSnapshot.value.order}
                   loadedThreads={presentedThreads}
                   approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -4073,7 +4226,7 @@ function SidebarContent(props: SidebarProps) {
                 remoteWork={dockedThread ? isThreadRemoteWorkHere(dockedThread) : false}
                 projectLabel={dockedThreadProjectLabel}
                 ancestorThreadKeys={dockedThreadAncestorKeys}
-                directoryKeys={props.selectedThreadDirectoryKeys ?? []}
+                directoryKeys={props.selectedThreadDirectoryKeys ?? EMPTY_DIRECTORY_KEYS}
                 onRevealHiddenThread={revealDockedThread}
               />
             )}

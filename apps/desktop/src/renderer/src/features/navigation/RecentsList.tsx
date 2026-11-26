@@ -2,7 +2,7 @@ import { readNavigationPresentationOrder, readOwnerChildOrder, type NavigationPr
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
 import type { useBoundedNavigationWindow } from "../../lib/useBoundedNavigationWindow";
 import { navigationThreadSelectionKey } from "../../lib/navigation-query-state";
-import { Children, Fragment, useEffect, useId, useRef, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { Children, Fragment, memo, useEffect, useId, useRef, type MouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useEventCallback } from "../../lib/useEventCallback";
 import { useRecoverableState } from "../../lib/RendererRecoveryState";
 import type {
@@ -182,7 +182,7 @@ type RecentsListProps = {
  * is Directories' own machinery (`useThreadPinOrdering`), so every lens edits
  * the same rank the same way.
  */
-export function RecentsList(props: RecentsListProps) {
+export const RecentsList = memo(function RecentsList(props: RecentsListProps) {
   // Pin drags keep their own indicator, as in Directories: a sub-thread
   // reorder and a pin move must never light each other's targets.
   const pinDropIndicator = useDropIndicatorController();
@@ -750,7 +750,7 @@ export function RecentsList(props: RecentsListProps) {
       {props.footer}
     </div>
   );
-}
+});
 
 type PinnedGroupCounts = {
   total: number;
