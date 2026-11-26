@@ -23324,11 +23324,10 @@ export class DesktopBackendRegistry {
         // that prompt. Keep the fallback for terminals with a drifted ID.
         const recoverDriftedId = !hadMatchingGenericActiveTurn && !isAcpPromptTurnId(thread.threadId, turnId);
         const turns = recoverDriftedId
-          ? this.context.turnState.registeredTurnKeys().map(parseActiveTurnKey)
-            .filter((turn) => turn?.backend === thread.backend && turn.threadId === thread.threadId)
+          ? this.context.turnState.registeredOtherProviderTurnsForThread(thread)
           : [terminalTurn];
         for (const turn of turns) {
-          if (!turn || !this.context.turnState.unregisterTurn(turn)) continue;
+          if (!this.context.turnState.unregisterTurn(turn)) continue;
           retiredAcpTurn = true;
           backendRegistryLog.info("ACP active turn removed", {
             ...turn,
