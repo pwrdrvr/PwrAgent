@@ -337,10 +337,7 @@ import {
   describeHeapSnapshotResult,
   HEAP_SNAPSHOT_SECRET_WARNING,
 } from "../../shared/heap-snapshot";
-import {
-  buildHotCpuCaptureNotice,
-  buildHotCpuPostCapNotice,
-} from "./features/notifications/hot-cpu-profile-notice";
+import { useHotCpuProfileNotices } from "./features/notifications/useHotCpuProfileNotices";
 import type { BundledGitLfsAdvisoryEvent } from "../../shared/bundled-git-lfs";
 import {
   githubPrAccessTargetKey,
@@ -1119,22 +1116,7 @@ function DesktopAppShell(props: {
       };
     }, [desktopApi, showPrAutoDispatchBudgetNotice]);
 
-    useEffect(() => {
-      const unsubscribeCapture = desktopApi?.onHotCpuProfileCaptured?.((event) => {
-        showAppNotice(buildHotCpuCaptureNotice(
-          event,
-          desktopApi.rearmHotCpuProfile,
-          (notice) => dispatchAppNotice({ type: "update-durable", notice }),
-        ));
-      });
-      const unsubscribePostCap = desktopApi?.onHotCpuPostCap?.((event) => {
-        showAppNotice(buildHotCpuPostCapNotice(event));
-      });
-      return () => {
-        unsubscribeCapture?.();
-        unsubscribePostCap?.();
-      };
-    }, [desktopApi, dispatchAppNotice, showAppNotice]);
+    useHotCpuProfileNotices(desktopApi, dispatchAppNotice);
 
     // On-demand heap snapshots. The capture (and its countdown) run in main, so
     // the result can land here even if Settings was closed to stage the scenario.

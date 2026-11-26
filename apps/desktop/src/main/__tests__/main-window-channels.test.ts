@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AGENT_EVENT_CHANNEL,
   CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,
+  HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL,
   HOT_CPU_POST_CAP_EVENT_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
   MCP_CONNECTIONS_CHANGED_EVENT_CHANNEL,
@@ -28,6 +29,7 @@ describe("main window event channels", () => {
 
   it("keeps this machine's own notices out of a federation viewer", () => {
     for (const channel of [
+      HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL,
       HOT_CPU_POST_CAP_EVENT_CHANNEL,
       HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
       CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL,

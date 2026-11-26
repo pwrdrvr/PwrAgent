@@ -161,7 +161,7 @@ import type {
   CodexProtocolCaptureResult,
   CodexProtocolCaptureStatus,
 } from "../../../shared/codex-protocol-capture";
-import type { HotCpuPostCapEvent, HotCpuProfileCapturedEvent, RearmHotCpuProfileRequest } from "../../../shared/hot-cpu-profile";
+import type { HotCpuFinalCaptureFailedEvent, HotCpuPostCapEvent, HotCpuProfileCapturedEvent, HotCpuRearmableCapture, RearmHotCpuProfileRequest } from "../../../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../../../shared/managed-grok-signature";
 import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
 import type {
@@ -1004,6 +1004,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => () => void;
   cancelAppUpdateDownload?: () => Promise<AppUpdateCancelResult>;
   rearmHotCpuProfile?: (request: RearmHotCpuProfileRequest) => Promise<boolean>;
+  listRearmableHotCpuProfiles?: () => Promise<HotCpuRearmableCapture[]>;
+  onHotCpuFinalCaptureFailed?: (callback: (event: HotCpuFinalCaptureFailedEvent) => void) => () => void;
   onHotCpuPostCap?: (callback: (event: HotCpuPostCapEvent) => void) => () => void;
   onHotCpuProfileCaptured?: (
     callback: (event: HotCpuProfileCapturedEvent) => void,

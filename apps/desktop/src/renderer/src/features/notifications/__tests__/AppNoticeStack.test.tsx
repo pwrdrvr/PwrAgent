@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppNoticeStack } from "../AppNoticeStack";
 import type { AppNoticeToastNotice } from "../AppNoticeToast";
@@ -10,6 +10,36 @@ import { buildSpendAlertNotice } from "../spend-alert-notice";
 afterEach(cleanup);
 
 describe("AppNoticeStack", () => {
+  it("keeps a focused Rearm button on its original process until focus leaves the notice", () => {
+    const rearmMain = vi.fn();
+    const rearmRenderer = vi.fn();
+    const main = {
+      id: "main", title: "Main CPU profile captured", message: "Capture limit reached",
+      revealOnArrival: true, actions: [{ label: "Rearm", onClick: rearmMain }],
+    };
+    const renderer = {
+      ...main, id: "renderer", title: "Renderer CPU profile captured",
+      actions: [{ label: "Rearm", onClick: rearmRenderer }],
+    };
+    const onDismissDurable = () => {};
+    const { rerender } = render(<AppNoticeStack durableNotices={[main]} onDismissDurable={onDismissDurable} />);
+    const button = screen.getByRole("button", { name: "Rearm" });
+    act(() => button.focus());
+    rerender(<AppNoticeStack durableNotices={[main, renderer]} onDismissDurable={onDismissDurable} />);
+
+    expect(button).toHaveFocus();
+    fireEvent.click(button);
+    expect(rearmMain).toHaveBeenCalledOnce();
+    expect(rearmRenderer).not.toHaveBeenCalled();
+    expect(screen.getByText(main.title)).toBeInTheDocument();
+
+    const copy = screen.getByRole("button", { name: "Copy notice" });
+    act(() => copy.focus());
+    expect(screen.getByText(main.title)).toBeInTheDocument();
+    act(() => copy.blur());
+    expect(screen.getByText(renderer.title)).toBeInTheDocument();
+  });
+
   it("shows a post-cap CPU notice on arrival and leaves subsequent navigation in the operator's control", () => {
     const capture = { id: "capture", title: "CPU profile captured", message: "Saved", autoDismiss: false };
     const postCap = buildHotCpuPostCapNotice({

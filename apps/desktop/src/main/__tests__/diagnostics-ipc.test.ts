@@ -63,6 +63,27 @@ describe("diagnostics ipc", () => {
     expect(rearm).toHaveBeenCalledExactlyOnceWith(request.sessionDirectoryName, request.profileFilename);
   });
 
+  it("returns the current rearmable captures only to a local main window", async () => {
+    const { registerDiagnosticsIpcHandlers } = await import("../shell/ipc/diagnostics");
+    const { HOT_CPU_PROFILE_REARMABLE_CHANNEL } = await import("../../shared/ipc");
+    const captures = [{
+      sessionDirectoryName: "hot-cpu-example",
+      profileFilename: "main-hot-0005.cpuprofile",
+      capturedAt: "2026-11-25T18:00:00.000Z",
+      captureLimit: 5,
+      target: "main" as const,
+    }];
+    const list = vi.fn(async () => captures);
+    registerDiagnosticsIpcHandlers(undefined, list);
+    const invoke = handlers.get(HOT_CPU_PROFILE_REARMABLE_CHANNEL)!;
+    const sender = { id: 1 };
+    isLocalMainWindowWebContents.mockImplementation((candidate) => candidate === sender);
+
+    expect(invoke({ sender: { id: 2 } })).toEqual([]);
+    expect(list).not.toHaveBeenCalled();
+    await expect(invoke({ sender })).resolves.toEqual(captures);
+  });
+
   it("routes Codex protocol capture status, start, and stop", async () => {
     const status = { active: false as const, available: true };
     const active = {

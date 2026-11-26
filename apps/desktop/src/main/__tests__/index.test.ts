@@ -29,6 +29,7 @@ const installWindowFrameSyncMock = vi.fn();
 const wireWindowControlsBridgeMock = vi.fn();
 const createMainWindowMock = vi.fn();
 const rearmHotCpuProfileMock = vi.fn(() => false);
+const listRearmableHotCpuProfilesMock = vi.fn(async () => []);
 const stopWindowDiagnosticsMock = vi.fn<() => Promise<void>>();
 const registerAppServerIpcHandlersMock = vi.fn();
 const registerNativeVoiceIpcHandlersMock = vi.fn();
@@ -369,6 +370,7 @@ vi.mock("../shell/window", () => ({
   createMainWindow: createMainWindowMock,
   getRendererEntry: () => ({ kind: "file", value: "/fixture/renderer/index.html" }),
   isFederationWindowWebContents: vi.fn(() => false),
+  listRearmableHotCpuProfiles: listRearmableHotCpuProfilesMock,
   rearmHotCpuProfile: rearmHotCpuProfileMock,
   stopWindowDiagnostics: stopWindowDiagnosticsMock,
   syncHotCpuProfilersFromSettings: vi.fn(),
@@ -1533,7 +1535,9 @@ describe("bootstrapApp", () => {
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
-    expect(registerDiagnosticsIpcHandlersMock).toHaveBeenCalledExactlyOnceWith(rearmHotCpuProfileMock);
+    expect(registerDiagnosticsIpcHandlersMock).toHaveBeenCalledExactlyOnceWith(
+      rearmHotCpuProfileMock, listRearmableHotCpuProfilesMock,
+    );
     expect(registerNativeVoiceIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerAudioTranscriptionIpcMock).toHaveBeenCalledOnce();
     expect(registerAudioTranscriptionIpcMock).toHaveBeenCalledBefore(createMainWindowMock);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import { AppNoticeToast, type AppNoticeToastNotice } from "./AppNoticeToast";
@@ -20,6 +20,8 @@ export function AppNoticeStack(props: {
   const [activeId, setActiveId] = useState<string>();
   const lastActiveIndexRef = useRef(0);
   const previousRevealIds = useRef(new Set<string>());
+  const pendingRevealId = useRef<string | undefined>(undefined);
+  const durableToastRef = useRef<HTMLElement>(null);
   const stackRef = useRef<HTMLDivElement>(null);
   const placement = useToastStackPlacement(stackRef);
   const durableNotices = props.durableNotices;
@@ -35,17 +37,26 @@ export function AppNoticeStack(props: {
       )
     : [];
 
+  const revealPendingNotice = useCallback((): boolean => {
+    const nextId = pendingRevealId.current;
+    if (!nextId) return false;
+    pendingRevealId.current = undefined;
+    const index = durableNotices.findIndex((notice) => notice.id === nextId);
+    if (index < 0) return false;
+    lastActiveIndexRef.current = index;
+    setActiveId(nextId);
+    return true;
+  }, [durableNotices]);
+
   useEffect(() => {
     const revealIds = new Set(durableNotices.filter((notice) => notice.revealOnArrival).map((notice) => notice.id));
-    const arrivalIndex = durableNotices.findLastIndex(
+    const arrival = durableNotices.findLast(
       (notice) => revealIds.has(notice.id) && !previousRevealIds.current.has(notice.id),
     );
     previousRevealIds.current = revealIds;
-    if (arrivalIndex >= 0) {
-      lastActiveIndexRef.current = arrivalIndex;
-      setActiveId(durableNotices[arrivalIndex].id);
-      return;
-    }
+    if (arrival) pendingRevealId.current = arrival.id;
+    const toast = durableToastRef.current;
+    if (!toast?.contains(toast.ownerDocument.activeElement) && revealPendingNotice()) return;
     if (durableNotices.length === 0) {
       setActiveId(undefined);
       lastActiveIndexRef.current = 0;
@@ -59,11 +70,12 @@ export function AppNoticeStack(props: {
       durableNotices.length - 1,
     );
     setActiveId(durableNotices[nextIndex]?.id);
-  }, [activeId, durableNotices]);
+  }, [activeId, durableNotices, revealPendingNotice]);
 
   const selectIndex = (index: number): void => {
     const next = durableNotices[index];
     if (!next) return;
+    pendingRevealId.current = undefined;
     lastActiveIndexRef.current = index;
     setActiveId(next.id);
   };
@@ -91,6 +103,8 @@ export function AppNoticeStack(props: {
       <AppNoticeToast
         desktopApi={props.desktopApi}
         notice={activeNotice}
+        noticeRef={durableToastRef}
+        onFocusLeave={revealPendingNotice}
         onOpenThread={props.onOpenThread}
         onSuppressSkillQuestionsWarning={props.onSuppressSkillQuestionsWarning}
         onSuppressCodexWarning={props.onSuppressCodexWarning}

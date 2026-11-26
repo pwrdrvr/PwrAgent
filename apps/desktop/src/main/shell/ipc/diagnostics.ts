@@ -7,11 +7,13 @@ import {
   DIAGNOSTICS_START_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   DIAGNOSTICS_STOP_CODEX_PROTOCOL_CAPTURE_CHANNEL,
   HOT_CPU_PROFILE_REARM_CHANNEL,
+  HOT_CPU_PROFILE_REARMABLE_CHANNEL,
 } from "../../../shared/ipc";
 import type {
   CaptureHeapSnapshotRequest,
   CaptureHeapSnapshotResult,
 } from "../../../shared/heap-snapshot";
+import type { HotCpuRearmableCapture } from "../../../shared/hot-cpu-profile";
 import { captureHeapSnapshot } from "../diagnostics/manual-heap-snapshot";
 import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
 import { getMainLogger } from "../../log";
@@ -74,7 +76,11 @@ async function runCapture(
 
 export function registerDiagnosticsIpcHandlers(
   rearmHotCpuProfile?: (sessionDirectoryName: string, profileFilename: string) => boolean,
+  listRearmableHotCpuProfiles?: () => Promise<HotCpuRearmableCapture[]>,
 ): void {
+  ipcMain.removeHandler(HOT_CPU_PROFILE_REARMABLE_CHANNEL);
+  ipcMain.handle(HOT_CPU_PROFILE_REARMABLE_CHANNEL, (event) =>
+    isLocalMainWindowWebContents(event.sender) ? listRearmableHotCpuProfiles?.() ?? [] : []);
   ipcMain.removeHandler(HOT_CPU_PROFILE_REARM_CHANNEL);
   ipcMain.handle(HOT_CPU_PROFILE_REARM_CHANNEL, (event, request?: {
     sessionDirectoryName?: unknown;
@@ -145,6 +151,7 @@ export function registerDiagnosticsIpcHandlers(
 }
 
 export function disposeDiagnosticsIpcHandlers(): void {
+  ipcMain.removeHandler(HOT_CPU_PROFILE_REARMABLE_CHANNEL);
   ipcMain.removeHandler(HOT_CPU_PROFILE_REARM_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_STOP_RENDERING_CHANNEL);

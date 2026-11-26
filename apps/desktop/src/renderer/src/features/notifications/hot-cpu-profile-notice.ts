@@ -1,6 +1,7 @@
 import {
   buildHotCpuProfileHandoffMessage,
   formatHotCpuProfileTriggerSummary,
+  type HotCpuFinalCaptureFailedEvent,
   type HotCpuPostCapEvent,
   type HotCpuProfileCapturedEvent,
   type RearmHotCpuProfileRequest,
@@ -22,31 +23,33 @@ function formatObservationTime(timestamp: string): string {
 }
 
 export function buildHotCpuCaptureNotice(
-  event: HotCpuProfileCapturedEvent,
+  event: HotCpuProfileCapturedEvent | HotCpuFinalCaptureFailedEvent,
   rearm?: (request: RearmHotCpuProfileRequest) => Promise<boolean>,
   updateNotice?: (notice: AppNoticeToastNotice) => void,
 ): AppNoticeToastNotice {
-  const heapSnapshotCount = event.heapSnapshotArtifacts?.length ?? 0;
+  const capture = "profilePath" in event ? event : undefined;
+  const heapSnapshotCount = capture?.heapSnapshotArtifacts?.length ?? 0;
   const process = event.target === "main" ? "Main" : "Renderer";
   const captureLimit = event.captureLimit;
-  const captureMessage = [
-    `Matched ${formatHotCpuProfileTriggerSummary(event)}. Saved ${event.profileFilename}.`,
+  const captureMessage = capture ? [
+    `Matched ${formatHotCpuProfileTriggerSummary(capture)}. Saved ${event.profileFilename}.`,
     heapSnapshotCount > 0 ? ` ${heapSnapshotCount} heap snapshots captured.` : "",
-  ].join("");
+  ].join("") : "The final capture did not complete.";
   const notice: AppNoticeToastNotice = {
     autoDismiss: false,
-    copyText: buildHotCpuProfileHandoffMessage(event),
+    copyText: capture ? buildHotCpuProfileHandoffMessage(capture) : undefined,
     facts: [
       {
         label: "Source",
-        value: `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
+        value: `Local app${capture?.sourceHostname ? ` on ${capture.sourceHostname}` : ""}`,
       },
-      { label: "Captured", value: formatObservationTime(event.capturedAt) },
+      { label: capture ? "Captured" : "Attempted", value: formatObservationTime(event.capturedAt) },
       { label: "Session", value: event.sessionDirectoryName },
     ],
     dismissGroup: CPU_PROFILE_DISMISS_GROUP,
     id: `hot-cpu-profile:${event.sessionDirectoryName}:${event.profileFilename}`,
-    title: `${process} CPU profile captured`,
+    title: capture ? `${process} CPU profile captured` : `${process} CPU profile capture failed`,
+    tone: capture ? undefined : "warning",
     message: captureLimit === undefined ? captureMessage
       : `${captureMessage} The capture limit (${captureLimit}) has been reached. CPU sampling continues.`,
   };

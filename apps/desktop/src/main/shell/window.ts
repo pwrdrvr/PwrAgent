@@ -38,6 +38,7 @@ import { chromiumTraceProcessor } from "../diagnostics/chromium-trace-processor"
 import { startChromiumTraceFilterProcess } from "./diagnostics/chromium-trace-filter-process";
 import { createChromiumTraceSession } from "./diagnostics/chromium-trace-session";
 import { HotCpuProfiler } from "./diagnostics/hot-cpu-profiler";
+import type { HotCpuRearmableCapture } from "../../shared/hot-cpu-profile";
 import { resolveAppBuildMetadata } from "./app-build-metadata";
 import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { isAppRendererUrl, type RendererEntry } from "./renderer-entry-url";
@@ -59,6 +60,7 @@ import {
   subscribersForChannel,
 } from "./window-channels";
 import {
+  HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL,
   HOT_CPU_POST_CAP_EVENT_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
   WINDOW_OPEN_NEW_THREAD_CHANNEL,
@@ -134,6 +136,17 @@ const hotCpuProfilersBySession = new Map<string, HotCpuProfiler>();
 
 export function rearmHotCpuProfile(sessionDirectoryName: string, profileFilename: string): boolean {
   return hotCpuProfilersBySession.get(sessionDirectoryName)?.rearm(profileFilename) ?? false;
+}
+
+export async function listRearmableHotCpuProfiles(): Promise<HotCpuRearmableCapture[]> {
+  if (hotCpuProfilersBySession.size === 0) return [];
+  const appBuildMetadata = await resolveAppBuildMetadata();
+  const sourceHostname = hostname();
+  return Array.from(hotCpuProfilersBySession.values()).flatMap((profiler) => {
+    const capture = profiler.rearmableCapture;
+    if (!capture) return [];
+    return ["profilePath" in capture ? { ...capture, sourceHostname, appBuildMetadata } : capture];
+  });
 }
 
 type EnabledHotCpuConfig = Extract<ReturnType<typeof resolveHotCpuProfileConfig>, { enabled: true }>;
@@ -650,6 +663,11 @@ export function createMainWindow(options?: {
       chromiumTrace: trace,
       config: hotCpuConfig,
       getAppMetrics: readAppMetrics,
+      onFinalCaptureFailed: (event) => {
+        for (const subscriber of subscribersForChannel(HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL)) {
+          subscriber.send(HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL, event);
+        }
+      },
       onHeapSnapshotLimitReached: async () => {
         await getDesktopSettingsService().writeConfigPatchTargeted({
           general: { hotCpuProfilingCaptureHeapSnapshot: false },

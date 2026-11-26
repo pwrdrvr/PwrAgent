@@ -3,9 +3,11 @@ import path from "node:path";
 import type { Profiler } from "node:inspector";
 import type { ProcessMetric } from "electron";
 import type {
+  HotCpuFinalCaptureFailedEvent,
   HotCpuPostCapEvent,
   HotCpuProfileCapturedEvent,
   HotCpuProfileHeapSnapshotArtifact,
+  HotCpuRearmableCapture,
   HotCpuRuleMatch,
 } from "../../../shared/hot-cpu-profile";
 import type { HotCpuProfileConfig } from "../../diagnostics/hot-cpu-profile-config";
@@ -115,6 +117,7 @@ export class HotCpuProfiler {
   private readonly logger: Logger;
   private readonly now: () => Date;
   private readonly onHeapSnapshotLimitReached?: () => void | Promise<void>;
+  private readonly onFinalCaptureFailed?: (event: HotCpuFinalCaptureFailedEvent) => void;
   private readonly onPostCapHotCpu?: (event: HotCpuPostCapEvent) => void;
   private readonly onSampleCaptured?: () => void;
   private readonly onStopped?: () => void;
@@ -138,7 +141,7 @@ export class HotCpuProfiler {
   private intervalTimer: ReturnType<typeof setTimeout> | null = null;
   private lastProfileAtMs: number | null = null;
   private batchStartCount = 0;
-  private rearmProfileFilename?: string;
+  private pendingRearm?: HotCpuRearmableCapture;
   private reportedPostCapHeat = false;
   private previousMetric?: {
     pid: number;
@@ -172,6 +175,7 @@ export class HotCpuProfiler {
     logger?: Logger;
     now?: () => Date;
     onHeapSnapshotLimitReached?: () => void | Promise<void>;
+    onFinalCaptureFailed?: (event: HotCpuFinalCaptureFailedEvent) => void;
     onPostCapHotCpu?: (event: HotCpuPostCapEvent) => void;
     onProfileWritten?: (event: HotCpuProfileCapturedEvent) => void | Promise<void>;
     onStopped?: () => void;
@@ -195,6 +199,7 @@ export class HotCpuProfiler {
     this.logger = options.logger ?? getMainLogger("pwragent:hot-cpu");
     this.now = options.now ?? (() => new Date());
     this.onHeapSnapshotLimitReached = options.onHeapSnapshotLimitReached;
+    this.onFinalCaptureFailed = options.onFinalCaptureFailed;
     this.onPostCapHotCpu = options.onPostCapHotCpu;
     this.onProfileWritten = options.onProfileWritten;
     this.onSampleCaptured = options.onSampleCaptured;
@@ -217,9 +222,14 @@ export class HotCpuProfiler {
     return this.batchStartCount + this.config.maxProfiles;
   }
 
+  get rearmableCapture(): HotCpuRearmableCapture | undefined {
+    if (this.stopped || this.isTargetDestroyed()) return undefined;
+    return this.pendingRearm;
+  }
+
   rearm(profileFilename: string): boolean {
-    if (this.stopped || this.isTargetDestroyed() || profileFilename !== this.rearmProfileFilename) return false;
-    this.rearmProfileFilename = undefined;
+    if (profileFilename !== this.rearmableCapture?.profileFilename) return false;
+    this.pendingRearm = undefined;
     this.batchStartCount = this.profileCount;
     this.reportedPostCapHeat = false;
     // Discard rule matches from any sample still being written when Rearm was clicked.
@@ -721,10 +731,10 @@ export class HotCpuProfiler {
       };
       this.profileCount += 1;
       const index = this.profileCount;
+      this.lastProfileAtMs = Date.parse(options.capturedAt);
       // Stop the rolling trace while it still contains the interval that
       // tripped the CPU rule. V8 continues recording its own post-trigger tail.
       this.activeChromiumTrace = this.captureChromiumTrace(index, this.activeProfileTime);
-      this.lastProfileAtMs = Date.parse(options.capturedAt);
       await this.session.appendEvent({
         capturedAt: options.capturedAt,
         type: "profile-started",
@@ -764,6 +774,7 @@ export class HotCpuProfiler {
       // pending. Only the path that claims it can discard its recording.
       const ownsProfile = this.profiling;
       if (ownsProfile) {
+        this.offerRearmAfterFailure(this.profileCount);
         this.profiling = false;
         this.activeProfileTrigger = null;
         this.activeProfileTime = undefined;
@@ -801,6 +812,23 @@ export class HotCpuProfiler {
       await this.stopProfilePromise;
     } finally {
       this.stopProfilePromise = null;
+    }
+  }
+
+  private offerRearmAfterFailure(index: number): void {
+    if (this.stopped || this.isTargetDestroyed() || index !== this.captureCap || this.pendingRearm) return;
+    const event: HotCpuFinalCaptureFailedEvent = {
+      capturedAt: this.now().toISOString(),
+      captureLimit: this.config.maxProfiles,
+      profileFilename: artifactFilename(this.session.createProfilePath(index)),
+      sessionDirectoryName: this.session.directoryName,
+      target: this.session.target ?? "renderer",
+    };
+    this.pendingRearm = event;
+    try {
+      this.onFinalCaptureFailed?.(event);
+    } catch {
+      this.logger.warn("[pwragent:hot-cpu] Could not publish final capture failure");
     }
   }
 
@@ -933,11 +961,8 @@ export class HotCpuProfiler {
         await this.captureHeapSnapshot(index, "stop");
       }
       await this.drainActiveHeapSnapshotCaptures();
-      const canRearm = !this.stopped && index === this.captureCap;
-      if (canRearm) this.rearmProfileFilename = profileFilename;
-      await this.onProfileWritten?.({
+      const capture: HotCpuProfileCapturedEvent = {
         capturedAt: this.now().toISOString(),
-        ...(canRearm ? { captureLimit: this.config.maxProfiles } : {}),
         ...(chromiumTracePath ? { chromiumTracePath } : {}),
         heapSnapshotArtifacts: [...this.activeProfileHeapSnapshots],
         profileFilename,
@@ -946,8 +971,15 @@ export class HotCpuProfiler {
         sessionDirectory: this.session.directoryPath,
         sessionDirectoryName: this.session.directoryName,
         ...activeProfileTrigger,
-      });
+      };
+      if (!this.stopped && !this.isTargetDestroyed() && index === this.captureCap) {
+        this.pendingRearm = { ...capture, captureLimit: this.config.maxProfiles };
+        await this.onProfileWritten?.(this.pendingRearm);
+      } else {
+        await this.onProfileWritten?.(capture);
+      }
     } catch (error) {
+      this.offerRearmAfterFailure(index);
       await this.session.appendEvent({
         capturedAt: this.now().toISOString(),
         type: "profile-stop-failed",

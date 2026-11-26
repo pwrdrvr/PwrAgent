@@ -53,6 +53,16 @@ export type RearmHotCpuProfileRequest = Pick<
   "sessionDirectoryName" | "profileFilename"
 >;
 
+export type HotCpuFinalCaptureFailedEvent = RearmHotCpuProfileRequest & {
+  capturedAt: string;
+  captureLimit: number;
+  target: "main" | "renderer";
+};
+
+export type HotCpuRearmableCapture =
+  | (HotCpuProfileCapturedEvent & { captureLimit: number })
+  | HotCpuFinalCaptureFailedEvent;
+
 function formatPercent(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(1);
 }

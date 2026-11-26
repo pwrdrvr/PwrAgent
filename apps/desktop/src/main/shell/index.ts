@@ -194,6 +194,7 @@ import {
   createMainWindow,
   getRendererEntry,
   isFederationWindowWebContents,
+  listRearmableHotCpuProfiles,
   rearmHotCpuProfile,
   stopWindowDiagnostics,
 } from "./window";
@@ -1450,7 +1451,7 @@ export function bootstrapApp(): void {
     });
     registerAppUpdateNoticeIpcHandlers();
     registerComposerDraftIpcHandlers();
-    registerDiagnosticsIpcHandlers(rearmHotCpuProfile);
+    registerDiagnosticsIpcHandlers(rearmHotCpuProfile, listRearmableHotCpuProfiles);
     registerFederationIpcHandlers();
     registerStarMapIpcHandlers();
     registerImageNormalizationIpcHandlers();
