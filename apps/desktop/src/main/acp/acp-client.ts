@@ -11,6 +11,7 @@ import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import { ACP_AGENT_ELICITATION_META_KEY } from "@pwragent/shared/mcp-elicitation-purpose";
 import { buildAcpAgentInstructionBlock } from "../../shared/agent-instruction-delivery.js";
+import { isAcpCompactPromptBlocks } from "./acp-compact";
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
@@ -341,6 +342,8 @@ type AcpActiveTurn = {
   assistantText: string;
   /** The agent compacted its history while this prompt ran. */
   compacted?: boolean;
+  /** The prompt itself is a leading `/compact` slash command. */
+  isCompactCommand?: boolean;
   sentAgentMemory?: boolean;
   sentWorkspaceContext?: boolean;
   cancelBeforePrompt?: () => void;
@@ -1755,9 +1758,14 @@ export class AcpAgentClient {
   }): Promise<{ sessionId: string; turnId: string }> {
     this.assertPromptAccess(params.sessionId);
     const session = this.options.store.getSession(this.options.backendId, params.sessionId);
-    const needsWorkspaceContext = session?.antigravityWorkspaceRebound && !session.antigravityWorkspaceContextDelivered;
     const prompt = params.promptContent ? [...params.promptContent] : textPrompt(params.prompt);
-    if (needsWorkspaceContext) {
+    const isCompactCommand = isAcpCompactPromptBlocks(prompt);
+    const needsWorkspaceContext = Boolean(
+      !isCompactCommand
+      && session?.antigravityWorkspaceRebound
+      && !session.antigravityWorkspaceContextDelivered,
+    );
+    if (needsWorkspaceContext && session) {
       const priorWorkspace = this.workspaceHistory(session).previous;
       if (!priorWorkspace) throw new Error("Couldn't recover this thread's previous workspace history.");
       prompt.push({
@@ -1767,6 +1775,7 @@ export class AcpAgentClient {
     }
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
+    activeTurn.isCompactCommand = isCompactCommand;
     activeTurn.sentWorkspaceContext = needsWorkspaceContext;
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
@@ -1875,6 +1884,13 @@ export class AcpAgentClient {
           throw responseError;
         }
         const receivedAt = this.now();
+        // A completed `/compact` command summarizes earlier turns (including
+        // any prior instruction block) even when the token drop is under 50%.
+        // Cancelled compactions leave history intact.
+        if (!cancelled && activeTurn.isCompactCommand) {
+          activeTurn.compacted = true;
+          this.recordDeliveredAgentInstructions(sessionId, undefined);
+        }
         // A prompt that session/cancel stopped settles normally, with
         // stopReason cancelled. Carry that through, so the transcript and
         // the terminal event say the turn was interrupted, not completed.
@@ -3525,7 +3541,11 @@ export class AcpAgentClient {
       // The agent keeps the block in the session's history, so a session
       // loaded again (after an idle close or an app restart) is not sent it
       // a second time. The stored record says what this agent session holds.
-      const instructions = params.agentInstructions;
+      // Never prepend instructions or append memory to a `/compact` command:
+      // ACP agents such as Antigravity require `/compact` as leading text,
+      // and appending memory would turn bare `/compact` into compact-and-continue.
+      const isCompactCommand = isAcpCompactPromptBlocks(params.prompt);
+      const instructions = isCompactCommand ? undefined : params.agentInstructions;
       const digest = instructions === undefined
         ? undefined
         : agentInstructionsDigest(params.protocolSessionId, instructions);
@@ -3534,7 +3554,9 @@ export class AcpAgentClient {
           this.options.backendId,
           params.sessionId,
         )?.agentInstructionsDigest;
-      const memory = params.readAgentMemory ? await params.readAgentMemory() : undefined;
+      const memory = !isCompactCommand && params.readAgentMemory
+        ? await params.readAgentMemory()
+        : undefined;
       if (cancelledBeforePrompt) return cancelled;
       if (this.jobMonitorCatalogs.has(params.sessionId)) {
         await this.prepareJobMonitorCatalog(params.sessionId);
@@ -3612,7 +3634,11 @@ export class AcpAgentClient {
       return;
     }
     const activeTurn = this.activeTurns.get(sessionId);
-    if (activeTurn?.assistantText.trim()) {
+    if (
+      activeTurn?.assistantText.trim()
+      || activeTurn?.isCompactCommand
+      || activeTurn?.compacted
+    ) {
       return;
     }
 

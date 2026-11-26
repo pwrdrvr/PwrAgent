@@ -4396,10 +4396,11 @@ function useComposerController(props: ComposerProps) {
       const commandName = command.name.startsWith("/")
         ? command.name.slice(1)
         : command.name;
-      // Claude runs `/compact` itself when it arrives as a prompt; the
-      // compaction API below is Codex's.
+      // Claude runs `/compact` itself when it arrives as a prompt; Codex and
+      // ACP backends that advertise `compact` route bare `/compact` through
+      // `compactThread`.
       return (
-        commandName === "compact" &&
+        commandName.toLowerCase() === "compact" &&
         command.backend !== "claude" &&
         (!props.thread || !command.backend || command.backend === props.thread.source)
       );
@@ -6736,7 +6737,8 @@ function useComposerController(props: ComposerProps) {
   const forkCommand = supportsForkCommand || supportsSubthreadCommand
     ? parseForkCommand(draft)
     : undefined;
-  const isCompactCommand = supportsCompactCommand && draft.trim() === "/compact";
+  const isCompactCommand =
+    supportsCompactCommand && draft.trim().toLowerCase() === "/compact";
   const mcpInventoryDetail: CodexMcpInventoryDetail | undefined =
     supportsMcpInventory && draft.trim().toLowerCase() === "/mcp"
       ? "toolsAndAuthOnly"
@@ -13109,7 +13111,7 @@ function useComposerController(props: ComposerProps) {
         return true;
       }
 
-      if (command.label.toLowerCase() === "/compact") {
+      if (supportsCompactCommand && command.label.toLowerCase() === "/compact") {
         void submitCompactThread();
         return true;
       }

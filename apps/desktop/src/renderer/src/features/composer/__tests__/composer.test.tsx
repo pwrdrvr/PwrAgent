@@ -19571,6 +19571,175 @@ describe("Composer", () => {
     expect(startTurn).not.toHaveBeenCalled();
   });
 
+  it("routes bare ACP /compact to compactThread", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-acp",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "acp:antigravity" as const,
+      threadId: "ag-thread-1",
+      turnId: "turn-acp-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Summarize the conversation into a checkpoint.",
+            argumentHint: "[message]",
+            backend: "acp:antigravity",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "ag-thread-1",
+          title: "Antigravity thread",
+          titleSource: "explicit",
+          source: "acp:antigravity",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/compact" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(compactThread).toHaveBeenCalledWith({
+        backend: "acp:antigravity",
+        threadId: "ag-thread-1",
+      });
+    });
+    expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("passes ACP /compact with focus text to startTurn", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-acp",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "acp:antigravity" as const,
+      threadId: "ag-thread-1",
+      turnId: "turn-acp-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Summarize the conversation into a checkpoint.",
+            argumentHint: "[message]",
+            backend: "acp:antigravity",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "ag-thread-1",
+          title: "Antigravity thread",
+          titleSource: "explicit",
+          source: "acp:antigravity",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, {
+      target: { value: "/compact Keep OAuth findings and add tests." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "acp:antigravity",
+          threadId: "ag-thread-1",
+          input: [
+            { type: "text", text: "/compact Keep OAuth findings and add tests." },
+          ],
+        }),
+      );
+    });
+    expect(compactThread).not.toHaveBeenCalled();
+  });
+
+  it("inserts /compact on Enter from slash autocomplete for Claude instead of calling compactThread", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-claude",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "claude" as const,
+      threadId: "claude-thread-1",
+      turnId: "turn-claude-1",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "compact",
+            description: "Compact conversation",
+            backend: "claude",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "claude-thread-1",
+          title: "Claude thread",
+          titleSource: "explicit",
+          source: "claude",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/compact" } });
+    fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
+
+    expect(compactThread).not.toHaveBeenCalled();
+    expect(screen.queryByText("Selected backend does not support compaction.")).not.toBeInTheDocument();
+  });
+
   it("locks the thread from /lock with the rest of the line as its note", async () => {
     const onLockThread = vi.fn(async () => undefined);
     const startTurn = vi.fn(async () => ({

@@ -64,6 +64,11 @@ import { SELF_STARTED_TURN_ENTRY_PREFIX } from "./thread-pending-wakes";
 import type { LaunchpadCreationRequest, LaunchpadCreationResponse } from "@pwragent/shared/contracts/agent";
 import type { ThreadTodoMessageTarget } from "@pwragent/shared/contracts/thread-todos";
 import { ClaudeBackend, ClaudeTurnActiveError } from "../claude/claude-backend";
+import {
+  findAdvertisedAcpCompactCommand,
+  formatAcpCompactCommandPrompt,
+  isAcpCompactTurnInput,
+} from "../acp/acp-compact";
 import { checkAgentAccessRequest, isAgentAccessRefusalMessage } from "../agent-tools/agent-access-ceiling";
 
 
@@ -11890,10 +11895,16 @@ export class DesktopBackendRegistry {
   private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
     return await this.threadStarts.run(params, async () => {
+      const acpCompactTurn =
+        isAcpBackendId(params.backend) && isAcpCompactTurnInput(params.input);
       // The first call establishes the per-turn context by calling startTurnNow
       // again. Add the notice at its inner, actual admission boundary.
-      const notices = this.tokenMiserServerCapabilitiesForTurn.getStore()
-        ? this.correspondenceStore.pendingStackNotices(params) : [];
+      // Never prepend stack notices to an ACP `/compact` command: ACP agents
+      // only trigger compaction when `/compact` is the leading text.
+      const notices =
+        !acpCompactTurn && this.tokenMiserServerCapabilitiesForTurn.getStore()
+          ? this.correspondenceStore.pendingStackNotices(params)
+          : [];
       const result = await this.startTurnWithoutHandoff(notices.length ? {
         ...params, input: [...notices.map(({ text }) => ({ type: "text" as const, text })), ...params.input],
       } : params);
@@ -12033,8 +12044,13 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
-      const pendingManagedReviewContextEntryIds =
-        overlay?.pendingManagedReviewContextEntryIds ?? [];
+      const acpCompactTurn = isAcpCompactTurnInput(params.input);
+      // Leave pending review contexts for the next normal turn so they neither
+      // get prepended before `/compact` (breaking slash-command detection) nor
+      // get consumed without reaching the agent.
+      const pendingManagedReviewContextEntryIds = acpCompactTurn
+        ? []
+        : overlay?.pendingManagedReviewContextEntryIds ?? [];
       const managedReviewEntriesById = new Map(
         (overlay?.managedReviewEntries ?? []).map((entry) => [entry.id, entry]),
       );
@@ -13433,12 +13449,67 @@ export class DesktopBackendRegistry {
     itemId?: string;
   }> {
     if (isAcpBackendId(params.backend)) {
+      return await this.compactAcpThread({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+    }
+    await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
+    return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
+  }
+
+  private async compactAcpThread(params: {
+    backend: AcpBackendId;
+    threadId: string;
+  }): Promise<{
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }> {
+    if (this.closed) {
+      throw new Error("Desktop backend registry is closed");
+    }
+    this.assertThreadOwnership();
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    let commands = session?.availableCommands ?? [];
+    if (commands.length === 0) {
+      commands = await this.resolveAcpAvailableCommands({
+        backend: params.backend,
+        cwds: [session?.cwd],
+      });
+    }
+    const compactCommand = findAdvertisedAcpCompactCommand(commands);
+    if (!compactCommand) {
       throw new Error(
         "ACP backend " + params.backend + " does not support thread compaction",
       );
     }
-    await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
-    return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
+    await this.assertThreadNotLocked(params.backend, params.threadId);
+    if (
+      this.reservedAcpStartThreadKeys.has(
+        buildTurnStartReservationKey(params.backend, params.threadId),
+      )
+      || this.threadHasActiveTurn(params.threadId, params.backend)
+    ) {
+      throw new Error("Cannot compact a thread while another operation is running");
+    }
+    try {
+      return await this.startTurn({
+        backend: params.backend,
+        threadId: params.threadId,
+        input: [
+          {
+            type: "text",
+            text: formatAcpCompactCommandPrompt(compactCommand),
+          },
+        ],
+      });
+    } catch (error) {
+      if (error instanceof ThreadAlreadyActiveError) {
+        throw new Error("Cannot compact a thread while another operation is running");
+      }
+      throw error;
+    }
   }
 
   private async compactThreadNow(params: {
