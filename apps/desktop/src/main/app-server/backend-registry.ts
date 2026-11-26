@@ -24,6 +24,7 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
+import { resolveLocalReviewWorktreeRoot } from "./review-workspace-guard";
 import type { AgentToolMcpCatalogId } from "../agent-tools/agent-tool-mcp-server";
 import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
 import { isOnlyTaskMonitorWake, type SubAgentMonitorService } from "./subagent-monitor-service";
@@ -6588,9 +6589,15 @@ export class DesktopBackendRegistry {
         throw new Error("The Antigravity reviewer could not preserve the caller's session mode.");
       }
     }
+    const worktreeRoot = params.managedReviewLedger
+      ? await resolveLocalReviewWorktreeRoot(sessionForTurn.cwd)
+      : undefined;
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     if (params.managedReviewLedger) {
-      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId);
+      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId, {
+        cwd: sessionForTurn.cwd,
+        worktreeRoot,
+      });
     }
     await this.emit({
       backend: params.backend,

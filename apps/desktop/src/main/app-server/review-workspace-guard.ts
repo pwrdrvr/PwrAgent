@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { AppServerReviewTarget } from "@pwragent/shared/contracts/normalized-app-server";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
 import { normalizeFullRef, shortReviewSha } from "../../shared/review-command";
@@ -12,6 +13,15 @@ export type ReviewGitRunner = (
   cwd: string,
   args: string[],
 ) => Promise<{ stdout: string }>;
+
+/** Use the reviewed checkout's root, including when cwd is inside a linked worktree. */
+export async function resolveLocalReviewWorktreeRoot(cwd?: string): Promise<string | undefined> {
+  if (!cwd || !path.isAbsolute(cwd)) return undefined;
+  const result = await runGitCommand(cwd, ["rev-parse", "--show-toplevel"], { timeout: 5_000 })
+    .catch(() => undefined);
+  const root = result?.stdout.trim();
+  return root && path.isAbsolute(root) ? root : undefined;
+}
 
 export function normalizeWorkspacePath(value: string): string {
   const normalized = value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
