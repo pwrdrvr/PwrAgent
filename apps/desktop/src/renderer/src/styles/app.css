@@ -27156,12 +27156,13 @@ button.stack-display__thread,
 }
 
 .compact-composer__mention-option--emoji .compact-composer__mention-title {
-  flex: none;
+  flex: 0 1 auto;
   font-family: var(--font-mono);
 }
 
 .compact-composer__mention-option--emoji .compact-composer__mention-meta {
   flex: 1 1 auto;
+  min-width: 0;
   text-align: right;
 }
 

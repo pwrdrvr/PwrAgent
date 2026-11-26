@@ -200,12 +200,15 @@ describe("ComposerTiptapInput :shortcode: auto-expansion", () => {
       editor.commands.setTextSelection(end - 2);
       editor.commands.setTextSelection(end);
     });
+    const parentNodesBetweenSpy = vi.spyOn($end.parent, "nodesBetween");
     expect(inputRef.current?.getEmojiTrigger()).toBeUndefined();
     const priorBlockCallsWithoutTrigger = nodesBetweenSpy.mock.calls.filter(
       ([from, to]) => from === 0 && to === blockStart,
     );
     expect(priorBlockCallsWithoutTrigger).toEqual([]);
+    expect(parentNodesBetweenSpy).not.toHaveBeenCalled();
     nodesBetweenSpy.mockRestore();
+    parentNodesBetweenSpy.mockRestore();
 
     // Once a boundary-safe :shortcode candidate exists, onTransaction populates the per-doc
     // fence cache once and subsequent getEmojiTrigger() reads on the same doc avoid re-walking.
@@ -442,29 +445,43 @@ describe("Composer :emoji: autocomplete", () => {
     });
     expect(textbox.textContent).toBe("Ready to ship 🚀 🥑 ");
 
-    // Pointer click (mouseDown + click) selects an option in EmojiAutocompleteList.
+    // Batched mouseDown + click on the same option must insert only a single emoji.
     act(() => {
       typeTextIntoEditor(editor, ":thumbs");
     });
     const thumbsListbox = await screen.findByRole("listbox", { name: "Emoji" });
     const thumbsDownOption = within(thumbsListbox).getAllByRole("option")[1]!;
     expect(thumbsDownOption).toHaveTextContent(":-1:");
-    fireEvent.mouseDown(thumbsDownOption);
+    act(() => {
+      fireEvent.mouseDown(thumbsDownOption);
+      fireEvent.click(thumbsDownOption);
+    });
     await waitFor(() => {
       expect(screen.queryByRole("listbox", { name: "Emoji" })).toBeNull();
     });
     expect(textbox.textContent).toBe("Ready to ship 🚀 🥑 👎 ");
 
-    // Synthetic click (e.g. keyboard activation on focused option) also selects.
+    // Narrowing results after moving activeIndex down must clamp aria-activedescendant immediately.
     act(() => {
-      typeTextIntoEditor(editor, ":tada");
+      typeTextIntoEditor(editor, ":t");
     });
-    const tadaListbox = await screen.findByRole("listbox", { name: "Emoji" });
-    const tadaOption = within(tadaListbox).getAllByRole("option")[0]!;
-    fireEvent.click(tadaOption);
+    const broadListbox = await screen.findByRole("listbox", { name: "Emoji" });
+    expect(within(broadListbox).getAllByRole("option").length).toBeGreaterThan(3);
+    fireEvent.keyDown(textbox, { key: "ArrowDown" });
+    fireEvent.keyDown(textbox, { key: "ArrowDown" });
+    fireEvent.keyDown(textbox, { key: "ArrowDown" });
+    act(() => {
+      typeTextIntoEditor(editor, "humbsu");
+    });
+    const narrowedListbox = await screen.findByRole("listbox", { name: "Emoji" });
+    const narrowedOptions = within(narrowedListbox).getAllByRole("option");
+    expect(narrowedOptions).toHaveLength(1);
+    expect(narrowedOptions[0]).toHaveAttribute("aria-selected", "true");
+    expect(textbox).toHaveAttribute("aria-activedescendant", narrowedOptions[0]!.id);
+    fireEvent.click(narrowedOptions[0]!);
     await waitFor(() => {
       expect(screen.queryByRole("listbox", { name: "Emoji" })).toBeNull();
     });
-    expect(textbox.textContent).toBe("Ready to ship 🚀 🥑 👎 🎉 ");
+    expect(textbox.textContent).toBe("Ready to ship 🚀 🥑 👎 👍 ");
   });
 });

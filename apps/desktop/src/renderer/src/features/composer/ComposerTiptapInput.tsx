@@ -2853,8 +2853,11 @@ function readEmojiTrigger(
 
 function replaceEditorEmojiTrigger(editor: TiptapEditor, emoji: string): void {
   const trigger = readEmojiTrigger(editor);
-  const { from, to, $to } = editor.state.selection;
-  const start = trigger?.start ?? from;
+  if (!trigger) {
+    return;
+  }
+  const { to, $to } = editor.state.selection;
+  const start = trigger.start;
   const following = $to.nodeAfter?.text ?? "";
   const hasSpace = /^[^\S\r\n]/.test(following);
   const addSpace = !hasSpace && !/^[\p{Pe}\p{Pf}]/u.test(following);

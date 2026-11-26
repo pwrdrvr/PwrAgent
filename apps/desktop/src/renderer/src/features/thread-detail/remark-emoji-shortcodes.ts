@@ -73,13 +73,26 @@ function lastTextEdge(
   if (node.type === "text" && typeof node.value === "string" && node.value.length > 0) {
     result = node.value.length >= 2 ? node.value.slice(-2) : node.value;
   } else if (INLINE_FORMATTING_TYPES.has(node.type) && node.children) {
+    let collected = "";
     for (let index = node.children.length - 1; index >= 0; index -= 1) {
-      const edge = lastTextEdge(node.children[index]!, cache);
-      if (edge !== undefined) {
-        result = edge;
+      const child = node.children[index]!;
+      if (isEmptyTextNode(child)) {
+        continue;
+      }
+      const edge = lastTextEdge(child, cache);
+      if (edge === undefined) {
+        if (collected.length > 0) {
+          collected = `x${collected}`;
+        }
+        break;
+      }
+      collected = edge + collected;
+      if (collected.length >= 2) {
+        collected = collected.slice(-2);
         break;
       }
     }
+    result = collected.length > 0 ? collected : null;
   }
   cache.set(node, result);
   return result ?? undefined;

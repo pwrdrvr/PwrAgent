@@ -37,13 +37,15 @@ export function useComposerEmojiAutocomplete(params: {
         : searchEmojiShortcodes(query, catalog, EMOJI_AUTOCOMPLETE_LIMIT),
     [catalog, query],
   );
+  const clampedActiveIndex =
+    options.length > 0 ? Math.min(activeIndex, options.length - 1) : 0;
 
   useEffect(() => {
     setActiveIndex(0);
-  }, [query, params.scopeKey]);
+  }, [query, trigger?.start, params.scopeKey]);
 
   return {
-    activeIndex,
+    activeIndex: clampedActiveIndex,
     listboxId,
     options,
     setActiveIndex,

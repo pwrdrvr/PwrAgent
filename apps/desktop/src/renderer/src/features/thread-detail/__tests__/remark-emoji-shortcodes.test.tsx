@@ -56,7 +56,7 @@ describe.each([false, true])(
       const markdown = [
         "Ship it :rocket:! :+1: and :thumbsup: (plus :avocado:).",
         "",
-        "**:tada:** and (**:+1:**) and foo (**:+1:**) vs foo(**:+1:**)",
+        "**:tada:** and (**:+1:**) and foo (**:+1:**) vs foo(**:+1:**) and ***:+1:***",
         "",
         "- Done :white_check_mark:",
       ].join("\n");
@@ -67,7 +67,9 @@ describe.each([false, true])(
 
       const paragraphs = container.querySelectorAll("p");
       expect(paragraphs[0]?.textContent).toBe("Ship it 🚀! 👍 and 👍 (plus 🥑).");
-      expect(paragraphs[1]?.textContent).toBe("🎉 and (👍) and foo (👍) vs foo(:+1:)");
+      expect(paragraphs[1]?.textContent).toBe(
+        "🎉 and (👍) and foo (👍) vs foo(:+1:) and 👍",
+      );
       expect(container.querySelector("li")?.textContent).toBe("Done ✅");
     });
 
@@ -186,5 +188,72 @@ describe("IncrementalMarkdown streaming parity for emoji shortcodes", () => {
     expect(incrementalFrames).toBe(chunks - 1);
     expect(parsedCharacters).toBeLessThanOrEqual(content.length * 2);
     expect(onMissingCatalog).not.toHaveBeenCalled();
+  });
+
+  it("accumulates up to two trailing characters across nested formatting children and skips empty text siblings", () => {
+    const catalog = buildReactionEmojiCatalog();
+    const transform = remarkEmojiShortcodes({ catalog });
+
+    // `strong([text("a"), delete([text("(")])])` followed by `:+1:)` must NOT expand.
+    const blockedTree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "strong",
+              children: [
+                { type: "text", value: "a" },
+                { type: "delete", children: [{ type: "text", value: "(" }] },
+              ],
+            },
+            { type: "text", value: ":+1:)" },
+          ],
+        },
+      ],
+    };
+    transform(blockedTree);
+    expect(blockedTree.children[0]!.children[1]!.value).toBe(":+1:)");
+
+    // `strong([text(" "), delete([text("(")])])` followed by `:+1:)` DOES expand.
+    const allowedTree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            {
+              type: "strong",
+              children: [
+                { type: "text", value: " " },
+                { type: "delete", children: [{ type: "text", value: "(" }] },
+              ],
+            },
+            { type: "text", value: ":+1:)" },
+          ],
+        },
+      ],
+    };
+    transform(allowedTree);
+    expect(allowedTree.children[0]!.children[1]!.value).toBe("👍)");
+
+    // Empty text siblings around formatted shortcodes do not break boundary checks.
+    const emptySiblingTree = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: [
+            { type: "text", value: "ok " },
+            { type: "text", value: "" },
+            { type: "strong", children: [{ type: "text", value: ":+1:" }] },
+            { type: "text", value: "" },
+          ],
+        },
+      ],
+    };
+    transform(emptySiblingTree);
+    expect(emptySiblingTree.children[0]!.children[2]!.children![0]!.value).toBe("👍");
   });
 });

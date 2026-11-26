@@ -218,7 +218,7 @@ function hasUnclosedInlineCodeSpan(line: string): boolean {
 export type CodeFenceMarker = {
   char: "`" | "~";
   length: number;
-  closingOnly: boolean;
+  canClose: boolean;
 };
 
 /**
@@ -239,7 +239,7 @@ export function extractCodeFenceMarkers(text: string): readonly CodeFenceMarker[
       markers.push({
         char: token[0] as "`" | "~",
         length: token.length,
-        closingOnly: false,
+        canClose: true,
       });
       continue;
     }
@@ -248,7 +248,7 @@ export function extractCodeFenceMarkers(text: string): readonly CodeFenceMarker[
       markers.push({
         char: opening.char,
         length: opening.length,
-        closingOnly: true,
+        canClose: false,
       });
     }
   }
@@ -265,8 +265,7 @@ export function advanceCodeFenceState(
   for (let index = 0; index < markers.length; index += 1) {
     const marker = markers[index]!;
     if (state) {
-      // A line with an info string (`closingOnly: true`) cannot close an open fence.
-      if (!marker.closingOnly && marker.char === state.char && marker.length >= state.length) {
+      if (marker.canClose && marker.char === state.char && marker.length >= state.length) {
         state = undefined;
       }
     } else {
