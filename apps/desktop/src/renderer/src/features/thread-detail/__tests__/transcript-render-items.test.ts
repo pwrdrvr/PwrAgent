@@ -1120,6 +1120,48 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("keeps a post-answer file diff and final answer visible when a cancelled tool follows them", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const firstActivity = tool("tool-1", turn);
+    const cancelledTool: AppServerThreadActivityEntry = {
+      ...tool("tool-cancelled", turn),
+      status: "failed",
+      details: [{ id: "call-cancelled", kind: "command", label: "create_pull_request", status: "failed" }],
+    };
+    const makeDiff = (id: string): AppServerThreadActivityEntry => ({
+      type: "activity",
+      id,
+      summary: "Edited 1 file, +2, -1",
+      details: [{
+        id: `${id}-detail`,
+        kind: "write",
+        label: "Update app.ts",
+        path: "/work/app.ts",
+        fileDiff: { kind: "update", additions: 2, removals: 1, diff: "+a\n-b" },
+      }],
+      turn,
+    });
+
+    // Claude (phase-less answer) and non-commentary Codex (final answer) with
+    // either a post-answer file diff or a cumulative live-diff-* row.
+    for (const [answer, backend, diffId] of [
+      [reply("r1", "Done.", turn), "claude", "diff-1"],
+      [final("f1", "Done.", turn), "codex", "diff-1"],
+      [final("f2", "Done.", turn), "codex", "live-diff-turn-1"],
+    ] as const) {
+      const diff = makeDiff(diffId);
+      expect(buildTranscriptRenderItems({
+        entries: [firstActivity, answer, diff, cancelledTool],
+        backend,
+      })).toEqual([
+        expect.objectContaining({ type: "workPhaseGroup", entries: [firstActivity] }),
+        { type: "entry", entry: answer },
+        { type: "entry", entry: diff },
+        expect.objectContaining({ type: "workPhaseGroup", entries: [cancelledTool], label: "More work" }),
+      ]);
+    }
+  });
+
   it("renders edited-file diffs as top-level activity instead of nested work", () => {
     const turn = completedTurn("turn-1", 70_000);
     const firstActivity: AppServerThreadActivityEntry = {

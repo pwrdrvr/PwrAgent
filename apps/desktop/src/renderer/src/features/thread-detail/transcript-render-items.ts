@@ -487,7 +487,7 @@ function classifyCompletedTurnEntries(
       if (isTokenUsageActivity(entry) || isTerminalTurnFailureActivity(entry)) {
         continue;
       }
-      if (isFileDiffActivity(entry)) {
+      if (isFileDiffActivity(entry) && !entry.id.startsWith("live-tools-")) {
         if (immediatelyAfterAnswer) {
           fileDiffImmediatelyAfterAnswer.add(entry);
         }
@@ -558,13 +558,15 @@ function classifyCompletedTurnEntries(
       continue;
     }
     if (entry.type === "activity" && isFileDiffActivity(entry)) {
-      const hasWorkOrReplyAfter =
-        sawReplyAfter || sawNonFailedWorkAfter || sawAnyWorkOrCommentaryAfter;
+      const hasWorkOrReplyAfter = sawReplyAfter || sawNonFailedWorkAfter;
       const isTrailing =
         !hasWorkOrReplyAfter
         && (
           entry.id.startsWith("live-diff-")
-          || (!acpBackend && !sawSteerAfterInTurn && fileDiffImmediatelyAfterAnswer.has(entry))
+          || (!acpBackend
+            && !entry.id.startsWith("live-tools-")
+            && !sawSteerAfterInTurn
+            && fileDiffImmediatelyAfterAnswer.has(entry))
         );
       if (isTrailing) {
         trailingFileDiffs.add(entry);
@@ -817,7 +819,7 @@ export function isConcreteWorkEntry(
     (entry.type === "activity" &&
       !isTerminalTurnFailureActivity(entry) &&
       !isRewindMarkerEntry(entry) &&
-      !isFileDiffActivity(entry) &&
+      (!isFileDiffActivity(entry) || entry.id.startsWith("live-tools-")) &&
       !isTokenUsageActivity(entry))
   );
 }
