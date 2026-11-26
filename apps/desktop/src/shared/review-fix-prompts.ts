@@ -97,7 +97,7 @@ export function autoFixReviewFindingsPrompt(
 }
 
 const AUTO_FIX_PROMPT_HEADER =
-  /^Auto-fix the (?:finding|\d+ findings) from [^\n]+\. Decide (?:whether|which ones) to fix (?:it|them)\.\n\n1\. /;
+  /^Auto-fix the (?:finding from [^\n]+\. Decide whether to fix it|\d+ findings from [^\n]+\. Decide which ones to fix)\.\n\n1\. /;
 const AUTO_FIX_PROMPT_MARKER =
   "Use PwrAgent's `list_reviews` tool for each finding's details. Settle every finding with `update_review_item`:";
 const FIX_PROMPT_HEADER =

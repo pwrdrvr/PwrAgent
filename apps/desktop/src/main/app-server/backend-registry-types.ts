@@ -1294,6 +1294,7 @@ export type CodexRetryableTurnStart = {
     input: AppServerTurnInputItem[];
     origin?: ThreadTurnQueueOrigin;
     turnInputSource?: TurnInputSource;
+    reviewFix?: boolean;
     executionMode?: ThreadExecutionMode;
     approvalPolicy?: string;
     sandbox?: string;

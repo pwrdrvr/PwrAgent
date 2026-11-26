@@ -1602,7 +1602,8 @@ export class DesktopBackendRegistry {
     if (!entry) return;
     this.context.turnState.bindStartingOrigin(entry, turn);
     const identity = { ...turn, backend: entry.backend };
-    if (!entry.reviewFix) {
+    const isPendingCodexTurn = entry.backend === "codex" && isPendingTurnId(turn.threadId, turn.turnId);
+    if (!entry.reviewFix && !isPendingCodexTurn) {
       this.managedReviewService.observeOperatorReviewInput(identity, entry.turnInputSource);
     }
     if ((entry.turnInputSource !== undefined || entry.reviewFix) && !terminalObserved
@@ -12499,6 +12500,7 @@ export class DesktopBackendRegistry {
               input: params.input,
               origin: params.origin,
               turnInputSource: params.turnInputSource,
+              reviewFix: params.reviewFix,
               executionMode: params.executionMode,
               approvalPolicy: params.approvalPolicy,
               sandbox: params.sandbox,
@@ -23315,9 +23317,20 @@ export class DesktopBackendRegistry {
         const pendingTurnId = buildPendingTurnId(threadId);
         const pendingActiveKey = buildActiveTurnKey("codex", threadId, pendingTurnId);
         const pendingModeKey = buildActiveTurnModeKey(threadId, pendingTurnId);
-        const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId,
-          this.codexMessageContextTurnObservations.get(threadId)?.get(turnId));
-        if (canTransferPending) this.bindDeferredJobMonitorCreation(threadId, turnId);
+        const observedTurnSequence = this.codexMessageContextTurnObservations.get(threadId)?.get(turnId);
+        const pendingSource = !isPendingTurnId(threadId, turnId)
+          ? this.context.turnState.readPendingCodexTurnInputSource(threadId, observedTurnSequence)
+          : undefined;
+        const pendingReviewFix = pendingSource !== undefined
+          ? this.context.turnState.readPendingCodexTurnReviewFix(threadId, observedTurnSequence)
+          : undefined;
+        const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId, observedTurnSequence);
+        if (canTransferPending) {
+          if (pendingSource !== undefined && !pendingReviewFix) {
+            this.managedReviewService.observeOperatorReviewInput({ backend: "codex", threadId, turnId }, pendingSource);
+          }
+          this.bindDeferredJobMonitorCreation(threadId, turnId);
+        }
         const collaborationMode = canTransferPending ? this.context.turnState.collaborationMode(pendingActiveKey) : undefined;
         const pendingMode = collaborationMode ? this.context.turnState.executionMode(pendingModeKey) : undefined;
         if (collaborationMode) {
