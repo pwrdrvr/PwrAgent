@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { globSync, readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseSync } from "oxc-parser";
 
@@ -21,22 +21,58 @@ export const VALID_RULES = new Set([
 export const BASELINE_REL_PATH = "scripts/property-budget-baseline.json";
 export const BASELINE_SCHEMA_VERSION = 1;
 
-const TEST_FILE_PATTERNS = [
-  "apps/**/*.test.{ts,tsx,js,mjs,cjs}",
-  "apps/**/*.spec.{ts,tsx,js,mjs,cjs}",
-  "packages/**/*.test.{ts,tsx,js,mjs,cjs}",
-  "packages/**/*.spec.{ts,tsx,js,mjs,cjs}",
-  "scripts/**/*.test.{ts,tsx,js,mjs,cjs}",
-  "scripts/**/*.spec.{ts,tsx,js,mjs,cjs}",
-  ".agents/**/*.test.{ts,tsx,js,mjs,cjs}",
+const TEST_SCAN_ROOTS = [
+  { dir: "apps", pattern: /\.(?:test|spec)\.[cm]?[jt]sx?$/ },
+  { dir: "packages", pattern: /\.(?:test|spec)\.[cm]?[jt]sx?$/ },
+  { dir: "scripts", pattern: /\.(?:test|spec)\.[cm]?[jt]sx?$/ },
+  { dir: ".agents", pattern: /\.test\.[cm]?[jt]sx?$/ },
 ];
 
-const TEST_FILE_EXCLUDES = [
-  "**/node_modules/**",
-  "**/out/**",
-  "**/dist/**",
-  "**/.local/**",
-];
+const SKIP_DIRECTORIES = new Set([
+  "node_modules",
+  "out",
+  "dist",
+  ".local",
+  ".git",
+]);
+
+const HEAVY_CALL_TOKEN_PATTERN =
+  /\b(?:StateDb|GitProcess|openInMemoryStateDb|createTempStateDb|openFreshStateDb|openStateDb|createStateDb|registryWithInMemoryStore|runIsolatedGit|runIsolatedGitSync|runGit|runGitSync|execGit|gitExec|initGitRepo|createGitRepo)\b/;
+
+const LEAF_AST_TYPES = new Set([
+  "Identifier",
+  "Literal",
+  "ThisExpression",
+  "Super",
+  "EmptyStatement",
+  "DebuggerStatement",
+  "BreakStatement",
+  "ContinueStatement",
+  "PrivateIdentifier",
+  "TemplateElement",
+  "JSXText",
+]);
+
+const TS_RUNTIME_AST_TYPES = new Set([
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "TSTypeAssertion",
+  "TSInstantiationExpression",
+  "TSEnumDeclaration",
+  "TSModuleDeclaration",
+  "TSModuleBlock",
+  "TSParameterProperty",
+]);
+
+function shouldSkipAstNode(node) {
+  const type = node.type;
+  if (LEAF_AST_TYPES.has(type)) return true;
+  if (type.charCodeAt(0) === 84 && type.charCodeAt(1) === 83 && !TS_RUNTIME_AST_TYPES.has(type)) {
+    return true;
+  }
+  return false;
+}
 
 const STATE_DB_IMPORT_NAMES = new Set([
   "StateDb",
@@ -106,21 +142,62 @@ function toPosixPath(value) {
 }
 
 export function listTestFiles(directory = REPO_ROOT) {
-  return [...globSync(TEST_FILE_PATTERNS, {
-    cwd: directory,
-    exclude: TEST_FILE_EXCLUDES,
-  })].map(toPosixPath).sort();
+  const results = [];
+
+  function walkDir(absDir, relPrefix, pattern) {
+    let entries;
+    try {
+      entries = readdirSync(absDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const name = entry.name;
+      if (entry.isDirectory()) {
+        if (SKIP_DIRECTORIES.has(name)) continue;
+        walkDir(join(absDir, name), `${relPrefix}/${name}`, pattern);
+      } else if (entry.isFile() && pattern.test(name)) {
+        results.push(`${relPrefix}/${name}`);
+      }
+    }
+  }
+
+  for (const { dir, pattern } of TEST_SCAN_ROOTS) {
+    const absRoot = resolve(directory, dir);
+    if (existsSync(absRoot)) {
+      walkDir(absRoot, toPosixPath(dir), pattern);
+    }
+  }
+
+  return results.sort();
 }
 
 function walkAst(node, visitor) {
   if (!node || typeof node !== "object") return;
+  if (shouldSkipAstNode(node)) return;
   visitor(node);
-  for (const key of Object.keys(node)) {
-    if (key === "start" || key === "end" || key === "type") continue;
+  for (const key in node) {
+    if (
+      key === "start"
+      || key === "end"
+      || key === "type"
+      || key === "typeAnnotation"
+      || key === "typeArguments"
+      || key === "typeParameters"
+      || key === "returnType"
+    ) {
+      continue;
+    }
     const value = node[key];
+    if (!value || typeof value !== "object") continue;
     if (Array.isArray(value)) {
-      for (const item of value) walkAst(item, visitor);
-    } else if (value && typeof value === "object" && typeof value.type === "string") {
+      for (let index = 0; index < value.length; index += 1) {
+        const item = value[index];
+        if (item && typeof item === "object" && typeof item.type === "string") {
+          walkAst(item, visitor);
+        }
+      }
+    } else if (typeof value.type === "string") {
       walkAst(value, visitor);
     }
   }
@@ -304,24 +381,25 @@ export function analyzePropertyBudgetSource(
 
   const parsed = parseSync(filename, source);
   const { program, comments } = parsed;
-  const lineStarts = computeLineStarts(source);
 
   // 1. Collect vi.mock / vi.doMock mocked module specifiers so mocked
   //    child_process, dugite, or StateDb modules are not mistaken for real ones.
   const mockedModules = new Set();
-  walkAst(program, (node) => {
-    if (
-      node.type === "CallExpression"
-      && node.callee?.type === "MemberExpression"
-      && node.callee.object?.type === "Identifier"
-      && node.callee.object.name === "vi"
-      && node.callee.property?.type === "Identifier"
-      && (node.callee.property.name === "mock" || node.callee.property.name === "doMock")
-      && isStringLiteral(node.arguments?.[0])
-    ) {
-      mockedModules.add(getStringLiteralValue(node.arguments[0]));
-    }
-  });
+  if (source.includes("vi.mock") || source.includes("vi.doMock")) {
+    walkAst(program, (node) => {
+      if (
+        node.type === "CallExpression"
+        && node.callee?.type === "MemberExpression"
+        && node.callee.object?.type === "Identifier"
+        && node.callee.object.name === "vi"
+        && node.callee.property?.type === "Identifier"
+        && (node.callee.property.name === "mock" || node.callee.property.name === "doMock")
+        && isStringLiteral(node.arguments?.[0])
+      ) {
+        mockedModules.add(getStringLiteralValue(node.arguments[0]));
+      }
+    });
+  }
 
   const childProcessMocked =
     mockedModules.has("node:child_process") || mockedModules.has("child_process");
@@ -419,144 +497,160 @@ export function analyzePropertyBudgetSource(
 
   // 3. Collect CommonJS require(...) bindings, promisified child_process aliases,
   //    and heavy call sites (respecting mocked modules and child_process receivers).
-  walkAst(program, (node) => {
-    if (node.type === "VariableDeclarator" && node.init) {
-      const init = unwrapExpression(node.init);
-      if (
-        init?.type === "CallExpression"
-        && init.callee?.type === "Identifier"
-        && init.callee.name === "require"
-        && isStringLiteral(init.arguments?.[0])
-      ) {
-        const mod = getStringLiteralValue(init.arguments[0]);
-        const isChildProcessMod = mod === "node:child_process" || mod === "child_process";
-        const isModMocked = mockedModules.has(mod) || (isChildProcessMod && childProcessMocked);
+  if (source.includes("require(") || source.includes("promisify")) {
+    walkAst(program, (node) => {
+      if (node.type === "VariableDeclarator" && node.init) {
+        const init = unwrapExpression(node.init);
+        if (
+          init?.type === "CallExpression"
+          && init.callee?.type === "Identifier"
+          && init.callee.name === "require"
+          && isStringLiteral(init.arguments?.[0])
+        ) {
+          const mod = getStringLiteralValue(init.arguments[0]);
+          const isChildProcessMod = mod === "node:child_process" || mod === "child_process";
+          const isModMocked = mockedModules.has(mod) || (isChildProcessMod && childProcessMocked);
 
-        if (isModMocked) {
-          for (const name of collectPatternIdentifiers(node.id)) {
-            mockedLocalNames.add(name);
+          if (isModMocked) {
+            for (const name of collectPatternIdentifiers(node.id)) {
+              mockedLocalNames.add(name);
+            }
+            return;
+          }
+
+          if (mod === "fast-check") {
+            if (node.id?.type === "Identifier") {
+              fcNamespaces.add(node.id.name);
+            } else if (node.id?.type === "ObjectPattern") {
+              for (const prop of node.id.properties ?? []) {
+                if (prop.type !== "Property" || prop.value?.type !== "Identifier") continue;
+                const key = getPropertyKeyName(prop);
+                if (key && FC_RUNNER_METHODS.has(key)) fcRunnerFns.add(prop.value.name);
+                if (key === "configureGlobal") fcConfigureGlobalFns.add(prop.value.name);
+              }
+            }
+          }
+          if (isChildProcessMod) {
+            heavyFixtures.add("child_process");
+            if (node.id?.type === "Identifier") {
+              childProcessNamespaces.add(node.id.name);
+            } else if (node.id?.type === "ObjectPattern") {
+              for (const prop of node.id.properties ?? []) {
+                if (prop.type !== "Property" || prop.value?.type !== "Identifier") continue;
+                const key = getPropertyKeyName(prop);
+                if (key && CHILD_PROCESS_CALL_NAMES.has(key)) {
+                  childProcessCallLocalNames.set(prop.value.name, key);
+                }
+              }
+            }
+          }
+          if (mod === "dugite") heavyFixtures.add("git");
+          if (mod === "better-sqlite3") heavyFixtures.add("state-db");
+          if (isTestingLibraryModule(mod)) {
+            if (node.id?.type === "Identifier") {
+              testingLibraryNamespaces.add(node.id.name);
+            } else if (node.id?.type === "ObjectPattern") {
+              for (const prop of node.id.properties ?? []) {
+                const key = getPropertyKeyName(prop);
+                if (key && RENDER_NAMES.has(key)) heavyFixtures.add("testing-library");
+              }
+            }
           }
           return;
         }
 
-        if (mod === "fast-check") {
-          if (node.id?.type === "Identifier") {
-            fcNamespaces.add(node.id.name);
-          } else if (node.id?.type === "ObjectPattern") {
-            for (const prop of node.id.properties ?? []) {
-              if (prop.type !== "Property" || prop.value?.type !== "Identifier") continue;
-              const key = getPropertyKeyName(prop);
-              if (key && FC_RUNNER_METHODS.has(key)) fcRunnerFns.add(prop.value.name);
-              if (key === "configureGlobal") fcConfigureGlobalFns.add(prop.value.name);
-            }
-          }
-        }
-        if (isChildProcessMod) {
-          heavyFixtures.add("child_process");
-          if (node.id?.type === "Identifier") {
-            childProcessNamespaces.add(node.id.name);
-          } else if (node.id?.type === "ObjectPattern") {
-            for (const prop of node.id.properties ?? []) {
-              if (prop.type !== "Property" || prop.value?.type !== "Identifier") continue;
-              const key = getPropertyKeyName(prop);
-              if (key && CHILD_PROCESS_CALL_NAMES.has(key)) {
-                childProcessCallLocalNames.set(prop.value.name, key);
-              }
-            }
-          }
-        }
-        if (mod === "dugite") heavyFixtures.add("git");
-        if (mod === "better-sqlite3") heavyFixtures.add("state-db");
-        if (isTestingLibraryModule(mod)) {
-          if (node.id?.type === "Identifier") {
-            testingLibraryNamespaces.add(node.id.name);
-          } else if (node.id?.type === "ObjectPattern") {
-            for (const prop of node.id.properties ?? []) {
-              const key = getPropertyKeyName(prop);
-              if (key && RENDER_NAMES.has(key)) heavyFixtures.add("testing-library");
-            }
-          }
-        }
-        return;
-      }
-
-      // Track promisify(execFile) / promisify(cp.execFile) wrappers.
-      if (
-        node.id?.type === "Identifier"
-        && init?.type === "CallExpression"
-        && init.callee?.type === "Identifier"
-        && init.callee.name === "promisify"
-      ) {
-        const target = unwrapExpression(init.arguments?.[0]);
-        if (target?.type === "Identifier" && childProcessCallLocalNames.has(target.name)) {
-          childProcessCallLocalNames.set(node.id.name, childProcessCallLocalNames.get(target.name));
-        } else if (
-          target?.type === "MemberExpression"
-          && target.object?.type === "Identifier"
-          && childProcessNamespaces.has(target.object.name)
-          && target.property?.type === "Identifier"
-          && CHILD_PROCESS_CALL_NAMES.has(target.property.name)
+        // Track promisify(execFile) / promisify(cp.execFile) wrappers.
+        if (
+          node.id?.type === "Identifier"
+          && init?.type === "CallExpression"
+          && init.callee?.type === "Identifier"
+          && init.callee.name === "promisify"
         ) {
-          childProcessCallLocalNames.set(node.id.name, target.property.name);
-        }
-      }
-    }
-  });
-
-  walkAst(program, (node) => {
-    if (
-      node.type === "NewExpression"
-      && node.callee?.type === "Identifier"
-      && node.callee.name === "StateDb"
-      && !mockedLocalNames.has("StateDb")
-    ) {
-      heavyFixtures.add("state-db");
-    }
-
-    if (node.type === "CallExpression") {
-      const callee = unwrapExpression(node.callee);
-      if (
-        callee?.type === "MemberExpression"
-        && callee.object?.type === "Identifier"
-        && callee.property?.type === "Identifier"
-      ) {
-        const objName = callee.object.name;
-        const propName = callee.property.name;
-        if (!mockedLocalNames.has(objName)) {
-          if (objName === "StateDb" && propName === "open") {
-            heavyFixtures.add("state-db");
-          }
-          if (objName === "GitProcess" && propName === "exec") {
-            heavyFixtures.add("git");
-          }
-          if (testingLibraryNamespaces.has(objName) && RENDER_NAMES.has(propName)) {
-            heavyFixtures.add("testing-library");
-          }
-          if (
-            childProcessNamespaces.has(objName)
-            && CHILD_PROCESS_CALL_NAMES.has(propName)
-            && isGitCommandArg(node.arguments?.[0], propName)
+          const target = unwrapExpression(init.arguments?.[0]);
+          if (target?.type === "Identifier" && childProcessCallLocalNames.has(target.name)) {
+            childProcessCallLocalNames.set(node.id.name, childProcessCallLocalNames.get(target.name));
+          } else if (
+            target?.type === "MemberExpression"
+            && target.object?.type === "Identifier"
+            && childProcessNamespaces.has(target.object.name)
+            && target.property?.type === "Identifier"
+            && CHILD_PROCESS_CALL_NAMES.has(target.property.name)
           ) {
-            heavyFixtures.add("git");
+            childProcessCallLocalNames.set(node.id.name, target.property.name);
           }
-          if (STATE_DB_CALL_NAMES.has(propName)) heavyFixtures.add("state-db");
-          if (GIT_CALL_NAMES.has(propName)) heavyFixtures.add("git");
-        }
-      } else if (callee?.type === "Identifier" && !mockedLocalNames.has(callee.name)) {
-        const callName = callee.name;
-        if (STATE_DB_CALL_NAMES.has(callName)) heavyFixtures.add("state-db");
-        if (GIT_CALL_NAMES.has(callName)) heavyFixtures.add("git");
-        const childCallKind = childProcessCallLocalNames.get(callName);
-        if (childCallKind && isGitCommandArg(node.arguments?.[0], childCallKind)) {
-          heavyFixtures.add("git");
         }
       }
-    }
-  });
+    });
+  }
+
+  if (
+    testingLibraryNamespaces.size > 0
+    || childProcessNamespaces.size > 0
+    || childProcessCallLocalNames.size > 0
+    || HEAVY_CALL_TOKEN_PATTERN.test(source)
+  ) {
+    walkAst(program, (node) => {
+      if (
+        node.type === "NewExpression"
+        && node.callee?.type === "Identifier"
+        && node.callee.name === "StateDb"
+        && !mockedLocalNames.has("StateDb")
+      ) {
+        heavyFixtures.add("state-db");
+      }
+
+      if (node.type === "CallExpression") {
+        const callee = unwrapExpression(node.callee);
+        if (
+          callee?.type === "MemberExpression"
+          && callee.object?.type === "Identifier"
+          && callee.property?.type === "Identifier"
+        ) {
+          const objName = callee.object.name;
+          const propName = callee.property.name;
+          if (!mockedLocalNames.has(objName)) {
+            if (objName === "StateDb" && propName === "open") {
+              heavyFixtures.add("state-db");
+            }
+            if (objName === "GitProcess" && propName === "exec") {
+              heavyFixtures.add("git");
+            }
+            if (testingLibraryNamespaces.has(objName) && RENDER_NAMES.has(propName)) {
+              heavyFixtures.add("testing-library");
+            }
+            if (
+              childProcessNamespaces.has(objName)
+              && CHILD_PROCESS_CALL_NAMES.has(propName)
+              && isGitCommandArg(node.arguments?.[0], propName)
+            ) {
+              heavyFixtures.add("git");
+            }
+            if (STATE_DB_CALL_NAMES.has(propName)) heavyFixtures.add("state-db");
+            if (GIT_CALL_NAMES.has(propName)) heavyFixtures.add("git");
+          }
+        } else if (callee?.type === "Identifier" && !mockedLocalNames.has(callee.name)) {
+          const callName = callee.name;
+          if (STATE_DB_CALL_NAMES.has(callName)) heavyFixtures.add("state-db");
+          if (GIT_CALL_NAMES.has(callName)) heavyFixtures.add("git");
+          const childCallKind = childProcessCallLocalNames.get(callName);
+          if (childCallKind && isGitCommandArg(node.arguments?.[0], childCallKind)) {
+            heavyFixtures.add("git");
+          }
+        }
+      }
+    });
+  }
 
   // 4. Single lexically scoped AST traversal to resolve const numbers/objects
   //    and inspect every fc.assert(...), fc.check(...), and fc.configureGlobal(...) call.
+  //    Pure in-memory files without `numRuns` always run at default 100 <= 100 and
+  //    cannot violate either rule, so they skip Pass 4 completely.
   const sortedHeavyFixtures = [...heavyFixtures].sort();
+  if (sortedHeavyFixtures.length === 0 && !source.includes("numRuns")) {
+    return { heavyFixtures: sortedHeavyFixtures, violations: [] };
+  }
+
+  const lineStarts = computeLineStarts(source);
   const violations = [];
   const scopeStack = [];
 
@@ -775,12 +869,28 @@ export function analyzePropertyBudgetSource(
   }
 
   function visitChildren(node) {
-    for (const key of Object.keys(node)) {
-      if (key === "start" || key === "end" || key === "type") continue;
+    for (const key in node) {
+      if (
+        key === "start"
+        || key === "end"
+        || key === "type"
+        || key === "typeAnnotation"
+        || key === "typeArguments"
+        || key === "typeParameters"
+        || key === "returnType"
+      ) {
+        continue;
+      }
       const value = node[key];
+      if (!value || typeof value !== "object") continue;
       if (Array.isArray(value)) {
-        for (const item of value) visitScoped(item);
-      } else if (value && typeof value === "object" && typeof value.type === "string") {
+        for (let index = 0; index < value.length; index += 1) {
+          const item = value[index];
+          if (item && typeof item === "object" && typeof item.type === "string") {
+            visitScoped(item);
+          }
+        }
+      } else if (typeof value.type === "string") {
         visitScoped(value);
       }
     }
@@ -788,6 +898,7 @@ export function analyzePropertyBudgetSource(
 
   function visitScoped(node) {
     if (!node || typeof node !== "object") return;
+    if (shouldSkipAstNode(node)) return;
 
     if (node.type === "Program" || node.type === "BlockStatement") {
       const scope = new Map();
