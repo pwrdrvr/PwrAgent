@@ -1921,7 +1921,7 @@ export class ManagedReviewService {
       const parsed = submittedOutput ?? parseReviewOutputText(output);
       const review = parsed
         ? formatReviewOutputText(parsed)
-        : output?.trim() || "Review completed without output.";
+        : output ?? "Review completed without output.";
       const entry: AppServerThreadReviewEntry = {
         type: "review",
         id: `managed-review:${params.record.turnId}:result`,
@@ -1968,7 +1968,7 @@ export class ManagedReviewService {
         parentThreadId: params.record.parentThreadId,
         reviewThreadId: params.record.reviewThreadId,
         structured: Boolean(parsed),
-        outputSource: submittedOutput ? "tool" : parsed ? "text" : "none",
+        outputSource: submittedOutput ? "tool" : output ? "text" : "none",
         turnId: params.record.turnId,
         ...(ledgerSummary.total > 0
           ? {

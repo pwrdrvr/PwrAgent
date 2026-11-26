@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   AppServerBackendKind,
   AppServerReviewFinding,
@@ -293,6 +294,14 @@ function parseSubmittedFinding(
     `${prefix}.code_location.absolute_file_path`,
   );
   if (!filePath.ok) return filePath;
+  // A rooted Windows path without a drive or share still depends on the current drive.
+  if (!path.isAbsolute(filePath.value)
+    || (process.platform === "win32" && path.parse(filePath.value).root.length === 1)) {
+    return {
+      ok: false,
+      message: `${prefix}.code_location.absolute_file_path must be an absolute path to the file in the reviewed worktree.`,
+    };
+  }
   const lineRange = asPlainObject(location.line_range);
   if (!lineRange) {
     return { ok: false, message: `${prefix}.code_location.line_range must be an object.` };
@@ -544,7 +553,6 @@ export class ManagedReviewCandidateLedger {
     turn: ManagedReviewCandidateTurnKey,
     input: ManagedReviewOutputSubmitInput,
   ): ManagedReviewCandidateOperationResult<{
-    submitted: AppServerReviewOutput;
     finding_count: number;
     ledger_summary: ManagedReviewCandidateCounts & { total: number };
   }> {
@@ -573,6 +581,15 @@ export class ManagedReviewCandidateLedger {
     if (!correctness.ok) {
       return { ok: false, code: "invalid_arguments", message: correctness.message };
     }
+    const verdict = normalizeOverallCorrectness(correctness.value, findings);
+    const expectedVerdict = findings.length === 0 ? "patch is correct" : "patch is incorrect";
+    if (verdict !== expectedVerdict) {
+      return {
+        ok: false,
+        code: "invalid_arguments",
+        message: `overall_correctness must be "${expectedVerdict}" when the findings array is ${findings.length === 0 ? "empty" : "non-empty"}.`,
+      };
+    }
     const explanation = readNonEmptyString(
       input.overall_explanation,
       "overall_explanation",
@@ -594,7 +611,7 @@ export class ManagedReviewCandidateLedger {
 
     const output: AppServerReviewOutput = {
       findings,
-      overall_correctness: normalizeOverallCorrectness(correctness.value, findings),
+      overall_correctness: verdict,
       overall_explanation: explanation.value,
       ...(overallConfidence === undefined
         ? {}
@@ -613,13 +630,12 @@ export class ManagedReviewCandidateLedger {
       };
       this.turns.set(key, state);
     }
-    state.submittedOutput = cloneReviewOutput(output);
+    state.submittedOutput = output;
 
     return {
       ok: true,
       data: {
-        submitted: cloneReviewOutput(output),
-        finding_count: output.findings.length,
+        finding_count: findings.length,
         ledger_summary: {
           total: state.candidates.length,
           ...countDispositions(state.candidates),

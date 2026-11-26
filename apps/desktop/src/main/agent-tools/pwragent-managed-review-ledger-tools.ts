@@ -270,7 +270,7 @@ export function buildManagedReviewLedgerToolDefinitions(
                   properties: {
                     absolute_file_path: {
                       type: "string",
-                      description: "Absolute path to the affected file.",
+                      description: "Absolute path to the affected file in the reviewed worktree. On Windows, include the drive or UNC share.",
                     },
                     line_range: {
                       type: "object",

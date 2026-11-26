@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import fc from "fast-check";
@@ -24,13 +25,27 @@ import {
   type ManagedReviewCandidateTurnKey,
 } from "../app-server/managed-review-candidate-ledger";
 import type { AppServerReviewOutput } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
+const { registryLogInfo } = vi.hoisted(() => ({ registryLogInfo: vi.fn() }));
+vi.mock("../log", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../log")>();
+  return {
+    ...actual,
+    getMainLogger: (scope: string) => {
+      const logger = actual.getMainLogger(scope);
+      return scope === "pwragent:backend-registry" ? { ...logger, info: registryLogInfo } : logger;
+    },
+  };
+});
+
 const BACKENDS: readonly AppServerBackendKind[] = ["codex", "acp:antigravity", "acp:grok"];
+const ABSOLUTE_FINDING_PATH = resolve("/repo/a.ts");
 
 const turnKeyArb: fc.Arbitrary<ManagedReviewCandidateTurnKey> = fc.record({
   backend: fc.constantFrom(...BACKENDS),
@@ -84,7 +99,7 @@ type LedgerStep =
   | {
       kind: "submitOutput";
       turn: ManagedReviewCandidateTurnKey;
-      valid: boolean;
+      invalidField: "title" | "path" | "verdict" | undefined;
       hasFinding: boolean;
       priority: ManagedReviewCandidatePriority;
       body: string;
@@ -118,7 +133,7 @@ const stepArb: fc.Arbitrary<LedgerStep> = fc.oneof(
   fc.record({
     kind: fc.constant("submitOutput" as const),
     turn: turnKeyArb,
-    valid: fc.boolean(),
+    invalidField: fc.option(fc.constantFrom("title" as const, "path" as const, "verdict" as const), { nil: undefined }),
     hasFinding: fc.boolean(),
     priority: priorityArb,
     body: fc.constantFrom(
@@ -236,36 +251,34 @@ describe("ManagedReviewCandidateLedger model properties", () => {
             }
           } else if (step.kind === "submitOutput") {
             const key = modelTurnKey(step.turn);
-            if (!step.valid) {
-              const actual = ledger.submitOutput(step.turn, {
-                findings: [{ title: "", body: step.body, confidence_score: 0.9, priority: step.priority, code_location: { absolute_file_path: "/repo/a.ts", line_range: { start: 1, end: 2 } } }],
-                overall_correctness: "patch is incorrect",
-                overall_explanation: step.explanation,
-              });
+            const hasFinding = step.hasFinding || step.invalidField === "title" || step.invalidField === "path";
+            const findings = hasFinding
+              ? [{
+                  title: step.invalidField === "title" ? "" : "Quoted finding",
+                  body: step.body,
+                  confidence_score: 0.9,
+                  priority: step.priority,
+                  code_location: {
+                    absolute_file_path: step.invalidField === "path" ? "src/a.ts" : ABSOLUTE_FINDING_PATH,
+                    line_range: { start: 10, end: 12 },
+                  },
+                }]
+              : [];
+            const claimsClean = step.invalidField === "verdict" ? hasFinding : !hasFinding;
+            const correctness = claimsClean ? "patch is correct" : "patch is incorrect";
+            const actual = ledger.submitOutput(step.turn, {
+              findings,
+              overall_correctness: correctness,
+              overall_explanation: step.explanation,
+              ...(step.confidenceScore !== undefined
+                ? { overall_confidence_score: step.confidenceScore }
+                : {}),
+            });
+            // An invalid submission must leave the previous accepted review intact.
+            if (step.invalidField) {
               expect(actual).toMatchObject({ ok: false, code: "invalid_arguments" });
               expect(ledger.submittedOutput(step.turn)).toEqual(model.get(key)?.submittedOutput);
             } else {
-              const findings = step.hasFinding
-                ? [{
-                    title: "Quoted finding",
-                    body: step.body,
-                    confidence_score: 0.9,
-                    priority: step.priority,
-                    code_location: {
-                      absolute_file_path: "/repo/a.ts",
-                      line_range: { start: 10, end: 12 },
-                    },
-                  }]
-                : [];
-              const correctness = step.hasFinding ? "patch is incorrect" : "patch is correct";
-              const actual = ledger.submitOutput(step.turn, {
-                findings,
-                overall_correctness: correctness,
-                overall_explanation: step.explanation,
-                ...(step.confidenceScore !== undefined
-                  ? { overall_confidence_score: step.confidenceScore }
-                  : {}),
-              });
               let state = model.get(key);
               if (!state) {
                 state = { turn: step.turn, nextId: 1, candidates: [] };
@@ -283,7 +296,6 @@ describe("ManagedReviewCandidateLedger model properties", () => {
               expect(actual).toMatchObject({
                 ok: true,
                 data: {
-                  submitted: expectedOutput,
                   finding_count: findings.length,
                 },
               });
@@ -334,6 +346,44 @@ describe("ManagedReviewCandidateLedger model properties", () => {
       { numRuns: 100 },
     );
   });
+
+  it.each([
+    { count: 1, verdict: "patch is correct", expected: "patch is incorrect" },
+    { count: 0, verdict: "patch is incorrect", expected: "patch is correct" },
+  ])("rejects '$verdict' with $count findings", ({ count, verdict, expected }) => {
+    const ledger = new ManagedReviewCandidateLedger();
+    const turn = { backend: "codex", threadId: "review", turnId: "turn" } as const;
+    const finding = {
+      title: "Guard null input",
+      body: "An empty request throws before validation.",
+      confidence_score: 0.95,
+      priority: 1,
+      code_location: { absolute_file_path: ABSOLUTE_FINDING_PATH, line_range: { start: 1, end: 1 } },
+    };
+    expect(ledger.submitOutput(turn, {
+      findings: count ? [finding] : [],
+      overall_correctness: verdict,
+      overall_explanation: "Reviewed the request path.",
+    })).toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining(expected) });
+  });
+
+  it.each(["src/a.ts", ...(process.platform === "win32" ? ["C:src/a.ts", "/src/a.ts"] : [])])(
+    "rejects a finding path that depends on the current directory or drive (%s)", (file) => {
+      const ledger = new ManagedReviewCandidateLedger();
+      const turn = { backend: "codex", threadId: "review", turnId: "turn" } as const;
+      expect(ledger.submitOutput(turn, {
+        findings: [{
+          title: "Guard null input",
+          body: "An empty request throws before validation.",
+          confidence_score: 0.95,
+          priority: 1,
+          code_location: { absolute_file_path: file, line_range: { start: 1, end: 1 } },
+        }],
+        overall_correctness: "patch is incorrect",
+        overall_explanation: "Found an unhandled request.",
+      })).toMatchObject({ ok: false, code: "invalid_arguments", message: expect.stringContaining("absolute_file_path") });
+    },
+  );
 
   it("enforces field validation, bounding, and per-turn capacity limits without mutating state", () => {
     const ledger = new ManagedReviewCandidateLedger();
@@ -428,7 +478,7 @@ describe("ManagedReviewCandidateLedger model properties", () => {
         confidence_score: 0.9,
         priority: 2,
         code_location: {
-          absolute_file_path: "/repo/a.ts",
+          absolute_file_path: ABSOLUTE_FINDING_PATH,
           line_range: { start: 1, end: 2 },
         },
       }),
@@ -451,7 +501,7 @@ describe("ManagedReviewCandidateLedger model properties", () => {
             confidence_score: 0.9,
             priority: 2,
             code_location: {
-              absolute_file_path: "/repo/a.ts",
+              absolute_file_path: ABSOLUTE_FINDING_PATH,
               line_range: { start: 20, end: 10 },
             },
           },
@@ -605,7 +655,7 @@ describe("managed review ledger MCP isolation and approval", () => {
                 confidence_score: 0.96,
                 priority: 2,
                 code_location: {
-                  absolute_file_path: "/repo/apps/desktop/src/main/app-server/acp-backend-adapter.ts",
+                  absolute_file_path: resolve("/repo/apps/desktop/src/main/app-server/acp-backend-adapter.ts"),
                   line_range: { start: 3585, end: 3586 },
                 },
               },
@@ -616,10 +666,12 @@ describe("managed review ledger MCP isolation and approval", () => {
           },
         });
         expect(submitted.isError).not.toBe(true);
-        expect(submitted.structuredContent).toMatchObject({
+        const receipt = {
           finding_count: 1,
           ledger_summary: { total: 1, pending: 0, keep: 1, drop: 0 },
-        });
+        };
+        expect(submitted.structuredContent).toEqual(receipt);
+        expect(JSON.stringify(submitted.content)).not.toContain("Calls synchronous");
         retireAtDispatch = true;
         await expect(reviewClient.callTool({
           name: "dispose_review_candidate",
@@ -781,6 +833,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
   let stateDb: StateDb;
 
   beforeEach(() => {
+    registryLogInfo.mockClear();
     stateDb = openInMemoryStateDb();
   }, 60_000);
 
@@ -1014,13 +1067,17 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       threadId: `codex-thread-${++nextThreadNumber}`,
     }));
     const startTurnSpy = vi.spyOn(codexClient, "startTurn");
+    const overlayStore = createOverlayStoreMock();
+    const upsertReview = vi.spyOn(overlayStore, "upsertManagedReviewEntry");
     const registry = createDesktopBackendRegistry({
       codexClient,
       acpAgentStore: new AcpAgentStore(stateDb),
       acpSessionStore: new AcpSessionStore(stateDb),
-      overlayStore: createOverlayStoreMock(),
+      overlayStore,
       threadTitleGenerationService: null,
     });
+    const onEvent = vi.fn<(event: AgentEvent) => void>();
+    const unsubscribe = registry.onEvent(onEvent);
 
     try {
       const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
@@ -1123,7 +1180,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
         }),
       ).toMatchObject({ overall_correctness: "patch is correct" });
 
-      // Terminal failure/completion clears the in-memory ledger.
+      // A failed provider turn must forward the failure and discard the submission.
       await codexClient.emit({
         method: "turn/failed",
         params: {
@@ -1136,11 +1193,21 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
           },
         },
       });
-      await vi.waitFor(() => {
-        expect(
-          registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
-        ).toBe(0);
-      });
+      const parentReviewEvents = onEvent.mock.calls.map(([event]) => event.notification)
+        .filter(({ params }) => "threadId" in params && params.threadId === parent.threadId
+          && "turnId" in params && params.turnId === review.turnId);
+      expect(parentReviewEvents.filter(({ method }) => method === "turn/failed")).toHaveLength(1);
+      const resultId = `managed-review:${review.turnId}:result`;
+      expect(parentReviewEvents).not.toContainEqual(expect.objectContaining({ method: "turn/completed" }));
+      expect(parentReviewEvents).not.toContainEqual(expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({ item: expect.objectContaining({ id: resultId }) }),
+      }));
+      expect(upsertReview).not.toHaveBeenCalledWith(expect.objectContaining({
+        threadId: parent.threadId,
+        entry: expect.objectContaining({ id: resultId }),
+      }));
+      expect(registryModules(registry).managedReviewService.candidateLedger.activeTurnCount).toBe(0);
       expect(
         registryModules(registry).managedReviewService.candidateLedger.submittedOutput({
           backend: "codex",
@@ -1149,6 +1216,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
         }),
       ).toBeUndefined();
     } finally {
+      unsubscribe();
       await registry.close();
     }
   });
@@ -1202,7 +1270,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
                 confidence_score: 0.94,
                 priority: 2,
                 code_location: {
-                  absolute_file_path: "/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts",
+                  absolute_file_path: resolve("/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts"),
                   line_range: { start: 1260, end: 1342 },
                 },
               },
@@ -1256,7 +1324,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
             confidence_score: 0.94,
             priority: 2,
             code_location: {
-              absolute_file_path: "/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts",
+              absolute_file_path: resolve("/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts"),
               line_range: { start: 1260, end: 1342 },
             },
           },
@@ -1329,7 +1397,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
                 confidence_score: 0.91,
                 priority: 1,
                 code_location: {
-                  absolute_file_path: "/repo/src/review.ts",
+                  absolute_file_path: resolve("/repo/src/review.ts"),
                   line_range: { start: 5, end: 9 },
                 },
               },
@@ -1373,6 +1441,57 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       expect(
         registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
       ).toBe(0);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it.each([
+    { source: "text", text: '{"findings":[', published: '{"findings":[' },
+    { source: "none", text: "  ", published: "Review completed without output." },
+  ])("attributes unstructured fallback reviews to $source", async ({ source, text, published }) => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
+    });
+    let nextThreadNumber = 0;
+    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
+      threadId: `codex-fallback-thread-${++nextThreadNumber}`,
+    }));
+    const overlayStore = createOverlayStoreMock();
+    const upsertReview = vi.spyOn(overlayStore, "upsertManagedReviewEntry");
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      acpAgentStore: new AcpAgentStore(stateDb),
+      acpSessionStore: new AcpSessionStore(stateDb),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    try {
+      const parent = await registry.startThread({ backend: "codex", cwd: "/repo" });
+      const review = await registry.startReview({
+        backend: "codex",
+        threadId: parent.threadId,
+        target: { type: "uncommittedChanges" },
+        runMode: "pwragent-sub-agent",
+      });
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          turn: { id: review.turnId, status: "completed", output: [{ type: "text", text }] },
+        },
+      });
+      expect(upsertReview).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: parent.threadId,
+        entry: expect.objectContaining({ id: `managed-review:${review.turnId}:result`, review: published }),
+      }));
+      expect(registryLogInfo).toHaveBeenCalledWith("managed review artifact published", expect.objectContaining({
+        turnId: review.turnId,
+        structured: false,
+        outputSource: source,
+      }));
     } finally {
       await registry.close();
     }
