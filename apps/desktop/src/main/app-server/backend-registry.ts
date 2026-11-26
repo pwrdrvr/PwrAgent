@@ -5556,6 +5556,7 @@ export class DesktopBackendRegistry {
   private async resolveAcpAvailableCommands(params: {
     backend: AcpBackendId;
     cwds: Array<string | undefined>;
+    allowProbe?: boolean;
   }): Promise<AppServerAvailableCommandSummary[]> {
     const repositoryPaths = await this.resolveAcpCommandRepositoryPaths(
       params.cwds,
@@ -5570,6 +5571,10 @@ export class DesktopBackendRegistry {
       }
     }
 
+    if (params.allowProbe === false) {
+      return [];
+    }
+
     const probeTarget = repositoryPaths[0];
     if (!probeTarget) {
       return [];
@@ -5577,6 +5582,45 @@ export class DesktopBackendRegistry {
     return await this.probeAcpAvailableCommands({
       backend: params.backend,
       repositoryPath: probeTarget,
+    });
+  }
+
+  /**
+   * Resolve slash commands for an existing ACP thread: prefer the session's
+   * live advertised commands, falling back to the repo command cache (and
+   * optionally probing) when the session has not advertised any yet.
+   */
+  private async resolveAcpThreadAvailableCommands(params: {
+    backend: AcpBackendId;
+    threadId: string;
+    allowProbe: boolean;
+    wakeArchivedCheckout?: boolean;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    if (session?.availableCommands?.length) {
+      return session.availableCommands;
+    }
+    if (params.wakeArchivedCheckout) {
+      // Wake an archived worktree before resolving its repository path so
+      // repo-level command caching and probing operate on the restored checkout.
+      await this.threadArchiveCoordinator.ensureCheckoutAwake(params);
+    }
+    const refreshedSession =
+      this.acpBackend.getSession(params.backend, params.threadId) ?? session;
+    if (refreshedSession?.availableCommands?.length) {
+      return refreshedSession.availableCommands;
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    return await this.resolveAcpAvailableCommands({
+      backend: params.backend,
+      cwds: [
+        refreshedSession?.cwd,
+        ...(overlay?.extraLinkedDirectories ?? []).flatMap((directory) => [
+          directory.worktreePath,
+          directory.path,
+        ]),
+      ],
+      allowProbe: params.allowProbe,
     });
   }
 
@@ -13463,56 +13507,88 @@ export class DesktopBackendRegistry {
     itemId?: string;
   }> {
     if (isAcpBackendId(params.backend)) {
-      return await this.compactAcpThread({
+      const result = await this.compactAcpThread({
         backend: params.backend,
         threadId: params.threadId,
       });
+      if (result.status === "busy") {
+        throw new Error("Cannot compact a thread while another operation is running");
+      }
+      return {
+        backend: result.backend,
+        threadId: result.threadId,
+        turnId: result.turnId,
+      };
     }
     await this.codexRuntimeSupervisor.invalidIdRecoveryBarrier;
     return await this.compactThreadNow({ backend: "codex", threadId: params.threadId });
   }
 
+  private async hasAutoCompactionHold(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<boolean> {
+    if (this.closed || this.isRestartGateClosed()) {
+      return true;
+    }
+    const identityKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const overlay = await this.overlayStore.getThreadOverlayState(params);
+    const archived = this.getThreadInfo(params)?.archived
+      ?? (overlay?.archiveRetentionStartedAt !== undefined || overlay?.archiveTombstonedAt !== undefined);
+    return (
+      await this.isThreadLocked(params)
+      || archived
+      || !this.threadTurnQueue.canStartImmediately(params)
+      || this.threadHasActiveTurn(params.threadId, params.backend)
+      || this.threadTurnQueue.hasWaitingEntries(params)
+      || (params.backend === "codex" && this.context.turnState.hasRetry(params.threadId))
+      || (isAcpBackendId(params.backend)
+        && this.reservedAcpStartThreadKeys.has(
+          buildTurnStartReservationKey(params.backend, params.threadId),
+        ))
+      || this.threadWorkspaceService.threadHandoffReservationRecords.has(identityKey)
+      || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(params)
+      || this.threadArchiveCoordinator.checkoutRestoreRecords.has(identityKey)
+    );
+  }
+
   private async compactAcpThread(params: {
     backend: AcpBackendId;
     threadId: string;
-  }): Promise<{
-    backend: AppServerBackendKind;
-    threadId: string;
-    turnId: string;
-  }> {
-    if (this.closed) {
-      throw new Error("Desktop backend registry is closed");
+    messageOrigin?: AppServerThreadMessageOrigin;
+    allowProbe?: boolean;
+    wakeArchivedCheckout?: boolean;
+    idleOnly?: boolean;
+  }): Promise<
+    | { status: "started"; backend: AppServerBackendKind; threadId: string; turnId: string }
+    | { status: "busy" }
+  > {
+    if (params.idleOnly) {
+      if (await this.hasAutoCompactionHold(params)) {
+        return { status: "busy" };
+      }
+      this.assertThreadOwnership();
+    } else {
+      if (this.closed) {
+        throw new Error("Desktop backend registry is closed");
+      }
+      this.assertThreadOwnership();
+      await this.assertThreadNotLocked(params.backend, params.threadId);
+      if (
+        this.reservedAcpStartThreadKeys.has(
+          buildTurnStartReservationKey(params.backend, params.threadId),
+        )
+        || this.threadHasActiveTurn(params.threadId, params.backend)
+      ) {
+        throw new Error("Cannot compact a thread while another operation is running");
+      }
     }
-    this.assertThreadOwnership();
-    await this.assertThreadNotLocked(params.backend, params.threadId);
-    if (
-      this.reservedAcpStartThreadKeys.has(
-        buildTurnStartReservationKey(params.backend, params.threadId),
-      )
-      || this.threadHasActiveTurn(params.threadId, params.backend)
-    ) {
-      throw new Error("Cannot compact a thread while another operation is running");
-    }
-    const session = this.acpBackend.getSession(params.backend, params.threadId);
-    let commands = session?.availableCommands ?? [];
-    if (commands.length === 0) {
-      // Wake an archived worktree before resolving its repository path so
-      // repo-level command caching and probing operate on the restored checkout.
-      await this.threadArchiveCoordinator.ensureCheckoutAwake(params);
-      const refreshedSession =
-        this.acpBackend.getSession(params.backend, params.threadId) ?? session;
-      const overlay = await this.overlayStore.getThreadOverlayState(params);
-      commands = await this.resolveAcpAvailableCommands({
-        backend: params.backend,
-        cwds: [
-          refreshedSession?.cwd,
-          ...(overlay?.extraLinkedDirectories ?? []).flatMap((directory) => [
-            directory.worktreePath,
-            directory.path,
-          ]),
-        ],
-      });
-    }
+    const commands = await this.resolveAcpThreadAvailableCommands({
+      backend: params.backend,
+      threadId: params.threadId,
+      allowProbe: params.allowProbe ?? true,
+      wakeArchivedCheckout: params.wakeArchivedCheckout ?? true,
+    });
     const compactCommand = findAdvertisedAcpCompactCommand(commands);
     if (!compactCommand) {
       throw new Error(
@@ -13520,8 +13596,11 @@ export class DesktopBackendRegistry {
       );
     }
     await this.threadModelSettings.assertRequestedThreadModelAvailable(params);
+    if (params.idleOnly && await this.hasAutoCompactionHold(params)) {
+      return { status: "busy" };
+    }
     try {
-      return await this.startTurnNow({
+      const started = await this.startTurnNow({
         backend: params.backend,
         threadId: params.threadId,
         input: [
@@ -13530,10 +13609,15 @@ export class DesktopBackendRegistry {
             text: formatAcpCompactCommandPrompt(compactCommand),
           },
         ],
+        ...(params.messageOrigin ? { messageOrigin: params.messageOrigin } : {}),
         isCompactCommand: true,
       });
+      return { status: "started", ...started };
     } catch (error) {
       if (error instanceof ThreadAlreadyActiveError) {
+        if (params.idleOnly) {
+          return { status: "busy" };
+        }
         throw new Error("Cannot compact a thread while another operation is running");
       }
       throw error;
@@ -13543,19 +13627,25 @@ export class DesktopBackendRegistry {
   /**
    * What owner-driven auto-compaction can do for one thread now. Codex
    * compacts through its API, between turns. Claude runs a `/compact` prompt
-   * itself. An ACP agent needs `compact` among its advertised commands: one
-   * that has advertised none yet is waited on, and one whose list lacks it
-   * cannot compact. Only Antigravity takes a steered `/compact` mid-turn.
+   * itself. An ACP agent needs `compact` among its live advertised commands or
+   * its repo command cache: one with no live or cached commands is waited on,
+   * and one whose list lacks `compact` cannot compact. Only Antigravity takes
+   * a steered `/compact` mid-turn.
    */
-  autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }): {
+  async autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }): Promise<{
     canSteer: boolean;
     canStart: "yes" | "blocked" | "unsupported";
-  } {
-    const gate = this.closed || this.isRestartGateClosed() ? "blocked" as const : "yes" as const;
+  }> {
+    if (this.closed) return { canSteer: false, canStart: "blocked" };
+    const gate = this.isRestartGateClosed() ? "blocked" as const : "yes" as const;
     if (!isAcpBackendId(params.backend)) return { canSteer: false, canStart: gate };
-    const commands = this.acpBackend.getSession(params.backend, params.threadId)?.availableCommands;
-    if (!commands?.length) return { canSteer: false, canStart: "blocked" };
-    if (!commands.some((command) => command.name.replace(/^\//u, "") === "compact")) {
+    const commands = await this.resolveAcpThreadAvailableCommands({
+      backend: params.backend,
+      threadId: params.threadId,
+      allowProbe: false,
+    });
+    if (!commands.length) return { canSteer: false, canStart: "blocked" };
+    if (!findAdvertisedAcpCompactCommand(commands)) {
       return { canSteer: false, canStart: "unsupported" };
     }
     return {
@@ -13576,8 +13666,9 @@ export class DesktopBackendRegistry {
 
   /**
    * Starts an owner-requested compaction on an idle thread: Codex's
-   * compaction API, or a `/compact` prompt for Claude and ACP agents. A lock,
-   * an archive, a running turn or another hold answers `busy`.
+   * compaction API, the ACP `/compact` path, or a `/compact` prompt for
+   * Claude. A lock, an archive, a running turn, waiting queue entries, or
+   * another hold answers `busy`.
    */
   async startAutoCompaction(params: {
     backend: AppServerBackendKind;
@@ -13588,24 +13679,24 @@ export class DesktopBackendRegistry {
       // The holds `submitTurnIfIdle` answers busy for, plus a pending retry:
       // `compactThread` would wake an archived checkout or throw, and a throw
       // counts as the provider refusing.
-      const identityKey = buildThreadIdentityKey(params.backend, params.threadId);
-      const overlay = await this.overlayStore.getThreadOverlayState(params);
-      const archived = this.getThreadInfo(params)?.archived
-        ?? (overlay?.archiveRetentionStartedAt !== undefined || overlay?.archiveTombstonedAt !== undefined);
-      if (
-        await this.isThreadLocked(params)
-        || archived
-        || this.threadHasActiveTurn(params.threadId, "codex")
-        || this.threadTurnQueue.hasWaitingEntries(params)
-        || this.context.turnState.hasRetry(params.threadId)
-        || this.threadWorkspaceService.threadHandoffReservationRecords.has(identityKey)
-        || this.threadWorkspaceService.threadHasBlockingWorkspaceMove(params)
-        || this.threadArchiveCoordinator.checkoutRestoreRecords.has(identityKey)
-      ) {
+      if (await this.hasAutoCompactionHold(params)) {
         return { status: "busy" };
       }
       const result = await this.compactThread({ backend: "codex", threadId: params.threadId });
       return { status: "started", turnId: result.turnId };
+    }
+    if (isAcpBackendId(params.backend)) {
+      const result = await this.compactAcpThread({
+        backend: params.backend,
+        threadId: params.threadId,
+        messageOrigin: params.messageOrigin,
+        allowProbe: false,
+        wakeArchivedCheckout: false,
+        idleOnly: true,
+      });
+      return result.status === "started"
+        ? { status: "started", turnId: result.turnId }
+        : { status: "busy" };
     }
     const result = await this.submitTurnIfIdle({
       backend: params.backend,

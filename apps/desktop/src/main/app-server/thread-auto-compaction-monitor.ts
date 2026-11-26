@@ -46,7 +46,9 @@ export type ThreadAutoCompactionHost = {
   resolveThreadModel(params: { backend: AppServerBackendKind; threadId: string }): Promise<string | undefined>;
   /** The running turn's id, or undefined when the thread is idle. */
   activeTurnId(params: { backend: AppServerBackendKind; threadId: string }): string | undefined;
-  support(params: { backend: AppServerBackendKind; threadId: string }): Pick<AutoCompactionContext, "canSteer" | "canStart">;
+  support(params: { backend: AppServerBackendKind; threadId: string }):
+    | Pick<AutoCompactionContext, "canSteer" | "canStart">
+    | Promise<Pick<AutoCompactionContext, "canSteer" | "canStart">>;
   steerCompact(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -201,24 +203,24 @@ export class ThreadAutoCompactionMonitor {
       case "turn/cancelled": {
         const ended = (notification as Notification<"turn/completed" | "turn/failed" | "turn/cancelled">).params;
         const turnId = providerTurnId(ended.turnId ?? undefined);
-        this.enqueueKnown(event.backend, threadId, (entry) => this.apply(entry, {
+        this.enqueueKnown(event.backend, threadId, async (entry) => this.apply(entry, {
           kind: "turn-ended",
           ...(turnId ? { turnId } : {}),
-          context: this.context(entry, true),
+          context: await this.context(entry, true),
         }));
         return;
       }
       case "thread/compacted":
-        this.enqueueKnown(event.backend, threadId, (entry) => this.apply(entry, {
+        this.enqueueKnown(event.backend, threadId, async (entry) => this.apply(entry, {
           kind: "compaction-observed",
-          context: this.context(entry),
+          context: await this.context(entry),
         }));
         return;
       default:
         if (isContextCompactionItem(notification)) {
-          this.enqueueKnown(event.backend, threadId, (entry) => this.apply(entry, {
+          this.enqueueKnown(event.backend, threadId, async (entry) => this.apply(entry, {
             kind: "compaction-observed",
-            context: this.context(entry),
+            context: await this.context(entry),
           }));
         }
     }
@@ -285,10 +287,11 @@ export class ThreadAutoCompactionMonitor {
    * active while its terminal event is being delivered, so `turn-ended`
    * passes `ended` to report it idle.
    */
-  private context(entry: ThreadEntry, ended = false): AutoCompactionContext {
-    const turnId = ended ? undefined : providerTurnId(this.host.activeTurnId(entry));
-    const running = !ended && this.host.activeTurnId(entry) !== undefined;
-    const support = this.host.support(entry);
+  private async context(entry: ThreadEntry, ended = false): Promise<AutoCompactionContext> {
+    const support = await this.host.support(entry);
+    const activeTurnId = this.host.activeTurnId(entry);
+    const turnId = ended ? undefined : providerTurnId(activeTurnId);
+    const running = !ended && activeTurnId !== undefined;
     return {
       turnRunning: running,
       ...(turnId ? { turnId } : {}),
@@ -319,7 +322,7 @@ export class ThreadAutoCompactionMonitor {
             },
           }
         : {}),
-      context: this.context(entry),
+      context: await this.context(entry),
     });
   }
 
@@ -344,12 +347,12 @@ export class ThreadAutoCompactionMonitor {
             turnId: command.turnId,
             requestId: `auto-compaction:${entry.backend}:${entry.threadId}:${++this.requestSequence}`,
           });
-          await this.apply(entry, { kind: "dispatch-accepted", context: this.context(entry) });
+          await this.apply(entry, { kind: "dispatch-accepted", context: await this.context(entry) });
         } catch (error) {
           this.host.log.warn("auto-compaction steer refused", {
             ...identity, error: error instanceof Error ? error.message : String(error),
           });
-          await this.apply(entry, { kind: "dispatch-refused", context: this.context(entry) });
+          await this.apply(entry, { kind: "dispatch-refused", context: await this.context(entry) });
         }
         return;
       }
@@ -367,13 +370,13 @@ export class ThreadAutoCompactionMonitor {
           await this.apply(entry, {
             kind: "dispatch-accepted",
             ...(turnId ? { turnId } : {}),
-            context: this.context(entry),
+            context: await this.context(entry),
           });
         } catch (error) {
           this.host.log.warn("auto-compaction start refused", {
             ...identity, error: error instanceof Error ? error.message : String(error),
           });
-          await this.apply(entry, { kind: "dispatch-refused", context: this.context(entry) });
+          await this.apply(entry, { kind: "dispatch-refused", context: await this.context(entry) });
         }
         return;
       }
@@ -403,9 +406,9 @@ export class ThreadAutoCompactionMonitor {
     });
     entry.settleTimer = setTimer(() => {
       entry.settleTimer = undefined;
-      this.enqueueKnown(entry.backend, entry.threadId, (current) => this.apply(current, {
+      this.enqueueKnown(entry.backend, entry.threadId, async (current) => this.apply(current, {
         kind: "settle-timeout",
-        context: this.context(current),
+        context: await this.context(current),
       }));
     }, AUTO_COMPACTION_SETTLE_MS);
   }
@@ -455,7 +458,9 @@ export class ThreadAutoCompactionMonitor {
 export type AutoCompactionRegistry = {
   onEvent(listener: (event: AgentEvent) => void | Promise<void>): () => void;
   getActiveTurnForThread(params: { backend: AppServerBackendKind; threadId: string }): { turnId: string } | undefined;
-  autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }): Pick<AutoCompactionContext, "canSteer" | "canStart">;
+  autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }):
+    | Pick<AutoCompactionContext, "canSteer" | "canStart">
+    | Promise<Pick<AutoCompactionContext, "canSteer" | "canStart">>;
   resolveAutoCompactionModel(params: { backend: AppServerBackendKind; threadId: string }): Promise<string | undefined>;
   startAutoCompaction(params: {
     backend: AppServerBackendKind;
