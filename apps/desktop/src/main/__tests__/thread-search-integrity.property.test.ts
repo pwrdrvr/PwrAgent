@@ -144,23 +144,12 @@ it("preserves a peer's committed rename between repair preflight and the write t
     writerStore.upsertThread(listed, 100);
     writer.raw.prepare("UPDATE thread_search_fts SET title = ? WHERE identity_key = ?").run("Nightshade", "codex:listed");
     const renamed = { ...listed, title: "Marigold", summary: "Committed rename" };
-    const prepare = reader.raw.prepare.bind(reader.raw);
     let committed = false;
-    const spy = vi.spyOn(reader.raw, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      if (sql.includes("AS fts_current")) {
-        const get = statement.get.bind(statement);
-        statement.get = (...args: unknown[]) => {
-          const result = get(...args);
-          if (!committed) {
-            expect(reader.raw.inTransaction).toBe(false);
-            writerStore.upsertThread(renamed, 200);
-            committed = true;
-          }
-          return result;
-        };
-      }
-      return statement;
+    const spy = afterProjectionCheck(reader, () => {
+      if (committed) return;
+      expect(reader.raw.inTransaction).toBe(false);
+      writerStore.upsertThread(renamed, 200);
+      committed = true;
     });
     const service = new ThreadSearchService(new ThreadSearchStore(reader), async () => [listed]);
     const response = await service.search({ query: '"Marigold"', contentMode: "metadata" });
@@ -176,3 +165,67 @@ it("preserves a peer's committed rename between repair preflight and the write t
     removeTempStateDbDir(tempDir);
   }
 });
+
+it.each(["metadata search", "single upsert"] as const)(
+  "repairs FTS during %s even when a peer attempts a write after the in-transaction recheck",
+  async (entryPoint) => {
+    const { dbPath, tempDir } = createTempStateDb("search-integrity-writer-lock-");
+    const reader = StateDb.open(dbPath);
+    const writer = StateDb.open(dbPath);
+    try {
+      const writerStore = new ThreadSearchStore(writer);
+      writerStore.upsertThreads([listed, peer]);
+      writer.raw.prepare("UPDATE thread_search_fts SET title = ? WHERE identity_key = ?").run("Nightshade", "codex:listed");
+      // Try once at the recheck boundary, while the reader's transaction is open.
+      writer.raw.pragma("busy_timeout = 0");
+      const touchPeer = writer.raw.prepare("UPDATE thread_search_documents SET indexed_at = ? WHERE identity_key = ?");
+      let attempted = false;
+      let blocked = false;
+      const spy = afterProjectionCheck(reader, () => {
+        if (attempted || !reader.raw.inTransaction) return;
+        attempted = true;
+        try {
+          touchPeer.run(300, "claude:peer");
+        } catch (error) {
+          expect(error).toMatchObject({ code: "SQLITE_BUSY" });
+          blocked = true;
+        }
+      });
+
+      const store = new ThreadSearchStore(reader);
+      if (entryPoint === "metadata search") {
+        const service = new ThreadSearchService(store, async () => [listed]);
+        const response = await service.search({ query: '"Sunflower"', contentMode: "metadata" });
+        expect(response.results.map(({ threadId }) => threadId)).toEqual([listed.id]);
+      } else {
+        store.upsertThread(listed);
+      }
+      spy.mockRestore();
+      expect(attempted).toBe(true);
+      expect(blocked).toBe(true);
+      expect(store.search({ query: '"Sunflower"', limit: 10 }).map(({ threadId }) => threadId)).toEqual([listed.id]);
+      expect(store.search({ query: '"Nightshade"', limit: 10 })).toEqual([]);
+      expect(touchPeer.run(300, "claude:peer").changes).toBe(1);
+    } finally {
+      writer.close();
+      reader.close();
+      removeTempStateDbDir(tempDir);
+    }
+  },
+);
+
+function afterProjectionCheck(db: StateDb, callback: () => void) {
+  const prepare = db.raw.prepare.bind(db.raw);
+  return vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    if (sql.includes("AS fts_current")) {
+      const get = statement.get.bind(statement);
+      statement.get = (...args: unknown[]) => {
+        const result = get(...args);
+        callback();
+        return result;
+      };
+    }
+    return statement;
+  });
+}

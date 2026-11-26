@@ -63,7 +63,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
       for (const { projection, repairOnly } of changed) {
         this.writeProjection(projection, Date.now(), repairOnly);
       }
-    })();
+    }).immediate();
   }
 
   private getProjectionStatus(projection: ThreadSearchProjection): ThreadSearchProjectionStatus {
@@ -101,7 +101,8 @@ export class ThreadSearchStore implements ThreadSearchStorage {
     const { identityKey } = projection;
     this.db.transaction(() => {
       // A peer may have changed the document after the preflight read. Keep an
-      // FTS-only repair tied to the matching document in this write snapshot.
+      // FTS-only repair tied to the matching document. The outermost immediate
+      // transaction holds the WAL writer lock before this recheck reads.
       const status = this.getProjectionStatus(projection);
       if (status === "current" || (repairOnly && status !== "repair")) return;
 
@@ -153,7 +154,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         @directoryLabels, @directoryPaths, COALESCE(@gitBranch, ''), COALESCE(@gitOriginUrl, ''),
         COALESCE(@model, ''), @backend, @threadIdSearchText
       )`).run(projection);
-    })();
+    }).immediate();
   }
 
   deleteThread(params: {
