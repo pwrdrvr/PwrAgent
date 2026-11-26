@@ -4,7 +4,7 @@ import { StateDb } from "../state/state-db";
 import { measureSqliteWrites, SQLITE_WRITE_METRICS_ENV } from "../state/sqlite-write-metrics";
 import { ThreadSearchStore } from "../storage/thread-search-store";
 import { ThreadSearchService } from "../thread-search/thread-search-service";
-import { createTempStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
+import { createTempStateDb, openInMemoryStateDb, removeTempStateDbDir } from "./sqlite-test-utils";
 import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 function summary(id: string, archived = false): AppServerThreadSummary {
@@ -16,11 +16,11 @@ function summary(id: string, archived = false): AppServerThreadSummary {
 }
 
 it("reuses proven current rows across overlapping searches of fresh provider objects", async () => {
-  const temp = createTempStateDb("search-warm-");
-  const db = StateDb.open(temp.dbPath);
+  const db = openInMemoryStateDb();
   try {
     const prepare = db.raw.prepare.bind(db.raw);
     let projectionReads = 0;
+    let versionReads = 0;
     const observe = vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       if (sql.includes("thread_search_documents") && sql.includes("thread_search_fts_rows")
@@ -35,6 +35,12 @@ it("reuses proven current rows across overlapping searches of fresh provider obj
           projectionReads++;
           return all(...args);
         };
+      } else if (sql.includes("pragma_data_version")) {
+        const get = statement.get.bind(statement);
+        statement.get = (...args: unknown[]) => {
+          versionReads++;
+          return get(...args);
+        };
       }
       return statement;
     });
@@ -47,6 +53,7 @@ it("reuses proven current rows across overlapping searches of fresh provider obj
     });
     await search(true);
     projectionReads = 0;
+    versionReads = 0;
     observe.mockClear();
     const stringify = JSON.stringify;
     let projectionSerializations = 0;
@@ -63,8 +70,9 @@ it("reuses proven current rows across overlapping searches of fresh provider obj
     expect(withArchives.results.map((r) => r.threadId).sort()).toEqual([...all, archived].map((row) => row.id).sort());
     expect(projectionReads).toBe(0);
     expect(projectionSerializations).toBe(0);
+    expect(versionReads).toBeLessThanOrEqual(8);
     expect(observe.mock.calls.length).toBeLessThanOrEqual(6);
-  } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
+  } finally { db.close(); }
 });
 
 it("reconciles the visible FTS corpus after external changes even when the mapped rowid still belongs to the thread", async () => {
@@ -103,12 +111,16 @@ it("reconciles the visible FTS corpus after external changes even when the mappe
   } finally { peer.close(); db.close(); removeTempStateDbDir(temp.tempDir); vi.unstubAllEnvs(); }
 });
 
-it("rechecks previously current identities if a peer commits after the preflight snapshot", async () => {
+it.each([
+  { slice: "unchanged", replaceTitle: false },
+  { slice: "changed", replaceTitle: true },
+])("rechecks an initially $slice slice if a peer commits after the preflight snapshot", async ({ replaceTitle }) => {
   const temp = createTempStateDb("search-preflight-peer-");
   const db = StateDb.open(temp.dbPath);
   const peer = StateDb.open(temp.dbPath);
   try {
     const first = summary("first");
+    const listedFirst = replaceTitle ? { ...first, title: "Asterism revised" } : first;
     const second = summary("second");
     const removePeerRow = peer.raw.prepare("DELETE FROM thread_search_fts WHERE identity_key = ?");
     const prepare = db.raw.prepare.bind(db.raw);
@@ -131,11 +143,11 @@ it("rechecks previously current identities if a peer commits after the preflight
     const store = new ThreadSearchStore(db);
     store.upsertThreads([first, second]);
     peerWillCommit = true;
-    const service = new ThreadSearchService(store, async () => [{ ...first, title: "Asterism revised" }, second]);
+    const service = new ThreadSearchService(store, async () => [listedFirst, second]);
     const result = await service.search({ query: "Asterism", contentMode: "metadata" });
     expect(peerWillCommit).toBe(false);
     expect(result.results.map((row) => [row.threadId, row.title]).sort()).toEqual([
-      ["first", "Asterism revised"], ["second", second.title],
+      ["first", listedFirst.title], ["second", second.title],
     ]);
   } finally { peer.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
 });

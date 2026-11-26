@@ -88,7 +88,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
     `);
   }
 
-  /** One write commit per changed slice, with no writer lock for a warm slice. */
+  /** One write commit per changed slice, with no writer lock for a stable, current slice. */
   upsertThreads(threads: readonly AppServerThreadSummary[]): void {
     this.upsert(threads);
   }
@@ -107,10 +107,13 @@ export class ThreadSearchStore implements ThreadSearchStorage {
 
     const cache = this.projectionCache;
     const preflight = this.db.transaction(() => {
+      // Pin the version and the projection reads to the same snapshot.
       const version = this.refreshProjectionCache();
       return { version, changed: this.findChanges(threads, cache) };
     })();
-    if (preflight.changed.length === 0) return;
+    // The final search can see commits hidden by the preflight snapshot.
+    // Read the version after closing it even when we found no changes.
+    if (preflight.changed.length === 0 && this.refreshProjectionCache() === preflight.version) return;
 
     const committed = this.db.transaction(() => {
       // Take the writer lock before rechecking. If a peer committed after our
@@ -129,9 +132,8 @@ export class ThreadSearchStore implements ThreadSearchStorage {
   }
 
   private refreshProjectionCache(): ProjectionVersion {
-    // The read transaction pins data_version and the verified rows to the same
-    // snapshot. total_changes also detects writes through this connection,
-    // including repairs and rollback outside this store.
+    // total_changes detects writes through this connection, including repairs
+    // and writes rolled back outside this store.
     const version = this.readProjectionVersion.get()!;
     const previous = this.projectionCache.version;
     if (previous?.external === version.external && previous.local === version.local) return previous;
