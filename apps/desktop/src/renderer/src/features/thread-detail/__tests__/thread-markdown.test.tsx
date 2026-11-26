@@ -2182,14 +2182,270 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("link", { name: "@repo" })).not.toBeInTheDocument();
   });
 
-  it.each(["javascript:alert(1)", "%6Aavascript:alert%281%29", "https%3A%2F%2Fexample.test"])(
-    "does not treat an encoded or unsafe URL as a local path: %s",
+  it.each([
+    "javascript:alert(1)",
+    "javascript:alert(1)#heading",
+    "%6Aavascript:alert%281%29",
+    "https%3A%2F%2Fexample.test",
+    "data:text/html,<script>alert(1)</script>",
+    "vbscript:msgbox(1)",
+    "#",
+  ])(
+    "does not treat an encoded or unsafe URL as a local path or safe link: %s",
     (url) => {
       const { container } = render(<ThreadMarkdown text={`[@repo](${url})`} />);
       expect(container.querySelector(".directory-chip")).toBeNull();
       expect(container.querySelector("a[href]")).toBeNull();
     },
   );
+
+  it("renders GFM footnotes with working same-document links and scrolls inside the current root", () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    const markdown = [
+      "First claim[^1] and second claim[^named].",
+      "",
+      "[^1]: First footnote body.",
+      "[^named]: Named footnote body.",
+    ].join("\n");
+
+    try {
+      const { container } = render(
+        <div>
+          <div data-testid="message-one">
+            <ThreadMarkdown text={markdown} />
+          </div>
+          <div data-testid="message-two">
+            <ThreadMarkdown text={markdown} />
+          </div>
+        </div>,
+      );
+
+      const messageTwo = screen.getByTestId("message-two");
+      const refLink = messageTwo.querySelector<HTMLAnchorElement>("a[data-footnote-ref]");
+      expect(refLink).not.toBeNull();
+      expect(refLink).toHaveAttribute("href", "#user-content-fn-1");
+      expect(refLink).toHaveAttribute("id", "user-content-fnref-1");
+      expect(refLink).toHaveAttribute("aria-describedby", "footnote-label");
+      expect(refLink).not.toHaveAttribute("target");
+      expect(refLink).not.toHaveAttribute("rel");
+
+      const footnotesSection = messageTwo.querySelector("section[data-footnotes]");
+      expect(footnotesSection).not.toBeNull();
+      const footnotesHeading = footnotesSection?.querySelector("h2#footnote-label.sr-only");
+      expect(footnotesHeading).not.toBeNull();
+
+      const targetItem = messageTwo.querySelector<HTMLLIElement>("li#user-content-fn-1");
+      expect(targetItem).not.toBeNull();
+
+      const clickEvent = new MouseEvent("click", { bubbles: true, cancelable: true });
+      fireEvent(refLink!, clickEvent);
+      expect(clickEvent.defaultPrevented).toBe(true);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
+      expect(scrollIntoView.mock.contexts[0]).toBe(targetItem);
+
+      scrollIntoView.mockClear();
+      const backref = targetItem?.querySelector<HTMLAnchorElement>("a[data-footnote-backref]");
+      expect(backref).not.toBeNull();
+      expect(backref).toHaveAttribute("href", "#user-content-fnref-1");
+      expect(backref).not.toHaveAttribute("target");
+
+      fireEvent.click(backref!);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(refLink);
+      expect(document.activeElement).toBe(refLink);
+
+      // Ensure message one's footnote was never scrolled when interacting with message two.
+      const messageOneItem = container
+        .querySelector('[data-testid="message-one"] li#user-content-fn-1');
+      expect(messageOneItem).not.toBe(targetItem);
+    } finally {
+      if (originalScrollIntoView) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+      } else {
+        delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+      }
+    }
+  });
+
+  it("scrolls to GitHub-style heading anchors including punctuation and duplicates without mutating window hash", () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const originalHash = window.location.hash;
+    window.location.hash = "#files/context-key";
+
+    const markdown = [
+      "- [C++ & Rust](#c--rust)",
+      "- [First Setup](#setup)",
+      "- [Second Setup](#setup-1)",
+      "",
+      "## C++ & Rust!",
+      "",
+      "## Setup",
+      "",
+      "## Setup",
+    ].join("\n");
+
+    try {
+      const { container } = render(<ThreadMarkdown text={markdown} />);
+      const headings = Array.from(container.querySelectorAll("h2"));
+      expect(headings).toHaveLength(3);
+
+      const cppLink = screen.getByRole("link", { name: "C++ & Rust" });
+      expect(cppLink).toHaveAttribute("href", "#c--rust");
+      expect(cppLink).not.toHaveAttribute("target");
+      fireEvent.click(cppLink);
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(headings[0]);
+
+      fireEvent.click(screen.getByRole("link", { name: "First Setup" }));
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(headings[1]);
+
+      fireEvent.click(screen.getByRole("link", { name: "Second Setup" }));
+      expect(scrollIntoView.mock.contexts.at(-1)).toBe(headings[2]);
+
+      expect(window.location.hash).toBe("#files/context-key");
+    } finally {
+      window.location.hash = originalHash;
+      if (originalScrollIntoView) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+      } else {
+        delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+      }
+    }
+  });
+
+  it("preserves GFM task list classes alongside transcript list classes", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          "- [x] Completed task",
+          "- [ ] Pending task",
+          "  - [x] Nested done",
+        ].join("\n")}
+      />,
+    );
+
+    const taskLists = container.querySelectorAll("ul.transcript-message__list.contains-task-list");
+    expect(taskLists).toHaveLength(2);
+    const items = container.querySelectorAll("li.task-list-item");
+    expect(items).toHaveLength(3);
+    const checkboxes = Array.from(
+      container.querySelectorAll<HTMLInputElement>('li.task-list-item input[type="checkbox"]'),
+    );
+    expect(checkboxes).toHaveLength(3);
+    expect(checkboxes.map((input) => input.checked)).toEqual([true, false, true]);
+    expect(checkboxes.every((input) => input.disabled)).toBe(true);
+  });
+
+  it("sets a dynamic --list-gutter for multi-digit ordered lists and leaves single-digit lists on the default", () => {
+    const tenItems = Array.from({ length: 10 }, (_, index) => `${index + 1}. Item ${index + 1}`).join("\n");
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          "1. Single",
+          "2. Digit",
+          "",
+          "---",
+          "",
+          tenItems,
+          "",
+          "---",
+          "",
+          "99. Ninety-nine",
+          "100. One hundred",
+          "     1. Nested single",
+          "     2. Nested two",
+        ].join("\n")}
+      />,
+    );
+
+    const lists = Array.from(container.querySelectorAll<HTMLOListElement>("ol.transcript-message__list"));
+    expect(lists).toHaveLength(4);
+    expect(lists[0]?.style.getPropertyValue("--list-gutter")).toBe("");
+    expect(lists[1]?.style.getPropertyValue("--list-gutter")).toBe("calc(2ch + 1.15em)");
+    expect(lists[2]?.style.getPropertyValue("--list-gutter")).toBe("calc(3ch + 1.15em)");
+    expect(lists[3]?.style.getPropertyValue("--list-gutter")).toBe("");
+  });
+
+  it("scrolls same-document heading anchors inside MarkdownDocumentModal and honors reduced motion", async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "scrollIntoView",
+    );
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    window.matchMedia = vi.fn(() => ({
+      matches: true,
+      media: "(prefers-reduced-motion: reduce)",
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(() => false),
+    })) as unknown as typeof window.matchMedia;
+
+    const readMarkdownFile = vi.fn(async (request: { path: string }) => ({
+      path: request.path,
+      content: [
+        "# README",
+        "",
+        "Jump to [Install Steps](#install-steps).",
+        "",
+        "## Install Steps",
+        "",
+        "Run `pnpm install`.",
+      ].join("\n"),
+    }));
+
+    try {
+      render(
+        <ThreadMarkdown
+          desktopApi={{ readMarkdownFile }}
+          text="Open [README.md](/repo/PwrAgent/README.md)."
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("link", { name: "README.md" }));
+      const dialog = await screen.findByRole("dialog", {
+        name: "Markdown document: README.md",
+      });
+      const targetHeading = await within(dialog).findByRole("heading", { name: "Install Steps" });
+      const tocLink = within(dialog).getByRole("link", { name: "Install Steps" });
+
+      fireEvent.click(tocLink);
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "auto", block: "center" });
+      expect(scrollIntoView.mock.contexts[0]).toBe(targetHeading);
+    } finally {
+      window.matchMedia = originalMatchMedia;
+      if (originalScrollIntoView) {
+        Object.defineProperty(HTMLElement.prototype, "scrollIntoView", originalScrollIntoView);
+      } else {
+        delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+      }
+    }
+  });
 });
 
 describe("ThreadMarkdown document viewer, keyboard", () => {

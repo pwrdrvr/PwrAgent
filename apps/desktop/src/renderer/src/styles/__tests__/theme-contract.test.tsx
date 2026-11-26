@@ -748,6 +748,10 @@ describe("Tangerine Terminal theme contract", () => {
       // nested chevron read it, so the indent and the chevron cannot drift
       // apart. Geometry, not theme.
       "thread-row-inline-start",
+      // Ordered-list marker gutter, set on `ol.transcript-message__list` from
+      // the list's start and item count so 2- and 3-digit markers do not clip.
+      // Geometry, not theme.
+      "list-gutter",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token
@@ -2519,6 +2523,37 @@ describe("Tangerine Terminal theme contract", () => {
 
     const listRule = extractRuleBody(css, ".transcript-message__list");
     expect(listRule).toContain("overflow-wrap: anywhere;");
+  });
+
+  it("styles GFM task lists, footnotes, and dynamic ordered-list gutters with theme tokens", () => {
+    const orderedListRule = extractRuleBody(css, "ol.transcript-message__list");
+    expect(orderedListRule).toContain("--list-gutter: 20px;");
+    expect(orderedListRule).toContain("padding-left: var(--list-gutter);");
+    expect(extractRuleBody(css, "ol.transcript-message__list > li::marker"))
+      .toContain("font-variant-numeric: tabular-nums;");
+
+    expect(extractRuleBody(css, ".thread-markdown .task-list-item"))
+      .toContain("list-style-type: none;");
+    const taskChecked = extractRuleBody(
+      css,
+      '.thread-markdown .task-list-item > input[type="checkbox"]:checked,\n.thread-markdown .task-list-item > p:first-child > input[type="checkbox"]:checked',
+    );
+    expect(taskChecked).toContain("background: var(--accent-fill);");
+    const taskCheckmark = extractRuleBody(
+      css,
+      '.thread-markdown .task-list-item > input[type="checkbox"]:checked::after,\n.thread-markdown .task-list-item > p:first-child > input[type="checkbox"]:checked::after',
+    );
+    expect(taskCheckmark).toContain("var(--button-text)");
+
+    const footnotesSection = extractRuleBody(css, ".thread-markdown section[data-footnotes]");
+    expect(footnotesSection).toContain("border-top: 1px solid var(--border-subtle);");
+    expect(footnotesSection).toContain("color: var(--text-secondary);");
+    expect(extractRuleBody(css, ".thread-markdown section[data-footnotes] > .sr-only"))
+      .toContain("overflow: hidden;");
+    expect(extractRuleBody(css, ".thread-markdown a[data-footnote-ref]"))
+      .toContain("font-variant-numeric: tabular-nums;");
+    expect(extractRuleBody(css, ".thread-markdown a[data-footnote-backref]"))
+      .toContain("color: var(--text-muted);");
   });
 
   it("wraps long markdown table headers, label cells, and unbroken cell text without cell-to-cell overflow", () => {

@@ -15,11 +15,14 @@ import {
   type ResolvedTranscriptFile,
 } from "@pwragent/shared/contracts/settings";
 import {
+  Children,
   createContext,
+  isValidElement,
   memo,
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
   type ClipboardEvent,
   type CSSProperties,
@@ -87,6 +90,11 @@ import {
   FilePreviewCopyButton,
   filePreviewDocumentName,
 } from "./FilePreview";
+import {
+  findMarkdownAnchorTarget,
+  isSafeMarkdownFragmentUrl,
+  orderedListGutter,
+} from "./markdown-anchors";
 
 type ThreadMarkdownProps = {
   applications?: DesktopApplicationsSnapshot;
@@ -432,6 +440,7 @@ type MarkdownRenderState = {
   sharedSkillNames: ReturnType<typeof findSharedSkillNames>;
   inlineFiles: Map<string, ResolvedTranscriptFile>;
   viewLocalFile: (target: MarkdownViewerTarget) => void;
+  openFragmentLink: (event: MouseEvent<HTMLAnchorElement>, href: string) => void;
   openLocalFileInEditor: (target: LocalFileTarget) => boolean;
   openLocalFileLink: (event: MouseEvent<HTMLAnchorElement>, href: string, label: string) => void;
   openSkillMarkdownInEditor: (skill: SkillActionTarget) => void;
@@ -451,6 +460,7 @@ const markdownComponents: Components = {
       imagePartsByPath,
       skillsByPath,
       sharedSkillNames,
+      openFragmentLink,
       openSkillMarkdownInEditor,
       viewSkillMarkdown,
       openLocalFileLink,
@@ -480,6 +490,34 @@ const markdownComponents: Components = {
 
     if (isImplicitBareAutolink({ href, label, source })) {
       return <>{anchorProps.children}</>;
+    }
+
+    if (isSafeMarkdownFragmentUrl(href)) {
+      const extraProps = anchorProps as Record<string, unknown>;
+      const footnoteRef = extraProps["data-footnote-ref"];
+      const footnoteBackref = extraProps["data-footnote-backref"];
+      const isFootnoteRef = footnoteRef !== undefined && footnoteRef !== false;
+      const isFootnoteBackref = footnoteBackref !== undefined && footnoteBackref !== false;
+      return (
+        <a
+          aria-describedby={anchorProps["aria-describedby"]}
+          aria-label={anchorProps["aria-label"]}
+          className={[
+            "transcript-message__link",
+            anchorProps.className,
+          ].filter(Boolean).join(" ")}
+          data-footnote-backref={isFootnoteBackref ? "" : undefined}
+          data-footnote-ref={isFootnoteRef ? "" : undefined}
+          href={href}
+          id={anchorProps.id}
+          onClick={(event) => {
+            openFragmentLink(event, href);
+          }}
+          title={anchorProps.title}
+        >
+          {linkedChildren}
+        </a>
+      );
     }
 
     const instanceId = parseInstanceReferenceUrl(href);
@@ -697,22 +735,64 @@ const markdownComponents: Components = {
     );
   },
   h1(headingProps) {
-    return <h1 className="transcript-message__heading">{headingProps.children}</h1>;
+    return (
+      <h1
+        className={["transcript-message__heading", headingProps.className].filter(Boolean).join(" ")}
+        id={headingProps.id}
+      >
+        {headingProps.children}
+      </h1>
+    );
   },
   h2(headingProps) {
-    return <h2 className="transcript-message__heading">{headingProps.children}</h2>;
+    return (
+      <h2
+        className={["transcript-message__heading", headingProps.className].filter(Boolean).join(" ")}
+        id={headingProps.id}
+      >
+        {headingProps.children}
+      </h2>
+    );
   },
   h3(headingProps) {
-    return <h3 className="transcript-message__heading">{headingProps.children}</h3>;
+    return (
+      <h3
+        className={["transcript-message__heading", headingProps.className].filter(Boolean).join(" ")}
+        id={headingProps.id}
+      >
+        {headingProps.children}
+      </h3>
+    );
   },
   h4(headingProps) {
-    return <h4 className="transcript-message__heading">{headingProps.children}</h4>;
+    return (
+      <h4
+        className={["transcript-message__heading", headingProps.className].filter(Boolean).join(" ")}
+        id={headingProps.id}
+      >
+        {headingProps.children}
+      </h4>
+    );
   },
   h5(headingProps) {
-    return <h5 className="transcript-message__heading">{headingProps.children}</h5>;
+    return (
+      <h5
+        className={["transcript-message__heading", headingProps.className].filter(Boolean).join(" ")}
+        id={headingProps.id}
+      >
+        {headingProps.children}
+      </h5>
+    );
   },
   h6(headingProps) {
-    return <h6 className="transcript-message__heading">{headingProps.children}</h6>;
+    return (
+      <h6
+        className={["transcript-message__heading", headingProps.className].filter(Boolean).join(" ")}
+        id={headingProps.id}
+      >
+        {headingProps.children}
+      </h6>
+    );
   },
   hr() {
     return <hr className="transcript-message__rule" />;
@@ -739,7 +819,25 @@ const markdownComponents: Components = {
     );
   },
   ol(listProps) {
-    return <ol className="transcript-message__list" start={listProps.start}>{listProps.children}</ol>;
+    const gutter = orderedListGutter(
+      listProps.start,
+      countOrderedListItems(listProps.node, listProps.children),
+    );
+    const style = gutter
+      ? ({ "--list-gutter": gutter } as CSSProperties)
+      : undefined;
+    return (
+      <ol
+        className={[
+          "transcript-message__list",
+          listProps.className,
+        ].filter(Boolean).join(" ")}
+        start={listProps.start}
+        style={style}
+      >
+        {listProps.children}
+      </ol>
+    );
   },
   p(paragraphProps) {
     return (
@@ -790,7 +888,16 @@ const markdownComponents: Components = {
     return <tr className="thread-markdown__tr">{tableRowProps.children}</tr>;
   },
   ul(listProps) {
-    return <ul className="transcript-message__list">{listProps.children}</ul>;
+    return (
+      <ul
+        className={[
+          "transcript-message__list",
+          listProps.className,
+        ].filter(Boolean).join(" ")}
+      >
+        {listProps.children}
+      </ul>
+    );
   },
 };
 
@@ -860,6 +967,7 @@ const MarkdownDocumentContent = memo(function MarkdownDocumentContent(props: {
 });
 
 export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdownProps) {
+  const rootRef = useRef<HTMLDivElement>(null);
   const sourceMarkdownText = useMemo(
     () => protectComposerHyphenListItems(repairNestedLanguageFences(props.text)),
     [props.text]
@@ -943,6 +1051,32 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     [editorApplication, props.desktopApi]
   );
 
+  const openFragmentLink = useCallback(
+    (event: MouseEvent<HTMLAnchorElement>, href: string): void => {
+      event.preventDefault();
+      const root = rootRef.current;
+      if (!root) {
+        return;
+      }
+      const target = findMarkdownAnchorTarget(root, href);
+      if (!target) {
+        return;
+      }
+      const prefersReducedMotion =
+        typeof window !== "undefined"
+        && typeof window.matchMedia === "function"
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView?.({
+        behavior: prefersReducedMotion ? "auto" : "smooth",
+        block: "center",
+      });
+      if (target.matches("a[href], button, input, [tabindex]")) {
+        target.focus({ preventScroll: true });
+      }
+    },
+    [],
+  );
+
   const openLocalFileLink = useCallback(
     (event: MouseEvent<HTMLAnchorElement>, href: string, label: string): void => {
       const target = localFileTargetFromHref(href);
@@ -1008,6 +1142,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     sharedSkillNames,
     inlineFiles,
     viewLocalFile: setMarkdownViewerTarget,
+    openFragmentLink,
     openLocalFileInEditor,
     openLocalFileLink,
     openSkillMarkdownInEditor,
@@ -1022,6 +1157,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     skillsByToken,
     sharedSkillNames,
     inlineFiles,
+    openFragmentLink,
     openLocalFileInEditor,
     openLocalFileLink,
     openSkillMarkdownInEditor,
@@ -1030,6 +1166,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
 
   return (
     <div
+      ref={rootRef}
       className={[
         props.className,
         "thread-markdown",
@@ -1306,6 +1443,9 @@ function normalizeWindowsUncPath(filePath: string): string {
 
 const normalizeMarkdownUrl: UrlTransform = (url) => {
   const trimmed = url.trim();
+  if (isSafeMarkdownFragmentUrl(trimmed)) {
+    return trimmed;
+  }
   if (trimmed.startsWith("/")) {
     return `file://${encodePosixPathForFileUrl(trimmed)}`;
   }
@@ -1368,6 +1508,28 @@ function isImplicitBareAutolink(params: {
     !source.startsWith("[") &&
     !/^[a-z][a-z\d+.-]*:/i.test(source)
   );
+}
+
+function countOrderedListItems(node: unknown, children: ReactNode): number {
+  const hastChildren = (
+    node as { children?: ReadonlyArray<{ type?: string; tagName?: string }> } | undefined
+  )?.children;
+  if (Array.isArray(hastChildren)) {
+    let count = 0;
+    for (const child of hastChildren) {
+      if (child.type === "element" && child.tagName === "li") {
+        count += 1;
+      }
+    }
+    return count;
+  }
+  let count = 0;
+  Children.forEach(children, (child) => {
+    if (isValidElement(child)) {
+      count += 1;
+    }
+  });
+  return count;
 }
 
 function dataColKind(node: unknown): string | undefined {

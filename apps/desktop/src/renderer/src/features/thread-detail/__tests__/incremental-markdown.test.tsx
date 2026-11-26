@@ -63,7 +63,9 @@ const fixtures = {
   fences: "Intro.\n\n```ts\n// [not a ref]\n\nconst text = '**literal**';\n```\n\nEnd.\n\n",
   html: "Intro.\n\n<div>\n\ninside\n\n</div>\n\n<script>bad()</script>\n\n[unsafe](javascript:bad)\n\nEnd.\n\n",
   footnotes: "Intro.\n\nA note[^a].\n\n[^a]: First\n\n    continuation\n\nAnother[^b].\n\n[^b]: Second\n\nEnd.\n\n",
+  anchors: "See [Setup](#setup) and [Second](#setup-1).\n\n## Setup\n\nFirst body.\n\n## Setup\n\nSecond body.\n\n",
   tasks: "Intro.\n\n- [x] first\n\n- [ ] second\n\nEnd.\n\n",
+  multiDigitList: "Intro.\n\n1. One\n2. Two\n3. Three\n4. Four\n5. Five\n6. Six\n7. Seven\n8. Eight\n9. Nine\n10. Ten\n\n99. Ninety-nine\n100. Hundred\n\nEnd.\n\n",
   inline: "Intro.\n\nA **strong _nested_** span and ~~strike~~, ~literal~, \\*escaped*.\n\nA [link](https://example.com/a?q=1&b=2) and ![image](https://example.com/a.png).\n\nEnd.\n\n",
   headings: "Intro.\n\nSetext\n---\n\n# ATX\n\n---\n\n    indented code\n\n    continued\n\nEnd.\n\n",
 };
