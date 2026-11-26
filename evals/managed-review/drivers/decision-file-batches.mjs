@@ -90,7 +90,11 @@ export function collectDecisionFileBatches(scoring, record) {
   return { complete, pending };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1]
+  && path.basename(process.argv[1]) === "decision-file-batches.mjs"
+  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
   const scoring = process.argv[process.argv.indexOf("--scoring") + 1];
   if (!process.argv.includes("--scoring") || !scoring || scoring.startsWith("--")) {
     throw new Error("Usage: decision-file-batches.mjs --scoring <scoring-directory> [--record]");

@@ -341,8 +341,9 @@ describe("managed-review scoring (Jev / local / default) and CLI guards", () => 
       ], { encoding: "utf8" });
       expect(build.status, build.stderr).toBe(0);
 
+      const scorerBundle = fs.realpathSync(path.join(distOut, "direct-decision-scorer.js"));
       const { stdout } = await execFileAsync(process.execPath, [
-        path.join(distOut, "direct-decision-scorer.js"),
+        scorerBundle,
         "--scoring", f.scoring,
         "--decision-endpoint", `http://127.0.0.1:${port}`,
         "--decision-model", "clef-custom-v2",
@@ -408,7 +409,7 @@ describe("managed-review scoring (Jev / local / default) and CLI guards", () => 
       const openAiPort = typeof openAiAddr === "object" && openAiAddr ? openAiAddr.port : 0;
       try {
         const openAiRun = await execFileAsync(process.execPath, [
-          path.join(distOut, "direct-decision-scorer.js"),
+          scorerBundle,
           "--scoring", openaiFixture.scoring,
           "--decision-endpoint", `http://127.0.0.1:${openAiPort}`,
           "--decision-model", "gpt-6-luna-custom",
