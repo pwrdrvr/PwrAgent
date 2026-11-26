@@ -567,7 +567,7 @@ export class AcpAgentClient {
       if (method === "_x.ai/session_notification") {
         // Log the raw shape at debug so a future Grok CLI release that
         // renames the kind or moves the title field surfaces visibly
-        // instead of silently degrading to "ACP session" forever. Kept
+        // instead of silently degrading to "Untitled thread" forever. Kept
         // off the info channel because this fires once per turn-end.
         const update = (params as { update?: { sessionUpdate?: string } })
           .update;
@@ -1366,6 +1366,8 @@ export class AcpAgentClient {
     executionMode: ThreadExecutionMode;
     approvalPolicy?: "deny-all";
     title?: string;
+    titleSource?: AcpSessionMetadata["titleSource"];
+    promptPlaceholderTitle?: true;
     createdAt?: number;
     acpRuntime?: BackendAcpSessionRuntimeState;
     hidden?: boolean;
@@ -1380,6 +1382,7 @@ export class AcpAgentClient {
       previousAgentSessionId?: string;
       mode?: string;
       titleSource?: AcpSessionMetadata["titleSource"];
+      promptPlaceholderTitle?: true;
     };
   }): Promise<AcpSessionMetadata> {
     return await this.withOperation(
@@ -1483,8 +1486,11 @@ export class AcpAgentClient {
       backendId: this.options.backendId,
       sessionId: appSessionId,
       ...(sessionId === appSessionId ? {} : { agentSessionId: sessionId }),
-      title: params.title ?? "ACP session",
-      titleSource: handoff?.titleSource ?? (params.title ? "explicit" : "fallback"),
+      title: params.title ?? "Untitled thread",
+      titleSource: handoff?.titleSource ?? params.titleSource ?? (params.title ? "explicit" : "fallback"),
+      ...(handoff?.promptPlaceholderTitle ?? params.promptPlaceholderTitle
+        ? { promptPlaceholderTitle: true as const }
+        : {}),
       cwd,
       createdAt: params.createdAt ?? now,
       updatedAt: now,
@@ -1689,6 +1695,7 @@ export class AcpAgentClient {
         previousAgentSessionId: protocolSessionIdForMetadata(metadata),
         mode: saved.acpRuntime?.configValues?.mode ?? saved.acpRuntime?.currentModeId,
         titleSource: saved.titleSource,
+        ...(saved.promptPlaceholderTitle ? { promptPlaceholderTitle: true } : {}),
       },
     });
   }
@@ -3963,14 +3970,15 @@ export class AcpAgentClient {
     }
     const currentTitleSource =
       metadata.titleSource ??
-      (metadata.title === "ACP session" || !metadata.title.trim()
+      (!metadata.title.trim() || metadata.title === "Untitled thread"
         ? "fallback"
         : "derived");
-    if (currentTitleSource !== "fallback") {
+    if (currentTitleSource !== "fallback" && metadata.promptPlaceholderTitle !== true) {
       return undefined;
     }
+    const { promptPlaceholderTitle: _placeholder, ...restMetadata } = metadata;
     this.options.store.upsertSession({
-      ...metadata,
+      ...restMetadata,
       title,
       titleSource: "derived",
       updatedAt:

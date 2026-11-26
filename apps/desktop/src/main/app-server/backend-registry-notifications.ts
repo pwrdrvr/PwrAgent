@@ -243,7 +243,7 @@ export function reviewTaskLabel(target: StartReviewRequest["target"]): string {
 /**
  * A thread launched straight from `/review` never runs a user turn, so the
  * title generator has no prompt to name it from and the thread keeps its
- * backend fallback ("ACP session", "New thread") forever. Synthesize the
+ * backend fallback ("Untitled thread", "New thread") forever. Synthesize the
  * prompt from what the launch already knows — the review target plus the
  * repository and branch it runs against — so the generated name reads like
  * "Review remote thread homing against main" rather than a generic placeholder.

@@ -414,6 +414,8 @@ export class ThreadWorkspaceService {
       cwd: session.cwd,
       executionMode: session.executionMode,
       title: session.title,
+      titleSource: session.titleSource,
+      ...(session.promptPlaceholderTitle ? { promptPlaceholderTitle: true } : {}),
       createdAt: session.createdAt,
     }));
   }

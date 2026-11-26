@@ -25,6 +25,8 @@ export type AcpSessionMetadata = {
   agentSessionId?: string;
   title: string;
   titleSource?: AppServerThreadTitleSource;
+  /** The current derived title is the first prompt's stopgap until a generated or provider title replaces it. */
+  promptPlaceholderTitle?: true;
   cwd?: string;
   createdAt: number;
   updatedAt: number;

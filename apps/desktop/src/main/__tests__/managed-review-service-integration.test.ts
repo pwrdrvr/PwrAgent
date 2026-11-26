@@ -1810,7 +1810,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       titleSource: "fallback",
       cwd: "/repo/worktree",
       createdAt: 1000,
@@ -1896,7 +1896,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       titleSource: "fallback",
       cwd: "/repo/worktree",
       createdAt: 1000,
@@ -2094,7 +2094,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo/worktree",
       createdAt: 1000,
       updatedAt: 1000,
@@ -2158,7 +2158,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo/worktree",
       createdAt: 1000,
       updatedAt: 1000,
@@ -2220,7 +2220,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo/worktree",
       createdAt: 1000,
       updatedAt: 1000,

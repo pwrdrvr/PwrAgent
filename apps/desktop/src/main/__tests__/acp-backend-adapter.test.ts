@@ -1067,7 +1067,7 @@ describe("acpSessionToThreadSummary", () => {
   const session: AcpSessionMetadata = {
     backendId: "acp:kimi",
     sessionId: "kimi-1",
-    title: "ACP session",
+    title: "Untitled thread",
     createdAt: 1,
     updatedAt: 1,
     executionMode: "default",

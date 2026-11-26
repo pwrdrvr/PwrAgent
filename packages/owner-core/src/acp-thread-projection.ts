@@ -23,7 +23,7 @@ export function projectAcpSessionThread(
     title: session.title,
     titleSource:
       session.titleSource ??
-      (session.title === "ACP session" ? "fallback" : "derived"),
+      (!session.title.trim() || session.title === "Untitled thread" ? "fallback" : "derived"),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     archivedAt: session.archivedAt,

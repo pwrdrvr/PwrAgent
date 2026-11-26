@@ -250,7 +250,7 @@ export interface ThreadDirectoryServiceHost extends Pick<RegistryHostPorts,
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
-  }): void;
+  }): Promise<void> | void;
   startReview(
     params: StartReviewRequest,
     trustedSnapshot?: boolean,
@@ -1878,10 +1878,28 @@ export class ThreadDirectoryService {
     }
     operation?.check();
     operation?.update({ phase: "creating" });
+    const launchpadAgent = request.agent ?? launchpad.agent;
+    const launchpadPromptInput =
+      request.input
+      ?? (launchpad.prompt.trim()
+        ? [{ type: "text" as const, text: launchpad.prompt }]
+        : []);
+    const initialPromptTitle = isAcpBackendId(launchpad.backend) && !launchpadAgent?.name?.trim()
+      ? shortenDerivedThreadTitle(
+          request.reviewTarget
+            ? reviewThreadTitlePrompt({
+                branchName: launchpad.branchName,
+                directoryLabel: launchpad.directoryLabel,
+                target: request.reviewTarget,
+              })
+            : extractFirstMeaningfulTextInput(launchpadPromptInput),
+        )
+      : undefined;
     const startThreadResponse = await this.host().startThread({
       backend: launchpad.backend,
       executionMode: launchpad.executionMode,
-      agent: request.agent ?? launchpad.agent,
+      agent: launchpadAgent,
+      ...(initialPromptTitle ? { initialPromptTitle } : {}),
       cwd: workspace.cwd,
       linkedDirectories,
       model: launchpad.model,

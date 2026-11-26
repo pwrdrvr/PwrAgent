@@ -6407,6 +6407,9 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     cwd?: string;
     executionMode: ThreadExecutionMode;
+    title?: string;
+    titleSource?: AcpSessionMetadata["titleSource"];
+    promptPlaceholderTitle?: true;
     acpRuntime?: BackendAcpSessionRuntimeState;
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpRegistrationSource;
@@ -6434,6 +6437,9 @@ export class DesktopBackendRegistry {
     const session = await this.withArchiveWorkspaceWrite(params.cwd ? [params.cwd] : [], async () => await client.startSession({
       cwd: params.cwd,
       executionMode: initialExecutionMode,
+      ...(params.title !== undefined ? { title: params.title } : {}),
+      ...(params.titleSource !== undefined ? { titleSource: params.titleSource } : {}),
+      ...(params.promptPlaceholderTitle ? { promptPlaceholderTitle: true } : {}),
       acpRuntime: effectiveAcpRuntime,
       additionalMcpRegistration: params.mcpRegistration,
       ...(params.hidden ? { hidden: true } : {}),
@@ -7032,17 +7038,25 @@ export class DesktopBackendRegistry {
         })
       : (await this.threadInspectionTools.readThreadInspectionSummaryForMutation({ backend, threadId, fresh: true }))?.title,
     readTitle: async (identity) => await this.findThreadForTitleGeneration(identity),
-    renameProvider: async (request, titleSource) => {
+    renameProvider: async (request, titleSource, options) => {
       const backend = request.backend ?? "codex";
       if (isAcpBackendId(backend)) {
         const nextName = request.name.trim();
         if (!nextName) throw new Error("Thread name cannot be blank.");
         const session = this.acpBackend.getSession(backend, request.threadId);
         if (!session) throw new Error("Selected ACP thread was not found.");
+        if (options?.guard) {
+          const current = acpSessionToThreadSummary(session);
+          if (!options.guard(current)) {
+            return { threadId: request.threadId, skipped: true, thread: current };
+          }
+        }
+        const { promptPlaceholderTitle: _previousPlaceholder, ...restSession } = session;
         this.acpBackend.upsertSession({
-          ...session,
+          ...restSession,
           title: nextName,
           titleSource,
+          ...(options?.promptPlaceholder ? { promptPlaceholderTitle: true } : {}),
           updatedAt: Math.max(session.updatedAt, Date.now()),
         });
         return { threadId: request.threadId };
@@ -8896,6 +8910,11 @@ export class DesktopBackendRegistry {
     rerunCodexEnvironmentSetup?: boolean;
     linkedDirectories?: LinkedDirectorySummary[];
     /**
+     * Initial prompt-derived placeholder title for a newly created ACP thread
+     * started with an immediate prompt (for example from a launchpad).
+     */
+    initialPromptTitle?: string;
+    /**
      * Report the start to every list while its workspace is prepared, as a
      * starting row (`thread/start/pending`). For callers with no row of
      * their own: a launchpad draws its own.
@@ -9317,6 +9336,9 @@ export class DesktopBackendRegistry {
     });
 
     const agentName = request.agent?.name?.trim();
+    const initialPromptTitle = !agentName && isAcpBackendId(backend)
+      ? request.initialPromptTitle?.trim() || undefined
+      : undefined;
     let gitBranch: string | undefined;
     let currentMigration: DesktopProviderThreadModelMigration | undefined;
     const metadata: Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure"> = {
@@ -9341,6 +9363,13 @@ export class DesktopBackendRegistry {
             backend: backend as AcpBackendId,
             cwd,
             executionMode: effectiveExecutionMode,
+            ...(initialPromptTitle
+              ? {
+                  title: initialPromptTitle,
+                  titleSource: "derived" as const,
+                  promptPlaceholderTitle: true as const,
+                }
+              : {}),
             acpRuntime,
             reasoningEffort: modelSettings.reasoningEffort,
             mcpRegistration: acpMcpRegistration,
@@ -9393,8 +9422,8 @@ export class DesktopBackendRegistry {
           {
             id: threadId,
             source: backend,
-            title: agentName || "Untitled thread",
-            titleSource: "fallback",
+            title: agentName || initialPromptTitle || "Untitled thread",
+            titleSource: initialPromptTitle ? "derived" : "fallback",
             projectKey: cwd,
             createdAt: startedAt,
             updatedAt: startedAt,
@@ -20086,8 +20115,8 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
-  }): void {
-    this.threadTitles.schedule(params);
+  }): Promise<void> {
+    return this.threadTitles.schedule(params);
   }
 
   private schedulePendingThreadTitleGenerationFromLifecycle(params: {
@@ -20399,6 +20428,13 @@ export class DesktopBackendRegistry {
         const metadata = await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: params.threadId });
         return thread.archivedAt === undefined ? this.withObservedThreadName({ ...thread, ...projectOwnerThreadTitle(thread, metadata) }) : undefined;
       }).catch(() => undefined);
+    }
+    if (isAcpBackendId(params.backend)) {
+      const session = this.acpBackend.getSession(params.backend, params.threadId);
+      if (!session || session.archivedAt !== undefined || session.hidden) {
+        return undefined;
+      }
+      return acpSessionToThreadSummary(session);
     }
     const activeThreads = await this.listThreads({
       backend: params.backend,

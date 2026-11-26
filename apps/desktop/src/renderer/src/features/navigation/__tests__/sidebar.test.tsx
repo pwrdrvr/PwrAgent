@@ -9035,7 +9035,7 @@ describe("Sidebar", () => {
       ...sharedThread,
       id: "session-1",
       source: "acp:gemini" as const,
-      title: "ACP session",
+      title: "Untitled thread",
       linkedDirectories: [],
     };
     const acpBackend: BackendSummary = {
@@ -9069,7 +9069,7 @@ describe("Sidebar", () => {
       />
     );
 
-    const threadRowCard = threadCard(screen.getByText("ACP session"));
+    const threadRowCard = threadCard(screen.getByText("Untitled thread"));
     fireEvent.contextMenu(threadRowCard, { clientX: 12, clientY: 34 });
     fireEvent.click(screen.getByRole("menuitem", { name: "Rename Thread" }));
 

@@ -1759,7 +1759,7 @@ describe("AcpSessionReplayNormalizer", () => {
       }),
     ).toBe("Refactor toolchain config");
     // Empty/whitespace summary still bails to undefined so the existing
-    // fallback path keeps the seed title (e.g. "ACP session").
+    // fallback path keeps the seed title (e.g. "Untitled thread").
     expect(
       readAcpTopicTitle({
         sessionUpdate: "session_summary_generated",
