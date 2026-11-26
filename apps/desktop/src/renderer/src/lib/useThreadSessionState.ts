@@ -2760,9 +2760,12 @@ function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason
   }
 
   if (session.expectOwnUpdate) {
+    // A review card can survive its turn while replay catches up, and a
+    // local header may never match the owner's label. Review activity is
+    // tracked by the submission status and the active turn above.
     reasons.push(
       ...session.optimisticEntries
-        .filter(isLiveOptimisticEntry)
+        .filter((entry) => entry.type !== "review" && isLiveOptimisticEntry(entry))
         .map(summarizeOptimisticEntryReason)
     );
   }
