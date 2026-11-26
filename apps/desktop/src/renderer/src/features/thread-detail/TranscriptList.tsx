@@ -95,7 +95,6 @@ import {
 import { approvalDisplayCommand } from "./approval-display-command";
 import { readRendererSequence } from "./live-transcript-activity";
 import { usePendingMarkdownPreview } from "./usePendingMarkdownPreview";
-import { isPendingCodexBrowserCompletion } from "./codex-browser-completion";
 
 type TranscriptViewport = {
   distanceFromBottom: number;
@@ -738,13 +737,7 @@ export function TranscriptList(props: TranscriptListProps) {
     () => pendingEntryLinkSource(props.threadLinkSource, localInstanceId),
     [localInstanceId, props.threadLinkSource],
   );
-  const pendingAssistant = props.pendingAssistantMessage;
-  const pendingAssistantPreview = usePendingMarkdownPreview(
-    props.threadId,
-    pendingAssistant && !isPendingCodexBrowserCompletion(pendingAssistant, props.parentThreadBackend)
-      ? pendingAssistant
-      : undefined,
-  );
+  const pendingAssistantPreview = usePendingMarkdownPreview(props.threadId, props.pendingAssistantMessage);
   const skills = props.skills ?? EMPTY_SKILLS;
   const agentCommandsStatus = props.pendingStatusText
     ? undefined

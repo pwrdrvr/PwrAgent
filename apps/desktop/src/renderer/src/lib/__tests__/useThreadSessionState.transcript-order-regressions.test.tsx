@@ -1,4 +1,4 @@
-import { act, cleanup, renderHook } from "@testing-library/react";
+import { act, cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
@@ -9,6 +9,7 @@ import type {
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import type { DesktopApi } from "../desktop-api";
 import { useThreadSessionState } from "../useThreadSessionState";
+import { TranscriptList } from "../../features/thread-detail/TranscriptList";
 
 afterEach(() => {
   cleanup();
@@ -116,6 +117,74 @@ function entryKeys(entries: readonly AppServerThreadEntry[]): string[] {
 }
 
 describe("useThreadSessionState transcript ordering regressions (MBT shrunk counterexamples)", () => {
+  it("keeps a browser completion hidden across MCP progress until its Codex item completes", async () => {
+    const session = await mountSession({ backend: "codex", supportsPagination: true, snapshot: () => [] });
+    const transcript = () => (
+      <TranscriptList
+        activeTurnId={session.result.current.activeTurnId}
+        entries={session.result.current.entries}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+        parentThreadBackend="codex"
+        pendingAssistantMessage={session.result.current.pendingAssistantMessage}
+      />
+    );
+    const view = render(transcript());
+    const title = "Checked the preview";
+    const prefix = '::browser-complete{title="Checked';
+    try {
+      act(() => {
+        session.emit("turn/started", {
+          turn: { id: "turn-1", status: "in_progress", startedAt: BASE_NOW },
+        });
+        session.emit("item/started", {
+          turnId: "turn-1",
+          item: { id: "tool", type: "mcpToolCall", server: "browser", tool: "inspect", status: "inProgress" },
+        });
+        session.emit("item/started", {
+          turnId: "turn-1",
+          item: { id: "completion", type: "agentMessage", text: "", phase: "commentary" },
+        });
+        session.emit("item/agentMessage/delta", {
+          turnId: "turn-1", itemId: "completion", delta: prefix, phase: "commentary",
+        });
+      });
+      view.rerender(transcript());
+      expect(view.queryByText(prefix)).toBeNull();
+
+      act(() => {
+        session.emit("item/mcpToolCall/progress", {
+          turnId: "turn-1", itemId: "tool", message: "Inspection still running",
+        });
+      });
+      view.rerender(transcript());
+      expect(view.queryByText(prefix)).toBeNull();
+
+      act(() => {
+        session.emit("item/agentMessage/delta", {
+          turnId: "turn-1", itemId: "completion", delta: ' the preview"}',
+        });
+      });
+      view.rerender(transcript());
+      expect(view.queryByText(/browser-complete|the preview/)).toBeNull();
+
+      act(() => {
+        session.emit("item/completed", {
+          turnId: "turn-1",
+          item: { id: "completion", type: "agentMessage", text: prefix + ' the preview"}', phase: "commentary" },
+        });
+      });
+      view.rerender(transcript());
+      expect(view.getByText(title).classList.contains("transcript-activity__label")).toBe(true);
+      expect(view.queryByText(/browser-complete/)).toBeNull();
+      expect(entryKeys(session.result.current.entries)).toEqual(["tool", "completion"]);
+    } finally {
+      view.unmount();
+      session.close();
+    }
+  });
+
   it("keeps a managed review start card above its tool calls", async () => {
     const session = await mountSession({
       backend: "acp:antigravity",
