@@ -42,7 +42,7 @@ export class RegistryTurnState {
     backend: Exclude<AppServerBackendKind, "codex">; threadId: string; state: CodexThreadActivity;
   }>();
   // These entries genuinely belong to other providers, not to Codex's model.
-  private readonly otherProviderRegistrations = new Map<string, number>();
+  private readonly otherProviderRegistrations = new Map<string, { turn: TurnIdentity; order: number }>();
   private readonly otherProviderOrigins = new Set<StartingTurnOrigin>();
   private readonly turnInputSources = new Map<string, TurnInputSourceRecord>();
   private readonly deletionListeners = new Set<(key: string) => void>();
@@ -132,7 +132,9 @@ export class RegistryTurnState {
     const key = typeof reference === "string" ? reference : buildActiveTurnKey(reference.backend, reference.threadId, reference.turnId);
     if (!turn) throw new Error(`Invalid registered turn identity: ${key}`);
     if (turn.backend === "codex") this.transition(turn.threadId, { type: "announced", turnId: turn.turnId, order: ++this.order, delivery: delivery?.owner });
-    else if (!this.otherProviderRegistrations.has(key)) this.otherProviderRegistrations.set(key, ++this.order);
+    else if (!this.otherProviderRegistrations.has(key)) {
+      this.otherProviderRegistrations.set(key, { turn: { ...turn }, order: ++this.order });
+    }
   }
 
   unregisterTurn(reference: TurnReference): boolean {
@@ -156,8 +158,14 @@ export class RegistryTurnState {
       : this.otherProviderRegistrations.has(key);
   }
 
+  registeredOtherProviderTurnsForThread(thread: Pick<TurnIdentity, "backend" | "threadId">): TurnIdentity[] {
+    return [...this.otherProviderRegistrations.values()]
+      .filter(({ turn }) => turn.backend === thread.backend && turn.threadId === thread.threadId)
+      .map(({ turn }) => turn);
+  }
+
   registeredTurnKeys(): string[] {
-    const entries = [...this.otherProviderRegistrations];
+    const entries = Array.from(this.otherProviderRegistrations, ([key, { order }]): [string, number] => [key, order]);
     for (const [threadId, state] of this.activities) {
       for (const turn of state.turns) {
         if (turn.phase === "announced") entries.push([buildActiveTurnKey("codex", threadId, turn.turnId), turn.registration]);

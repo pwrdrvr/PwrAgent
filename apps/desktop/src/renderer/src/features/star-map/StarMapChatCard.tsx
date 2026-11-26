@@ -794,6 +794,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             // ordinary prompt content and may accompany attachments.
             requiresNoAttachments:
               commandBackend === "codex" && commandName === "compact",
+            skill: command.skill,
             sourceLabel: formatBackendLabel(commandBackend),
           };
         }),
@@ -810,6 +811,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       ensureSkillsLoaded: (options) => {
         void ensureSkillsLoaded(options);
       },
+      skillCatalogTargetKey: threadSkills.skillCatalogTargetKey,
       skillLoading: threadSkills.loading,
       searchRemoteThreads: desktopApi?.jumpSearchRemoteThreads,
       skills: threadSkills.skills,
@@ -828,6 +830,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       navigationSources.threads,
       supportsReview,
       threadSkills.providerCommands,
+      threadSkills.skillCatalogTargetKey,
       threadSkills.loading,
       threadSkills.skills,
       thread,

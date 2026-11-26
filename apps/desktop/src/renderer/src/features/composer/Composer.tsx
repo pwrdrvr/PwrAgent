@@ -141,7 +141,6 @@ import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
   MoveThreadToMainCheckoutResponse,
-  AppServerAvailableCommandSummary,
   AppServerBackendKind,
   AppServerReviewTarget,
   AppServerSkillSummary,
@@ -238,6 +237,7 @@ import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import { LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { prefersClaudeCodeReview, resolveReviewRunMode } from "../../lib/review-run-mode";
@@ -404,7 +404,7 @@ import {
 } from "./ComposerDropdown";
 import { providerPickerDropdownOptions } from "./provider-picker-options";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
-import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
+import { isSkillOriginShortcut, SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import {
   canPushToRemoteTarget,
@@ -465,6 +465,7 @@ export type ComposerProps = {
   onOpenCodexSkillProfiles?: () => void;
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  bindOptimisticReviewEntryToTurn?: (id: string, turnId: string) => void;
   beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage?: (
     text: string,
@@ -612,7 +613,8 @@ export type ComposerProps = {
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
-  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  skillCatalogTargetKey?: string;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   pendingRequestActive?: boolean;
   pendingUserInputActive?: boolean;
@@ -768,7 +770,7 @@ export type ComposerProps = {
   setExecutionModeError?: string;
   skillError?: string;
   skillLoading?: boolean;
-  providerCommands?: AppServerAvailableCommandSummary[];
+  providerCommands?: ThreadProviderCommand[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
   integratedTerminal?: ComposerTerminalToggleProps;
@@ -1050,6 +1052,7 @@ type SlashCommandSuggestion = {
   id: string;
   insertText: string;
   label: string;
+  skill?: AppServerSkillSummary;
   source: "provider" | "pwragent";
   sourceLabel: string;
 };
@@ -1207,7 +1210,7 @@ const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
 ];
 
 function providerCommandToSlashSuggestion(
-  command: AppServerAvailableCommandSummary,
+  command: ThreadProviderCommand,
   backends: BackendSummary[] = [],
 ): SlashCommandSuggestion {
   const commandName = command.name.startsWith("/")
@@ -1222,6 +1225,7 @@ function providerCommandToSlashSuggestion(
     insertText: `/${commandName}`,
     description: command.description ?? "Provider command",
     aliases: command.aliases,
+    skill: command.skill,
     ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
     source: "provider",
     sourceLabel,
@@ -7232,10 +7236,13 @@ function useComposerController(props: ComposerProps) {
     };
   }, [activeAutocompleteIndex, autocompleteKind]);
 
+  const onEnsureSkillsLoaded = props.onEnsureSkillsLoaded;
+  const isSlashSkillPicker = !trigger && Boolean(slashTrigger);
+  const skillPickerScope = `${composerScopeKey}:${props.skillCatalogTargetKey ?? props.thread?.source ?? props.launchpad?.backend}`;
   const skillPickerLoadKey = trigger
-    ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:skills:${trigger.start}`
+    ? `${skillPickerScope}:skills:${trigger.start}`
     : slashTrigger
-      ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:slash:${slashTrigger.start}`
+      ? `${skillPickerScope}:slash:${slashTrigger.start}`
       : undefined;
   const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -7243,15 +7250,16 @@ function useComposerController(props: ComposerProps) {
       loadedSkillPickerRef.current = undefined;
       return;
     }
-    if (!props.onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
+    if (!onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
       return;
     }
     // Query edits and streamed thread summaries can replace the callback.
     // Check freshness once per trigger opening, including an empty list.
     loadedSkillPickerRef.current = skillPickerLoadKey;
-    void props.onEnsureSkillsLoaded?.();
+    void onEnsureSkillsLoaded(isSlashSkillPicker ? { includeCommands: true } : undefined);
   }, [
-    props.onEnsureSkillsLoaded,
+    onEnsureSkillsLoaded,
+    isSlashSkillPicker,
     skillPickerLoadKey,
   ]);
 
@@ -7967,8 +7975,12 @@ function useComposerController(props: ComposerProps) {
       });
       // Claude publishes the /code-review user message when it accepts the
       // turn. It has no review-start item to replace the temporary header.
-      if (claudeCodeReview && optimisticReviewId) {
-        props.removeOptimisticMessage?.(optimisticReviewId);
+      if (optimisticReviewId) {
+        if (claudeCodeReview) {
+          props.removeOptimisticMessage?.(optimisticReviewId);
+        } else {
+          props.bindOptimisticReviewEntryToTurn?.(optimisticReviewId, response.turnId);
+        }
       }
       if (pickedReviewer) {
         // Only an explicit pick is worth replaying; recording inherited
@@ -13214,6 +13226,16 @@ function useComposerController(props: ComposerProps) {
         return;
       }
 
+      if (autocompleteKind === "slash" && isSkillOriginShortcut(event)) {
+        const skill = filteredSlashCommands[activeSlashIndex]?.skill;
+        const anchor = autocompleteOptionRefs.current[activeSlashIndex];
+        if (skill && anchor && skillOriginCard.openFromKeyboard(skill, anchor, event.currentTarget)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+      }
+
       const updateActiveAutocompleteIndex = (
         updater: (current: number) => number,
       ): void => {
@@ -15200,6 +15222,8 @@ function useComposerController(props: ComposerProps) {
               ref={(node) => {
                 autocompleteOptionRefs.current[index] = node;
               }}
+              aria-describedby={command.skill ? skillOriginCard.describedBy(command.skill) : undefined}
+              aria-keyshortcuts={command.skill ? "Shift+F10" : undefined}
               aria-selected={index === activeSlashIndex}
               className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
               role="option"
@@ -15227,11 +15251,18 @@ function useComposerController(props: ComposerProps) {
                     {command.argumentHint}
                   </span>
                 ) : null}
-                <span
-                  className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
-                >
-                  {command.sourceLabel}
-                </span>
+                {command.skill?.origin ? (
+                  <SkillOriginChip
+                    origin={command.skill.origin}
+                    {...skillOriginCard.chipHandlers(command.skill)}
+                  />
+                ) : (
+                  <span
+                    className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
+                  >
+                    {command.sourceLabel}
+                  </span>
+                )}
               </span>
               <span className="composer__autocomplete-meta">
                 {command.description}

@@ -13,6 +13,29 @@ import {
 } from "../transcript-review-presentation";
 
 describe("native review prompt presentation", () => {
+  it.each(["history", "tail"] as const)("keeps a legacy reply that matches a receipt-bound placeholder in the %s", (placement) => {
+    const text = "Review changes against main";
+    const earlier: AppServerThreadMessageEntry = { type: "message", id: "earlier", role: "assistant", text };
+    const placeholder: AppServerThreadEntry = {
+      type: "review", id: "optimistic-review-start", review: text, displayText: text,
+      turn: { id: "accepted-review" },
+    };
+    const index = createTranscriptReviewHistoryIndex();
+    addTranscriptReviewSegmentToIndex(index, summarizeTranscriptReviewSegment(
+      placement === "history" ? [earlier, placeholder] : [earlier],
+      [earlier],
+    ));
+    const result = deriveTranscriptReviewPresentation({
+      historyEvents: iterateTranscriptReviewHistoryEvents(index), historyIndex: index,
+      tailEntries: placement === "tail" ? [placeholder] : [],
+      tailMessages: [],
+    });
+    // Receipt binding cannot hide an existing answer with the same text.
+    expect([...result.excludedHistoryEntryIds]).toEqual([]);
+    expect([...result.excludedHistoryMessageIds]).toEqual([]);
+    expect(result.tailEntries).toEqual(placement === "tail" ? [placeholder] : []);
+  });
+
   it("hides a complete inline envelope in history without native review markers", () => {
     const text = "<pwragent-inline-review-instructions>\nInspect this diff.\n</pwragent-inline-review-instructions>";
     const internal: AppServerThreadMessageEntry = { type: "message", id: "internal", role: "user", text };

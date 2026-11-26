@@ -90,6 +90,8 @@ function oracleClassifySkillOrigin(
       return { kind: "built-in", label: "Built-in" };
     case "admin":
       return { kind: "admin", label: "Admin" };
+    case "antigravity-user":
+      return { kind: "personal", label: "Personal" };
     case "user":
       if (
         options.bundledSkillRoots?.some(
@@ -247,6 +249,7 @@ const scopeArb = fc.constantFrom(
   " user ",
   "system",
   "admin",
+  "antigravity-user",
   "local",
 );
 
@@ -334,6 +337,15 @@ describe("withSkillOrigins differential oracle", () => {
       ),
       { numRuns: 100 },
     );
+  });
+
+  it("keeps Antigravity personal skills personal when their home directory is linked", () => {
+    const home = [{ label: "Home", path: "/home/operator" }];
+    const skills = withSkillOrigins<AppServerSkillSummary>([
+      { name: "repo", path: "/home/operator/project/.agents/skills/repo/SKILL.md", scope: "repo" },
+      { name: "personal", path: "/home/operator/.gemini/skills/personal/SKILL.md", scope: "antigravity-user" },
+    ], home);
+    expect(skills.map(({ origin }) => origin?.kind)).toEqual(["project", "personal"]);
   });
 
   it("preserves worktree precedence, early-directory ties, UNC casing ties in both orderings, and slash-root matching on the indexed path", () => {

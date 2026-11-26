@@ -4275,6 +4275,7 @@ function DesktopAppShell(props: {
         activeTurnStartedAt: session.activeTurnStartedAt,
         terminals,
         addOptimisticReviewEntry: session.addOptimisticReviewEntry,
+        bindOptimisticReviewEntryToTurn: session.bindOptimisticReviewEntryToTurn,
         beginReviewSubmission: session.beginReviewSubmission,
         addOptimisticUserMessage: session.addOptimisticUserMessage,
         bindOptimisticUserMessageToTurn: session.bindOptimisticUserMessageToTurn,
@@ -4403,6 +4404,7 @@ function DesktopAppShell(props: {
         setExecutionModeError: navigation.setThreadExecutionModeError,
         setThreadModelSettingsError: navigation.setThreadModelSettingsError,
         skillError: skills.error,
+        skillCatalogTargetKey: skills.skillCatalogTargetKey,
         skillLoading: skills.loading,
         codexSkillProfiles: remoteSkillProfileOwner
           ? skills.response?.codexSkillProfiles

@@ -41,10 +41,16 @@ async function findUnresolvedStaticImport(environments) {
       if (!module.file || !deps?.length) continue;
       const linked = new Set([...module.importedModules].flatMap(({ id, url }) => [id, url]));
       for (const specifier of deps) {
-        // Vite can wrap external Node IDs in a browser URL. The wrapper
-        // is not a filesystem import and node: builtins need no graph edge.
-        const builtinId = specifier.replace(/^\/@id\//, "");
-        if ((!specifier.startsWith(".") && linked.has(specifier)) || isBuiltin(builtinId)
+        // Vite encodes virtual and external IDs in transformResult.deps as
+        // `/@id/<id>` with `\0` replaced by `__x00__` (Vite's `unwrapId`),
+        // while `module.importedModules` stores the unwrapped ID (e.g. Oxc's
+        // `\0@oxc-project+runtime@.../helpers/esm/usingCtx.js` helper for
+        // `using` declarations) and node: builtins need no graph edge.
+        const unwrapped = specifier.startsWith("/@id/")
+          ? specifier.slice(5).replace("__x00__", "\0")
+          : specifier;
+        if ((!specifier.startsWith(".") && (linked.has(specifier) || linked.has(unwrapped)))
+          || isBuiltin(unwrapped)
           || /^(?:https?:|data:)/.test(specifier)) continue;
         // SSR can preserve an unresolved static specifier without throwing.
         // External dependencies also lack an edge, so ask Vite to resolve
@@ -250,8 +256,9 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
         && !file.startsWith(e2eDirectory) && (status === "D" || !isTypeOnly(root, file)));
       for (const file of edges.keys()) {
         const testSide = testSidePath.test(file) || specFiles.has(file);
-        const reason = testSide && enumeratesFiles.test(text(file)) ? "always run: enumerates files"
-          : product && (bundlesSource.test(text(file)) || testSide && loadsSource.test(text(file)))
+        const content = testSide || product ? text(file) : "";
+        const reason = testSide && enumeratesFiles.test(content) ? "always run: enumerates files"
+          : product && (bundlesSource.test(content) || testSide && loadsSource.test(content))
             ? "runs on product changes: executes source outside the Vitest graph"
             : undefined;
         if (!reason) continue;

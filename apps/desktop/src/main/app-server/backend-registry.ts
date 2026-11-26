@@ -1,3 +1,4 @@
+import { discoverAntigravitySkillCatalog } from "../acp/antigravity-skills";
 import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import { isResourceCheckoutCleanupCall, type CheckoutToolHandler, type CheckoutToolMode } from "../agent-tools/pwragent-resource-checkout-agent-tools";
@@ -23,6 +24,7 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
+import { resolveLocalReviewWorktreeRoot } from "./review-workspace-guard";
 import type { AgentToolMcpCatalogId } from "../agent-tools/agent-tool-mcp-server";
 import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
 import { isOnlyTaskMonitorWake, type SubAgentMonitorService } from "./subagent-monitor-service";
@@ -231,6 +233,7 @@ import {
   type ArchiveWorktreeResponse,
   type ArchiveThreadRequest,
   type ArchiveThreadResponse,
+  type AppServerListSkillsRequest,
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingThreadStart,
@@ -854,6 +857,7 @@ import {
   buildTurnStartReservationKey,
   executionModeQueueKey,
   formatQuitThreadKey,
+  isAcpPromptTurnId,
   parseActiveTurnKey,
   parseReservedAcpStartThreadKey,
   parseThreadIdFromThreadTurnKeyBody,
@@ -888,8 +892,8 @@ import {
 } from "./backend-registry-notification-values";
 import {
   TOKEN_MISER_MANAGED_CAPABILITY_REASON,
+  buildClaudeConnectionMcpServerName,
   buildCodexConnectionMcpConfig,
-  buildCodexConnectionMcpServerName,
   buildCodexParentDynamicToolSpecs,
   buildCodexPdfMcpConfig,
   buildCodexPdfMcpDisabledConfig,
@@ -5559,6 +5563,14 @@ export class DesktopBackendRegistry {
     return resolved;
   }
 
+  private async resolveAcpAvailableCommands(params: {
+    backend: AcpBackendId;
+    cwds: Array<string | undefined>;
+    allowProbe?: boolean;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    return (await this.resolveAcpAvailableCommandCatalog(params)).commands;
+  }
+
   /**
    * Serve an ACP agent's slash commands for a request with no session behind
    * it. Cache first (free, and kept fresh by every real session's
@@ -5572,11 +5584,11 @@ export class DesktopBackendRegistry {
    * any more, and ignoring the ones already on disk lets an affected profile
    * heal on the next request.
    */
-  private async resolveAcpAvailableCommands(params: {
+  private async resolveAcpAvailableCommandCatalog(params: {
     backend: AcpBackendId;
     cwds: Array<string | undefined>;
     allowProbe?: boolean;
-  }): Promise<AppServerAvailableCommandSummary[]> {
+  }): Promise<{ commands: AppServerAvailableCommandSummary[]; cwd?: string }> {
     const repositoryPaths = await this.resolveAcpCommandRepositoryPaths(
       params.cwds,
     );
@@ -5586,22 +5598,25 @@ export class DesktopBackendRegistry {
         repositoryPath,
       );
       if (cached && cached.commands.length > 0) {
-        return cached.commands;
+        return {
+          commands: cached.commands,
+          ...(params.backend === "acp:antigravity" && cached.workspaceCwd ? { cwd: cached.workspaceCwd } : {}),
+        };
       }
     }
 
-    if (params.allowProbe === false) {
-      return [];
-    }
-
     const probeTarget = repositoryPaths[0];
-    if (!probeTarget) {
-      return [];
+    if (params.allowProbe === false || !probeTarget) {
+      return { commands: [] };
     }
-    return await this.probeAcpAvailableCommands({
+    const commands = await this.probeAcpAvailableCommands({
       backend: params.backend,
       repositoryPath: probeTarget,
     });
+    return {
+      commands,
+      ...(params.backend === "acp:antigravity" ? { cwd: path.resolve(probeTarget) } : {}),
+    };
   }
 
   /**
@@ -5763,6 +5778,7 @@ export class DesktopBackendRegistry {
           backendId: params.backend,
           repositoryPath: params.repositoryPath,
           commands,
+          ...(params.backend === "acp:antigravity" ? { workspaceCwd: path.resolve(params.repositoryPath) } : {}),
           observedAt: Date.now(),
         });
         return commands;
@@ -5845,7 +5861,7 @@ export class DesktopBackendRegistry {
     }
 
     const backend = event.backend;
-    const { commands, threadId } = event.notification.params;
+    const { commands, threadId, cwd: workspaceCwd } = event.notification.params;
     // An empty update is treated as "no news", not as "this repo has no
     // commands": agents emit one during session setup before their command
     // registry is populated, and letting that clobber a good cache would empty
@@ -5875,6 +5891,9 @@ export class DesktopBackendRegistry {
           backendId: backend,
           repositoryPath,
           commands,
+          ...(backend === "acp:antigravity" && typeof workspaceCwd === "string" && path.isAbsolute(workspaceCwd)
+            ? { workspaceCwd }
+            : {}),
           observedAt: Date.now(),
         });
       })
@@ -5889,29 +5908,71 @@ export class DesktopBackendRegistry {
 
   async listSkills(params: {
     backend?: AppServerBackendKind;
+    catalog?: AppServerListSkillsRequest["catalog"];
     cwd?: string;
     cwds?: string[];
     threadId?: string;
+    antigravityWorkspace?: {
+      cwds: string[];
+      resolvePath?: (file: string) => Promise<string | undefined>;
+    };
   } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
     const backend = params.backend ?? "codex";
     if (isAcpBackendId(backend)) {
       const session = params.threadId
         ? this.acpBackend.getSession(backend, params.threadId)
         : undefined;
-      const sessionCommands = session?.availableCommands ?? [];
-      if (sessionCommands.length > 0) {
-        return { data: [{ commands: sessionCommands, skills: [] }] };
+      const authorized = backend === "acp:antigravity" ? params.antigravityWorkspace : undefined;
+      let cwds: Array<string | undefined> = authorized?.cwds ?? [session?.cwd, params.cwd, ...(params.cwds ?? [])];
+      let commandSession = session;
+      if (backend === "acp:antigravity" && params.threadId) {
+        const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: params.threadId });
+        const directories = overlay?.extraLinkedDirectories;
+        const workspaceCwd = resolveThreadWorkspaceCwd(session && acpSessionToThreadSummary(session), directories);
+        if (directories?.some(isHandoffDirectory)) {
+          // The owner’s handoff supersedes both a stale provider session and
+          // any pre-handoff paths sent by a viewer.
+          if (!authorized) {
+            cwds = [workspaceCwd, ...directories.filter((directory) => !isHandoffDirectory(directory))
+              .map(({ worktreePath, path }) => worktreePath ?? path)];
+          }
+          const providerCwd = session?.antigravityPrimaryCwd ?? session?.cwd;
+          if (session?.requiresAgentSessionRebind || !providerCwd || !workspaceCwd
+            || path.resolve(providerCwd) !== path.resolve(workspaceCwd)) {
+            commandSession = undefined;
+          }
+        } else if (!authorized) {
+          cwds[0] = workspaceCwd ?? session?.cwd;
+        }
+      }
+      const readCommands = async (): Promise<AppServerListSkillsResponse["data"][number]> => {
+        if (!commandSession?.availableCommands?.length) {
+          // The provider's own loader cannot honor a directory-limited file
+          // pull. A remote restricted request may only use live commands.
+          if (authorized?.resolvePath) return { commands: [], skills: [] };
+          if (backend === "acp:antigravity") {
+            return { ...await this.resolveAcpAvailableCommandCatalog({ backend, cwds }), skills: [] };
+          }
+          return { commands: await this.resolveAcpAvailableCommands({ backend, cwds }), skills: [] };
+        }
+        const cwd = backend === "acp:antigravity" && !commandSession.requiresAgentSessionRebind
+          ? commandSession.antigravityPrimaryCwd ?? commandSession.cwd
+          : undefined;
+        if (cwd && authorized?.resolvePath && !await authorized.resolvePath(cwd)) {
+          return { commands: [], skills: [] };
+        }
+        return { commands: commandSession.availableCommands, skills: [], ...(cwd ? { cwd: path.resolve(cwd) } : {}) };
+      };
+
+      if (backend !== "acp:antigravity" || params.catalog === "commands") {
+        return { data: [await readCommands()] };
       }
 
-      // No live session has reported commands for this request — either it is a
-      // launchpad draft (no thread id at all) or a session that has not yet
-      // advertised. Fall back to what the repo last told us, and probe for it
-      // when we have never seen this repo/agent pair.
-      const commands = await this.resolveAcpAvailableCommands({
-        backend,
-        cwds: [session?.cwd, params.cwd, ...(params.cwds ?? [])],
-      });
-      return { data: [{ commands, skills: [] }] };
+      // Use the worktree itself for skills. The slash-command cache uses the
+      // common repository and can cost an ACP startup on a miss.
+      const data = await discoverAntigravitySkillCatalog(cwds, authorized?.resolvePath);
+      const commands = params.catalog === "skills" ? undefined : await readCommands();
+      return { data: commands ? [commands, ...data] : data };
     }
 
     if (backend === "claude") {
@@ -6528,9 +6589,15 @@ export class DesktopBackendRegistry {
         throw new Error("The Antigravity reviewer could not preserve the caller's session mode.");
       }
     }
+    const worktreeRoot = params.managedReviewLedger
+      ? await resolveLocalReviewWorktreeRoot(sessionForTurn.cwd)
+      : undefined;
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     if (params.managedReviewLedger) {
-      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId);
+      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId, {
+        cwd: sessionForTurn.cwd,
+        worktreeRoot,
+      });
     }
     await this.emit({
       backend: params.backend,
@@ -12051,7 +12118,7 @@ export class DesktopBackendRegistry {
               return undefined;
             });
           const servers = [...registrations.map((registration) => ({
-            ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
+            ...registration.server, name: buildClaudeConnectionMcpServerName(registration.server),
           })), ...(owned ? [owned.server] : [])];
           const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
             ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
@@ -23321,29 +23388,30 @@ export class DesktopBackendRegistry {
     const turnId = turnIdFromTerminalNotification(event.notification);
     const notification = event.notification;
     const { managedReview } = delivery;
-    const genericActiveTurnKeyPrefix =
-      `${event.backend}:${notification.params.threadId}:`;
-    const hadGenericActiveTurn = Array.from(this.context.turnState.registeredTurnKeys()).some((key) =>
-      key.startsWith(genericActiveTurnKeyPrefix),
-    );
+    const thread = { backend: event.backend, threadId: notification.params.threadId };
     const hadMatchingGenericActiveTurn = turnId !== undefined
-      && this.context.turnState.hasRegisteredTurn({ backend: event.backend, threadId: notification.params.threadId, turnId: turnId });
+      && this.context.turnState.hasRegisteredTurn({ ...thread, turnId });
+    let retiredAcpTurn = false;
     if (turnId) {
       if (isAcpBackendId(event.backend)) {
-        for (const key of Array.from(this.context.turnState.registeredTurnKeys())) {
-          if (key.startsWith(genericActiveTurnKeyPrefix)) {
-            this.context.turnState.unregisterTurn(key);
-            const parsed = parseActiveTurnKey(key);
-            backendRegistryLog.info("ACP active turn removed", {
-              backend: event.backend,
-              threadId: notification.params.threadId,
-              turnId: parsed?.turnId ?? null,
-              method: event.notification.method,
-              completedTurnId: turnId,
-            });
-            if (parsed) {
-              this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
-            }
+        const terminalTurn = { ...thread, turnId };
+        // A stopped prompt can report its own terminal again after a new
+        // prompt starts. A prompt ID issued for this thread can only retire
+        // that prompt. Keep the fallback for terminals with a drifted ID.
+        const recoverDriftedId = !hadMatchingGenericActiveTurn && !isAcpPromptTurnId(thread.threadId, turnId);
+        const turns = recoverDriftedId
+          ? this.context.turnState.registeredOtherProviderTurnsForThread(thread)
+          : [terminalTurn];
+        for (const turn of turns) {
+          if (!this.context.turnState.unregisterTurn(turn)) continue;
+          retiredAcpTurn = true;
+          backendRegistryLog.info("ACP active turn removed", {
+            ...turn,
+            method: event.notification.method,
+            completedTurnId: turnId,
+          });
+          if (turn.turnId !== turnId) {
+            this.clearAcceptedToolCallsForEndedTurn(turn.backend, turn.threadId, turn.turnId);
           }
         }
       } else {
@@ -23358,8 +23426,7 @@ export class DesktopBackendRegistry {
         turnId,
       });
     }
-    if ((event.backend === "claude" && hadMatchingGenericActiveTurn)
-      || (isAcpBackendId(event.backend) && hadGenericActiveTurn)) {
+    if ((event.backend === "claude" && hadMatchingGenericActiveTurn) || retiredAcpTurn) {
       await this.adoptThreadBranchChangeFromActiveTurn({
         backend: event.backend,
         threadId: notification.params.threadId,

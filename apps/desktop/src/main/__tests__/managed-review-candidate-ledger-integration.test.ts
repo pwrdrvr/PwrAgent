@@ -1,6 +1,6 @@
-import path, { resolve } from "node:path";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
+import path, { join, resolve } from "node:path";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import fc from "fast-check";
@@ -22,6 +22,7 @@ import type { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
 import { createOverlayStoreMock, git, MockBackendClient } from "./helpers/backend-registry-fixture";
+import { runIsolatedGit } from "./helpers/isolated-git";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const { registryLogInfo } = vi.hoisted(() => ({ registryLogInfo: vi.fn() }));
@@ -35,6 +36,17 @@ vi.mock("../log", async (importOriginal) => {
     },
   };
 });
+
+async function createNestedReviewCheckout() {
+  const scratch = await mkdtemp(join(tmpdir(), "pwragent-review-ledger-"));
+  onTestFinished(async () => await rm(scratch, { recursive: true, force: true }));
+  const root = await realpath(scratch);
+  const cwd = join(root, "packages", "app");
+  await mkdir(cwd, { recursive: true });
+  await runIsolatedGit(root, ["init", "-b", "main"]);
+  const { stdout } = await runIsolatedGit(cwd, ["rev-parse", "--show-toplevel"]);
+  return { cwd, root: resolve(stdout.trim()) };
+}
 
 describe("managed review ledger MCP isolation and approval", () => {
   it("exposes only the 4 auto-approved managed review tools to managedReview Antigravity clients and hides them from normal clients", async () => {
@@ -88,7 +100,7 @@ describe("managed review ledger MCP isolation and approval", () => {
       );
 
       try {
-        // Before bindThread (session/new timing): tools/list already returns ONLY the 3 ledger tools directly.
+        // Before bindThread (session/new timing), tools/list already returns only the ledger tools.
         const reviewTools = await reviewClient.listTools();
         expect(reviewTools.tools.map((tool) => tool.name).sort()).toEqual(
           [...MANAGED_REVIEW_LEDGER_TOOL_NAMES].sort(),
@@ -113,7 +125,7 @@ describe("managed review ledger MCP isolation and approval", () => {
         // Bind review thread and execute Pass 1 -> Pass 2 calls.
         reviewReg.bindThread("review-child-thread");
         const turn = { backend: "acp:antigravity", threadId: "review-child-thread", turnId: "active-turn" } as const;
-        ledger.armToolTurn(turn, turn.turnId);
+        ledger.armToolTurn(turn, turn.turnId, { worktreeRoot: resolve("/repo") });
         const recorded = await reviewClient.callTool({
           name: "record_review_candidate",
           arguments: {
@@ -141,6 +153,32 @@ describe("managed review ledger MCP isolation and approval", () => {
           counts: { pending: 1, keep: 0, drop: 0 },
         });
 
+        const verdict = {
+          use_ledger: true,
+          overall_correctness: "patch is incorrect",
+          overall_explanation: "Synchronous database read on streaming path.",
+          overall_confidence_score: 0.95,
+        };
+        await expect(reviewClient.callTool({
+          name: "submit_review_output",
+          arguments: verdict,
+        })).resolves.toMatchObject({ isError: true });
+        expect(ledger.submittedOutput(turn)).toBeUndefined();
+
+        const beforeRefining = ledger.list(turn);
+        await expect(reviewClient.callTool({
+          name: "dispose_review_candidate",
+          arguments: {
+            id: "C1",
+            disposition: "keep",
+            priority: 2,
+            reason: "Verified on the streaming path.",
+            summary: "Invalid attempted replacement",
+            start_line: 3587,
+          },
+        })).resolves.toMatchObject({ isError: true });
+        expect(ledger.list(turn)).toEqual(beforeRefining);
+
         const disposed = await reviewClient.callTool({
           name: "dispose_review_candidate",
           arguments: {
@@ -148,6 +186,9 @@ describe("managed review ledger MCP isolation and approval", () => {
             disposition: "keep",
             priority: 2,
             reason: "Verified on every non-tool assistant_message_chunk.",
+            mechanism: 'Calls synchronous `getSession()` on `"agent_message_chunk"` updates.',
+            start_line: 3586,
+            confidence_score: 0.96,
           },
         });
         expect(disposed.isError).not.toBe(true);
@@ -157,23 +198,7 @@ describe("managed review ledger MCP isolation and approval", () => {
         });
         const submitted = await reviewClient.callTool({
           name: "submit_review_output",
-          arguments: {
-            findings: [
-              {
-                title: "Keep session database reads off the ACP streaming path",
-                body: 'Calls synchronous `getSession()` on `"agent_message_chunk"` updates.',
-                confidence_score: 0.96,
-                priority: 2,
-                code_location: {
-                  absolute_file_path: resolve("/repo/apps/desktop/src/main/app-server/acp-backend-adapter.ts"),
-                  line_range: { start: 3585, end: 3586 },
-                },
-              },
-            ],
-            overall_correctness: "patch is incorrect",
-            overall_explanation: "Synchronous database read on streaming path.",
-            overall_confidence_score: 0.95,
-          },
+          arguments: verdict,
         });
         expect(submitted.isError).not.toBe(true);
         const receipt = {
@@ -182,6 +207,17 @@ describe("managed review ledger MCP isolation and approval", () => {
         };
         expect(submitted.structuredContent).toEqual(receipt);
         expect(JSON.stringify(submitted.content)).not.toContain("Calls synchronous");
+        expect(ledger.submittedOutput(turn)?.findings).toEqual([{
+          title: "Keep session database reads off the ACP streaming path",
+          body: 'Calls synchronous `getSession()` on `"agent_message_chunk"` updates.',
+          confidence_score: 0.96,
+          priority: 2,
+          category: "performance",
+          code_location: {
+            absolute_file_path: resolve("/repo/apps/desktop/src/main/app-server/acp-backend-adapter.ts"),
+            line_range: { start: 3586, end: 3586 },
+          },
+        }]);
         retireAtDispatch = true;
         await expect(reviewClient.callTool({
           name: "dispose_review_candidate",
@@ -189,11 +225,7 @@ describe("managed review ledger MCP isolation and approval", () => {
         })).resolves.toMatchObject({ isError: true });
         await expect(reviewClient.callTool({
           name: "submit_review_output",
-          arguments: {
-            findings: [],
-            overall_correctness: "patch is correct",
-            overall_explanation: "Arrived after terminal.",
-          },
+          arguments: verdict,
         })).resolves.toMatchObject({ isError: true });
         expect(ledger.snapshot(turn)).toMatchObject({ keep: 1, drop: 0 });
         expect(ledger.submittedOutput(turn)?.findings).toHaveLength(1);
@@ -731,7 +763,8 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
     }
   });
 
-  it("publishes structured findings submitted via submit_review_output even when body contains quotes and trailing text is not valid JSON", async () => {
+  it.each(["explicit", "ledger"])("publishes %s ACP findings even when the terminal text is invalid JSON", async (mode) => {
+    const { cwd, root } = await createNestedReviewCheckout();
     const backend = "acp:antigravity";
     const agentStore = new AcpAgentStore(stateDb);
     const sessionStore = new AcpSessionStore(stateDb);
@@ -758,6 +791,17 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       },
     });
     const findingBody = 'The `"remote-pin"` step and `"local-name"` step omit version checks.';
+    const explicitFinding = {
+      title: "Remote-pin test leaves owner-version wiring unfalsified",
+      body: findingBody,
+      confidence_score: 0.94,
+      priority: 2,
+      code_location: {
+        absolute_file_path: resolve("/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts"),
+        line_range: { start: 1260, end: 1342 },
+      },
+    };
+    const useLedger = mode === "ledger";
     let submitResult: { isError?: boolean; structuredContent?: unknown } | undefined;
     const transport = new ReviewListingAcpTransport(
       {
@@ -770,23 +814,31 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
         },
       },
       async ({ client, emitText }) => {
-        submitResult = await client!.callTool({
+        if (!client) throw new Error("Managed review MCP tools were not attached.");
+        if (useLedger) {
+          expect((await client.callTool({
+            name: "record_review_candidate",
+            arguments: {
+              file: "packages/app/src/disconnect.ts",
+              start_line: 10,
+              end_line: 11,
+              category: "lifecycle",
+              summary: "Unsubscribe on disconnect",
+              mechanism: "The listener remains active after disconnect.",
+            },
+          })).isError).not.toBe(true);
+          expect((await client.callTool({
+            name: "dispose_review_candidate",
+            arguments: { id: "C1", disposition: "keep", priority: 1, reason: "Disconnect skips cleanup." },
+          })).isError).not.toBe(true);
+        }
+        submitResult = await client.callTool({
           name: "submit_review_output",
           arguments: {
-            findings: [
-              {
-                title: "Remote-pin test leaves owner-version wiring unfalsified",
-                body: findingBody,
-                confidence_score: 0.94,
-                priority: 2,
-                code_location: {
-                  absolute_file_path: resolve("/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts"),
-                  line_range: { start: 1260, end: 1342 },
-                },
-              },
-            ],
+            ...(useLedger ? { use_ledger: true } : {}),
+            findings: [explicitFinding],
             overall_correctness: "patch is incorrect",
-            overall_explanation: "One unfalsified test gap remains.",
+            overall_explanation: "Verified actionable defects.",
             overall_confidence_score: 0.93,
           },
         }) as { isError?: boolean; structuredContent?: unknown };
@@ -815,7 +867,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       threadTitleGenerationService: null,
     });
     try {
-      const parent = await registry.startThread({ backend, cwd: "/repo" });
+      const parent = await registry.startThread({ backend, cwd });
       await registry.startReview({
         backend,
         threadId: parent.threadId,
@@ -828,19 +880,21 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       expect(submitResult?.isError).not.toBe(true);
       expect(publishedEntries[0]?.output).toEqual({
         findings: [
-          {
-            title: "Remote-pin test leaves owner-version wiring unfalsified",
-            body: findingBody,
-            confidence_score: 0.94,
-            priority: 2,
+          ...(useLedger ? [{
+            title: "Unsubscribe on disconnect",
+            body: "The listener remains active after disconnect.",
+            category: "lifecycle",
+            confidence_score: 0,
+            priority: 1,
             code_location: {
-              absolute_file_path: resolve("/repo/apps/desktop/src/main/__tests__/navigation-query-source.test.ts"),
-              line_range: { start: 1260, end: 1342 },
+              absolute_file_path: join(root, "packages", "app", "src", "disconnect.ts"),
+              line_range: { start: 10, end: 11 },
             },
-          },
+          }] : []),
+          explicitFinding,
         ],
         overall_correctness: "patch is incorrect",
-        overall_explanation: "One unfalsified test gap remains.",
+        overall_explanation: "Verified actionable defects.",
         overall_confidence_score: 0.93,
       });
       expect(publishedEntries[0]?.review).toContain("[P2] Remote-pin test leaves owner-version wiring unfalsified");
@@ -852,6 +906,117 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       });
     } finally {
       await transport.closeAll();
+      await registry.close();
+    }
+  });
+
+  it.each(["keep", "drop"] as const)("publishes a Codex ledger batch with a %s disposition and empty terminal text", async (disposition) => {
+    const { cwd, root } = await createNestedReviewCheckout();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
+    });
+    let nextThreadNumber = 0;
+    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
+      threadId: `codex-submit-thread-${++nextThreadNumber}`,
+    }));
+    const overlayStore = createOverlayStoreMock();
+    const publishedEntries: Array<{ id: string; review: string; output?: unknown }> = [];
+    const upsertReview = overlayStore.upsertManagedReviewEntry.bind(overlayStore);
+    vi.spyOn(overlayStore, "upsertManagedReviewEntry").mockImplementation(async (params) => {
+      if (params.entry.id.endsWith(":result")) {
+        publishedEntries.push(params.entry);
+      }
+      return await upsertReview(params);
+    });
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      acpAgentStore: new AcpAgentStore(stateDb),
+      acpSessionStore: new AcpSessionStore(stateDb),
+      overlayStore,
+      threadTitleGenerationService: null,
+    });
+    try {
+      const parent = await registry.startThread({ backend: "codex", cwd });
+      const review = await registry.startReview({
+        backend: "codex",
+        threadId: parent.threadId,
+        cwd,
+        target: { type: "uncommittedChanges" },
+        runMode: "pwragent-sub-agent",
+      });
+
+      const call = async (tool: string, args: Record<string, unknown>) => await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          requestId: `req-${tool}`,
+          callId: `call-${tool}`,
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tool,
+          arguments: args,
+        },
+      }) as { success: boolean };
+      expect((await call("record_review_candidate", {
+        summary: "Preserve quoted code span",
+        mechanism: 'Keeps `"remote-pin"` intact.',
+        category: "correctness",
+        file: "packages/app/src/review.ts",
+        start_line: 5,
+        end_line: 9,
+      })).success).toBe(true);
+      const keep = disposition === "keep";
+      expect((await call("dispose_review_candidate", {
+        id: "C1",
+        disposition,
+        reason: keep ? "Verified for malformed input." : "The caller preserves the span.",
+        ...(keep ? { priority: 1 } : {}),
+      })).success).toBe(true);
+      const verdict = {
+        overall_correctness: keep ? "patch is incorrect" : "patch is correct",
+        overall_explanation: keep ? "One defect found." : "No actionable defects.",
+      };
+      expect((await call("submit_review_output", { use_ledger: true, ...verdict })).success).toBe(true);
+      expect(publishedEntries).toHaveLength(0);
+
+      await codexClient.emit({
+        method: "turn/completed",
+        params: {
+          threadId: review.reviewThreadId,
+          turnId: review.turnId,
+          turn: {
+            id: review.turnId,
+            status: "completed",
+            output: [],
+          },
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(publishedEntries).toHaveLength(1);
+      });
+      expect(publishedEntries[0]?.output).toMatchObject({
+        ...verdict,
+        findings: keep ? [
+          {
+            title: "Preserve quoted code span",
+            body: 'Keeps `"remote-pin"` intact.',
+            priority: 1,
+            code_location: {
+              absolute_file_path: join(root, "packages", "app", "src", "review.ts"),
+              line_range: { start: 5, end: 9 },
+            },
+          },
+        ] : [],
+      });
+      expect(publishedEntries[0]?.review).toContain(
+        keep ? "[P1] Preserve quoted code span" : "No findings.",
+      );
+      expect(
+        registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
+      ).toBe(0);
+    } finally {
       await registry.close();
     }
   });
@@ -1068,7 +1233,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
     });
 
     try {
-      const repo = await mkdtemp(path.join(os.tmpdir(), "pwragent-managed-review-ledger-"));
+      const repo = await mkdtemp(path.join(tmpdir(), "pwragent-managed-review-ledger-"));
       onTestFinished(() => rm(repo, { recursive: true, force: true }));
       await git(repo, ["init", "-b", "main"]);
       const cwd = path.join(repo, "packages", "ui");

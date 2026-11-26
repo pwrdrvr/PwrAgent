@@ -56,6 +56,7 @@ import { threadTodoMessageOriginFromUnknown } from "@pwragent/shared/contracts/t
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import { isPendingEntryId } from "./pending-entry-id";
+import { isPendingCodexBrowserCompletion } from "../features/thread-detail/codex-browser-completion";
 import {
   agentEventThreadIdentityKey,
   threadSummaryIdentityKey,
@@ -221,6 +222,9 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   recentlyCompletedTurnUsage?: RecentlyCompletedTurnUsage;
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  // A browser marker stays outside the transcript until its item completes
+  // or a later delta establishes that it is ordinary commentary.
+  browserCompletionDrafts?: ReadonlyMap<string, AppServerThreadMessageEntry>;
   pendingReviewSubmissions?: ReadonlySet<symbol>;
   // A review may take focus before the parent turn's terminal event arrives.
   pendingUsageByTurn?: ReadonlyMap<string, PendingTurnUsage>;
@@ -3878,6 +3882,20 @@ function flushPendingAssistantToOptimistic(
   };
 }
 
+function discardBrowserCompletionDrafts(
+  drafts: ThreadSessionEntry["browserCompletionDrafts"],
+  discard: (entry: AppServerThreadMessageEntry) => boolean,
+): ThreadSessionEntry["browserCompletionDrafts"] {
+  let remaining: Map<string, AppServerThreadMessageEntry> | undefined;
+  for (const [id, entry] of drafts ?? []) {
+    if (discard(entry)) {
+      remaining ??= new Map(drafts);
+      remaining.delete(id);
+    }
+  }
+  return remaining ? (remaining.size > 0 ? remaining : undefined) : drafts;
+}
+
 function updateActivityEntry(
   entry: AppServerThreadActivityEntry,
   details: AppServerThreadActivityDetail[],
@@ -5595,6 +5613,7 @@ export function useThreadSessionState(params: {
   ) => string;
   addOptimisticReviewEntry: (displayText: string) => string;
   beginReviewSubmission: () => (() => void) | undefined;
+  bindOptimisticReviewEntryToTurn: (id: string, turnId: string) => void;
   /**
    * Names the turn a pending user message started, from the owner's
    * `startTurn` response. Call it only for a send that opened that turn.
@@ -6294,6 +6313,9 @@ export function useThreadSessionState(params: {
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
               : current.pendingAssistantMessage,
+            browserCompletionDrafts: shouldClearStaleThinking
+              ? undefined
+              : current.browserCompletionDrafts,
             ...transitionHydratedInteractions(current, {
               clearThinking: shouldClearStaleThinking,
               clearInteraction: shouldClearStaleInteraction,
@@ -6761,6 +6783,7 @@ export function useThreadSessionState(params: {
                   (entry) => !isLiveOptimisticEntry(entry)
                 ),
                 pendingAssistantMessage: undefined,
+                browserCompletionDrafts: undefined,
                 pendingStatusText: undefined,
                 safetyBuffering: undefined,
                 staleThinkingRecheckAt: undefined,
@@ -7305,15 +7328,14 @@ export function useThreadSessionState(params: {
         ) {
           const { itemId, delta } = event.notification.params;
           const isSamePendingMessage = current.pendingAssistantMessage?.id === itemId;
+          const browserDraft = current.browserCompletionDrafts?.get(itemId);
+          const previousMessage = isSamePendingMessage ? current.pendingAssistantMessage : browserDraft;
           const turn = buildTurnMetadata({
-            fallbackId: event.notification.params.turnId ?? current.activeTurnId,
+            fallbackId: event.notification.params.turnId ?? previousMessage?.turn?.id ?? current.activeTurnId,
             fallbackStartedAt: current.activeTurnStartedAt,
             fallbackStatus: "in_progress",
           });
-          const phase =
-            event.notification.params.phase ??
-            (isSamePendingMessage ? current.pendingAssistantMessage?.phase : undefined);
-          const pendingText = current.pendingAssistantMessage?.text ?? "";
+          const phase = event.notification.params.phase ?? previousMessage?.phase;
           const flushedResponse = isSamePendingMessage
             ? current.response
               : appendPendingAssistantMessage(
@@ -7325,29 +7347,28 @@ export function useThreadSessionState(params: {
                 optimisticMessageEntries(current.optimisticEntries),
                 current.pendingAssistantMessage
               );
-          const carriedSequence = isSamePendingMessage
-            ? readRendererSequence(current.pendingAssistantMessage)
-            : undefined;
+          const carriedSequence = readRendererSequence(previousMessage);
           const allocatedSequence =
             carriedSequence ?? current.nextLiveEntrySequence;
-          const nextEntrySequence = isSamePendingMessage
+          const nextEntrySequence = previousMessage
             ? current.nextLiveEntrySequence
             : current.nextLiveEntrySequence + 1;
 
-          const nextPendingAssistantMessage: AppServerThreadMessageEntry = {
+          const nextMessage = withRendererSequence<AppServerThreadMessageEntry>({
             type: "message",
             id: itemId,
             role: "assistant",
             phase,
-            createdAt: isSamePendingMessage
-              ? current.pendingAssistantMessage?.createdAt
-              : Date.now(),
+            createdAt: previousMessage ? previousMessage.createdAt : Date.now(),
             ...(turn ? { turn } : {}),
-            text:
-              isSamePendingMessage
-                ? `${pendingText}${delta}`
-                : delta,
-          };
+            text: (previousMessage?.text ?? "") + delta,
+          }, allocatedSequence);
+          const bufferBrowserCompletion = isPendingCodexBrowserCompletion(nextMessage, event.backend);
+          const browserCompletionDrafts = bufferBrowserCompletion
+            ? new Map(current.browserCompletionDrafts).set(itemId, nextMessage)
+            : browserDraft
+              ? discardBrowserCompletionDrafts(current.browserCompletionDrafts, (entry) => entry.id === itemId)
+              : current.browserCompletionDrafts;
 
           return {
             ...current,
@@ -7355,10 +7376,8 @@ export function useThreadSessionState(params: {
             interacted: true,
             lastTouchedAt: nextLastTouchedAt,
             nextLiveEntrySequence: nextEntrySequence,
-            pendingAssistantMessage: withRendererSequence(
-              nextPendingAssistantMessage,
-              allocatedSequence
-            ),
+            pendingAssistantMessage: bufferBrowserCompletion ? undefined : nextMessage,
+            browserCompletionDrafts,
             response: flushedResponse,
           };
         }
@@ -7533,6 +7552,7 @@ export function useThreadSessionState(params: {
           });
           const item = getNotificationItem(event.notification.params);
           const transientTaskMonitorItem = isTransientTaskMonitorItem(item);
+          const browserDraft = typeof item?.id === "string" ? current.browserCompletionDrafts?.get(item.id) : undefined;
           const assistantMessageEntry = !retainTranscript || transientTaskMonitorItem
             ? undefined
             : assistantMessageEntryFromCompletedItem({
@@ -7555,7 +7575,8 @@ export function useThreadSessionState(params: {
           if (assistantMessageEntry) {
             const observedMessage = current.pendingAssistantMessage?.id === assistantMessageEntry.id
               ? current.pendingAssistantMessage
-              : current.optimisticEntries.find((entry) => entry.id === assistantMessageEntry.id)
+              : browserDraft
+                ?? current.optimisticEntries.find((entry) => entry.id === assistantMessageEntry.id)
                 ?? current.response?.replay.entries.find((entry) => entry.id === assistantMessageEntry.id);
             const sequence = readRendererSequence(observedMessage) ?? current.nextLiveEntrySequence;
             const completedEntry = withRendererSequence(assistantMessageEntry, sequence);
@@ -7596,6 +7617,9 @@ export function useThreadSessionState(params: {
                 current.pendingAssistantMessage?.id === assistantMessageEntry.id
                   ? undefined
                   : current.pendingAssistantMessage,
+              browserCompletionDrafts: browserDraft
+                ? discardBrowserCompletionDrafts(current.browserCompletionDrafts, (entry) => entry.id === browserDraft.id)
+                : current.browserCompletionDrafts,
               response: nextResponse,
             };
           }
@@ -7610,6 +7634,14 @@ export function useThreadSessionState(params: {
           }
           if (!retainTranscript) {
             return current;
+          }
+          if (browserDraft) {
+            return {
+              ...current,
+              browserCompletionDrafts: discardBrowserCompletionDrafts(
+                current.browserCompletionDrafts, (entry) => entry.id === browserDraft.id,
+              ),
+            };
           }
           if (taskMonitorUsageEntry) {
             const nextResponse = appendThreadEntries(
@@ -7747,6 +7779,10 @@ export function useThreadSessionState(params: {
             ? { ...pendingUsage.entry, turn: completedTurn }
             : undefined;
           const pendingUsageByTurn = removePendingTurnUsage(current.pendingUsageByTurn, turnId);
+          const browserCompletionDrafts = discardBrowserCompletionDrafts(
+            current.browserCompletionDrafts,
+            (entry) => entry.turn?.id === turnId,
+          );
           const settledLifecycle = completedTurnMatchesActive ? {
             activeTurnId: undefined,
             activeTurnStartedAt: undefined,
@@ -7778,6 +7814,7 @@ export function useThreadSessionState(params: {
               ...current,
               ...settledLifecycle,
               pendingUsageByTurn,
+              browserCompletionDrafts,
               error: undefined,
               lastTouchedAt: nextLastTouchedAt,
             };
@@ -7982,6 +8019,7 @@ export function useThreadSessionState(params: {
             ...current,
             ...settledLifecycle,
             pendingUsageByTurn,
+            browserCompletionDrafts,
             error: undefined,
             expectOwnUpdate: true,
             hydratedUpdatedAt:
@@ -8024,6 +8062,10 @@ export function useThreadSessionState(params: {
         if (event.notification.method === "turn/failed" || event.notification.method === "turn/cancelled") {
           const turnId = event.notification.params.turnId;
           const pendingUsageByTurn = removePendingTurnUsage(current.pendingUsageByTurn, turnId ?? current.activeTurnId);
+          const browserCompletionDrafts = discardBrowserCompletionDrafts(
+            current.browserCompletionDrafts,
+            (entry) => entry.turn?.id === (turnId ?? current.activeTurnId),
+          );
           if (
             !terminalTurnMatchesActiveTurn(
               current,
@@ -8031,7 +8073,8 @@ export function useThreadSessionState(params: {
               event.relatedReviewTurnId,
             )
           ) {
-            return pendingUsageByTurn === current.pendingUsageByTurn ? current : { ...current, pendingUsageByTurn };
+            return pendingUsageByTurn === current.pendingUsageByTurn && browserCompletionDrafts === current.browserCompletionDrafts
+              ? current : { ...current, pendingUsageByTurn, browserCompletionDrafts };
           }
           if (turnId) {
             consumedOptimisticActiveTurnKeysRef.current.add(
@@ -8056,6 +8099,7 @@ export function useThreadSessionState(params: {
             lastTouchedAt: nextLastTouchedAt,
             needsHydrationAfterCompletion: false,
             pendingAssistantMessage: undefined,
+            browserCompletionDrafts,
             pendingMcpInteraction: undefined,
             pendingRequest: undefined,
             pendingUsageByTurn,
@@ -8108,6 +8152,7 @@ export function useThreadSessionState(params: {
               backendReportedActive: false,
               lastTouchedAt: nextLastTouchedAt,
               pendingAssistantMessage: undefined,
+              browserCompletionDrafts: undefined,
               pendingStatusText: undefined,
             };
           }
@@ -8143,6 +8188,8 @@ export function useThreadSessionState(params: {
             loadingMore: false,
             providerPageTurnIds: undefined,
             providerPageAnchorTurnId: undefined,
+            browserCompletionDrafts: event.notification.method === "thread/rewound"
+              ? undefined : current.browserCompletionDrafts,
             pendingUsageByTurn: undefined,
             pendingStatusText: undefined,
             response: undefined,
@@ -8718,6 +8765,42 @@ export function useThreadSessionState(params: {
       return id;
     },
     [thread, threadKey, updateSession]
+  );
+
+  const bindOptimisticReviewEntryToTurn = useCallback(
+    (id: string, turnId: string): void => {
+      if (!threadKey) return;
+
+      updateSession(threadKey, (current) => {
+        const pending = current.optimisticEntries.find(
+          (entry): entry is AppServerThreadReviewEntry =>
+            entry.id === id && entry.type === "review"
+        );
+        if (!pending || pending.turn?.id === turnId) return current;
+
+        const isOwnerHeader = (entry: AppServerThreadEntry): entry is AppServerThreadReviewEntry =>
+          entry.type === "review"
+          && entry.turn?.id === turnId
+          && !isPendingEntryId(entry.id)
+          && isReviewStartEntry(entry);
+        const replayHeader = current.response?.replay.entries.find(isOwnerHeader);
+        const headerAlreadyRetainedOrSettled =
+          current.optimisticEntries.some(isOwnerHeader)
+          || (replayHeader && replayHeader.turn?.status !== "in_progress");
+        // A running read can get here before the receipt and be absent from
+        // the next read. Keep that owner's header until replay settles it.
+        const fallback = replayHeader
+          ? preserveReviewMetadata(pending, replayHeader)
+          : { ...pending, turn: { id: turnId } };
+        return {
+          ...current,
+          optimisticEntries: headerAlreadyRetainedOrSettled
+            ? current.optimisticEntries.filter((entry) => entry.id !== id)
+            : current.optimisticEntries.map((entry) => entry.id === id ? fallback : entry),
+        };
+      });
+    },
+    [threadKey, updateSession]
   );
 
   const upsertLiveTranscriptEntry = useCallback(
@@ -9307,6 +9390,7 @@ export function useThreadSessionState(params: {
     addOptimisticUserMessage,
     addOptimisticReviewEntry,
     beginReviewSubmission,
+    bindOptimisticReviewEntryToTurn,
     bindOptimisticUserMessageToTurn,
     clearPendingRequest,
     entries,

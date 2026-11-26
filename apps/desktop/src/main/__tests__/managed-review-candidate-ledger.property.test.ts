@@ -498,6 +498,23 @@ describe("ManagedReviewCandidateLedger model properties", () => {
       overall_correctness: "patch is correct",
       overall_explanation: "No concrete defects.",
     });
+
+    ledger.armToolTurn(turn, turn.turnId, { worktreeRoot: resolve("/repo") });
+    for (const { id } of ledger.list(turn).candidates) {
+      expect(ledger.dispose(turn, { id, disposition: "keep", priority: 2, reason: "Verified." }).ok).toBe(true);
+    }
+    const overflowFinding = { ...tooManyFindings[0], title: "One too many", priority: 1 };
+    expect(ledger.submitOutput(turn, {
+      use_ledger: true,
+      findings: [overflowFinding],
+      overall_correctness: "patch is incorrect",
+      overall_explanation: "Verified a defect after the ledger filled.",
+    })).toMatchObject({ ok: true, data: { finding_count: MANAGED_REVIEW_CANDIDATE_MAX_PER_TURN + 1 } });
+    const final = ledger.submittedOutput(turn)?.findings;
+    expect(final?.[0]).toEqual(overflowFinding);
+    expect(final?.slice(1).map(({ title }) => title)).toEqual(
+      ledger.list(turn).candidates.map(({ summary }) => summary),
+    );
   });
 });
 

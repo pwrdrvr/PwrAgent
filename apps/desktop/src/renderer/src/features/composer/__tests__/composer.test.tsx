@@ -730,6 +730,104 @@ describe("Composer", () => {
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
+  it.each([
+    { first: "previous", oldCompletesFirst: true },
+    { first: "current", oldCompletesFirst: false },
+  ])("reloads the Antigravity picker when the $first worktree's catalog completes first", async ({ oldCompletesFirst }) => {
+    const thread: NavigationThreadSummary = {
+      id: "antigravity-worktree-picker", title: "Check the release", titleSource: "explicit",
+      source: "acp:antigravity", linkedDirectories: [], inbox: { inInbox: false },
+    };
+    type ListResult = Awaited<ReturnType<NonNullable<DesktopApi["listSkills"]>>>;
+    const first = Promise.withResolvers<ListResult>();
+    const second = Promise.withResolvers<ListResult>();
+    const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>((request) =>
+      request?.cwd === "/first" ? first.promise : second.promise);
+    const desktopApi: DesktopApi = { listSkills };
+    function Picker({ worktreePath }: { worktreePath: string }) {
+      const selected: NavigationThreadSummary = {
+        ...thread, linkedDirectories: [{ id: "repo", path: "/repo", label: "Repo", kind: "local", worktreePath }],
+      };
+      const skills = useThreadSkills({ desktopApi, thread: selected });
+      return <Composer
+        thread={selected}
+        skills={skills.skills}
+        skillCatalogTargetKey={skills.skillCatalogTargetKey}
+        skillLoading={skills.loading}
+        onEnsureSkillsLoaded={skills.ensureLoaded}
+      />;
+    }
+    const view = render(<Picker worktreePath="/first" />);
+    try {
+      const input = screen.getByRole("textbox", { name: "Reply" });
+      fireEvent.change(input, { target: { value: "$release" } });
+      expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first"]);
+
+      view.rerender(<Picker worktreePath="/second" />);
+      expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first", "/second"]);
+
+      const settle = async (pending: typeof first, workspace: string) => {
+        await act(async () => {
+          pending.resolve({ backend: "acp:antigravity", fetchedAt: 1, data: [{
+            skills: [{ name: `release-${workspace}`, path: `/${workspace}/.agents/skills/release/SKILL.md` }],
+          }] });
+        });
+        expect(screen.queryByRole("option", { name: /release-first/ })).toBeNull();
+      };
+      if (oldCompletesFirst) await settle(first, "first");
+      await settle(second, "second");
+      expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
+      if (!oldCompletesFirst) await settle(first, "first");
+      expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it("shows the project chip and opens Antigravity slash provenance from the keyboard", async () => {
+    const thread: NavigationThreadSummary = {
+      id: "slash-skill", title: "Garden release", titleSource: "explicit",
+      source: "acp:antigravity", inbox: { inInbox: false },
+      linkedDirectories: [{ id: "garden", path: "/garden", label: "Garden", kind: "local" }],
+    };
+    const description = "Prepare the Garden release.";
+    const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
+    const desktopApi: DesktopApi = {
+      listSkills: async ({ catalog } = {}) => ({
+        backend: thread.source,
+        fetchedAt: 1,
+        data: catalog === "commands"
+          ? [{ cwd: "/garden", commands: [{ name: "release", backend: thread.source, description }], skills: [] }]
+          : [{ cwd: "/garden", skills: [{ name: "release", description, path: "/garden/.agents/skills/release/SKILL.md" }] }],
+      }),
+    };
+    function Picker() {
+      const skills = useThreadSkills({ desktopApi, thread });
+      return <Composer desktopApi={{ openMarkdownFileViewer }} thread={thread} skills={skills.skills} providerCommands={skills.providerCommands} onEnsureSkillsLoaded={skills.ensureLoaded} />;
+    }
+    render(<Picker />);
+    const input = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(input, { target: { value: "/rele" } });
+    const option = await screen.findByRole("option", { name: /\/release.*Garden.*Prepare/ });
+    expect(within(option).getByText("Garden")).toBeInTheDocument();
+    input.focus();
+    fireEvent.keyDown(input, { key: "F10", shiftKey: true });
+    const copy = await screen.findByRole("button", { name: "Copy path" });
+    expect(copy).toHaveFocus();
+    expect(screen.getByRole("group", { name: /Where.*release comes from/ })).toHaveTextContent("/garden/.agents/skills/release/SKILL.md");
+    await userEvent.tab();
+    const open = screen.getByRole("button", { name: "Open SKILL.md" });
+    expect(open).toHaveFocus();
+    fireEvent.scroll(option.parentElement!);
+    fireEvent.resize(window);
+    expect(open).toBeInTheDocument();
+    expect(open).toHaveFocus();
+    fireEvent.keyDown(open, { key: "Escape" });
+    expect(input).toHaveFocus();
+    fireEvent.click(option);
+    expect(input).toHaveValue("/release ");
+  });
+
   it("offers explicit Refresh for a missing skill while reopening reuses the fresh catalog", async () => {
     let names = ["rate-math-paper"];
     let pause = false;
@@ -9117,6 +9215,7 @@ describe("Composer", () => {
     const scheduledApi = createScheduledActionApi();
     const startReview = vi.fn(async () => ({ backend: source, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
     const removeOptimisticMessage = vi.fn();
+    const bindOptimisticReviewEntryToTurn = vi.fn();
     const codex = backendSummary("codex");
     codex.capabilities = { ...codex.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true,
       reviewCodexSubAgent: true, reviewAutoFix: true, reviewPullRequestSet: true };
@@ -9136,6 +9235,7 @@ describe("Composer", () => {
     const element = (
       <Composer
         addOptimisticReviewEntry={() => "optimistic-review-start"}
+        bindOptimisticReviewEntryToTurn={bindOptimisticReviewEntryToTurn}
         removeOptimisticMessage={removeOptimisticMessage}
         backends={source === "claude" ? [claude, codex] : [codex]}
         desktopApi={{ onAgentEvent: () => () => undefined, startReview, ...scheduledApi }}
@@ -9149,7 +9249,7 @@ describe("Composer", () => {
         }}
       />
     );
-    return { element, prs, scheduledApi, startReview, removeOptimisticMessage };
+    return { element, prs, scheduledApi, startReview, removeOptimisticMessage, bindOptimisticReviewEntryToTurn };
   };
 
   it("reviews a checked stack together, bottom first, on the PwrAgent Sub Agent", async () => {
@@ -9230,7 +9330,7 @@ describe("Composer", () => {
    * sends no reviewer: Claude Code reviews its own thread at the chosen effort.
    */
   it("runs Claude Code's /code-review on a Claude thread with the targets and effort it takes", async () => {
-    const { element, prs, startReview, removeOptimisticMessage } = stackReviewFixture("claude");
+    const { element, prs, startReview, removeOptimisticMessage, bindOptimisticReviewEntryToTurn } = stackReviewFixture("claude");
     render(element);
     await openReviewComposer();
     expect(screen.getByRole("button", { name: /^Branch/ })).toBeInTheDocument();
@@ -9256,6 +9356,7 @@ describe("Composer", () => {
     // Claude's accepted /code-review has its own user row and never emits a
     // review-start artifact to replace the Composer placeholder.
     expect(removeOptimisticMessage).toHaveBeenCalledExactlyOnceWith("optimistic-review-start");
+    expect(bindOptimisticReviewEntryToTurn).not.toHaveBeenCalled();
   });
 
   /**

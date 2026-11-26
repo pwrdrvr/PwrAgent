@@ -9,9 +9,14 @@ function unitSteps(workflow, job) {
     .map((step) => step.split("\n").filter((line) => !/^\s*(?:#|PWRAGENT_NATIVE_ORACLE_PROFILE:)/.test(line)).join("\n").trim());
 }
 
-test("release macOS lanes verify completion and retry failures just like regular CI", () => {
-  // Regular macOS CI is the oracle for the reporter, step outcomes, and retry environment.
+test("release and full macOS CI use the same reporters, completion checks, and retry environment", () => {
   const ci = unitSteps("ci.yml", "test-macos");
+  const release = unitSteps("release.yml", "test");
   expect(ci).toHaveLength(3);
-  expect(unitSteps("release.yml", "test")).toEqual(ci);
+  expect(release).toHaveLength(3);
+  const full = ci[0].replace(/\n\s+UNIT_MODE: [^\n]+/, "").replace(
+    /run: \|\n\s+if [^\n]+\n\s+pnpm exec node scripts\/ci\/run-pr-test-impact\.mjs unit macos [^\n]+\n\s+else\n\s+([^\n]+)\n\s+fi$/,
+    "run: $1",
+  );
+  expect([full, ...ci.slice(1)]).toEqual(release);
 });

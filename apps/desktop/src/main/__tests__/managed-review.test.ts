@@ -98,12 +98,16 @@ describe("managed review", () => {
     expect(prompt).toContain("list_review_candidates");
     expect(prompt).toContain("dispose_review_candidate");
     expect(prompt).toContain("submit_review_output");
+    expect(prompt).toContain('"use_ledger":true');
+    expect(prompt).toContain("Refine a kept candidate by ID");
+    expect(prompt).toContain("Submit even when the ledger is empty or every candidate was dropped.");
+    expect(prompt).toContain("for verified findings you could not record");
     expect(prompt).toMatch(/pass 1/i);
     expect(prompt).toMatch(/pass 2/i);
     expect(prompt).toMatch(/audit every changed production file systematically/i);
     expect(prompt).toMatch(/do not stop exploring after finding your first one or two issues/i);
     expect(prompt).toMatch(/skip obvious duplicates/i);
-    expect(prompt).toMatch(/limit_exceeded.*include verified findings when calling `submit_review_output`/i);
+    expect(prompt).toMatch(/limit_exceeded.*include verified findings explicitly when calling `submit_review_output`/i);
     expect(prompt).toMatch(/do not drop a concrete P2 or P3 defect/i);
     expect(prompt).toMatch(/feature request, UX preference, or alternative-design suggestion/i);
     expect(prompt).toMatch(/if the core fix were reverted to the broken behavior/i);

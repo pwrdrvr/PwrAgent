@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.5.1 - 2026-11-26
+
+- Auto-compaction - Set context thresholds per provider and model in Settings. PwrAgent compacts eligible threads at the configured threshold. Claude Code and supported ACP backends also handle manual `/compact` through their own sessions.
+- Pull Requests - Add opt-in Forge Automation rules that leave matching maintainer-owned PRs alone by repository and optional label. Projects with merge restrictions can allow specific target branches. Show GitHub-managed stacks and use GitHub's stack merge flow with operator consent.
+- Reviews - Suppress duplicate review offers while a review is running and show when a review is queued. Keep review headers with the owning turn, and submit managed review findings as structured results.
+- Antigravity and ACP - Discover skills in the composer’s skill picker, preserve images and message order in replay, and keep replacement turns active when the previous turn finishes late. Show clearer MCP tool labels and preserve the sent prompt when steering lands during its turn.
+- Decisions - Read batch inputs from JSON or JSONL files and write results to a file. Choose whether results also appear inline.
+- Desktop - Keep Windows profiles opening when another instance holds the shared profile registry. Restore rich-text mentions and pasted thread links, show typed messages during voice sessions, and keep the Star Map camera in place while hiding offline instances by default.
+- Performance and Diagnostics - Reduce Git reads for navigation and PR stacks, and bound Token Miser startup and archive work. Surface CPU capture limits and make captures easier to rearm. Keep more main-process log history.
+
 ## v1.5.0 - 2026-11-25
 
 - Stacked Pull Requests - See layer order, health, and blockers from the sidebar and PR views. Add, adopt, remove, and restack local layers, with optional worktrees. Repairs, CI waits, and merge offers advance from the bottom up. After a parent merges, PwrAgent updates the immediate child before advancing the rest of the stack.

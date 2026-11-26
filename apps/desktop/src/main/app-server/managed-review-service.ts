@@ -75,7 +75,6 @@ import type {
 import { buildCodexTokenMiserDynamicToolSpecs, mergeCodexDynamicToolSpecs } from "./codex-thread-config";
 import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
-import { runGitCommand } from "./git-executable";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
 import { buildManagedReviewPrompt, managedReviewAcpRuntime } from "./managed-review";
 import {
@@ -91,7 +90,11 @@ import type { RegistryContext, RegistryHost } from "./registry-context";
 import { immutableReviewDiffHash, isOperatorReviewInput } from "./agent-review-submission";
 import { refreshReviewBaseBranch } from "./review-base-branch";
 import { resolveReviewProvenance } from "./review-provenance";
-import { assertReviewWorkspaceMatchesAttachedPullRequest, normalizeWorkspacePath } from "./review-workspace-guard";
+import {
+  assertReviewWorkspaceMatchesAttachedPullRequest,
+  normalizeWorkspacePath,
+  resolveLocalReviewWorktreeRoot,
+} from "./review-workspace-guard";
 import type { ThreadInfoStore } from "./thread-info-store";
 import { buildReviewStartFailurePrompt, reviewStartFailureFingerprint } from "./thread-orchestration-prompts";
 import {
@@ -774,10 +777,8 @@ export class ManagedReviewService {
           target: params.target,
           threadId: params.threadId,
         }),
-        managedMode && cwd && (reviewBackendDiffers || codexEnvironmentRuntime?.executionTarget !== "remote")
-          ? runGitCommand(cwd, ["rev-parse", "--show-toplevel"], { timeout: 10_000 })
-              .then(({ stdout }) => stdout.replace(/\r?\n$/, "") || undefined)
-              .catch(() => undefined)
+        managedMode && (reviewBackendDiffers || codexEnvironmentRuntime?.executionTarget !== "remote")
+          ? resolveLocalReviewWorktreeRoot(cwd)
           : undefined,
       ]);
       // A review on another provider cannot inherit the parent thread's model
@@ -854,6 +855,7 @@ export class ManagedReviewService {
             agentAntigravityAccess,
             turnAttribution,
             backend: reviewBackend,
+            checkoutRoot,
             cwd,
             // The parent thread's persisted Codex environment only describes
             // its own provider's runtime; a cross-provider review must not
@@ -1027,6 +1029,7 @@ export class ManagedReviewService {
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>;
     /** Backend that runs the review — the reviewer override when set. */
     backend: AppServerBackendKind;
+    checkoutRoot?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     cwd?: string;
     modelSettings: ModelSettings;
@@ -1159,7 +1162,10 @@ export class ManagedReviewService {
       parentThreadId: params.parentThreadId,
     });
     if (candidateLedger) {
-      this.candidateLedger.armToolTurn({ backend: "codex", threadId: thread.threadId }, null);
+      this.candidateLedger.armToolTurn({ backend: "codex", threadId: thread.threadId }, null, {
+        cwd: params.cwd,
+        worktreeRoot: params.checkoutRoot,
+      });
     }
     const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
     try {

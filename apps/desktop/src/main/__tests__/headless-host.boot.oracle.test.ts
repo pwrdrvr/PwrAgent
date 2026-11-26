@@ -71,8 +71,11 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "headless-host-boot-"));
   let stopChild: (() => Promise<unknown[]>) | undefined;
   onTestFinished(async () => {
-    await stopChild?.();
-    fs.rmSync(root, { recursive: true, force: true });
+    try {
+      await stopChild?.();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
   const env = { ...process.env, PWRAGENT_HOME: path.join(root, "home"), PWRAGENT_PROFILE: "fixture", CLAUDE_CONFIG_DIR: path.join(root, "claude") };
   const profile = ensureNamedProfileExists("fixture", { env });
@@ -121,15 +124,23 @@ it("boots and shuts down the real Node owners while preserving desktop-encrypted
   child.stderr?.on("data", (chunk) => { output += chunk.toString(); });
   // Wait for stdio to drain before reporting a startup failure.
   const exited = once(child, "close");
-  let stopRequested = false;
-  stopChild = async () => {
-    if (child.connected && !stopRequested) {
-      stopRequested = true;
-      child.send({ stop: true });
-    }
+  let ownerReady = false;
+  let stopping: typeof exited | undefined;
+  stopChild = () => stopping ??= (async () => {
+    // Until the readiness message the child may have no shutdown receiver.
+    const sent = ownerReady && child.connected && await new Promise<boolean>((resolve) => {
+      child.send({ stop: true }, (error) => resolve(!error));
+    }).catch(() => false);
+    if (!sent && child.exitCode === null && child.signalCode === null) child.kill();
     return await exited;
-  };
-  const ready = await Promise.race([once(child, "message").then(([value]) => value), exited.then(([code]) => { throw new Error(`Node owner exited before ready (${code}): ${output}`); })]);
+  })();
+  const ready = await Promise.race([
+    once(child, "message").then(([value]) => {
+      ownerReady = true;
+      return value;
+    }),
+    exited.then(([code]) => { throw new Error(`Node owner exited before ready (${code}): ${output}`); }),
+  ]);
   signal.throwIfAborted();
   expect(ready).toMatchObject({ ready: true, leaseHeld: true, messagingHeld: true, errors: [
     { name: "federationInstancePrivateKey", reason: expect.stringContaining("desktop OS keychain") },
