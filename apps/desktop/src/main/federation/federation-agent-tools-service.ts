@@ -809,23 +809,16 @@ async function createInstanceThread(
     const sourceThread = messageOrigin.sourceThread;
     const launchId = `create_instance_thread:${instance.instanceId}:${response.backend}:${response.threadId}`;
     const rawInput = args.input ?? "";
-    // Skip leading whitespace in O(ws) before slicing so giant prompts stay O(1)
-    // and never drop content behind long leading whitespace.
+    // Derive only a compact title from a bounded prefix; never store prompt text in threads.payload.
     let inputStart = 0;
     while (inputStart < rawInput.length && rawInput.charCodeAt(inputStart) <= 32) {
       inputStart += 1;
     }
-    const remainingLength = rawInput.length - inputStart;
-    const trimmedInput = remainingLength > 0
-      ? rawInput.slice(inputStart, inputStart + 4_001).trimEnd()
+    const titlePrefix = inputStart < rawInput.length
+      ? rawInput.slice(inputStart, inputStart + 512).replace(/[\uD800-\uDBFF]$/u, "")
       : "";
-    const boundedPrompt = trimmedInput
-      ? remainingLength > 4_000 || trimmedInput.length > 4_000
-        ? `${trimmedInput.slice(0, 3_999).trimEnd()}…`
-        : trimmedInput
-      : undefined;
     const title =
-      (trimmedInput ? shortenDerivedThreadTitle(trimmedInput.slice(0, 512)) : undefined)
+      (titlePrefix ? shortenDerivedThreadTitle(titlePrefix) : undefined)
       || directory.label;
     try {
       await targetStore.appendLaunchedThread({
@@ -836,7 +829,6 @@ async function createInstanceThread(
           source: "create_instance_thread",
           occurredAt: Date.now(),
           title,
-          ...(boundedPrompt ? { prompt: boundedPrompt } : {}),
           projectLabel: directory.label,
           startedThread: {
             backend: response.backend,

@@ -1,14 +1,18 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import {
   MAX_LAUNCHED_THREAD_LOG_ENTRIES,
   type ThreadLaunchedThread,
 } from "@pwragent/shared/contracts/navigation";
+import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
+import { createDesktopBackendRegistry } from "../app-server/backend-registry-wiring";
 import { createFederationAgentToolsHandler } from "../federation/federation-agent-tools-service";
 import type { DesktopFederationRuntime } from "../federation/federation-runtime";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { MockBackendClient } from "./helpers/backend-registry-fixture";
 import { createTempStateDb } from "./sqlite-test-utils";
 
 let stateDb: StateDb;
@@ -34,7 +38,6 @@ function makeLaunch(
     source: "handoff_task",
     occurredAt: 2_000,
     title: "Investigate cache invalidation",
-    prompt: "Check signing key TTL behavior.",
     projectLabel: "atlas-auth",
     startedThread: {
       backend: "codex",
@@ -133,7 +136,13 @@ describe("create_instance_thread launchedThreadLog recording", () => {
     operatorApproved?: boolean;
     resolveMessageOrigin?: () => { kind: "pwragent" };
   }) {
-    const appendLaunchedThread = vi.fn(async () => undefined);
+    const appendLaunchedThread = vi.fn<
+      (params: {
+        backend: string;
+        threadId: string;
+        launch: ThreadLaunchedThread;
+      }) => Promise<void>
+    >(async () => undefined);
     const onLaunchedThreadRecorded = vi.fn(async () => undefined);
     const materializeDirectoryLaunchpad = vi.fn(async () => ({
       backend: "claude" as const,
@@ -229,28 +238,29 @@ describe("create_instance_thread launchedThreadLog recording", () => {
     };
   }
 
-  it("records a launchedThreadLog entry and emits notification for agent calls", async () => {
+  it("records compact launchedThreadLog metadata (never prompt text) and emits notification for agent calls", async () => {
     const scenario = buildFederationCase();
     const response = await scenario.invoke();
     expect(response).toMatchObject({ ok: true });
     expect(scenario.appendLaunchedThread).toHaveBeenCalledTimes(1);
-    expect(scenario.appendLaunchedThread).toHaveBeenCalledWith(
-      expect.objectContaining({
-        backend: "codex",
-        threadId: "parent-thread-1",
-        launch: expect.objectContaining({
-          source: "create_instance_thread",
-          projectLabel: "atlas",
-          prompt: "Audit webhook retry metrics and add bounds.",
-          startedThread: expect.objectContaining({
-            backend: "claude",
-            threadId: "remote-child-7",
-            instanceId: "peer-m3",
-            instanceLabel: "M3 Studio",
-          }),
-        }),
-      }),
-    );
+    const recordedCall = scenario.appendLaunchedThread.mock.calls[0]?.[0];
+    expect(recordedCall).toBeDefined();
+    expect(recordedCall).toMatchObject({
+      backend: "codex",
+      threadId: "parent-thread-1",
+      launch: {
+        source: "create_instance_thread",
+        projectLabel: "atlas",
+        startedThread: {
+          backend: "claude",
+          threadId: "remote-child-7",
+          instanceId: "peer-m3",
+          instanceLabel: "M3 Studio",
+        },
+      },
+    });
+    // Prompt text must never be persisted into SQLite threads.payload.
+    expect("prompt" in (recordedCall!.launch as Record<string, unknown>)).toBe(false);
     expect(scenario.onLaunchedThreadRecorded).toHaveBeenCalledTimes(1);
   });
 
@@ -266,5 +276,183 @@ describe("create_instance_thread launchedThreadLog recording", () => {
     expect(await intake.invoke()).toMatchObject({ ok: true });
     expect(intake.appendLaunchedThread).not.toHaveBeenCalled();
     expect(intake.onLaunchedThreadRecorded).not.toHaveBeenCalled();
+  });
+});
+
+describe("handoff_task launchedThreadLog persistence and event scoping", () => {
+  it("persists compact metadata via backend-registry wiring, emits thread/launchedThreads/updated, and does not trigger ROW_CHANGE_METHODS", async () => {
+    expect(navigationQueryEventRequiresRefresh("thread/launchedThreads/updated")).toBe(false);
+
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "handoff-parent-1",
+          title: "Parent thread",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: 1_000,
+          linkedDirectories: [],
+        },
+      ],
+      startThreadResult: { threadId: "handoff-child-1" },
+    });
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      overlayStore: store,
+      threadTitleGenerationService: null,
+    });
+    onTestFinished(() => registry.close());
+
+    const launchedEvents: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      if (event.notification.method === "thread/launchedThreads/updated") {
+        launchedEvents.push(event);
+      }
+    });
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "handoff-parent-1",
+          turnId: "turn-live-1",
+          turn: { id: "turn-live-1" },
+        },
+      },
+    });
+
+    const result = await registry.handoffResearchWorker(
+      {
+        operation: "handoff_task",
+        context: {
+          backend: "codex",
+          threadId: "handoff-parent-1",
+          turnId: "turn-live-1",
+          callId: "call-handoff-1",
+        },
+        args: {
+          task: "Full secret prompt that must stay out of threads.payload.",
+          title: "Verify cache bounds",
+          workspaceMode: "none",
+          groupingMode: "none",
+          messagingAttachment: "none",
+        },
+      },
+      () => {},
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: { threadId: "handoff-child-1" },
+    });
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "handoff-parent-1",
+    });
+    expect(overlay?.launchedThreadLog).toHaveLength(1);
+    const recorded = overlay?.launchedThreadLog?.[0] as Record<string, unknown>;
+    expect(recorded).toMatchObject({
+      id: "handoff:codex:handoff-parent-1:turn-live-1:call-handoff-1",
+      source: "handoff_task",
+      title: "Verify cache bounds",
+      seedMode: "clean",
+      groupingMode: "none",
+      workspaceMode: "none",
+      startedThread: {
+        backend: "codex",
+        threadId: "handoff-child-1",
+      },
+    });
+    expect("prompt" in recorded).toBe(false);
+
+    expect(launchedEvents).toHaveLength(1);
+    expect(launchedEvents[0]).toMatchObject({
+      backend: "codex",
+      notification: {
+        method: "thread/launchedThreads/updated",
+        params: {
+          threadId: "handoff-parent-1",
+          launchId: "handoff:codex:handoff-parent-1:turn-live-1:call-handoff-1",
+        },
+      },
+    });
+  });
+
+  it("records turnStartFailure and swallows appendLaunchedThread errors without failing the handoff", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "handoff-parent-err",
+          title: "Parent thread",
+          titleSource: "explicit",
+          source: "codex",
+          updatedAt: 1_000,
+          linkedDirectories: [],
+        },
+      ],
+      startThreadResult: { threadId: "handoff-child-err" },
+    });
+    vi.spyOn(codexClient, "startTurn").mockRejectedValueOnce(new Error("initial turn rejected"));
+    const appendSpy = vi
+      .spyOn(store, "appendLaunchedThread")
+      .mockRejectedValueOnce(new Error("sqlite busy"));
+
+    const registry = createDesktopBackendRegistry({
+      codexClient,
+      overlayStore: store,
+      threadTitleGenerationService: null,
+    });
+    onTestFinished(() => registry.close());
+
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "handoff-parent-err",
+          turnId: "turn-live-2",
+          turn: { id: "turn-live-2" },
+        },
+      },
+    });
+
+    const result = await registry.handoffResearchWorker(
+      {
+        operation: "handoff_task",
+        context: {
+          backend: "codex",
+          threadId: "handoff-parent-err",
+          turnId: "turn-live-2",
+          callId: "call-handoff-2",
+        },
+        args: {
+          task: "Check fallback behavior",
+          title: "Fallback check",
+          workspaceMode: "none",
+          groupingMode: "none",
+          messagingAttachment: "none",
+        },
+      },
+      () => {},
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        threadId: "handoff-child-err",
+        turnStartFailure: { phase: "turn", message: "initial turn rejected" },
+      },
+    });
+    expect(appendSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "handoff-parent-err",
+        launch: expect.objectContaining({
+          turnStartFailure: "initial turn rejected",
+        }),
+      }),
+    );
   });
 });

@@ -96,7 +96,10 @@ import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-hist
 import type { DesktopApi } from "../../lib/desktop-api";
 import { parseReviewCommand } from "../../../../shared/review-command";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import {
+  agentEventMatchesThread,
+  threadSummaryIdentityKey,
+} from "../../lib/federated-thread-events";
 import { isThreadRemoteWorkHere } from "../navigation/ThreadRowStatus";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
 import { useThreadSkills } from "../../lib/useThreadSkills";
@@ -408,7 +411,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           threadId: thread.id,
           ...(federationTarget ? { federationTarget } : {}),
         },
-    threadKey: cardKey,
+    threadKey: threadSummaryIdentityKey(thread),
   });
   const composerScopeKey = buildThreadComposerScopeKey(thread.source, thread.id, federationTarget ?? { scope: "local" });
   const ownedComposerDraftStore = useOwnedComposerDraftStore(

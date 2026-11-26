@@ -289,6 +289,7 @@ export function useNavigationSelectedDetail(params: {
         && notification.method !== "thread/acpRuntime/updated"
         && notification.method !== "thread/prWatches/updated"
         && notification.method !== "thread/subAgentFailures/dismissed"
+        && notification.method !== "thread/launchedThreads/updated"
         && !(selectedOwner && isThreadPendingWakeInvalidation(notification.method, notification.params))) return;
       // A canonical event supersedes the retained collection too. Otherwise
       // the configuration read overlays its older cache and briefly erases

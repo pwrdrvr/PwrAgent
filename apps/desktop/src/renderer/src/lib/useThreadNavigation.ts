@@ -993,7 +993,6 @@ function launchedThreadLogsEqual(
       || x.occurredAt !== y.occurredAt
       || x.title !== y.title
       || x.detail !== y.detail
-      || x.prompt !== y.prompt
       || x.projectLabel !== y.projectLabel
       || x.seedMode !== y.seedMode
       || x.groupingMode !== y.groupingMode
@@ -5355,11 +5354,6 @@ export function useThreadNavigation(
         // Completed questionnaire answers are persisted in the thread overlay
         // because App Server replay does not include request-user-input items.
         // Refresh so the sanitized Q/A summary appears in the transcript now.
-        scheduleEventRefresh();
-        return;
-      }
-
-      if (method === "thread/launchedThreads/updated") {
         scheduleEventRefresh();
         return;
       }

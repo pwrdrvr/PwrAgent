@@ -2916,10 +2916,7 @@ export class ThreadWorkspaceService {
         childLinkedDirectory?.label
         || (childCwd ? path.basename(childCwd) : undefined)
         || undefined;
-      // Preserve Markdown newlines while capping work to O(min(len, 4000)).
-      const boundedPrompt = task.length > 4_000
-        ? `${task.slice(0, 3_999).trimEnd()}…`
-        : task;
+      // Store compact control-plane metadata only (never prompt text) in threads.payload.
       try {
         await this.context.stores.threads.appendLaunchedThread({
           backend: sourceBackend,
@@ -2929,7 +2926,6 @@ export class ThreadWorkspaceService {
             source: "handoff_task",
             occurredAt: createdAt,
             title,
-            ...(boundedPrompt ? { prompt: boundedPrompt } : {}),
             ...(projectLabel ? { projectLabel } : {}),
             startedThread: {
               backend,

@@ -350,7 +350,6 @@ describe("TranscriptLaunchedTodo in TranscriptList", () => {
       source: "handoff_task",
       occurredAt: 2_100,
       title: "Add signing-key cache in atlas-auth",
-      prompt: "Implement a bounded per-tenant signing-key TTL cache.",
       projectLabel: "atlas-auth",
       startedThread: {
         backend: "codex",
@@ -365,7 +364,6 @@ describe("TranscriptLaunchedTodo in TranscriptList", () => {
       source: "handoff_task",
       occurredAt: 2_400,
       title: "Explore alternate retry policy",
-      prompt: "Compare exponential vs jittered backoff.",
       projectLabel: "atlas",
       startedThread: {
         backend: "claude",
@@ -380,7 +378,6 @@ describe("TranscriptLaunchedTodo in TranscriptList", () => {
       source: "create_instance_thread",
       occurredAt: 2_600,
       title: "Run GPU benchmark on M3 Studio",
-      prompt: "Execute the inference latency sweep.",
       projectLabel: "atlas-bench",
       startedThread: {
         backend: "codex",
@@ -441,10 +438,9 @@ describe("TranscriptLaunchedTodo in TranscriptList", () => {
       threadId: "handoff-child-1",
     }));
 
-    // Expanding the forked card reveals the turn start failure + prompt.
+    // Expanding the forked card reveals the turn start failure.
     fireEvent.click(screen.getByRole("button", { name: /Forked thread/ }));
     expect(screen.getByText("Initial turn failed")).toBeInTheDocument();
     expect(screen.getByText("Backend busy on initial turn")).toBeInTheDocument();
-    expect(screen.getByText("Compare exponential vs jittered backoff.")).toBeInTheDocument();
   });
 });

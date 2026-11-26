@@ -590,7 +590,6 @@ export function serializeNavigationSnapshotForHash(params: {
         occurredAt: entry.occurredAt,
         title: entry.title,
         detail: entry.detail ?? null,
-        prompt: entry.prompt ?? null,
         projectLabel: entry.projectLabel ?? null,
         steps: entry.steps ?? null,
         startedThread: {

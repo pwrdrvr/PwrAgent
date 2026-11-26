@@ -1097,7 +1097,6 @@ describe("mergeLaunchedThreadRecords and injectLaunchedThreads unified propertie
             source: spec.source,
             occurredAt: spec.occurredAt,
             title: `Tool ${spec.id}`,
-            prompt: "Run checks.",
             startedThread: {
               backend: spec.backend,
               threadId: spec.corruptChild ? "   " : spec.childId,
@@ -1212,7 +1211,6 @@ describe("mergeLaunchedThreadRecords and injectLaunchedThreads unified propertie
             source,
             occurredAt: 500,
             title: "Audit retries",
-            prompt: "Verify backoff ceiling.",
             projectLabel: "atlas",
             startedThread: {
               backend: "codex",

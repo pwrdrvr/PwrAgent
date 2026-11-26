@@ -4076,8 +4076,6 @@ export type ThreadLaunchedThread = {
   title: string;
   /** Optional summary text. */
   detail?: string;
-  /** Optional bounded initial prompt/task sent to the child thread. */
-  prompt?: string;
   /** Optional target project display label. */
   projectLabel?: string;
   /** Optional plan/checklist step labels. */

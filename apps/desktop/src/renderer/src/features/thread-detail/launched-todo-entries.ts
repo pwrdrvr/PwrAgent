@@ -761,7 +761,6 @@ export function buildLaunchedThreadPresentation(params: {
       : "Started thread";
   const title = launch.title.trim() || linkRef.fallbackLabel;
   const detail = launch.detail?.trim() || undefined;
-  const prompt = launch.prompt?.trim() || undefined;
   const steps: ThreadTodoItem[] = (launch.steps ?? [])
     .map((text) => text.trim())
     .filter(Boolean)
@@ -803,7 +802,6 @@ export function buildLaunchedThreadPresentation(params: {
     ...(setupFailure ? ["", `Environment setup failed: ${setupFailure}`] : []),
     ...(turnStartFailure ? ["", `Initial turn failed: ${turnStartFailure}`] : []),
     ...(steps.length > 0 ? ["", "Plan steps:", ...steps.map((step) => `- ${step.text}`)] : []),
-    ...(prompt ? ["", "Prompt:", prompt] : []),
   ];
 
   return {
@@ -811,10 +809,9 @@ export function buildLaunchedThreadPresentation(params: {
     copyText: copyParts.join("\n"),
     ...(detail ? { detail } : {}),
     facts,
-    hasExpandableBody: Boolean(prompt || steps.length > 0 || setupFailure || turnStartFailure),
+    hasExpandableBody: Boolean(steps.length > 0 || setupFailure || turnStartFailure),
     launchedAt: launch.occurredAt,
     linkRef,
-    ...(prompt ? { prompt } : {}),
     ...(setupFailure ? { setupFailure } : {}),
     ...(turnStartFailure ? { turnStartFailure } : {}),
     ...(statusChipLabel ? { statusChipLabel } : {}),
