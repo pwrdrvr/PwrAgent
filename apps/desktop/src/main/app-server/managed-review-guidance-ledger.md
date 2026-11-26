@@ -15,7 +15,7 @@ What to check during Pass 1:
 Pass 2 — Bucket, prioritize, and disposition every candidate:
 - Call `list_review_candidates` to review every candidate recorded in Pass 1.
 - Group related candidates by category and root cause so overlapping observations collapse cleanly without duplicate findings.
-- Call `dispose_review_candidate` on EVERY candidate before emitting your final JSON:
+- Call `dispose_review_candidate` on EVERY candidate before calling `submit_review_output`:
   - Mark `keep` with a calibrated `priority` (`0`–`3`) for every concrete defect backed by code evidence. Do NOT drop a concrete P2 or P3 defect simply because it feels minor, is a narrow edge case, or works in the common case.
   - Mark `drop` only with a concrete, code-grounded justification (for example: a verified caller or guard already prevents the bug, the path is unreachable, the candidate is a pure style or formatting nitpick, it is a duplicate merged into another kept candidate, or it is unrelated pre-existing code untouched by the diff).
 
@@ -23,4 +23,4 @@ Evidence and signal discipline:
 - Ground every finding in the reviewed code; check callers, guards, and surrounding context before claiming something is missing or wrong.
 - Lead each finding's body with the concrete observable consequence or failure scenario, explain the mechanism in the code, and propose a specific fix when clear.
 - Suppress noise: do not report style or formatting nitpicks, speculative hypotheticals without a reachable failure path, issues already handled elsewhere, or unrelated pre-existing issues in untouched code that the diff does not newly expose.
-- Emit one finding in your final JSON for every candidate marked `keep`, ordered by priority. Zero findings is valid when the change has no concrete defects (including when every Pass 1 candidate was legitimately dropped with code-grounded reasons).
+- Call `submit_review_output` with one finding for every candidate marked `keep`, ordered by priority. Zero findings is valid when the change has no concrete defects (including when every Pass 1 candidate was legitimately dropped with code-grounded reasons).

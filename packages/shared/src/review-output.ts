@@ -22,13 +22,7 @@ export function reviewEntryFailure(
   return undefined;
 }
 
-/**
- * The structured review contract a PwrAgent Sub Agent child answers in. Main
- * parses the child's reply into the review card's output and its text form.
- */
-export const REVIEW_OUTPUT_INSTRUCTIONS = [
-  "Return only one JSON object with this exact top-level shape:",
-  '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.85}',
+const REVIEW_OUTPUT_RUBRIC_LINES = [
   'overall_correctness must be exactly "patch is correct" or "patch is incorrect" — no other wording. Use "patch is incorrect" when you report any concrete defect that should be fixed (including P0-P2 issues), and "patch is correct" when no actionable defects remain.',
   // The field had no stated meaning for most of its life, so the number the
   // card printed was whatever each model decided it meant. The example value
@@ -42,7 +36,31 @@ export const REVIEW_OUTPUT_INSTRUCTIONS = [
   "- 1 (P1): Urgent, high-impact bug, broken contract, or major regression likely hit in normal usage. Should fix before merge.",
   "- 2 (P2): Moderate-impact issue worth fixing (edge-case or lifecycle bug, violated repository rule, or a non-falsifying/missing regression test that leaves the core fix unprotected).",
   "- 3 (P3): Low-impact, narrow-scope defect with a specific worthwhile fix (for example, inaccurate telemetry/metric semantics, misleading diagnostics, or minor contract roughness).",
+];
+
+/**
+ * The structured review contract a PwrAgent Sub Agent child answers in when no
+ * managed review tool is attached. Main parses the child's reply into the
+ * review card's output and its text form.
+ */
+export const REVIEW_OUTPUT_INSTRUCTIONS = [
+  "Return only one JSON object with this exact top-level shape:",
+  '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.85}',
+  ...REVIEW_OUTPUT_RUBRIC_LINES,
   "Do not wrap the JSON in Markdown fences and do not include prose outside it.",
+].join("\n");
+
+/**
+ * The structured review contract when the managed review child has the
+ * `submit_review_output` tool attached. Passing findings as structured tool
+ * arguments lets the provider/MCP transport serialize JSON instead of asking
+ * the model to hand-escape long Markdown prose in free text.
+ */
+export const REVIEW_OUTPUT_TOOL_INSTRUCTIONS = [
+  "Submit your final review by calling the `submit_review_output` tool with this top-level shape:",
+  '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.85}',
+  ...REVIEW_OUTPUT_RUBRIC_LINES,
+  "After `submit_review_output` succeeds, end your turn with a brief one-sentence confirmation rather than repeating the JSON in plain text.",
 ].join("\n");
 
 /**
@@ -186,7 +204,7 @@ function readReviewArtifactObject(
  * badge next to a "0 findings" badge. When the wording says nothing either
  * way, the findings list is the more trustworthy signal.
  */
-function normalizeOverallCorrectness(
+export function normalizeOverallCorrectness(
   value: string,
   findings: AppServerReviewOutput["findings"],
 ): AppServerReviewOutput["overall_correctness"] {
