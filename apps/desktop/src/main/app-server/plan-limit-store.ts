@@ -424,7 +424,7 @@ function mergeWindow(
   if (!known || limit.windowKey === "credits") return reading;
   const order = windowOrder(known.limit.resetAt, limit.resetAt, Math.max(known.toleranceMs, reading.toleranceMs));
   // A new window: nothing measured in the old one carries over.
-  if (order > 0) return { ...reading, limit: { ...withoutUsage(known.limit), ...limit } };
+  if (order > 0) return newest && complete ? reading : { ...reading, limit: { ...withoutUsage(known.limit), ...limit } };
   // Even the newest read cannot bring back an earlier window: a coarse reading
   // recorded while it was in flight may have started the next one.
   if (order < 0) return undefined;

@@ -364,4 +364,61 @@ describe("usage limit history", () => {
     expect(selected.windowStart).toBe(t0);
     expect(selected.pacePerHour).toBeCloseTo(17.5);
   });
+
+  it("ignores a stale historical reset on an idle 5h pool when choosing the active 5h series", () => {
+    const [liveBeatsHistorical] = buildLimitAccounts([{
+      ...studio,
+      history: [
+        {
+          observedAt: t0 - 12 * HOUR,
+          provider: "google",
+          limits: [{ name: "5h Gemini limit", limitId: "gemini-5h", usedPercent: 45, resetAt: t0 - 10 * HOUR, windowMinutes: 300 }],
+        },
+        {
+          observedAt: t0 - 9 * HOUR,
+          provider: "google",
+          limits: [{ name: "5h Gemini limit", limitId: "gemini-5h", usedPercent: 0, windowMinutes: 300 }],
+        },
+      ],
+      current: {
+        observedAt: t0 + HOUR,
+        provider: "google",
+        limits: [
+          { name: "5h Gemini limit", limitId: "gemini-5h", usedPercent: 0, windowMinutes: 300 },
+          { name: "5h Claude/GPT limit", limitId: "3p-5h", usedPercent: 0, resetAt: t0 + 5 * HOUR, windowMinutes: 300 },
+        ],
+      },
+    }]);
+    const liveSelected = fiveHourSeries(liveBeatsHistorical)!;
+    expect(liveSelected.limitId).toBe("3p-5h");
+    expect(liveSelected.latest.resetAt).toBe(t0 + 5 * HOUR);
+    expect(seriesStart(liveSelected)).toBe(t0);
+
+    const [neverUsedBeatsStaleIdle] = buildLimitAccounts([{
+      ...studio,
+      history: [
+        {
+          observedAt: t0 - 48 * HOUR,
+          provider: "google",
+          limits: [{ name: "5h Claude/GPT limit", limitId: "3p-5h", usedPercent: 60, resetAt: t0 - 46 * HOUR, windowMinutes: 300 }],
+        },
+        {
+          observedAt: t0 - 45 * HOUR,
+          provider: "google",
+          limits: [{ name: "5h Claude/GPT limit", limitId: "3p-5h", usedPercent: 0, windowMinutes: 300 }],
+        },
+      ],
+      current: {
+        observedAt: t0,
+        provider: "google",
+        limits: [
+          { name: "5h Gemini limit", limitId: "gemini-5h", usedPercent: 0, windowMinutes: 300 },
+          { name: "5h Claude/GPT limit", limitId: "3p-5h", usedPercent: 0, windowMinutes: 300 },
+        ],
+      },
+    }]);
+    const idleSelected = fiveHourSeries(neverUsedBeatsStaleIdle)!;
+    expect(idleSelected.limitId).toBe("gemini-5h");
+    expect(seriesStart(idleSelected)).toBeUndefined();
+  });
 });

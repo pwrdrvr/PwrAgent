@@ -361,9 +361,9 @@ export function sinceResetSeries(account: LimitAccount | undefined): LimitSeries
  * primary window of another stated length is not the 5-hour limit.
  *
  * When a provider reports multiple 5-hour pools (Antigravity's Gemini and
- * Claude/GPT pools), prefer an anchored pool with a known window start or
- * reset over an idle pool whose reset was omitted, breaking ties by higher
- * usage and then existing order.
+ * Claude/GPT pools), prefer a pool with a live `resetAt` over an idle pool
+ * whose reset was omitted (even if the idle pool has a historical reset's
+ * `windowStart`), breaking ties by higher usage and then existing order.
  */
 export function fiveHourSeries(account: LimitAccount | undefined): LimitSeries | undefined {
   const candidates = account?.series.filter((series) => series.windowMinutes === 300) ?? [];
@@ -376,9 +376,9 @@ export function fiveHourSeries(account: LimitAccount | undefined): LimitSeries |
 }
 
 function isBetterFiveHourSeries(candidate: LimitSeries, current: LimitSeries): boolean {
-  const candidateAnchored = candidate.windowStart !== undefined || candidate.latest.resetAt !== undefined;
-  const currentAnchored = current.windowStart !== undefined || current.latest.resetAt !== undefined;
-  if (candidateAnchored !== currentAnchored) return candidateAnchored;
+  const candidateHasReset = candidate.latest.resetAt !== undefined;
+  const currentHasReset = current.latest.resetAt !== undefined;
+  if (candidateHasReset !== currentHasReset) return candidateHasReset;
   return candidate.latest.usedPercent > current.latest.usedPercent;
 }
 

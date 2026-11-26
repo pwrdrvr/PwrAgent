@@ -571,6 +571,52 @@ describe("PlanLimitStore", () => {
         },
       ));
     });
+
+    it("does not carry forward omitted non-usage fields across a window rollover on a complete newest read", () => {
+      fc.assert(fc.property(
+        fc.integer({ min: 0, max: 100 }),
+        fc.integer({ min: 0, max: 100 }),
+        fc.constantFrom(300, 10_080),
+        fc.integer({ min: 100, max: 100_000 }),
+        fc.boolean(),
+        (priorUsed, nextUsed, priorWindowMinutes, priorLimit, priorExpires) => {
+          const { store } = storeAt(now);
+          const firstReset = now + hour;
+          const nextReset = now + 6 * hour;
+          const prior: BackendRateLimitSummary = {
+            name: "5h Gemini limit",
+            limitId: "gemini-5h",
+            limitName: "Gemini Models",
+            usedPercent: priorUsed,
+            limit: priorLimit,
+            windowMinutes: priorWindowMinutes,
+            expires: priorExpires,
+            resetAt: firstReset,
+          };
+          const rolled: BackendRateLimitSummary = {
+            name: "5h Gemini limit",
+            limitId: "gemini-5h",
+            usedPercent: nextUsed,
+            resetAt: nextReset,
+          };
+          store.record("acp:antigravity", {
+            limits: [prior],
+            since: store.mark("acp:antigravity"),
+            precise: true,
+            dated: true,
+            complete: true,
+          });
+          store.record("acp:antigravity", {
+            limits: [rolled],
+            since: store.mark("acp:antigravity"),
+            precise: true,
+            dated: true,
+            complete: true,
+          });
+          expect(store.limits("acp:antigravity")).toEqual([rolled]);
+        },
+      ));
+    });
   });
 
   it("tells subscribers when a window passes its reset", async () => {

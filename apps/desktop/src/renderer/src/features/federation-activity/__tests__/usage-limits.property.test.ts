@@ -130,6 +130,52 @@ describe("usage limit schedule properties", () => {
     ));
   });
 
+  it("prefers a 5h pool with a live resetAt over an idle 5h pool that has a historical reset", () => {
+    fc.assert(fc.property(
+      fc.boolean(),
+      fc.integer({ min: 10, max: 95 }),
+      fc.integer({ min: 0, max: 99 }),
+      fc.integer({ min: 6, max: 72 }),
+      (geminiIdle, priorPercent, activePercent, hoursAgo) => {
+        const idleMeta = geminiIdle
+          ? { name: "5h Gemini limit", limitId: "gemini-5h" }
+          : { name: "5h Claude/GPT limit", limitId: "3p-5h" };
+        const activeMeta = geminiIdle
+          ? { name: "5h Claude/GPT limit", limitId: "3p-5h" }
+          : { name: "5h Gemini limit", limitId: "gemini-5h" };
+        const priorAt = START - hoursAgo * HOUR;
+        const priorResetAt = priorAt + 2 * HOUR;
+        const [account] = buildLimitAccounts([{
+          ...fixtureOwner,
+          history: [
+            {
+              observedAt: priorAt,
+              provider: "google",
+              limits: [{ ...idleMeta, usedPercent: priorPercent, resetAt: priorResetAt, windowMinutes: 300 }],
+            },
+            {
+              observedAt: priorResetAt + HOUR,
+              provider: "google",
+              limits: [{ ...idleMeta, usedPercent: 0, windowMinutes: 300 }],
+            },
+          ],
+          current: {
+            observedAt: START + HOUR,
+            provider: "google",
+            limits: [
+              { ...idleMeta, usedPercent: 0, windowMinutes: 300 },
+              { ...activeMeta, usedPercent: activePercent, resetAt: START + 5 * HOUR, windowMinutes: 300 },
+            ],
+          },
+        }]);
+        const selected = fiveHourSeries(account)!;
+        expect(selected.limitId).toBe(activeMeta.limitId);
+        expect(selected.latest.resetAt).toBe(START + 5 * HOUR);
+        expect(selected.windowStart).toBe(START);
+      },
+    ));
+  });
+
   it("keeps pre-reset percentages from changing the new window's start or pace", () => {
     fc.assert(fc.property(fc.record({
       beforeHours: fc.integer({ min: 1, max: 48 }),
