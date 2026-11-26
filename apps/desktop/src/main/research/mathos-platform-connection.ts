@@ -168,13 +168,25 @@ export async function listMathosTeams(deps: MathosPlatformDeps, target: Pick<Mat
 }
 
 /** Opens the team's VM for a runtime ticket. `wake: false`: an asleep VM stays asleep. */
-export async function openMathosRuntime(deps: MathosPlatformDeps, target: MathosPlatformTarget, runtime: MathosRuntimeVersion): Promise<{ environment: string; ticket: string }> {
+export async function openMathosRuntime(deps: MathosPlatformDeps, target: MathosPlatformTarget, runtime: MathosRuntimeVersion,
+  signal?: AbortSignal): Promise<{ environment: string; ticket: string }> {
   const now = deps.now ?? Date.now;
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const wait = (ms: number) => {
+    if (!signal) return sleep(ms);
+    if (signal.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const done = () => { signal.removeEventListener("abort", done); resolve(); };
+      signal.addEventListener("abort", done, { once: true });
+      void sleep(ms).then(done, done);
+    });
+  };
   const started = now();
   for (;;) {
+    if (signal?.aborted) throw new MathosPlatformError("The MathOS Platform connection is closed.");
     const { status, value } = await platformCall(deps, target, "open",
       { version: runtime.version, ipc_version: runtime.ipc, wake: false, ticket: true, team: target.team });
+    if (signal?.aborted) throw new MathosPlatformError("The MathOS Platform connection is closed.");
     const body = record(value);
     if (body?.state === "asleep" || body?.code === "asleep") {
       throw new MathosPlatformError("This team’s MathOS VM is asleep. Open MathOS to wake it, then try again.", "asleep");
@@ -183,7 +195,7 @@ export async function openMathosRuntime(deps: MathosPlatformDeps, target: Mathos
       if (now() - started >= PREPARING_WAIT_MS) {
         throw new MathosPlatformError("The MathOS Platform is still preparing this team’s VM. Try again in a few minutes.", "preparing");
       }
-      await sleep(PREPARING_POLL_MS);
+      await wait(PREPARING_POLL_MS);
       continue;
     }
     if (status !== 200) throw refused(status, value, "open this team’s VM");
@@ -245,24 +257,10 @@ export async function connectMathosRuntime(deps: MathosPlatformDeps, target: Mat
     entry.reject(new MathosPlatformError(message, typeof error?.code === "string" ? error.code : undefined));
   };
 
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    const settle = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (error) { closed = true; try { socket.close(1000); } catch { /* not open */ } reject(error); } else resolve();
-    };
-    const timer = setTimeout(() => settle(new MathosPlatformError("The MathOS runtime did not answer in time.")), CONNECT_TIMEOUT_MS);
-    socket.addEventListener("open", () => {
-      if (socket.protocol !== MATHOS_RUNTIME_SUBPROTOCOL) { settle(new MathosPlatformError("The MathOS runtime speaks a different protocol version.")); return; }
-      write(`${JSON.stringify({ nucleus_key: target.apiKey })}\n`);
-      settle();
-    });
-    socket.addEventListener("error", () => settle(new MathosPlatformError("Could not connect to the MathOS runtime.")));
-    socket.addEventListener("close", () => settle(new MathosPlatformError("Could not connect to the MathOS runtime.")));
-  });
-
+  // Attach message and close handlers before `open` settles so frames or an immediate
+  // close (for example 1008 after auth) arriving before the next microtask are never lost.
+  let openSettled = false;
+  let openSettle!: (error?: Error) => void;
   socket.addEventListener("message", ({ data }) => {
     if (closed) return;
     if (typeof data === "string") { fail("The MathOS runtime sent an unexpected text frame."); return; }
@@ -284,9 +282,30 @@ export async function connectMathosRuntime(deps: MathosPlatformDeps, target: Mat
     if (start < chunk.length) { buffered.push(chunk.slice(start)); bufferedBytes += chunk.length - start; }
     if (bufferedBytes > MAX_LINE_BYTES) fail("The MathOS runtime sent a line longer than PwrAgent reads.");
   });
-  socket.addEventListener("close", ({ code }) => fail(code === 1008
-    ? "The MathOS runtime refused this connection."
-    : "The MathOS runtime connection closed."));
+  socket.addEventListener("close", ({ code }) => {
+    if (!openSettled) { openSettle(new MathosPlatformError("Could not connect to the MathOS runtime.")); return; }
+    fail(code === 1008
+      ? "The MathOS runtime refused this connection."
+      : "The MathOS runtime connection closed.");
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    const settle = (error?: Error) => {
+      if (openSettled) return;
+      openSettled = true;
+      clearTimeout(timer);
+      if (error) { closed = true; try { socket.close(1000); } catch { /* not open */ } reject(error); } else resolve();
+    };
+    openSettle = settle;
+    const timer = setTimeout(() => settle(new MathosPlatformError("The MathOS runtime did not answer in time.")), CONNECT_TIMEOUT_MS);
+    socket.addEventListener("open", () => {
+      if (socket.protocol !== MATHOS_RUNTIME_SUBPROTOCOL) { settle(new MathosPlatformError("The MathOS runtime speaks a different protocol version.")); return; }
+      try { write(`${JSON.stringify({ nucleus_key: target.apiKey })}\n`); }
+      catch { settle(new MathosPlatformError("Could not send to the MathOS runtime.")); return; }
+      settle();
+    });
+    socket.addEventListener("error", () => settle(new MathosPlatformError("Could not connect to the MathOS runtime.")));
+  });
 
   return {
     request(op, params) {
@@ -409,19 +428,21 @@ export function openMathosPlatformConnection(target: MathosPlatformTarget, deps:
   let runtime: Promise<RuntimeSocket> | undefined;
   let socket: RuntimeSocket | undefined;
   let closed = false;
+  const abort = new AbortController();
 
   const connect = async (): Promise<RuntimeSocket> => {
     if (closed) throw new MathosPlatformError("The MathOS Platform connection is closed.");
     if (socket?.closed) { runtime = undefined; socket = undefined; }
     runtime ??= (async () => {
       const version = await readMathosRuntimeVersion(deps, target.origin);
-      const opened = await openMathosRuntime(deps, target, version);
+      const opened = await openMathosRuntime(deps, target, version, abort.signal);
       const connected = await connectMathosRuntime(deps, target, opened);
       if (closed) { connected.close(); throw new MathosPlatformError("The MathOS Platform connection is closed."); }
       socket = connected;
       return connected;
     })();
-    try { return await runtime; } catch (error) { runtime = undefined; throw error; }
+    const pending = runtime;
+    try { return await pending; } catch (error) { if (runtime === pending) runtime = undefined; throw error; }
   };
 
   const observe = async (op: string, params: Record<string, unknown>) => (await connect()).request(op, params);
@@ -455,6 +476,7 @@ export function openMathosPlatformConnection(target: MathosPlatformTarget, deps:
     },
     close() {
       closed = true;
+      abort.abort();
       socket?.close();
       void runtime?.then((connected) => connected.close(), () => undefined);
     },
