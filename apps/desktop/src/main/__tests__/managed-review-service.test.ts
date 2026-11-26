@@ -538,4 +538,68 @@ describe("ManagedReviewService pending review starts", () => {
       expect(submitTurn).toHaveBeenCalledTimes(expectedNotices);
     }), { numRuns: 200 });
   });
+
+  it("correlates inner inline Codex review events with the outer review rootTurnId", async () => {
+    const harness = createReviewHarness();
+    await harness.service.startReview(REVIEW_REQUEST);
+    harness.activity.setReviewInterrupt(
+      { threadId: THREAD, turnId: REVIEW_TURN },
+      "inner-review-turn",
+    );
+
+    const startedEvent: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: THREAD,
+          turnId: "inner-review-turn",
+          turn: { id: "inner-review-turn", status: "inProgress" },
+        },
+      },
+    };
+    const decoratedStarted = harness.service.withReviewRuntimeMetadata(startedEvent);
+    expect(decoratedStarted.notification).toMatchObject({
+      method: "turn/started",
+      params: {
+        threadId: THREAD,
+        turnId: "inner-review-turn",
+        turn: { id: "inner-review-turn", rootTurnId: REVIEW_TURN },
+      },
+    });
+
+    const promptEvent: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: THREAD,
+          turnId: "inner-review-turn",
+          item: { id: "prompt-1", type: "userMessage", text: "Review the current code changes and provide prioritized findings." },
+        },
+      },
+    };
+    const decoratedPrompt = harness.service.withReviewRuntimeMetadata(promptEvent);
+    expect(decoratedPrompt.notification).toMatchObject({
+      method: "item/completed",
+      params: {
+        threadId: THREAD,
+        turnId: "inner-review-turn",
+        rootTurnId: REVIEW_TURN,
+      },
+    });
+
+    const unrelatedPrompt: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: THREAD,
+          turnId: "ordinary-turn",
+          item: { id: "prompt-2", type: "userMessage", text: "Hello" },
+        },
+      },
+    };
+    expect(harness.service.withReviewRuntimeMetadata(unrelatedPrompt)).toBe(unrelatedPrompt);
+  });
 });

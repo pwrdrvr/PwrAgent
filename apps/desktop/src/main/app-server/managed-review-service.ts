@@ -2570,13 +2570,70 @@ export class ManagedReviewService {
     } as AgentEvent);
   }
 
+  private resolveInlineNativeCodexReviewRootTurnId(
+    threadId: string,
+    turnId: string,
+  ): string | undefined {
+    const matches = (records: Iterable<ReviewSubAgentRecord>): string | undefined => {
+      for (const record of records) {
+        if (
+          record.mode !== "native"
+          || record.backend !== "codex"
+          || record.reviewThreadId !== record.parentThreadId
+          || record.reviewThreadId !== threadId
+          || record.turnId === turnId
+        ) {
+          continue;
+        }
+        const reviewTurnKey = buildActiveTurnModeKey(record.reviewThreadId, record.turnId);
+        if (this.context.turnState.reviewInterrupt(reviewTurnKey) === turnId) {
+          return record.turnId;
+        }
+      }
+      return undefined;
+    };
+    return (
+      matches(this.context.turnState.liveReviewRecords().values())
+      ?? matches(this.reviewSubAgentsByReviewTurn.values())
+    );
+  }
+
   /**
    * Provider transcripts do not attach model settings to review-mode items.
    * The registry owns that association for the review's lifetime, so include
-   * it in the live item as well as the durable review artifact.
+   * it in the live item as well as the durable review artifact. Also propagate
+   * the outer review turn ID onto correlated inner inline Codex review events
+   * so renderers can suppress the generated review prompt live.
    */
   withReviewRuntimeMetadata(event: AgentEvent): AgentEvent {
-    if (event.notification.method !== "item/completed") {
+    const method = event.notification.method;
+    if (method === "turn/started" && event.backend === "codex") {
+      const params = readRecord(event.notification.params);
+      const threadId = readNonEmptyString(params?.threadId);
+      const turn = readRecord(params?.turn);
+      const turnId = readNonEmptyString(turn?.id) ?? readNonEmptyString(params?.turnId);
+      if (!threadId || !turn || !turnId || typeof turn.rootTurnId === "string") {
+        return event;
+      }
+      const rootTurnId = this.resolveInlineNativeCodexReviewRootTurnId(threadId, turnId);
+      if (!rootTurnId) {
+        return event;
+      }
+      return {
+        ...event,
+        notification: {
+          ...event.notification,
+          params: {
+            ...event.notification.params,
+            turn: {
+              ...turn,
+              rootTurnId,
+            },
+          },
+        },
+      } as AgentEvent;
+    }
+    if (method !== "item/started" && method !== "item/completed") {
       return event;
     }
     const params = readRecord(event.notification.params);
@@ -2584,10 +2641,30 @@ export class ManagedReviewService {
     const turnId = readNonEmptyString(params?.turnId);
     const item = readRecord(params?.item);
     const itemType = readNonEmptyString(item?.type);
+    if (!threadId || !turnId || !item) {
+      return event;
+    }
+    if (event.backend === "codex" && itemType === "userMessage") {
+      if (typeof params?.rootTurnId === "string") {
+        return event;
+      }
+      const rootTurnId = this.resolveInlineNativeCodexReviewRootTurnId(threadId, turnId);
+      if (!rootTurnId) {
+        return event;
+      }
+      return {
+        ...event,
+        notification: {
+          ...event.notification,
+          params: {
+            ...event.notification.params,
+            rootTurnId,
+          },
+        },
+      } as AgentEvent;
+    }
     if (
-      !threadId
-      || !turnId
-      || !item
+      method !== "item/completed"
       || (itemType !== "enteredReviewMode" && itemType !== "exitedReviewMode")
     ) {
       return event;

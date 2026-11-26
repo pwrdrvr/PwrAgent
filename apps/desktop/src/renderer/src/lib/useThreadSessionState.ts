@@ -228,6 +228,8 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   pendingReviewSubmissions?: ReadonlySet<symbol>;
   // A review may take focus before the parent turn's terminal event arrives.
   pendingUsageByTurn?: ReadonlyMap<string, PendingTurnUsage>;
+  /** Bounded turnId -> rootTurnId map learned from live turn notifications. */
+  turnRootIds?: ReadonlyMap<string, string>;
   settledTransientMessages: AppServerTransientThreadMessageEntry[];
   transientMessage?: AppServerTransientThreadMessageEntry;
   response?: AppServerReadThreadResponse;
@@ -2632,7 +2634,11 @@ function carryForwardTranscriptEntryOrder(
       && source.type === "message"
       && !isSteeredMessage(entry)
       && isSteeredMessage(source);
-    const turn = source.turn && !entry.turn ? source.turn : undefined;
+    const turn = source.turn && !entry.turn
+      ? source.turn
+      : entry.turn && entry.turn.rootTurnId === undefined && source.turn?.rootTurnId !== undefined
+        ? { ...entry.turn, rootTurnId: source.turn.rootTurnId }
+        : undefined;
     const createdAt =
       typeof source.createdAt === "number" && source.createdAt !== entry.createdAt
         ? source.createdAt
@@ -3600,10 +3606,12 @@ function isContextCompactionItemNotification(
 
 function buildTurnMetadata(params: {
   fallbackId?: string;
+  fallbackRootTurnId?: string | null;
   fallbackStartedAt?: number;
   fallbackStatus?: AppServerThreadTurnMetadata["status"];
   turn?: {
     id?: unknown;
+    rootTurnId?: unknown;
     status?: unknown;
     startedAt?: unknown;
     completedAt?: unknown;
@@ -3629,6 +3637,10 @@ function buildTurnMetadata(params: {
         ? "in_progress"
         : params.turn.status
       : params.fallbackStatus;
+  const rootTurnId =
+    typeof params.turn?.rootTurnId === "string" || params.turn?.rootTurnId === null
+      ? params.turn.rootTurnId
+      : params.fallbackRootTurnId;
   const startedAt =
     normalizeNotificationTimestamp(params.turn?.startedAt) ?? params.fallbackStartedAt;
   const completedAt = normalizeNotificationTimestamp(params.turn?.completedAt);
@@ -3637,6 +3649,7 @@ function buildTurnMetadata(params: {
   return {
     id,
     ...(status ? { status } : {}),
+    ...(rootTurnId !== undefined ? { rootTurnId } : {}),
     ...(startedAt ? { startedAt } : {}),
     ...(completedAt ? { completedAt } : {}),
     ...(typeof durationMs === "number" ? { durationMs } : {}),
@@ -3651,12 +3664,17 @@ function mergeKnownTurnMetadata(params: {
   if (!id) {
     return undefined;
   }
+  const rootTurnId =
+    params.turn?.rootTurnId !== undefined
+      ? params.turn.rootTurnId
+      : params.knownTurn?.rootTurnId;
 
   return {
     id,
     ...(params.turn?.status ?? params.knownTurn?.status
       ? { status: params.turn?.status ?? params.knownTurn?.status }
       : {}),
+    ...(rootTurnId !== undefined ? { rootTurnId } : {}),
     ...(typeof (params.turn?.startedAt ?? params.knownTurn?.startedAt) === "number"
       ? { startedAt: params.turn?.startedAt ?? params.knownTurn?.startedAt }
       : {}),
@@ -3665,6 +3683,88 @@ function mergeKnownTurnMetadata(params: {
       : {}),
     ...(typeof (params.turn?.durationMs ?? params.knownTurn?.durationMs) === "number"
       ? { durationMs: params.turn?.durationMs ?? params.knownTurn?.durationMs }
+      : {}),
+  };
+}
+
+const MAX_TRACKED_TURN_ROOT_IDS = 64;
+
+function rememberTurnRootId(
+  current: ReadonlyMap<string, string> | undefined,
+  turnId: string | undefined,
+  rootTurnId: string | undefined,
+): ReadonlyMap<string, string> | undefined {
+  if (!turnId || !rootTurnId || current?.get(turnId) === rootTurnId) {
+    return current;
+  }
+  const next = new Map(current);
+  next.delete(turnId);
+  next.set(turnId, rootTurnId);
+  while (next.size > MAX_TRACKED_TURN_ROOT_IDS) {
+    const oldest = next.keys().next().value;
+    if (oldest === undefined) break;
+    next.delete(oldest);
+  }
+  return next;
+}
+
+function backfillEntriesTurnRootId(
+  entries: AppServerThreadEntry[],
+  turnId: string,
+  rootTurnId: string,
+): AppServerThreadEntry[] {
+  let changed = false;
+  const next = entries.map((entry) => {
+    if (entry.turn?.id !== turnId || entry.turn.rootTurnId !== undefined) {
+      return entry;
+    }
+    changed = true;
+    return {
+      ...entry,
+      turn: {
+        ...entry.turn,
+        rootTurnId,
+      },
+    };
+  });
+  return changed ? next : entries;
+}
+
+function recordSessionTurnRootId(
+  session: ThreadSessionEntry,
+  turnId: string | undefined,
+  rootTurnId: string | undefined,
+): ThreadSessionEntry {
+  if (!turnId || !rootTurnId) {
+    return session;
+  }
+  const nextTurnRootIds = rememberTurnRootId(session.turnRootIds, turnId, rootTurnId);
+  const nextOptimistic = backfillEntriesTurnRootId(session.optimisticEntries, turnId, rootTurnId);
+  const existingReplayEntries = session.response?.replay.entries;
+  const nextReplayEntries = existingReplayEntries
+    ? backfillEntriesTurnRootId(existingReplayEntries, turnId, rootTurnId)
+    : undefined;
+  if (
+    nextTurnRootIds === session.turnRootIds
+    && nextOptimistic === session.optimisticEntries
+    && nextReplayEntries === existingReplayEntries
+  ) {
+    return session;
+  }
+  return {
+    ...session,
+    ...(nextTurnRootIds ? { turnRootIds: nextTurnRootIds } : {}),
+    optimisticEntries: nextOptimistic,
+    ...(session.response && nextReplayEntries && nextReplayEntries !== existingReplayEntries
+      ? {
+          response: {
+            ...session.response,
+            replay: {
+              ...session.response.replay,
+              entries: nextReplayEntries,
+            },
+          },
+        }
       : {}),
   };
 }
@@ -4866,13 +4966,14 @@ function messageContentFromUserItem(item: Record<string, unknown>): {
 
 function userMessageEntryFromItem(params: {
   turnId?: string;
+  rootTurnId?: string | null;
   item?: {
     id?: string;
     type?: string;
     content?: unknown;
     text?: unknown;
   };
-}, retainedEntries: AppServerThreadEntry[]): AppServerThreadMessageEntry | undefined {
+}, retainedEntries: AppServerThreadEntry[], knownTurnRootIds?: ReadonlyMap<string, string>): AppServerThreadMessageEntry | undefined {
   const item = params.item;
   if (!item || typeof item !== "object" || Array.isArray(item)) {
     return undefined;
@@ -4888,15 +4989,22 @@ function userMessageEntryFromItem(params: {
     return undefined;
   }
 
-  const turn = buildTurnMetadata({
-    fallbackId: typeof params.turnId === "string" ? params.turnId : undefined,
-    fallbackStatus: "in_progress",
-  });
+  const turnId = typeof params.turnId === "string" ? params.turnId : undefined;
   const origin = threadMessageOriginFromUnknown(record.origin);
   const id = typeof record.id === "string" ? record.id : `user-${Date.now()}`;
   const retainedMessage = retainedEntries.find((entry) =>
     entry.type === "message" && entry.role === "user" && entry.id === id,
   );
+  const fallbackRootTurnId =
+    typeof params.rootTurnId === "string" || params.rootTurnId === null
+      ? params.rootTurnId
+      : (turnId ? knownTurnRootIds?.get(turnId) : undefined)
+        ?? retainedMessage?.turn?.rootTurnId;
+  const turn = buildTurnMetadata({
+    fallbackId: turnId,
+    fallbackRootTurnId,
+    fallbackStatus: "in_progress",
+  });
 
   return {
     type: "message",
@@ -7085,6 +7193,7 @@ export function useThreadSessionState(params: {
           const userMessageEntry = userMessageEntryFromItem(
             event.notification.params,
             current.response?.replay.entries ?? [],
+            current.turnRootIds,
           );
           if (userMessageEntry) {
             const launchpadMessageCandidate =
@@ -7464,6 +7573,7 @@ export function useThreadSessionState(params: {
             event.notification.params.turn !== null
               ? (event.notification.params.turn as {
                   id?: unknown;
+                  rootTurnId?: unknown;
                   status?: unknown;
                   startedAt?: unknown;
                   completedAt?: unknown;
@@ -7474,8 +7584,13 @@ export function useThreadSessionState(params: {
             typeof startedTurnRecord?.id === "string"
               ? startedTurnRecord.id
               : event.notification.params.turnId;
+          const startedRootTurnId =
+            typeof startedTurnRecord?.rootTurnId === "string"
+              ? startedTurnRecord.rootTurnId
+              : undefined;
+          const withRootTurn = recordSessionTurnRootId(current, turnId, startedRootTurnId);
           if (consumedOptimisticActiveTurnKeysRef.current.has(`${targetThreadKey}:${turnId}`)) {
-            return current;
+            return withRootTurn;
           }
           const startedAt =
             normalizeNotificationTimestamp(startedTurnRecord?.startedAt) ?? Date.now();
@@ -7486,25 +7601,25 @@ export function useThreadSessionState(params: {
             && turnId !== session.activeTurnId
           );
           if (
-            !shouldAdoptStartedTurn(current, turnId) &&
+            !shouldAdoptStartedTurn(withRootTurn, turnId) &&
             !transientTurnYieldedToStartedTurn
           ) {
-            return current;
+            return withRootTurn;
           }
 
           return {
-            ...current,
+            ...withRootTurn,
             activeTurnId: turnId,
             activeTurnStartedAt: startedAt,
             activeTurnStartedSequence:
               turnId
-                ? current.activeTurnStartedSequence?.turnId === turnId
-                  ? current.activeTurnStartedSequence
-                  : { turnId, sequence: current.nextLiveEntrySequence }
-                : current.activeTurnStartedSequence,
+                ? withRootTurn.activeTurnStartedSequence?.turnId === turnId
+                  ? withRootTurn.activeTurnStartedSequence
+                  : { turnId, sequence: withRootTurn.nextLiveEntrySequence }
+                : withRootTurn.activeTurnStartedSequence,
             backendReportedActive: true,
             expectOwnUpdate: true,
-            interacted: retainTranscript || current.interacted,
+            interacted: retainTranscript || withRootTurn.interacted,
             lastTouchedAt: nextLastTouchedAt,
           };
         }

@@ -2583,6 +2583,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
+        /** Server- or owner-correlated root turn ID when this item runs inside a child turn (e.g. inline Codex review). */
+        rootTurnId?: string | null;
         item: {
           id: string;
           type: string;

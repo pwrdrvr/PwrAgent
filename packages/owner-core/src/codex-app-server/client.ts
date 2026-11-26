@@ -2685,6 +2685,51 @@ function collectAssistantReviewTexts(items: Record<string, unknown>[]): string[]
   return output;
 }
 
+function collectNativeReviewTurnIds(value: unknown): Set<string> {
+  const output = new Set<string>();
+  const visit = (node: unknown): void => {
+    if (Array.isArray(node)) {
+      node.forEach(visit);
+      return;
+    }
+
+    const record = asRecord(node);
+    if (!record) {
+      return;
+    }
+
+    const items = Array.isArray(record.items) ? record.items : undefined;
+    if (
+      items?.some((item) => {
+        const candidate = asRecord(item);
+        return candidate !== null && normalizeReviewEventItem(candidate) !== undefined;
+      })
+    ) {
+      const turnId = pickString(record, ["id", "turnId", "turn_id", "runId", "run_id"]);
+      if (turnId) {
+        output.add(turnId);
+      }
+    }
+
+    for (const key of [
+      "turns",
+      "entries",
+      "data",
+      "results",
+      "events",
+      "payload",
+      "thread",
+      "response",
+      "result",
+    ]) {
+      visit(record[key]);
+    }
+  };
+
+  visit(value);
+  return output;
+}
+
 function shouldSuppressConversationMessage(
   record: Record<string, unknown>,
   suppressedAssistantTexts = new Set<string>(),
@@ -3054,6 +3099,7 @@ function appendConversationMessage(
 function extractConversationMessages(value: unknown): AppServerThreadReplay["messages"] {
   const output: AppServerThreadReplay["messages"] = [];
   const suppressedAssistantTexts = collectReviewSuppressionTexts(value);
+  const nativeReviewTurnIds = collectNativeReviewTurnIds(value);
   const timestampKeys = [
     "createdAt",
     "created_at",
@@ -3079,10 +3125,14 @@ function extractConversationMessages(value: unknown): AppServerThreadReplay["mes
     const createdAt = recordCreatedAt ?? inheritedCreatedAt;
 
     const items = Array.isArray(record.items) ? record.items : [];
-    const isReviewTurn = nativeReviewTurn || items.some((item) => {
-      const candidate = asRecord(item);
-      return candidate && normalizeReviewEventItem(candidate) !== undefined;
-    });
+    const recordRootTurnId = pickString(record, ["rootTurnId", "root_turn_id"]);
+    const isReviewTurn =
+      nativeReviewTurn
+      || items.some((item) => {
+        const candidate = asRecord(item);
+        return candidate && normalizeReviewEventItem(candidate) !== undefined;
+      })
+      || (recordRootTurnId !== undefined && nativeReviewTurnIds.has(recordRootTurnId));
     const role = normalizeConversationRole(
       pickString(record, ["role", "author", "speaker", "source", "type"])
     );
@@ -3234,11 +3284,13 @@ function extractTurnMetadata(
   const durationMs = pickNumber(turn, ["durationMs", "duration_ms"]);
   const status = normalizeTurnStatus(pickString(turn, ["status"]));
 
+  const rawRootTurnId = "rootTurnId" in turn ? turn.rootTurnId : turn.root_turn_id;
+
   return {
     id,
     ...(status ? { status } : {}),
-    ...(typeof turn.rootTurnId === "string" || turn.rootTurnId === null
-      ? { rootTurnId: turn.rootTurnId } : {}),
+    ...(typeof rawRootTurnId === "string" || rawRootTurnId === null
+      ? { rootTurnId: rawRootTurnId } : {}),
     ...(startedAt ? { startedAt } : {}),
     ...(completedAt ? { completedAt } : {}),
     ...(typeof durationMs === "number" ? { durationMs } : {}),
@@ -5603,6 +5655,7 @@ function extractThreadEntries(
   }
 
   const entries: AppServerThreadEntry[] = [];
+  const nativeReviewTurnIds = collectNativeReviewTurnIds(turns);
 
   for (const turn of turns) {
     const turnStartIndex = entries.length;
@@ -5622,7 +5675,12 @@ function extractThreadEntries(
         ...extractMcpToolResultImagePartsFromReplayItem(item),
       ]),
     );
-    const nativeReviewTurn = rawItems.some((item) => normalizeReviewEventItem(item) !== undefined);
+    const rootTurnId = typeof turnMetadata?.rootTurnId === "string"
+      ? turnMetadata.rootTurnId
+      : undefined;
+    const nativeReviewTurn =
+      rawItems.some((item) => normalizeReviewEventItem(item) !== undefined)
+      || (rootTurnId !== undefined && nativeReviewTurnIds.has(rootTurnId));
     const assistantReviewTexts = collectAssistantReviewTexts(rawItems);
     const suppressedAssistantTexts = collectReviewSuppressionTexts(rawItems);
     for (const text of assistantReviewTexts) {

@@ -15585,6 +15585,124 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it.each([
+    ["turn-started-first", "pullRequest"],
+    ["prompt-before-turn-started", "pullRequest"],
+    ["item-root-turn-id-without-turn-started", "branch"],
+  ] as const)("hides live split-turn Codex review prompts (%s, %s)", async (mode, target) => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const reviewPrompt = target === "pullRequest"
+      ? pullRequestReviewPrompt
+      : "Review the code changes against the base branch 'origin/main'. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
+    const displayText = target === "pullRequest"
+      ? `Review ${pullRequestReviewUrl}`
+      : "Review changes against origin/main";
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-split-review", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result, "thread-split-review");
+
+    const emitEntered = () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-split-review",
+            turnId: "turn-outer",
+            item: {
+              id: "item-entered",
+              type: "enteredReviewMode",
+              review: target === "pullRequest" ? reviewPrompt : "changes against 'origin/main'",
+            },
+          },
+        },
+      });
+    };
+    const emitInnerStarted = () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-split-review",
+            turnId: "turn-inner",
+            turn: {
+              id: "turn-inner",
+              rootTurnId: "turn-outer",
+              status: "inProgress",
+            },
+          },
+        },
+      });
+    };
+    const emitInnerPrompt = (withParamRoot: boolean) => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-split-review",
+            turnId: "turn-inner",
+            ...(withParamRoot ? { rootTurnId: "turn-outer" } : {}),
+            item: {
+              id: "item-inner-prompt",
+              type: "userMessage",
+              content: [{ type: "text", text: reviewPrompt }],
+            },
+          },
+        },
+      });
+    };
+
+    act(() => {
+      result.current.addOptimisticReviewEntry(displayText);
+      emitEntered();
+      if (mode === "turn-started-first") {
+        emitInnerStarted();
+        emitInnerPrompt(false);
+      } else if (mode === "prompt-before-turn-started") {
+        emitInnerPrompt(false);
+        emitInnerStarted();
+      } else {
+        emitInnerPrompt(true);
+      }
+    });
+
+    expect(result.current.entries.filter((entry) => entry.type === "review")).toEqual([
+      expect.objectContaining({ id: "item-entered", displayText }),
+    ]);
+    expect(result.current.entries.some((entry) => entry.id === "item-inner-prompt")).toBe(false);
+    expect(result.current.messages.some((message) => message.id === "item-inner-prompt")).toBe(false);
+  });
+
   it("keeps a live review authoritative across a transient idle hydration", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
