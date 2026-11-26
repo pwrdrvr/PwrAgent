@@ -1060,7 +1060,9 @@ export class ManagedReviewService {
           threadId: thread.threadId,
           input: [{
             type: "text",
-            text: buildManagedReviewPrompt(params.target, { candidateLedger }),
+            text: buildManagedReviewPrompt(params.target, {
+              candidateLedger, pinnedPatchFile: params.agentAntigravityAccess?.pinnedPatchFile,
+            }),
           }],
           model: params.modelSettings.model,
           reasoningEffort: params.modelSettings.reasoningEffort,
