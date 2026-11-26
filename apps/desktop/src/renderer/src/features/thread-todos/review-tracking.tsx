@@ -13,6 +13,7 @@ import { BanIcon, CheckIcon, ClockIcon, TodoIcon } from "../../icons";
 import { PendingSpinner } from "../../components/PendingSpinner";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { ipcErrorMessage } from "../../lib/open-path-failure";
 
 const pendingReads = new WeakMap<DesktopApi, Map<string, Promise<unknown>>>();
 
@@ -154,7 +155,8 @@ export function useTrackedReview(
   const api = desktopApi;
   const instanceId = identity?.federationTarget?.instanceId ?? readRendererFederationTarget()?.instanceId;
   const [review, setReview] = useState<ThreadReview>();
-  const [error, setError] = useState<string>();
+  const [readError, setReadError] = useState<string>();
+  const [updateError, setUpdateError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const generation = useRef(0);
   const backend = identity?.backend;
@@ -163,7 +165,8 @@ export function useTrackedReview(
   useEffect(() => {
     generation.current++;
     setReview(undefined);
-    setError(undefined);
+    setReadError(undefined);
+    setUpdateError(undefined);
     setBusy(false);
     if (!backend || !threadId || !api?.listThreadReviews) return;
     let cancelled = false;
@@ -178,13 +181,19 @@ export function useTrackedReview(
       try {
         do {
           queued = false;
-          const reviews = await readReviews(api, { backend, threadId,
-            ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
-          });
-          if (!cancelled) setReview(reviews.find((entry) => id ? entry.id === id : entry.sourceKey === sourceKey));
+          try {
+            const reviews = await readReviews(api, { backend, threadId,
+              ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
+            });
+            // A queued refresh supersedes the in-flight result.
+            if (!cancelled && !queued) {
+              setReview(reviews.find((entry) => id ? entry.id === id : entry.sourceKey === sourceKey));
+              setReadError(undefined);
+            }
+          } catch (error) {
+            if (!cancelled && !queued) setReadError(ipcErrorMessage(error));
+          }
         } while (queued && !cancelled);
-      } catch (error) {
-        if (!cancelled) setError(error instanceof Error ? error.message : String(error));
       } finally {
         loading = false;
       }
@@ -204,19 +213,22 @@ export function useTrackedReview(
     if (!review || !api?.updateThreadReview) return;
     const startedGeneration = generation.current;
     setBusy(true);
-    setError(undefined);
+    setUpdateError(undefined);
     try {
       const response = await api.updateThreadReview({ id: review.id, ...request,
         ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
       });
-      if (generation.current === startedGeneration) setReview(response.review);
+      if (generation.current === startedGeneration) {
+        setReview(response.review);
+        setReadError(undefined);
+      }
     } catch (error) {
-      if (generation.current === startedGeneration) setError(error instanceof Error ? error.message : String(error));
+      if (generation.current === startedGeneration) setUpdateError(ipcErrorMessage(error));
     } finally {
       if (generation.current === startedGeneration) setBusy(false);
     }
   }, [api, review, instanceId]);
-  return { review, update, busy, error };
+  return { review, update, busy, error: updateError ?? readError };
 }
 
 /**

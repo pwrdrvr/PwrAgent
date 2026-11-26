@@ -22,6 +22,12 @@ export function reviewEntryFailure(
   return undefined;
 }
 
+/** A result item can arrive while its enclosing review turn is still active. */
+export function isReviewResultEntry(entry: AppServerThreadReviewEntry): boolean {
+  return !entry.id.endsWith(":started")
+    && (entry.displayText === undefined || Boolean(entry.output));
+}
+
 const REVIEW_OUTPUT_RUBRIC_LINES = [
   'overall_correctness must be exactly "patch is correct" or "patch is incorrect" — no other wording. Use "patch is incorrect" when you report any concrete defect that should be fixed (including P0-P2 issues), and "patch is correct" when no actionable defects remain.',
   // The field had no stated meaning for most of its life, so the number the

@@ -305,7 +305,35 @@ describe("agent notices", () => {
           expect(world.store.get(id)?.status, `interrupted notice ${id} was not marked failed`).toBe("failed");
         }
       });
-    }), { numRuns: 60 });
+      // Each case opens a StateDb: capped at 5 (docs/property-model-oracle-testing.md#what-to-check-in).
+      // Raise it locally to search; the named examples below keep the cases it found.
+    }), { numRuns: 5 });
+  });
+
+  it("delivers a notice interrupted mid-delivery once, then marks it failed", async () => {
+    await withWorld(async (world) => {
+      world.crashAfterDelivery = true;
+      await world.send(THREADS[0]!, 0);
+      expect(world.alive).toBe(false);
+      expect(world.deliveries).toHaveLength(1);
+      const id = world.deliveries[0]!.id;
+      await world.restart();
+      await world.tick(24 * 60 * MINUTE);
+      expect(world.deliveredCount(id)).toBe(1);
+      expect(world.store.get(id)?.status).toBe("failed");
+    });
+  });
+
+  it("delivers a notice that came due while the owner was down at the next launch", async () => {
+    await withWorld(async (world) => {
+      const created = await world.send(THREADS[0]!, 30);
+      if (!("id" in created)) throw new Error(created.refused);
+      world.crash();
+      world.clock += 2 * 60 * MINUTE;
+      await world.start();
+      expect(world.deliveredCount(created.id)).toBe(1);
+      expect(world.store.get(created.id)?.status).toBe("started");
+    });
   });
 
   it("never spends or suspends the thread's follow-up allowance", async () => {
@@ -328,7 +356,25 @@ describe("agent notices", () => {
         expect(world.service.countActiveAgentFollowUps(thread)).toBe(0);
         expect(world.deliveries).toHaveLength(count);
       });
-    }), { numRuns: 20 });
+      // Each case opens a StateDb: capped at 5. The pre-fix counterexample
+      // (one notice) and the guard's trip point (13) are named examples below.
+    }), { numRuns: 5 });
+  });
+
+  it.each([1, 13])("never spends the follow-up allowance: %i notices", async (count) => {
+    // Pre-fix, one notice already counted as a fired follow-up, and the
+    // thirteenth in a day suspended the thread's follow-ups.
+    await withWorld(async (world) => {
+      world.limits = { maxPerThreadPerDay: 0, maxPerProfilePerDay: 0, maxScheduledPerThread: 0 };
+      const thread = THREADS[0]!;
+      for (let index = 0; index < count; index += 1) {
+        expect("id" in await world.send(thread, 0)).toBe(true);
+        await world.tick(2 * MINUTE);
+      }
+      expect(world.service.agentFollowUpProtection(thread)).toEqual({ firedInWindow: 0 });
+      expect(world.service.countActiveAgentFollowUps(thread)).toBe(0);
+      expect(world.deliveries).toHaveLength(count);
+    });
   });
 
   it("counts a cancelled notice against the daily bound, so cancel and resend cannot spend more", async () => {
