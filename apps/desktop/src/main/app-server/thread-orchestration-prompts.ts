@@ -7,6 +7,10 @@ import {
   type HandoffThreadWorkspaceResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { type CodexEnvironmentStartupFailure } from "@pwragent/shared/contracts/agent";
+import {
+  formatInitialContinueAfterPromptNote,
+  type ResolvedInitialThreadContinueAfter,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import { type PendingThreadWorkspaceMoveSummary } from "@pwragent/shared/contracts/thread-tools";
 import { type ThreadAssetOwner } from "./thread-assets";
 import { stageTurnInputAttachmentsForRetention } from "./turn-input-attachment-files";
@@ -17,6 +21,7 @@ export function buildHandoffTaskPrompt(params: {
   task: string;
   context?: string;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
+  continueAfter?: ResolvedInitialThreadContinueAfter;
 }): string {
   const lines = [
     "You are a PwrAgent handoff thread created by another PwrAgent thread.",
@@ -27,6 +32,13 @@ export function buildHandoffTaskPrompt(params: {
     "Workspace ownership:",
     "Use only this thread's assigned runtime workspace for edits, builds, and Git. If a needed branch is checked out elsewhere, repoint this workspace to its commit (detached is fine); do not operate in the other worktree.",
     "Before opening or attaching a PR, verify this workspace contains its head. Attaching a PR does not rebind the workspace.",
+    ...(params.continueAfter
+      ? [
+          "",
+          "Continue After:",
+          formatInitialContinueAfterPromptNote(params.continueAfter),
+        ]
+      : []),
     ...(params.codexEnvironmentStartupFailure
       ? [
           "",

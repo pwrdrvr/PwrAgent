@@ -1,4 +1,5 @@
 import type { TurnEventObserver } from "./turn-event-observer";
+import type { RegistryHandlers } from "./backend-registry-handlers";
 import type { RegistryHostPorts } from "./registry-host-ports";
 import type { RegistryContext, RegistryHost } from "./registry-context";
 import type { ThreadArchiveCoordinator } from "./thread-archive-coordinator";
@@ -52,6 +53,7 @@ import {
   type MoveThreadWorkspaceResult,
   type PwrAgentThreadOrchestrationRequest,
   type PwrAgentThreadOrchestrationResponse,
+  type HandoffTaskContinueAfterResult,
   type HandoffTaskResult,
   type HandoffTaskSeedMode,
   type HandoffTaskGroupingMode,
@@ -60,6 +62,13 @@ import {
   type HandoffTaskMessagingAttachment,
   type ThreadHandoffOriginWorkspace,
 } from "@pwragent/shared/contracts/thread-orchestration-tools";
+import {
+  isThreadDependencyLocalThreadCondition,
+  parseInitialThreadContinueAfter,
+  resolveInitialThreadContinueAfter,
+  type InitialThreadContinueAfter,
+  type ResolvedInitialThreadContinueAfter,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import {
   type PendingThreadHandoffPhase,
   type PendingThreadHandoffSummary,
@@ -191,6 +200,7 @@ export interface ThreadWorkspaceServiceHost extends Pick<RegistryHostPorts,
   readonly pendingServerRequests: Map<string, PendingServerRequest>;
   readonly pendingStartedThreads: ReadonlyMap<string, AppServerThreadSummary>;
   readonly threadInfoStore: ThreadInfoStore;
+  readonly threadDependencyToolHandler?: RegistryHandlers["threadDependencyToolHandler"];
   readonly threadStarts: ThreadTurnStartLifecycle;
   readonly threadTurnQueue: ThreadTurnQueue;
   readonly worktreeArchiveService: WorktreeArchiveService;
@@ -2286,6 +2296,20 @@ export class ThreadWorkspaceService {
         "handoff_task requires a non-empty task string.",
       );
     }
+    let parsedContinueAfter: InitialThreadContinueAfter | undefined;
+    if (request.args.continueAfter !== undefined) {
+      const parsed = parseInitialThreadContinueAfter(request.args.continueAfter);
+      if (!parsed.ok) {
+        return threadOrchestrationFailure("invalid_arguments", parsed.message);
+      }
+      if (!this.host().threadDependencyToolHandler) {
+        return threadOrchestrationFailure(
+          "unsupported_operation",
+          "Thread dependencies (Continue After) are not available on this instance.",
+        );
+      }
+      parsedContinueAfter = parsed.value;
+    }
 
     // The child starts at the caller's access or less; only the operator
     // raises it. Omitted, it inherits this mode below.
@@ -2827,10 +2851,18 @@ export class ThreadWorkspaceService {
     });
     this.host().invalidateThreadListCache(backend);
 
+    const resolvedContinueAfter = parsedContinueAfter
+      ? this.resolveHandoffContinueAfter(parsedContinueAfter, {
+          backend: sourceBackend,
+          threadId: sourceThreadId,
+          title: sourceThread?.title,
+        })
+      : undefined;
     const prompt = buildHandoffTaskPrompt({
       task,
       context: request.args.context,
       codexEnvironmentStartupFailure,
+      continueAfter: resolvedContinueAfter,
     });
     const ancestry = await this.host().readDelegatedTurnAncestry({
       backend: sourceBackend, threadId: sourceThreadId, turnId: sourceTurnId,
@@ -2889,6 +2921,18 @@ export class ThreadWorkspaceService {
       });
     }
 
+    const continueAfter = resolvedContinueAfter
+      ? await this.registerHandoffContinueAfter({
+          continueAfter: resolvedContinueAfter,
+          sourceBackend,
+          sourceThreadId,
+          backend,
+          threadId,
+          causalContext,
+          turnStartFailed: Boolean(turnStartFailure),
+        })
+      : undefined;
+
     this.updatePendingThreadHandoff(handoffId, {
       phase: "attaching_messaging",
       message:
@@ -2944,8 +2988,92 @@ export class ThreadWorkspaceService {
           : {}),
         ...(autoPinFailure ? { autoPinFailure } : {}),
         ...(turnStartFailure ? { turnStartFailure } : {}),
+        ...(continueAfter ? { continueAfter } : {}),
       },
     };
+  }
+
+  private resolveHandoffContinueAfter(
+    spec: InitialThreadContinueAfter,
+    source: { backend: AppServerBackendKind; threadId: string; title?: string },
+  ): ResolvedInitialThreadContinueAfter {
+    const resolved = resolveInitialThreadContinueAfter(spec, source);
+    return {
+      ...resolved,
+      conditions: resolved.conditions.map((condition) => {
+        if (condition.title || !isThreadDependencyLocalThreadCondition(condition)) return condition;
+        const cached = this.host().getCachedThreadSummary({
+          backend: condition.backend,
+          threadId: condition.threadId,
+        })?.title?.trim();
+        return cached ? { ...condition, title: cached.slice(0, 200) } : condition;
+      }),
+    };
+  }
+
+  private async registerHandoffContinueAfter(params: {
+    continueAfter: ResolvedInitialThreadContinueAfter;
+    sourceBackend: AppServerBackendKind;
+    sourceThreadId: string;
+    backend: AppServerBackendKind;
+    threadId: string;
+    causalContext: Pick<AppServerThreadMessageOrigin, "causalMessagingSource" | "causalMessagingAmbiguous">;
+    turnStartFailed: boolean;
+  }): Promise<HandoffTaskContinueAfterResult> {
+    if (params.turnStartFailed) {
+      return {
+        status: "skipped",
+        error: "Skipped registering Continue After because the child thread's initial turn failed to start.",
+      };
+    }
+    const handler = this.host().threadDependencyToolHandler;
+    if (!handler) {
+      return {
+        status: "failed",
+        error: "Thread dependencies (Continue After) are not available on this instance.",
+      };
+    }
+    try {
+      const response = await handler(
+        {
+          action: "create",
+          backend: params.backend,
+          threadId: params.threadId,
+          ...params.continueAfter,
+        },
+        params.causalContext,
+        `agent:${params.sourceBackend}:${params.sourceThreadId}`,
+      );
+      if (!response.ok) {
+        backendRegistryLog.warn("thread handoff continueAfter registration failed", {
+          backend: params.backend,
+          threadId: params.threadId,
+          error: response.error.message,
+        });
+        return { status: "failed", error: response.error.message };
+      }
+      if (!("threadDependencies" in response.data)) {
+        return { status: "failed", error: "Continue After registration returned an unexpected response." };
+      }
+      const created = response.data.threadDependencies.dependencies[0];
+      if (!created) {
+        return { status: "failed", error: "Continue After registration did not return the created dependency." };
+      }
+      return {
+        status: "registered",
+        dependencyId: created.id,
+        dependencyStatus: created.status,
+        ...(response.data.projectNotice ? { projectNotice: response.data.projectNotice } : {}),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      backendRegistryLog.warn("thread handoff continueAfter registration threw", {
+        backend: params.backend,
+        threadId: params.threadId,
+        error: message,
+      });
+      return { status: "failed", error: message };
+    }
   }
 
   private async attachHandoffThreadToMessaging(params: {

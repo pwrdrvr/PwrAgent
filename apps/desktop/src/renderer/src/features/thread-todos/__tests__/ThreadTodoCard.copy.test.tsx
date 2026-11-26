@@ -153,6 +153,47 @@ describe("to-do card Markdown", () => {
     const two = card([], { items: undefined, detail: undefined, title: "Two" });
     expect(threadTodosMarkdown([one, two])).toBe("## One\n\n## Two");
   });
+
+  it("includes Continue after conditions and continuation on start-thread cards and in Markdown", () => {
+    const handoff = card([], {
+      items: undefined,
+      detail: undefined,
+      kind: "handoff",
+      title: "Fix pointer-travel on top of #688",
+      action: {
+        type: "start_thread",
+        prompt: "Build the fix locally on top of #688.",
+        continueAfter: {
+          conditions: [{
+            backend: "acp:antigravity",
+            threadId: "parent-1",
+            when: "pr_merged",
+            prUrl: "https://github.com/pwrdrvr/PwrGit/pull/688",
+            title: "Find and fix worst-case rendering",
+          }],
+          continuation: "PR #688 merged. Fetch origin/main, rebase, verify, and open the PR.",
+        },
+      },
+    });
+    expect(threadTodoMarkdown(handoff)).toBe([
+      "## Fix pointer-travel on top of #688",
+      "",
+      "### Continue after",
+      "",
+      "- PR #688 is merged",
+      "",
+      "PR #688 merged. Fetch origin/main, rebase, verify, and open the PR.",
+      "",
+      "### Prompt",
+      "",
+      "> Build the fix locally on top of #688.",
+    ].join("\n"));
+
+    render(<ThreadTodoCard {...props(handoff)} />);
+    expect(screen.getByText("Continue after")).toBeTruthy();
+    expect(screen.getByText("PR #688 is merged")).toBeTruthy();
+    expect(screen.getByText("PR #688 merged. Fetch origin/main, rebase, verify, and open the PR.")).toBeTruthy();
+  });
 });
 
 describe("to-do card copy", () => {

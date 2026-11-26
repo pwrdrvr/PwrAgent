@@ -1,4 +1,5 @@
 import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
+import { describeInitialContinueAfterCondition } from "@pwragent/shared/contracts/thread-dependencies";
 import type { ThreadTodo, ThreadTodoItem } from "@pwragent/shared/contracts/thread-todos";
 import { threadTodoPrerequisites, threadTodoSteps } from "@pwragent/shared/contracts/thread-todos";
 import { copyTextWithHtml } from "../../lib/copy-text";
@@ -35,6 +36,12 @@ export function threadTodoMarkdown(
     sections.push(reviewItems.map(reviewItemMarkdown).join("\n"));
   }
   const action = todo.action;
+  if (action?.type === "start_thread" && action.continueAfter) {
+    const conditions = action.continueAfter.conditions
+      .map((condition) => `- ${describeInitialContinueAfterCondition(condition)}`)
+      .join("\n");
+    sections.push(`### Continue after\n\n${conditions}\n\n${action.continueAfter.continuation.trim()}`);
+  }
   if ((action?.type === "start_thread" || action?.type === "send_message") && action.prompt.trim()) {
     const quoted = action.prompt.trim().split(/\r?\n/).map((line) => line ? `> ${line}` : ">").join("\n");
     sections.push(`### Prompt\n\n${quoted}`);

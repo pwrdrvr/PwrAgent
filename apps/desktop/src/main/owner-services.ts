@@ -740,6 +740,14 @@ wireOwnerRendererEvents();
     registry,
     readDefaultMergeMethod: () => settings.resolveDefaultMergeMethod(),
     readReviewStackHold: (thread) => getDesktopAppServerService().automationStackHold(thread),
+    registerContinueAfter: async ({ backend, threadId, continueAfter }) => {
+      await getDesktopAppServerService().manageThreadDependencies({
+        action: "create",
+        backend,
+        threadId,
+        ...continueAfter,
+      }, undefined, "operator");
+    },
     // Clicking a card approves the mode it shows, so these handlers skip the agent access ceiling.
     federation: createFederationAgentToolsHandler({ ...federationAgentToolOptions, operatorApproved: true }),
     federationWithOrigin: (messageOrigin: AppServerThreadMessageOrigin) => createFederationAgentToolsHandler({

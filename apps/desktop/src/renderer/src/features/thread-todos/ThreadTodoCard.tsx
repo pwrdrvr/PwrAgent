@@ -17,6 +17,10 @@ import {
   type Ref,
 } from "react";
 import type { PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
+import {
+  describeInitialContinueAfterCondition,
+  type ResolvedInitialThreadContinueAfter,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
 import type {
   ThreadTodo,
@@ -1303,13 +1307,22 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
             <TodoMessageDestination todo={todo} target={messageTarget} localMachine={props.localMachine}
               disabled={props.running} onSelect={(next) => chooseMessage({ messageTarget: next })} />
           ) : startsThread ? (
-            <TodoDispatchFacts
-              todo={todo}
-              target={target}
-              {...(action?.type === "start_thread" && action.executionMode
-                ? { access: formatExecutionModeLabel(action.executionMode) } : {})}
-              disabled={props.running || startRequiresUpdate}
-            />
+            <>
+              <TodoDispatchFacts
+                todo={todo}
+                target={target}
+                {...(action?.type === "start_thread" && action.executionMode
+                  ? { access: formatExecutionModeLabel(action.executionMode) } : {})}
+                disabled={props.running || startRequiresUpdate}
+              />
+              {action?.type === "start_thread" && action.continueAfter ? (
+                <ThreadTodoContinueAfter
+                  continueAfter={action.continueAfter}
+                  expanded={resting.expanded}
+                  onOwner={target.onOwner}
+                />
+              ) : null}
+            </>
           ) : action?.type === "merge_pull_request" ? (
             <dl className="thread-todo-card__facts">
               <div className="thread-todo-card__fact thread-todo-card__fact--pr">
@@ -1415,6 +1428,41 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       </div>
       {copying.menu}
     </article>
+  );
+}
+
+function ThreadTodoContinueAfter(props: {
+  continueAfter: ResolvedInitialThreadContinueAfter;
+  expanded: boolean;
+  onOwner: boolean;
+}) {
+  const { continueAfter, expanded, onOwner } = props;
+  const qualifiers = [
+    continueAfter.conditions.length > 1 && continueAfter.mode === "any" ? "any" : undefined,
+    continueAfter.deliver === "operator" ? "reminds you" : undefined,
+    continueAfter.holdMerge ? "holds merge" : undefined,
+  ].filter(Boolean);
+  return (
+    <div className="thread-todo-continue-after">
+      <p className="thread-todo-card__group-label">
+        Continue after{qualifiers.length > 0 ? ` · ${qualifiers.join(" · ")}` : ""}
+      </p>
+      <ul className="thread-todo-continue-after__conditions">
+        {continueAfter.conditions.map((condition, index) => (
+          <li key={`${condition.backend}:${condition.threadId}:${condition.when}:${index}`}>
+            {describeInitialContinueAfterCondition(condition)}
+          </li>
+        ))}
+      </ul>
+      <p className={`thread-todo-continue-after__continuation${expanded ? "" : " is-clamped"}`}>
+        {continueAfter.continuation}
+      </p>
+      {!onOwner ? (
+        <p className="thread-todo-continue-after__note">
+          Registered only when starting on this card's own PwrAgent.
+        </p>
+      ) : null}
+    </div>
   );
 }
 

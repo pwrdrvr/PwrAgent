@@ -6,7 +6,6 @@ import type {
 import type {
   PwrAgentThreadTodoOperationName,
   ThreadTodo,
-  ThreadTodoAction,
   ThreadTodoStatus,
 } from "@pwragent/shared/contracts/thread-todos";
 import {
@@ -29,6 +28,7 @@ import {
   MAX_HANDS_OFF_RULE_TEXT,
   normalizeHandsOffRepository,
 } from "@pwragent/shared/project-forge-automation";
+import { parseInitialThreadContinueAfter } from "@pwragent/shared/contracts/thread-dependencies";
 import type {
   AgentToolCallContext,
   AgentToolDefinition,
@@ -36,7 +36,9 @@ import type {
 } from "./agent-tool-definition.js";
 import { agentToolFailure, agentToolSuccess } from "./agent-tool-definition.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
+import { buildInitialContinueAfterInputSchema } from "./continue-after-schema.js";
 import type {
+  AddThreadTodoAction,
   AddThreadTodoInput,
   ThreadTodoActionPatch,
   UpdateThreadTodoInput,
@@ -310,7 +312,7 @@ export function normalizeAddTodoArgs(
 
 function normalizeAction(
   value: unknown,
-): { ok: true; value: ThreadTodoAction } | { ok: false; message: string } | undefined {
+): { ok: true; value: AddThreadTodoAction } | { ok: false; message: string } | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
@@ -404,6 +406,12 @@ function normalizeAction(
       }
       const model = optionalString(action.model);
       const reasoningEffort = optionalString(action.reasoningEffort);
+      let continueAfter: ReturnType<typeof parseInitialThreadContinueAfter> extends { ok: true; value: infer V } | { ok: false; message: string } ? V | undefined : never;
+      if (action.continueAfter !== undefined) {
+        const parsed = parseInitialThreadContinueAfter(action.continueAfter, "start_thread continueAfter");
+        if (!parsed.ok) return parsed;
+        continueAfter = parsed.value;
+      }
       return {
         ok: true,
         value: {
@@ -416,6 +424,7 @@ function normalizeAction(
           ...(executionMode ? { executionMode } : {}),
           ...(workMode ? { workMode } : {}),
           ...(placement ? { placement } : {}),
+          ...(continueAfter ? { continueAfter } : {}),
         },
       };
     }
@@ -535,6 +544,19 @@ export function normalizeUpdateTodoArgs(
   const placement = readClearableChoice(args.placement, "placement", THREAD_TODO_PLACEMENTS);
   if (placement && !placement.ok) return placement;
   if (placement) action.placement = placement.value;
+  if (args.clearContinueAfter !== undefined && typeof args.clearContinueAfter !== "boolean") {
+    return { ok: false, message: "update_todo clearContinueAfter must be true or false." };
+  }
+  if (args.clearContinueAfter === true && args.continueAfter !== undefined) {
+    return { ok: false, message: "update_todo cannot combine continueAfter with clearContinueAfter." };
+  }
+  if (args.clearContinueAfter === true) {
+    action.continueAfter = null;
+  } else if (args.continueAfter !== undefined) {
+    const parsed = parseInitialThreadContinueAfter(args.continueAfter, "update_todo continueAfter");
+    if (!parsed.ok) return parsed;
+    action.continueAfter = parsed.value;
+  }
   if (args.pullRequest !== undefined) {
     const pullRequest = normalizePullRequestReference(args.pullRequest);
     if (!pullRequest) {
@@ -678,6 +700,7 @@ function descriptionForOperation(operation: PwrAgentThreadTodoOperationName): st
         "Check prAutomation.reviewReadiness first, and do not duplicate its offer.",
         "A merge card for a PR head that is unreviewed, or whose review has unsettled findings, is refused.",
         "Use start_thread for follow-up work. For Git work, set action.workMode=worktree unless the instructions require sharing a checkout. Give the child its task in the assigned checkout.",
+        "Set action.continueAfter when the started thread should automatically resume after a prerequisite (such as this thread's PR merging); omit backend and threadId in a condition to wait on this thread.",
         "Leave action.placement as sibling unless the work belongs to this thread alone, which is sub_thread.",
         "Set action.backend for a cross-provider proposal. handoff_task creates a thread immediately and does not configure a card.",
         "Find registered backend ids and modelOptions in list_instance_projects. Models are validated against the destination provider.",
@@ -862,6 +885,9 @@ function inputSchemaForOperation(
                 enum: [...THREAD_TODO_PLACEMENTS],
                 description: `start_thread only: ${PLACEMENT_DESCRIPTION}`,
               },
+              continueAfter: buildInitialContinueAfterInputSchema(
+                "start_thread only: durable Continue After wait registered on the started thread right when the operator launches it on this machine, so follow-up work after prerequisites (such as this thread's PR merging) is never lost in prose.",
+              ),
             },
           },
         },
@@ -936,6 +962,13 @@ function inputSchemaForOperation(
             type: "string",
             enum: [...THREAD_TODO_PLACEMENTS, ""],
             description: `Handoff cards: ${PLACEMENT_DESCRIPTION} Empty clears the proposal.`,
+          },
+          continueAfter: buildInitialContinueAfterInputSchema(
+            "Handoff cards: replace or add the Continue After wait registered when the operator starts the new thread.",
+          ),
+          clearContinueAfter: {
+            type: "boolean",
+            description: "Handoff cards: pass true to remove the card's Continue After wait.",
           },
           pullRequest: {
             type: "string",

@@ -5,6 +5,7 @@ import { federatedThreadIdentityKey } from "./federation";
 import { buildThreadIdentityKey, isAppServerBackendKind } from "./navigation";
 import { isThreadExecutionMode } from "../thread-execution-mode";
 import type { ThreadTodoNativeAccessMode } from "../thread-todo-access";
+import type { ResolvedInitialThreadContinueAfter } from "./thread-dependencies";
 
 import type {
   AppServerBackendKind,
@@ -312,6 +313,11 @@ export type ThreadTodoAction =
        * start for another project or on another machine is always top-level.
        */
       placement?: ThreadTodoPlacement;
+      /**
+       * Optional durable Continue After wait registered on the new thread as
+       * soon as the operator starts it on this machine.
+       */
+      continueAfter?: ResolvedInitialThreadContinueAfter;
     };
 
 export type ThreadTodoActionType = ThreadTodoAction["type"];
