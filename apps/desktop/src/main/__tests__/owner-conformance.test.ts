@@ -10,7 +10,8 @@ import { createServer, type AddressInfo, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, inject, it, vi } from "vitest";
+import { beforeAll, describe, expect, inject, it, vi } from "vitest";
+import type { OwnerFixtures } from "../../test-setup/owner-conformance-fixtures";
 import type { AgentEvent, InterruptTurnRequest } from "@pwragent/shared/contracts/agent";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import type { FederationCapability } from "@pwragent/shared/contracts/federation";
@@ -93,8 +94,10 @@ const BASELINE_PATH = path.join(process.cwd(), "apps/desktop/src/main/__tests__/
 /** The event classes the Outpost publishes. */
 const EVENT_CLASSES = ["navigation", "transcript"];
 const VIEWER_CAPABILITIES: FederationCapability[] = [...OUTPOST_VIEWER_CAPABILITIES, "event_subscriptions"];
+let fixturePackages: OwnerFixtures;
+
 async function startConformanceDaemon(options: Parameters<typeof startOutpostDaemon>[0] = {}) {
-  const fixture = inject("ownerConformanceFixtures")[options.hostKind ?? "headless"];
+  const fixture = fixturePackages[options.hostKind ?? "headless"];
   return await startOutpostDaemon({ ...options, packageRoot: fixture.directory, fixturePreload: fixture.preload });
 }
 
@@ -353,11 +356,16 @@ async function runScenario(host: OwnerHost, steps: Step[]): Promise<OwnerStepRec
 }
 
 describe.skipIf(process.platform === "win32")("owner conformance: desktop and the Outpost", () => {
+  beforeAll(() => {
+    const result = inject("ownerConformanceFixtures");
+    if (!result) throw new Error("Vitest did not prepare the owner conformance fixtures");
+    if ("error" in result) throw new Error(`Owner conformance fixture build failed:\n${result.error}`);
+    fixturePackages = result.fixtures;
+  });
+
   it("receives both built owner packages from global setup", () => {
-    const fixtures = inject("ownerConformanceFixtures");
-    expect(fixtures).toBeDefined();
     for (const kind of ["desktop", "headless"] as const) {
-      const { directory, preload } = fixtures[kind];
+      const { directory, preload } = fixturePackages[kind];
       expect(existsSync(path.join(directory, "bin/pwragent.js"))).toBe(true);
       expect(existsSync(path.join(directory, "dist/index.js"))).toBe(true);
       expect(existsSync(preload)).toBe(true);
