@@ -233,7 +233,7 @@ async function main() {
   const nativeCollection = requestedArms.includes("claude-native");
   if (blind && !(nativeCollection && parsedCohort.split === "collection"
     && allCases.every(({ baseline }) => !Object.hasOwn(baseline, "items")))) {
-    process.stderr.write("[eval] Blind evaluation requires a separate reviewer environment. This local driver cannot hide baseline files.\n");
+    process.stderr.write("[eval] Blind evaluation requires a separate reviewer environment (use isolated-review-controller.mjs). This local driver cannot hide baseline files.\n");
     process.exitCode = 1;
     return;
   }
