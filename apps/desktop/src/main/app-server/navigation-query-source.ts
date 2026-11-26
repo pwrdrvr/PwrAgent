@@ -577,7 +577,7 @@ export function getNavigationDirectorySetAnnouncer(): NavigationDirectorySetAnno
 
 type NavigationStackProjection = {
   projection: Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined;
-  prScope: StackPrRelevanceScope;
+  prScope: StackPrRelevanceScope | undefined;
 };
 const activeStackReads = new Map<string, SharedPrMetadataRead<NavigationStackProjection>>();
 
@@ -588,7 +588,7 @@ async function projectNavigationIndexStacks(
   priority: number,
   signal: AbortSignal,
   previous: () => NavigationQueryIndex | undefined,
-): Promise<{ index: NavigationQueryIndex; prScope: StackPrRelevanceScope }> {
+): Promise<{ index: NavigationQueryIndex; prScope: StackPrRelevanceScope | undefined }> {
   const nativeRows = navigationQuerySnapshotSharedThreads(local);
   const pins = nativeRows && local.threads !== nativeRows ? local.threads.slice(nativeRows.length) : [];
   const observedAt = local.observedAt;
@@ -704,7 +704,12 @@ async function projectNavigationStacks(
       return prs;
     });
   signal.throwIfAborted();
+  let incompleteCatalog = false;
   for (const catalog of catalogs) {
+    if (catalog.status === "unavailable") {
+      incompleteCatalog = true;
+      continue;
+    }
     if (catalog.status !== "ok") continue;
     const repo = normalizedPullRequestRepository(catalog.catalog.repository);
     if (repo) repositories.add(repo);
@@ -716,8 +721,8 @@ async function projectNavigationStacks(
       if (repo && layer.pullRequest) prKeys.add(`${repo}#${layer.pullRequest.number}`);
     }
   }
-  const prScope = { prKeys, repositories };
-  onPrScope?.(prScope);
+  const prScope = incompleteCatalog ? undefined : { prKeys, repositories };
+  if (prScope) onPrScope?.(prScope);
   return { projection: projectBoundNavigationStacks(threads, stacks, validated), prScope };
 }
 

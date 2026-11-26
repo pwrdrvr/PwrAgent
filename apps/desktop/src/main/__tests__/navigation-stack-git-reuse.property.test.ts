@@ -286,7 +286,9 @@ async function createRealGitSidebarFixture(catalogCount: number) {
   };
 
   const queryStore = new NavigationQueryStore();
-  const directoryKey = buildDirectorySummaries({ threads: buildRawThreads() }).find((dir) => dir.path === boundRoot)!.key;
+  const directoryKey = buildDirectorySummaries({ threads: buildRawThreads() }).find(
+    (dir) => dir.label === "bound-repo" || Boolean(dir.path && path.relative(dir.path, boundRoot) === ""),
+  )!.key;
 
   const readPages = async (scope: "owner" | "viewer") => {
     const loadIndex = () => loadLocalNavigationQueryIndex({

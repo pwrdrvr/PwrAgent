@@ -12191,6 +12191,7 @@ describe("app server ipc", () => {
       const automation = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
       overlayStoreFixture.stable = getDesktopOverlayStore();
+      readNavigationPullRequests.mockImplementation((refs) => refs.map(() => [pr]));
       publishLocalEvent.mockImplementation(async (event) => {
         emitRegistryEvent(event);
         return undefined;
@@ -12237,6 +12238,7 @@ describe("app server ipc", () => {
         expect(stackReads).toHaveBeenCalledTimes(4);
       } finally {
         emitRegistryEvent({ notification: { method: "thread/name/updated" } });
+        readNavigationPullRequests.mockImplementation((refs) => refs.map(() => []));
         publishLocalEvent.mockImplementation(async () => undefined);
         overlayStoreFixture.stable = undefined;
         service.prStatusRegistry.delete(key);
