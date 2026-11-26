@@ -341,6 +341,7 @@ export class ResearchService {
     this.requireReleasedAssignment(run.id, item);
     if (!["open", "blocked"].includes(item.work.state) || item.work.assignee) throw new Error("Release or reopen the item before assigning it");
     if (run.activeWorkers >= run.workerLimit) throw new Error("Research worker limit reached; wait for or cancel an existing worker");
+    if (item.type === "approach" && researchApproachOccupiesSlot(item.record)) throw new Error("The prior assignment is still active or unresolved; cancel it before reassigning");
     if (run.status === "exhausted") {
       this.append(run, `reopen:${key}`, context, { type: "status", status: "running", reason: "The coordinator explicitly assigned retained evidence within the original deadline." });
       this.scheduleDeadline(this.requireHeader(run.id));
@@ -393,14 +394,18 @@ export class ResearchService {
     if (header.revision >= RESEARCH_MAX_EVENTS && command.state !== "cancelled") throw new Error("Research event limit reached; finish this run before starting another");
     if (this.storage.append(id, header.revision, { seq: header.revision + 1, commandId: requestId, signature, at: this.now(), actor, data: { type: "item_work", itemId: item.id, work } })) this.publish(id, header.revision + 1);
     if (cancellation) {
+      const targets = item.type === "approach" && cancellation !== item.id ? [cancellation, item.id] : [cancellation];
+      const targetSet = new Set(targets);
       for (const delivery of this.storage.deliveries(id, { open: true })) {
-        if (delivery.approachId === cancellation) await this.cancelDelivery(id, delivery, actor);
+        if (delivery.approachId && targetSet.has(delivery.approachId)) await this.cancelDelivery(id, delivery, actor);
       }
-      if (!(this.pendingStarts.get(id)?.has(cancellation) && this.approach(id, cancellation)?.state === "starting")) {
-        if (this.queuedResumes.get(id)?.has(cancellation)) await this.withdrawResume(id, cancellation, actor);
-        else await this.stopWorker(id, cancellation, actor);
+      for (const target of targets) {
+        if (!(this.pendingStarts.get(id)?.has(target) && this.approach(id, target)?.state === "starting")) {
+          if (this.queuedResumes.get(id)?.has(target)) await this.withdrawResume(id, target, actor);
+          else if (target === cancellation || !["ended", "stopped", "failed"].includes(this.approach(id, target)?.state ?? "")) await this.stopWorker(id, target, actor);
+        }
       }
-      this.settleItemCancellation(id, cancellation);
+      for (const target of targets) this.settleItemCancellation(id, target);
     }
     return this.storage.readItem(id, item.id)!;
   }
@@ -422,9 +427,16 @@ export class ResearchService {
     if (!assignment || researchApproachOccupiesSlot(assignment)) return;
     for (const itemId of new Set([assignment.id, assignment.itemId].filter((value): value is string => Boolean(value)))) {
       const item = this.storage.readItem(id, itemId);
-      if (item?.work.assignmentId !== assignmentId || item.work.state !== "cancel_requested") continue;
+      if (!item || item.work.state !== "cancel_requested") continue;
+      const trackedId = item.work.assignmentId;
+      if (!trackedId) continue;
+      if (trackedId !== assignmentId) {
+        if (item.id !== assignmentId) continue;
+        const tracked = this.approach(id, trackedId);
+        if (tracked && researchApproachOccupiesSlot(tracked)) continue;
+      } else if (item.type === "approach" && researchApproachOccupiesSlot(item.record)) continue;
       const run = this.requireHeader(id);
-      this.append(run, `item-cancelled:${assignmentId}:${item.id}:${item.version}`, this.operator(run), { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancelled" } });
+      this.append(run, `item-cancelled:${trackedId}:${item.id}:${item.version}`, this.operator(run), { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancelled" } });
     }
   }
 
@@ -1213,8 +1225,9 @@ export class ResearchService {
     if (!this.canDispatch(run)) return false;
     const selected = this.storage.readItem(run.id, approach.id);
     if (!selected || ["completed", "cancel_requested", "cancelled"].includes(selected.work.state)) return false;
+    if (selected.work.assignmentId !== undefined && selected.work.assignmentId !== approach.id) return false;
     const item = this.storage.readItem(run.id, approach.itemId ?? approach.id);
-    if (!approach.itemId) return Boolean(item && !["completed", "cancel_requested", "cancelled"].includes(item.work.state));
+    if (!approach.itemId) return true;
     return item?.work.assignmentId === approach.id && !["open", "completed", "cancel_requested", "cancelled"].includes(item.work.state);
   }
   /** The owner records a worker turn's end under one of two exact command keys. */

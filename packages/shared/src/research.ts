@@ -471,13 +471,14 @@ export function researchWorkerTimeReachedAt(time: ResearchWorkerTime, limitMs: n
 
 /**
  * Whether a cut-off worker can be resumed: it has a thread to continue in, its direction was not abandoned,
- * and its work is still open. A focused child also needs the item it investigates to still be assigned to it,
- * the rule the owner applies when it admits a worker.
+ * its work is still open, and it has not been reassigned to a focused child. A focused child also needs the
+ * item it investigates to still be assigned to it, the rule the owner applies when it admits a worker.
  */
 export function researchApproachResumable(approach: ResearchApproach, read: (itemId: string) => Pick<ResearchItem, "work"> | undefined): boolean {
   if (!approach.interrupted || !approach.worker || approach.directionState === "abandoned") return false;
   const closed = (item: Pick<ResearchItem, "work"> | undefined) => !item || ["completed", "cancel_requested", "cancelled"].includes(item.work.state);
-  if (closed(read(approach.id))) return false;
+  const own = read(approach.id);
+  if (closed(own) || (own?.work.assignmentId !== undefined && own.work.assignmentId !== approach.id)) return false;
   if (!approach.itemId) return true;
   const source = read(approach.itemId);
   return !closed(source) && source!.work.assignmentId === approach.id && source!.work.state !== "open";

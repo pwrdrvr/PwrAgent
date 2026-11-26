@@ -254,6 +254,7 @@ export class ReplayResearchService {
     this.requireReleasedAssignment(run, item);
     if (!["open", "blocked"].includes(item.work.state) || item.work.assignee) throw new Error("Release or reopen the item before assigning it");
     if (run.activeWorkers >= run.workerLimit) throw new Error("Research worker limit reached; wait for or cancel an existing worker");
+    if (item.type === "approach" && researchApproachOccupiesSlot(item.record)) throw new Error("The prior assignment is still active or unresolved; cancel it before reassigning");
     if (run.status === "exhausted") {
       this.append(run, `reopen:${key}`, context, { type: "status", status: "running", reason: "The coordinator explicitly assigned retained evidence within the original deadline." });
       this.scheduleDeadline(this.requireRun(run.id));
@@ -305,14 +306,18 @@ export class ReplayResearchService {
     this.storage.append(id, header.revision, { seq: header.revision + 1, commandId: requestId, signature, at: this.now(), actor, data: { type: "item_work", itemId: item.id, work } });
     this.publish(id);
     if (cancellation) {
+      const targets = item.type === "approach" && cancellation !== item.id ? [cancellation, item.id] : [cancellation];
+      const targetSet = new Set(targets);
       for (const delivery of this.requireRun(id).deliveries) {
-        if (delivery.approachId === cancellation && !["cancelled", "ended"].includes(delivery.state)) await this.cancelDelivery(id, delivery, actor);
+        if (delivery.approachId && targetSet.has(delivery.approachId) && !["cancelled", "ended"].includes(delivery.state)) await this.cancelDelivery(id, delivery, actor);
       }
-      if (!(this.pendingStarts.has(`${id}:${cancellation}`) && this.requireRun(id).approaches.find((a) => a.id === cancellation)?.state === "starting")) {
-        if (this.queuedResumes.has(`${id}:${cancellation}`)) await this.withdrawResume(id, cancellation, actor);
-        else await this.stopWorker(id, cancellation, actor);
+      for (const target of targets) {
+        if (!(this.pendingStarts.has(`${id}:${target}`) && this.requireRun(id).approaches.find((a) => a.id === target)?.state === "starting")) {
+          if (this.queuedResumes.has(`${id}:${target}`)) await this.withdrawResume(id, target, actor);
+          else if (target === cancellation || !["ended", "stopped", "failed"].includes(this.requireRun(id).approaches.find((a) => a.id === target)?.state ?? "")) await this.stopWorker(id, target, actor);
+        }
       }
-      this.settleItemCancellation(id, cancellation);
+      for (const target of targets) this.settleItemCancellation(id, target);
     }
     return this.storage.readItem(id, item.id)!;
   }
@@ -335,8 +340,15 @@ export class ReplayResearchService {
     if (!assignment || researchApproachOccupiesSlot(assignment)) return;
     for (const itemId of new Set([assignment.id, assignment.itemId].filter((value): value is string => Boolean(value)))) {
       const item = this.storage.readItem(id, itemId);
-      if (item?.work.assignmentId !== assignmentId || item.work.state !== "cancel_requested") continue;
-      this.append(this.requireRun(id), `item-cancelled:${assignmentId}:${item.id}:${item.version}`, this.operator(run), { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancelled" } });
+      if (!item || item.work.state !== "cancel_requested") continue;
+      const trackedId = item.work.assignmentId;
+      if (!trackedId) continue;
+      if (trackedId !== assignmentId) {
+        if (item.id !== assignmentId) continue;
+        const tracked = run.approaches.find((a) => a.id === trackedId);
+        if (tracked && researchApproachOccupiesSlot(tracked)) continue;
+      } else if (item.type === "approach" && researchApproachOccupiesSlot(item.record)) continue;
+      this.append(this.requireRun(id), `item-cancelled:${trackedId}:${item.id}:${item.version}`, this.operator(run), { type: "item_work", itemId: item.id, work: { ...item.work, state: "cancelled" } });
     }
   }
 
@@ -1070,8 +1082,9 @@ export class ReplayResearchService {
     if (!this.canDispatch(run)) return false;
     const selected = this.storage.readItem(run.id, approach.id);
     if (!selected || ["completed", "cancel_requested", "cancelled"].includes(selected.work.state)) return false;
+    if (selected.work.assignmentId !== undefined && selected.work.assignmentId !== approach.id) return false;
     const item = this.storage.readItem(run.id, approach.itemId ?? approach.id);
-    if (!approach.itemId) return Boolean(item && !["completed", "cancel_requested", "cancelled"].includes(item.work.state));
+    if (!approach.itemId) return true;
     return item?.work.assignmentId === approach.id && !["open", "completed", "cancel_requested", "cancelled"].includes(item.work.state);
   }
   private turnEnded(run: ResearchRun, approachId: string, turnId: string): boolean {

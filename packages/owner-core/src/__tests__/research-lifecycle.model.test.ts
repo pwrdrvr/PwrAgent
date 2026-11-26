@@ -3,6 +3,7 @@ import fc from "fast-check";
 import {
   projectResearchRun,
   researchApproachOccupiesSlot,
+  researchApproachResumable,
   RESEARCH_MAX_WORKERS,
   type ResearchActor,
   type ResearchFindingKind,
@@ -316,6 +317,15 @@ describe("native research run lifecycle model", () => {
                 expect(a.worker.turnId).not.toBe(`pending:${a.worker.threadId}`);
               }
             }
+            // An approach reassigned to a focused child is never resumable and cannot stay
+            // pending/starting/running (only an unsolicited turn whose stop threw may remain "unknown").
+            const itemById = new Map(projected.items.map((item) => [item.id, item]));
+            for (const item of projected.items) {
+              if (item.type === "approach" && item.work.assignmentId && item.work.assignmentId !== item.id) {
+                expect(researchApproachResumable(item.record, (id) => itemById.get(id))).toBe(false);
+                expect(["pending", "starting", "running"]).not.toContain(item.record.state);
+              }
+            }
           };
 
           for (const op of ops) {
@@ -571,7 +581,22 @@ describe("native research run lifecycle model", () => {
               }
             } else if (op.kind === "cancel_queued_resume_via_work") {
               const run = service.read(runId, OP);
-              const cutOff = run.approaches.find((a) => a.interrupted && a.worker);
+              const itemById = new Map(run.items.map((entry) => [entry.id, entry]));
+              const reassignedCutOff = run.approaches.find((a) => {
+                const own = itemById.get(a.id);
+                return Boolean(a.interrupted && a.worker && own?.work.assignmentId && own.work.assignmentId !== a.id);
+              });
+              if (
+                run.status === "running"
+                && run.ownerId === `owner-${generation}`
+                && (run.deadlineAt === undefined || now < run.deadlineAt)
+                && reassignedCutOff
+              ) {
+                await expect(
+                  service.update(runId, `qres-reassigned-${cmdSeq}`, { action: "resume", approachIds: [reassignedCutOff.id] }, OP),
+                ).rejects.toThrow(/cannot be resumed/);
+              }
+              const cutOff = run.approaches.find((a) => researchApproachResumable(a, (id) => itemById.get(id)));
               if (run.status === "running" && cutOff && !stopThrows && cancelQueuedBehavior === "cancelled") {
                 nextNotifyOutcome = "queued";
                 const resumed = await service.update(runId, `qres-${cmdSeq}`, { action: "resume", approachIds: [cutOff.id] }, OP).catch(() => undefined);
@@ -1120,6 +1145,294 @@ describe("native research run lifecycle model", () => {
       expect(cancelled).toEqual(["q-late-coord"]);
       expect(stopped).not.toContain(COORD.threadId);
       service.close();
+    },
+  );
+
+  // Shrunk counterexample from model seed -1110052618:
+  // restart (leaves a1 interrupted) -> assign focused child onto a1 ->
+  // update(resume, [a1]) -> work(itemId: a1, state: "cancelled").
+  // Resuming an interrupted approach that already has a focused child must be
+  // refused (and skipped by resume-all), so a1 never holds both a focused child
+  // and its own queued resume. Reopening a1 after cancelling the child restores
+  // resumability cleanly.
+  it("refuses resuming an interrupted approach that has a focused assignment, and allows resuming again only after reopening", async () => {
+    const storage = new MemoryResearchStorage();
+    let liveOwner = "owner-1";
+    let workerSeq = 0;
+    let queueSeq = 0;
+    const notified: string[] = [];
+    const stopped: Array<{ threadId: string; turnId?: string }> = [];
+    const cancelledQueues: string[] = [];
+    const makePorts = (ownerId: string): ResearchPorts => ({
+      ownerId,
+      ownerPid: 1,
+      ownerStartedAt: START_TIME,
+      isOwnerAlive: (o) => o.ownerId === liveOwner,
+      now: () => START_TIME,
+      schedule: () => () => {},
+      spawn: async (_c, _t, _title, _mode, onCreated) => {
+        const id = ++workerSeq;
+        const w = { backend: "codex" as const, threadId: `w-${id}`, turnId: `t-${id}` };
+        onCreated(w);
+        return w;
+      },
+      stop: async (w) => { stopped.push({ threadId: w.threadId, turnId: w.turnId }); },
+      notify: async (_actor, target) => {
+        notified.push(target.threadId);
+        return { queueEntryId: `q-${++queueSeq}` };
+      },
+      cancelQueued: async (entry) => { cancelledQueues.push(entry); return {}; },
+      changed: () => {},
+      onError: () => {},
+    });
+
+    const first = new ResearchService(storage, makePorts("owner-1"));
+    const started = await first.start(
+      {
+        objective: "Obj",
+        workspaceMode: "none",
+        approaches: [
+          { title: "A1", task: "T1" },
+          { title: "A2", task: "T2" },
+        ],
+      },
+      COORD_AGENT,
+    );
+    first.close();
+
+    liveOwner = "owner-2";
+    const second = new ResearchService(storage, makePorts("owner-2"));
+    second.initialize();
+
+    const a1Before = second.readItem(started.id, "a1", OP).item;
+    const child = await second.assign(
+      { runId: started.id, itemId: "a1", expectedVersion: a1Before.version, task: "Focus on A1" },
+      { ...COORD_AGENT, callId: "assign-a1" },
+    );
+
+    await expect(
+      second.update(started.id, "resume-a1-reassigned", { action: "resume", approachIds: ["a1"] }, OP),
+    ).rejects.toThrow(/cannot be resumed/);
+    expect(notified).toEqual([]);
+
+    // Resume-all must skip reassigned a1 and resume only a2.
+    await second.update(started.id, "resume-all-1", { action: "resume" }, OP);
+    expect(notified).toEqual(["w-2"]);
+
+    // Another restart cuts off the focused child too; resume-all must resume the
+    // child and a2, never the replaced a1.
+    second.close();
+    liveOwner = "owner-3";
+    const third = new ResearchService(storage, makePorts("owner-3"));
+    third.initialize();
+    notified.length = 0;
+    await third.update(started.id, "resume-all-2", { action: "resume" }, OP);
+    expect(notified.sort()).toEqual(["w-2", child.worker!.threadId].sort());
+
+    // Cancelling a1 withdraws the focused child's queued resume, then reopening
+    // a1 clears the focused assignment so a1 itself can be resumed and cancelled cleanly.
+    const a1Assigned = third.readItem(started.id, "a1", OP).item;
+    const a1Cancelled = await third.work(
+      started.id,
+      "cancel-a1-child",
+      { action: "work", itemId: "a1", expectedVersion: a1Assigned.version, state: "cancelled", reason: "Cancel focused child" },
+      OP,
+    );
+    expect(a1Cancelled.work.state).toBe("cancelled");
+    expect(cancelledQueues).toHaveLength(1);
+    expect(stopped).toEqual([]);
+
+    const a1Reopened = await third.work(
+      started.id,
+      "reopen-a1",
+      { action: "work", itemId: "a1", expectedVersion: a1Cancelled.version, state: "open", reason: "Reopen A1" },
+      OP,
+    );
+    expect(a1Reopened.work.state).toBe("open");
+
+    notified.length = 0;
+    await third.update(started.id, "resume-a1-reopened", { action: "resume", approachIds: ["a1"] }, OP);
+    expect(notified).toEqual(["w-1"]);
+
+    const a1Resumed = third.readItem(started.id, "a1", OP).item;
+    const cancelledBefore = cancelledQueues.length;
+    const a1CancelledOwn = await third.work(
+      started.id,
+      "cancel-a1-own",
+      { action: "work", itemId: "a1", expectedVersion: a1Resumed.version, state: "cancelled", reason: "Cancel A1 queued resume" },
+      OP,
+    );
+    expect(a1CancelledOwn.work.state).toBe("cancelled");
+    expect(cancelledQueues).toHaveLength(cancelledBefore + 1);
+    expect(stopped).toEqual([]);
+    third.close();
+  });
+
+  // Assigning a focused child onto an approach whose own worker still occupies a
+  // slot (running or queued resume) must be refused even when workerLimit has room.
+  it("refuses assigning a focused child to an approach whose own worker is active or has a queued resume", async () => {
+    const storage = new MemoryResearchStorage();
+    let liveOwner = "owner-1";
+    let workerSeq = 0;
+    const cancelledQueues: string[] = [];
+    const makePorts = (ownerId: string): ResearchPorts => ({
+      ownerId,
+      ownerPid: 1,
+      ownerStartedAt: START_TIME,
+      isOwnerAlive: (o) => o.ownerId === liveOwner,
+      now: () => START_TIME,
+      schedule: () => () => {},
+      spawn: async (_c, _t, _title, _mode, onCreated) => {
+        const id = ++workerSeq;
+        const w = { backend: "codex" as const, threadId: `w-${id}`, turnId: `t-${id}` };
+        onCreated(w);
+        return w;
+      },
+      stop: async () => {},
+      notify: async () => ({ queueEntryId: "q-resume-a1" }),
+      cancelQueued: async (entry) => { cancelledQueues.push(entry); return {}; },
+      changed: () => {},
+      onError: () => {},
+    });
+
+    const first = new ResearchService(storage, makePorts("owner-1"));
+    const started = await first.start(
+      {
+        objective: "Obj",
+        workspaceMode: "none",
+        approaches: [
+          { title: "A1", task: "T1" },
+          { title: "A2", task: "T2" },
+        ],
+      },
+      COORD_AGENT,
+    );
+    // Free a slot by ending a2 so workerLimit (2) is not the reason assign rejects.
+    const w2 = first.read(started.id, OP).approaches[1]!.worker!;
+    first.observeEnd(w2, w2.turnId!);
+    const a1Running = first.readItem(started.id, "a1", OP).item;
+    await expect(
+      first.assign({ runId: started.id, itemId: "a1", expectedVersion: a1Running.version, task: "Focus while running" }, { ...COORD_AGENT, callId: "assign-running" }),
+    ).rejects.toThrow(/prior assignment is still active/);
+
+    first.close();
+    liveOwner = "owner-2";
+    const second = new ResearchService(storage, makePorts("owner-2"));
+    second.initialize();
+    await second.update(started.id, "resume-a1", { action: "resume", approachIds: ["a1"] }, OP);
+    const a1Queued = second.readItem(started.id, "a1", OP).item;
+    await expect(
+      second.assign({ runId: started.id, itemId: "a1", expectedVersion: a1Queued.version, task: "Focus while resume queued" }, { ...COORD_AGENT, callId: "assign-queued" }),
+    ).rejects.toThrow(/prior assignment is still active/);
+
+    const cancelled = await second.work(
+      started.id,
+      "cancel-a1",
+      { action: "work", itemId: "a1", expectedVersion: a1Queued.version, state: "cancelled", reason: "Cancel queued resume" },
+      OP,
+    );
+    expect(cancelled.work.state).toBe("cancelled");
+    expect(cancelledQueues).toEqual(["q-resume-a1"]);
+    expect(second.read(started.id, OP).activeWorkers).toBe(0);
+    second.close();
+  });
+
+  // Defense-in-depth: if an unsolicited turn on a reassigned approach's old thread
+  // failed to stop (leaving it "unknown" alongside the focused child), cancelling
+  // the approach item via work() must stop both and defer settling to "cancelled"
+  // until BOTH the focused child and the approach itself no longer occupy a slot.
+  it.each(["both-stop", "own-stop-fails-then-ends"] as const)(
+    "cancels both the focused child and an unresolved own-approach turn before settling item cancellation (%s)",
+    async (mode) => {
+      const storage = new MemoryResearchStorage();
+      let liveOwner = "owner-1";
+      let workerSeq = 0;
+      const failStopThreads = new Set<string>();
+      const stopped: Array<{ threadId: string; turnId?: string }> = [];
+      const makePorts = (ownerId: string): ResearchPorts => ({
+        ownerId,
+        ownerPid: 1,
+        ownerStartedAt: START_TIME,
+        isOwnerAlive: (o) => o.ownerId === liveOwner,
+        now: () => START_TIME,
+        schedule: () => () => {},
+        spawn: async (_c, _t, _title, _mode, onCreated) => {
+          const id = ++workerSeq;
+          const w = { backend: "codex" as const, threadId: `w-${id}`, turnId: `t-${id}` };
+          onCreated(w);
+          return w;
+        },
+        stop: async (w) => {
+          stopped.push({ threadId: w.threadId, turnId: w.turnId });
+          if (failStopThreads.has(w.threadId)) throw new Error("Stop lost");
+        },
+        notify: async () => ({}),
+        cancelQueued: async () => ({}),
+        changed: () => {},
+        onError: () => {},
+      });
+
+      const first = new ResearchService(storage, makePorts("owner-1"));
+      const started = await first.start(
+        {
+          objective: "Obj",
+          workspaceMode: "none",
+          approaches: [
+            { title: "A1", task: "T1" },
+            { title: "A2", task: "T2" },
+          ],
+        },
+        COORD_AGENT,
+      );
+      first.close();
+
+      liveOwner = "owner-2";
+      const second = new ResearchService(storage, makePorts("owner-2"));
+      second.initialize();
+      const a1Before = second.readItem(started.id, "a1", OP).item;
+      const child = await second.assign(
+        { runId: started.id, itemId: "a1", expectedVersion: a1Before.version, task: "Focus on A1" },
+        { ...COORD_AGENT, callId: "assign-a1" },
+      );
+
+      // Unsolicited start on a1's old worker fails to stop, leaving a1 "unknown" alongside child.
+      failStopThreads.add("w-1");
+      await second.observeStart({ backend: "codex", threadId: "w-1" }, "t-stray");
+      expect(second.read(started.id, OP).approaches.find((a) => a.id === "a1")?.state).toBe("unknown");
+
+      if (mode === "both-stop") failStopThreads.clear();
+      stopped.length = 0;
+      const a1Current = second.readItem(started.id, "a1", OP).item;
+      const cancelled = await second.work(
+        started.id,
+        "cancel-both",
+        { action: "work", itemId: "a1", expectedVersion: a1Current.version, state: "cancelled", reason: "Cancel A1 and child" },
+        OP,
+      );
+      expect(stopped).toEqual([
+        { threadId: child.worker!.threadId, turnId: child.worker!.turnId },
+        { threadId: "w-1", turnId: "t-stray" },
+      ]);
+
+      if (mode === "both-stop") {
+        expect(cancelled.work.state).toBe("cancelled");
+        expect(second.read(started.id, OP).activeWorkers).toBe(0);
+        const events = storage.records.get(started.id)!;
+        const childStoppedSeq = events.find((e) => e.commandId === `stopped:${child.assignmentId}:${child.worker!.turnId}`)!.seq;
+        const ownStoppedSeq = events.find((e) => e.commandId === "stopped:a1:t-stray")!.seq;
+        const settledSeq = events.find((e) => e.commandId.startsWith(`item-cancelled:${child.assignmentId}:a1:`))!.seq;
+        expect(settledSeq).toBeGreaterThan(childStoppedSeq);
+        expect(settledSeq).toBeGreaterThan(ownStoppedSeq);
+      } else {
+        // Child stopped cleanly while a1's stray turn stayed "unknown": item must remain
+        // cancel_requested until a1 itself exits.
+        expect(cancelled.work.state).toBe("cancel_requested");
+        expect(second.read(started.id, OP).activeWorkers).toBe(1);
+        second.observeEnd({ backend: "codex", threadId: "w-1" }, "t-stray");
+        expect(second.readItem(started.id, "a1", OP).item.work.state).toBe("cancelled");
+        expect(second.read(started.id, OP).activeWorkers).toBe(0);
+      }
+      second.close();
     },
   );
 });
