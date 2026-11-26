@@ -7,10 +7,13 @@ import { _electron as electron } from "@playwright/test";
 import { afterEach, expect, it, vi } from "vitest";
 import { launchElectronApp } from "../../../e2e/fixtures/electron-app";
 import { isPathWithin } from "../../shared/path-within";
+import { resolveE2eAcpDiscoveryOptions } from "../acp/acp-e2e-discovery";
+import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import { createLocalAcpAgentDiscovery } from "../app-server/acp-backend-adapter";
 import { normalizeConfigDomains } from "../settings/config-store/config-domains";
 import {
   ACP_AGENTS_ANTIGRAVITY_CLI_PATH_ENV,
+  ACP_AGENTS_GEMINI_CLI_PATH_ENV,
   E2E_ACP_DISCOVERY_ROOT_ENV,
 } from "../settings/desktop-settings-env";
 
@@ -34,7 +37,88 @@ afterEach(() => {
   probe.mockReset();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
 });
+
+function stubWindowsProcessEnv(env: NodeJS.ProcessEnv): void {
+  vi.stubGlobal("process", Object.create(process, {
+    env: { value: env },
+    platform: { value: "win32" },
+  }));
+}
+
+it("only probes fixture-owned Windows batch shims in PATHEXT order", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "replay-acp-windows-"));
+  try {
+    const fixtureRoot = path.join(root, "fixture");
+    const bin = path.join(fixtureRoot, ".local", "bin");
+    const cmd = path.join(bin, "gemini.cmd");
+    const bat = path.join(bin, "gemini.bat");
+    await mkdir(bin, { recursive: true });
+    await Promise.all([cmd, bat, path.join(root, "gemini.cmd")].map((file) =>
+      writeFile(file, "@echo off\r\nexit /b 0\r\n"),
+    ));
+    stubWindowsProcessEnv({
+      PWRAGENT_E2E: "1",
+      [E2E_ACP_DISCOVERY_ROOT_ENV]: fixtureRoot,
+      PATH: root,
+      PathExt: ".cmd;.bat",
+    });
+    // Discovery must pass the absolute shim, which controls the transport's
+    // choice of cmd.exe. Stub the version and help probes at that boundary.
+    probe.mockImplementation(async (command: string, args: string[]) => {
+      if (command !== cmd && command !== bat) throw new Error("Not a fixture shim");
+      return { stdout: args[0] === "--version" ? "1.2.3" : "Use --acp " };
+    });
+
+    const agents = await discoverLocalAcpAgentRecords({
+      ...resolveE2eAcpDiscoveryOptions(false),
+      enabledRegistryIds: ["gemini"],
+    });
+
+    expect([...new Set(probe.mock.calls.map(([command]) => command))]).toEqual([cmd, bat]);
+    expect(agents).toMatchObject([{ installStatus: "installed", activeCommand: cmd }]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it.each(["inherited replay flag", "per-launch replay flag", "per-launch discovery root"] as const)(
+  "isolates Windows replay launches with a mixed-case %s",
+  async (source) => {
+    const homeRoot = await mkdtemp(path.join(os.tmpdir(), "replay-acp-windows-env-"));
+    try {
+      const replayKey = "PwRaGeNt_RePlAy_FiXtUrE_PaTh";
+      const explicitRoot = path.join(homeRoot, "explicit-root");
+      stubWindowsProcessEnv({
+        ...(source === "inherited replay flag" ? { [replayKey]: fixturePath } : {}),
+        [E2E_ACP_DISCOVERY_ROOT_ENV.toLowerCase()]: path.join(homeRoot, "ambient-root"),
+        [ACP_AGENTS_GEMINI_CLI_PATH_ENV.toLowerCase()]: path.join(homeRoot, "ambient.cmd"),
+      });
+      const launch = vi.spyOn(electron, "launch").mockRejectedValue(stoppedBeforeLaunch);
+
+      await expect(launchElectronApp({
+        homeRoot,
+        ...(source === "per-launch discovery root" ? { fixturePath } : {}),
+        env: {
+          ...(source === "per-launch replay flag" ? { [replayKey]: fixturePath } : {}),
+          ...(source === "per-launch discovery root" ? { [E2E_ACP_DISCOVERY_ROOT_ENV.toLowerCase()]: explicitRoot } : {}),
+        },
+      })).rejects.toBe(stoppedBeforeLaunch);
+
+      const env = launch.mock.lastCall![0]!.env!;
+      expect(env.PWRAGENT_REPLAY_FIXTURE_PATH).toBe(fixturePath);
+      expect(env[E2E_ACP_DISCOVERY_ROOT_ENV]).toBe(source === "per-launch discovery root"
+        ? explicitRoot
+        : path.join(homeRoot, "replay-acp-discovery"));
+      expect(Object.keys(env).filter((key) => key.toUpperCase() === E2E_ACP_DISCOVERY_ROOT_ENV))
+        .toEqual([E2E_ACP_DISCOVERY_ROOT_ENV]);
+      expect(Object.keys(env).some((key) => key.toUpperCase() === ACP_AGENTS_GEMINI_CLI_PATH_ENV)).toBe(false);
+    } finally {
+      await rm(homeRoot, { recursive: true, force: true });
+    }
+  },
+);
 
 it.skipIf(process.platform === "win32").each([
   "ambient PATH",

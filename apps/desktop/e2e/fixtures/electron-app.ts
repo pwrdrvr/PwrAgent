@@ -165,6 +165,18 @@ const PROFILE_RESOLUTION_ENV_VARS = [
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
 ] as const;
 
+const ACP_CLI_OVERRIDE_ENV_PATTERN = /^PWRAGENT_ACP_AGENTS_.*_CLI_PATH$/i;
+
+function normalizeReplayEnvKey(key: string): string {
+  if (process.platform !== "win32") return key;
+  const name = key.toUpperCase();
+  return name === "PWRAGENT_REPLAY_FIXTURE_PATH"
+    || name === E2E_ACP_DISCOVERY_ROOT_ENV
+    || ACP_CLI_OVERRIDE_ENV_PATTERN.test(name)
+    ? name
+    : key;
+}
+
 type ElectronChildProcess = ReturnType<ElectronApplication["process"]>;
 type ElectronMainProcess = { pid: number; startedAt: number };
 const electronMainProcesses = new WeakMap<ElectronApplication, ElectronMainProcess>();
@@ -347,7 +359,7 @@ export async function launchElectronApp(
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) {
-      env[key] = value;
+      env[normalizeReplayEnvKey(key)] = value;
     }
   }
   for (const key of PROFILE_RESOLUTION_ENV_VARS) {
@@ -368,7 +380,9 @@ export async function launchElectronApp(
       : {}),
   });
   delete env.ELECTRON_RENDERER_URL;
-  const overrides = params.env ?? {};
+  const overrides = Object.fromEntries(Object.entries(params.env ?? {}).map(([key, value]) =>
+    [normalizeReplayEnvKey(key), value],
+  ));
   const replayFixturePath = Object.hasOwn(overrides, "PWRAGENT_REPLAY_FIXTURE_PATH")
     ? overrides.PWRAGENT_REPLAY_FIXTURE_PATH
     : env.PWRAGENT_REPLAY_FIXTURE_PATH;
@@ -377,7 +391,7 @@ export async function launchElectronApp(
     // Environment key names are case-insensitive on Windows.
     for (const key of Object.keys(env)) {
       if (key.toUpperCase() === E2E_ACP_DISCOVERY_ROOT_ENV
-        || /^PWRAGENT_ACP_AGENTS_.*_CLI_PATH$/i.test(key)) {
+        || ACP_CLI_OVERRIDE_ENV_PATTERN.test(key)) {
         delete env[key];
       }
     }
