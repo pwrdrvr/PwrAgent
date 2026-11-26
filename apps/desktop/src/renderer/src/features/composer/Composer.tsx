@@ -15859,9 +15859,9 @@ function useComposerController(props: ComposerProps) {
       && filesystemFederationTarget?.scope !== "remote" ? props.launchpad : undefined;
     return (
       props.launchpad || props.thread ? (
-        <div
-          className="composer__setup"
-          aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
+        <fieldset
+          className="composer__pending-controls"
+          disabled={preparingSend}
         >
           {props.launchpad && launchpadMachine && props.launchpadMachineChipHost !== null ? (
             renderLaunchpadMachineChip(
@@ -16447,7 +16447,7 @@ function useComposerController(props: ComposerProps) {
                 }, { owner: { scope: "local" } });
               }} />
           ) : null}
-        </div>
+        </fieldset>
       ) : null
     );
   }
@@ -16469,13 +16469,27 @@ function useComposerController(props: ComposerProps) {
   }
 
   function renderComposerFooter(): ReactNode {
+    const hasSetup = Boolean(props.launchpad || props.thread);
+    const hasApplicationActions = Boolean(
+      launchpadCodexEnvironmentOptions.length > 0
+      || threadCodexEnvironmentOptions.length > 0
+      || props.thread?.codexEnvironmentRuntime
+      || (workspaceOpenPath && (editorApplication || terminalApplication))
+      || (props.thread && !props.launchpad && props.integratedTerminal),
+    );
     return (
-      <div className="composer__footer">
-        {launchpadCodexEnvironmentOptions.length > 0 ||
-        threadCodexEnvironmentOptions.length > 0 ||
-        props.thread?.codexEnvironmentRuntime ||
-        (workspaceOpenPath && (editorApplication || terminalApplication)) ||
-        (props.thread && !props.launchpad && props.integratedTerminal) ? (
+      <div
+        className={hasSetup ? "composer__setup" : "composer__footer"}
+        aria-label={
+          props.launchpad
+            ? "New thread settings"
+            : props.thread
+              ? "Thread settings"
+              : undefined
+        }
+      >
+        {renderComposerToolbar()}
+        {hasApplicationActions ? (
           <div className="composer__application-actions" aria-label="Composer tools">
             <fieldset
               className="composer__pending-controls composer__pending-controls--dim"
@@ -16642,9 +16656,7 @@ function useComposerController(props: ComposerProps) {
             ) : null}
             </fieldset>
           </div>
-        ) : (
-          <span aria-hidden="true" className="composer__footer-spacer" />
-        )}
+        ) : null}
         <div className="composer__actions">
           {rewoundPromptScope === composerScopeKey ? (
             <span className="composer__rewound-chip">
@@ -17494,9 +17506,9 @@ function useComposerController(props: ComposerProps) {
           {renderComposerAutocomplete()}
         </div>
 
-        {renderComposerToolbar()}
-
         {renderComposerWorkspaceHandoff()}
+        </fieldset>
+        {renderComposerFooter()}
 
         {props.unavailableReason ? (
          <p className="composer__meta composer__meta--error">
@@ -17527,9 +17539,6 @@ function useComposerController(props: ComposerProps) {
             Waiting for input before this turn can continue.
           </p>
         ) : null}
-
-        </fieldset>
-        {renderComposerFooter()}
         </form>
         {fullAccessRiskDialog}
         {renderComposerImageLightbox()}

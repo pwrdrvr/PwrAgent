@@ -48400,7 +48400,7 @@ button.composer__subthread-source-parent:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px 6px;
 }
 
 .composer__pending-controls {
@@ -48461,13 +48461,10 @@ button.composer__subthread-source-parent:hover {
 .composer__application-actions {
   display: inline-flex;
   min-width: 0;
+  max-width: 100%;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.composer__footer-spacer {
-  min-width: 0;
 }
 
 .composer__application-button {
@@ -53240,12 +53237,21 @@ button.composer__subthread-source-parent:hover {
   opacity: 1;
 }
 
+/* Right-aligned trailing controls (`margin-left: auto`) share the wrapped
+   overflow line of `.composer__setup` whenever they fit, and drop flush-right
+   onto the next line otherwise. Left padding adds a subtle gutter so they
+   stay visually distinct from left-hand controls right at the wrap edge. */
 .composer__actions {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+  margin-left: auto;
+  max-width: 100%;
+  padding-left: 6px;
+  box-sizing: border-box;
 }
 
 /* Send / Queue / Stop / Cancel ride the footer as chips so they sit flush
