@@ -182,6 +182,51 @@ it.each([
   }
 });
 
+it.each([
+  { secondCommit: "changes the indexed projection", changesProjection: true },
+  { secondCommit: "only writes unrelated metadata", changesProjection: false },
+])("rechecks a no-write reconciliation when the second peer commit $secondCommit", async ({ changesProjection }) => {
+  const temp = createTempStateDb("search-reconcile-drift-");
+  const db = StateDb.open(temp.dbPath);
+  const peer = StateDb.open(temp.dbPath);
+  try {
+    db.raw.pragma("busy_timeout = 0");
+    const afterVersionRead = interceptProjectionVersion(db);
+    const thread = summary("concurrent");
+    const listed = { ...thread, title: "Asterism revised" };
+    const store = new ThreadSearchStore(db);
+    const peerStore = new ThreadSearchStore(peer);
+    store.upsertThreads([thread]);
+
+    const commitDuringReconciliation = vi.fn(() => {
+      if (changesProjection) {
+        peerStore.upsertThread({ ...listed, title: "Iridescent" });
+      } else {
+        peer.raw.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("contrived-search-peer", "updated");
+        peer.raw.exec("BEGIN IMMEDIATE");
+      }
+    });
+    afterVersionRead(() => {
+      // Preflight sees the original row. Reconciliation pins the snapshot
+      // containing the requested row before the second peer commit.
+      peerStore.upsertThread(listed);
+      afterVersionRead(commitDuringReconciliation);
+    });
+
+    const service = new ThreadSearchService(store, async () => [listed]);
+    const result = await service.search({ query: "Asterism", contentMode: "metadata" });
+    expect(commitDuringReconciliation).toHaveBeenCalledOnce();
+    expect(peer.raw.inTransaction).toBe(!changesProjection);
+    expect(result.results.map((row) => [row.threadId, row.title])).toEqual([[listed.id, listed.title]]);
+    expect(store.search({ query: "Iridescent", limit: 5 })).toEqual([]);
+  } finally {
+    if (peer.raw.inTransaction) peer.raw.exec("ROLLBACK");
+    peer.close();
+    db.close();
+    removeTempStateDbDir(temp.tempDir);
+  }
+});
+
 function interceptProjectionVersion(db: StateDb) {
   const prepare = db.raw.prepare.bind(db.raw);
   let next: (() => void) | undefined;

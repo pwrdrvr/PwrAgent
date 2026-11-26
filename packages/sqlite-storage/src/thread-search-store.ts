@@ -133,7 +133,8 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         external: version.external,
       };
     });
-    let committed: ReturnType<typeof reconcile>;
+    let committed: ReturnType<typeof reconcile> | undefined;
+    let retryVersion: ProjectionVersion | undefined;
     try {
       committed = reconcile.deferred();
     } catch (error) {
@@ -142,10 +143,14 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         || (error.code !== "SQLITE_BUSY_SNAPSHOT" && error.code !== "SQLITE_BUSY")) {
         throw error;
       }
-      const version = this.refreshProjectionCache();
-      if (error.code === "SQLITE_BUSY" && version.external === reconciliationVersion.external) throw error;
-      // The peer may have applied these same changes before our snapshot
-      // upgrade failed. Check again before attempting one locked retry.
+      retryVersion = this.refreshProjectionCache();
+      if (error.code === "SQLITE_BUSY" && retryVersion.external === reconciliationVersion.external) throw error;
+    }
+    if (!committed?.written.size) {
+      // A no-write reconciliation can also miss a peer commit behind its
+      // snapshot. Use fresh reads before asking for the writer lock.
+      const version = retryVersion ?? this.refreshProjectionCache();
+      if (committed && version === reconciliationVersion) return;
       preflight = { version, changed: this.findChanges(threads) };
       if (preflight.changed.length === 0) return;
       committed = reconcile.immediate();
