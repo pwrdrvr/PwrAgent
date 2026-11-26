@@ -1054,37 +1054,51 @@ export async function inputToAcpPrompt(
 ): Promise<AcpPromptPayload | undefined> {
   const promptContent: AcpPromptContentBlock[] = [];
   const parts: AppServerThreadMessagePart[] = [];
+  const hasPromptText = input.some(
+    (item) => (item.type === "text" && item.text.trim().length > 0) || item.type === "localFile" || item.type === "file",
+  );
 
+  let lastPromptContentWasUserText = false;
   for (const item of input) {
     if (item.type === "text") {
       const text = item.text.trim();
       if (text) {
-        promptContent.push({ type: "text", text });
+        const previousBlock = promptContent[promptContent.length - 1];
+        if (lastPromptContentWasUserText && previousBlock?.type === "text") {
+          previousBlock.text = `${previousBlock.text}\n${text}`;
+        } else {
+          promptContent.push({ type: "text", text });
+        }
+        lastPromptContentWasUserText = true;
         parts.push({ type: "text", text });
       }
       continue;
     }
+    lastPromptContentWasUserText = false;
 
     if (item.type === "image") {
-      const name = item.name?.trim();
-      if (name) {
-        promptContent.push({ type: "text", text: `Attached image filename: ${name}` });
-      }
+      const explicitName = item.name?.trim();
       const image = parseImageDataUrl(item.url);
       let replayUrl = item.url;
+      let stagedFileName: string | undefined;
       if (image && options?.owner) {
         const bytes = Buffer.from(image.data, "base64");
         if (bytes.byteLength > 0) {
           const staged = await stageTurnInputAttachment({
             type: "localImage",
             data: bytes,
-            ...(name ? { name } : {}),
+            ...(explicitName ? { name: explicitName } : {}),
             mimeType: image.mimeType,
           }, options.owner);
           replayUrl = toTranscriptImageProtocolUrl(pathToFileURL(staged.path).toString());
+          stagedFileName = path.basename(staged.path);
         }
       }
-      parts.push({ type: "image", ...(name ? { alt: name } : {}), url: replayUrl });
+      const annotationName = explicitName || (!hasPromptText ? stagedFileName ?? "image.png" : undefined);
+      if (annotationName) {
+        promptContent.push({ type: "text", text: `Attached image filename: ${annotationName}` });
+      }
+      parts.push({ type: "image", ...(annotationName ? { alt: annotationName } : {}), url: replayUrl });
       if (image) {
         promptContent.push({
           type: "image",
@@ -1125,14 +1139,14 @@ export async function inputToAcpPrompt(
           privateStorageRoots: options.privateStorageRoots,
         })).path
       : item.path;
-    if (explicitName || !alreadyOwnedAsset) {
+    if (explicitName || !alreadyOwnedAsset || !hasPromptText) {
       promptContent.push({ type: "text", text: `[Local image: ${fileName}]` });
     }
     // Record the image itself, as the inline-image branch does. A text
     // placeholder here was all a reopened thread could show.
     parts.push({
       type: "image",
-      ...(explicitName || !alreadyOwnedAsset ? { alt: fileName } : {}),
+      ...(explicitName || !alreadyOwnedAsset || !hasPromptText ? { alt: fileName } : {}),
       url: toTranscriptImageProtocolUrl(pathToFileURL(imagePath).toString()),
     });
     const fileInfo = await stat(imagePath);
