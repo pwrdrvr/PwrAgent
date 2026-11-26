@@ -1,0 +1,4 @@
+interface:
+  display_name: "PwrAgent Scaling Audit"
+  short_description: "Find quadratic work and fanout with local MBT"
+  default_prompt: "Use $pwragent-scaling-audit to probe the changed paths for quadratic work and fanout, fix what you find, and keep small regression tests."
