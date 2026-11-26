@@ -563,6 +563,23 @@ describe("ThreadRow chip flow", () => {
     ]);
   });
 
+  it("keeps the reaction picker open on ThreadRow after clicking an emoji so multiple reactions can be added", () => {
+    const { container, onSetReaction } = renderRow();
+    const addReaction = container.querySelector(
+      ".thread-row__chip--add-reaction",
+    ) as HTMLElement;
+
+    fireEvent.click(addReaction);
+
+    const dialog = screen.getByRole("dialog", { name: "Add reaction" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Thumbs up" }));
+    expect(onSetReaction).toHaveBeenCalledWith(expect.anything(), "👍", true);
+    expect(screen.getByRole("dialog", { name: "Add reaction" })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Rocket" }));
+    expect(onSetReaction).toHaveBeenCalledWith(expect.anything(), "🚀", true);
+  });
+
   it("does not invoke onSelectThread when an existing reaction chip is clicked", () => {
     const { container, onSelectThread, onSetReaction } = renderRow();
     const reaction = container.querySelector(

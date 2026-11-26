@@ -2,6 +2,7 @@ import fc from "fast-check";
 import { describe, expect, it, vi } from "vitest";
 import { buildReactionEmojiCatalog } from "../reaction-emoji-catalog";
 import {
+  INITIAL_REACTION_PICKER_LEAVE_STATE,
   LABEL_LETTER_REACTIONS,
   LABEL_NUMBER_REACTIONS,
   QUICK_REACTIONS,
@@ -12,6 +13,8 @@ import {
   normalizeEmojiKey,
   recordRecentReactionList,
   searchReactionEmojis,
+  transitionReactionPickerLeaveState,
+  type ReactionPickerLeaveEvent,
 } from "../reaction-picker-model";
 
 describe("reaction picker positioning properties", () => {
@@ -162,6 +165,56 @@ describe("lazy value cache lifecycle", () => {
     expect(cache.getCached()).toBe("catalog-ok");
     await expect(cache.load()).resolves.toBe("catalog-ok");
     expect(loader).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("reaction picker post-pick leave-dismiss state machine", () => {
+  it("never arms leave-close before a pick, arms on leave after a pick, and cancels on re-entry or inside interaction", () => {
+    const events = fc.constantFrom<ReactionPickerLeaveEvent>(
+      "pick",
+      "pointer_enter",
+      "pointer_leave",
+      "interact_inside",
+      "dismiss_immediate",
+    );
+
+    fc.assert(
+      fc.property(fc.array(events, { minLength: 1, maxLength: 40 }), (sequence) => {
+        let state = INITIAL_REACTION_PICKER_LEAVE_STATE;
+        for (const event of sequence) {
+          const prev = state;
+          const next = transitionReactionPickerLeaveState(prev, event);
+          state = next.state;
+
+          if (event === "dismiss_immediate") {
+            expect(next.effect).toBe("dismiss_now");
+            expect(state).toEqual(INITIAL_REACTION_PICKER_LEAVE_STATE);
+            continue;
+          }
+
+          if (event === "pointer_leave") {
+            if (!prev.hasPicked) {
+              expect(next.effect).toBe("none");
+              expect(state.leaveTimerArmed).toBe(false);
+            } else {
+              expect(next.effect).toBe("arm_timer");
+              expect(state.leaveTimerArmed).toBe(true);
+            }
+            continue;
+          }
+
+          if (prev.leaveTimerArmed) {
+            expect(next.effect).toBe("cancel_timer");
+          } else {
+            expect(next.effect).toBe("none");
+          }
+          expect(state.leaveTimerArmed).toBe(false);
+          if (event === "pick") {
+            expect(state.hasPicked).toBe(true);
+          }
+        }
+      }),
+    );
   });
 });
 

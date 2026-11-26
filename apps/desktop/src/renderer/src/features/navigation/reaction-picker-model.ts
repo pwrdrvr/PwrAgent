@@ -636,6 +636,71 @@ export type LazyValueCache<T> = {
   load: () => Promise<T>;
 };
 
+export type ReactionPickerLeaveState = {
+  hasPicked: boolean;
+  leaveTimerArmed: boolean;
+};
+
+export type ReactionPickerLeaveEvent =
+  | "pick"
+  | "pointer_enter"
+  | "pointer_leave"
+  | "interact_inside"
+  | "dismiss_immediate";
+
+export type ReactionPickerLeaveTransition = {
+  state: ReactionPickerLeaveState;
+  effect: "none" | "arm_timer" | "cancel_timer" | "dismiss_now";
+};
+
+export const INITIAL_REACTION_PICKER_LEAVE_STATE: ReactionPickerLeaveState = {
+  hasPicked: false,
+  leaveTimerArmed: false,
+};
+
+/**
+ * Coordinates multi-select stay-open and pointer-leave auto-close behavior:
+ *
+ * - Before any reaction is picked, leaving the popover does nothing so the
+ *   user can cross from the trigger or read the sidebar without losing it.
+ * - Picking a reaction keeps the popover open and arms pointer-leave close.
+ * - Leaving after a pick schedules a short grace timer; re-entering, typing,
+ *   or picking again cancels the timer.
+ * - Explicit dismissal (outside click or Escape) always cancels and closes
+ *   immediately.
+ */
+export function transitionReactionPickerLeaveState(
+  state: ReactionPickerLeaveState,
+  event: ReactionPickerLeaveEvent,
+): ReactionPickerLeaveTransition {
+  switch (event) {
+    case "pick":
+      return {
+        state: { hasPicked: true, leaveTimerArmed: false },
+        effect: state.leaveTimerArmed ? "cancel_timer" : "none",
+      };
+    case "pointer_leave":
+      if (!state.hasPicked) {
+        return { state, effect: "none" };
+      }
+      return {
+        state: { hasPicked: true, leaveTimerArmed: true },
+        effect: "arm_timer",
+      };
+    case "pointer_enter":
+    case "interact_inside":
+      return {
+        state: { ...state, leaveTimerArmed: false },
+        effect: state.leaveTimerArmed ? "cancel_timer" : "none",
+      };
+    case "dismiss_immediate":
+      return {
+        state: { hasPicked: false, leaveTimerArmed: false },
+        effect: "dismiss_now",
+      };
+  }
+}
+
 export function createLazyValueCache<T>(
   loader: () => Promise<T>,
 ): LazyValueCache<T> {

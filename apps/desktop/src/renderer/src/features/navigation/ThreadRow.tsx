@@ -893,10 +893,7 @@ export const ThreadRow = memo(function ThreadRow(props: ThreadRowProps) {
           open={pickerOpen}
           current={reactions}
           anchorRef={addReactionRef}
-          onSelect={(emoji) => {
-            toggleReaction(emoji);
-            setPickerOpen(false);
-          }}
+          onSelect={toggleReaction}
           onDismiss={() => setPickerOpen(false)}
         />
       ) : null}
