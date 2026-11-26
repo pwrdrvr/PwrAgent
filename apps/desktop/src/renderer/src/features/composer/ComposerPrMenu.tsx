@@ -4,6 +4,7 @@ import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigat
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { CheckIcon, PullRequestIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ipcErrorMessage } from "../../lib/open-path-failure";
 import { useMenuNavigation } from "../../lib/useMenuNavigation";
 import { useCloseOnOutsidePointer, useTodoFactMenuPlacement } from "../thread-todos/TodoFactMenu";
 import { useThreadDependencyList } from "../thread-dependencies/useThreadDependencyList";
@@ -14,6 +15,7 @@ import {
   createMergeBuildWatch,
   describeMergeBuildWatch,
   ownMergeBuildWaits,
+  resolveComposerMergeBuildPrUrl,
 } from "../pr-watches/merge-build-watches";
 
 /**
@@ -48,11 +50,15 @@ export function ComposerPrMenu(props: {
   };
 }) {
   const [open, setOpen] = useState(false);
+  const [pending, setPending] = useState(false);
   const [error, setError] = useState<string>();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const id = useId();
-  const close = useCallback(() => setOpen(false), []);
+  const close = useCallback(() => {
+    setOpen(false);
+    setError(undefined);
+  }, []);
   useMenuNavigation({ open, menuRef, triggerRef, onClose: close });
   useCloseOnOutsidePointer({ open, triggerRef, menuRef, onClose: close });
   const position = useTodoFactMenuPlacement({ open, triggerRef, menuRef, width: 340 });
@@ -62,8 +68,9 @@ export function ComposerPrMenu(props: {
   // dependency event in the window, which a closed button has no use for.
   const list = useThreadDependencyList(props.thread.source, props.thread.id, owner, props.desktopApi, open);
   const waits = ownMergeBuildWaits(list.data?.dependencies ?? [], target);
-  const mergeBuild = describeMergeBuildWatch({ waits, defaultOn: props.watchMergeBuildsDefault, prUrl: props.prUrl });
-  const canManage = Boolean(props.desktopApi?.manageThreadDependencies) && list.ready && Boolean(list.data);
+  const prUrl = resolveComposerMergeBuildPrUrl(props.prUrl, props.thread.prs, waits);
+  const mergeBuild = describeMergeBuildWatch({ waits, defaultOn: props.watchMergeBuildsDefault, prUrl });
+  const canManage = Boolean(props.desktopApi?.manageThreadDependencies) && list.ready && Boolean(list.data) && !pending;
   // One PR's switch means something only beside another PR Auto-fix covers,
   // or to undo one already made.
   // The thread's project's rules decide which PRs Auto-fix leaves alone.
@@ -78,15 +85,18 @@ export function ComposerPrMenu(props: {
   /** True when the change went through; a refusal stays on screen. */
   const toggleMergeBuild = async (): Promise<boolean> => {
     const api = props.desktopApi;
-    if (!api?.manageThreadDependencies) return false;
+    if (!api?.manageThreadDependencies || pending) return false;
+    setPending(true);
     setError(undefined);
     try {
       if (mergeBuild.checked) await cancelMergeBuildWatches(api, props.thread, waits);
-      else await createMergeBuildWatch(api, props.thread, props.prUrl);
+      else await createMergeBuildWatch(api, props.thread, prUrl);
       return true;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(ipcErrorMessage(reason));
       return false;
+    } finally {
+      setPending(false);
     }
   };
 
@@ -201,7 +211,9 @@ export function ComposerPrMenu(props: {
             <span className="todo-model-picker__detail">{canManage ? mergeBuild.detail : list.error ? "Unavailable" : "Checking…"}</span>
           </button>
           <p className="todo-model-picker__footnote">
-            After the PR merges, PwrAgent checks the build of the merge commit on the branch it merged into.
+            {props.watchMergeBuildsDefault && !mergeBuild.checked && mergeBuild.detail !== "Off for this PR"
+              ? "After the PR merges, PwrAgent checks the build of the merge commit on the branch it merged into. Check to also wake when it passes."
+              : "After the PR merges, PwrAgent checks the build of the merge commit on the branch it merged into."}
           </p>
           {error ? <p className="todo-model-picker__error" role="alert">{error}</p> : null}
         </div>,

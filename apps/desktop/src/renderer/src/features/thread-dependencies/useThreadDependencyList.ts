@@ -7,6 +7,7 @@ import type {
 } from "@pwragent/shared/contracts/thread-dependencies";
 import { threadDependencyMarkDoneIndex } from "@pwragent/shared/contracts/thread-dependencies";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ipcErrorMessage } from "../../lib/open-path-failure";
 
 /** A wait on this thread that it can mark done, with the machine that keeps it. */
 export type MarkDoneWait = {
@@ -95,7 +96,7 @@ export function useThreadDependencyList(
       } catch (reason) {
         if (!disposed && current === sequence) setState((previous) => ({
           key, ...(previous.key === key ? { data: previous.data } : {}),
-          error: reason instanceof Error ? reason.message : String(reason),
+          error: ipcErrorMessage(reason),
         }));
       }
     };

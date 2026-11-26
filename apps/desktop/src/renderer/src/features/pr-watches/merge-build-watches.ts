@@ -17,6 +17,17 @@ import { parsePullRequestUrl } from "../../lib/pull-request-links";
 export const isActiveMergeBuildWait = (dependency: ThreadDependency): boolean =>
   dependency.status === "waiting" || dependency.status === "ready" || dependency.status === "dispatching";
 
+/** Default wake plan for an explicit merge build watch registered from a PR menu. */
+export const DEFAULT_MERGE_BUILD_WATCH_CONTINUATION = "Report the merge build result.";
+
+function samePrUrl(left: string, right: string): boolean {
+  if (left.toLowerCase() === right.toLowerCase()) return true;
+  const parsedLeft = parsePullRequestUrl(left);
+  const parsedRight = parsePullRequestUrl(right);
+  return parsedLeft !== undefined && parsedRight !== undefined
+    && buildPullRequestStatusKey(parsedLeft) === buildPullRequestStatusKey(parsedRight);
+}
+
 /** This thread's own merge build waits: the PR it opened, merged, then built on its target branch. */
 export function ownMergeBuildWaits(dependencies: readonly ThreadDependency[], thread: { backend: string; threadId: string }): ThreadDependency[] {
   return dependencies.filter((dependency) => dependency.backend === thread.backend && dependency.threadId === thread.threadId
@@ -24,16 +35,50 @@ export function ownMergeBuildWaits(dependencies: readonly ThreadDependency[], th
       condition.when === "merge_build" && condition.backend === thread.backend && condition.threadId === thread.threadId));
 }
 
+/** True when `waits` already has a delivered merge build watch for `prUrl`. */
+function hasDeliveredMergeBuildWait(waits: readonly ThreadDependency[] | undefined, prUrl: string): boolean {
+  if (!waits?.length) return false;
+  return waits.some((dependency) => {
+    if (dependency.status !== "delivered") return false;
+    const watchUrl = mergeBuildWaitPrUrl(dependency);
+    return watchUrl !== undefined && samePrUrl(watchUrl, prUrl);
+  });
+}
+
 /**
  * The PR a new merge build watch names: the newest open PR, else the one
- * merged most recently, whose build may still be running.
+ * merged most recently whose merge build watch has not already delivered.
  */
-export function mergeBuildPullRequestUrl(prs: readonly PrSummary[]): string | undefined {
+export function mergeBuildPullRequestUrl(
+  prs: readonly PrSummary[],
+  waits?: readonly ThreadDependency[],
+): string | undefined {
   const merged = (pr: PrSummary) => pr.lifecycleState === "merged" || pr.state === "merged";
   const open = prs.filter((pr) => !merged(pr) && pr.lifecycleState !== "closed" && pr.state !== "closed");
   const newest = (list: PrSummary[], at: (pr: PrSummary) => number | undefined) =>
     [...list].sort((left, right) => (at(right) ?? 0) - (at(left) ?? 0))[0];
-  return (newest(open, (pr) => pr.createdAt) ?? newest(prs.filter(merged), (pr) => pr.mergedAt))?.url;
+  const candidate = newest(open, (pr) => pr.createdAt)
+    ?? newest(prs.filter((pr) => merged(pr) && !hasDeliveredMergeBuildWait(waits, pr.url)), (pr) => pr.mergedAt);
+  return candidate?.url;
+}
+
+/**
+ * Drops an already-merged PR whose merge build watch already delivered so the
+ * composer menu arms a watch for the thread's next PR instead of re-watching
+ * the finished build.
+ */
+export function resolveComposerMergeBuildPrUrl(
+  prUrl: string | undefined,
+  prs: readonly PrSummary[] | undefined,
+  waits: readonly ThreadDependency[],
+): string | undefined {
+  if (!prUrl) return undefined;
+  const matched = prs?.find((pr) => samePrUrl(pr.url, prUrl));
+  if (matched && (matched.lifecycleState === "merged" || matched.state === "merged")
+    && hasDeliveredMergeBuildWait(waits, prUrl)) {
+    return undefined;
+  }
+  return prUrl;
 }
 
 /** The PR a merge build wait is about: the one it names, else the one it found. */
@@ -75,12 +120,15 @@ export function describeMergeBuildWatch(params: {
 }): { checked: boolean; detail: string } {
   const active = params.waits.find(isActiveMergeBuildWait);
   if (active) return { checked: true, detail: active.wakeOn === "failure" ? "Wakes if it fails" : "Wakes on pass or fail" };
-  const prUrl = params.prUrl?.toLowerCase();
-  const stopped = params.waits.some((dependency) => dependency.status === "cancelled"
-    && dependency.conditions.some((condition) => condition.when === "merge_build"
-      && (!prUrl || !condition.prUrl || condition.prUrl.toLowerCase() === prUrl)));
+  // Match `armMergeBuild`: only a cancelled wait bound to this PR opts it out;
+  // a wait cancelled before any PR existed leaves future PRs on the default.
+  const stopped = params.prUrl !== undefined && params.waits.some((dependency) => {
+    if (dependency.status !== "cancelled") return false;
+    const watchUrl = mergeBuildWaitPrUrl(dependency);
+    return watchUrl !== undefined && samePrUrl(watchUrl, params.prUrl!);
+  });
   if (stopped) return { checked: false, detail: "Off for this PR" };
-  return { checked: false, detail: params.defaultOn ? "Default: wakes if it fails" : "Off" };
+  return { checked: false, detail: params.defaultOn ? "Auto: wakes if it fails" : "Off" };
 }
 
 /**
@@ -131,6 +179,7 @@ export async function createMergeBuildWatch(api: MergeBuildApi, thread: Pick<Nav
       ...(prUrl ? { prUrl } : {}),
       ...(thread.title ? { title: thread.title.slice(0, 200) } : {}),
     }],
+    continuation: DEFAULT_MERGE_BUILD_WATCH_CONTINUATION,
   });
 }
 

@@ -2112,8 +2112,18 @@ describe("app server ipc", () => {
       action: "create", backend: "codex", threadId: "waiting",
       conditions: [{ backend: "codex", threadId: "prerequisite", when: "turn_completed" }], continuation: "  ",
     })).rejects.toThrow("Write what this thread should do");
+    // A legacy operator/peer self merge_build watch (sent without continuation by v1.5.1)
+    // is accepted past the continuation check, while an agent tool call still requires one.
+    await expect(handler({ sender: { id: 1 } }, {
+      action: "create", backend: "codex", threadId: "waiting",
+      conditions: [{ backend: "codex", threadId: "waiting", when: "merge_build" }],
+    })).rejects.not.toThrow("Write what this thread should do");
     const tool = setThreadDependencyToolHandler.mock.calls.at(-1)?.[0];
     await expect(tool({ action: "create", backend: "codex", threadId: "" })).resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+    await expect(tool({
+      action: "create", backend: "codex", threadId: "waiting",
+      conditions: [{ backend: "codex", threadId: "waiting", when: "merge_build" }],
+    }, undefined, "agent:codex:waiting")).resolves.toMatchObject({ ok: false, error: { message: expect.stringContaining("Write what this thread should do") } });
   });
 
   it("lists every active registration for sidebar status", async () => {

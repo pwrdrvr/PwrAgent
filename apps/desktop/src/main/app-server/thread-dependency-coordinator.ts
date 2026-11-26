@@ -891,9 +891,19 @@ export class ThreadDependencyCoordinator {
         const pinned = !condition.prUrl && previous?.prUrl ? { ...condition, prUrl: previous.prUrl } : undefined;
         const resolvingPinned = pinned && this.currentPrCondition(pinned, snapshot);
         const selector = pinned ? (resolvingPinned && await resolvingPinned) ?? this.canonicalPrCondition(pinned) : condition;
-        // A merge build waits for the merge exactly as pr_merged does.
+        // A merge build waits for the merge exactly as pr_merged does. An
+        // unpinned self merge_build wait armed before a PR opens ignores old
+        // closed or already-merged PRs so it binds cleanly to the next open PR.
         const prSelector = selector.when === "merge_build" ? { ...selector, when: "pr_merged" as const } : selector;
-        const observed = { ...evaluateCondition(prSelector, snapshot, this.now(), turn, this.options.canonicalizePrUrl), condition };
+        const candidateSnapshot = condition.when === "merge_build" && !condition.prUrl && !previous?.prUrl
+          && identity(condition) === identity(item)
+          ? {
+            ...snapshot,
+            prs: snapshot.prs.filter(({ pr }) => pr.lifecycleState !== "merged" && pr.state !== "merged"
+              && pr.lifecycleState !== "closed" && pr.state !== "closed"),
+          }
+          : snapshot;
+        const observed = { ...evaluateCondition(prSelector, candidateSnapshot, this.now(), turn, this.options.canonicalizePrUrl), condition };
         if (!observed.prUrl && previous?.prUrl) {
           observed.prUrl = previous.prUrl;
           observed.headSha = previous.headSha;

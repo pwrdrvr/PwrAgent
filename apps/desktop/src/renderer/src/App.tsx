@@ -15,6 +15,7 @@ import {
   withSeenExecutionMode,
 } from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
+import { ipcErrorMessage } from "./lib/open-path-failure";
 import { classifyDirectory, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
 import { detectProviderResponseBlock } from "@pwragent/shared/provider-response-block";
 import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
@@ -3450,7 +3451,7 @@ function DesktopAppShell(props: {
       showAppNotice({
         id: `merge-build-watch:${threadSummaryIdentityKey(thread)}:${pr.url}`,
         title: "Couldn't watch the merge build",
-        message: error instanceof Error ? error.message : String(error),
+        message: ipcErrorMessage(error),
       });
     }
   });
@@ -3461,7 +3462,7 @@ function DesktopAppShell(props: {
       showAppNotice({
         id: `merge-build-watch:${wait.id}`,
         title: "The merge build watch is still running",
-        message: error instanceof Error ? error.message : String(error),
+        message: ipcErrorMessage(error),
       });
     }
   });
