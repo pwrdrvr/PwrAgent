@@ -57,7 +57,9 @@ import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
 import { ThreadMarkdown } from "./ThreadMarkdown";
+import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
+import { codexBrowserCompletionActivity } from "./codex-browser-completion";
 import { SubAgentDetailsModal } from "./context-panels/SubAgentDetailsModal";
 import { RailStatusChip, type RailChipTone } from "./context-panels/RailStatusChip";
 import { subAgentTone } from "./context-panels/subagent-format";
@@ -109,6 +111,13 @@ type MessageRewindControl = {
 const EMPTY_IMAGE_PARTS: AppServerThreadImagePart[] = [];
 
 export const TranscriptMessage = memo(function TranscriptMessage(props: TranscriptMessageProps) {
+  const browserCompletion = codexBrowserCompletionActivity(props.message, props.parentThreadBackend);
+  return browserCompletion
+    ? <TranscriptActivity entry={browserCompletion} desktopApi={props.desktopApi} />
+    : <TranscriptMessageContent {...props} />;
+});
+
+function TranscriptMessageContent(props: TranscriptMessageProps) {
   const threadLinks = useThreadLinks();
   const origin = props.message.origin;
   const sourceThread = origin?.sourceThread;
@@ -805,7 +814,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
       ))}
     </>
   );
-});
+}
 
 TranscriptMessage.displayName = "TranscriptMessage";
 

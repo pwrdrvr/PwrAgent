@@ -569,6 +569,48 @@ it("keeps a completed message's live sequence when a tied command row precedes i
   } finally { real.unmount(); clock.mockRestore(); }
 });
 
+it("publishes an interleaved browser marker only on completion and releases commentary that stops matching", async () => {
+  const real = await mount(initialModel());
+  const turnId = "browser-turn";
+  const toolId = "browser-tool";
+  const prefix = '::browser-complete{title="Verified preview"';
+  let nextId = 0;
+  try {
+    act(() => {
+      real.emit("turn/started", { turn: { id: turnId, status: "in_progress" } });
+      real.emit("item/started", {
+        turnId, item: { id: toolId, type: "mcpToolCall", server: "browser", tool: "inspect", status: "inProgress" },
+      });
+    });
+    fc.assert(fc.property(fc.integer({ min: 1, max: prefix.length }), fc.boolean(), (splitAt, literal) => {
+      const itemId = `browser-item-${nextId++}`;
+      const text = prefix + (literal ? " needs a closing brace" : "}");
+      const replayed = () => Array.from(real.result.current.entries).filter((entry) => entry.id === itemId);
+      act(() => {
+        real.emit("item/started", { turnId, item: { id: itemId, type: "agentMessage", text: "", phase: "commentary" } });
+        real.emit("item/agentMessage/delta", { turnId, itemId, delta: text.slice(0, splitAt), phase: "commentary" });
+        real.emit("item/mcpToolCall/progress", { turnId, itemId: toolId, message: "Inspecting the preview" });
+      });
+      expect(replayed()).toEqual([]);
+
+      act(() => {
+        real.emit("item/agentMessage/delta", { turnId, itemId, delta: text.slice(splitAt), phase: "commentary" });
+      });
+      expect(real.result.current.pendingAssistantMessage?.text).toBe(literal ? text : undefined);
+      expect(replayed()).toEqual([]);
+
+      act(() => {
+        const item = { id: itemId, type: "agentMessage", text, phase: "commentary" };
+        real.emit("item/completed", { turnId, item });
+        real.emit("item/completed", { turnId, item });
+      });
+      expect(replayed()).toEqual([expect.objectContaining({ text })]);
+    }), { numRuns: 5 });
+  } finally {
+    await real.close();
+  }
+});
+
 it("keeps a hydrated message before later live tools when its completion is redelivered", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
   const model: Model = { turn: 0, ledger: [] };
