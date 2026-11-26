@@ -7,11 +7,7 @@ import type {
   AcpBackendId,
   AppServerReviewTarget,
 } from "@pwragent/shared/contracts/normalized-app-server";
-import {
-  MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
-  reviewTargetInstructions,
-  MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
-} from "../../shared/review-command";
+import { reviewTargetInstructions } from "../../shared/review-command";
 import {
   REVIEW_OUTPUT_INSTRUCTIONS,
   REVIEW_OUTPUT_TOOL_INSTRUCTIONS,
@@ -118,15 +114,4 @@ export function managedReviewAcpRuntime(params: {
     ...(!params.requireCallerMode ? { currentModeId: "auto" } : {}),
     updatedAt: params.now ?? Date.now(),
   };
-}
-
-export function buildManagedReviewContextInput(outputs: string[]): string {
-  return [
-    MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
-    ...outputs.map((output, index) => [
-      outputs.length > 1 ? `Review ${index + 1}:` : undefined,
-      output.trim(),
-    ].filter((line): line is string => Boolean(line)).join("\n")),
-    MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
-  ].join("\n\n");
 }

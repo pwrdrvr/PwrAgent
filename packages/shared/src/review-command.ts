@@ -73,13 +73,9 @@ export function formatReviewCommand(target: AppServerReviewTarget): string {
 }
 
 /**
- * Delimiters wrapping the managed-review artifact that PwrAgent prepends to the
- * next prompt after a review finishes. The agent needs the text in its context
- * window; the operator does not need to read it in the transcript, and ACP
- * agents echo every prompt back as a `user_message_chunk`. Both the writer
- * (`buildManagedReviewContextInput`) and the transcript filter
- * (`stripManagedReviewContextBlock`) key off these exact strings — change one
- * and the block starts rendering as a user message again.
+ * Delimiters from older ACP prompts that embedded managed review artifacts.
+ * Keep them stable so recorded prompts and provider echoes can still be read
+ * without attributing the review body to the operator.
  */
 export const MANAGED_REVIEW_CONTEXT_OPEN_MARKER =
   "[PwrAgent review sub-agent results — context for this turn]";

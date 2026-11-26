@@ -21,7 +21,7 @@ import {
 } from "@pwragent/shared/command-action-labels";
 import { stripAgentMemoryChunk } from "@pwragent/shared/contracts/agent-memory";
 import { ACP_WORKSPACE_HISTORY_URI } from "./acp-workspace-history.js";
-import { stripManagedReviewContextBlock } from "../../shared/review-command.js";
+import { MANAGED_REVIEW_CONTEXT_OPEN_MARKER, stripManagedReviewContextBlock } from "../../shared/review-command.js";
 import { stripAcpAgentInstructionChunk } from "../../shared/agent-instruction-delivery.js";
 import {
   type AcpProviderTool,
@@ -742,10 +742,18 @@ export class AcpSessionReplayNormalizer {
           receivedAt: createdAt,
         });
       } else if (kind === "pwragent_user_prompt") {
+        const prompt = readString(update.update, "prompt") ?? "";
+        const parts = readMessageParts(update.update);
+        // Older versions stored the injected review both in the prompt and
+        // as its first text part. Keep the rest of the recorded user input.
+        const hasReviewContext = prompt.startsWith(`${MANAGED_REVIEW_CONTEXT_OPEN_MARKER}\n\n`);
+        const firstPart = parts?.[0];
         this.recordUserPrompt({
           sessionId: update.sessionId,
-          prompt: readString(update.update, "prompt") ?? "",
-          parts: readMessageParts(update.update),
+          prompt: hasReviewContext ? stripManagedReviewContextBlock(prompt) : prompt,
+          parts: hasReviewContext && firstPart?.type === "text"
+            && firstPart.text.startsWith(`${MANAGED_REVIEW_CONTEXT_OPEN_MARKER}\n\n`)
+            ? parts?.slice(1) : parts,
           turnId: readString(update.update, "turnId") ?? buildPendingTurnId(update.sessionId),
           receivedAt: createdAt,
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
@@ -843,10 +851,8 @@ export class AcpSessionReplayNormalizer {
       this.attachReplayedUserImagePart(update, createdAt, imagePart);
       return;
     }
-    // PwrAgent prepends the finished managed-review artifact to the next
-    // prompt so the agent can reason about it. The transcript already shows
-    // that review as its own entry, so strip the block back out of the echo
-    // rather than rendering it as something the operator typed.
+    // Older prompts could contain an injected review artifact. The review
+    // has its own transcript entry, so keep the artifact out of the echo.
     // The Agent instruction block PwrAgent puts ahead of a prompt is removed
     // the same way: the operator did not type it.
     // An agent may echo the block in several chunks.

@@ -1807,6 +1807,32 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
   });
 
+  it("restores the old recorded ACP prompt without the review JSON in its text or parts", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const context = [
+      "[PwrAgent review sub-agent results — context for this turn]",
+      '{"findings":[{"title":"Keep the README current"}]}',
+      "[End PwrAgent review sub-agent results]",
+    ].join("\n\n");
+    const reply = "Continue after the review";
+    const attachment = { type: "file", name: "notes.txt", mimeType: "text/plain", sizeBytes: 8 };
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        turnId: "turn-1",
+        prompt: `${context}\n\n${reply}`,
+        parts: [{ type: "text", text: context }, { type: "text", text: reply }, attachment],
+      },
+    });
+
+    expect(replay.entries).toEqual([expect.objectContaining({
+      type: "message", role: "user", text: reply,
+      parts: [{ type: "text", text: reply }, attachment],
+    })]);
+  });
+
   it("keeps user text that shares a chunk with the review context block", () => {
     const normalizer = new AcpSessionReplayNormalizer();
 

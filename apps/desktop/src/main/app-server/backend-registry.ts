@@ -217,9 +217,6 @@ import { isGoalActivationEntry, ThreadGoalControl, type ThreadGoalGate } from ".
 import type { ThreadGoalRequest, ThreadGoalState } from "@pwragent/shared/contracts/thread-goal";
 import type { AcpMcpRegistrationSource, AcpMcpServerRegistration } from "../acp/acp-client";
 import {
-  buildManagedReviewContextInput,
-} from "./managed-review";
-import {
   buildCodexAgentInstructionUpdate,
   providerDeliveredAgentInstructions,
 } from "../../shared/agent-instruction-delivery";
@@ -12190,23 +12187,11 @@ export class DesktopBackendRegistry {
           params.input,
           this.acpBackend.getSession(params.backend, params.threadId)?.availableCommands,
         );
-      // Leave pending review contexts for the next normal turn so they neither
-      // get prepended before `/compact` (breaking slash-command detection) nor
-      // get consumed without reaching the agent.
-      const pendingManagedReviewContextEntryIds = acpCompactTurn
+      // Clean up pending IDs from older profiles after a normal turn accepts.
+      // Review details are available through list_reviews.
+      const legacyReviewContextEntryIds = acpCompactTurn
         ? []
         : overlay?.pendingManagedReviewContextEntryIds ?? [];
-      const managedReviewEntriesById = new Map(
-        (overlay?.managedReviewEntries ?? []).map((entry) => [entry.id, entry]),
-      );
-      const pendingManagedReviewContexts =
-        pendingManagedReviewContextEntryIds.flatMap((entryId) => {
-          const entry = managedReviewEntriesById.get(entryId);
-          if (!entry) {
-            return [];
-          }
-          return [entry.output ? JSON.stringify(entry.output) : entry.review];
-        });
       const modelSettings = await this.resolveModelSettings(params.backend, {
         model: migrationApplied
           ? overlay?.model
@@ -12219,7 +12204,6 @@ export class DesktopBackendRegistry {
       const identity = { backend: params.backend, threadId: params.threadId };
       const reservationKey = buildTurnStartReservationKey(params.backend, params.threadId);
       let preparedPdfInput!: Awaited<ReturnType<typeof preparePdfTurnInput>>;
-      let userInput!: AppServerTurnInputItem[];
       let input!: AppServerTurnInputItem[];
       let promptContext: string | undefined;
       return await this.threadStarts.startAcp({
@@ -12239,24 +12223,13 @@ export class DesktopBackendRegistry {
           });
           // ACP adapters already accept data-URL image parts. Keeping those
           // intact avoids changing their established image payload contract.
-          userInput = await ownThreadInputAttachments(
+          input = await ownThreadInputAttachments(
             await enrichLocalFileInputs(preparedPdfInput.input, {
               privateStorageRoots: this.localFilePrivateStorageRoots,
             }),
             params,
             this.localFilePrivateStorageRoots,
           );
-          input = pendingManagedReviewContexts.length > 0
-            ? [
-                {
-                  type: "text" as const,
-                  text: buildManagedReviewContextInput(
-                    pendingManagedReviewContexts,
-                  ),
-                },
-                ...userInput,
-              ]
-            : userInput;
           if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
             await this.flushQueuedExecutionModeIfPresent(
               params.threadId,
@@ -12288,7 +12261,7 @@ export class DesktopBackendRegistry {
         }, { executionMode: params.executionMode }),
         bindOrigin: (origin, result) => this.bindStartingTurnOrigin(origin, result),
         consumeReviewContexts: () => this.overlayStore.consumeManagedReviewContexts({
-          ...identity, entryIds: pendingManagedReviewContextEntryIds,
+          ...identity, entryIds: legacyReviewContextEntryIds,
         }),
         bindPdf: (result) => this.pdfAttachmentStore.bindTurn(
           { backend: params.backend, threadId: result.threadId, turnId: result.turnId },
@@ -12297,7 +12270,7 @@ export class DesktopBackendRegistry {
         scheduleTitle: (result) => this.scheduleThreadTitleGeneration({
           backend: params.backend,
           threadId: result.threadId,
-          input: userInput,
+          input,
         }),
         bindContext: (context, result) => {
           this.bindPendingThreadMessageContext(context, result.turnId);
@@ -12308,7 +12281,7 @@ export class DesktopBackendRegistry {
           backend: params.backend,
           threadId: result.threadId,
           turnId: result.turnId,
-          input: userInput,
+          input,
         }),
         // An accepted turn's prompt item claims its bound context, as every
         // other user item does. That item can reach the message-context stage
