@@ -33087,6 +33087,91 @@ a.transcript-message__messaging-origin:focus-visible {
   opacity: 1;
 }
 
+/* When column 0 is pinned, the pinned column's own right separator and depth
+   shadow signal scrolled-under content, so hide the outer left fade. */
+.thread-markdown__table-wrap[data-pinned-col-active="true"]::before {
+  opacity: 0;
+}
+
+.thread-markdown__table-wrap[data-sticky-header="true"] {
+  z-index: 3;
+}
+
+.thread-markdown__table-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--shadow-base) 22%, transparent);
+  opacity: 0;
+  transform: translateY(var(--table-sticky-y, 0px));
+  transition: opacity 140ms ease;
+}
+
+.thread-markdown__table-wrap:hover .thread-markdown__table-actions,
+.thread-markdown__table-wrap:focus-within .thread-markdown__table-actions {
+  opacity: 1;
+}
+
+.thread-markdown__table-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.thread-markdown__table-action:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.thread-markdown__table-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.thread-markdown__table-action--pin {
+  display: none;
+}
+
+.thread-markdown__table-wrap[data-can-pin-col="true"] .thread-markdown__table-action--pin {
+  display: inline-flex;
+}
+
+/* Hide the floating toolbar pill when it has no expand button and the pin
+   button is hidden (for example a non-overflowing or narrow-pane CSV/TSV
+   preview table). */
+.thread-markdown__table-wrap:not([data-can-pin-col="true"])
+  .thread-markdown__table-actions:not(:has(.thread-markdown__table-action--expand)) {
+  display: none;
+}
+
+.thread-markdown__table-action--pin[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+@media (hover: none) {
+  .thread-markdown__table-actions {
+    opacity: 1;
+  }
+}
+
 .thread-markdown__table-scroll {
   max-width: 100%;
   overflow-x: auto;
@@ -33107,7 +33192,10 @@ a.transcript-message__messaging-origin:focus-visible {
 .thread-markdown__table {
   width: max-content;
   min-width: 100%;
-  border-collapse: collapse;
+  /* Separate borders keep sticky header and pinned column borders intact with
+     each stuck cell in Chromium rather than detaching during scroll. */
+  border-collapse: separate;
+  border-spacing: 0;
   font-size: 13px;
   line-height: 1.45;
   font-variant-numeric: tabular-nums;
@@ -33115,6 +33203,81 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .thread-markdown__thead {
   background: var(--bg-panel-elevated);
+}
+
+.thread-markdown__thead .thread-markdown__th {
+  background: var(--bg-panel-elevated);
+}
+
+.thread-markdown__table-wrap[data-sticky-mode="scroll-ancestor"]
+  .thread-markdown__thead
+  .thread-markdown__th {
+  position: relative;
+  z-index: 3;
+  transform: translateY(var(--table-sticky-y, 0px));
+}
+
+.thread-markdown__table-wrap[data-sticky-header="true"]
+  .thread-markdown__thead
+  .thread-markdown__th {
+  will-change: transform;
+  box-shadow:
+    0 1px 0 var(--border-strong),
+    0 6px 12px -6px color-mix(in srgb, var(--shadow-base) 26%, transparent);
+}
+
+.thread-markdown__table-wrap--native-sticky
+  .thread-markdown__thead
+  .thread-markdown__th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  box-shadow: 0 1px 0 var(--border-strong);
+}
+
+.thread-markdown__table-wrap[data-pinned-col-active="true"]
+  .thread-markdown__th:first-child,
+.thread-markdown__table-wrap[data-pinned-col-active="true"]
+  .thread-markdown__td:first-child {
+  position: sticky;
+  left: 0;
+}
+
+.thread-markdown__table-wrap[data-pinned-col-active="true"]
+  .thread-markdown__th:first-child {
+  z-index: 4;
+  background: var(--bg-panel-elevated);
+}
+
+.thread-markdown__table-wrap[data-pinned-col-active="true"]
+  .thread-markdown__td:first-child {
+  z-index: 2;
+  background: var(--bg-app);
+}
+
+.thread-markdown__table-wrap[data-pinned-col-active="true"][data-pinned-col-scrolled="true"]
+  .thread-markdown__td:first-child {
+  box-shadow:
+    1px 0 0 var(--border-strong),
+    8px 0 14px -8px color-mix(in srgb, var(--shadow-base) 30%, transparent);
+}
+
+.thread-markdown__table-wrap[data-pinned-col-active="true"][data-pinned-col-scrolled="true"]
+  .thread-markdown__th:first-child {
+  box-shadow:
+    1px 0 0 var(--border-strong),
+    8px 0 14px -8px color-mix(in srgb, var(--shadow-base) 30%, transparent);
+}
+
+.thread-markdown__table-wrap[data-sticky-header="true"][data-pinned-col-active="true"][data-pinned-col-scrolled="true"]
+  .thread-markdown__th:first-child,
+.thread-markdown__table-wrap--native-sticky[data-pinned-col-active="true"][data-pinned-col-scrolled="true"]
+  .thread-markdown__th:first-child {
+  box-shadow:
+    1px 0 0 var(--border-strong),
+    0 1px 0 var(--border-strong),
+    8px 0 14px -8px color-mix(in srgb, var(--shadow-base) 30%, transparent),
+    0 6px 12px -6px color-mix(in srgb, var(--shadow-base) 26%, transparent);
 }
 
 .thread-markdown__th,
@@ -33451,6 +33614,202 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .markdown-document-modal__status--error {
   color: var(--danger-text);
+}
+
+/* Popout table document viewer modal: uses full viewport width with native 2D
+   scrolling (sticky header row + optional pinned column 0), live row filter,
+   wide-column mode, and Markdown/CSV copy actions. */
+.table-viewer-modal__content {
+  width: min(100%, 1380px);
+  height: min(100vh - 56px, 900px);
+  max-height: none;
+}
+
+.table-viewer-modal__header {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+
+.table-viewer-modal__meta {
+  flex: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.table-viewer-modal__controls {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.table-viewer-modal__search {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-app);
+  color: var(--text-muted);
+}
+
+.table-viewer-modal__search:focus-within {
+  border-color: var(--accent-border);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.table-viewer-modal__search-icon {
+  flex: none;
+  color: var(--text-muted);
+}
+
+.table-viewer-modal__search-input {
+  width: 156px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.table-viewer-modal__search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.table-viewer-modal__search-clear {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.table-viewer-modal__search-clear:hover {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.table-viewer-modal__search-clear:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.table-viewer-modal__toggle,
+.table-viewer-modal__csv-button {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.table-viewer-modal__toggle:hover,
+.table-viewer-modal__csv-button:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.table-viewer-modal__toggle:focus-visible,
+.table-viewer-modal__csv-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.table-viewer-modal__toggle[aria-pressed="true"],
+.table-viewer-modal__csv-button[data-copied="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.table-viewer-modal__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  padding: 14px 16px 16px;
+  overflow: hidden;
+}
+
+.table-viewer-modal__markdown {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  max-width: none;
+}
+
+.table-viewer-modal__markdown .thread-markdown__table-wrap--native-sticky {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.table-viewer-modal__markdown
+  .thread-markdown__table-wrap--native-sticky
+  .thread-markdown__table-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.table-viewer-modal__content--wide-columns
+  .thread-markdown__th[data-col-kind="label"],
+.table-viewer-modal__content--wide-columns
+  .thread-markdown__td[data-col-kind="label"] {
+  max-width: 48ch;
+}
+
+.table-viewer-modal__content--wide-columns
+  .thread-markdown__th[data-col-kind="prose"],
+.table-viewer-modal__content--wide-columns
+  .thread-markdown__td[data-col-kind="prose"] {
+  max-width: 72ch;
+}
+
+.table-viewer-modal__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 28px 16px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.table-viewer-modal__empty p {
+  margin: 0;
 }
 
 /* In-app file preview: every kind but Markdown. Shown as written with a line
@@ -37759,6 +38118,127 @@ div.composer-error-row__toggle {
 
 .transcript-activity--warning .transcript-activity__label {
   color: var(--accent-bright);
+}
+
+.transcript-browser-use:not([data-browser-standalone="true"]) {
+  width: min(100%, 760px);
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+}
+
+.transcript-browser-use__headline {
+  display: inline-flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.transcript-browser-use__icon {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.transcript-browser-use__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.transcript-browser-use__meta--indented {
+  padding-left: 16px;
+}
+
+.transcript-browser-use__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.transcript-browser-use__chip--handoff {
+  border-color: var(--border-strong);
+  color: var(--status-warning-text);
+}
+
+.transcript-browser-use__url,
+.transcript-browser-use__detail-url {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.transcript-browser-use__url:hover,
+.transcript-browser-use__detail-url:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.transcript-browser-use__url:focus-visible,
+.transcript-browser-use__detail-url:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+.transcript-browser-use__steps,
+.transcript-browser-use__webmcp {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.transcript-browser-use__preview {
+  margin-top: 8px;
+}
+
+.transcript-browser-use__preview--indented {
+  padding-left: 16px;
+}
+
+.transcript-browser-use__preview-button {
+  display: inline-block;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-panel);
+  cursor: zoom-in;
+}
+
+.transcript-browser-use__preview-button:hover {
+  border-color: var(--border-strong);
+}
+
+.transcript-browser-use__preview-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-browser-use__preview-image {
+  display: block;
+  width: auto;
+  max-width: min(100%, 360px);
+  height: auto;
+  max-height: 180px;
+  object-fit: contain;
 }
 
 .transcript-thread-tool {

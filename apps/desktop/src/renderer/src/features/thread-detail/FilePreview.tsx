@@ -8,6 +8,7 @@ import {
   type FilePreviewNotice,
   type FilePreviewTable,
 } from "./file-preview-model";
+import { classifyPlainFirstColumnPin } from "./remark-table-profile";
 import { TableScrollContainer } from "./TableScrollContainer";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 
@@ -168,6 +169,15 @@ function DelimitedFilePreview(props: {
 
 function DelimitedTable(props: { kind: "csv" | "tsv"; table: FilePreviewTable }) {
   const { header, numericColumns, rows, totalRows } = props.table;
+  const pinRecommendation = useMemo(
+    () =>
+      classifyPlainFirstColumnPin(
+        rows.map((row) => row[0] ?? ""),
+        header.length,
+        Boolean(numericColumns[0]),
+      ),
+    [header.length, numericColumns, rows],
+  );
   return (
     <div className="file-preview">
       {totalRows > rows.length ? (
@@ -181,6 +191,7 @@ function DelimitedTable(props: { kind: "csv" | "tsv"; table: FilePreviewTable })
       <TableScrollContainer
         ariaLabel={`${capitalizedKindLabel(props.kind)} contents`}
         className="file-preview__table"
+        pinRecommendation={pinRecommendation}
         role="region"
       >
         <table className="thread-markdown__table">

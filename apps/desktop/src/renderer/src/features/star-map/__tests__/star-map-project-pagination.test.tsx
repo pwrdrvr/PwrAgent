@@ -80,11 +80,13 @@ it.each(["local", "remote"])("renders 15 complete project clouds and three indep
   expect(view.container.querySelector('button[aria-label="Load more project-0 threads"]')).toBeNull();
   expect(view.container.querySelectorAll('[data-thread-key$="p0-c0"]')).toHaveLength(1);
   expect(expired).toBe(true);
-  // A click asks for its block; only the rebaseline after the evicted cursor
-  // falls back to the demand page size that paces a first paint.
-  expect(read.mock.calls.slice(before).every(([request]) => request.query.kind === "star-map"
-    && request.query.projectKey === directories[0]!.key
-    && request.pageSize === (request.cursor ? 100 : 10))).toBe(true);
+  // Click 1 hits an evicted cursor (100), rebaselines up to the 100-row page
+  // cap, then fetches the remaining 10 rows to complete its 110-row block;
+  // click 2 asks for the next 100-row block.
+  const clickCalls = read.mock.calls.slice(before).map(([request]) => request);
+  expect(clickCalls.every((request) => request.query.kind === "star-map"
+    && request.query.projectKey === directories[0]!.key)).toBe(true);
+  expect(clickCalls.map((request) => request.pageSize)).toEqual([100, 100, 10, 100]);
   expect(view.container.querySelectorAll(".star-map__cluster-label")).toHaveLength(15);
   view.unmount();
 });

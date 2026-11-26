@@ -196,6 +196,12 @@ import {
   normalizeReviewOutputRecord,
 } from "@pwragent/shared/review-command";
 import {
+  extractCodexBrowserUseDetail,
+  formatCodexBrowserUseDetailLabel,
+  isCodexBrowserBatchAuxiliaryTool,
+  summarizeCodexBrowserUseDetails,
+} from "@pwragent/shared/codex-browser-use";
+import {
   formatDynamicToolOutput,
   formatMcpToolOutput,
   formatToolActivityTitle,
@@ -3652,7 +3658,13 @@ function pushActivityDetail(
   detailsByKey: Map<string, AppServerThreadActivityDetail>,
   detail: AppServerThreadActivityDetail
 ): void {
-  const key = JSON.stringify(detail.images?.length ? ["image", detail.id] : ["label", detail.label]);
+  const key = JSON.stringify(
+    detail.images?.length
+      ? ["image", detail.id]
+      : detail.browserUse
+        ? ["browserUse", detail.id]
+        : ["label", detail.label],
+  );
   const existing = detailsByKey.get(key);
   if (existing) {
     if (!existing.status || existing.status === "completed") {
@@ -4981,6 +4993,7 @@ function summarizeActivityItems(
   let changedFileAdditions = 0;
   let changedFileRemovals = 0;
   let toolCalls = 0;
+  let browserAuxiliaryToolCalls = 0;
   let spawnedAgents = 0;
   let waitedAgents = 0;
   let failedCollabCalls = 0;
@@ -5219,16 +5232,31 @@ function summarizeActivityItems(
       normalizedItemType === "imageview" ||
       normalizedItemType === "imagegeneration"
     ) {
+      const browserUse =
+        normalizedItemType === "mcptoolcall"
+          ? extractCodexBrowserUseDetail(item)
+          : undefined;
+      const toolName =
+        pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
+        (normalizedItemType === "imageview" ? `View image: ${pickString(item, ["path"]) ?? "unknown image"}` : undefined);
+      const mcpIdentifier =
+        normalizedItemType === "mcptoolcall" && toolName
+          ? formatToolIdentifier(
+              pickString(item, ["server", "serverName", "server_name"]),
+              toolName,
+            )
+          : undefined;
       // A web search explores, as its live row does: it counts as a search,
       // not a tool, so the header reads the same after the turn is read back.
       if (normalizedItemType === "websearch") {
         searches += 1;
-      } else {
-        toolCalls += 1;
+      } else if (!browserUse) {
+        if (isCodexBrowserBatchAuxiliaryTool(mcpIdentifier)) {
+          browserAuxiliaryToolCalls += 1;
+        } else {
+          toolCalls += 1;
+        }
       }
-      const toolName =
-        pickString(item, ["tool", "toolName", "tool_name", "name"]) ??
-        (normalizedItemType === "imageview" ? `View image: ${pickString(item, ["path"]) ?? "unknown image"}` : undefined);
       const args = parseToolArguments(item);
       const query =
         pickString(item, ["query"]) ??
@@ -5256,6 +5284,8 @@ function summarizeActivityItems(
       const label =
         normalizedItemType === "websearch"
         ? formatWebSearchLabel(itemStatus === "in_progress")
+        : browserUse
+          ? formatCodexBrowserUseDetailLabel(browserUse, explicitTitle)
         : (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
         && explicitTitle
         ? formatToolActivityTitle(explicitTitle)
@@ -5276,6 +5306,7 @@ function summarizeActivityItems(
         ...(mcpCommandDetail || dynamicCommandDetail
           ? { command: mcpCommandDetail ?? dynamicCommandDetail }
           : {}),
+        ...(browserUse ? { browserUse } : {}),
         status: itemStatus
       });
     }
@@ -5303,8 +5334,15 @@ function summarizeActivityItems(
       ].filter(Boolean).join(", ")
     );
   }
-  if (toolCalls > 0) {
-    summaryParts.push(`Used ${toolCalls} tool${toolCalls === 1 ? "" : "s"}`);
+  const browserSummary = summarizeCodexBrowserUseDetails(details);
+  const effectiveToolCalls = browserSummary
+    ? toolCalls
+    : toolCalls + browserAuxiliaryToolCalls;
+  if (effectiveToolCalls > 0) {
+    summaryParts.push(`Used ${effectiveToolCalls} tool${effectiveToolCalls === 1 ? "" : "s"}`);
+  }
+  if (browserSummary) {
+    summaryParts.push(browserSummary);
   }
   if (spawnedAgents > 0) {
     summaryParts.push(`Spawned ${spawnedAgents} agent${spawnedAgents === 1 ? "" : "s"}`);

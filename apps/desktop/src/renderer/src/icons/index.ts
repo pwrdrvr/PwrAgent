@@ -39,6 +39,7 @@ export { FolderPlusIcon } from "./FolderPlusIcon";
 export { GitHubIcon } from "./GitHubIcon";
 export { GitLabIcon } from "./GitLabIcon";
 export { GitIcon } from "./GitIcon";
+export { GlobeIcon } from "./GlobeIcon";
 export { GrokIcon } from "./GrokIcon";
 export { HelpCircleIcon } from "./HelpCircleIcon";
 export { HistoryIcon } from "./HistoryIcon";

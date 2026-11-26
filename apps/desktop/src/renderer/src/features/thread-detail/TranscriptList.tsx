@@ -1020,22 +1020,38 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   // Replies to Codex async questions, keyed by the question they name. The
   // window is a contiguous tail, so a reply to any visible question is here.
-  // The string key keeps the map, and every row it reaches, stable until a
-  // reply actually changes.
-  const asyncQuestionReplyKey = useMemo(
-    () =>
-      JSON.stringify(
-        transcriptEntries.flatMap((entry) =>
-          entry.type === "message" && entry.role === "user"
-            ? (parseCodexAsyncQuestionReply(entry.text) ?? []).map((reply) => [
-                reply.questionItemId,
-                reply.answer,
-              ])
-            : []
-        ),
-      ),
-    [transcriptEntries],
-  );
+  // Only user messages carry replies, so read directly from history + transient
+  // user messages rather than rescanning the entire transcript on every 100ms
+  // streaming assistant preview delta.
+  const asyncQuestionReplyKey = useMemo(() => {
+    const pairs: Array<[string, string]> = [];
+    for (const entry of props.entries) {
+      if (entry.type !== "message" || entry.role !== "user") {
+        continue;
+      }
+      const replies = parseCodexAsyncQuestionReply(entry.text);
+      if (replies) {
+        for (const reply of replies) {
+          pairs.push([reply.questionItemId, reply.answer]);
+        }
+      }
+    }
+    const transients =
+      props.transientMessages ??
+      (props.transientMessage ? [props.transientMessage] : []);
+    for (const transient of transients) {
+      if (transient.role !== "user") {
+        continue;
+      }
+      const replies = parseCodexAsyncQuestionReply(transient.text);
+      if (replies) {
+        for (const reply of replies) {
+          pairs.push([reply.questionItemId, reply.answer]);
+        }
+      }
+    }
+    return JSON.stringify(pairs);
+  }, [props.entries, props.transientMessage, props.transientMessages]);
   const asyncQuestionReplies = useMemo(
     () => new Map<string, string>(JSON.parse(asyncQuestionReplyKey) as Array<[string, string]>),
     [asyncQuestionReplyKey],

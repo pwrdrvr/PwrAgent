@@ -79,7 +79,10 @@ describe("managed review", () => {
       expect(filePrompt).toContain(target.snapshot.mergeBaseCommit);
       expect(filePrompt).toContain(target.snapshot.headCommit);
       expect(filePrompt).toContain('Open "pwragent-eval-review.patch" in the review workspace with a file-reading tool');
+      expect(filePrompt).toContain("Terminal and shell commands are unavailable in this read-only review mode");
+      expect(filePrompt).toContain("do not run git or any other shell commands");
       expect(filePrompt).not.toContain(expected);
+      expect(prompt).not.toContain("Terminal and shell commands are unavailable in this read-only review mode");
     }
   });
 

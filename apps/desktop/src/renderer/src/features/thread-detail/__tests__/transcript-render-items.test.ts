@@ -1629,6 +1629,66 @@ describe("buildTranscriptRenderItems", () => {
     expect(group).toMatchObject({ type: "workPhaseGroup", entries: work });
     expect(group).not.toHaveProperty("defaultExpanded");
   });
+
+  it("treats rich Browser Use activities as completed-turn work in backward classification", () => {
+    const turn = completedTurn("turn-browser-backward", 20_000);
+    const browser: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "activity-browser",
+      summary: "Browsed example.com",
+      status: "completed",
+      turn,
+      details: [
+        {
+          id: "call-1",
+          kind: "command",
+          label: "Inspect page",
+          status: "completed",
+          browserUse: { backend: "iab", browserId: "iab", url: "https://example.com/" },
+        },
+      ],
+    };
+
+    // Case 1: unphased assistant reply before a rich Browser Use card folds as an interim reply.
+    const unphased = reply("r-interim", "Checking the page now.", turn);
+    const answer = reply("r-final", "Verified the heading.", turn);
+    const withInterim = buildTranscriptRenderItems({
+      backend: "codex",
+      entries: [unphased, browser, answer],
+    });
+    expect(withInterim).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: [unphased] }),
+      expect.objectContaining({ type: "entry", entry: expect.objectContaining({ id: "activity-browser" }) }),
+      { type: "entry", entry: answer },
+    ]);
+
+    // Case 2: a pre-browser live-diff-* activity is not misclassified as a trailing diff.
+    const preDiff: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-diff-1",
+      summary: "Edited app.tsx",
+      status: "completed",
+      turn,
+      details: [
+        {
+          id: "diff-1",
+          kind: "write",
+          label: "Updated app.tsx",
+          path: "src/app.tsx",
+          status: "completed",
+          fileDiff: { kind: "update", diff: "@@ -1 +1 @@\n-a\n+b\n", additions: 1, removals: 1 },
+        },
+      ],
+    };
+    const withPreDiff = buildTranscriptRenderItems({
+      backend: "codex",
+      entries: [preDiff, browser],
+    });
+    expect(withPreDiff).toEqual([
+      expect.objectContaining({ type: "workPhaseGroup", entries: [preDiff] }),
+      expect.objectContaining({ type: "entry", entry: expect.objectContaining({ id: "activity-browser" }) }),
+    ]);
+  });
 });
 
 function groupedEntries(items: ReturnType<typeof buildTranscriptRenderItems>): AppServerThreadEntry[] {

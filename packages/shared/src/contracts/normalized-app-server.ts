@@ -1092,6 +1092,53 @@ export type AppServerThreadSubAgentCallDetail = {
   fastMode?: boolean;
 };
 
+export type AppServerThreadBrowserUseHandoffReason =
+  | "authentication"
+  | "captcha"
+  | "user_requested"
+  | "other";
+
+export type AppServerThreadBrowserUseWebMcpTool = {
+  name: string;
+  title?: string;
+  sourceHostname?: string;
+};
+
+export type AppServerThreadBrowserUseDetail = {
+  backend?: string;
+  browserFamily?: string;
+  browserId?: string;
+  url?: string;
+  tabId?: string;
+  handoffReason?: AppServerThreadBrowserUseHandoffReason;
+  cloudHandoff?: boolean;
+  sessionEnded?: boolean;
+  screenshotUrl?: string;
+  webMcpTools?: AppServerThreadBrowserUseWebMcpTool[];
+};
+
+export type AppServerThreadBrowserUsePresentation = {
+  /** True when rendered from a standalone ::browser-complete marker with no matched browser activity. */
+  standalone?: boolean;
+  /** Matched headline from ::browser-complete or derived browser title. */
+  title: string;
+  surfaceLabel?: string;
+  backend?: string;
+  browserFamily?: string;
+  browserId?: string;
+  url?: string;
+  handoffReason?: AppServerThreadBrowserUseHandoffReason;
+  cloudHandoff?: boolean;
+  sessionEnded?: boolean;
+  screenshotUrl?: string;
+  stepCount: number;
+  webMcpTools?: AppServerThreadBrowserUseWebMcpTool[];
+  /** True when the activity batch also includes non-browser tool details. */
+  hasNonBrowserDetails?: boolean;
+  /** True when browser details in the batch span multiple distinct browser surfaces. */
+  ambiguousSurface?: boolean;
+};
+
 export type AppServerThreadActivityDetail = {
   id: string;
   kind: "read" | "write" | "command";
@@ -1103,6 +1150,7 @@ export type AppServerThreadActivityDetail = {
   status?: AppServerThreadActivityStatus;
   command?: AppServerThreadCommandDetail;
   fileDiff?: AppServerThreadFileDiff;
+  browserUse?: AppServerThreadBrowserUseDetail;
 };
 
 export type AppServerThreadActivityEntry = {
@@ -1113,6 +1161,8 @@ export type AppServerThreadActivityEntry = {
   tone?: "warning";
   status?: AppServerThreadActivityStatus;
   details: AppServerThreadActivityDetail[];
+  /** Enriched Codex Browser Use presentation for transcript rendering. */
+  browserUse?: AppServerThreadBrowserUsePresentation;
   /** Exact provider item IDs for a group that can be reloaded independently. */
   itemIds?: string[];
   /** Owner-prepared collapsed history; resolve before expanding its details. */

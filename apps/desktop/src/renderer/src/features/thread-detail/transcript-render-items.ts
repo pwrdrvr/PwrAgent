@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
 import { formatElapsedMs } from "../../lib/format-duration";
+import { projectCodexBrowserUseEntries } from "./codex-browser-completion";
 import { isAutoReviewActivityEntry } from "./protocol-activity-entries";
 import { isLaunchedTodoEntry } from "./launched-todo-entries";
 import { isRewindMarkerEntry } from "./rewind-marker-entries";
@@ -44,7 +45,13 @@ export function buildTranscriptRenderItems(params: {
 }): TranscriptRenderItem[] {
   const entries = params.backend === "acp:antigravity"
     ? groupAntigravityEdits(params.entries, params.alwaysVisibleEntryIds)
-    : params.entries;
+    : params.backend === "codex"
+      ? projectCodexBrowserUseEntries(
+          params.entries,
+          params.backend,
+          params.alwaysVisibleEntryIds,
+        )
+      : params.entries;
   const activeTurnId =
     params.activeTurnId ??
     entries.find((entry) => entry.id === params.activeMessageId)?.turn?.id;
@@ -237,8 +244,9 @@ function buildActiveWorkGroups(
     ) {
       break;
     }
-    activeEntries.unshift(entry);
+    activeEntries.push(entry);
   }
+  activeEntries.reverse();
 
   if (!hasConcreteWork(activeEntries)) {
     return [];
@@ -578,7 +586,10 @@ function classifyCompletedTurnEntries(
       }
       continue;
     }
-    if (isConcreteWorkEntry(entry)) {
+    if (
+      (entry.type === "activity" && isRichBrowserUseActivity(entry))
+      || isConcreteWorkEntry(entry)
+    ) {
       sawAnyWorkOrCommentaryAfter = true;
       if (!isAllFailedActivity(entry)) {
         sawNonFailedWorkAfter = true;
@@ -789,6 +800,7 @@ function isWorkPhaseEntry(
       !isRewindMarkerEntry(entry) &&
       !isLaunchedTodoEntry(entry) &&
       !(trailingFileDiffs ? trailingFileDiffs.has(entry) : isFileDiffActivity(entry)) &&
+      !isRichBrowserUseActivity(entry) &&
       !isTokenUsageActivity(entry)
     );
   }
@@ -812,6 +824,7 @@ function hasConcreteWork(
           && !isRewindMarkerEntry(entry)
           && !isLaunchedTodoEntry(entry)
           && !trailingFileDiffs.has(entry)
+          && !isRichBrowserUseActivity(entry)
           && !isTokenUsageActivity(entry))
       : isConcreteWorkEntry(entry),
   );
@@ -827,6 +840,7 @@ export function isConcreteWorkEntry(
       !isRewindMarkerEntry(entry) &&
       !isLaunchedTodoEntry(entry) &&
       (!isFileDiffActivity(entry) || entry.id.startsWith("live-tools-")) &&
+      !isRichBrowserUseActivity(entry) &&
       !isTokenUsageActivity(entry))
   );
 }
@@ -851,6 +865,10 @@ function isTerminalTurnFailureActivity(
 
 function isFileDiffActivity(entry: AppServerThreadActivityEntry): boolean {
   return entry.details.some(hasTranscriptFileDiff);
+}
+
+function isRichBrowserUseActivity(entry: AppServerThreadActivityEntry): boolean {
+  return Boolean(entry.browserUse && !entry.browserUse.standalone);
 }
 
 function isTokenUsageActivity(entry: AppServerThreadActivityEntry): boolean {

@@ -40,6 +40,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata";
+import { prepareSqliteRead } from "./sqlite-prepared-read";
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
@@ -3695,6 +3696,17 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     ).map(readThreadCompactionRow);
   }
 
+  async readLatestThreadCompactionAt(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<number | undefined> {
+    const row = prepareSqliteRead(this.stateDb.raw,
+      `SELECT observed_at FROM thread_compactions WHERE backend = ? AND thread_id = ?
+       ORDER BY observed_at DESC LIMIT 1`,
+    ).get(params.backend, params.threadId) as { observed_at: number } | undefined;
+    return row?.observed_at;
+  }
+
   /**
    * Name the cold replay a compaction caused.
    *
@@ -4329,8 +4341,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     if (usageTurnIds.size === 0) {
       return;
     }
-    const turnRows = this.stateDb.raw
-      .prepare(
+    const turnRows = prepareSqliteRead(
+        this.stateDb.raw,
         `SELECT usage_turn_id,
                 started_at,
                 completed_at,
@@ -4373,8 +4385,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       sourceItemIds: JSON.stringify(params.sourceItemIds),
       turnIds: JSON.stringify(params.turnIds),
     };
-    const readMatches = () => this.stateDb.raw
-      .prepare(
+    const readMatches = () => prepareSqliteRead(
+        this.stateDb.raw,
         `WITH matches AS (
            SELECT rowid FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_source
            WHERE backend = @backend AND thread_id = @threadId AND status != 'superseded'
@@ -4424,7 +4436,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   ): Promise<void> {
     const db = this.stateDb.raw;
     const versions = sqliteUsageLedgerVersions(db);
-    const select = db.prepare(
+    const select = prepareSqliteRead(db,
       `SELECT * FROM (
          SELECT * FROM thread_usage_lines INDEXED BY idx_thread_usage_lines_unpriced_thread
          WHERE backend = ? AND thread_id = ? AND status != 'superseded'
@@ -5036,9 +5048,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       // Creation may race an explicit pin. Keep the rank the operator gave
       // the thread, and allocate against the live local and viewer ranks.
       if (params.prepend && current.pinnedRank) return current;
-      const rank = params.prepend ? buildPrependPinRank : buildAppendPinRank;
       const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim()
-        : params.pinned ? current.pinnedRank ?? rank(this.readThreadPinRanks()) : undefined;
+        : params.pinned ? current.pinnedRank ?? buildPrependPinRank(this.readThreadPinRanks()) : undefined;
       const nextState: ThreadOverlayState = {
         ...current,
         pinnedRank: pinnedRank || undefined,
@@ -5207,7 +5218,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       const pinnedRank = params.pinned === undefined ? params.pinnedRank?.trim() || undefined
         : params.pinned ? (typeof parsed.localPinnedRank === "string" && parsed.localPinnedRank
-          ? parsed.localPinnedRank : buildAppendPinRank(this.readThreadPinRanks())) : undefined;
+          ? parsed.localPinnedRank : buildPrependPinRank(this.readThreadPinRanks())) : undefined;
       if (pinnedRank === undefined) {
         delete parsed.localPinnedRank;
       } else {
@@ -8876,6 +8887,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         payload = json_set(payload, '$.endedReason', 'archived')
       WHERE backend = ? AND thread_id = ? AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')`)
       .run(now, identity.backend, identity.threadId).changes;
+  }
+
+  async hasActiveChecksWatch(params: Parameters<PrStatusWatchStorage["hasActiveChecksWatch"]>[0]): Promise<boolean> {
+    return Boolean(this.stateDb.raw.prepare(
+      `SELECT 1 FROM pr_status_watches
+       WHERE pr_key = ? AND head_sha = ? AND head_sha <> ''
+         AND status IN ('watching', 'dispatching')
+         AND ((? = 'success' AND notify_on_success = 1) OR (? = 'failure' AND notify_on_failure = 1))
+       LIMIT 1`,
+    ).get(params.prKey, params.headSha, params.outcome, params.outcome));
   }
 
   async claimThreadPrStatusWatches(params: Parameters<PrStatusWatchStorage["claimThreadPrStatusWatches"]>[0]): Promise<PrStatusWatchClaimResult> {
@@ -13406,6 +13427,7 @@ export type OverlayStoreLike = Pick<
   | "registerThreadPrStatusWatch"
   | "isThreadPrStatusWatchClaimActive"
   | "retireArchivedThreadPrAutomation"
+  | "hasActiveChecksWatch"
   | "claimThreadPrStatusWatches"
   | "releaseThreadPrStatusWatch"
   | "renewThreadPrStatusWatchLease"

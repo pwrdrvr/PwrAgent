@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const scanRoots = [
   "apps/desktop/src/main",
+  "evals",
   "packages/pwragent/src",
   "packages/owner-core/src",
   "packages/sqlite-storage/src",
@@ -14,6 +15,14 @@ const scanRoots = [
 
 const excludedFiles = new Set([
   "scripts/check-codex-storage-boundary.mjs",
+]);
+
+const excludedDirNames = new Set([
+  "node_modules",
+  ".cache",
+  "runs",
+  "dist",
+  ".git",
 ]);
 
 // PwrDrvr LLC explicitly authorizes this one recovery module to inspect and
@@ -93,13 +102,19 @@ console.log("codex storage boundary lint passed");
 function listCodeFiles(directory) {
   const results = [];
   for (const entry of readdirSync(directory)) {
+    if (excludedDirNames.has(entry)) {
+      continue;
+    }
     const entryPath = resolve(directory, entry);
     const relPath = relative(repoRoot, entryPath);
     if (excludedFiles.has(relPath) || relPath.includes("/__tests__/")) {
       continue;
     }
 
-    const stat = statSync(entryPath);
+    const stat = lstatSync(entryPath);
+    if (stat.isSymbolicLink()) {
+      continue;
+    }
     if (stat.isDirectory()) {
       results.push(...listCodeFiles(entryPath));
       continue;
