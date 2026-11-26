@@ -8241,17 +8241,156 @@ button.stack-display__thread,
   position: fixed;
   z-index: 50;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px;
+  width: 316px;
+  max-height: min(404px, calc(100vh - 16px));
+  overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--popover-bg);
   box-shadow: var(--shadow-popover);
 }
 
-.reaction-picker__row {
+.reaction-picker__search {
   display: flex;
-  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reaction-picker__search:has(.reaction-picker__search-input:focus-visible) {
+  border-radius: 7px 7px 0 0;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.reaction-picker__search-icon {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.reaction-picker__search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1;
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+.reaction-picker__search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.reaction-picker__search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.reaction-picker__search-clear {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.reaction-picker__search-clear:hover,
+.reaction-picker__search-clear:focus-visible {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.reaction-picker__search-clear:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.reaction-picker__tabs {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reaction-picker__tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease,
+    color 100ms ease;
+}
+
+.reaction-picker__tab:hover,
+.reaction-picker__tab:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.reaction-picker__tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.reaction-picker__tab.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.reaction-picker__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 112px;
+  max-height: 268px;
+  padding: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.reaction-picker__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reaction-picker__section-label {
+  padding: 0 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.reaction-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -8259,8 +8398,8 @@ button.stack-display__thread,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 100%;
+  height: 32px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -8278,7 +8417,8 @@ button.stack-display__thread,
 }
 
 .reaction-picker__option:hover,
-.reaction-picker__option:focus-visible {
+.reaction-picker__option:focus-visible,
+.reaction-picker__option.is-match {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
 }
@@ -8294,71 +8434,57 @@ button.stack-display__thread,
   background: var(--accent-soft);
 }
 
-.reaction-picker__custom {
+.reaction-picker__empty {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-subtle);
+  justify-content: center;
+  min-height: 96px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
-.reaction-picker__custom-input {
+.reaction-picker__footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.reaction-picker__preview-emoji {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+  font-variant-emoji: emoji;
+}
+
+.reaction-picker__preview-name {
   flex: 1 1 auto;
   min-width: 0;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-input);
+  overflow: hidden;
   color: var(--text-primary);
-  font-size: 13px;
-  line-height: 1;
-  font-family: inherit;
-}
-
-.reaction-picker__custom-input::placeholder {
-  color: var(--text-muted);
-}
-
-.reaction-picker__custom-input:focus-visible {
-  border-color: var(--accent-border);
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
-.reaction-picker__custom-submit {
-  flex: 0 0 auto;
-  appearance: none;
-  cursor: pointer;
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid var(--accent-border);
-  border-radius: 6px;
-  background: var(--accent-soft);
-  color: var(--accent-bright);
   font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  transition:
-    background 100ms ease,
-    border-color 100ms ease;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.reaction-picker__custom-submit:hover:not(:disabled),
-.reaction-picker__custom-submit:focus-visible {
-  background: var(--accent-fill);
-  color: var(--button-text);
+.reaction-picker__preview-meta {
+  flex: 0 0 auto;
+  max-width: 112px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.reaction-picker__custom-submit:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.reaction-picker__custom-submit:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
+.reaction-picker__footer-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 /* Title line — a sibling of the open-thread overlay since the
