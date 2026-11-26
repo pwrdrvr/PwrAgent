@@ -1021,16 +1021,18 @@ export class NavigationWindowQueries {
   async loadMore(id: string): Promise<void> {
     let resource = this.resources.get(id);
     if (!resource) return;
+    const targetResumeKey = this.resumeKey(resource);
     // A refresh can begin between the button's render and its click, or a
-    // demand update can replace the resource while that refresh settles.
-    while (resource && resource.pending) {
+    // demand update can replace the same collection while that refresh settles.
+    while (resource && this.resumeKey(resource) === targetResumeKey && resource.pending) {
       await resource.pending;
       resource = this.resources.get(id);
     }
-    if (!resource || !this.isCurrent(resource)) return;
+    if (!resource || !this.isCurrent(resource) || this.resumeKey(resource) !== targetResumeKey) return;
     await this.read(resource, true);
     const current = this.resources.get(id);
-    if (current && this.isCurrent(current) && current.value.state.page && !current.value.state.error && current.expandedRows) {
+    if (current && this.isCurrent(current) && this.resumeKey(current) === targetResumeKey
+      && current.value.state.page && !current.value.state.error && current.expandedRows) {
       const key = this.resumeKey(current);
       this.sessionExpandedQueries.add(key);
       // Asking for more never lowers the saved depth, even when a restore
@@ -1123,8 +1125,6 @@ export class NavigationWindowQueries {
     let cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
     const queryKey = this.resumeKey(resource);
-    const wasSessionExpanded = this.sessionExpandedQueries.has(queryKey);
-    if (explicitLoadMore) this.sessionExpandedQueries.add(queryKey);
     const previousExpandedRows = resource.expandedRows;
     const restoringBeforeRead = explicitAnchor || fromStart ? 0 : loadedRows(resource.value.state.page);
     const read = ++this.nextDiagnosticRead;
@@ -1154,6 +1154,7 @@ export class NavigationWindowQueries {
       const acceptReply = (next: RetainableState, reply: ReplyDiagnostic | undefined) => {
         const before = resource.value.state.page;
         this.acceptState(resource, next);
+        if (explicitLoadMore) this.sessionExpandedQueries.add(queryKey);
         if (reply === lastReply) lastReply = undefined;
         if (!reply || !navigationListingDiagnostics.isRecording(reply.generation)) return;
         const page = resource.value.state.page;
@@ -1222,7 +1223,8 @@ export class NavigationWindowQueries {
           // the operator a button that fails identically on every press.
           let rows = request.pageSize ?? NAVIGATION_QUERY_MAX_PAGE_ROWS;
           for (;;) {
-            const charged = resuming && Boolean(request.cursor) && !restoringDisplayed;
+            const charged = resuming && !this.sessionExpandedQueries.has(queryKey)
+              && Boolean(request.cursor) && !restoringDisplayed;
             if (charged) {
               // Unresolved notices reserve this slot for the replacement.
               // Check every attempt, including retries with a smaller page.
@@ -1391,7 +1393,7 @@ export class NavigationWindowQueries {
           const before = loadedRows(next.state.page);
           const restoringDisplayed = before < restoring;
           if (this.needsSeenReplacement(resource, next)) return;
-          if ((!resuming || restoringDisplayed) && this.needsWorkingStateReplacement(resource, next, "match-only")) return;
+          if ((!resuming || sessionExpanded || restoringDisplayed) && this.needsWorkingStateReplacement(resource, next, "match-only")) return;
           try {
             const continuationPage = await readPage({ ...started.request, cursor: nextCursor, pageSize: cursorPageSize(before) }, restoringDisplayed, next);
             if (!this.isCurrent(resource) || resource.value.state.pendingSequence !== started.pendingSequence) return;
@@ -1421,7 +1423,6 @@ export class NavigationWindowQueries {
       } catch (error) {
         if (explicitLoadMore && loadedRows(resource.value.state.page) <= restoringBeforeRead) {
           resource.expandedRows = previousExpandedRows;
-          if (!wasSessionExpanded) this.sessionExpandedQueries.delete(queryKey);
         }
         // An overtaken cursor cannot establish a new rebaseline requirement.
         if (this.isCurrent(resource) && !this.needsSeenReplacement(resource) && !this.needsWorkingStateReplacement(resource)) resource.value = { ...resource.value,
@@ -1445,6 +1446,7 @@ export class NavigationWindowQueries {
           const repeat = resource.refreshAfterPending;
           resource.refreshAfterPending = false;
           if (repeat && !resource.value.state.rebaselineRequired) {
+            if (explicitLoadMore && !resource.value.state.error) this.sessionExpandedQueries.add(queryKey);
             void this.read(resource, false);
           } else {
             resource.value = { ...resource.value, loading: false };
