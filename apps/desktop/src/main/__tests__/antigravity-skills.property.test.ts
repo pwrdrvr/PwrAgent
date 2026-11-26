@@ -1,9 +1,10 @@
 import fc from "fast-check";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { createKimiAcpRegistry, createOverlayStoreMock } from "./helpers/backend-registry-fixture";
+import { readFederatedAntigravitySkills } from "../federation/federation-file-pull";
+import { createAcpAvailableCommandsStoreMock, createKimiAcpRegistry, createOverlayStoreMock } from "./helpers/backend-registry-fixture";
 
 const backend = "acp:antigravity";
 
@@ -55,6 +56,77 @@ it("lists worktree and home skills before the launchpad starts an ACP session", 
       ["release", release],
     ]);
     expect(acpClient.startSession).not.toHaveBeenCalled();
+  });
+});
+
+it("keeps restricted Antigravity discovery inside the authorized workspace", async () => {
+  await withWorkspace(async ({ home, repo, skill, write }) => {
+    const inside = await skill(path.join(repo, ".agents", "skills"), "inside");
+    await skill(path.join(home, ".agents", "skills"), "personal");
+    const outside = path.join(home, "other");
+    const external = await skill(path.join(outside, ".agents", "skills"), "outside");
+    await write(path.join(repo, ".agents", "skills.json"), JSON.stringify({ entries: [{ path: external }] }));
+    await symlink(path.dirname(external), path.join(repo, ".agents", "skills", "linked"), "junction");
+    const root = await realpath(repo);
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    const { data } = await registry.listSkills({
+      backend, cwd: outside, catalog: "skills",
+      antigravityWorkspace: {
+        cwds: [repo],
+        resolvePath: async (file) => {
+          const resolved = await realpath(file).catch(() => undefined);
+          return resolved === root || resolved?.startsWith(`${root}${path.sep}`) ? resolved : undefined;
+        },
+      },
+    });
+    expect(data.map(({ cwd, skills }) => [cwd, skills.map(({ path }) => path)])).toEqual([[repo, [inside]]]);
+  });
+});
+
+it("discovers peer skills from the owner's thread or registered launchpad under file-pull policy", async () => {
+  await withWorkspace(async ({ home, repo, skill }) => {
+    const inside = await skill(path.join(repo, ".agents", "skills"), "inside");
+    const outside = path.join(home, "other");
+    await skill(path.join(outside, ".agents", "skills"), "outside");
+    const { registry, acpClient } = createKimiAcpRegistry({ acpBackendId: backend });
+    const session = await acpClient.startSession({ cwd: repo, executionMode: "default" });
+    const permissions = { filePull: false, filePullOutsideThreadDirectories: false };
+    const listSkills = vi.fn((input: Parameters<typeof registry.listSkills>[0]) => registry.listSkills(input));
+    const options = {
+      permissions: () => permissions,
+      resolveThread: (source: Parameters<typeof registry.resolveThread>[0]["backend"], threadId: string) =>
+        registry.resolveThread({ backend: source, threadId }),
+      listLaunchpads: async () => [{ directoryPath: repo, registeredAt: 1 }, { directoryPath: outside }],
+      listSkills,
+    };
+    const catalog = "skills" as const;
+    const request = { threadId: session.sessionId, cwd: outside, cwds: [outside], catalog };
+    await expect(readFederatedAntigravitySkills(request, options)).resolves.toEqual({ data: [] });
+    permissions.filePull = true;
+    await expect(readFederatedAntigravitySkills({ cwd: outside, catalog }, options)).resolves.toEqual({ data: [] });
+    await expect(readFederatedAntigravitySkills({ ...request, threadId: "unknown" }, options)).resolves.toEqual({ data: [] });
+    expect(listSkills).not.toHaveBeenCalled();
+    for (const peerRequest of [request, { cwd: repo, cwds: [outside], catalog }]) {
+      const { data } = await readFederatedAntigravitySkills(peerRequest, options);
+      expect(data.map(({ cwd, skills }) => [cwd, skills.map(({ path }) => path)])).toEqual([[repo, [inside]]]);
+    }
+  });
+});
+
+it("reports the observed worktree for cached Antigravity commands and leaves legacy rows unscoped", async () => {
+  await withWorkspace(async ({ repo, cwd }) => {
+    const commands = [{ name: "release", description: "Prepare the release." }];
+    const record = { backendId: backend, repositoryPath: repo, commands, observedAt: 1 } as const;
+    const store = createAcpAvailableCommandsStoreMock([record]);
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      acpAvailableCommandsStore: store,
+      acpWorktreeRepositoryResolver: async () => ({ id: "repo", path: repo, label: "Repo", kind: "local" }),
+    });
+    const request = { backend, cwd: repo, catalog: "commands" } as const;
+    await expect(registry.listSkills(request)).resolves.toEqual({ data: [{ commands, skills: [] }] });
+    store.upsert({ ...record, workspaceCwd: cwd });
+    await expect(registry.listSkills(request)).resolves.toEqual({ data: [{ cwd, commands, skills: [] }] });
   });
 });
 
@@ -147,6 +219,19 @@ it.each(["skill file", "skill folder", "collection"] as const)("applies complete
     const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
     const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
     expect(data[0]?.skills.map(({ path }) => path)).toEqual([allowed]);
+  });
+});
+
+it("resolves a nested include below the portion of its suffix already in the collection root", async () => {
+  await withWorkspace(async ({ home, repo, skill, write }) => {
+    const shared = path.join(home, "shared");
+    const release = await skill(shared, "release", "team/checks/release");
+    await write(path.join(repo, ".agents", "skills.json"), JSON.stringify({
+      entries: [{ path: path.join(shared, "team"), include_only: ["team/checks/release"] }],
+    }));
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
+    expect(data[0]?.skills.map(({ path }) => path)).toEqual([release]);
   });
 });
 

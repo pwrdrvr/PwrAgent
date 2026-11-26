@@ -46,10 +46,10 @@ function slashSkillKey(name: string, description: string | undefined): string | 
 }
 
 function indexAntigravitySlashSkills(
-  skills: AppServerSkillSummary[] | undefined,
+  skills: AppServerSkillSummary[],
 ): Map<string, AppServerSkillSummary | undefined> {
   const matches = new Map<string, AppServerSkillSummary | undefined>();
-  for (const skill of skills ?? []) {
+  for (const skill of skills) {
     if (!skill.path || !skill.origin || skill.enabled === false || skill.mentionOnly) continue;
     const prefix = skill.pluginId ? `${skill.pluginId}:` : undefined;
     const names = prefix && skill.name.startsWith(prefix)
@@ -59,7 +59,9 @@ function indexAntigravitySlashSkills(
       const key = slashSkillKey(name, skill.description);
       // ACP doesn't identify the selected file. Multiple distinct paths with
       // the same advertisement leave provenance unknown.
-      if (key) matches.set(key, matches.has(key) ? undefined : skill);
+      if (key && matches.get(key)?.path !== skill.path) {
+        matches.set(key, matches.has(key) ? undefined : skill);
+      }
     }
   }
   return matches;
@@ -288,13 +290,8 @@ export function useThreadSkills(params: {
         return;
       }
 
-      const commands = Array.isArray(
-        (event.notification.params as { commands?: unknown }).commands,
-      )
-        ? ((event.notification.params as {
-            commands: AppServerAvailableCommandSummary[];
-          }).commands)
-        : [];
+      const { cwd, commands: incoming } = event.notification.params;
+      const commands = Array.isArray(incoming) ? incoming : [];
       const commandKey = backend === "acp:antigravity" ? `${key}:commands` : key;
       requestVersionsRef.current[commandKey] =
         (requestVersionsRef.current[commandKey] ?? 0) + 1;
@@ -308,6 +305,7 @@ export function useThreadSkills(params: {
             fetchedAt: Date.now(),
             data: [
               {
+                ...(typeof cwd === "string" ? { cwd } : {}),
                 commands,
                 skills: [],
               },
@@ -418,18 +416,24 @@ export function useThreadSkills(params: {
     );
   }, [bundledSkillRoots, originDirectories, state?.response?.data]);
 
-  const antigravitySkills = separateCommands ? skills : undefined;
+  const antigravityCatalog = separateCommands ? state?.response?.data : undefined;
   const providerCommands = useMemo(() => {
     const deduped = new Map<string, ThreadProviderCommand>();
-    const matches = indexAntigravitySlashSkills(antigravitySkills);
+    const matchesByWorkspace = new Map<string, ReturnType<typeof indexAntigravitySlashSkills>>();
 
     for (const entry of commandState?.response?.data ?? []) {
+      let matches = entry.cwd ? matchesByWorkspace.get(entry.cwd) : undefined;
+      if (!matches && entry.cwd && entry.commands?.length && antigravityCatalog) {
+        const workspaceSkills = antigravityCatalog.flatMap(({ cwd, skills }) => cwd === entry.cwd ? skills : []);
+        matches = indexAntigravitySlashSkills(withSkillOrigins(workspaceSkills, originDirectories));
+        matchesByWorkspace.set(entry.cwd, matches);
+      }
       for (const command of entry.commands ?? []) {
         const backend = command.backend ?? skillTarget?.backend;
         const skillKey = backend === "acp:antigravity" && !command.argumentHint
           ? slashSkillKey(command.name, command.description)
           : undefined;
-        const skill = skillKey ? matches.get(skillKey) : undefined;
+        const skill = skillKey ? matches?.get(skillKey) : undefined;
         deduped.set(`${backend ?? "unknown"}:${command.name}`, skill ? { ...command, skill } : command);
       }
     }
@@ -437,7 +441,7 @@ export function useThreadSkills(params: {
     return [...deduped.values()].sort((left, right) =>
       left.name.localeCompare(right.name)
     );
-  }, [antigravitySkills, skillTarget?.backend, commandState?.response?.data]);
+  }, [antigravityCatalog, originDirectories, skillTarget?.backend, commandState?.response?.data]);
 
   return {
     ensureLoaded,

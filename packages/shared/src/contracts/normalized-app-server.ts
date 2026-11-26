@@ -3068,6 +3068,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         commands: AppServerAvailableCommandSummary[];
+        /** Workspace where this command list was observed, when known. */
+        cwd?: string;
       };
     }
   | {

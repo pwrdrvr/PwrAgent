@@ -15,6 +15,7 @@ const SKILL_HEADER = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m;
 type Scope = "repo" | "antigravity-user";
 type Filter = { include?: ReadonlySet<string>; exclude: ReadonlySet<string> };
 type SkillSource = { plugin?: string; cliGlobal?: boolean; mentionOnly?: boolean };
+type SkillPathResolver = (file: string) => Promise<string | undefined>;
 
 const PLUGIN_MANIFESTS = [".antigravity-plugin/plugin.json", "plugin.json", ".gemini-plugin/plugin.json"];
 
@@ -34,15 +35,19 @@ function records(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.map(asRecord) : [];
 }
 
-async function fileInfo(file: string) {
-  return await stat(file).catch(() => undefined);
+async function fileInfo(file: string, resolvePath?: SkillPathResolver) {
+  const target = resolvePath ? await resolvePath(file) : file;
+  return target ? await stat(target).catch(() => undefined) : undefined;
 }
 
-async function readPrefix(file: string, limit: number): Promise<string | undefined> {
-  if (!(await fileInfo(file))?.isFile()) return undefined;
-  const handle = await open(file, constants.O_RDONLY | constants.O_NONBLOCK).catch(() => undefined);
+async function readPrefix(file: string, limit: number, resolvePath?: SkillPathResolver): Promise<string | undefined> {
+  const target = resolvePath ? await resolvePath(file) : file;
+  if (!target || !(await fileInfo(target))?.isFile()) return undefined;
+  const flags = constants.O_RDONLY | constants.O_NONBLOCK | (resolvePath ? constants.O_NOFOLLOW : 0);
+  const handle = await open(target, flags).catch(() => undefined);
   if (!handle) return undefined;
   try {
+    if (resolvePath && !(await handle.stat()).isFile()) return undefined;
     const buffer = Buffer.alloc(limit);
     let length = 0;
     while (length < limit) {
@@ -50,6 +55,7 @@ async function readPrefix(file: string, limit: number): Promise<string | undefin
       if (bytesRead === 0) break;
       length += bytesRead;
     }
+    if (resolvePath && await resolvePath(file) !== target) return undefined;
     return buffer.toString("utf8", 0, length);
   } catch {
     return undefined;
@@ -58,8 +64,8 @@ async function readPrefix(file: string, limit: number): Promise<string | undefin
   }
 }
 
-async function readJson(file: string): Promise<Record<string, unknown>> {
-  const contents = await readPrefix(file, MAX_CONFIG_BYTES + 1);
+async function readJson(file: string, resolvePath?: SkillPathResolver): Promise<Record<string, unknown>> {
+  const contents = await readPrefix(file, MAX_CONFIG_BYTES + 1, resolvePath);
   if (!contents || Buffer.byteLength(contents) > MAX_CONFIG_BYTES) return {};
   try {
     return asRecord(JSON.parse(contents));
@@ -68,8 +74,8 @@ async function readJson(file: string): Promise<Record<string, unknown>> {
   }
 }
 
-async function readSkill(file: string, scope: Scope, plugin?: string): Promise<AppServerSkillSummary | undefined> {
-  const contents = await readPrefix(file, MAX_FRONTMATTER_BYTES);
+async function readSkill(file: string, scope: Scope, plugin?: string, resolvePath?: SkillPathResolver): Promise<AppServerSkillSummary | undefined> {
+  const contents = await readPrefix(file, MAX_FRONTMATTER_BYTES, resolvePath);
   const header = contents?.match(SKILL_HEADER);
   if (!header || header.index !== 0) return undefined;
   try {
@@ -117,6 +123,26 @@ function entryFilter(entry: Record<string, unknown>): Filter {
   return { include: new Set(strings(entry.include_only)), exclude: new Set(strings(entry.exclude)) };
 }
 
+function addNestedIncludes(candidates: Set<string>, directory: string, filters: Filter[]): void {
+  const directoryParts = directory.split(path.sep);
+  for (const { include } of filters) {
+    if (!include) continue;
+    for (const name of include) {
+      const parts = name.split("/");
+      if (parts.length < 2 || parts.some((part) => !part || part === "." || part === ".." || part.includes("\\"))) continue;
+      candidates.add(name);
+      // Any complete prefix that already ends the collection path can be
+      // dropped. Keep the original too, since that directory may also exist.
+      const maxOverlap = Math.min(parts.length - 1, directoryParts.length);
+      for (let overlap = 1; overlap <= maxOverlap; overlap++) {
+        if (directoryParts.slice(-overlap).every((part, index) => part === parts[index])) {
+          candidates.add(parts.slice(overlap).join("/"));
+        }
+      }
+    }
+  }
+}
+
 function isProjectConfigDirectory(directory: string): boolean {
   return PROJECT_CONFIG_NAMES.includes(path.basename(directory));
 }
@@ -131,22 +157,23 @@ function currentUsername(): string | undefined {
   }
 }
 
-async function workspaceAncestors(cwd: string, spendPath: () => void): Promise<string[]> {
+async function workspaceAncestors(cwd: string, spendPath: () => void, resolvePath?: SkillPathResolver): Promise<string[]> {
   const ancestors = [cwd];
   for (let current = cwd; ; ) {
     // A linked Git worktree has a .git file, which is also a boundary.
     spendPath();
-    if (await fileInfo(path.join(current, ".git"))) return ancestors;
+    if (await fileInfo(path.join(current, ".git"), resolvePath)) return ancestors;
     const parent = path.dirname(current);
     if (parent === current) return [cwd];
+    if (resolvePath && !await resolvePath(parent)) return ancestors;
     ancestors.push(parent);
     current = parent;
   }
 }
 
-async function resolveEntry(base: string, repositoryRoot: string, rawPath: string): Promise<string> {
+async function resolveEntry(base: string, repositoryRoot: string, rawPath: string, resolvePath?: SkillPathResolver): Promise<string> {
   const local = path.resolve(base, rawPath);
-  return base === repositoryRoot || path.isAbsolute(rawPath) || await fileInfo(local)
+  return base === repositoryRoot || path.isAbsolute(rawPath) || await fileInfo(local, resolvePath)
     ? local
     : path.resolve(repositoryRoot, rawPath);
 }
@@ -155,6 +182,7 @@ async function resolveEntry(base: string, repositoryRoot: string, rawPath: strin
  * and no file path. Resolve the paths on the thread owner's filesystem. */
 export async function discoverAntigravitySkillCatalog(
   cwds: Array<string | undefined>,
+  resolvePath?: SkillPathResolver,
 ): Promise<AppServerListSkillsResponse["data"]> {
   let remainingPaths = MAX_SCAN_PATHS;
   const spendPath = () => {
@@ -165,13 +193,15 @@ export async function discoverAntigravitySkillCatalog(
   const workspaces = new Set<string>();
   for (const cwd of cwds) {
     spendPath();
-    if (cwd?.trim()) workspaces.add(path.resolve(cwd));
+    if (!cwd?.trim()) continue;
+    const workspace = path.resolve(cwd);
+    if (!resolvePath || await resolvePath(workspace)) workspaces.add(workspace);
   }
   const data: AppServerListSkillsResponse["data"] = [];
   // Process workspaces in order so all sources share one allowance and an
   // exhausted request has no scans still running in the background.
-  for (const cwd of workspaces.size > 0 ? workspaces : [undefined]) {
-    data.push({ cwd, skills: await discoverAntigravitySkills(cwd, spendPath) });
+  for (const cwd of workspaces.size > 0 || resolvePath ? workspaces : [undefined]) {
+    data.push({ cwd, skills: await discoverAntigravitySkills(cwd, spendPath, resolvePath) });
   }
   return data;
 }
@@ -179,17 +209,18 @@ export async function discoverAntigravitySkillCatalog(
 async function discoverAntigravitySkills(
   cwd: string | undefined,
   spendPath: () => void,
+  resolvePath?: SkillPathResolver,
 ): Promise<AppServerSkillSummary[]> {
   const home = os.homedir();
   const gemini = path.join(home, ".gemini");
   const globalConfig = path.join(gemini, "config");
-  const workspace = cwd ? await workspaceAncestors(cwd, spendPath) : [];
+  const workspace = cwd ? await workspaceAncestors(cwd, spendPath, resolvePath) : [];
   const repo = workspace.at(-1);
   const projectConfigs = workspace.flatMap((directory) =>
     PROJECT_CONFIG_NAMES.map((name) => ({ directory: path.join(directory, name), base: directory })));
   if (repo) {
     spendPath();
-    const { personal_customization_dir: personal } = await readJson(path.join(repo, ".gemini", "config.json"));
+    const { personal_customization_dir: personal } = await readJson(path.join(repo, ".gemini", "config.json"), resolvePath);
     if (typeof personal === "string" && personal) {
       const username = currentUsername();
       if (username) {
@@ -204,7 +235,7 @@ async function discoverAntigravitySkills(
     configs.push({
       ...config,
       scope: config.directory === globalConfig ? "antigravity-user" : "repo",
-      manifest: await readJson(path.join(config.directory, "skills.json")),
+      manifest: await readJson(path.join(config.directory, "skills.json"), resolvePath),
     });
   }
   const excludes = new Set(configs.flatMap(({ manifest }) => strings(manifest.exclude)));
@@ -212,7 +243,8 @@ async function discoverAntigravitySkills(
 
   async function children(directory: string): Promise<string[]> {
     spendPath();
-    const entries = await opendir(directory).catch(() => undefined);
+    const target = resolvePath ? await resolvePath(directory) : directory;
+    const entries = target ? await opendir(target).catch(() => undefined) : undefined;
     if (!entries) return [];
     const names: string[] = [];
     for await (const entry of entries) {
@@ -225,7 +257,7 @@ async function discoverAntigravitySkills(
   async function add(file: string, scope: Scope, source: SkillSource = {}) {
     spendPath();
     if (!source.cliGlobal && matchesFolderSuffix(excludes, path.dirname(file))) return;
-    const skill = await readSkill(file, scope, source.plugin);
+    const skill = await readSkill(file, scope, source.plugin, resolvePath);
     if (skill && (source.cliGlobal || !excludes.has(skill.name)) && !skills.has(skill.name)) {
       skills.set(skill.name, source.mentionOnly ? { ...skill, mentionOnly: true } : skill);
     }
@@ -235,9 +267,8 @@ async function discoverAntigravitySkills(
     spendPath();
     // Default discovery is one level deep. Manifest include_only can point
     // directly to a nested skill without recursively crawling the checkout.
-    const nested = filters.flatMap(({ include }) => [...(include ?? [])])
-      .filter((name) => name.includes("/") && !name.split("/").some((part) => !part || part === "." || part === ".." || part.includes("\\")));
-    const candidates = new Set([...(await children(directory)), ...nested]);
+    const candidates = new Set(await children(directory));
+    addNestedIncludes(candidates, directory, filters);
     for (const candidate of candidates) {
       const folder = path.join(directory, candidate);
       if (matchesFilters(filters, folder)) {
@@ -259,26 +290,27 @@ async function discoverAntigravitySkills(
     for (const entry of records(manifest.inherits)) {
       if (typeof entry.path !== "string" || !entry.path) continue;
       spendPath();
-      const file = await resolveEntry(base, repositoryRoot, entry.path);
+      const file = await resolveEntry(base, repositoryRoot, entry.path, resolvePath);
       if (ancestors.includes(file)) continue;
+      const inheritedManifest = await readJson(file, resolvePath);
       const parent = path.dirname(file);
       const inheritedBase = isProjectConfigDirectory(parent) ? path.dirname(parent) : parent;
-      const inheritedRoot = (await workspaceAncestors(inheritedBase, spendPath)).at(-1) ?? inheritedBase;
+      const inheritedRoot = (await workspaceAncestors(inheritedBase, spendPath, resolvePath)).at(-1) ?? inheritedBase;
       await followManifest(
-        await readJson(file), inheritedBase, inheritedRoot, scope,
+        inheritedManifest, inheritedBase, inheritedRoot, scope,
         [...activeFilters, entryFilter(entry)], [...ancestors, file],
       );
     }
     for (const entry of records(manifest.entries)) {
       if (typeof entry.path !== "string" || !entry.path) continue;
       spendPath();
-      const target = await resolveEntry(base, repositoryRoot, entry.path);
+      const target = await resolveEntry(base, repositoryRoot, entry.path, resolvePath);
       const entryFilters = [...activeFilters, entryFilter(entry)];
       if (path.basename(target).toLowerCase() === "skill.md") {
         if (matchesFilters(entryFilters, path.dirname(target))) await add(target, scope);
       } else {
         const direct = path.join(target, "SKILL.md");
-        if ((await fileInfo(direct))?.isFile()) {
+        if ((await fileInfo(direct, resolvePath))?.isFile()) {
           if (matchesFilters(entryFilters, target)) await add(direct, scope);
         } else {
           await scan(target, scope, entryFilters);
@@ -301,7 +333,7 @@ async function discoverAntigravitySkills(
   await scan(path.join(home, ".agents", "skills"), "antigravity-user", [], { mentionOnly: true });
 
   spendPath();
-  const plugins = asRecord((await readJson(path.join(globalConfig, "config.json"))).plugins);
+  const plugins = asRecord((await readJson(path.join(globalConfig, "config.json"), resolvePath)).plugins);
   const pluginRoots = [
     ...configs.map(({ directory, scope }) => ({ directory: path.join(directory, "plugins"), scope })),
     { directory: path.join(gemini, "antigravity-cli", "plugins"), scope: "antigravity-user" as const },
@@ -313,8 +345,8 @@ async function discoverAntigravitySkills(
       for (const location of PLUGIN_MANIFESTS) {
         spendPath();
         const file = path.join(root, location);
-        if ((await fileInfo(file))?.isFile()) {
-          manifest = await readJson(file);
+        if ((await fileInfo(file, resolvePath))?.isFile()) {
+          manifest = await readJson(file, resolvePath);
           break;
         }
       }

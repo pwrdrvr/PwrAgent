@@ -389,7 +389,7 @@ it.each([
       await act(async () => { void result.current.ensureLoaded({ includeCommands: true }); });
       const resolveCommands = async () => {
         await act(async () => {
-          commands.resolve({ backend, fetchedAt: 1, data: [{ commands: slashRows, skills: [] }] });
+          commands.resolve({ backend, fetchedAt: 1, data: [{ cwd: draft.directoryPath, commands: slashRows, skills: [] }] });
         });
       };
       if (first === "commands") {
@@ -398,7 +398,7 @@ it.each([
         expect(result.current.providerCommands.every((command) => !("skill" in command))).toBe(true);
       }
       await act(async () => {
-        skills.resolve({ backend, fetchedAt: 1, data: [{ skills: [
+        skills.resolve({ backend, fetchedAt: 1, data: [{ cwd: draft.directoryPath, skills: [
           { name: "release", description: "Prepare the release.", path: releasePath },
           { name: "compact", description: "Compact images.", path: "/project-0/.agents/skills/compact/SKILL.md" },
           { name: "check", description: "Check the project.", path: "/project-0/.agents/skills/check/SKILL.md" },
@@ -427,6 +427,38 @@ it.each([
   },
 );
 
+it.each([
+  { workspace: "/primary", skillIsKnown: false },
+  { workspace: undefined, skillIsKnown: false },
+  { workspace: "/secondary", skillIsKnown: true },
+])("matches slash provenance only in its reported workspace $workspace", async ({ workspace, skillIsKnown }) => {
+  const thread: NavigationThreadSummary = {
+    id: "multi-workspace", source: "acp:antigravity", title: "Release", titleSource: "explicit",
+    inbox: { inInbox: false },
+    linkedDirectories: ["primary", "secondary"].map((id) => ({ id, path: `/${id}`, label: id, kind: "local" })),
+  };
+  const command = { name: "release", description: "Prepare the release." };
+  const skill = { ...command, path: "/secondary/.agents/skills/release/SKILL.md" };
+  const desktopApi: DesktopApi = {
+    listSkills: async (request) => ({
+      backend: thread.source, fetchedAt: 1,
+      data: request?.catalog === "commands"
+        ? [{ cwd: workspace, commands: [command], skills: [] }]
+        : [{ cwd: "/primary", skills: [] }, { cwd: "/secondary", skills: [skill] }],
+    }),
+  };
+  const { result, unmount } = renderHook(() => useThreadSkills({ desktopApi, thread }));
+  try {
+    await act(async () => { await result.current.ensureLoaded({ includeCommands: true }); });
+    expect(result.current.skills).toEqual([expect.objectContaining(skill)]);
+    expect(result.current.providerCommands).toEqual([
+      skillIsKnown ? { ...command, skill: expect.objectContaining(skill) } : command,
+    ]);
+  } finally {
+    unmount();
+  }
+});
+
 it("leaves slash provenance unknown when the matching skill is available only as a mention", async () => {
   const draft = { ...launchpad(0, false), backend: "acp:antigravity" as const };
   const command = { name: "compact", description: "Compact this session." };
@@ -434,7 +466,9 @@ it("leaves slash provenance unknown when the matching skill is available only as
   const desktopApi: DesktopApi = {
     listSkills: async (request) => ({
       backend: draft.backend, fetchedAt: 1,
-      data: request?.catalog === "commands" ? [{ commands: [command], skills: [] }] : [{ skills: [fallback] }],
+      data: request?.catalog === "commands"
+        ? [{ cwd: draft.directoryPath, commands: [command], skills: [] }]
+        : [{ cwd: draft.directoryPath, skills: [fallback] }],
     }),
   };
   const { result, unmount } = renderHook(() => useThreadSkills({ desktopApi, launchpad: draft }));

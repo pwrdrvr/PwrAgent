@@ -172,6 +172,7 @@ export function useSkillOriginCard(options: {
   const cardRef = useRef<HTMLDivElement>(null);
   const openTimerRef = useRef<number | null>(null);
   const closeTimerRef = useRef<number | null>(null);
+  const cardPointerHeldRef = useRef(false);
   const copiedTimerRef = useRef<number | null>(null);
   const [state, setState] = useState<CardState | undefined>(undefined);
   // Read synchronously by the pointer handlers, which decide between "wait"
@@ -195,6 +196,7 @@ export function useSkillOriginCard(options: {
   const close = useCallback(() => {
     clearTimer(openTimerRef);
     clearTimer(closeTimerRef);
+    cardPointerHeldRef.current = false;
     if (stateRef.current) {
       commitState(undefined);
     }
@@ -206,7 +208,8 @@ export function useSkillOriginCard(options: {
     clearTimer(closeTimerRef);
     closeTimerRef.current = window.setTimeout(() => {
       closeTimerRef.current = null;
-      commitState(undefined);
+      cardPointerHeldRef.current = false;
+      if (!cardRef.current?.contains(document.activeElement)) commitState(undefined);
     }, CARD_CLOSE_GRACE_MS);
   }, [clearTimer, commitState]);
 
@@ -231,6 +234,7 @@ export function useSkillOriginCard(options: {
       // Moving between chips while a card is up swaps it at once, the way
       // a menu bar does; only the first card waits.
       if (current) {
+        cardPointerHeldRef.current = false;
         commitState(next);
         return;
       }
@@ -324,6 +328,10 @@ export function useSkillOriginCard(options: {
       }
       close();
     };
+    const dismissOnLayout = () => {
+      if (cardPointerHeldRef.current || cardRef.current?.contains(document.activeElement)) return;
+      close();
+    };
     // Only a scroll that moves the chip. A streaming transcript scrolls
     // constantly and has nothing to do with a card over the composer.
     const onScroll = (event: Event): void => {
@@ -333,19 +341,19 @@ export function useSkillOriginCard(options: {
         target === document
         || (target instanceof Node && anchor && target.contains(anchor))
       ) {
-        close();
+        dismissOnLayout();
       }
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     document.addEventListener("pointerdown", onPointerDown, { capture: true });
     window.addEventListener("scroll", onScroll, { capture: true });
-    window.addEventListener("resize", close);
+    window.addEventListener("resize", dismissOnLayout);
     window.addEventListener("blur", close);
     return () => {
       window.removeEventListener("keydown", onKeyDown, { capture: true });
       document.removeEventListener("pointerdown", onPointerDown, { capture: true });
       window.removeEventListener("scroll", onScroll, { capture: true });
-      window.removeEventListener("resize", close);
+      window.removeEventListener("resize", dismissOnLayout);
       window.removeEventListener("blur", close);
     };
   }, [close, visible]);
@@ -405,7 +413,10 @@ export function useSkillOriginCard(options: {
         onBlur={state.returnFocus ? (target) => {
           if (!(target instanceof Node) || !cardRef.current?.contains(target)) close();
         } : undefined}
-        onPointerEnter={() => clearTimer(closeTimerRef)}
+        onPointerEnter={() => {
+          cardPointerHeldRef.current = true;
+          clearTimer(closeTimerRef);
+        }}
         onPointerLeave={scheduleClose}
       />,
       document.body,

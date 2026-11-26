@@ -5578,7 +5578,7 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     cwds: Array<string | undefined>;
     allowProbe?: boolean;
-  }): Promise<AppServerAvailableCommandSummary[]> {
+  }): Promise<AppServerListSkillsResponse["data"][number]> {
     const repositoryPaths = await this.resolveAcpCommandRepositoryPaths(
       params.cwds,
     );
@@ -5588,22 +5588,29 @@ export class DesktopBackendRegistry {
         repositoryPath,
       );
       if (cached && cached.commands.length > 0) {
-        return cached.commands;
+        return {
+          commands: cached.commands, skills: [],
+          ...(params.backend === "acp:antigravity" && cached.workspaceCwd ? { cwd: cached.workspaceCwd } : {}),
+        };
       }
     }
 
     if (params.allowProbe === false) {
-      return [];
+      return { commands: [], skills: [] };
     }
 
     const probeTarget = repositoryPaths[0];
     if (!probeTarget) {
-      return [];
+      return { commands: [], skills: [] };
     }
-    return await this.probeAcpAvailableCommands({
+    const commands = await this.probeAcpAvailableCommands({
       backend: params.backend,
       repositoryPath: probeTarget,
     });
+    return {
+      commands, skills: [],
+      ...(params.backend === "acp:antigravity" ? { cwd: path.resolve(probeTarget) } : {}),
+    };
   }
 
   /**
@@ -5765,6 +5772,7 @@ export class DesktopBackendRegistry {
           backendId: params.backend,
           repositoryPath: params.repositoryPath,
           commands,
+          ...(params.backend === "acp:antigravity" ? { workspaceCwd: path.resolve(params.repositoryPath) } : {}),
           observedAt: Date.now(),
         });
         return commands;
@@ -5847,7 +5855,7 @@ export class DesktopBackendRegistry {
     }
 
     const backend = event.backend;
-    const { commands, threadId } = event.notification.params;
+    const { commands, threadId, cwd: workspaceCwd } = event.notification.params;
     // An empty update is treated as "no news", not as "this repo has no
     // commands": agents emit one during session setup before their command
     // registry is populated, and letting that clobber a good cache would empty
@@ -5877,6 +5885,9 @@ export class DesktopBackendRegistry {
           backendId: backend,
           repositoryPath,
           commands,
+          ...(backend === "acp:antigravity" && typeof workspaceCwd === "string" && path.isAbsolute(workspaceCwd)
+            ? { workspaceCwd }
+            : {}),
           observedAt: Date.now(),
         });
       })
@@ -5895,13 +5906,18 @@ export class DesktopBackendRegistry {
     cwd?: string;
     cwds?: string[];
     threadId?: string;
+    antigravityWorkspace?: {
+      cwds: string[];
+      resolvePath?: (file: string) => Promise<string | undefined>;
+    };
   } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
     const backend = params.backend ?? "codex";
     if (isAcpBackendId(backend)) {
       const session = params.threadId
         ? this.acpBackend.getSession(backend, params.threadId)
         : undefined;
-      let cwds = [session?.cwd, params.cwd, ...(params.cwds ?? [])];
+      const authorized = backend === "acp:antigravity" ? params.antigravityWorkspace : undefined;
+      let cwds: Array<string | undefined> = authorized?.cwds ?? [session?.cwd, params.cwd, ...(params.cwds ?? [])];
       let commandSession = session;
       if (backend === "acp:antigravity" && params.threadId) {
         const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: params.threadId });
@@ -5910,30 +5926,44 @@ export class DesktopBackendRegistry {
         if (directories?.some(isHandoffDirectory)) {
           // The owner’s handoff supersedes both a stale provider session and
           // any pre-handoff paths sent by a viewer.
-          cwds = [workspaceCwd, ...directories.filter((directory) => !isHandoffDirectory(directory))
-            .map(({ worktreePath, path }) => worktreePath ?? path)];
+          if (!authorized) {
+            cwds = [workspaceCwd, ...directories.filter((directory) => !isHandoffDirectory(directory))
+              .map(({ worktreePath, path }) => worktreePath ?? path)];
+          }
           const providerCwd = session?.antigravityPrimaryCwd ?? session?.cwd;
           if (session?.requiresAgentSessionRebind || !providerCwd || !workspaceCwd
             || path.resolve(providerCwd) !== path.resolve(workspaceCwd)) {
             commandSession = undefined;
           }
-        } else {
+        } else if (!authorized) {
           cwds[0] = workspaceCwd ?? session?.cwd;
         }
       }
-      const readCommands = async () => commandSession?.availableCommands?.length
-        ? commandSession.availableCommands
-        : await this.resolveAcpAvailableCommands({ backend, cwds });
+      const readCommands = async (): Promise<AppServerListSkillsResponse["data"][number]> => {
+        if (!commandSession?.availableCommands?.length) {
+          // The provider's own loader cannot honor a directory-limited file
+          // pull. A remote restricted request may only use live commands.
+          if (authorized?.resolvePath) return { commands: [], skills: [] };
+          return await this.resolveAcpAvailableCommands({ backend, cwds });
+        }
+        const cwd = backend === "acp:antigravity" && !commandSession.requiresAgentSessionRebind
+          ? commandSession.antigravityPrimaryCwd ?? commandSession.cwd
+          : undefined;
+        if (cwd && authorized?.resolvePath && !await authorized.resolvePath(cwd)) {
+          return { commands: [], skills: [] };
+        }
+        return { commands: commandSession.availableCommands, skills: [], ...(cwd ? { cwd: path.resolve(cwd) } : {}) };
+      };
 
       if (backend !== "acp:antigravity" || params.catalog === "commands") {
-        return { data: [{ commands: await readCommands(), skills: [] }] };
+        return { data: [await readCommands()] };
       }
 
       // Use the worktree itself for skills. The slash-command cache uses the
       // common repository and can cost an ACP startup on a miss.
-      const data = await discoverAntigravitySkillCatalog(cwds);
+      const data = await discoverAntigravitySkillCatalog(cwds, authorized?.resolvePath);
       const commands = params.catalog === "skills" ? undefined : await readCommands();
-      return { data: commands ? [{ commands, skills: [] }, ...data] : data };
+      return { data: commands ? [commands, ...data] : data };
     }
 
     if (backend === "claude") {

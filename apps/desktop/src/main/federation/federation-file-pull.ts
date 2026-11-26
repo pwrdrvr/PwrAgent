@@ -1,9 +1,9 @@
 import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
-import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
+import { isAppServerBackendKind, type NavigationLaunchpadDraft } from "@pwragent/shared/contracts/navigation";
 import { isFilePreviewPath } from "@pwragent/shared/file-preview";
-import { type AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerListSkillsRequest, AppServerThreadSummary } from "@pwragent/shared/contracts/normalized-app-server";
 import {
   type ReadMarkdownFileResponse,
   type ResolveTranscriptFilesRequest,
@@ -11,6 +11,7 @@ import {
 } from "@pwragent/shared/contracts/settings";
 
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { resolveThreadWorkspaceCwd } from "../app-server/linked-directory-identity";
 import { resolveTranscriptFiles, transcriptThreadDirectories } from "../transcript-files";
 
 export const FILE_PULL_MARKDOWN_METHOD = "file.pull.markdown";
@@ -28,6 +29,63 @@ type WaitingResolution = {
 };
 
 const MAX_ACTIVE_FILE_OPERATIONS = 4;
+
+/** Skill descriptions come from files, so peer discovery shares file pull's
+ * permissions and resolves workspaces on the owner before opening anything. */
+export async function readFederatedAntigravitySkills(
+  request: AppServerListSkillsRequest,
+  options: Options & {
+    listLaunchpads: () => Promise<Array<Pick<NavigationLaunchpadDraft, "directoryPath" | "federationTarget" | "registeredAt">>>;
+    listSkills: DesktopBackendRegistry["listSkills"];
+  },
+): Promise<Awaited<ReturnType<DesktopBackendRegistry["listSkills"]>>> {
+  const permissions = { ...options.permissions() };
+  if (!permissions.filePull) return { data: [] };
+
+  let cwds: string[];
+  let directories: string[];
+  if (typeof request.threadId === "string" && request.threadId) {
+    const thread = await options.resolveThread("acp:antigravity", request.threadId);
+    if (!thread) return { data: [] };
+    directories = transcriptThreadDirectories(thread);
+    cwds = [
+      resolveThreadWorkspaceCwd(thread),
+      ...thread.linkedDirectories.map(({ worktreePath, path }) => worktreePath ?? path),
+    ]
+      .filter((cwd): cwd is string => !!cwd && path.isAbsolute(cwd));
+  } else {
+    const hint = request.cwd ?? (Array.isArray(request.cwds) && request.cwds.length === 1 ? request.cwds[0] : undefined);
+    if (typeof hint !== "string" || !path.isAbsolute(hint)) return { data: [] };
+    const launchpad = (await options.listLaunchpads()).find((draft) =>
+      draft.registeredAt != null && draft.federationTarget?.scope !== "remote"
+      && draft.directoryPath && path.isAbsolute(draft.directoryPath)
+      && path.relative(draft.directoryPath, hint) === "");
+    if (!launchpad?.directoryPath) return { data: [] };
+    directories = cwds = [launchpad.directoryPath];
+  }
+  if (!cwds.length) return { data: [] };
+
+  const roots = permissions.filePullOutsideThreadDirectories ? undefined : await Promise.all(
+    directories.map((directory) => realpath(directory).catch(() => undefined)),
+  );
+  const result = await options.listSkills({
+    backend: "acp:antigravity",
+    catalog: request.catalog,
+    threadId: request.threadId,
+    antigravityWorkspace: {
+      cwds,
+      resolvePath: roots && (async (file) => {
+        const target = await realpath(file).catch(() => undefined);
+        return target && roots.some((root) => root && isWithin(root, target)) ? target : undefined;
+      }),
+    },
+  });
+  const current = options.permissions();
+  if (!current.filePull || (permissions.filePullOutsideThreadDirectories && !current.filePullOutsideThreadDirectories)) {
+    return { data: [] };
+  }
+  return result;
+}
 
 /** Resolve ownership for both current and archived threads. Refresh the archive
  * on a miss so archiving a thread does not break an already-open file viewer. */

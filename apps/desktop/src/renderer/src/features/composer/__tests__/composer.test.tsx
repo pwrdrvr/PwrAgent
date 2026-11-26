@@ -730,57 +730,58 @@ describe("Composer", () => {
     expect(refresh).toHaveBeenCalledTimes(2);
   });
 
-  it("reloads an open Antigravity picker after switching worktrees while a catalog read is pending", async () => {
-    await fc.assert(fc.asyncProperty(fc.boolean(), async (oldCompletesFirst) => {
-      const thread: NavigationThreadSummary = {
-        id: "antigravity-worktree-picker", title: "Check the release", titleSource: "explicit",
-        source: "acp:antigravity", linkedDirectories: [], inbox: { inInbox: false },
+  it.each([
+    { first: "previous", oldCompletesFirst: true },
+    { first: "current", oldCompletesFirst: false },
+  ])("reloads the Antigravity picker when the $first worktree's catalog completes first", async ({ oldCompletesFirst }) => {
+    const thread: NavigationThreadSummary = {
+      id: "antigravity-worktree-picker", title: "Check the release", titleSource: "explicit",
+      source: "acp:antigravity", linkedDirectories: [], inbox: { inInbox: false },
+    };
+    type ListResult = Awaited<ReturnType<NonNullable<DesktopApi["listSkills"]>>>;
+    const first = Promise.withResolvers<ListResult>();
+    const second = Promise.withResolvers<ListResult>();
+    const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>((request) =>
+      request?.cwd === "/first" ? first.promise : second.promise);
+    const desktopApi: DesktopApi = { listSkills };
+    function Picker({ worktreePath }: { worktreePath: string }) {
+      const selected: NavigationThreadSummary = {
+        ...thread, linkedDirectories: [{ id: "repo", path: "/repo", label: "Repo", kind: "local", worktreePath }],
       };
-      type ListResult = Awaited<ReturnType<NonNullable<DesktopApi["listSkills"]>>>;
-      const first = Promise.withResolvers<ListResult>();
-      const second = Promise.withResolvers<ListResult>();
-      const listSkills = vi.fn<NonNullable<DesktopApi["listSkills"]>>((request) =>
-        request?.cwd === "/first" ? first.promise : second.promise);
-      const desktopApi: DesktopApi = { listSkills };
-      function Picker({ worktreePath }: { worktreePath: string }) {
-        const selected: NavigationThreadSummary = {
-          ...thread, linkedDirectories: [{ id: "repo", path: "/repo", label: "Repo", kind: "local", worktreePath }],
-        };
-        const skills = useThreadSkills({ desktopApi, thread: selected });
-        return <Composer
-          thread={selected}
-          skills={skills.skills}
-          skillCatalogTargetKey={skills.skillCatalogTargetKey}
-          skillLoading={skills.loading}
-          onEnsureSkillsLoaded={skills.ensureLoaded}
-        />;
-      }
-      const view = render(<Picker worktreePath="/first" />);
-      try {
-        const input = screen.getByRole("textbox", { name: "Reply" });
-        fireEvent.change(input, { target: { value: "$release" } });
-        expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first"]);
+      const skills = useThreadSkills({ desktopApi, thread: selected });
+      return <Composer
+        thread={selected}
+        skills={skills.skills}
+        skillCatalogTargetKey={skills.skillCatalogTargetKey}
+        skillLoading={skills.loading}
+        onEnsureSkillsLoaded={skills.ensureLoaded}
+      />;
+    }
+    const view = render(<Picker worktreePath="/first" />);
+    try {
+      const input = screen.getByRole("textbox", { name: "Reply" });
+      fireEvent.change(input, { target: { value: "$release" } });
+      expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first"]);
 
-        view.rerender(<Picker worktreePath="/second" />);
-        expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first", "/second"]);
+      view.rerender(<Picker worktreePath="/second" />);
+      expect(listSkills.mock.calls.map(([request]) => request?.cwd)).toEqual(["/first", "/second"]);
 
-        const settle = async (pending: typeof first, workspace: string) => {
-          await act(async () => {
-            pending.resolve({ backend: "acp:antigravity", fetchedAt: 1, data: [{
-              skills: [{ name: `release-${workspace}`, path: `/${workspace}/.agents/skills/release/SKILL.md` }],
-            }] });
-          });
-          expect(screen.queryByRole("option", { name: /release-first/ })).toBeNull();
-        };
-        if (oldCompletesFirst) await settle(first, "first");
-        await settle(second, "second");
-        expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
-        if (!oldCompletesFirst) await settle(first, "first");
-        expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
-      } finally {
-        view.unmount();
-      }
-    }), { numRuns: 4, examples: [[false], [true]] });
+      const settle = async (pending: typeof first, workspace: string) => {
+        await act(async () => {
+          pending.resolve({ backend: "acp:antigravity", fetchedAt: 1, data: [{
+            skills: [{ name: `release-${workspace}`, path: `/${workspace}/.agents/skills/release/SKILL.md` }],
+          }] });
+        });
+        expect(screen.queryByRole("option", { name: /release-first/ })).toBeNull();
+      };
+      if (oldCompletesFirst) await settle(first, "first");
+      await settle(second, "second");
+      expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
+      if (!oldCompletesFirst) await settle(first, "first");
+      expect(screen.getByRole("option", { name: /release-second/ })).toBeInTheDocument();
+    } finally {
+      view.unmount();
+    }
   });
 
   it("shows the project chip and opens Antigravity slash provenance from the keyboard", async () => {
@@ -796,8 +797,8 @@ describe("Composer", () => {
         backend: thread.source,
         fetchedAt: 1,
         data: catalog === "commands"
-          ? [{ commands: [{ name: "release", backend: thread.source, description }], skills: [] }]
-          : [{ skills: [{ name: "release", description, path: "/garden/.agents/skills/release/SKILL.md" }] }],
+          ? [{ cwd: "/garden", commands: [{ name: "release", backend: thread.source, description }], skills: [] }]
+          : [{ cwd: "/garden", skills: [{ name: "release", description, path: "/garden/.agents/skills/release/SKILL.md" }] }],
       }),
     };
     function Picker() {
@@ -816,6 +817,10 @@ describe("Composer", () => {
     expect(screen.getByRole("group", { name: /Where.*release comes from/ })).toHaveTextContent("/garden/.agents/skills/release/SKILL.md");
     await userEvent.tab();
     const open = screen.getByRole("button", { name: "Open SKILL.md" });
+    expect(open).toHaveFocus();
+    fireEvent.scroll(option.parentElement!);
+    fireEvent.resize(window);
+    expect(open).toBeInTheDocument();
     expect(open).toHaveFocus();
     fireEvent.keyDown(open, { key: "Escape" });
     expect(input).toHaveFocus();

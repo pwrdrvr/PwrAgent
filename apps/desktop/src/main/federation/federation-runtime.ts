@@ -62,7 +62,7 @@ import type {
   AnalyzeUsageActivityRequest,
   AnalyzeUsageActivityResponse,
 } from "@pwragent/shared/contracts/usage-activity";
-import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANSCRIPT_METHOD, resolveFilePullThread } from "./federation-file-pull";
+import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANSCRIPT_METHOD, readFederatedAntigravitySkills, resolveFilePullThread } from "./federation-file-pull";
 import type {
   HandoffInstanceThreadRequest,
   HandoffInstanceThreadResult,
@@ -4437,7 +4437,7 @@ export class DesktopFederationRuntime {
     });
     registerFederationBackendHandlers({
       router,
-      backend: localBackendOperations(),
+      backend: localBackendOperations(() => this.receiverPermissions()),
       durableTurnRequests: this.durableTurnRequestService(),
       resolveTurnInput: async (input, sourceInstanceId) =>
         await this.turnInputAttachmentReceiver.resolveInput(
@@ -7786,7 +7786,9 @@ async function withFederationNavigationConsumer<T>(
   }
 }
 
-function localBackendOperations(): FederationBackendOperations {
+function localBackendOperations(
+  peerFilePermissions?: () => { filePull: boolean; filePullOutsideThreadDirectories: boolean },
+): FederationBackendOperations {
   const messagingBridge = new DesktopMessagingBackendBridge();
   return {
     async getNavigationQueryPage(request, rpcOptions) {
@@ -7956,13 +7958,21 @@ function localBackendOperations(): FederationBackendOperations {
       request: AppServerListSkillsRequest = {},
     ): Promise<AppServerListSkillsResponse> {
       const backend = request.backend ?? "codex";
-      const response = await getDesktopBackendRegistry().listSkills({
-        backend,
-        catalog: request.catalog,
-        cwd: request.cwd,
-        cwds: request.cwds,
-        threadId: request.threadId,
-      });
+      const registry = getDesktopBackendRegistry();
+      const response = backend === "acp:antigravity" && peerFilePermissions
+        ? await readFederatedAntigravitySkills(request, {
+          permissions: peerFilePermissions,
+          resolveThread: (backend, threadId) => resolveFilePullThread(registry, backend, threadId),
+          listLaunchpads: () => getDesktopOverlayStore().listDirectoryLaunchpads(),
+          listSkills: (params) => registry.listSkills(params),
+        })
+        : await registry.listSkills({
+          backend,
+          catalog: request.catalog,
+          cwd: request.cwd,
+          cwds: request.cwds,
+          threadId: request.threadId,
+        });
       return {
         backend,
         fetchedAt: Date.now(),
