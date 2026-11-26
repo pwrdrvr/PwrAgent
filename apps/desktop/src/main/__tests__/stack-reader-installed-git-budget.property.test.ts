@@ -8,6 +8,7 @@ import * as gitExecutable from "../app-server/git-executable";
 import { bundledGitDirectory, bundledGitExecutable, configureBundledGit } from "../bundled-git";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
+import { forgetGithubForgeStacks, githubForgeStackRepository, recordGithubForgeStack } from "../stacks/github-forge-stacks";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
 
 let restoreGit: (() => void) | undefined;
@@ -78,6 +79,143 @@ async function packagedGitFixture() {
 }
 
 describe("StackReader installed-Git and unavailable checkout budgets", () => {
+  it("admits a catalog published while another scoped catalog is still being read", async () => {
+    const { sandbox } = await packagedGitFixture();
+    const first = path.join(sandbox, "first");
+    const second = path.join(sandbox, "second");
+    await Promise.all([mkdir(first), mkdir(second)]);
+    const head = initialize(first);
+    initialize(second);
+    git(first, "branch", "feat");
+
+    const observation = new StackReadObservation();
+    const readCatalog = observation.catalog.bind(observation);
+    const sampledFirst = Promise.withResolvers<void>();
+    const repository = "github.com:fixture/publishing";
+    vi.spyOn(observation, "catalog").mockImplementation(async (commonDir) => {
+      if (commonDir === path.join(first, ".git")) {
+        const result = await readCatalog(commonDir);
+        sampledFirst.resolve();
+        return result;
+      }
+      await sampledFirst.promise;
+      await writeFile(path.join(first, ".git", "gh-stack"), JSON.stringify({
+        schemaVersion: 1, repository, stacks: [{
+          trunk: { branch: "main", head },
+          branches: [{ branch: "feat", head, base: head }],
+        }],
+      }));
+      return await readCatalog(commonDir);
+    });
+
+    // The scope must match a fresh Git-backed read when its initially missing
+    // catalog becomes visible before the other scoped read completes.
+    const reader = new StackReader();
+    const rows = [row(first, "first"), row(second, "second")];
+    const scope = [first, second];
+    const interrupted = await reader.read(rows, [], scope, undefined, observation, undefined, new Set([repository]));
+    const fresh = await reader.read(rows, [], scope);
+    expect(fresh.stacks.map((stack) => stack.name)).toEqual(["feat"]);
+    expect(interrupted).toEqual(fresh);
+  });
+
+  it.skipIf(process.platform === "win32")("observes only the scoped Git anchors when publication has no tracked stack", async () => {
+    const { sandbox, executable } = await packagedGitFixture();
+    const repo = path.join(sandbox, "repo");
+    const lower = path.join(sandbox, "lower");
+    const upper = path.join(sandbox, "upper");
+    await mkdir(repo);
+    const head = initialize(repo);
+    git(repo, "worktree", "add", "-q", "-b", "lower", lower);
+    git(repo, "worktree", "add", "-q", "-b", "upper", upper);
+    const wrapper = path.join(sandbox, "external-git");
+    const redirect = path.join(sandbox, "redirect");
+    const redirected = path.join(sandbox, "redirected");
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    await writeFile(wrapper, [
+      "#!/bin/sh",
+      "if [ -f " + quote(redirect) + " ] && [ \"$1\" = \"-C\" ] && [ \"$2\" = " + quote(upper)
+        + " ] && [ \"$3\" = \"rev-parse\" ]; then",
+      "  shift 2; set -- -C " + quote(redirected) + " \"$@\"",
+      "fi",
+      "exec " + quote(executable) + " \"$@\"",
+      "",
+    ].join("\n"), { mode: 0o700 });
+    vi.stubEnv("PWRAGENT_GIT_PATH", wrapper);
+    const repository = "github.com:fixture/publishing";
+    const layer = (cwd: string, number: number, branch: string, base: string): NavigationThreadSummary => ({
+      ...row(cwd, branch), gitBranch: branch, prs: [{
+        number, provider: "github.com", org: "fixture", repo: "publishing", lifecycleState: "open", state: "passing",
+        url: `https://github.com/fixture/publishing/pull/${number}`, headRefName: branch, baseRefName: base,
+        headSha: head, baseSha: head, linkedDirectoryPaths: [cwd],
+      }],
+    });
+    const lowerRow = layer(lower, 1, "lower", "main");
+    const upperRow = layer(upper, 2, "upper", "lower");
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    onTestFinished(() => starts.mockRestore());
+    onTestFinished(forgetGithubForgeStacks);
+    const publishing = new Set([githubForgeStackRepository({ host: "GitHub.com", owner: "Fixture", repo: "Publishing" })]);
+    const readForPublication = (reader: StackReader, rows: NavigationThreadSummary[]) =>
+      reader.read(rows, [], [upper], undefined, undefined, undefined, publishing);
+    const checkoutStarts = () => starts.mock.calls.flatMap(([cwd, [verb], purpose]) =>
+      verb === "rev-parse" && purpose === "stack-checkout" ? [cwd] : []);
+    const reader = new StackReader();
+
+    // Publishing cannot act on inferred stacks. Adding rows with an inferred
+    // edge cannot require more checkout discoveries than the live scope itself.
+    await fc.assert(fc.asyncProperty(fc.boolean(), async (reverse) => {
+      const rows = reverse ? [upperRow, lowerRow] : [lowerRow, upperRow];
+      const ordinary = await new StackReader().read(rows, [], [upper]);
+      expect(ordinary.stacks.map((stack) => stack.inferred)).toEqual([true]);
+      starts.mockClear();
+      const result = await readForPublication(reader, rows);
+      expect(checkoutStarts()).toEqual([upper]);
+      expect(result.stacks).toEqual(ordinary.stacks.filter((stack) => !stack.inferred));
+    }), { numRuns: 2, examples: [[false]] });
+
+    // A catalog created after a negative read must still be admitted, even
+    // with a Git runtime chosen explicitly and an identical set of rows.
+    const catalog = path.join(repo, ".git", "gh-stack");
+    const rows = [lowerRow, upperRow];
+    await writeFile(catalog, JSON.stringify({
+      schemaVersion: 1, repository, stacks: [{
+        trunk: { branch: "main", head },
+        branches: [{ branch: "lower", head, base: head }, { branch: "upper", head, base: head }],
+      }],
+    }));
+    starts.mockClear();
+    const local = await readForPublication(reader, rows);
+    expect(local.stacks.map((stack) => stack.inferred)).toEqual([false]);
+    expect(checkoutStarts()).toContain(lower);
+
+    await writeFile(path.join(repo, ".git", "pwragent-stack-op.json"), "{}");
+    const busy = await readForPublication(reader, rows);
+    expect(busy.stacks[0]?.layers.map((entry) => entry.health)).toEqual(["held", "held"]);
+
+    await rm(catalog);
+    recordGithubForgeStack({
+      repository, number: 3, trunk: "main",
+      layers: [
+        { number: 1, branch: "lower", head, open: true, merged: false },
+        { number: 2, branch: "upper", head, open: true, merged: false },
+      ],
+    });
+    const forge = await readForPublication(reader, rows);
+    expect(forge.stacks.map((stack) => stack.githubStack)).toEqual([3]);
+
+    forgetGithubForgeStacks();
+    await mkdir(redirected);
+    initialize(redirected);
+    await writeCatalog(redirected, "publishing");
+    await writeFile(redirect, "");
+    starts.mockClear();
+    const moved = await readForPublication(reader, rows);
+    expect(checkoutStarts()).toContain(upper);
+    expect(moved.stacks[0]?.name).toBe("feat");
+    expect(moved.stacks[0]?.key).not.toBe(local.stacks[0]?.key);
+  });
+
   it.skipIf(process.platform === "win32")("skips ordinary unrelated checkouts for explicitly selected packaged Git while matching the live Git projection", async () => {
     const { sandbox, executable } = await packagedGitFixture();
     const stacked = path.join(sandbox, "stacked");

@@ -189,6 +189,7 @@ export interface PrAutoDispatchStorage {
 
 /** PR watch claims and leases. The host retains its existing transaction policy. */
 export interface PrStatusWatchStorage {
+  hasActiveChecksWatch(params: { prKey: string; headSha: string; outcome: "success" | "failure" }): Promise<boolean>;
   claimThreadPrStatusWatches(params: {
     prKey: string;
     headSha: string;

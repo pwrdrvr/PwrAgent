@@ -141,7 +141,11 @@ export class PrStatusWatchCoordinator {
       now: observedAt,
     });
     await this.notifyWatchesChanged(advanced.threads);
-    if (!outcome || await this.options.stackHold?.(pr)) return dispatched;
+    if (!outcome) return dispatched;
+    // A concluded PR can be polled without anyone waiting for this outcome.
+    // Check after head moves and notifications, before observing live Git.
+    if (this.options.stackHold && (!await this.options.store.hasActiveChecksWatch({ prKey, headSha, outcome })
+      || await this.options.stackHold(pr))) return dispatched;
 
     const now = this.now();
     const failedCheckUrl = outcome === "failure" ? pr.failedCheckUrl : undefined;
