@@ -124,11 +124,18 @@ export function useOperatorRequests(
   }, [api]);
 
   useEffect(() => {
-    void reload();
+    // StrictMode can dispose this setup before the first read starts.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void reload();
+    });
     const unsubscribe = api?.onOperatorRequestsChanged?.(() => {
       void reload();
     });
-    return () => unsubscribe?.();
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, [api, reload, mountedThreadKeys]);
 
   const markSeen = useCallback((keys: readonly string[]): void => {
