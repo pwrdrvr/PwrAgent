@@ -1319,6 +1319,7 @@ export type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<Pick<Ow
     | "listThreadCompactions"
     | "recordThreadCompaction"
     | "readTokenMiserGatePricingLines"
+    | "readTokenMiserLegacyReplayCounts"
     | "reconcileOrphanedThreadSubAgents"
     | "moveLegacyThreadSubAgents"
     | "moveLegacyThreadUsageActivities"

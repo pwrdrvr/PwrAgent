@@ -798,7 +798,8 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
           // single usage event into N pricing reads and 2N notifications;
           // `recordTokenMiserParentModelRequest` already emits once for the
           // whole batch.
-          if (reason === "replay" || reason === "flushed") {
+          // Startup reconciles and publishes a page at a time.
+          if (reason === "replay" || reason === "flushed" || reason === "startup-stop") {
             return;
           }
           try {
@@ -1529,6 +1530,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         // The ledger tests for readThreadToolAccounting before calling it, as
         // the registry did; a getter keeps a missing method missing.
         get readThreadToolAccounting() { return overlayStore.readThreadToolAccounting?.bind(overlayStore); },
+        get readTokenMiserLegacyReplayCounts() { return overlayStore.readTokenMiserLegacyReplayCounts?.bind(overlayStore); },
         get persistThreadToolInvocationBoundary() { return overlayStore.persistThreadToolInvocationBoundary?.bind(overlayStore); },
         get markThreadToolInvocationsNoisy() { return overlayStore.markThreadToolInvocationsNoisy?.bind(overlayStore); },
         get setThreadSpendAlertPending() { return overlayStore.setThreadSpendAlertPending?.bind(overlayStore); },
