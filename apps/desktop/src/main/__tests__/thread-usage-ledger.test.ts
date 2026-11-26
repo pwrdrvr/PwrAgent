@@ -33,7 +33,7 @@ type LedgerInternals = {
     current: ThreadToolInvocationRecord;
     previousOutputChars: number;
   };
-  persistTokenMiserLedgerEntries(entries: readonly TokenMiserObjectMetadata[]): Promise<void>;
+  persistTokenMiserLedgerEntries(entries: readonly TokenMiserObjectMetadata[]): Promise<string[]>;
   publishLiveTokenMiserLedgerEntry(entry: TokenMiserObjectMetadata): Promise<void>;
   stopTokenMiserReplayTrackingAtCompaction(event: AgentEvent): Promise<void>;
 };
@@ -358,13 +358,18 @@ describe("ThreadUsageLedger", () => {
         const stops: Array<{ objectId: string; stoppedAt: number }> = [];
         const tokenMiserStore = {
           prune: async () => {},
-          listMetadata: async () => entries.map((entry) => ({ ...entry })),
-          stopReplayTracking: async (params: { objectId: string; stoppedAt: number }) => {
-            stops.push(params);
-            if (refuses.has(params.objectId)) return false;
-            const entry = entries.find((candidate) => candidate.objectId === params.objectId)!;
-            entry.replayTrackingStoppedAt = params.stoppedAt;
-            return true;
+          *listMetadataPages() {
+            for (let offset = 0; offset < entries.length; offset += 3) {
+              yield entries.slice(offset, offset + 3).map((entry) => ({ ...entry }));
+            }
+          },
+          readMetadata: async (objectId: string) => entries.find((entry) => entry.objectId === objectId),
+          stopReplayTracking: async ({ objectId, stoppedAt }: { objectId: string; stoppedAt: number }) => {
+            stops.push({ objectId, stoppedAt });
+            if (refuses.has(objectId)) return undefined;
+            const entry = entries.find((candidate) => candidate.objectId === objectId)!;
+            entry.replayTrackingStoppedAt = stoppedAt;
+            return { ...entry };
           },
         };
         const { ledger, internals } = createLedger({
@@ -377,6 +382,7 @@ describe("ThreadUsageLedger", () => {
         const persisted: TokenMiserObjectMetadata[][] = [];
         vi.spyOn(internals, "persistTokenMiserLedgerEntries").mockImplementation(async (metadata) => {
           persisted.push([...metadata]);
+          return [];
         });
 
         // The oracle, from the inputs alone.
@@ -401,7 +407,7 @@ describe("ThreadUsageLedger", () => {
         const open = new Map([...internals.activeTokenMiserReplayEntries].map(([threadId, active]) =>
           [threadId, new Set(active.keys())]));
         expect(open).toEqual(expectedOpen);
-        expect(persisted).toEqual([entries]);
+        expect(persisted.flat()).toEqual(entries);
       },
     ), { numRuns: 300 });
   });
@@ -494,11 +500,14 @@ describe("ThreadUsageLedger", () => {
     const released = new Promise<void>((resolve) => { release = resolve; });
     const tokenMiserStore = {
       prune: async () => {},
-      listMetadata: async () => { await released; return []; },
+      *listMetadataPages() { yield [gate({ objectId: "gate", threadId: "thread", createdAt: 1 })]; },
       stopReplayTracking: async () => false,
     };
     const { ledger, internals } = createLedger({ host: { tokenMiserStore: tokenMiserStore as never } });
-    vi.spyOn(internals, "persistTokenMiserLedgerEntries").mockResolvedValue();
+    vi.spyOn(internals, "persistTokenMiserLedgerEntries").mockImplementation(async () => {
+      await released;
+      return [];
+    });
     await expect(ledger.currentTokenMiserLedgerReconciliation).resolves.toBeUndefined();
     const reconciliation = ledger.initializeTokenMiserLedger();
     expect(ledger.currentTokenMiserLedgerReconciliation).toBe(reconciliation);

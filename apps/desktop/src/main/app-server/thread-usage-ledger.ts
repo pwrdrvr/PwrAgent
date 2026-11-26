@@ -2858,7 +2858,10 @@ export class ThreadUsageLedger {
           maxBytes: 512 * 1024 * 1024,
         });
       });
-    this.tokenMiserLedgerReconciliation = this.tokenMiserStoragePreparation
+    this.tokenMiserLedgerReconciliation = Promise.all([
+      this.tokenMiserStoragePreparation,
+      this.tokenMiserLedgerReconciliation,
+    ])
       .then(async () => await this.reconcileTokenMiserLedger())
       .catch((error) => {
         backendRegistryLog.warn("Token Miser ledger reconciliation failed", {
@@ -2873,70 +2876,62 @@ export class ThreadUsageLedger {
     if (!host.tokenMiserStore) {
       return;
     }
-    const restored = await host.tokenMiserStore.listMetadata();
-    const stoppedCount =
-      await this.stopTokenMiserGatesCompactedWhileClosed(restored);
-    // Re-read after closing gates: `restored` was captured before the stop, so
-    // registering from it would put the just-stopped gates straight back into
-    // the active set and publish a stale ledger.
-    const metadata = stoppedCount > 0
-      ? await host.tokenMiserStore.listMetadata()
-      : restored;
-    for (const entry of metadata) {
-      this.rememberActiveTokenMiserReplayEntry(entry);
-      this.seedTokenMiserRequestCursor(entry);
+    const compactedAtByThread = new Map<string, number | undefined>();
+    const pricingChanged = new Set<string>();
+    await yieldToEventLoop();
+    for (const page of host.tokenMiserStore.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE)) {
+      const metadata = await this.stopTokenMiserGatesCompactedWhileClosed(host.tokenMiserStore, page, compactedAtByThread);
+      for (const entry of metadata) {
+        this.rememberActiveTokenMiserReplayEntry(entry);
+        this.seedTokenMiserRequestCursor(entry);
+      }
+      const changed = await this.persistTokenMiserLedgerEntries(metadata, { publishPricing: false });
+      for (const threadId of changed) pricingChanged.add(threadId);
+      await yieldToEventLoop();
     }
-    await this.persistTokenMiserLedgerEntries(metadata);
+    for (const threadId of pricingChanged) {
+      await this.emitThreadPricingUpdated({ backend: "codex", threadId });
+      await yieldToEventLoop();
+    }
   }
 
   /**
-   * Close out gates whose thread compacted while this instance was not running.
-   *
-   * Restore re-registers every unstopped gate, so without this a gate created
-   * before a compaction stays active forever and keeps counting cached replays
-   * against content the compaction already removed from context. The live
-   * `thread/compacted` handler cannot cover this: the event fired when nobody
-   * was listening. Persisted markers are what make the boundary survive.
+   * Close gates whose thread compacted while the instance was stopped. Use the
+   * updated row so a restored gate never re-enters the active set with the
+   * replay state it had before the stop.
    */
   private async stopTokenMiserGatesCompactedWhileClosed(
+    store: TokenMiserStore,
     metadata: readonly TokenMiserObjectMetadata[],
-  ): Promise<number> {
-    const active = metadata.filter((entry) =>
-      entry.replayTrackingVersion === 2
-      && entry.replayTrackingStoppedAt === undefined
-    );
-    if (active.length === 0) {
-      return 0;
-    }
-    const compactedAtByThread = new Map<string, number>();
-    for (const threadId of new Set(active.map((entry) => entry.threadId))) {
-      const compactions = await this.context.stores.usage.listThreadCompactions?.({
-        backend: "codex",
-        threadId,
-      });
-      const latest = compactions?.at(-1);
-      if (latest) {
-        compactedAtByThread.set(threadId, latest.observedAt);
-      }
-    }
-    let stopped = 0;
-    for (const entry of active) {
-      const compactedAt = compactedAtByThread.get(entry.threadId);
-      // Only a compaction that happened after the gate bounds it; an earlier
-      // one belongs to context the gate never entered.
-      if (compactedAt === undefined || compactedAt <= entry.createdAt) {
+    compactedAtByThread: Map<string, number | undefined>,
+  ): Promise<TokenMiserObjectMetadata[]> {
+    const restored: TokenMiserObjectMetadata[] = [];
+    for (const entry of metadata) {
+      if (entry.replayTrackingVersion !== 2 || entry.replayTrackingStoppedAt !== undefined) {
+        restored.push(entry);
         continue;
       }
-      if (
-        await this.host().tokenMiserStore!.stopReplayTracking({
-          objectId: entry.objectId,
-          stoppedAt: compactedAt,
-        })
-      ) {
-        stopped += 1;
+      if (!compactedAtByThread.has(entry.threadId)) {
+        const compactions = await this.context.stores.usage.listThreadCompactions?.({
+          backend: "codex", threadId: entry.threadId,
+        });
+        compactedAtByThread.set(entry.threadId, compactions?.at(-1)?.observedAt);
       }
+      const compactedAt = compactedAtByThread.get(entry.threadId);
+      if (compactedAt === undefined || compactedAt <= entry.createdAt) {
+        restored.push(entry);
+        continue;
+      }
+      // Startup publishes from the reconciled page instead of doing a full
+      // live ledger read for each stopped gate.
+      const stopped = await store.stopReplayTracking({
+        objectId: entry.objectId, stoppedAt: compactedAt, restoring: true,
+      });
+      // A peer may have already stopped or removed it since the page read.
+      const current = stopped ?? await store.readMetadata(entry.objectId, entry.threadId);
+      if (current) restored.push(current);
     }
-    return stopped;
+    return restored;
   }
 
   /**
@@ -3905,53 +3900,47 @@ export class ThreadUsageLedger {
 
     const pricingChanged: string[] = [];
     for (const [threadId, entries] of byThread) {
-      // Only the gates' own lines and their turns' parent lines can price
-      // them; a long thread's other lines are not read.
-      const pricingLines =
-        typeof this.context.stores.usage.readTokenMiserGatePricingLines === "function"
-          ? await this.context.stores.usage.readTokenMiserGatePricingLines({
-              backend: "codex",
-              sourceItemIds: entries.map(tokenMiserMonitorId),
-              threadId,
-              turnIds: [...new Set(entries.map((entry) => entry.turnId))],
-            })
-          : typeof this.context.stores.usage.readThreadPricing === "function"
-            ? (await this.context.stores.usage.readThreadPricing({
-                backend: "codex",
-                threadId,
-              })).lines
-            : undefined;
-      // Only gates that predate observed replay tracking read invocations.
-      const toolAccounting =
-        entries.some((entry) => entry.replayTrackingVersion !== 2)
-        && typeof this.context.stores.toolAccounting.readThreadToolAccounting === "function"
-          ? await this.context.stores.toolAccounting.readThreadToolAccounting({
-              backend: "codex",
-              includeAllInvocations: true,
-              threadId,
-            })
-          : undefined;
-      // A gate's stored line names the gate as its source item, so the
-      // narrow read finds any line a gate could otherwise insert twice.
-      const knownUsageLineIds = new Set(
-        pricingLines?.map((line) => line.usageLineId) ?? [],
-      );
+      const usage = this.context.stores.usage;
+      const fallbackPricing = !usage.readTokenMiserGatePricingLines
+        ? (await usage.readThreadPricing?.({ backend: "codex", threadId }))?.lines
+        : undefined;
+      const toolAccounting = this.context.stores.toolAccounting;
+      const fallbackReplays = !toolAccounting.readTokenMiserLegacyReplayCounts
+        && entries.some((entry) => entry.replayTrackingVersion !== 2)
+        ? indexTokenMiserCachedReplays((await toolAccounting.readThreadToolAccounting?.({
+            backend: "codex", includeAllInvocations: true, threadId,
+          }))?.invocations ?? [])
+        : undefined;
       const subAgents: ThreadSubAgentSummary[] = [];
       const usageLines: ThreadUsageLineRecord[] = [];
-      const indexes: TokenMiserLedgerIndexes = {
-        pricing: indexTokenMiserPricingLines(pricingLines ?? []),
-        replays: indexTokenMiserCachedReplays(toolAccounting?.invocations ?? []),
-      };
 
       for (let offset = 0; offset < entries.length; offset += TOKEN_MISER_LEDGER_BATCH_SIZE) {
         if (offset > 0) await yieldToEventLoop();
         const batch = entries.slice(offset, offset + TOKEN_MISER_LEDGER_BATCH_SIZE);
+        const monitorIds = batch.map(tokenMiserMonitorId);
+        const pricingLines = fallbackPricing ?? await usage.readTokenMiserGatePricingLines?.({
+          backend: "codex", threadId, sourceItemIds: monitorIds,
+          turnIds: [...new Set(batch.map((entry) => entry.turnId))],
+        }) ?? [];
+        const legacyGates = batch.filter((entry) => entry.replayTrackingVersion !== 2);
+        const counts = legacyGates.length > 0
+          ? await toolAccounting.readTokenMiserLegacyReplayCounts?.({ backend: "codex", threadId, gates: legacyGates })
+          : undefined;
+        const indexes: TokenMiserLedgerIndexes = {
+          pricing: indexTokenMiserPricingLines(pricingLines),
+          replays: fallbackReplays ?? {
+            countAfterInvocation: ({ turnId, toolUseId }) => counts?.get(turnId)?.get(toolUseId) ?? 0,
+          },
+        };
+        // A gate's stored line names the gate as its source item, so this
+        // batch's read finds any line it could otherwise insert twice.
+        const knownUsageLineIds = new Set(pricingLines.map((line) => line.usageLineId));
         // Read the authoritative cards on every flush, including a repeated
         // one. A previous in-memory artifact cannot stand in for the database
         // after a peer write, deletion, or rolled-back transaction.
         const existingSubAgents = new Map((
           await this.context.stores.subAgents.getThreadSubAgents({
-            backend: "codex", threadId, monitorIds: batch.map(tokenMiserMonitorId),
+            backend: "codex", threadId, monitorIds,
           })
         ).map((card) => [card.monitorId, card]));
         for (const entry of batch) {
