@@ -137,7 +137,10 @@ it.each([
   } finally { peer.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
 });
 
-it("returns unchanged search rows while a peer holds the writer lock after an unrelated commit", async () => {
+it.each([
+  { peerCommit: "an unrelated write", indexesProjection: false },
+  { peerCommit: "indexing the desired projection", indexesProjection: true },
+])("returns current search rows while a peer holds the writer lock after $peerCommit", async ({ indexesProjection }) => {
   const temp = createTempStateDb("search-preflight-lock-");
   const db = StateDb.open(temp.dbPath);
   const peer = StateDb.open(temp.dbPath);
@@ -145,17 +148,22 @@ it("returns unchanged search rows while a peer holds the writer lock after an un
     db.raw.pragma("busy_timeout = 0");
     const afterVersionRead = interceptProjectionVersion(db);
     const thread = summary("unchanged");
+    const listed = indexesProjection ? { ...thread, title: "Asterism revised" } : thread;
     const store = new ThreadSearchStore(db);
     store.upsertThreads([thread]);
     afterVersionRead(() => {
-      peer.raw.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("contrived-search-peer", "updated");
+      if (indexesProjection) {
+        new ThreadSearchStore(peer).upsertThread(listed);
+      } else {
+        peer.raw.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("contrived-search-peer", "updated");
+      }
       peer.raw.exec("BEGIN IMMEDIATE");
     });
 
-    const service = new ThreadSearchService(store, async () => [thread]);
+    const service = new ThreadSearchService(store, async () => [listed]);
     const result = await service.search({ query: "Asterism", contentMode: "metadata" });
     expect(peer.raw.inTransaction).toBe(true);
-    expect(result.results.map((row) => row.threadId)).toEqual([thread.id]);
+    expect(result.results.map((row) => [row.threadId, row.title])).toEqual([[listed.id, listed.title]]);
   } finally {
     if (peer.raw.inTransaction) peer.raw.exec("ROLLBACK");
     peer.close();

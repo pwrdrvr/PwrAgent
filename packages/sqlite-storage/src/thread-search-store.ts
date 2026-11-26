@@ -122,17 +122,18 @@ export class ThreadSearchStore implements ThreadSearchStorage {
     }
 
     const committed = this.db.transaction(() => {
-      // Take the writer lock before rechecking. If a peer committed after our
-      // read snapshot, it can have changed even a previously current row.
+      // A peer may have reconciled these rows since preflight. Recheck first
+      // so SQLite only upgrades to a write transaction if work remains.
       const version = this.refreshProjectionCache();
       const changed = version === preflight.version ? preflight.changed : this.findChanges(threads, cache);
       return {
         written: this.writeChangedProjections(changed, indexedAt),
         external: version.external,
       };
-    }).immediate();
-    // Keep the external version from under the lock. FTS can flush shadow
-    // changes at commit, so sample our own change count after the commit.
+    }).deferred();
+    if (committed.written.size === 0) return;
+    // Keep the external version from the transaction snapshot. FTS can flush
+    // shadow changes at commit, so sample our own count after the commit.
     cache.version = { external: committed.external, local: this.readLocalChanges.get()! };
     for (const projection of committed.written.values()) rememberProjection(cache, projection);
   }
