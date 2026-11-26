@@ -2,8 +2,8 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { bundledGitLfsExecutable } from "../bundled-git";
 import { isGitConfigNoMatch, nextRemoteSampleOrder, parseForgeRemote, readSshHost, REMOTE_CONFIG_KEYS, type InventoryRemoteConfigReader } from "./git-remote";
-import type { GitRemoteConfiguration } from "./git-remote-config";
-import { parsePrConfigWithOrigins, readPrConfigInputs } from "./pr-config-observation";
+import { parseGitRemoteConfigRecords, type GitRemoteConfiguration } from "./git-remote-config";
+import { canReadSingleBranchOrigin, parsePrConfigWithOrigins, readPrConfigInputs } from "./pr-config-observation";
 import { runPrMetadataGit, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 import { observeLinkedPrCheckout, observePrCheckoutConfigFiles } from "./pr-remote-heads";
 
@@ -53,20 +53,25 @@ async function sampleConfig(cwd: string, checkout: LinkedCheckout, inputs: NonNu
   const inputsUnchanged = () => isDeepStrictEqual(inputs, currentInputs(cwd));
   const read = async (reader: PrMetadataDemand) => {
     let sampleOrder: number | undefined;
+    let allowSingleBranchOrigin = false;
     const result = await runPrMetadataGit(cwd,
       ["config", "--null", "--show-scope", "--show-origin", "--includes", "--get-regexp", CONFIG_KEYS],
-      { env: inputs.env, purpose: "pr-remotes", maxBuffer: 64 * 1024, timeout: 2_000, beforeSpawn: () => {
+      { env: inputs.env, purpose: "pr-remotes", maxBuffer: 64 * 1024, timeout: 2_000, beforeSpawn: (executable) => {
         if (!inputsUnchanged()) throw new Error("Git config inputs changed");
         sampleOrder = nextRemoteSampleOrder();
+        allowSingleBranchOrigin = canReadSingleBranchOrigin(executable, inputs.env);
       } }, reader);
-    return { ...result, sampleOrder: sampleOrder ?? nextRemoteSampleOrder() };
+    return { ...result, sampleOrder: sampleOrder ?? nextRemoteSampleOrder(), allowSingleBranchOrigin };
   };
   try {
     const roots = await observePrCheckoutConfigFiles(cwd, inputs.paths, demand);
     const result = await read(demand);
     const parsed = parsePrConfigWithOrigins(checkout.directory, result.stdout);
     if (!parsed) return undefined;
-    const exact: ConfigSample = { configuration: parsed.configuration, sampleOrder: result.sampleOrder };
+    // Single-branch evidence belongs to this checkout's Git invocation.
+    const configuration = parsed.configuration ?? (result.allowSingleBranchOrigin && !result.stderr
+      ? parseGitRemoteConfigRecords(parsed.records, true) : undefined);
+    const exact: ConfigSample = { configuration, sampleOrder: result.sampleOrder };
     const sources = shareableConfig(parsed, checkout.commonDir);
     if (!roots || roots.gitDir !== checkout.gitDir || result.stderr || !sources) return { exact };
     const includes = [...sources.includes].filter((file) => !roots.paths.has(file));

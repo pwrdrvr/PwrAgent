@@ -1,8 +1,9 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import * as git from "../app-server/git-executable";
+import { bundledGitExecutable } from "../bundled-git";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
 import { clearGitHubRemoteCache, observeForgeRepositoriesForDirectory, parseForgeRemote, resolveGitHubRepoForDirectory } from "../pr-status/git-remote";
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
@@ -13,6 +14,57 @@ import { isolateProcessGitEnvironment } from "./helpers/isolated-git";
 
 const origin = "https://github.com/fixture/original.git";
 const editedOrigin = "https://github.com/fixture/edited.git";
+
+it.skipIf(process.platform === "win32").each(["wrapper", "command override", "repository override", "remotes", "branches"] as const)(
+  "keeps Git's origin authority for a narrow fetch with %s",
+  async (scenario) => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-narrow-remote-oracle-")));
+    const restore = isolateProcessGitEnvironment(root);
+    onTestFinished(async () => {
+      clearGitHubRemoteCache();
+      restore();
+      await rm(root, { recursive: true, force: true });
+    });
+    await git.runGitCommand(root, ["init", "-b", "main"]);
+    await git.runGitCommand(root, ["config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main"]);
+    if (scenario === "repository override") {
+      const other = path.join(root, "override");
+      await git.runGitCommand(root, ["init", "-b", "main", other]);
+      await git.runGitCommand(other, ["config", "remote.origin.url", editedOrigin]);
+      await git.runGitCommand(other, ["config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main"]);
+      process.env.GIT_DIR = path.join(other, ".git");
+    } else if (scenario === "wrapper" || scenario === "command override") {
+      await git.runGitCommand(root, ["config", "remote.origin.url", origin]);
+      if (scenario === "wrapper") {
+        // The wrapper supplies a different answer only to the native URL read.
+        const wrapper = path.join(root, "git-wrapper");
+        await writeFile(wrapper, [
+          "#!/bin/sh",
+          `if [ "$3 $4 $5 $6" = "remote get-url --all origin" ]; then printf '%s\\n' '${editedOrigin}'; exit; fi`,
+          `exec '${bundledGitExecutable()}' "$@"`,
+        ].join("\n"), { mode: 0o755 });
+        process.env.PWRAGENT_GIT_PATH = wrapper;
+      } else {
+        process.env.GIT_CONFIG_COUNT = "1";
+        process.env.GIT_CONFIG_KEY_0 = `url.${editedOrigin}.insteadOf`;
+        process.env.GIT_CONFIG_VALUE_0 = origin;
+      }
+    } else {
+      const legacyDir = path.join(root, ".git", scenario);
+      await mkdir(legacyDir, { recursive: true });
+      await writeFile(path.join(legacyDir, "origin"), scenario === "remotes" ? `URL: ${editedOrigin}\n` : `${editedOrigin}#main\n`);
+    }
+    expect((await git.runGitCommand(root, ["remote"])).stdout.trim()).toBe("origin");
+    const native = parseForgeRemote((await git.runGitCommand(root, ["remote", "get-url", "--all", "origin"])).stdout);
+    expect(native).toEqual(parseForgeRemote(editedOrigin));
+
+    const runner = vi.spyOn(git, "runGitCommand");
+    onTestFinished(() => { runner.mockRestore(); });
+    const inventoryConfig = createInventoryRemoteConfigReader();
+    await expect(resolveGitHubRepoForDirectory(root, { inventoryConfig })).resolves.toEqual(native);
+    expect(runner.mock.calls.map(([, args]) => args[0])).toEqual(["config", "remote", "remote"]);
+  },
+);
 
 async function ordinaryWorktrees() {
   const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-owner-remote-oracle-")));
@@ -142,25 +194,34 @@ it.skipIf(process.platform === "win32").each(["common", "global", "worktree"] as
   },
 );
 
-it.skipIf(process.platform === "win32")("keeps an inactive branch include from supplying sibling config", async () => {
-  const { root, clone, checkouts } = await ordinaryWorktrees();
-  const changed = checkouts.at(-1)!;
-  const include = path.join(root, "branch-config");
-  await writeFile(include, `[url "${editedOrigin}"]\n\tinsteadOf = ${origin}\n`);
-  await git.runGitCommand(changed, ["switch", "-c", "edited-worktree"]);
-  await git.runGitCommand(clone, ["config", "includeIf.onbranch:edited-worktree.path", include]);
-  const runner = vi.spyOn(git, "runGitCommand");
-  onTestFinished(() => { runner.mockRestore(); });
-  const inventoryConfig = createInventoryRemoteConfigReader();
-  const actual = await Promise.all(checkouts.map((cwd) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig })));
-  const checks = runner.mock.calls.filter(([, , options]) => options?.purpose === "pr-remotes");
-  expect(checks.map(([cwd]) => cwd).sort()).toEqual(checkouts.toSorted());
-  const expected = await Promise.all(checkouts.map(async (cwd) =>
-    parseForgeRemote((await git.runGitCommand(cwd, ["remote", "get-url", "origin"])).stdout),
-  ));
-  expect(expected.at(-1)).toEqual(parseForgeRemote(editedOrigin));
-  expect(actual).toEqual(expected);
-});
+it.skipIf(process.platform === "win32").each(["wildcard", "single-branch"] as const)(
+  "keeps an inactive branch include from supplying sibling config for a %s fetch",
+  async (fetch) => {
+    const { root, clone, checkouts } = await ordinaryWorktrees();
+    const changed = checkouts.at(-1)!;
+    const include = path.join(root, "branch-config");
+    if (fetch === "single-branch") {
+      await git.runGitCommand(clone, ["config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main"]);
+    }
+    await writeFile(include, `[url "${editedOrigin}"]\n\tinsteadOf = ${origin}\n`);
+    await git.runGitCommand(changed, ["switch", "-c", "edited-worktree"]);
+    await git.runGitCommand(clone, ["config", "includeIf.onbranch:edited-worktree.path", include]);
+    const runner = vi.spyOn(git, "runGitCommand");
+    onTestFinished(() => { runner.mockRestore(); });
+    const inventoryConfig = createInventoryRemoteConfigReader();
+    const actual = await Promise.all(checkouts.map((cwd) => resolveGitHubRepoForDirectory(cwd, { inventoryConfig })));
+    for (const checkout of checkouts) {
+      const commands = runner.mock.calls.flatMap(([cwd, [verb], options]) =>
+        cwd === checkout && options?.purpose === "pr-remotes" ? [verb] : []);
+      expect(commands).toEqual(fetch === "single-branch" ? ["config", "remote", "remote"] : ["config"]);
+    }
+    const expected = await Promise.all(checkouts.map(async (cwd) =>
+      parseForgeRemote((await git.runGitCommand(cwd, ["remote", "get-url", "origin"])).stdout),
+    ));
+    expect(expected.at(-1)).toEqual(parseForgeRemote(editedOrigin));
+    expect(actual).toEqual(expected);
+  },
+);
 
 it.skipIf(process.platform === "win32")("only confirms shared includes when a sibling requests the config", async () => {
   const { root, checkouts } = await ordinaryWorktrees();

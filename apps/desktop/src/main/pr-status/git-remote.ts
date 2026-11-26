@@ -6,6 +6,7 @@ import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { GitReadCache } from "../git-info/read-cache";
 import { parseGitRemoteConfiguration, type GitRemote, type GitRemoteConfiguration } from "./git-remote-config";
+import { canReadSingleBranchOrigin } from "./pr-config-observation";
 import { PR_METADATA_PRIORITY, runPrMetadataGit, runPrMetadataProcess, SharedPrMetadataRead, type PrMetadataDemand } from "./pr-metadata-process";
 
 const execFileAsync = promisify(execFile);
@@ -626,10 +627,14 @@ async function defaultReadRemotes(
       let configuration = inventory?.configuration;
       configSampleOrder = inventory?.sampleOrder;
       if (!inventory) {
-        const { stdout } = await runPrMetadataGit(cwd,
+        let allowSingleBranchOrigin = false;
+        const { stdout, stderr } = await runPrMetadataGit(cwd,
           ["config", "--null", "--show-scope", "--includes", "--get-regexp", REMOTE_CONFIG_KEYS],
-          { ...gitOptions, beforeSpawn: () => { configSampleOrder = nextRemoteSampleOrder(); } }, demand);
-        configuration = parseGitRemoteConfiguration(stdout);
+          { ...gitOptions, beforeSpawn: (executable) => {
+            configSampleOrder = nextRemoteSampleOrder();
+            allowSingleBranchOrigin = !confirmEmpty && Boolean(inventoryConfig) && canReadSingleBranchOrigin(executable, childEnv);
+          } }, demand);
+        configuration = parseGitRemoteConfiguration(stdout, allowSingleBranchOrigin && !stderr);
       }
       if (configuration?.names.length) return { ...configuration, configSampleOrder, remoteNamesStillMatch: inventory?.remoteNamesStillMatch };
       if (configuration && !confirmEmpty) return { remotes: [], unconfirmedEmpty: true, configSampleOrder };
