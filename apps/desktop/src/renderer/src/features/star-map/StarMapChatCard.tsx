@@ -85,6 +85,7 @@ import {
   threadGalleryImageMatches,
 } from "../thread-detail/thread-image-gallery";
 import { TranscriptList } from "../thread-detail/TranscriptList";
+import { useThreadLaunchedTodos } from "../thread-detail/useThreadLaunchedTodos";
 import { TranscriptError } from "../thread-detail/TranscriptError";
 import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
 import { ActiveDecisionBatchesStrip } from "../thread-detail/ActiveDecisionBatchesStrip";
@@ -95,7 +96,10 @@ import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-hist
 import type { DesktopApi } from "../../lib/desktop-api";
 import { parseReviewCommand } from "../../../../shared/review-command";
 import { readRendererFederationTarget } from "../../lib/federation-window";
-import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import {
+  agentEventMatchesThread,
+  threadSummaryIdentityKey,
+} from "../../lib/federated-thread-events";
 import { isThreadRemoteWorkHere } from "../navigation/ThreadRowStatus";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
 import { useThreadSkills } from "../../lib/useThreadSkills";
@@ -215,8 +219,8 @@ const MemoizedActiveDecisionBatchesStrip = memo(ActiveDecisionBatchesStrip);
 /** Monotonic across every card this renderer mounts; see `data-card-mount`. */
 let starMapCardMounts = 0;
 
-/** The card reads the thread's configuration, never a history collection. */
-const NO_HISTORY_COLLECTIONS = [] as const;
+/** The card reads the thread's configuration plus launched-thread markers. */
+const STAR_MAP_CHAT_COLLECTIONS = ["launchedThreadLog"] as const;
 
 /**
  * One chat card, anchored in the star map.
@@ -398,6 +402,17 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         : undefined,
     [remoteInstanceId, thread.source],
   );
+  const launchedTodos = useThreadLaunchedTodos({
+    desktopApi,
+    thread: props.active === false
+      ? undefined
+      : {
+          backend: thread.source,
+          threadId: thread.id,
+          ...(federationTarget ? { federationTarget } : {}),
+        },
+    threadKey: threadSummaryIdentityKey(thread),
+  });
   const composerScopeKey = buildThreadComposerScopeKey(thread.source, thread.id, federationTarget ?? { scope: "local" });
   const ownedComposerDraftStore = useOwnedComposerDraftStore(
     props.composerDraftStore,
@@ -411,7 +426,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     federationTarget,
   });
   const selectedDetail = useNavigationSelectedDetail({
-    collections: NO_HISTORY_COLLECTIONS,
+    collections: STAR_MAP_CHAT_COLLECTIONS,
     desktopApi,
     enabled: props.active !== false,
     ref: { backend: thread.source, threadId: thread.id, ownerInstanceId: remoteInstanceId },
@@ -2212,6 +2227,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             desktopApi={desktopApi}
             entries={transcriptWindow.visibleEntries}
             error={session.error}
+            launchedThreads={selectedConfiguration?.launchedThreadLog ?? thread.launchedThreadLog}
+            launchedTodos={launchedTodos}
             loading={session.loading}
             loadingMore={session.loadingMore}
             onLoadOlder={transcriptWindow.loadOlder}

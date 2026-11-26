@@ -2734,6 +2734,13 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/launchedThreads/updated";
+      params: {
+        threadId: string;
+        launchId: string;
+      };
+    }
+  | {
       method: "thread/tokenUsage/updated";
       params: {
         threadId: string;

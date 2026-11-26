@@ -185,6 +185,7 @@ import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptError } from "./TranscriptError";
 import { TranscriptList, transcriptItemBox } from "./TranscriptList";
+import { useThreadLaunchedTodos } from "./useThreadLaunchedTodos";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { ThreadRewindConfirm, type ThreadRewindPreview } from "./ThreadRewindConfirm";
 import {
@@ -1437,6 +1438,19 @@ export function ThreadView(props: ThreadViewProps) {
     transcriptThreadLinkTarget && isRemoteFederationTarget(transcriptThreadLinkTarget)
       ? transcriptThreadLinkTarget.instanceId
       : undefined;
+  const launchedTodos = useThreadLaunchedTodos({
+    desktopApi: props.desktopApi,
+    thread: selectedThread
+      ? {
+          backend: selectedThread.source,
+          threadId: selectedThread.id,
+          ...(transcriptThreadLinkTarget && isRemoteFederationTarget(transcriptThreadLinkTarget)
+            ? { federationTarget: transcriptThreadLinkTarget }
+            : {}),
+        }
+      : undefined,
+    threadKey: threadTodoKey,
+  });
   const transcriptThreadLinkBackend = selectedThread?.source;
   const transcriptThreadLinkSource = useMemo(
     () => transcriptThreadLinkBackend && transcriptThreadLinkInstanceId
@@ -3557,6 +3571,9 @@ export function ThreadView(props: ThreadViewProps) {
               }
               turnFailures={selectedThread!.turnFailureLog}
               rewinds={selectedThread!.rewindLog}
+              launchedThreads={selectedThread!.launchedThreadLog}
+              launchedTodos={launchedTodos}
+              onOpenLaunchedTodoThread={props.threadTodos?.openStartedThread}
               rewindUndo={rewindUndo}
               activeTurnId={props.activeTurnId}
               activeTurnStartedAt={props.activeTurnStartedAt}

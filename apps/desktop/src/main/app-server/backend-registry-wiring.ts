@@ -1476,6 +1476,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         // The workspace service tests for updateSubthreadOrder before calling
         // it, as the registry did; a getter keeps a missing method missing.
         get updateSubthreadOrder() { return overlayStore.updateSubthreadOrder?.bind(overlayStore); },
+        get appendLaunchedThread() { return overlayStore.appendLaunchedThread?.bind(overlayStore); },
         setThreadScheduledStart: (...args) => overlayStore.setThreadScheduledStart(...args),
         setTurnFailureCodexInvalidIdRecovery: (...args) => overlayStore.setTurnFailureCodexInvalidIdRecovery(...args),
       },

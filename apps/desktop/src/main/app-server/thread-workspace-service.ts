@@ -2913,6 +2913,56 @@ export class ThreadWorkspaceService {
         backend, threadId, input: [{ type: "text", text: prompt }], messageOrigin,
       }, turnId, title);
     }
+    if (this.context.stores.threads.appendLaunchedThread) {
+      const projectLabel =
+        childLinkedDirectory?.label
+        || (childCwd ? path.basename(childCwd) : undefined)
+        || undefined;
+      // Store compact control-plane metadata only (never prompt text) in threads.payload.
+      try {
+        await this.context.stores.threads.appendLaunchedThread({
+          backend: sourceBackend,
+          threadId: sourceThreadId,
+          launch: {
+            id: handoffId,
+            source: "handoff_task",
+            occurredAt: createdAt,
+            title,
+            ...(projectLabel ? { projectLabel } : {}),
+            startedThread: {
+              backend,
+              threadId,
+              ...(codexEnvironmentStartupFailure?.message
+                ? { setupFailure: codexEnvironmentStartupFailure.message }
+                : {}),
+            },
+            seedMode,
+            groupingMode,
+            workspaceMode: createdWorkspaceMode,
+            ...(turnStartFailure
+              ? { turnStartFailure: turnStartFailure.message }
+              : {}),
+          },
+        });
+        await this.context.emit({
+          backend: sourceBackend,
+          notification: {
+            method: "thread/launchedThreads/updated",
+            params: {
+              threadId: sourceThreadId,
+              launchId: handoffId,
+            },
+          },
+        });
+      } catch (error) {
+        backendRegistryLog.warn("failed to record handoff launched thread", {
+          backend: sourceBackend,
+          error: error instanceof Error ? error.message : String(error),
+          handoffId,
+          threadId: sourceThreadId,
+        });
+      }
+    }
     this.updatePendingThreadHandoff(handoffId, {
       status: turnStartFailure ? "failed" : "completed",
       phase: turnStartFailure ? "failed" : "completed",

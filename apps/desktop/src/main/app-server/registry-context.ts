@@ -10,7 +10,7 @@ export type RegistryThreadStore = Pick<BackendRegistryOverlayStoreLike,
   | "getThreadMetadata" | "updateThreadMetadata" | "setThreadMcpConnectionIds" | "setThreadModelSettings"
   | "setThreadForkOrigin" | "setThreadHandoffOrigin" | "setThreadScheduledStart"
   | "setTurnFailureCodexInvalidIdRecovery"
-> & Partial<Pick<BackendRegistryOverlayStoreLike, "setThreadParent" | "updateSubthreadOrder">>;
+> & Partial<Pick<BackendRegistryOverlayStoreLike, "setThreadParent" | "updateSubthreadOrder" | "appendLaunchedThread">>;
 
 // The overlay store requires upsertThreadUsageLine and readThreadPricing, but
 // the wiring's getters return undefined for a store without them, and their

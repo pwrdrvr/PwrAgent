@@ -605,6 +605,23 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         },
       });
     },
+    onLaunchedThreadRecorded: async ({
+      backend,
+      threadId,
+      launchId,
+    }: {
+      backend: PwrAgentFederationContext["backend"];
+      threadId: string;
+      launchId: string;
+    }) => {
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "thread/launchedThreads/updated",
+          params: { threadId, launchId },
+        },
+      });
+    },
   };
   const federationAgentToolsHandler =
     createFederationAgentToolsHandler(federationAgentToolOptions);
