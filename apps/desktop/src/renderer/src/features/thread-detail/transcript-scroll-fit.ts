@@ -21,6 +21,7 @@ type ScrollerHeightState = {
   observer: ResizeObserver | undefined;
   elements: Set<HTMLElement>;
   height: number;
+  lastBorderBlockSize: number | undefined;
 };
 
 const scrollerHeightStates = new WeakMap<HTMLElement, ScrollerHeightState>();
@@ -50,14 +51,26 @@ export function useTranscriptScrollportHeight(
       const initialHeight = scroller.clientHeight;
       const elements = new Set<HTMLElement>();
       let observer: ResizeObserver | undefined;
-      state = { observer: undefined, elements, height: initialHeight };
+      state = {
+        observer: undefined,
+        elements,
+        height: initialHeight,
+        lastBorderBlockSize: undefined,
+      };
       if (typeof ResizeObserver !== "undefined") {
         const sharedState = state;
         observer = new ResizeObserver((entries) => {
-          const entryBlockSize = entries?.[0]?.contentBoxSize?.[0]?.blockSize;
-          const next = entryBlockSize !== undefined && entryBlockSize > 0
-            ? Math.round(entryBlockSize)
-            : scroller.clientHeight;
+          // Compare against border-box block size (which does not shift when
+          // `.transcript-list__items` toggles pending-item bottom padding) so
+          // width-only and padding-only deliveries skip layout reads and writes.
+          const borderBlockSize = entries?.[0]?.borderBoxSize?.[0]?.blockSize;
+          if (borderBlockSize !== undefined && borderBlockSize > 0) {
+            if (sharedState.lastBorderBlockSize === borderBlockSize) {
+              return;
+            }
+            sharedState.lastBorderBlockSize = borderBlockSize;
+          }
+          const next = scroller.clientHeight;
           if (next <= 0 || next === sharedState.height) {
             return;
           }
@@ -66,7 +79,7 @@ export function useTranscriptScrollportHeight(
             applyScrollportHeight(target, next);
           }
         });
-        observer.observe(scroller);
+        observer.observe(scroller, { box: "border-box" });
         state.observer = observer;
       }
       scrollerHeightStates.set(scroller, state);

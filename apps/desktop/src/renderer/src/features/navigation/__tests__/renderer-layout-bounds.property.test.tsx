@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import fc from "fast-check";
 import { useRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -50,18 +50,29 @@ class ControlledResizeObserver implements ResizeObserver {
   }
 
   deliver(
-    entries: Array<{ target: Element; inlineSize: number; blockSize: number }>,
+    entries: Array<{
+      target: Element;
+      inlineSize: number;
+      blockSize: number;
+      contentBlockSize?: number;
+    }>,
   ): void {
     const matched = entries
       .filter((item) => this.targets.has(item.target))
       .map((item) => {
-        const size = [{ inlineSize: item.inlineSize, blockSize: item.blockSize }];
+        const borderSize = [{ inlineSize: item.inlineSize, blockSize: item.blockSize }];
+        const contentSize = [
+          {
+            inlineSize: item.inlineSize,
+            blockSize: item.contentBlockSize ?? item.blockSize,
+          },
+        ];
         return {
           target: item.target,
-          contentRect: new DOMRect(0, 0, item.inlineSize, item.blockSize),
-          borderBoxSize: size,
-          contentBoxSize: size,
-          devicePixelContentBoxSize: size,
+          contentRect: new DOMRect(0, 0, item.inlineSize, item.contentBlockSize ?? item.blockSize),
+          borderBoxSize: borderSize,
+          contentBoxSize: contentSize,
+          devicePixelContentBoxSize: borderSize,
         } as unknown as ResizeObserverEntry;
       });
     if (matched.length > 0) {
@@ -336,15 +347,15 @@ describe("renderer layout and memoization bounds", () => {
       const nav = view.container.querySelector<HTMLElement>("nav")!;
       const sidebarBody = view.container.querySelector<HTMLElement>(".sidebar-body")!;
 
-      // Initial ResizeObserver delivery with matching heights retains the
-      // already-measured visible sections (dir-0, dir-1) instead of wiping
-      // the whole cache from index 0 (only an unprobed binary-search gap
-      // between dir-1 and dir-3 can trigger at most 1 follow-up read).
+      // Initial ResizeObserver delivery with matching border-box height (even
+      // when content-box is 16px smaller due to `.directory-list` bottom
+      // padding) retains the already-measured visible sections instead of
+      // wiping the cache from index 0.
       sectionRectReads = 0;
       act(() => {
         for (const obs of ControlledResizeObserver.instances) {
           obs.deliver([
-            { target: list, inlineSize: 320, blockSize: 120 },
+            { target: list, inlineSize: 320, blockSize: 120, contentBlockSize: 104 },
             ...sections.map((target) => ({ target, inlineSize: 320, blockSize: 100 })),
             { target: nav, inlineSize: 120, blockSize: 400 },
             { target: sidebarBody, inlineSize: 440, blockSize: 400 },
@@ -358,7 +369,7 @@ describe("renderer layout and memoization bounds", () => {
       act(() => {
         for (const obs of ControlledResizeObserver.instances) {
           obs.deliver([
-            { target: list, inlineSize: 360, blockSize: 120 },
+            { target: list, inlineSize: 360, blockSize: 120, contentBlockSize: 104 },
             ...sections.map((target) => ({ target, inlineSize: 360, blockSize: 100 })),
           ]);
         }
@@ -514,6 +525,219 @@ describe("renderer layout and memoization bounds", () => {
       act(() => view.rerender(renderSidebar("recents", true)));
       act(() => view.rerender(renderSidebar("recents", false)));
       expect(recentsRenders).toBe(0);
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it("preserves colon-containing Drafts resource IDs for reload and load-more pagers", () => {
+    const fixture = buildLargeDirectoryFixture({
+      directoryCount: 1,
+      unpinnedThreadsPerDirectory: 1,
+      directoryThreadsCollapsed: false,
+    });
+    const directories = fixture.directories;
+    const threads = fixture.threads;
+    const selectedItemKey = buildThreadIdentityKey(threads[0]!.source, threads[0]!.id);
+    const backends: BackendSummary[] = [
+      {
+        backend: "codex",
+        label: "Codex",
+        available: true,
+        status: "ready",
+        capabilities: { streaming: true },
+      } as unknown as BackendSummary,
+    ];
+    const disclosure = {
+      expandedByKey: {},
+      unpinnedExpandedByKey: {},
+      setExpandedByKey: noop,
+      setUnpinnedExpandedByKey: noop,
+      previousSelectedItemKeyRef: { current: selectedItemKey },
+      handledRevealRequestRef: { current: 0 },
+    };
+    const makeDraftPage = (nextCursor?: string): NavigationQueryPage => ({
+      protocol: 2,
+      revision: "r1",
+      inventory: "owner",
+      coverage: { state: "complete" },
+      counts: { total: threads.length, active: 0, review: 0 },
+      entries: threads.map((t) => ({
+        row: { ...t, ref: { backend: t.source, threadId: t.id } },
+        placement: { kind: "root" as const },
+      })),
+      nextCursor,
+    } as unknown as NavigationQueryPage);
+    const makeDraftRequest = (id: string) => ({
+      protocol: 2 as const,
+      inventory: "owner" as const,
+      consumer: "main-sidebar" as const,
+      query: { kind: "exact" as const, identities: [{ backend: "codex" as const, threadId: id }] },
+      pageSize: 50,
+    });
+    const resources = new Map<string, NavigationWindowResource>();
+    resources.set("drafts:0", {
+      id: "drafts:0",
+      loading: false,
+      restoredFromCache: false,
+      state: {
+        ...createNavigationPageState(makeDraftRequest("drafts:0")),
+        page: makeDraftPage(),
+        rebaselineRequired: true,
+      },
+    });
+    resources.set("drafts:100", {
+      id: "drafts:100",
+      loading: false,
+      restoredFromCache: false,
+      state: {
+        ...createNavigationPageState(makeDraftRequest("drafts:100")),
+        page: makeDraftPage("cursor-2"),
+      },
+    });
+    const restart = vi.fn(async () => undefined);
+    const loadMore = vi.fn(async () => undefined);
+    const pagedNav = {
+      resources,
+      presentationReady: true,
+      directories: directories as unknown as NonNullable<Parameters<typeof Sidebar>[0]["pagedNavigation"]>["directories"],
+      selectedDirectoryKeys: undefined,
+      connected: true,
+      invalidate: noop,
+      refresh: asyncNoop,
+      loadMore,
+      rebaseline: asyncNoop,
+      restart,
+      setVisibleAnchor: noop,
+    };
+
+    const view = render(
+      <Sidebar
+        backends={backends}
+        browseMode="drafts"
+        directories={directories}
+        directoryDisclosure={disclosure}
+        loaded
+        loading={false}
+        pagedNavigation={pagedNav}
+        pinnedThreadsOnTop
+        projectIndexHidden
+        projectIndexWidth={null}
+        selectedItemKey={selectedItemKey}
+        selectedThreadDirectoryKeys={[]}
+        threads={threads}
+        onBrowseModeChange={noop}
+        onCreateThread={asyncNoop}
+        onOpenLaunchpad={asyncNoop}
+        onProjectIndexHiddenChange={noop}
+        onProjectIndexWidthChange={noop}
+        onSelectThread={noop}
+      />,
+    );
+    try {
+      const reloadBtn = view.getByRole("button", { name: "Reload this lens" });
+      const moreBtn = view.getByRole("button", { name: "Load more threads" });
+      act(() => {
+        fireEvent.click(reloadBtn);
+        fireEvent.click(moreBtn);
+      });
+      expect(restart).toHaveBeenCalledWith("drafts:0");
+      expect(loadMore).toHaveBeenCalledWith("drafts:100");
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it("retains measured card height captured while bottom-docked when transitioning directly to top", () => {
+    ControlledResizeObserver.instances = [];
+    vi.stubGlobal("ResizeObserver", ControlledResizeObserver);
+    const fixture = buildLargeDirectoryFixture({
+      directoryCount: 2,
+      unpinnedThreadsPerDirectory: 1,
+      directoryThreadsCollapsed: false,
+    });
+    const threads = fixture.threads;
+    const directories = fixture.directories;
+    const disclosure = {
+      expandedByKey: Object.fromEntries(directories.map((d) => [d.key, true])),
+      unpinnedExpandedByKey: {},
+      setExpandedByKey: noop,
+      setUnpinnedExpandedByKey: noop,
+      previousSelectedItemKeyRef: { current: undefined as string | undefined },
+      handledRevealRequestRef: { current: 0 },
+    };
+
+    let rowTop = 620; // Initially below viewport -> bottom dock.
+    const origRect = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (this: Element) {
+      if (this.matches(".directory-list, .sidebar__scroll-region")) {
+        return new DOMRect(0, 100, 320, 360);
+      }
+      if (this.matches(".thread-row")) {
+        return new DOMRect(0, rowTop, 300, 40);
+      }
+      return origRect.call(this);
+    });
+
+    let cardOffsetReads = 0;
+    const origOffsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")?.get;
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("selected-thread-dock")) {
+        cardOffsetReads += 1;
+        return 46;
+      }
+      return origOffsetHeight ? (origOffsetHeight.call(this) as number) : 0;
+    });
+
+    function Harness({ index }: { index: number }) {
+      const regionRef = useRef<HTMLDivElement>(null);
+      const selected = threads[index]!;
+      const selectedKey = buildThreadIdentityKey(selected.source, selected.id);
+      return (
+        <div className="sidebar__scroll-region" ref={regionRef}>
+          <FixtureDirectoriesList
+            directories={directories}
+            directoryDisclosure={disclosure}
+            threads={threads}
+            selectedItemKey={selectedKey}
+            onOpenLaunchpad={asyncNoop}
+            onOpenThreadContextMenu={noop}
+            onSelectThread={noop}
+          />
+          <SelectedThreadDock
+            regionRef={regionRef}
+            thread={selected}
+            threadKey={selectedKey}
+            status={undefined}
+            remoteWork={false}
+            projectLabel={(key) => key}
+            ancestorThreadKeys={[]}
+            directoryKeys={[directories[0]!.key]}
+            onRevealHiddenThread={noop}
+          />
+        </div>
+      );
+    }
+
+    const view = render(<Harness index={0} />);
+    try {
+      const dock = view.container.querySelector<HTMLElement>(".selected-thread-dock")!;
+      expect(dock.dataset.edge).toBe("bottom");
+      // Measure card height (58px) while bottom-docked.
+      act(() => {
+        for (const obs of ControlledResizeObserver.instances) {
+          obs.deliver([{ target: dock, inlineSize: 280, blockSize: 58 }]);
+        }
+      });
+
+      // Transition directly to top without unmounting the dock button.
+      cardOffsetReads = 0;
+      rowTop = -120;
+      act(() => view.rerender(<Harness index={1} />));
+      const region = view.container.querySelector<HTMLElement>(".sidebar__scroll-region")!;
+      expect(view.container.querySelector<HTMLElement>(".selected-thread-dock")?.dataset.edge).toBe("top");
+      expect(region.style.getPropertyValue("--selected-thread-dock-reserve")).toBe("70px");
+      expect(cardOffsetReads).toBe(0);
     } finally {
       view.unmount();
     }

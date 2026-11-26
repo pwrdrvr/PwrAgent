@@ -143,7 +143,9 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
         continue;
       }
       if (entry.target === list) {
-        const size = entry.contentBoxSize?.[0]?.blockSize;
+        // `.directory-list` has bottom padding and no vertical borders, so its
+        // border-box block size matches `clientHeight` (padding box).
+        const size = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentBoxSize?.[0]?.blockSize;
         if (size === undefined || size !== listBlockSize) {
           listBlockSize = size;
           viewportHeight = undefined;
@@ -234,7 +236,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     resize?.disconnect();
     if (list !== null) {
       mutation.observe(list, { childList: true });
-      resize?.observe(list);
+      resize?.observe(list, { box: "border-box" });
     }
     syncSections();
   };

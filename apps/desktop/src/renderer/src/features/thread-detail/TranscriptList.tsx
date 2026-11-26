@@ -1493,15 +1493,9 @@ export function TranscriptList(props: TranscriptListProps) {
 
     const lastBlockSizes = new WeakMap<Element, number>();
     const observer = new ResizeObserver((entries) => {
-      // While the sidebar is being dragged the main pane reflows every frame.
-      // Reading/writing scroll geometry + re-rendering on each of those frames
-      // is a layout-thrash amplifier; skip it here and re-sync once when the
-      // drag ends (see the subscribeSidebarResizing effect below).
-      if (isSidebarResizing()) {
-        return;
-      }
+      let blockChanged = !entries || entries.length === 0;
       if (entries && entries.length > 0) {
-        let blockChanged = false;
+        let hadInitialObservation = false;
         for (const entry of entries) {
           const blockSize = entry.borderBoxSize?.[0]?.blockSize
             ?? entry.contentBoxSize?.[0]?.blockSize;
@@ -1512,16 +1506,33 @@ export function TranscriptList(props: TranscriptListProps) {
           const prev = lastBlockSizes.get(entry.target);
           if (prev !== blockSize) {
             lastBlockSizes.set(entry.target, blockSize);
-            // Skip the initial ResizeObserver delivery when useLayoutEffect
-            // already measured the mounted transcript.
-            if (prev !== undefined || snapshotRef.current === undefined) {
+            if (prev !== undefined) {
               blockChanged = true;
+            } else {
+              hadInitialObservation = true;
             }
+          }
+        }
+        // Keep lastBlockSizes current during sidebar drags, then defer
+        // scroll/render sync until the drag ends (subscribeSidebarResizing).
+        if (isSidebarResizing()) {
+          return;
+        }
+        if (!blockChanged && hadInitialObservation) {
+          const snap = snapshotRef.current;
+          if (
+            snap === undefined
+            || container.clientHeight !== snap.clientHeight
+            || container.scrollHeight !== snap.scrollHeight
+          ) {
+            blockChanged = true;
           }
         }
         if (!blockChanged) {
           return;
         }
+      } else if (isSidebarResizing()) {
+        return;
       }
       const { scrollToBottom, syncScrollState, requestOlderPageIfUnderflowing } = resizeActionsRef.current;
       if (isGluedToBottomRef.current) {

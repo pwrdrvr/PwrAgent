@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppServerThreadEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { TranscriptList } from "../TranscriptList";
 import * as WorkPhaseGroupModule from "../TranscriptWorkPhaseGroup";
+import { setSidebarResizing } from "../../../lib/sidebar-resize-signal";
 import {
   TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY,
   useTranscriptScrollportHeight,
@@ -37,17 +38,30 @@ class SharedTestResizeObserver implements ResizeObserver {
     this.disconnected = true;
   }
 
-  deliver(entries: Array<{ target: Element; inlineSize: number; blockSize: number }>): void {
+  deliver(
+    entries: Array<{
+      target: Element;
+      inlineSize: number;
+      blockSize: number;
+      contentBlockSize?: number;
+    }>,
+  ): void {
     const matched = entries
       .filter((item) => this.targets.has(item.target))
       .map((item) => {
-        const size = [{ inlineSize: item.inlineSize, blockSize: item.blockSize }];
+        const borderSize = [{ inlineSize: item.inlineSize, blockSize: item.blockSize }];
+        const contentSize = [
+          {
+            inlineSize: item.inlineSize,
+            blockSize: item.contentBlockSize ?? item.blockSize,
+          },
+        ];
         return {
           target: item.target,
-          contentRect: new DOMRect(0, 0, item.inlineSize, item.blockSize),
-          borderBoxSize: size,
-          contentBoxSize: size,
-          devicePixelContentBoxSize: size,
+          contentRect: new DOMRect(0, 0, item.inlineSize, item.contentBlockSize ?? item.blockSize),
+          borderBoxSize: borderSize,
+          contentBoxSize: contentSize,
+          devicePixelContentBoxSize: borderSize,
         } as unknown as ResizeObserverEntry;
       });
     if (matched.length > 0) {
@@ -102,22 +116,40 @@ describe("transcript render and scrollport bounds", () => {
             expect(styleWrites).toBe(openCount);
 
             const scroller = view.container.querySelector<HTMLElement>(".transcript-list__items")!;
-            // Width-only resizes with unchanged blockSize trigger 0 style writes.
+            // Model `.transcript-list__items` vertical padding (22px -> 16px when
+            // pending item toggles): borderBoxSize matches clientHeight while
+            // contentBoxSize shifts by 6px. Neither initial delivery, padding
+            // toggle, nor width-only resizes may write `--transcript-scrollport-height`.
             styleWrites = 0;
+            act(() => {
+              SharedTestResizeObserver.instances[0]!.deliver([
+                { target: scroller, inlineSize: widths[0]!, blockSize: clientHeight, contentBlockSize: clientHeight - 22 },
+              ]);
+            });
+            act(() => {
+              SharedTestResizeObserver.instances[0]!.deliver([
+                { target: scroller, inlineSize: widths[0]!, blockSize: clientHeight, contentBlockSize: clientHeight - 16 },
+              ]);
+            });
             for (const width of widths) {
               act(() => {
                 SharedTestResizeObserver.instances[0]!.deliver([
-                  { target: scroller, inlineSize: width, blockSize: clientHeight },
+                  { target: scroller, inlineSize: width, blockSize: clientHeight, contentBlockSize: clientHeight - 22 },
                 ]);
               });
             }
             expect(styleWrites).toBe(0);
+            expect(
+              view
+                .getByTestId("body-0")
+                .style.getPropertyValue(TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY),
+            ).toBe("480px");
 
             // A genuine height change writes once per open body.
             clientHeight = 620;
             act(() => {
               SharedTestResizeObserver.instances[0]!.deliver([
-                { target: scroller, inlineSize: widths[0]!, blockSize: clientHeight },
+                { target: scroller, inlineSize: widths[0]!, blockSize: clientHeight, contentBlockSize: clientHeight - 22 },
               ]);
             });
             expect(styleWrites).toBe(openCount);
@@ -234,15 +266,24 @@ describe("transcript render and scrollport bounds", () => {
   it("ignores width-only ResizeObserver deliveries on TranscriptList", () => {
     SharedTestResizeObserver.instances = [];
     vi.stubGlobal("ResizeObserver", SharedTestResizeObserver);
+    let scrollHeight = 800;
+    const clientHeight = 480;
     let scrollHeightReads = 0;
     let rafSchedules = 0;
     const origScrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
     vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
       if (this.classList.contains("transcript-list__items")) {
         scrollHeightReads += 1;
-        return 800;
+        return scrollHeight;
       }
       return origScrollHeight.call(this) as number;
+    });
+    const origClientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+      if (this.classList.contains("transcript-list__items")) {
+        return clientHeight;
+      }
+      return origClientHeight.call(this) as number;
     });
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => {
       rafSchedules += 1;
@@ -264,11 +305,23 @@ describe("transcript render and scrollport bounds", () => {
     try {
       const container = view.container.querySelector<HTMLElement>(".transcript-list__items")!;
       const content = container.firstElementChild as HTMLElement;
-      scrollHeightReads = 0;
       rafSchedules = 0;
 
-      // Initial delivery + 3 width-only resizes with unchanged blockSize do 0 work.
-      for (const width of [800, 720, 960, 840]) {
+      // Initial delivery with unchanged scrollHeight/clientHeight does not schedule scrollToBottom.
+      act(() => {
+        for (const obs of SharedTestResizeObserver.instances) {
+          obs.deliver([
+            { target: container, inlineSize: 800, blockSize: 480 },
+            { target: content, inlineSize: 800, blockSize: 800 },
+          ]);
+        }
+      });
+      expect(rafSchedules).toBe(0);
+
+      // Width-only resizes with unchanged blockSize trigger 0 scrollHeight reads and 0 rAFs.
+      scrollHeightReads = 0;
+      rafSchedules = 0;
+      for (const width of [720, 960, 840]) {
         act(() => {
           for (const obs of SharedTestResizeObserver.instances) {
             obs.deliver([
@@ -280,6 +333,84 @@ describe("transcript render and scrollport bounds", () => {
       }
       expect(scrollHeightReads).toBe(0);
       expect(rafSchedules).toBe(0);
+
+      // Sidebar drag changes content height to 1000px while resizing is active,
+      // then ends, then a later non-drag resize returns content height to 800px:
+      // must NOT be dropped as stale.
+      setSidebarResizing(true);
+      scrollHeight = 1000;
+      act(() => {
+        for (const obs of SharedTestResizeObserver.instances) {
+          obs.deliver([
+            { target: container, inlineSize: 640, blockSize: 480 },
+            { target: content, inlineSize: 640, blockSize: 1000 },
+          ]);
+        }
+      });
+      act(() => {
+        setSidebarResizing(false);
+      });
+      rafSchedules = 0;
+      scrollHeight = 800;
+      act(() => {
+        for (const obs of SharedTestResizeObserver.instances) {
+          obs.deliver([
+            { target: container, inlineSize: 800, blockSize: 480 },
+            { target: content, inlineSize: 800, blockSize: 800 },
+          ]);
+        }
+      });
+      expect(rafSchedules).toBeGreaterThan(0);
+    } finally {
+      act(() => {
+        setSidebarResizing(false);
+      });
+      view.unmount();
+    }
+  });
+
+  it("syncs when content height changes between mount layout effect and first ResizeObserver tick", () => {
+    SharedTestResizeObserver.instances = [];
+    vi.stubGlobal("ResizeObserver", SharedTestResizeObserver);
+    let scrollHeight = 500;
+    const origScrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
+    vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+      if (this.classList.contains("transcript-list__items")) return scrollHeight;
+      return origScrollHeight.call(this) as number;
+    });
+    const origClientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+      if (this.classList.contains("transcript-list__items")) return 400;
+      return origClientHeight.call(this) as number;
+    });
+
+    const view = render(
+      <TranscriptList
+        threadId="thread-pre-first-tick"
+        entries={[
+          { id: "m1", type: "message", role: "assistant", text: "Late font/image growth" },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => {}}
+      />,
+    );
+    try {
+      const container = view.container.querySelector<HTMLElement>(".transcript-list__items")!;
+      const content = container.firstElementChild as HTMLElement;
+      expect(container.scrollTop).toBe(500);
+
+      // Height grows before the first ResizeObserver callback arrives.
+      scrollHeight = 920;
+      act(() => {
+        for (const obs of SharedTestResizeObserver.instances) {
+          obs.deliver([
+            { target: container, inlineSize: 800, blockSize: 400 },
+            { target: content, inlineSize: 800, blockSize: 920 },
+          ]);
+        }
+      });
+      expect(container.scrollTop).toBe(920);
     } finally {
       view.unmount();
     }

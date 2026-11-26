@@ -606,6 +606,9 @@ export const SelectedThreadDock = memo(function SelectedThreadDock(props: Select
       layout?.dispose();
       layoutRef.current = region && threadKey
         ? { region, sync, ...observeDockLayout(region, cardRef, sync, (measuredHeight) => {
+          if (measuredHeight !== undefined && measuredHeight > 0) {
+            measuredCardHeightRef.current = measuredHeight;
+          }
           if (dockRef.current?.edge === "top") updateReserve("top", measuredHeight);
         }) }
         : undefined;

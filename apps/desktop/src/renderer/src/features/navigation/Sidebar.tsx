@@ -1298,13 +1298,13 @@ function SidebarContent(props: SidebarProps) {
     .filter((resource) => !isNavigationPeerUnavailable(resource.state.error))
     .map((resource) =>
       resource.state.rebaselineRequired
-        ? `${resource.id}:reload`
+        ? `${resource.id}\u0000reload`
         : resource.state.page?.nextCursor
-          ? `${resource.id}:more:${resource.loading ? 1 : 0}`
+          ? `${resource.id}\u0000more\u0000${resource.loading ? 1 : 0}`
           : "",
     )
     .filter(Boolean)
-    .join("|");
+    .join("\u0001");
   // The lens's own continuation, handed to the list beside `startActions` so
   // it sits right under the last row, inside the scrolling lane. It used to
   // render after the list as a sibling in the scroll region. The lane is
@@ -1328,8 +1328,8 @@ function SidebarContent(props: SidebarProps) {
       ) : null;
     }
     if (!listPagerKey) return null;
-    return listPagerKey.split("|").map((entry) => {
-      const [id, kind, busy] = entry.split(":");
+    return listPagerKey.split("\u0001").map((entry) => {
+      const [id, kind, busy] = entry.split("\u0000");
       return kind === "reload" ? (
         <SidebarShowMore
           key={id}
