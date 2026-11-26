@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { a11ySpec, getPrDiff, harnessReferences, listE2eFiles, planImpact, separateA11y, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
+import { a11ySpec, getPrDiff, getPushDiff, harnessReferences, listE2eFiles, planImpact, separateA11y, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
 import { withVitestImpact } from "./pr-test-impact-vitest.mjs";
 
 const source = "packages/shared/src/";
@@ -62,6 +62,18 @@ it("retains status and path identity from Git and plans from the tested merge wh
     expect(diverged.behindBase).toBe(true);
     expect(diverged.mergeFiles).toEqual(expect.arrayContaining([{ status: "A", file: renamed }, { status: "D", file: "old file" }]));
     expect(diverged.mergeFiles.some(({ file }) => file === "base-only")).toBe(false);
+    const moved = getPrDiff(root, { base: fork, head, changedFiles: 1 }, api);
+    expect(moved.fallback).toBeUndefined();
+    expect(moved.mergeFiles).toEqual(diverged.mergeFiles);
+    const merge = git("rev-parse", "HEAD");
+    expect(getPushDiff(root, { before: base, after: merge, forced: false }).mergeFiles).toEqual(diverged.mergeFiles);
+    expect(getPushDiff(root, { before: base, after: merge, forced: true }).fallback).toMatch(/fast-forward/);
+    expect(getPushDiff(root, { before: merge, after: base, forced: false }).fallback).toMatch(/fast-forward/);
+    write(renamed, "changed by the merge");
+    git("add", "-A");
+    git("commit", "--amend", "--no-edit");
+    expect(getPrDiff(root, { base: fork, head, changedFiles: 1 }, api).fallback).toBe("advanced base changed the tested PR patch");
+    git("reset", "--hard", merge);
     git("commit", "--allow-empty", "-m", "not a merge");
     expect(getPrDiff(root, { base, head, changedFiles: 1 }, api).fallback).toMatch(/not the merge/);
     git("reset", "--hard", "HEAD~1");
@@ -439,10 +451,10 @@ it("treats linked Vite/Oxc virtual helpers from `using` declarations as resolved
   });
 }, 30_000);
 
-it("excludes unrelated directory-scanning unit tests for e2e-only diffs while keeping e2e guardrails and fixture/product owners", async () => {
+it("keeps recursive directory readers and preserves literal, fixture and product owners", async () => {
   await temporaryTree(async (root, write) => {
     const e2eGuard = "apps/desktop/src/main/__tests__/e2e-guardrail.test.mjs";
-    const unrelatedMainScan = "apps/desktop/src/main/__tests__/unrelated-scan.test.mjs";
+    const repositoryScan = "recursive-scan.test.mjs";
     const unrelatedRendererScan = "apps/desktop/src/renderer/src/__tests__/renderer-scan.test.mjs";
     const fixtureOwner = "apps/desktop/src/main/__tests__/fixture-owner.test.mjs";
     const literalOwner = "apps/desktop/src/main/__tests__/literal-owner.test.mjs";
@@ -458,7 +470,7 @@ it("excludes unrelated directory-scanning unit tests for e2e-only diffs while ke
     write(specB, "export const specB = 1;");
     write(product, "export const value = 1;");
     write(e2eGuard, 'import { readdirSync } from "node:fs"; import path from "node:path"; export default readdirSync(path.resolve(import.meta.dirname, "../../../e2e"));');
-    write(unrelatedMainScan, 'import { readdirSync } from "node:fs"; export default readdirSync(".");');
+    write(repositoryScan, 'import { readdirSync } from "node:fs"; export default readdirSync(new URL("./", import.meta.url), { recursive: true }).filter((file) => file.endsWith(".spec.ts"));');
     write(unrelatedRendererScan, 'import { readdirSync } from "node:fs"; import path from "node:path"; export default readdirSync(path.resolve(import.meta.dirname, ".."));');
     write(fixtureOwner, 'import { helper } from "../../../e2e/fixtures/shared-helper.mjs"; export default helper();');
     write(literalOwner, 'export const named = "targeted.spec.ts";');
@@ -485,8 +497,8 @@ it("excludes unrelated directory-scanning unit tests for e2e-only diffs while ke
         expect(selected.includes(literalOwner), label).toBe(editSpecB);
         expect(selected.includes(fixtureOwner), label).toBe(editFixture);
         expect(selected.includes(productOwner), label).toBe(editProduct);
-        expect(selected.includes(unrelatedMainScan), label).toBe(editProduct);
-        expect(selected.includes(unrelatedRendererScan), label).toBe(editProduct);
+        expect(selected, label).toContain(repositoryScan);
+        expect(selected, label).toContain(unrelatedRendererScan);
       }
     }, "fixture.config.mjs");
   });

@@ -3,7 +3,6 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
-import ts from "typescript";
 
 const codeFile = /\.[cm]?[jt]sx?$/;
 // Unit-test inputs that the application bundle never loads.
@@ -34,6 +33,24 @@ function apiFileEntries(files) {
 const fileKeys = (files) => files.map(({ status, file }) => JSON.stringify([status, file])).sort();
 const sameFiles = (a, b) => JSON.stringify(fileKeys(a)) === JSON.stringify(fileKeys(b));
 const sha = /^[a-f0-9]{40}$/;
+const patch = (root, range) => git(root, "diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--binary", range, "--");
+const isAncestor = (root, ancestor, descendant) => {
+  try {
+    git(root, "merge-base", "--is-ancestor", ancestor, descendant);
+    return true;
+  } catch (error) {
+    if (error.status === 1) return false;
+    throw error;
+  }
+};
+
+export function getPushDiff(root, { before, after, forced }) {
+  if (forced !== false || !sha.test(before) || !sha.test(after) || /^0+$/.test(before)
+    || git(root, "rev-parse", "HEAD").trim() !== after || !isAncestor(root, before, after)) {
+    return { before, after, fallback: "checkout is not a verified fast-forward push" };
+  }
+  return { before, after, mergeFiles: gitFiles(root, `${before}..${after}`) };
+}
 
 export function getPrDiff(root, { base, head, changedFiles }, githubFiles) {
   if (!sha.test(base) || !sha.test(head)) throw new Error("Expected immutable PR base and head SHAs");
@@ -47,30 +64,35 @@ export function getPrDiff(root, { base, head, changedFiles }, githubFiles) {
   const stacked = parents.length === 2 && parents[1] === head && testedBase !== base
     && git(root, "show", "-s", "--format=%P", testedBase).trim().split(" ").length === 2
     && git(root, "rev-parse", `${testedBase}^2`).trim() === base;
-  const testedRange = `${stacked ? testedBase : base}..${merge}`;
+  const movedBase = parents.length === 2 && parents[1] === head && testedBase !== base && !stacked
+    && isAncestor(root, base, testedBase);
+  const testedRange = `${stacked || movedBase ? testedBase : base}..${merge}`;
   const mergeFiles = gitFiles(root, testedRange);
   // The tested merge is the base tip plus this PR. Its first-parent diff is
   // what the PR changes there, including on a branch behind its base: a test
   // that reaches none of those files runs the same code as on the base tip.
   const source = {
-    base, head, mergeBase, merge, testedBase, stacked, behindBase: mergeBase !== base,
+    base, head, mergeBase, merge, testedBase, stacked, movedBase, behindBase: mergeBase !== base,
     githubFiles, branchFiles, mergeFiles,
   };
   if (!Array.isArray(githubFiles) || !githubFiles.length || githubFiles.length !== changedFiles) {
     return { ...source, fallback: "incomplete GitHub diff" };
   }
   if (!sameFiles(apiFileEntries(githubFiles), branchFiles)) return { ...source, fallback: "GitHub and three-dot diff disagree" };
-  if (parents.length !== 2 || (!stacked && testedBase !== base) || parents[1] !== head) {
+  if (parents.length !== 2 || (!stacked && !movedBase && testedBase !== base) || parents[1] !== head) {
     return { ...source, fallback: "checkout is not the merge of the event base and head" };
   }
   if (stacked) {
     if (mergeBase !== base || !sameFiles(branchFiles, mergeFiles)) {
       return { ...source, fallback: "stack base advanced or the merge diff differs from the PR diff" };
     }
-    const patch = (range) => git(root, "diff", "--no-ext-diff", "--no-renames", "--binary", range, "--");
-    if (patch(`${base}..${head}`) !== patch(testedRange)) {
+    if (patch(root, `${base}..${head}`) !== patch(root, testedRange)) {
       return { ...source, fallback: "tested stack merge changed the child patch" };
     }
+  }
+  if (movedBase && (!sameFiles(branchFiles, mergeFiles)
+    || patch(root, `${mergeBase}..${head}`) !== patch(root, testedRange))) {
+    return { ...source, fallback: "advanced base changed the tested PR patch" };
   }
   return source;
 }
@@ -179,6 +201,8 @@ export async function planE2e(changes, { inventory, affected, testOnly = () => f
   }
   const missing = [...reasons.keys()].find((file) => !files.includes(file));
   if (missing) return full("edited spec is absent from Playwright collection", missing);
+  const ambiguous = [...reasons.keys()].find((file) => !playwrightListPath(file));
+  if (ambiguous) return full("spec path cannot be represented in a Playwright test list", ambiguous);
   // One lane runs a narrowed plan. A wider selection needs the full suite's
   // four balanced lanes.
   if (reasons.size > Math.ceil(files.length / 4)) return full("selection is wider than one Playwright lane");
@@ -202,174 +226,42 @@ export function separateA11y(e2e) {
   };
 }
 
-function isProcessPlatform(node) {
-  return ts.isPropertyAccessExpression(node)
-    && ts.isIdentifier(node.expression) && node.expression.text === "process"
-    && node.name.text === "platform";
-}
+const range = (count) => Array.from({ length: count }, (_, index) => index + 1);
 
-function platformSkipMatches(expr, platform) {
-  if (ts.isParenthesizedExpression(expr)) return platformSkipMatches(expr.expression, platform);
-  if (!ts.isBinaryExpression(expr)) return false;
-  if (expr.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
-    return platformSkipMatches(expr.left, platform) || platformSkipMatches(expr.right, platform);
-  }
-  const op = expr.operatorToken.kind;
-  if (op !== ts.SyntaxKind.EqualsEqualsEqualsToken && op !== ts.SyntaxKind.ExclamationEqualsEqualsToken) return false;
-  let value;
-  if (isProcessPlatform(expr.left) && ts.isStringLiteralLike(expr.right)) value = expr.right.text;
-  else if (isProcessPlatform(expr.right) && ts.isStringLiteralLike(expr.left)) value = expr.left.text;
-  else return false;
-  return op === ts.SyntaxKind.EqualsEqualsEqualsToken ? value === platform : value !== platform;
-}
-
-function isTestIdentifier(node) {
-  return ts.isIdentifier(node) && node.text === "test";
-}
-
-function isTestProperty(node, names) {
-  return ts.isPropertyAccessExpression(node) && isTestIdentifier(node.expression) && names.includes(node.name.text);
-}
-
-function callbackBody(call) {
-  const last = call.arguments[call.arguments.length - 1];
-  if (!last || !(ts.isArrowFunction(last) || ts.isFunctionExpression(last)) || !ts.isBlock(last.body)) return null;
-  return last.body;
-}
-
-function containsTestCall(node) {
-  if (ts.isCallExpression(node) && (isTestIdentifier(node.expression)
-    || isTestProperty(node.expression, ["only", "fail", "fixme", "skip", "describe"]))) return true;
-  return Boolean(ts.forEachChild(node, containsTestCall));
-}
-
-function hasUnconditionalPlatformSkip(statements, platform) {
-  for (const statement of statements) {
-    if (!ts.isExpressionStatement(statement) || !ts.isCallExpression(statement.expression)) continue;
-    const call = statement.expression;
-    if (isTestProperty(call.expression, ["skip"]) && call.arguments.length > 0
-      && platformSkipMatches(call.arguments[0], platform)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Whether a Playwright spec can execute at least one test on `platform`
- * (`"linux"` or `"win32"`). Fails safe (`true`) unless the file declares at
- * least one literal `test(...)` call (with no dynamic loop/helper test
- * registration) and every declared test unconditionally skips on `platform`.
- */
-export function specRunsOnPlatform(sourceText, platform) {
-  const source = ts.createSourceFile("spec.ts", sourceText, ts.ScriptTarget.Latest, true);
-  let testCount = 0;
-  let dynamic = false;
-  let runnable = false;
-  const hooks = ["beforeAll", "afterAll", "beforeEach", "afterEach", "use", "setTimeout"];
-
-  const visitBlock = (statements, inheritedSkip) => {
-    for (const statement of statements) {
-      if (ts.isImportDeclaration(statement) || ts.isTypeAliasDeclaration(statement)
-        || ts.isInterfaceDeclaration(statement) || ts.isExportDeclaration(statement)
-        || ts.isEmptyStatement(statement)) continue;
-      if (ts.isFunctionDeclaration(statement) || ts.isVariableStatement(statement)) {
-        if (containsTestCall(statement)) dynamic = true;
-        continue;
-      }
-      if (ts.isExpressionStatement(statement) && ts.isCallExpression(statement.expression)) {
-        const call = statement.expression;
-        const callee = call.expression;
-        if (isTestProperty(callee, hooks)) continue;
-        if (isTestProperty(callee, ["skip", "fixme"]) && call.arguments.length <= 2
-          && !(call.arguments[call.arguments.length - 1] && (ts.isArrowFunction(call.arguments[call.arguments.length - 1])
-            || ts.isFunctionExpression(call.arguments[call.arguments.length - 1])))) {
-          continue;
-        }
-        if (isTestProperty(callee, ["describe"]) || (ts.isPropertyAccessExpression(callee)
-          && isTestProperty(callee.expression, ["describe"]) && ["serial", "parallel", "configure"].includes(callee.name.text))) {
-          if (ts.isPropertyAccessExpression(callee) && callee.name.text === "configure") continue;
-          const body = callbackBody(call);
-          if (!body) { dynamic = true; return; }
-          const describeSkip = inheritedSkip || hasUnconditionalPlatformSkip(body.statements, platform);
-          visitBlock(body.statements, describeSkip);
-          if (dynamic || runnable) return;
-          continue;
-        }
-        if (isTestIdentifier(callee) || isTestProperty(callee, ["only", "fail"])) {
-          const body = callbackBody(call);
-          if (!body) { dynamic = true; return; }
-          testCount++;
-          if (!inheritedSkip && !hasUnconditionalPlatformSkip(body.statements, platform)) {
-            runnable = true;
-            return;
-          }
-          continue;
-        }
-        if (isTestProperty(callee, ["skip", "fixme"])) {
-          testCount++;
-          continue;
-        }
-      }
-      if (containsTestCall(statement)) { dynamic = true; return; }
-    }
-  };
-
-  visitBlock(source.statements, hasUnconditionalPlatformSkip(source.statements, platform));
-  return dynamic || testCount === 0 || runnable;
-}
-
-export function annotateE2ePlatforms(e2e, root = process.cwd()) {
-  if (e2e.mode !== "selected") return e2e;
+// Every matrix and the retry report consume the same lane inventory.
+export function scheduleImpact(plan, { allPlatforms, windowsFull, auditRequested, e2eOnly }) {
+  const { e2e, a11y } = separateA11y(plan.e2e);
+  const unit = (group) => range(plan.unit.mode === "selected"
+    ? unitLaneCount(unitGroupFiles(plan.unit.selected, group).length, group)
+    : unitGroups[group].lanes);
+  const e2eLanes = (suite, fullLanes) => suite.mode === "full" ? range(fullLanes) : range(suite.selected.length ? 1 : 0);
+  const nativeE2e = allPlatforms ? plan.e2e : e2e;
+  const windowsMode = windowsFull || ((allPlatforms || e2eOnly) && nativeE2e.mode === "full") ? "full"
+    : nativeE2e.mode === "selected" && nativeE2e.selected.length ? "selected" : "off";
   return {
-    ...e2e,
-    selected: e2e.selected.map((entry) => {
-      try {
-        const text = readFileSync(path.join(root, entry.file), "utf8");
-        return {
-          ...entry,
-          platforms: {
-            linux: specRunsOnPlatform(text, "linux"),
-            win32: specRunsOnPlatform(text, "win32"),
-          },
-        };
-      } catch {
-        return { ...entry, platforms: { linux: true, win32: true } };
-      }
-    }),
+    e2e,
+    nativeE2e,
+    windowsMode,
+    a11y,
+    lanes: {
+      "unit-linux": unit("linux"),
+      "unit-windows-main": unit("windows-main"),
+      "unit-windows-renderer": unit("windows-renderer"),
+      "unit-macos": allPlatforms ? unit("macos") : [],
+      "e2e-linux": e2eLanes(e2e, 4),
+      "e2e-linux-a11y": a11y || auditRequested || (allPlatforms && e2e.mode === "full") ? [1, 2] : [],
+      "e2e-windows": windowsMode === "full" ? range(4) : windowsMode === "selected" ? [1] : [],
+      "e2e-macos": allPlatforms ? e2eLanes(nativeE2e, 5) : [],
+    },
   };
 }
 
-export function e2eFilesForPlatform(e2e, platform) {
-  if (e2e.mode !== "selected") return [];
-  return e2e.selected.filter((entry) => entry.platforms?.[platform] !== false);
-}
-
-export function planE2eLanes(e2e) {
-  if (e2e.mode !== "selected") {
-    // A full E2E plan runs all four Linux lanes and leaves Windows E2E to
-    // `main`, `ci:full`, `ci:windows-e2e`, `ci:windows-shutdown-diagnostics`,
-    // or platform-specific path triggers.
-    return { linux: [1, 2, 3, 4], windows: [] };
-  }
-  return {
-    linux: e2eFilesForPlatform(e2e, "linux").length ? [1] : [],
-    windows: e2eFilesForPlatform(e2e, "win32").length ? [1] : [],
-  };
-}
-
-export function formatWindowsE2eSummary(e2e, { windowsE2eRequested = false, windowsDiagnostics = false } = {}) {
-  if (windowsDiagnostics) {
-    return "full — all four lanes × 3 samples (`ci:windows-shutdown-diagnostics` label)";
-  }
-  if (windowsE2eRequested) {
-    return "full — all four lanes (`ci:windows-e2e` label)";
-  }
-  if (e2e.mode === "selected") {
-    const count = e2eFilesForPlatform(e2e, "win32").length;
-    return count ? `${count} of ${e2e.total} files` : "not selected (no affected Windows spec)";
-  }
-  return "skipped on PR for full plan (runs on `main`; add `ci:windows-e2e` or `ci:full` to run here)";
+// The pinned Playwright test-list format uses paths relative to its root,
+// with optional title and location delimiters. Ambiguous names widen E2E.
+export function playwrightListPath(file) {
+  if (!file.startsWith(e2eDirectory)) return undefined;
+  const relative = file.slice(e2eDirectory.length);
+  return relative && relative === relative.trim() && !/^[#\[]|[>:›\\\r\n]/u.test(relative) ? relative : undefined;
 }
 
 export async function planImpact(files, { fallback, unit, e2e }) {
@@ -424,6 +316,7 @@ export function listAffectedE2eFiles(root, base, config = "apps/desktop/playwrig
 // across two jobs; Linux runs every project in one.
 export const unitGroups = {
   linux: { config: "vitest.linux-ci.mts", lanes: 4 },
+  macos: { config: "vitest.workspace.mts", lanes: 4 },
   "windows-main": { config: "vitest.workspace.mts", lanes: 4, projects: ["desktop-main"] },
   "windows-renderer": {
     config: "vitest.workspace.mts", lanes: 2,

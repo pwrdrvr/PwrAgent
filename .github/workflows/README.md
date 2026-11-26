@@ -5,9 +5,9 @@ namespaced with `ci:` when they start, skip, or narrow CI work.
 
 | Label | Workflow | Effect |
 |---|---|---|
-| `ci:full` | `ci.yml` | Runs every unit test and Desktop E2E spec on a PR, where the test plan would otherwise select the affected ones, and adds the macOS unit tests, macOS Desktop E2E and Windows Desktop E2E. Without it, PRs skip those jobs unless they change a platform-specific path and the required `Desktop E2E` check accepts the skipped macOS lanes; every push to `main` and `releases/**` still runs them. The classifier reads labels live, so after adding the label use **Re-run all jobs** or push. **Re-run failed jobs** does not rerun the succeeded classifier, so it does not pick the label up. See [cross-platform jobs on PRs](#cross-platform-jobs-on-prs). |
-| `ci:a11y` | `ci.yml` | Runs the accessibility audit (`apps/desktop/e2e/a11y.spec.ts`) on a PR, in the `Linux Desktop a11y` job's two lanes. Without it, a PR skips that job unless `ci:full` is present, the PR changes `a11y.spec.ts`, a narrowed test plan selects the spec, or a platform-specific path runs the cross-platform jobs. Every push to `main` and `releases/**` runs it. Like `ci:full`, the classifier reads it live, so after adding it use **Re-run all jobs** or push. See [accessibility audit on PRs](#accessibility-audit-on-prs). |
-| `ci:windows-e2e` | `ci.yml` | Runs all four `Windows Desktop E2E` lanes on a PR without enabling macOS unit/E2E (`ci:full`) or the three-sample native diagnostic capture (`ci:windows-shutdown-diagnostics`). Without it, a PR runs one narrowed Windows Desktop E2E lane automatically when the test plan narrows E2E to Windows-runnable specs (for example a spec-only edit), and skips full Windows Desktop E2E on product-code PRs unless `ci:full`, a platform-specific path, or `ci:windows-shutdown-diagnostics` is present. The classifier reads it live, so after adding it use **Re-run all jobs** or push. |
+| `ci:full` | `ci.yml` | Runs every unit test and Desktop E2E spec on a PR, where the test plan would otherwise select the affected ones, and adds the macOS unit tests, macOS Desktop E2E and Windows Desktop E2E. Without it, PRs skip those jobs unless they change a platform-specific path and the required `Desktop E2E` check accepts the skipped macOS lanes; verified `main` pushes can narrow those suites and releases and the daily run exercise the full matrices. The classifier reads labels live, so after adding the label use **Re-run all jobs** or push. **Re-run failed jobs** does not rerun the succeeded classifier, so it does not pick the label up. See [cross-platform jobs on PRs](#cross-platform-jobs-on-prs). |
+| `ci:a11y` | `ci.yml` | Runs the accessibility audit (`apps/desktop/e2e/a11y.spec.ts`) on a PR, in the `Linux Desktop a11y` job's two lanes. Without it, a PR skips that job unless `ci:full` is present, the PR changes `a11y.spec.ts`, a narrowed test plan selects the spec, or a platform-specific path runs the cross-platform jobs. It runs on release pushes, the daily run, and when the `main` plan selects it or requires full E2E. Like `ci:full`, the classifier reads it live, so after adding it use **Re-run all jobs** or push. See [accessibility audit on PRs](#accessibility-audit-on-prs). |
+| `ci:windows-e2e` | `ci.yml` | Runs all four `Windows Desktop E2E` lanes on a PR without enabling macOS unit/E2E (`ci:full`) or the three-sample native diagnostic capture (`ci:windows-shutdown-diagnostics`). Without it, a PR runs one narrowed Windows Desktop E2E lane automatically when the test plan narrows E2E to affected specs (for example a spec-only edit), and skips full Windows Desktop E2E on product-code PRs unless `ci:full`, a platform-specific path, or `ci:windows-shutdown-diagnostics` is present. The classifier reads it live, so after adding it use **Re-run all jobs** or push. |
 | `ci:benchmark-checks` | `check-performance.yml` | Compares base and PR syntax lint, typed lint and typecheck on one GitHub-hosted `macos-26` runner. Records three paired samples, runner/hardware identity and system load. Adding this label starts the benchmark. |
 | `ci:build-preview` | `preview-build.yml` | Builds an ad-hoc signed, unnotarized macOS preview DMG and uploads it as a workflow artifact. Use for PRs that change release packaging, installer assets, or desktop distribution behavior. |
 | `ci:windows-package` | `ci.yml` | Builds the unsigned Windows NSIS installer (`release.mjs --win`) and uploads it as a workflow artifact. Off by default — the normal Windows CI job is build + test only. Adding the label alone does not start CI; add it before opening the PR, rerun CI, or push a commit after adding it. The release workflow (`release.yml`) builds the Windows installer automatically on version tags. |
@@ -20,20 +20,16 @@ change as the workflow update.
 
 ## Cross-platform jobs on PRs
 
-PRs run Lint, Build, the Linux unit and Desktop E2E lanes, and the Windows
-verify and unit lanes. On a PR the `Test plan` job selects the unit tests and
-Linux specs that the change affects, and those lanes run that selection; see
-[docs/pr-test-impact.md](../../docs/pr-test-impact.md). The macOS unit tests, macOS Desktop E2E and Windows
-Desktop E2E run on every push to `main` (each push has its own concurrency
-group, so none is dropped). A PR runs them only with `ci:full`, or when it
-changes code that only those runners exercise: `pnpm-lock.yaml`, the
-`visual-regression`, `macos-*` and `windows-*` Desktop E2E specs (and the
-visual baselines), `apps/desktop/native/**`, `apps/desktop/build/**`, the
-macOS-only scripts under `apps/desktop/scripts/` (app icon, Swift generators,
-Dock tile plug-in, `macos-*`, `assemble-mac-*`), or `scripts/ci/macos-*`. That rule matched 19 of the 296 PRs merged in the week
-measured below. If the classifier cannot read the labels or the full
-changed-file list, it runs everything. A PR with
-`ci:windows-shutdown-diagnostics` still runs Windows Desktop E2E.
+PRs run Lint, Build, the affected Linux unit and E2E tests, Windows verify
+and the affected Windows unit tests. A selected E2E list also runs on
+Windows. Ordinary PRs leave full macOS and Windows E2E to `main`. Use
+`ci:full` to exercise all suites on a PR. Native inputs, platform-specific
+specs, and unverifiable classifier results still run every platform.
+
+Each push to `main` retains a separate run. A verified fast-forward can
+narrow unit suites and test-only E2E across all platforms. Product changes
+still run full Desktop E2E across all platforms. Release pushes and the
+daily `main` run use the full matrices. See [test impact](../../docs/pr-test-impact.md).
 
 Measured over 1,000 CI runs from 2026-11-04 to 2026-11-11 (789 PR, 211 push):
 

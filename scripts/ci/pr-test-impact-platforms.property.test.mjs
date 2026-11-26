@@ -1,116 +1,84 @@
-import { readFileSync } from "node:fs";
 import fc from "fast-check";
 import { expect, it } from "vitest";
-import { annotateE2ePlatforms, e2eFilesForPlatform, formatWindowsE2eSummary, planE2eLanes, specRunsOnPlatform } from "./pr-test-impact.mjs";
+import { aggregateSlices, expectedSlices } from "./flake-report.mjs";
+import { a11ySpec, playwrightListPath, scheduleImpact } from "./pr-test-impact.mjs";
 
-it("targets narrowed Linux and Windows E2E lanes by spec platform eligibility and leaves full plans off Windows by default", () => {
-  const skipKinds = [
-    { name: "all", line: "", linux: true, win32: true },
-    { name: "skip-win32", line: 'test.skip(process.platform === "win32", "non-win32");', linux: true, win32: false },
-    { name: "only-win32", line: 'test.skip(process.platform !== "win32", "win32 only");', linux: false, win32: true },
-    { name: "only-darwin", line: 'test.skip(process.platform !== "darwin", "darwin only");', linux: false, win32: false },
-    { name: "darwin-arm64", line: 'test.skip(process.platform !== "darwin" || process.arch !== "arm64", "darwin arm64");', linux: false, win32: false },
-    { name: "skip-darwin", line: 'test.skip(process.platform === "darwin", "non-darwin");', linux: true, win32: true },
-  ];
-  fc.assert(fc.property(
-    fc.array(fc.constantFrom(...skipKinds), { minLength: 1, maxLength: 6 }),
-    fc.boolean(),
-    (cases, dynamicLoop) => {
-      const blocks = cases.map((item, index) => `test("case ${index}", async () => {\n  ${item.line}\n});`);
-      if (dynamicLoop) blocks.push('for (const x of [1]) { test(`dyn ${x}`, async () => { test.skip(process.platform === "win32", "win"); }); }');
-      const code = blocks.join("\n");
-      const expectedLinux = dynamicLoop || cases.some((item) => item.linux);
-      const expectedWin32 = dynamicLoop || cases.some((item) => item.win32);
-      expect(specRunsOnPlatform(code, "linux")).toBe(expectedLinux);
-      expect(specRunsOnPlatform(code, "win32")).toBe(expectedWin32);
-    },
-  ), { numRuns: 100 });
-
-  // Real repository specs match their actual platform skip guards.
-  const repoSpecs = [
-    ["apps/desktop/e2e/todo-dispatch-model.spec.ts", true, true],
-    ["apps/desktop/e2e/outpost-owner-data.spec.ts", true, false],
-    ["apps/desktop/e2e/electron-launcher-ownership.spec.ts", false, true],
-    ["apps/desktop/e2e/electron-native-session-shutdown.spec.ts", true, true],
-    ["apps/desktop/e2e/a11y.spec.ts", true, true],
-    ["apps/desktop/e2e/macos-window-activation.spec.ts", false, false],
-    ["apps/desktop/e2e/windows-titlebar-hover.spec.ts", false, true],
-  ];
-  for (const [file, linux, win32] of repoSpecs) {
-    const text = readFileSync(file, "utf8");
-    expect(specRunsOnPlatform(text, "linux"), `${file} on linux`).toBe(linux);
-    expect(specRunsOnPlatform(text, "win32"), `${file} on win32`).toBe(win32);
-  }
-
-  const annotated = (files) => annotateE2ePlatforms({
-    mode: "selected", total: 147, selected: files.map((file) => ({ file, reasons: ["edited spec"] })),
-  });
-  const todoPlan = annotated(["apps/desktop/e2e/todo-dispatch-model.spec.ts"]);
-  expect(planE2eLanes(todoPlan)).toEqual({ linux: [1], windows: [1] });
-  expect(e2eFilesForPlatform(todoPlan, "win32").map(({ file }) => file))
-    .toEqual(["apps/desktop/e2e/todo-dispatch-model.spec.ts"]);
-
-  const outpostPlan = annotated(["apps/desktop/e2e/outpost-owner-data.spec.ts"]);
-  expect(planE2eLanes(outpostPlan)).toEqual({ linux: [1], windows: [] });
-
-  const launcherPlan = annotated(["apps/desktop/e2e/electron-launcher-ownership.spec.ts"]);
-  expect(planE2eLanes(launcherPlan)).toEqual({ linux: [], windows: [1] });
-
-  expect(planE2eLanes(annotated([]))).toEqual({ linux: [], windows: [] });
-  expect(planE2eLanes({ mode: "full", reason: "application impact has no recorded Playwright spec owner" }))
-    .toEqual({ linux: [1, 2, 3, 4], windows: [] });
+const full = { mode: "full", reason: "fixture" };
+const unit = (main, renderer) => ({
+  mode: "selected",
+  selected: [
+    ...Array.from({ length: main }, () => ({ project: "desktop-main" })),
+    ...Array.from({ length: renderer }, () => ({ project: "desktop-renderer" })),
+  ],
+});
+const e2e = (count, audit) => ({
+  mode: "selected",
+  selected: [
+    ...Array.from({ length: count }, (_, index) => ({ file: `apps/desktop/e2e/spec-${index}.spec.ts` })),
+    ...(audit ? [{ file: a11ySpec }] : []),
+  ],
 });
 
-it("treats top-level test.fail as runnable and does not count modifier-form test.fixme as a skipped test declaration", () => {
-  // A spec with a skipped test and a runnable test.fail executes on the skipped platform.
-  const mixedWithFail = [
-    'test("win only", async () => { test.skip(process.platform !== "win32", "win"); });',
-    'test.fail("expected failure on all platforms", async () => { expect(1).toBe(2); });',
-  ].join("\n");
-  expect(specRunsOnPlatform(mixedWithFail, "linux")).toBe(true);
-  expect(specRunsOnPlatform(mixedWithFail, "win32")).toBe(true);
-
-  // A helper containing test.fail still triggers the dynamic fail-safe.
-  const helperWithFail = [
-    'function register() { test.fail("expected", async () => {}); }',
-    'test("win only", async () => { test.skip(process.platform !== "win32", "win"); });',
-    "register();",
-  ].join("\n");
-  expect(specRunsOnPlatform(helperWithFail, "linux")).toBe(true);
-
-  // Modifier-form test.fixme without literal test(...) declarations preserves the testCount === 0 fail-safe.
-  const modifierFixmeOnly = [
-    'test.fixme(process.platform === "win32", "tracked bug");',
-    "registerDynamicTests();",
-  ].join("\n");
-  expect(specRunsOnPlatform(modifierFixmeOnly, "win32")).toBe(true);
-  expect(specRunsOnPlatform(modifierFixmeOnly, "linux")).toBe(true);
-
-  // Declaration-form test.fixme("title", fn) still counts as a skipped test declaration.
-  const declaredFixmeOnly = 'test.fixme("broken", async () => {});';
-  expect(specRunsOnPlatform(declaredFixmeOnly, "win32")).toBe(false);
-  expect(specRunsOnPlatform(declaredFixmeOnly, "linux")).toBe(false);
+it("schedules exactly the work the suites and platform policy require", () => {
+  fc.assert(fc.property(fc.record({
+    allPlatforms: fc.boolean(),
+    windowsFull: fc.boolean(),
+    auditRequested: fc.boolean(),
+    audit: fc.boolean(),
+    fullUnit: fc.boolean(),
+    fullE2e: fc.boolean(),
+    mainFiles: fc.oneof(fc.constant(0), fc.integer({ min: 1, max: 660 })),
+    rendererFiles: fc.oneof(fc.constant(0), fc.integer({ min: 1, max: 660 })),
+    specs: fc.nat(7),
+    diagnostics: fc.boolean(),
+    e2eOnly: fc.boolean(),
+  }), (state) => {
+    const { allPlatforms, windowsFull, auditRequested, fullUnit, fullE2e, mainFiles, rendererFiles, specs, audit, diagnostics, e2eOnly } = state;
+    const plan = {
+      unit: fullUnit ? full : unit(mainFiles, rendererFiles),
+      e2e: fullE2e ? full : e2e(specs, audit),
+    };
+    const samples = diagnostics ? 3 : 1;
+    const schedule = scheduleImpact(plan, { allPlatforms, windowsFull: windowsFull || diagnostics, auditRequested, e2eOnly });
+    const nativeCount = specs + Number(allPlatforms && audit);
+    const counts = {
+      "unit-linux": mainFiles + rendererFiles,
+      "unit-windows-main": mainFiles,
+      "unit-windows-renderer": rendererFiles,
+      ...(allPlatforms ? { "unit-macos": mainFiles + rendererFiles } : {}),
+    };
+    const expected = expectedSlices(samples).filter(({ kind, platform, lane }) => {
+      if (kind === "unit") return Object.hasOwn(counts, `unit-${platform}`)
+        && (fullUnit || (lane - 1) * 150 < counts[`unit-${platform}`]);
+      if (platform === "linux-a11y") return auditRequested || (fullE2e ? allPlatforms : audit);
+      if (platform === "windows") return windowsFull || diagnostics || ((allPlatforms || e2eOnly) && fullE2e)
+        || (!fullE2e && nativeCount > 0 && lane === 1);
+      if (platform === "macos") return allPlatforms && (fullE2e || (nativeCount > 0 && lane === 1));
+      return fullE2e || (specs > 0 && lane === 1);
+    });
+    const report = aggregateSlices({ slices: [], samples, lanes: schedule.lanes });
+    expect(report.missingSlices).toEqual(expected);
+    if (!fullE2e) {
+      expect(schedule.e2e.selected).toEqual(e2e(specs, false).selected);
+      expect(schedule.nativeE2e.selected).toEqual(e2e(specs, allPlatforms && audit).selected);
+    }
+  }));
 });
 
-it("reports full Windows E2E in the test plan summary whenever ci:windows-e2e or shutdown diagnostics overrides narrowing", () => {
-  const fullPlan = { mode: "full", reason: "application impact has no recorded Playwright spec owner" };
-  const narrowedSelected = {
-    mode: "selected", total: 147,
-    selected: [{ file: "apps/desktop/e2e/todo-dispatch-model.spec.ts", platforms: { linux: true, win32: true } }],
-  };
-  const narrowedNone = {
-    mode: "selected", total: 147,
-    selected: [{ file: "apps/desktop/e2e/outpost-owner-data.spec.ts", platforms: { linux: true, win32: false } }],
-  };
-  for (const plan of [fullPlan, narrowedSelected, narrowedNone]) {
-    expect(formatWindowsE2eSummary(plan, { windowsDiagnostics: true, windowsE2eRequested: false }))
-      .toContain("ci:windows-shutdown-diagnostics");
-    expect(formatWindowsE2eSummary(plan, { windowsDiagnostics: true, windowsE2eRequested: true }))
-      .toContain("ci:windows-shutdown-diagnostics");
-    expect(formatWindowsE2eSummary(plan, { windowsDiagnostics: false, windowsE2eRequested: true }))
-      .toContain("all four lanes (`ci:windows-e2e` label)");
+it("collects affected specs on Windows even when their runtime controls whether they skip", () => {
+  const plan = { unit: unit(0, 0), e2e: e2e(1, false) };
+  const policy = { allPlatforms: false, windowsFull: false, auditRequested: false };
+  const scheduled = scheduleImpact(plan, policy);
+  expect(scheduled.lanes["unit-linux"]).toEqual([]);
+  expect(scheduled.lanes["e2e-windows"]).toEqual([1]);
+  expect(scheduled.nativeE2e).toEqual(plan.e2e);
+  expect(scheduled.windowsMode).toBe("selected");
+  expect(scheduleImpact(plan, { ...policy, windowsFull: true }).windowsMode).toBe("full");
+});
+
+it("does not silently reinterpret filename syntax as a Playwright test title or location", () => {
+  expect(playwrightListPath("apps/desktop/e2e/sub/a+b.spec.ts")).toBe("sub/a+b.spec.ts");
+  for (const name of ["a\nb.spec.ts", "a>b.spec.ts", "#note.spec.ts", "[project].spec.ts", "a:b.spec.ts"]) {
+    expect(playwrightListPath(`apps/desktop/e2e/${name}`)).toBeUndefined();
   }
-  expect(formatWindowsE2eSummary(narrowedSelected)).toBe("1 of 147 files");
-  expect(formatWindowsE2eSummary(narrowedNone)).toBe("not selected (no affected Windows spec)");
-  expect(formatWindowsE2eSummary(fullPlan)).toContain("skipped on PR for full plan");
 });

@@ -8,11 +8,6 @@ import { namesFile, testSidePath } from "./pr-test-impact.mjs";
 const codeFile = /\.[cm]?[jt]sx?$/;
 // A test that lists directories can read a file that no module imports.
 const enumeratesFiles = /readdirSync|readdir\(|opendir|globSync|fast-glob|tinyglobby|\bglob\(|ls-files/;
-// A test-side file that resolves or constructs the desktop E2E directory
-// (`../../../e2e`, `apps/desktop/e2e`, `path.join(..., "desktop", "e2e")`,
-// or `path.join/resolve(..., "e2e")`). Excludes bare directory-skip checks
-// (`entry.name !== "e2e"`) and relative `./e2e` fixture config literals.
-const enumeratesE2eDirectory = /(?:["'`][^"'`]*(?:\.\.|desktop)\/e2e\/?["'`]|["'`]desktop["'`]\s*,\s*["'`]e2e["'`]|(?:path\.(?:join|resolve)|new URL)\([^)]*["'`]e2e\/?["'`])/;
 // A loader whose specifier is computed can load a file that it only names
 // in a string, which the import graph never links.
 const computedLoader = /\bimport\s*\(\s*(?:[^"'`\s)]|`[^`]*\$\{)|\brequire\s*\(\s*(?:[^"'`\s)]|`[^`]*\$\{)|createRequire/;
@@ -257,14 +252,12 @@ export async function withVitestImpact(root, callback, config = "vitest.linux-ci
       for (const file of affected) {
         if (!explained.has(file)) add(file, { reason: "Vitest related input" });
       }
-      const e2eOnly = changes.every(({ file }) => file.startsWith(e2eDirectory));
       const product = changes.some(({ status, file }) => !testSidePath.test(file) && !specFiles.has(file)
         && !file.startsWith(e2eDirectory) && (status === "D" || !isTypeOnly(root, file)));
       for (const file of edges.keys()) {
         const testSide = testSidePath.test(file) || specFiles.has(file);
         const content = testSide || product ? text(file) : "";
-        const reason = testSide && enumeratesFiles.test(content) && (!e2eOnly || enumeratesE2eDirectory.test(content))
-          ? (e2eOnly ? "always run: enumerates e2e files" : "always run: enumerates files")
+        const reason = testSide && enumeratesFiles.test(content) ? "always run: enumerates files"
           : product && (bundlesSource.test(content) || testSide && loadsSource.test(content))
             ? "runs on product changes: executes source outside the Vitest graph"
             : undefined;

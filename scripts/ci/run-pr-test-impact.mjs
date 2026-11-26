@@ -2,7 +2,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { createVitest } from "vitest/node";
-import { e2eFilesForPlatform, unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
+import { unitGroupFiles, unitGroups, unitLaneCount } from "./pr-test-impact.mjs";
 
 const [kind, group, lane] = process.argv.slice(2);
 const { plan } = JSON.parse(readFileSync(".local/ci/pr-test-impact/plan.json", "utf8"));
@@ -28,25 +28,17 @@ if (kind === "unit") {
   try {
     const identify = ({ project, moduleId }) => ({ project: project.name, file: posix(path.relative(process.cwd(), moduleId)) });
     const specs = (await ctx.globTestSpecifications()).filter((spec) => expected.has(key(identify(spec))));
-    const absent = selected.length - specs.length;
-    summary(`Narrowed plan: ${specs.length} of ${plan.unit.total} test files in ${lanes} lane(s)`
-      + `${absent ? `; ${absent} selected file(s) are not collected on this platform` : ""}.`);
-    // The plan comes from the Linux inventory, so Linux collects every file.
-    if (absent && group === "linux") throw new Error("The plan names a test file that Vitest does not collect");
-    if (specs.length) {
-      await ctx.standalone();
-      const { testModules, unhandledErrors } = await ctx.runTestSpecifications(specs);
-      // Preserve the CI reporter's distinct test failure code until close.
-      if (unhandledErrors.length || testModules.some((module) => !module.ok())) process.exitCode ||= 1;
+    if (!selected.length || specs.length !== selected.length) {
+      throw new Error(`Narrowed plan for ${group} expected ${selected.length} files; Vitest collected ${specs.length}`);
     }
+    summary(`Narrowed plan: ${specs.length} of ${plan.unit.total} test files in ${lanes} lane(s).`);
+    await ctx.standalone();
+    const { testModules, unhandledErrors } = await ctx.runTestSpecifications(specs);
+    // Preserve the CI reporter's distinct test failure code until close.
+    if (unhandledErrors.length || testModules.some((module) => !module.ok())) process.exitCode ||= 1;
   } finally {
     await ctx.close();
   }
-} else if (kind === "e2e-files" || kind === "e2e-windows-files") {
-  if (plan.e2e.mode !== "selected") throw new Error("The plan does not narrow the Playwright specs");
-  const platform = kind === "e2e-windows-files" ? "win32" : "linux";
-  // Paths for the Playwright command, relative to the desktop package.
-  process.stdout.write(e2eFilesForPlatform(plan.e2e, platform).map(({ file }) => path.posix.relative("apps/desktop", file)).join("\n"));
 } else {
   throw new Error(`Unknown narrowed run: ${kind}`);
 }

@@ -113,7 +113,7 @@ test("retry inventory, PR unit plans, and full test shards match their workflow 
     if (job === "desktop-e2e-macos") {
       assert.equal(lanes.length, 5, "macOS Desktop E2E needs five lanes for deadline headroom");
       assert.ok(section.includes(`--shard=\${{ matrix.lane }}/${lanes.length}`));
-      const weights = section.match(/PWTEST_SHARD_WEIGHTS: "([\d:]+)"/)?.[1].split(":");
+      const weights = section.match(/PWTEST_SHARD_WEIGHTS="([\d:]+)"/)?.[1].split(":");
       assert.equal(weights?.length, lanes.length, "macOS E2E weights must cover the full matrix");
     }
     assert.deepEqual(expectedSlices().filter((s) => s.kind === kind && s.platform === platform).map((s) => s.lane), lanes,
@@ -121,7 +121,8 @@ test("retry inventory, PR unit plans, and full test shards match their workflow 
     if (kind === "unit" && Object.hasOwn(unitGroups, platform)) {
       assert.deepEqual(Array.from({ length: unitGroups[platform].lanes }, (_, index) => index + 1), lanes,
         `PR test planner lanes for ${job}`);
-      assert.ok(section.includes(`--shard={0}/${lanes.length} `), `full test shard count for ${job}`);
+      const shard = platform === "macos" ? "${{ matrix.lane }}" : "{0}";
+      assert.ok(section.includes(`--shard=${shard}/${lanes.length} `), `full test shard count for ${job}`);
     }
     assert.match(section, new RegExp(`kind: ${kind}\\n\\s+platform: ${platform}\\n`));
     assert.match(section, /uses: \.\/\.github\/actions\/flake-slice/);
