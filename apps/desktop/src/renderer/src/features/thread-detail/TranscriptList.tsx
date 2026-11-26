@@ -33,6 +33,7 @@ import type {
 } from "@pwragent/shared/pending-request-response";
 import type {
   NavigationThreadSummary,
+  ThreadLaunchedThread,
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadQuestionnaireActivity,
@@ -41,7 +42,10 @@ import type {
   ThreadSubAgentSummary,
 } from "@pwragent/shared/contracts/navigation";
 import type { ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
-import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
+import type {
+  ThreadTodo,
+  ThreadTodoMergeMethod,
+} from "@pwragent/shared/contracts/thread-todos";
 import { anchorTurnUsageEntries } from "@pwragent/shared/thread-usage-display";
 import {
   buildPendingRequestActions,
@@ -52,6 +56,14 @@ import { TranscriptPrContextProvider } from "../pr-status/transcript-pr-context"
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
+import {
+  injectLaunchedThreads,
+  isLaunchedTodoEntry,
+  launchedTodoIdFromEntry,
+  mergeLaunchedThreadRecords,
+  type LaunchedThreadRecord,
+} from "./launched-todo-entries";
+import { TranscriptLaunchedTodo } from "./TranscriptLaunchedTodo";
 import {
   injectRewindMarkers,
   isRewindMarkerEntry,
@@ -118,6 +130,11 @@ type TranscriptListProps = {
   };
   /** The thread's rewinds, each drawn as a marker where its turns were. */
   rewinds?: ThreadRewindRecord[];
+  /** Completed handoff to-do cards that launched a thread from this thread. */
+  launchedTodos?: readonly ThreadTodo[];
+  /** Child threads launched from this thread via agent tools (`handoff_task`, `create_instance_thread`). */
+  launchedThreads?: readonly ThreadLaunchedThread[];
+  onOpenLaunchedTodoThread?: (todo: ThreadTodo) => void;
   /** Undo for the latest rewind, where its provider kept the removed turns. */
   rewindUndo?: {
     busyId?: string;
@@ -908,6 +925,19 @@ export function TranscriptList(props: TranscriptListProps) {
     [props.pendingRequest],
   );
 
+  const launchedRecordById = useMemo(() => {
+    const map = new Map<string, LaunchedThreadRecord>();
+    const merged = mergeLaunchedThreadRecords({
+      launchedTodos: props.launchedTodos,
+      launchedThreads: props.launchedThreads,
+      ownerInstanceId: props.threadLinkSource?.instanceId,
+    });
+    for (const record of merged) {
+      map.set(record.id, record);
+    }
+    return map;
+  }, [props.launchedThreads, props.launchedTodos, props.threadLinkSource?.instanceId]);
+
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
     const transientMessageEntries: AppServerThreadMessageEntry[] =
@@ -928,30 +958,47 @@ export function TranscriptList(props: TranscriptListProps) {
       insertPendingEntry(entries, pendingEntry);
     }
     // Pending rows (a pending total included) and synthetic rows (transitions,
-    // questionnaires, turn failures) are placed by time. A row of a turn placed
-    // after that turn's total would leave the total mid-turn, so the rendered
-    // list ends with each total back at the end of its turn.
+    // questionnaires, turn failures, launched to-dos) are placed by time. A
+    // row of a turn placed after that turn's total would leave the total
+    // mid-turn, so the rendered list ends with each total back at the end of
+    // its turn.
     return anchorTurnUsageEntries(
-      injectRewindMarkers(
-        injectTurnFailures(
-          injectQuestionnaireActivities(
-            injectMessagingBindingTransitions(
-              injectPermissionTransitions(entries, props.permissionTransitions),
-              props.messagingBindingTransitions,
+      injectLaunchedThreads(
+        injectRewindMarkers(
+          injectTurnFailures(
+            injectQuestionnaireActivities(
+              injectMessagingBindingTransitions(
+                injectPermissionTransitions(entries, props.permissionTransitions),
+                props.messagingBindingTransitions,
+              ),
+              props.questionnaireActivities,
             ),
-            props.questionnaireActivities,
+            props.turnFailures,
           ),
-          props.turnFailures,
+          props.rewinds,
         ),
-        props.rewinds,
+        {
+          launchedTodos: props.launchedTodos,
+          launchedThreads: props.launchedThreads,
+          ownerInstanceId: props.threadLinkSource?.instanceId,
+        },
+        {
+          hasPreviousPage: canLoadOlder,
+          prependAnchorId: props.prependAnchorId,
+        },
       ),
     );
   }, [
+    canLoadOlder,
     props.entries,
+    props.launchedThreads,
+    props.launchedTodos,
     props.pendingActivityEntry,
     props.pendingProtocolActivityEntries,
     props.pendingUsageActivityEntry,
     pendingAssistantPreview,
+    props.prependAnchorId,
+    props.threadLinkSource?.instanceId,
     props.transientMessage,
     props.transientMessages,
     props.pendingPlanEntry,
@@ -1716,6 +1763,17 @@ export function TranscriptList(props: TranscriptListProps) {
                         onUndo: () => props.rewindUndo?.onUndo(undoableRewind!),
                       }
                     : undefined}
+                />
+              ) : isLaunchedTodoEntry(item.entry)
+                && launchedRecordById.has(launchedTodoIdFromEntry(item.entry) ?? "") ? (
+                <TranscriptLaunchedTodo
+                  applications={props.applications}
+                  desktopApi={props.desktopApi}
+                  fileViewerContext={props.fileViewerContext}
+                  record={launchedRecordById.get(launchedTodoIdFromEntry(item.entry)!)!}
+                  skills={skills}
+                  threadLinkSource={props.threadLinkSource}
+                  onOpenStartedThread={props.onOpenLaunchedTodoThread}
                 />
               ) : item.entry.type === "activity" ? (
                 <TranscriptActivity

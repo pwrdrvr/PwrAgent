@@ -9,6 +9,7 @@ import type {
 import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
 import { formatElapsedMs } from "../../lib/format-duration";
 import { isAutoReviewActivityEntry } from "./protocol-activity-entries";
+import { isLaunchedTodoEntry } from "./launched-todo-entries";
 import { isRewindMarkerEntry } from "./rewind-marker-entries";
 import { formatFileEditActivitySummary, hasTranscriptFileDiff } from "./live-transcript-activity";
 
@@ -224,9 +225,9 @@ function buildActiveWorkGroups(
     ) {
       continue;
     }
-    // The live auto-review row carries no turn and sits at its first review's
-    // time. It stays in view without cutting off the work before it.
-    if (isAutoReviewActivityEntry(entry)) {
+    // Live auto-review notices and launched to-do cards carry no turn and stay
+    // in view at top level without cutting off the work before them.
+    if (isStandaloneOverlayActivity(entry)) {
       continue;
     }
     if (
@@ -336,11 +337,10 @@ function buildCompletedGroups(
   };
 
   for (const [index, entry] of entries.entries()) {
-    // The auto-review row stays in view after its turn: Codex keeps no record
-    // of the reviews, so this row is their only trace until the next turn.
-    // It neither joins the turn's work nor splits it, so it renders after the
-    // group it arrived among.
-    if (isAutoReviewActivityEntry(entry)) {
+    // Auto-review notices and launched to-do cards stay in view at top level:
+    // they neither join a turn's work group nor split it, so each renders
+    // after the group it arrived among.
+    if (isStandaloneOverlayActivity(entry)) {
       continue;
     }
     const turnId = entry.turn?.id;
@@ -465,7 +465,7 @@ function classifyCompletedTurnEntries(
   let forwardTurnId: string | undefined;
   let immediatelyAfterAnswer = false;
   for (const entry of entries) {
-    if (isAutoReviewActivityEntry(entry)) {
+    if (isStandaloneOverlayActivity(entry)) {
       continue;
     }
     if ((entry.type === "message" && entry.role === "user") || isRewindMarkerEntry(entry)) {
@@ -530,8 +530,8 @@ function classifyCompletedTurnEntries(
 
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
-    // A review notice is not work: an answer it follows is still the answer.
-    if (isAutoReviewActivityEntry(entry)) {
+    // A review notice or launched to-do card is not work: an answer it follows is still the answer.
+    if (isStandaloneOverlayActivity(entry)) {
       continue;
     }
     if ((entry.type === "message" && entry.role === "user") || isRewindMarkerEntry(entry)) {
@@ -649,7 +649,7 @@ function buildCommentaryOnlyGroups(
   }
 
   for (const entry of entries) {
-    if (isAutoReviewActivityEntry(entry)) {
+    if (isStandaloneOverlayActivity(entry)) {
       continue;
     }
     if (
@@ -772,6 +772,10 @@ function isAssistantInterimMessage(
   );
 }
 
+function isStandaloneOverlayActivity(entry: AppServerThreadEntry): boolean {
+  return isAutoReviewActivityEntry(entry) || isLaunchedTodoEntry(entry);
+}
+
 function isWorkPhaseEntry(
   entry: AppServerThreadEntry,
   trailingFileDiffs?: ReadonlySet<AppServerThreadEntry>,
@@ -783,6 +787,7 @@ function isWorkPhaseEntry(
     return (
       !isTerminalTurnFailureActivity(entry) &&
       !isRewindMarkerEntry(entry) &&
+      !isLaunchedTodoEntry(entry) &&
       !(trailingFileDiffs ? trailingFileDiffs.has(entry) : isFileDiffActivity(entry)) &&
       !isTokenUsageActivity(entry)
     );
@@ -805,6 +810,7 @@ function hasConcreteWork(
         || (entry.type === "activity"
           && !isTerminalTurnFailureActivity(entry)
           && !isRewindMarkerEntry(entry)
+          && !isLaunchedTodoEntry(entry)
           && !trailingFileDiffs.has(entry)
           && !isTokenUsageActivity(entry))
       : isConcreteWorkEntry(entry),
@@ -819,6 +825,7 @@ export function isConcreteWorkEntry(
     (entry.type === "activity" &&
       !isTerminalTurnFailureActivity(entry) &&
       !isRewindMarkerEntry(entry) &&
+      !isLaunchedTodoEntry(entry) &&
       (!isFileDiffActivity(entry) || entry.id.startsWith("live-tools-")) &&
       !isTokenUsageActivity(entry))
   );

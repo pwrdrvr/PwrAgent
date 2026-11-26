@@ -972,6 +972,13 @@ function rewindLogsEqual(
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
 }
 
+function launchedThreadLogsEqual(
+  left: NavigationThreadSummary["launchedThreadLog"],
+  right: NavigationThreadSummary["launchedThreadLog"]
+): boolean {
+  return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
+}
+
 function threadSummariesEqual(
   left: NavigationPresentedThread,
   right: NavigationPresentedThread
@@ -1080,7 +1087,8 @@ function threadSummariesEqual(
       left.questionnaireActivityLog,
       right.questionnaireActivityLog
     ) &&
-    rewindLogsEqual(left.rewindLog, right.rewindLog)
+    rewindLogsEqual(left.rewindLog, right.rewindLog) &&
+    launchedThreadLogsEqual(left.launchedThreadLog, right.launchedThreadLog)
   );
 }
 
@@ -3929,7 +3937,7 @@ export function useThreadNavigation(
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined, [selectedItemKey, rendererFederationTarget]);
   const selectedDetail = useNavigationSelectedDetail({
-    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "rewindLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
+    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "rewindLog", "launchedThreadLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
     desktopApi, enabled: enabled && viewVisible,
     ref: selectedIdentity,
     federationTarget: selectedIdentity?.ownerInstanceId
@@ -5302,6 +5310,11 @@ export function useThreadNavigation(
         // Completed questionnaire answers are persisted in the thread overlay
         // because App Server replay does not include request-user-input items.
         // Refresh so the sanitized Q/A summary appears in the transcript now.
+        scheduleEventRefresh();
+        return;
+      }
+
+      if (method === "thread/launchedThreads/updated") {
         scheduleEventRefresh();
         return;
       }

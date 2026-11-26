@@ -2911,6 +2911,57 @@ export class ThreadWorkspaceService {
         backend, threadId, input: [{ type: "text", text: prompt }], messageOrigin,
       }, turnId, title);
     }
+    if (this.context.stores.threads.appendLaunchedThread) {
+      const projectLabel =
+        childLinkedDirectory?.label
+        || (childCwd ? path.basename(childCwd) : undefined)
+        || undefined;
+      const boundedPrompt = truncateThreadInspectionText(task, 4_000);
+      try {
+        await this.context.stores.threads.appendLaunchedThread({
+          backend: sourceBackend,
+          threadId: sourceThreadId,
+          launch: {
+            id: handoffId,
+            source: "handoff_task",
+            occurredAt: createdAt,
+            title,
+            ...(boundedPrompt ? { prompt: boundedPrompt } : {}),
+            ...(projectLabel ? { projectLabel } : {}),
+            startedThread: {
+              backend,
+              threadId,
+              ...(codexEnvironmentStartupFailure?.message
+                ? { setupFailure: codexEnvironmentStartupFailure.message }
+                : {}),
+            },
+            seedMode,
+            groupingMode,
+            workspaceMode: createdWorkspaceMode,
+            ...(turnStartFailure
+              ? { turnStartFailure: turnStartFailure.message }
+              : {}),
+          },
+        });
+        await this.context.emit({
+          backend: sourceBackend,
+          notification: {
+            method: "thread/launchedThreads/updated",
+            params: {
+              threadId: sourceThreadId,
+              launchId: handoffId,
+            },
+          },
+        });
+      } catch (error) {
+        backendRegistryLog.warn("failed to record handoff launched thread", {
+          backend: sourceBackend,
+          error: error instanceof Error ? error.message : String(error),
+          handoffId,
+          threadId: sourceThreadId,
+        });
+      }
+    }
     this.updatePendingThreadHandoff(handoffId, {
       status: turnStartFailure ? "failed" : "completed",
       phase: turnStartFailure ? "failed" : "completed",

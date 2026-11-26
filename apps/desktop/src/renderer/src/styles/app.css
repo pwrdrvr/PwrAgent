@@ -37577,6 +37577,184 @@ div.composer-error-row__toggle {
   line-height: 1.45;
 }
 
+/* Durable transcript card left when a handoff to-do launches a thread. */
+.transcript-launched-todo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.transcript-launched-todo[data-setup-failed="true"] {
+  border-color: var(--danger-border);
+}
+
+.transcript-launched-todo__header {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.transcript-launched-todo__toggle,
+.transcript-launched-todo__label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.transcript-launched-todo__toggle {
+  padding: 2px 4px 2px 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.transcript-launched-todo__toggle:hover {
+  color: var(--text-primary);
+}
+
+.transcript-launched-todo__toggle[aria-expanded="true"] .transcript-activity__chevron {
+  transform: rotate(45deg);
+}
+
+.transcript-launched-todo__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-launched-todo__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.transcript-launched-todo__verb {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.transcript-launched-todo__meta {
+  display: inline-flex;
+  min-width: 0;
+  margin-left: auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.transcript-launched-todo__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.transcript-launched-todo__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.transcript-launched-todo__detail {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.transcript-launched-todo[data-expanded="true"] .transcript-launched-todo__detail {
+  display: block;
+  overflow: visible;
+}
+
+.transcript-launched-todo__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.transcript-launched-todo__fact-sep {
+  opacity: 0.6;
+}
+
+.transcript-launched-todo__notice {
+  margin: 2px 0 0;
+  color: var(--status-warning-text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.transcript-launched-todo__error-preview,
+.transcript-launched-todo__error-text {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.transcript-launched-todo__error-preview {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.transcript-launched-todo__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.transcript-launched-todo__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.transcript-launched-todo__section > :last-child {
+  margin-bottom: 0;
+}
+
+.transcript-launched-todo__section-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.transcript-launched-todo__steps {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 /* Inside the accent-framed card the toggle must sit ON the card's text
    grid — the bare rows' negative margin (which aligns the chevron with
    the transcript's left edge) would bleed the toggle chrome into the

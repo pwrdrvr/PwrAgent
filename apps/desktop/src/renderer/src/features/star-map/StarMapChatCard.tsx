@@ -85,6 +85,7 @@ import {
   threadGalleryImageMatches,
 } from "../thread-detail/thread-image-gallery";
 import { TranscriptList } from "../thread-detail/TranscriptList";
+import { useThreadLaunchedTodos } from "../thread-detail/useThreadLaunchedTodos";
 import { TranscriptError } from "../thread-detail/TranscriptError";
 import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
 import { ActiveDecisionBatchesStrip } from "../thread-detail/ActiveDecisionBatchesStrip";
@@ -398,6 +399,17 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         : undefined,
     [remoteInstanceId, thread.source],
   );
+  const launchedTodos = useThreadLaunchedTodos({
+    desktopApi,
+    thread: props.active === false
+      ? undefined
+      : {
+          backend: thread.source,
+          threadId: thread.id,
+          ...(federationTarget ? { federationTarget } : {}),
+        },
+    threadKey: cardKey,
+  });
   const composerScopeKey = buildThreadComposerScopeKey(thread.source, thread.id, federationTarget ?? { scope: "local" });
   const ownedComposerDraftStore = useOwnedComposerDraftStore(
     props.composerDraftStore,
@@ -2212,6 +2224,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             desktopApi={desktopApi}
             entries={transcriptWindow.visibleEntries}
             error={session.error}
+            launchedThreads={thread.launchedThreadLog}
+            launchedTodos={launchedTodos}
             loading={session.loading}
             loadingMore={session.loadingMore}
             onLoadOlder={transcriptWindow.loadOlder}

@@ -68,6 +68,32 @@ describe("listing To-dos on their owner", () => {
     expect((await localThreadTodoOperations.listTodos({ status: "open" })).todos).toEqual([]);
     expect(fixture.listThreads).not.toHaveBeenCalled();
   });
+
+  it("returns a single thread's completed to-dos even if the thread is archived without scanning owners", async () => {
+    const archivedDone: ThreadTodo = {
+      ...card("archived", 2),
+      kind: "handoff",
+      status: "done",
+      resolvedAt: 4,
+      startedThread: { backend: "codex", threadId: "child-1" },
+    };
+    fixture.cards = [archivedDone];
+    fixture.listThreads.mockClear();
+    fixture.listThreads.mockResolvedValue([thread("archived", { archivedAt: 5 })]);
+
+    const scoped = await localThreadTodoOperations.listTodos({
+      status: "done",
+      backend: "codex",
+      threadId: "archived",
+    });
+    expect(scoped.todos).toEqual([archivedDone]);
+    expect(fixture.listThreads).not.toHaveBeenCalled();
+
+    // Unscoped completed listing still filters archived threads out of the global panel.
+    const globalDone = await localThreadTodoOperations.listTodos({ status: "done" });
+    expect(globalDone.todos).toEqual([]);
+    expect(fixture.listThreads).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("raising a started thread's plan for a peer", () => {

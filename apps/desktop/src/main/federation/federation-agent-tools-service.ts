@@ -43,6 +43,7 @@ import type {
   NavigationQueryPage,
   NavigationSelectedDetailResponse,
   NavigationThreadSummary,
+  ThreadLaunchedThread,
 } from "@pwragent/shared/contracts/navigation";
 import {
   FEDERATION_CAPABILITIES,
@@ -56,6 +57,7 @@ import {
   NAVIGATION_QUERY_MAX_PAGE_ROWS,
 } from "@pwragent/shared/contracts/navigation";
 import { buildThreadMarkdownLink, buildThreadUrl } from "@pwragent/shared/contracts/thread-link";
+import { shortenDerivedThreadTitle } from "@pwragent/shared/thread-titles";
 import { resolveModelOptionReference } from "@pwragent/shared/codex-model-providers";
 import { THREAD_ENVIRONMENT_NONE } from "@pwragent/shared/contracts/agent";
 import { checkAgentAccessRequest } from "../agent-tools/agent-access-ceiling";
@@ -115,6 +117,11 @@ type FederationAgentThreadStore = RemoteThreadTargetStore & {
     pinnedVia?: "child";
     summary?: NavigationThreadSummary;
   }) => Promise<unknown>;
+  appendLaunchedThread?: (params: {
+    backend: PwrAgentFederationContext["backend"];
+    threadId: string;
+    launch: ThreadLaunchedThread;
+  }) => Promise<unknown>;
 };
 
 /**
@@ -140,6 +147,11 @@ export function createFederationAgentToolsHandler(
       instanceId: string;
       backend: CreateInstanceThreadResult["backend"];
       threadId: string;
+    }) => Promise<void> | void;
+    onLaunchedThreadRecorded?: (params: {
+      backend: PwrAgentFederationContext["backend"];
+      threadId: string;
+      launchId: string;
     }) => Promise<void> | void;
     resolveSourceTurnAttachments?: (
       context: PwrAgentFederationContext,
@@ -229,8 +241,10 @@ export function createFederationAgentToolsHandler(
           collectHostInfo,
           options.targetStore,
           options.onRemoteChildMounted,
+          options.onLaunchedThreadRecorded,
           options.resolveSourceTurnAttachments,
           options.resolveMessageOrigin,
+          options.operatorApproved === true,
         );
       }
       return await searchFederationThreads(
@@ -597,12 +611,18 @@ async function createInstanceThread(
     backend: CreateInstanceThreadResult["backend"];
     threadId: string;
   }) => Promise<void> | void) | undefined,
+  onLaunchedThreadRecorded: ((params: {
+    backend: PwrAgentFederationContext["backend"];
+    threadId: string;
+    launchId: string;
+  }) => Promise<void> | void) | undefined,
   resolveSourceTurnAttachments: ((
     context: PwrAgentFederationContext,
   ) => AppServerTurnInputItem[] | Promise<AppServerTurnInputItem[]>) | undefined,
   resolveMessageOrigin: ((
     context: PwrAgentFederationContext,
   ) => AppServerThreadMessageOrigin) | undefined,
+  operatorApproved: boolean,
 ): Promise<PwrAgentFederationResponse> {
   const resolved = await resolveInstance(runtime, args.instanceId, collectHostInfo);
   if (!resolved.ok) {
@@ -780,6 +800,68 @@ async function createInstanceThread(
     backend: response.backend,
     ...(!instance.isLocal ? { instanceId: instance.instanceId } : {}),
   };
+  if (
+    !operatorApproved
+    && messageOrigin.kind === "agent"
+    && messageOrigin.sourceThread
+    && targetStore?.appendLaunchedThread
+  ) {
+    const sourceThread = messageOrigin.sourceThread;
+    const launchId = `create_instance_thread:${instance.instanceId}:${response.backend}:${response.threadId}`;
+    const trimmedInput = args.input?.trim();
+    const boundedPrompt = trimmedInput
+      ? trimmedInput.length > 4_000
+        ? `${trimmedInput.slice(0, 3_999)}…`
+        : trimmedInput
+      : undefined;
+    const title =
+      (trimmedInput ? shortenDerivedThreadTitle(trimmedInput) : undefined)
+      || directory.label;
+    try {
+      await targetStore.appendLaunchedThread({
+        backend: sourceThread.backend,
+        threadId: sourceThread.threadId,
+        launch: {
+          id: launchId,
+          source: "create_instance_thread",
+          occurredAt: Date.now(),
+          title,
+          ...(boundedPrompt ? { prompt: boundedPrompt } : {}),
+          projectLabel: directory.label,
+          startedThread: {
+            backend: response.backend,
+            threadId: response.threadId,
+            ...(!instance.isLocal
+              ? {
+                  instanceId: instance.instanceId,
+                  instanceLabel: instance.label,
+                }
+              : {}),
+            ...(response.codexEnvironmentStartupFailure?.message
+              ? { setupFailure: response.codexEnvironmentStartupFailure.message }
+              : {}),
+          },
+          groupingMode,
+          ...(response.workMode ? { workspaceMode: response.workMode } : {}),
+          ...(response.turnStartFailure
+            ? { turnStartFailure: response.turnStartFailure.message }
+            : {}),
+        },
+      });
+      await onLaunchedThreadRecorded?.({
+        backend: sourceThread.backend,
+        threadId: sourceThread.threadId,
+        launchId,
+      });
+    } catch (error) {
+      log.warn("failed to record create_instance_thread launched thread", {
+        backend: sourceThread.backend,
+        error: error instanceof Error ? error.message : String(error),
+        launchId,
+        threadId: sourceThread.threadId,
+      });
+    }
+  }
   const result: CreateInstanceThreadResult = {
     instanceId: instance.instanceId,
     instanceLabel: instance.label,

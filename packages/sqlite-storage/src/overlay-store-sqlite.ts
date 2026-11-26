@@ -93,6 +93,7 @@ import type {
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   RemoteThreadPin,
+  ThreadLaunchedThread,
   ThreadQuestionnaireActivity,
   ThreadRewindRecord,
   ThreadSubAgentSummary,
@@ -153,6 +154,7 @@ import {
 import {
   DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
+  MAX_LAUNCHED_THREAD_LOG_ENTRIES,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_MANAGED_REVIEW_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
@@ -1420,6 +1422,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           turnFailureLog: current?.turnFailureLog,
           questionnaireActivityLog: current?.questionnaireActivityLog,
           rewindLog: current?.rewindLog,
+          launchedThreadLog: current?.launchedThreadLog,
         });
       }
     }
@@ -7119,7 +7122,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         SELECT json_extract(requested.value, '$.id') AS id,
           json_remove(threads.payload, '$.immutableUsageActivities', '$.managedReviewEntries',
             '$.permissionTransitionLog', '$.messagingBindingTransitionLog',
-            '$.turnFailureLog', '$.questionnaireActivityLog', '$.rewindLog', '$.subAgents') AS payload
+            '$.turnFailureLog', '$.questionnaireActivityLog', '$.rewindLog', '$.launchedThreadLog', '$.subAgents') AS payload
         FROM json_each(?) AS requested
         LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
@@ -7438,6 +7441,41 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return nextState;
   }
 
+  async appendLaunchedThread(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    launch: ThreadLaunchedThread;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const existing = current.launchedThreadLog ?? [];
+    const withoutDup = existing.filter((entry) => entry.id !== params.launch.id);
+    const nextLog = [
+      ...withoutDup,
+      params.launch,
+    ].sort((left, right) => {
+      if (left.occurredAt !== right.occurredAt) {
+        return left.occurredAt - right.occurredAt;
+      }
+      return left.id.localeCompare(right.id);
+    });
+    const trimmed =
+      nextLog.length > MAX_LAUNCHED_THREAD_LOG_ENTRIES
+        ? nextLog.slice(nextLog.length - MAX_LAUNCHED_THREAD_LOG_ENTRIES)
+        : nextLog;
+    const nextState: ThreadOverlayState = {
+      ...current,
+      launchedThreadLog: trimmed,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async appendThreadRewind(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -7458,6 +7496,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       messagingBindingTransitionLog: undefined,
       turnFailureLog: undefined,
       questionnaireActivityLog: undefined,
+      launchedThreadLog: undefined,
       managedReviewEntries: undefined,
       pendingManagedReviewContextEntryIds: undefined,
       rewindLog: [params.rewind],
@@ -13392,6 +13431,7 @@ export type OverlayStoreLike = Pick<
   | "appendTurnFailure"
   | "setTurnFailureCodexInvalidIdRecovery"
   | "appendQuestionnaireActivity"
+  | "appendLaunchedThread"
   | "appendThreadRewind"
   | "markThreadRewindUndone"
   | "getLaunchpadDefaults"
