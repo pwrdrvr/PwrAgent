@@ -2595,10 +2595,16 @@ export class ManagedReviewService {
     const reviewKey = buildReviewSubAgentKey(event.backend, threadId, turnId);
     const record =
       this.context.turnState.liveReviewRecords().get(reviewKey)
-      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey);
+      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey)
+      ?? this.findActiveReviewSubAgentForTerminal({
+        backend: event.backend,
+        threadId,
+        turnId,
+      })?.record;
     if (!record) {
       return event;
     }
+    const relatedReviewTurnId = record.turnId !== turnId ? record.turnId : undefined;
     const data = readRecord(item.data) ?? {};
     // Each field guards itself. Keying the whole decoration off `reviewer`
     // made a later field's delivery depend on an unrelated field's absence:
@@ -2608,24 +2614,27 @@ export class ManagedReviewService {
       ...(data.reviewer ? {} : { reviewer: reviewEntryReviewer(record) }),
       ...(record.context && !data.context ? { context: record.context } : {}),
     };
-    if (Object.keys(additions).length === 0) {
+    if (Object.keys(additions).length === 0 && !relatedReviewTurnId) {
       return event;
     }
     return {
       ...event,
-      notification: {
-        ...event.notification,
-        params: {
-          ...event.notification.params,
-          item: {
-            ...item,
-            data: {
-              ...data,
-              ...additions,
+      ...(relatedReviewTurnId ? { relatedReviewTurnId } : {}),
+      ...(Object.keys(additions).length > 0 ? {
+        notification: {
+          ...event.notification,
+          params: {
+            ...event.notification.params,
+            item: {
+              ...item,
+              data: {
+                ...data,
+                ...additions,
+              },
             },
           },
         },
-      },
+      } : {}),
     } as AgentEvent;
   }
 }

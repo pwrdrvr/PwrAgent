@@ -8365,6 +8365,18 @@ function useComposerController(props: ComposerProps) {
   const reviewWaitsAfter = (config: ReviewConfigState | undefined): boolean =>
     config?.waitAfterReview ?? props.reviewAutoFixDefault === false;
 
+  const withDefaultReviewAfterAction = <
+    T extends { displayText: string; target: AppServerReviewTarget; afterReview?: ReviewAfterAction },
+  >(
+    command: T,
+  ): T & { afterReview?: ReviewAfterAction } =>
+    command.afterReview || !reviewAutoFixSupported
+      ? command
+      : {
+          ...command,
+          afterReview: props.reviewAutoFixDefault === false ? "wait" : "auto-fix",
+        };
+
   const submitReviewConfig = async (
     config: ReviewConfigState | undefined,
   ): Promise<void> => {
@@ -9718,7 +9730,7 @@ function useComposerController(props: ComposerProps) {
         setSendError("Choose a project to review.");
         return;
       }
-      queueReviewCommand(reviewCommand, { scheduledSendAt });
+      queueReviewCommand(withDefaultReviewAfterAction(reviewCommand), { scheduledSendAt });
       return;
     }
 
@@ -10387,7 +10399,7 @@ function useComposerController(props: ComposerProps) {
           }));
           setSendError(undefined);
         } else {
-          await submitReviewCommand(reviewCommand);
+          await submitReviewCommand(withDefaultReviewAfterAction(reviewCommand));
         }
         return;
       }
@@ -10473,7 +10485,7 @@ function useComposerController(props: ComposerProps) {
           return;
         }
         queueReviewCommand(
-          reviewCommand,
+          withDefaultReviewAfterAction(reviewCommand),
           effectiveScheduledSendAt
             ? { scheduledSendAt: effectiveScheduledSendAt }
             : undefined,
@@ -10573,7 +10585,7 @@ function useComposerController(props: ComposerProps) {
       }
 
       if (effectiveScheduledSendAt) {
-        queueReviewCommand(reviewCommand, {
+        queueReviewCommand(withDefaultReviewAfterAction(reviewCommand), {
           scheduledSendAt: effectiveScheduledSendAt,
         });
         return;
@@ -10583,7 +10595,7 @@ function useComposerController(props: ComposerProps) {
       // pending time before firing so it doesn't linger and re-arm the toggle.
       setScheduledDraftSendAt(undefined);
       setScheduleArmed(true);
-      await submitReviewCommand(reviewCommand);
+      await submitReviewCommand(withDefaultReviewAfterAction(reviewCommand));
       return;
     }
 

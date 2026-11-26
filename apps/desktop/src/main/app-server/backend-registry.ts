@@ -11037,8 +11037,16 @@ export class DesktopBackendRegistry {
     return { results };
   }
 
-  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn: true }): Promise<JoinedSubmissionResult>;
-  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn?: false }): Promise<ThreadTurnQueueImmediateSubmissionResult>;
+  /** Pause queued turn dispatch on a thread until the returned release runs. */
+  suspendTurnQueueDispatch(thread: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): () => void {
+    return this.threadTurnQueue.suspendDispatch(thread);
+  }
+
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn: true; reviewAutoFixHandoff?: boolean }): Promise<JoinedSubmissionResult>;
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn?: false; reviewAutoFixHandoff?: boolean }): Promise<ThreadTurnQueueImmediateSubmissionResult>;
   async submitTurnIfIdle(params: IdleSubmission & {
     /**
      * A PwrAgent wake (Continue After, a PR watch) joins a running turn, or
@@ -11047,10 +11055,17 @@ export class DesktopBackendRegistry {
      * archive, a handoff, a workspace move or a checkout restore still does.
      */
     joinRunningTurn?: boolean;
+    /**
+     * True while the review Auto-fix runtime holds a boundary dispatch
+     * suspension so the fix can start ahead of waiting FIFO entries once the
+     * review turn ends.
+     */
+    reviewAutoFixHandoff?: boolean;
   }): Promise<JoinedSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
-    const { origin = "manual", joinRunningTurn = false, canAdmit, ...entry } = params;
+    const { origin = "manual", joinRunningTurn = false, reviewAutoFixHandoff = false, canAdmit, ...entry } = params;
     const join = joinRunningTurn && isSteerableAgentTraffic(entry.messageOrigin);
+    const handoff = reviewAutoFixHandoff && Boolean(entry.messageOrigin?.reviewAutoFix);
     const overlay = await this.overlayStore.getThreadOverlayState({ backend: params.backend, threadId: params.threadId });
     // The durable archive observation also covers watches restored at startup,
     // before provider listings have populated this process's information store.
@@ -11079,7 +11094,10 @@ export class DesktopBackendRegistry {
             ...entry,
             input,
             origin,
-          }, { onAdmission });
+          }, {
+            onAdmission,
+            ...(handoff ? { bypassWaitingQueue: true, ignoreDispatchSuspensionCount: 1 } : {}),
+          });
       });
     } catch (error) {
       // Turn preparation yields after the queue's idle check. If a backend

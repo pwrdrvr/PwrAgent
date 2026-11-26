@@ -9113,6 +9113,36 @@ describe("Composer", () => {
     }));
   });
 
+  it.each([
+    { setting: undefined, expected: "auto-fix" },
+    { setting: true, expected: "auto-fix" },
+    { setting: false, expected: "wait" },
+  ])("applies the Auto-fix default ($setting -> $expected) to direct /review commands with arguments", async ({ setting, expected }) => {
+    const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true,
+      reviewCodexSubAgent: true, reviewAutoFix: true };
+    render(<Composer
+      backends={[backend]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      disabled={false} skills={[]}
+      reviewAutoFixDefault={setting}
+      thread={{
+        id: "thread-1", title: "Direct review", titleSource: "explicit",
+        source: "codex", executionMode: "default", inbox: { inInbox: false },
+        linkedDirectories: [],
+      }}
+    />);
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review main" } });
+    await act(async () => { fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" }); });
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+        target: { type: "baseBranch", branch: "main" },
+        afterReview: expected,
+      }));
+    });
+  });
+
   /**
    * Rule: checking several attached PRs queues one review per PR, in the
    * list's order (open newest first, then finished newest first) whatever
