@@ -19734,10 +19734,70 @@ describe("Composer", () => {
 
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "/compact" } });
+    expect(screen.getByRole("listbox", { name: "Commands" })).toBeInTheDocument();
     fireEvent.keyDown(textarea, { key: "Enter", code: "Enter" });
 
     expect(compactThread).not.toHaveBeenCalled();
     expect(screen.queryByText("Selected backend does not support compaction.")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(textarea).toHaveValue("/compact ");
+    });
+  });
+
+  it("routes alias-matched ACP compact commands through compactThread", async () => {
+    const compactThread = vi.fn(async (request: CompactThreadRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      turnId: "compact-turn-alias",
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "acp:antigravity" as const,
+      threadId: "ag-thread-alias",
+      turnId: "turn-acp-alias",
+    }));
+
+    render(
+      <Composer
+        desktopApi={{
+          compactThread,
+          onAgentEvent: () => () => undefined,
+          startTurn,
+        }}
+        disabled={false}
+        providerCommands={[
+          {
+            name: "summarize",
+            aliases: ["compact"],
+            description: "Summarize the conversation into a checkpoint.",
+            backend: "acp:antigravity",
+            scope: "session",
+            source: "provider",
+          },
+        ]}
+        skills={[]}
+        thread={{
+          id: "ag-thread-alias",
+          title: "Antigravity alias thread",
+          titleSource: "explicit",
+          source: "acp:antigravity",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    const textarea = screen.getByLabelText("Reply");
+    fireEvent.change(textarea, { target: { value: "/summarize" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(compactThread).toHaveBeenCalledWith({
+        backend: "acp:antigravity",
+        threadId: "ag-thread-alias",
+      });
+    });
+    expect(startTurn).not.toHaveBeenCalled();
   });
 
   it("locks the thread from /lock with the rest of the line as its note", async () => {

@@ -6498,6 +6498,7 @@ export class DesktopBackendRegistry {
         // prompt when the agent session has not been sent this text.
         agentInstructions: providerDeliveredAgentInstructions(overlay?.agent) ?? "",
         ...(overlay?.agent ? { readAgentMemory: () => this.readAgentMemoryContext(params) } : {}),
+        ...(params.isCompactCommand ? { isCompactCommand: true } : {}),
       });
     } catch (error) {
       await this.emit({
@@ -11877,6 +11878,7 @@ export class DesktopBackendRegistry {
     agentMessageOrigins?: AppServerThreadMessageOrigin[];
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
+    isCompactCommand?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     const endUpdateBlockingWork = beginUpdateBlockingWork();
     try {
@@ -11895,8 +11897,13 @@ export class DesktopBackendRegistry {
   private async prepareAndStartTurn(params: Parameters<DesktopBackendRegistry["startTurnNow"]>[0]): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
     return await this.threadStarts.run(params, async () => {
-      const acpCompactTurn =
-        isAcpBackendId(params.backend) && isAcpCompactTurnInput(params.input);
+      const acpCompactTurn = isAcpBackendId(params.backend) && (
+        params.isCompactCommand === true
+        || isAcpCompactTurnInput(
+          params.input,
+          this.acpBackend.getSession(params.backend, params.threadId)?.availableCommands,
+        )
+      );
       // The first call establishes the per-turn context by calling startTurnNow
       // again. Add the notice at its inner, actual admission boundary.
       // Never prepend stack notices to an ACP `/compact` command: ACP agents
@@ -11934,6 +11941,7 @@ export class DesktopBackendRegistry {
     agentMessageOrigins?: AppServerThreadMessageOrigin[];
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
     invalidIdRecoveryAttempted?: boolean;
+    isCompactCommand?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.threadArchiveCoordinator.assertArchiveWorkspaceUsable(buildThreadIdentityKey(params.backend, params.threadId));
     if (!this.tokenMiserServerCapabilitiesForTurn.getStore()) {
@@ -12044,7 +12052,12 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
-      const acpCompactTurn = isAcpCompactTurnInput(params.input);
+      const acpCompactTurn =
+        params.isCompactCommand === true
+        || isAcpCompactTurnInput(
+          params.input,
+          this.acpBackend.getSession(params.backend, params.threadId)?.availableCommands,
+        );
       // Leave pending review contexts for the next normal turn so they neither
       // get prepended before `/compact` (breaking slash-command detection) nor
       // get consumed without reaching the agent.
@@ -12139,6 +12152,7 @@ export class DesktopBackendRegistry {
           ...identity, input,
           model: modelSettings.model,
           reasoningEffort: modelSettings.reasoningEffort,
+          ...(acpCompactTurn ? { isCompactCommand: true } : {}),
         }, { executionMode: params.executionMode }),
         bindOrigin: (origin, result) => this.bindStartingTurnOrigin(origin, result),
         consumeReviewContexts: () => this.overlayStore.consumeManagedReviewContexts({
@@ -13470,20 +13484,6 @@ export class DesktopBackendRegistry {
       throw new Error("Desktop backend registry is closed");
     }
     this.assertThreadOwnership();
-    const session = this.acpBackend.getSession(params.backend, params.threadId);
-    let commands = session?.availableCommands ?? [];
-    if (commands.length === 0) {
-      commands = await this.resolveAcpAvailableCommands({
-        backend: params.backend,
-        cwds: [session?.cwd],
-      });
-    }
-    const compactCommand = findAdvertisedAcpCompactCommand(commands);
-    if (!compactCommand) {
-      throw new Error(
-        "ACP backend " + params.backend + " does not support thread compaction",
-      );
-    }
     await this.assertThreadNotLocked(params.backend, params.threadId);
     if (
       this.reservedAcpStartThreadKeys.has(
@@ -13493,8 +13493,35 @@ export class DesktopBackendRegistry {
     ) {
       throw new Error("Cannot compact a thread while another operation is running");
     }
+    const session = this.acpBackend.getSession(params.backend, params.threadId);
+    let commands = session?.availableCommands ?? [];
+    if (commands.length === 0) {
+      // Wake an archived worktree before resolving its repository path so
+      // repo-level command caching and probing operate on the restored checkout.
+      await this.threadArchiveCoordinator.ensureCheckoutAwake(params);
+      const refreshedSession =
+        this.acpBackend.getSession(params.backend, params.threadId) ?? session;
+      const overlay = await this.overlayStore.getThreadOverlayState(params);
+      commands = await this.resolveAcpAvailableCommands({
+        backend: params.backend,
+        cwds: [
+          refreshedSession?.cwd,
+          ...(overlay?.extraLinkedDirectories ?? []).flatMap((directory) => [
+            directory.worktreePath,
+            directory.path,
+          ]),
+        ],
+      });
+    }
+    const compactCommand = findAdvertisedAcpCompactCommand(commands);
+    if (!compactCommand) {
+      throw new Error(
+        "ACP backend " + params.backend + " does not support thread compaction",
+      );
+    }
+    await this.threadModelSettings.assertRequestedThreadModelAvailable(params);
     try {
-      return await this.startTurn({
+      return await this.startTurnNow({
         backend: params.backend,
         threadId: params.threadId,
         input: [
@@ -13503,6 +13530,7 @@ export class DesktopBackendRegistry {
             text: formatAcpCompactCommandPrompt(compactCommand),
           },
         ],
+        isCompactCommand: true,
       });
     } catch (error) {
       if (error instanceof ThreadAlreadyActiveError) {

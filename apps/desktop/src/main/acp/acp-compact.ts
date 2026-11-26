@@ -3,7 +3,7 @@ import type {
   AppServerTurnInputItem,
 } from "@pwragent/shared/contracts/normalized-app-server";
 
-const ACP_COMPACT_COMMAND_PATTERN = /^\/compact(?:\s|$)/i;
+const LEADING_SLASH_COMMAND_PATTERN = /^\/([^\s/]+)(?:\s|$)/i;
 
 /** Strip leading slashes and outer whitespace from an advertised ACP command name. */
 export function normalizeAcpCommandName(name: string): string {
@@ -36,26 +36,67 @@ export function formatAcpCompactCommandPrompt(
 }
 
 /**
- * True when text begins with `/compact` (bare or followed by whitespace and
- * optional focus instructions). Antigravity and other ACP agents only trigger
- * compaction when `/compact` is the leading text with nothing prepended.
+ * Lowercased slash-command trigger names (without leading `/`) that invoke
+ * compaction for an ACP session: always `"compact"`, plus the canonical name
+ * and aliases of any advertised compact command (e.g. `summarize` when aliased
+ * to `compact`).
  */
-export function isAcpCompactCommandText(text: string): boolean {
-  return ACP_COMPACT_COMMAND_PATTERN.test(text.trimStart());
+export function acpCompactCommandTriggerNames(
+  commands?: readonly AppServerAvailableCommandSummary[],
+): Set<string> {
+  const names = new Set<string>(["compact"]);
+  const advertised = findAdvertisedAcpCompactCommand(commands);
+  if (!advertised) {
+    return names;
+  }
+  const canonical = normalizeAcpCommandName(advertised.name).toLowerCase();
+  if (canonical) {
+    names.add(canonical);
+  }
+  for (const alias of advertised.aliases ?? []) {
+    const normalizedAlias = normalizeAcpCommandName(alias).toLowerCase();
+    if (normalizedAlias) {
+      names.add(normalizedAlias);
+    }
+  }
+  return names;
 }
 
-/** True when a normalized turn input list starts with an ACP `/compact` command. */
+/**
+ * True when text begins with `/compact` or the session's advertised compact
+ * command name/alias (bare or followed by whitespace and optional focus
+ * instructions). ACP agents such as Antigravity only trigger compaction when
+ * the command is the leading text with nothing prepended.
+ */
+export function isAcpCompactCommandText(
+  text: string,
+  commands?: readonly AppServerAvailableCommandSummary[],
+): boolean {
+  const match = LEADING_SLASH_COMMAND_PATTERN.exec(text.trimStart());
+  if (!match?.[1]) {
+    return false;
+  }
+  return acpCompactCommandTriggerNames(commands).has(match[1].toLowerCase());
+}
+
+/** True when a normalized turn input list starts with an ACP compact command. */
 export function isAcpCompactTurnInput(
   input: readonly AppServerTurnInputItem[],
+  commands?: readonly AppServerAvailableCommandSummary[],
 ): boolean {
   const first = input[0];
-  return first?.type === "text" && isAcpCompactCommandText(first.text);
+  return first?.type === "text" && isAcpCompactCommandText(first.text, commands);
 }
 
-/** True when ACP wire prompt blocks start with a `/compact` command block. */
+/** True when ACP wire prompt blocks start with a compact command block. */
 export function isAcpCompactPromptBlocks(
   prompt: ReadonlyArray<{ readonly type: string; readonly text?: string }>,
+  commands?: readonly AppServerAvailableCommandSummary[],
 ): boolean {
   const first = prompt[0];
-  return first?.type === "text" && typeof first.text === "string" && isAcpCompactCommandText(first.text);
+  return (
+    first?.type === "text"
+    && typeof first.text === "string"
+    && isAcpCompactCommandText(first.text, commands)
+  );
 }
