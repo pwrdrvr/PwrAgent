@@ -18,7 +18,8 @@ const fixture = vi.hoisted(() => {
     handlers: new Map<string, (event: unknown, request: unknown) => Promise<unknown>>(),
     remote: vi.fn(async (..._args: unknown[]): Promise<unknown> => ["question-1"]), localDismiss: vi.fn(), localList: vi.fn(() => []),
     remoteListener: undefined as ((event: AgentEvent) => void) | undefined,
-    peerListener: undefined as (() => void) | undefined,
+    peerListener: undefined as ((instanceId: string) => void) | undefined,
+    mountedCounts: new Map<string, { live: number; revoked: number }>(),
   };
 });
 
@@ -26,22 +27,29 @@ vi.mock("electron", () => ({ ipcMain: {
   removeHandler: (channel: string) => fixture.handlers.delete(channel),
   handle: (channel: string, handler: (event: unknown, request: unknown) => Promise<unknown>) => fixture.handlers.set(channel, handler),
 } }));
-vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({ listRemoteThreadPins: async () => [] }) }));
+vi.mock("../storage/desktop-overlay-store", () => ({ getDesktopOverlayStore: () => ({
+  listRemoteThreadPins: async () => [],
+  countRemoteThreadPinsByInstance: async () => fixture.mountedCounts,
+}) }));
 vi.mock("../operator-requests/operator-request-runtime", () => ({
   localOperatorQuestionOperations: { dismiss: fixture.localDismiss, listDismissed: fixture.localList },
 }));
 vi.mock("../federation/federation-runtime", () => ({ getDesktopFederationRuntime: () => ({
   requestOperatorQuestionOperation: fixture.remote,
   onRemoteBackendEvent: (listener: (event: AgentEvent) => void) => { fixture.remoteListener = listener; return () => {}; },
-  onPeerStatusChanged: (listener: () => void) => { fixture.peerListener = listener; return () => {}; },
+  onPeerStatusChanged: (listener: (instanceId: string) => void) => { fixture.peerListener = listener; return () => {}; },
 }) }));
 vi.mock("../log", () => ({ getMainLogger: () => ({ warn: vi.fn() }) }));
 
 import { registerOperatorRequestIpcHandlers } from "../shell/ipc/operator-requests-ipc";
+import { changesOperatorQueueMounts } from "../operator-requests/operator-request-mount-change";
 import { mainWindowEventChannels } from "../shell/main-window-channels";
 import { WINDOW_KIND_MAIN, _resetWindowChannelsForTests, registerWindowChannels } from "../shell/window-channels";
 
 const events: OwnerQueueEvents = new EventEmitter();
+function publishMountEvent(event: AgentEvent): void {
+  if (changesOperatorQueueMounts(event)) events.emit("operatorRequestsChanged", { reason: "questions" });
+}
 
 // The real registry, fed the channels createMainWindow registers, so a
 // window missing a channel misses its broadcasts here as it does in the app.
@@ -55,6 +63,7 @@ function registerTestWindows(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  fixture.mountedCounts.clear();
   registerTestWindows();
   registerOperatorRequestIpcHandlers({
     operatorRequests: { list: () => ({ serverRequests: [], questions: [], seenKeys: [] }), markSeen: vi.fn() },
@@ -107,7 +116,8 @@ describe("operator question IPC ownership", () => {
     expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
   });
 
-  it("refreshes the correct viewers on remote changes, stream recovery and reconnection", () => {
+  it("refreshes the correct viewers on remote changes, stream recovery and reconnection", async () => {
+    fixture.mountedCounts.set("owner", { live: 1, revoked: 0 });
     fixture.remoteListener!({ backend: "codex", federationTarget: fixture.target,
       notification: { method: "thread/operatorQuestions/changed", params: { backend: "codex", threadId: "thread-1" } },
     });
@@ -121,8 +131,35 @@ describe("operator question IPC ownership", () => {
       notification: { method: "federation/eventStream/changed", params: {} },
     } as AgentEvent);
     expect(fixture.windows[1]!.send).toHaveBeenCalledTimes(2);
-    fixture.peerListener!();
+    fixture.peerListener!("owner");
+    await Promise.resolve();
     expect(fixture.windows[1]!.send).toHaveBeenCalledTimes(3);
+    expect(fixture.windows[2]!.send).not.toHaveBeenCalled();
+  });
+
+  it("a peer status change refreshes only its full viewer when its mounts are revoked", async () => {
+    fixture.mountedCounts.set("owner", { live: 1, revoked: 0 });
+    fixture.mountedCounts.set("other", { live: 0, revoked: 1 });
+    fixture.peerListener!("other");
+    await Promise.resolve();
+    expect(fixture.windows[0]!.send).not.toHaveBeenCalled();
+    expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
+    expect(fixture.windows[2]!.send).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes the main window on saved membership changes and ignores rank and summary changes", () => {
+    const publish = (params: { threadId?: string; pinned?: boolean; membershipChanged?: false }) => publishMountEvent({
+      backend: "codex",
+      notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId: "owner", ...params } },
+    });
+    publish({});
+    publish({ threadId: "thread-1", pinned: true, membershipChanged: false });
+    expect(fixture.windows[0]!.send).not.toHaveBeenCalled();
+    publish({ threadId: "thread-1", pinned: true });
+    publish({ pinned: false });
+    expect(fixture.windows[0]!.send).toHaveBeenCalledTimes(2);
+    expect(fixture.windows[1]!.send).not.toHaveBeenCalled();
+    expect(fixture.windows[2]!.send).not.toHaveBeenCalled();
   });
 
   // A full-window viewer reads its queue from the owner. Answering a question

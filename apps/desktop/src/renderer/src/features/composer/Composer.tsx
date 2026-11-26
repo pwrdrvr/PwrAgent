@@ -60,12 +60,10 @@ import { contextWindowMoonFace } from "./context-window-moon";
 import {
   applyContextWindowBudget,
   autoCompactionStatusLine,
-  isAutoCompactionActive,
   type ContextWindowBudget,
-  type ThreadAutoCompactionStatus,
 } from "./context-window-budget";
 import { useAutoCompactionRules, useContextMoonStyle } from "../../lib/context-moon-preferences";
-import { useThreadAutoCompaction } from "../../lib/useThreadAutoCompaction";
+import { isAutoCompactionActive, type ThreadAutoCompactionStatus } from "../../lib/thread-session-transitions";
 import {
   getShortTermRateLimitResetAt,
   getRateLimitResetSendAt,
@@ -508,6 +506,7 @@ export type ComposerProps = {
   /** Threads searchable from the inline `#` reference picker. */
   threads?: NavigationThreadSummary[];
   disabled?: boolean;
+  autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
   draftStore?: ComposerDraftStore;
@@ -525,6 +524,8 @@ export type ComposerProps = {
     text: string;
     /** Queue behind an active turn even when the backend supports steering. */
     busyBehavior?: "queue";
+    /** True when submitted from a review card's Auto-fix / Fix control. */
+    reviewFix?: boolean;
   };
   onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
   /**
@@ -985,6 +986,7 @@ type QueuedTurnDraft = {
   paused?: boolean;
   pauseRevision?: number;
   title?: string;
+  reviewFix?: boolean;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
@@ -5056,7 +5058,7 @@ function useComposerController(props: ComposerProps) {
     // that gate opens instead of consuming its id and rejecting it silently.
     if (props.disabled) return;
     appliedReplySubmissionId.current = submission.id;
-    void submitReplyText(submission.text, submission.busyBehavior)
+    void submitReplyText(submission.text, submission.busyBehavior, submission.reviewFix)
       .catch(() => false)
       .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
     // submitReplyText is recreated each render; the id guard sends once.
@@ -8365,6 +8367,18 @@ function useComposerController(props: ComposerProps) {
   const reviewWaitsAfter = (config: ReviewConfigState | undefined): boolean =>
     config?.waitAfterReview ?? props.reviewAutoFixDefault === false;
 
+  const withDefaultReviewAfterAction = <
+    T extends { displayText: string; target: AppServerReviewTarget; afterReview?: ReviewAfterAction },
+  >(
+    command: T,
+  ): T & { afterReview?: ReviewAfterAction } =>
+    command.afterReview || !reviewAutoFixSupported
+      ? command
+      : {
+          ...command,
+          afterReview: props.reviewAutoFixDefault === false ? "wait" : "auto-fix",
+        };
+
   const submitReviewConfig = async (
     config: ReviewConfigState | undefined,
   ): Promise<void> => {
@@ -8934,6 +8948,7 @@ function useComposerController(props: ComposerProps) {
         fastMode: props.thread.source === "codex" && supportsFast
           ? Boolean(currentSettings?.fastMode)
           : undefined,
+        ...(queued?.reviewFix ? { reviewFix: true } : {}),
       });
       // Only once the turn is actually accepted. Reporting the reply before
       // the await would clear the thread out of the Attention work queue even
@@ -9718,7 +9733,7 @@ function useComposerController(props: ComposerProps) {
         setSendError("Choose a project to review.");
         return;
       }
-      queueReviewCommand(reviewCommand, { scheduledSendAt });
+      queueReviewCommand(withDefaultReviewAfterAction(reviewCommand), { scheduledSendAt });
       return;
     }
 
@@ -10250,7 +10265,11 @@ function useComposerController(props: ComposerProps) {
    * as its own queued draft, so a failure never restores it into the
    * operator's reply and a success never clears what they were typing.
    */
-  const submitReplyText = async (text: string, busyBehavior?: "queue"): Promise<boolean> => {
+  const submitReplyText = async (
+    text: string,
+    busyBehavior?: "queue",
+    reviewFix?: boolean,
+  ): Promise<boolean> => {
     if (
       !props.thread
       || props.launchpad
@@ -10266,6 +10285,7 @@ function useComposerController(props: ComposerProps) {
     const reply: QueuedTurnDraft = {
       id: createQueuedTurnId(),
       text,
+      ...(reviewFix ? { reviewFix: true } : {}),
       imageAttachments: [],
       fileAttachments: [],
       input,
@@ -10387,7 +10407,7 @@ function useComposerController(props: ComposerProps) {
           }));
           setSendError(undefined);
         } else {
-          await submitReviewCommand(reviewCommand);
+          await submitReviewCommand(withDefaultReviewAfterAction(reviewCommand));
         }
         return;
       }
@@ -10473,7 +10493,7 @@ function useComposerController(props: ComposerProps) {
           return;
         }
         queueReviewCommand(
-          reviewCommand,
+          withDefaultReviewAfterAction(reviewCommand),
           effectiveScheduledSendAt
             ? { scheduledSendAt: effectiveScheduledSendAt }
             : undefined,
@@ -10573,7 +10593,7 @@ function useComposerController(props: ComposerProps) {
       }
 
       if (effectiveScheduledSendAt) {
-        queueReviewCommand(reviewCommand, {
+        queueReviewCommand(withDefaultReviewAfterAction(reviewCommand), {
           scheduledSendAt: effectiveScheduledSendAt,
         });
         return;
@@ -10583,7 +10603,7 @@ function useComposerController(props: ComposerProps) {
       // pending time before firing so it doesn't linger and re-arm the toggle.
       setScheduledDraftSendAt(undefined);
       setScheduleArmed(true);
-      await submitReviewCommand(reviewCommand);
+      await submitReviewCommand(withDefaultReviewAfterAction(reviewCommand));
       return;
     }
 
@@ -15860,9 +15880,9 @@ function useComposerController(props: ComposerProps) {
       && filesystemFederationTarget?.scope !== "remote" ? props.launchpad : undefined;
     return (
       props.launchpad || props.thread ? (
-        <div
-          className="composer__setup"
-          aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
+        <fieldset
+          className="composer__pending-controls"
+          disabled={preparingSend}
         >
           {props.launchpad && launchpadMachine && props.launchpadMachineChipHost !== null ? (
             renderLaunchpadMachineChip(
@@ -16448,7 +16468,7 @@ function useComposerController(props: ComposerProps) {
                 }, { owner: { scope: "local" } });
               }} />
           ) : null}
-        </div>
+        </fieldset>
       ) : null
     );
   }
@@ -16470,13 +16490,27 @@ function useComposerController(props: ComposerProps) {
   }
 
   function renderComposerFooter(): ReactNode {
+    const hasSetup = Boolean(props.launchpad || props.thread);
+    const hasApplicationActions = Boolean(
+      launchpadCodexEnvironmentOptions.length > 0
+      || threadCodexEnvironmentOptions.length > 0
+      || props.thread?.codexEnvironmentRuntime
+      || (workspaceOpenPath && (editorApplication || terminalApplication))
+      || (props.thread && !props.launchpad && props.integratedTerminal),
+    );
     return (
-      <div className="composer__footer">
-        {launchpadCodexEnvironmentOptions.length > 0 ||
-        threadCodexEnvironmentOptions.length > 0 ||
-        props.thread?.codexEnvironmentRuntime ||
-        (workspaceOpenPath && (editorApplication || terminalApplication)) ||
-        (props.thread && !props.launchpad && props.integratedTerminal) ? (
+      <div
+        className={hasSetup ? "composer__setup" : "composer__footer"}
+        aria-label={
+          props.launchpad
+            ? "New thread settings"
+            : props.thread
+              ? "Thread settings"
+              : undefined
+        }
+      >
+        {renderComposerToolbar()}
+        {hasApplicationActions ? (
           <div className="composer__application-actions" aria-label="Composer tools">
             <fieldset
               className="composer__pending-controls composer__pending-controls--dim"
@@ -16643,9 +16677,7 @@ function useComposerController(props: ComposerProps) {
             ) : null}
             </fieldset>
           </div>
-        ) : (
-          <span aria-hidden="true" className="composer__footer-spacer" />
-        )}
+        ) : null}
         <div className="composer__actions">
           {rewoundPromptScope === composerScopeKey ? (
             <span className="composer__rewound-chip">
@@ -16654,8 +16686,8 @@ function useComposerController(props: ComposerProps) {
             </span>
           ) : null}
           <ContextWindowMoon
+            autoCompaction={props.autoCompaction}
             contextWindow={props.contextWindow}
-            desktopApi={props.desktopApi}
             model={selectedModelOption?.id ?? currentSettings?.model}
             thread={props.thread}
             onOpenUsage={props.desktopApi?.openUsageActivity
@@ -17495,9 +17527,9 @@ function useComposerController(props: ComposerProps) {
           {renderComposerAutocomplete()}
         </div>
 
-        {renderComposerToolbar()}
-
         {renderComposerWorkspaceHandoff()}
+        </fieldset>
+        {renderComposerFooter()}
 
         {props.unavailableReason ? (
          <p className="composer__meta composer__meta--error">
@@ -17528,9 +17560,6 @@ function useComposerController(props: ComposerProps) {
             Waiting for input before this turn can continue.
           </p>
         ) : null}
-
-        </fieldset>
-        {renderComposerFooter()}
         </form>
         {fullAccessRiskDialog}
         {renderComposerImageLightbox()}
@@ -17811,14 +17840,14 @@ function AttachmentTooltip({
 }
 
 function ContextWindowMoon({
+  autoCompaction,
   contextWindow: reportedContextWindow,
-  desktopApi,
   model,
   thread,
   onOpenUsage,
 }: {
+  autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
-  desktopApi?: DesktopApi;
   /** The thread's model, matched against auto-compaction rules. */
   model?: string;
   thread?: NavigationThreadSummary;
@@ -17832,7 +17861,6 @@ function ContextWindowMoon({
   const opensUsage = Boolean(onOpenUsage);
   const moonStyle = useContextMoonStyle();
   const savedRules = useAutoCompactionRules();
-  const autoCompaction = useThreadAutoCompaction(desktopApi, thread);
   const backend = thread?.source;
   const ownedElsewhere = Boolean(thread?.federation?.ref);
   // A rule's budget, when one matches, is the window the moon measures.
@@ -17842,15 +17870,27 @@ function ContextWindowMoon({
       : undefined,
     [backend, model, ownedElsewhere, reportedContextWindow, savedRules],
   );
-  const contextWindow = measured?.contextWindow;
+  const awaitingContextUsage = autoCompaction?.phase === "verifying";
+  const contextWindow = awaitingContextUsage ? undefined : measured?.contextWindow;
   const budget = measured?.budget;
+  const moonFace = contextWindow ? contextWindowMoonFace(contextWindow.usedPercent, moonStyle) : undefined;
+  const card = useMemo(() => contextWindow || awaitingContextUsage ? (
+    <ContextWindowUsageCard
+      autoCompaction={autoCompaction}
+      budget={budget}
+      contextWindow={contextWindow}
+      critical={moonFace?.critical ?? false}
+      opensUsage={opensUsage}
+      phaseLabel={moonFace?.phaseLabel}
+    />
+  ) : undefined, [awaitingContextUsage, autoCompaction, budget, contextWindow, moonFace?.critical, moonFace?.phaseLabel, opensUsage]);
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
   // hover-time values. If the context state disappears (thread switch),
   // drop the card so it can't reappear at stale coordinates.
   useEffect(() => {
-    if (!contextWindow) {
+    if (!card) {
       recordRendererUpdate(RendererUpdateEvent.contextCardClear, tooltipId);
       hide();
       return;
@@ -17858,63 +17898,45 @@ function ContextWindowMoon({
     if (!visible) {
       return;
     }
-    const moonFace = contextWindowMoonFace(contextWindow.usedPercent, moonStyle);
     recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
-    update(
-      <ContextWindowUsageCard
-        autoCompaction={autoCompaction}
-        budget={budget}
-        contextWindow={contextWindow}
-        critical={moonFace.critical}
-        opensUsage={opensUsage}
-        phaseLabel={moonFace.phaseLabel}
-      />,
-    );
-  }, [autoCompaction, budget, contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
+    update(card);
+  }, [card, hide, tooltipId, update, visible]);
 
-  if (!contextWindow) {
+  if (!card) {
     return null;
   }
 
-  const moonFace = contextWindowMoonFace(contextWindow.usedPercent, moonStyle);
-  const phaseLabel = moonFace.phaseLabel;
-  const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
-  const tokenLabel = `${formatCompactNumber(
-    contextWindow.totalTokens
-  )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
+  const percentLabel = contextWindow ? `${Math.round(contextWindow.usedPercent)}%` : undefined;
+  const tokenLabel = contextWindow
+    ? `${formatCompactNumber(contextWindow.totalTokens)}/${formatCompactNumber(contextWindow.modelContextWindow)}`
+    : undefined;
   const compacting = isAutoCompactionActive(autoCompaction);
-  const label = budget
-    ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : phaseLabel}`
-    : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const label = awaitingContextUsage
+    ? "Context usage pending"
+    : budget
+      ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : moonFace?.phaseLabel}`
+      : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${moonFace?.phaseLabel}`;
   const moonClassName = compacting ? " context-window-moon--compacting" : "";
-  const card = (
-    <ContextWindowUsageCard
-      autoCompaction={autoCompaction}
-      budget={budget}
-      contextWindow={contextWindow}
-      critical={moonFace.critical}
-      opensUsage={opensUsage}
-      phaseLabel={phaseLabel}
-    />
-  );
   const face = (
     <>
-      <span
-        aria-hidden="true"
-        className={`context-window-moon__sprite context-window-moon__sprite--${moonFace.phaseKind}`}
-      >
-        <span className="context-window-moon__disc">
-          <svg
-            className="context-window-moon__shadow"
-            focusable="false"
-            preserveAspectRatio="none"
-            viewBox="-1 -1 2 2"
-          >
-            <path d={moonFace.path} />
-          </svg>
+      {moonFace ? (
+        <span
+          aria-hidden="true"
+          className={`context-window-moon__sprite context-window-moon__sprite--${moonFace.phaseKind}`}
+        >
+          <span className="context-window-moon__disc">
+            <svg
+              className="context-window-moon__shadow"
+              focusable="false"
+              preserveAspectRatio="none"
+              viewBox="-1 -1 2 2"
+            >
+              <path d={moonFace.path} />
+            </svg>
+          </span>
         </span>
-      </span>
-      <span className="context-window-moon__label">{percentLabel}</span>
+      ) : null}
+      {percentLabel ? <span className="context-window-moon__label">{percentLabel}</span> : <span>Pending</span>}
       {tooltipNode}
     </>
   );
@@ -17924,6 +17946,7 @@ function ContextWindowMoon({
   return onOpenUsage ? (
     <button
       aria-label={label}
+      aria-describedby={visible ? tooltipId : undefined}
       className={`context-window-moon context-window-moon--button${moonClassName}`}
       type="button"
       onBlur={hide}
@@ -17940,6 +17963,7 @@ function ContextWindowMoon({
   ) : (
     <div
       aria-label={label}
+      aria-describedby={visible ? tooltipId : undefined}
       className={`context-window-moon${moonClassName}`}
       role="img"
       tabIndex={0}
@@ -17963,12 +17987,23 @@ function ContextWindowUsageCard({
 }: {
   autoCompaction?: ThreadAutoCompactionStatus;
   budget?: ContextWindowBudget;
-  contextWindow: ThreadContextWindowState;
+  contextWindow?: ThreadContextWindowState;
   critical: boolean;
   opensUsage?: boolean;
-  phaseLabel: string;
+  phaseLabel?: string;
 }) {
-  const statusLine = budget ? autoCompactionStatusLine(autoCompaction, formatCompactNumber) : undefined;
+  const statusLine = autoCompactionStatusLine(autoCompaction, formatCompactNumber);
+  if (!contextWindow) {
+    return (
+      <>
+        <div className="context-usage-card__header">
+          <span className="context-usage-card__eyebrow">Context usage</span>
+          <span className="context-usage-card__phase">Pending</span>
+        </div>
+        <div className="context-usage-card__status">{statusLine}</div>
+      </>
+    );
+  }
   const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
   const hasBreakdown =
     typeof contextWindow.inputTokens === "number"

@@ -1,11 +1,22 @@
 import path from "node:path";
-import { bundledGitExecutable } from "../bundled-git";
+import { bundledGitExecutable, isPackagedBundledGit } from "../bundled-git";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { getSelectedManagedGit } from "../git-command";
 import { gitCommandPreference, gitRuntimeEnvironment } from "../git-runtime";
-import { parseGitRemoteConfiguration } from "./git-remote-config";
+import { parseGitRemoteConfigRecords } from "./git-remote-config";
 
 const MAX_CONFIG_INCLUDES = 16;
+const GIT_CONFIG_OVERRIDE = /^GIT_(?:DIR|WORK_TREE|COMMON_DIR|IMPLICIT_WORK_TREE|OBJECT_DIRECTORY|NAMESPACE|CONFIG|CONFIG_COUNT|CONFIG_PARAMETERS|TEST_.*)$/i;
+const GIT_DISCOVERY_OVERRIDE = /^(?:DYLD_.*|LD_.*|SUDO_UID|GIT_(?:CEILING_DIRECTORIES|DISCOVERY_ACROSS_FILESYSTEM|CONFIG_KEY_.*|CONFIG_VALUE_.*))$/i;
+
+// The owner may accept a positive single-branch config sample only from the
+// actual bundled executable. A wrapper can answer config and remote differently.
+export function canReadSingleBranchOrigin(executable: string, env: NodeJS.ProcessEnv): boolean {
+  const preference = gitCommandPreference(env);
+  return process.platform !== "win32" && executable === bundledGitExecutable()
+    && (preference ? isPackagedBundledGit(preference) : !getSelectedManagedGit())
+    && !Object.keys(env).some((key) => GIT_CONFIG_OVERRIDE.test(key) || GIT_DISCOVERY_OVERRIDE.test(key));
+}
 
 export function readPrConfigInputs(cwd: string) {
   const env = buildPwrAgentChildProcessEnv(process.env);
@@ -13,8 +24,7 @@ export function readPrConfigInputs(cwd: string) {
   const executable = bundledGitExecutable();
   if (getSelectedManagedGit() || (preference && path.normalize(preference) !== path.normalize(executable))) return "native-only" as const;
   const nativeOnly = process.platform === "win32" || Boolean(preference);
-  if (!path.isAbsolute(cwd) || Object.keys(env).some((key) =>
-    /^(GIT_(DIR|WORK_TREE|COMMON_DIR|IMPLICIT_WORK_TREE|OBJECT_DIRECTORY|NAMESPACE|CONFIG|CONFIG_COUNT|CONFIG_PARAMETERS|TEST_.*))$/i.test(key))) {
+  if (!path.isAbsolute(cwd) || Object.keys(env).some((key) => GIT_CONFIG_OVERRIDE.test(key))) {
     return undefined;
   }
   const runtime = gitRuntimeEnvironment(env);
@@ -74,7 +84,7 @@ export function parsePrConfigWithOrigins(cwd: string, stdout: string) {
       config.push(scope, record);
     }
   }
-  const configuration = parseGitRemoteConfiguration([...config, ""].join("\0"));
+  const configuration = parseGitRemoteConfigRecords(config);
   return {
     configuration, records: config,
     sources: canTrackIncludes && includes.size <= MAX_CONFIG_INCLUDES ? { origins, localOrigins, includes } : undefined,

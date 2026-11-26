@@ -95,6 +95,9 @@ export function isPwrSnapResourceUri(value: string): boolean {
  * that hold one show the image as unavailable.
  */
 export function isLegacyPwrSnapMediaUrl(value: string): boolean {
+  // Data URLs have opaque origins, so their potentially large payloads cannot affect this check.
+  if (value.startsWith("data:")) return false;
+
   let parsed: ParsedUrl;
   try {
     parsed = new URL(value);

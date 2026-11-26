@@ -8241,17 +8241,156 @@ button.stack-display__thread,
   position: fixed;
   z-index: 50;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px;
+  width: 316px;
+  max-height: min(404px, calc(100vh - 16px));
+  overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--popover-bg);
   box-shadow: var(--shadow-popover);
 }
 
-.reaction-picker__row {
+.reaction-picker__search {
   display: flex;
-  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reaction-picker__search:has(.reaction-picker__search-input:focus-visible) {
+  border-radius: 7px 7px 0 0;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.reaction-picker__search-icon {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.reaction-picker__search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1;
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+.reaction-picker__search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.reaction-picker__search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.reaction-picker__search-clear {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.reaction-picker__search-clear:hover,
+.reaction-picker__search-clear:focus-visible {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.reaction-picker__search-clear:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.reaction-picker__tabs {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reaction-picker__tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease,
+    color 100ms ease;
+}
+
+.reaction-picker__tab:hover,
+.reaction-picker__tab:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.reaction-picker__tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.reaction-picker__tab.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.reaction-picker__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 112px;
+  max-height: 268px;
+  padding: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.reaction-picker__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reaction-picker__section-label {
+  padding: 0 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.reaction-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -8259,8 +8398,8 @@ button.stack-display__thread,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 100%;
+  height: 32px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -8278,7 +8417,8 @@ button.stack-display__thread,
 }
 
 .reaction-picker__option:hover,
-.reaction-picker__option:focus-visible {
+.reaction-picker__option:focus-visible,
+.reaction-picker__option.is-match {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
 }
@@ -8294,71 +8434,57 @@ button.stack-display__thread,
   background: var(--accent-soft);
 }
 
-.reaction-picker__custom {
+.reaction-picker__empty {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-subtle);
+  justify-content: center;
+  min-height: 96px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
-.reaction-picker__custom-input {
+.reaction-picker__footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.reaction-picker__preview-emoji {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+  font-variant-emoji: emoji;
+}
+
+.reaction-picker__preview-name {
   flex: 1 1 auto;
   min-width: 0;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-input);
+  overflow: hidden;
   color: var(--text-primary);
-  font-size: 13px;
-  line-height: 1;
-  font-family: inherit;
-}
-
-.reaction-picker__custom-input::placeholder {
-  color: var(--text-muted);
-}
-
-.reaction-picker__custom-input:focus-visible {
-  border-color: var(--accent-border);
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
-.reaction-picker__custom-submit {
-  flex: 0 0 auto;
-  appearance: none;
-  cursor: pointer;
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid var(--accent-border);
-  border-radius: 6px;
-  background: var(--accent-soft);
-  color: var(--accent-bright);
   font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  transition:
-    background 100ms ease,
-    border-color 100ms ease;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.reaction-picker__custom-submit:hover:not(:disabled),
-.reaction-picker__custom-submit:focus-visible {
-  background: var(--accent-fill);
-  color: var(--button-text);
+.reaction-picker__preview-meta {
+  flex: 0 0 auto;
+  max-width: 112px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.reaction-picker__custom-submit:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.reaction-picker__custom-submit:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
+.reaction-picker__footer-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 /* Title line — a sibling of the open-thread overlay since the
@@ -32736,6 +32862,7 @@ a.transcript-message__messaging-origin:focus-visible {
   border-left: 1px solid var(--border-subtle);
   text-align: left;
   vertical-align: top;
+  overflow-wrap: break-word;
 }
 
 .thread-markdown__th:first-child,
@@ -32758,11 +32885,13 @@ a.transcript-message__messaging-origin:focus-visible {
 
 /* Content-aware column sizing.
    The remark-table-profile plugin stamps each <th>/<td> with a
-   data-col-kind attribute based on the column's content shape:
-     - tag:   every cell is <=4 chars (e.g. "#", "Sev", "P1", "✓")
-     - label: longest cell is <=40 chars and <=4 words (e.g. file paths,
-              short identifiers, key names) — should not wrap when possible
-     - prose: longer or multi-sentence content — wraps and shares space */
+   data-col-kind attribute based on the column's header and body shape:
+     - tag:   every body cell is <=4 visual cols and header is compact
+              (<=12 cols, 1 word) — e.g. "#", "Sev", "Severity", "P1", "✓"
+     - label: body and header fit <=40 visual cols and <=4 words (e.g. file
+              paths, short identifiers, key names) — stays single-line up to
+              36ch under table width: max-content and wraps if wider
+     - prose: longer or multi-word content — wraps within 24ch..48ch */
 .thread-markdown__th[data-col-kind="tag"],
 .thread-markdown__td[data-col-kind="tag"] {
   width: 1%;
@@ -32773,9 +32902,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .thread-markdown__th[data-col-kind="label"],
 .thread-markdown__td[data-col-kind="label"] {
-  min-width: max-content;
   max-width: 36ch;
-  white-space: nowrap;
 }
 
 .thread-markdown__th[data-col-kind="prose"],
@@ -32784,11 +32911,7 @@ a.transcript-message__messaging-origin:focus-visible {
   max-width: 48ch;
 }
 
-/* Headers are typically short enough to stay on one line regardless of kind */
-.thread-markdown__th {
-  white-space: nowrap;
-}
-
+.thread-markdown__th .transcript-message__code,
 .thread-markdown__td .transcript-message__code {
   display: inline;
   white-space: normal;
@@ -32796,17 +32919,21 @@ a.transcript-message__messaging-origin:focus-visible {
   word-break: break-word;
 }
 
+.thread-markdown__th .transcript-message__link,
 .thread-markdown__td .transcript-message__link {
   overflow-wrap: anywhere;
   word-break: normal;
 }
 
-/* Label cells: links and code chips are allowed to break if the cell
-   still overflows after honoring max-width — prevents a long path from
-   pushing the table beyond the scroll wrapper without a break opportunity */
-.thread-markdown__td[data-col-kind="label"] .transcript-message__link,
-.thread-markdown__td[data-col-kind="label"] .transcript-message__code {
-  white-space: normal;
+/* Tag columns use width: 1% and rely on white-space: nowrap so min-content
+   keeps the full tag/header width instead of collapsing to a single char. */
+.thread-markdown__th[data-col-kind="tag"] .transcript-message__code,
+.thread-markdown__td[data-col-kind="tag"] .transcript-message__code,
+.thread-markdown__th[data-col-kind="tag"] .transcript-message__link,
+.thread-markdown__td[data-col-kind="tag"] .transcript-message__link {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .markdown-document-modal {
@@ -48395,7 +48522,7 @@ button.composer__subthread-source-parent:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px 6px;
 }
 
 .composer__pending-controls {
@@ -48456,13 +48583,10 @@ button.composer__subthread-source-parent:hover {
 .composer__application-actions {
   display: inline-flex;
   min-width: 0;
+  max-width: 100%;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.composer__footer-spacer {
-  min-width: 0;
 }
 
 .composer__application-button {
@@ -53235,12 +53359,21 @@ button.composer__subthread-source-parent:hover {
   opacity: 1;
 }
 
+/* Right-aligned trailing controls (`margin-left: auto`) share the wrapped
+   overflow line of `.composer__setup` whenever they fit, and drop flush-right
+   onto the next line otherwise. Left padding adds a subtle gutter so they
+   stay visually distinct from left-hand controls right at the wrap edge. */
 .composer__actions {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+  margin-left: auto;
+  max-width: 100%;
+  padding-left: 6px;
+  box-sizing: border-box;
 }
 
 /* Send / Queue / Stop / Cancel ride the footer as chips so they sit flush
@@ -53554,7 +53687,11 @@ button.composer__subthread-source-parent:hover {
 .context-window-moon {
   display: inline-flex;
   min-height: 26px;
-  min-width: 0;
+  /* Reserve the sprite, gap and up to four percentage characters for every phase. */
+  inline-size: calc(26px + 7px + 4ch);
+  box-sizing: content-box;
+  flex-shrink: 0;
+  justify-content: flex-end;
   align-items: center;
   align-self: center;
   gap: 7px;

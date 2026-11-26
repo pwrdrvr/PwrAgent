@@ -389,6 +389,9 @@ importers:
       electron-updater:
         specifier: 6.8.11
         version: 6.8.11(supports-color@7.2.0)
+      emojilib:
+        specifier: ^4.0.3
+        version: 4.0.3
       fflate:
         specifier: ^0.8.3
         version: 0.8.3
@@ -458,6 +461,9 @@ importers:
       tar:
         specifier: 7.5.22
         version: 7.5.22
+      unicode-emoji-json:
+        specifier: ^0.9.0
+        version: 0.9.0
       unist-util-visit:
         specifier: 5.2.0
         version: 5.2.0
@@ -3568,6 +3574,9 @@ packages:
   emojilib@2.4.0:
     resolution: {integrity: sha512-5U0rVMU5Y2n2+ykNLQqMoqklN9ICBT/KsvC1Gz6vqHbz2AXXGkG+Pm5rMWk/8Vjrr/mY9985Hi8DYzn1F09Nyw==}
 
+  emojilib@4.0.3:
+    resolution: {integrity: sha512-KbWiYre9aRSaPbHrHZIz9zmoM+21LAsK1VFJtnTh1VCtWE/rNMDviGhQTmselFl95dhqtGlY22iH0leG5BuW0g==}
+
   emoticon@4.1.0:
     resolution: {integrity: sha512-VWZfnxqwNcc51hIy/sbOdEem6D+cVtpPzEEtVAFdaas30+1dgkyaOQ4sQ6Bp0tOMqWO1v+HQfYaoodOkdhK6SQ==}
 
@@ -5725,6 +5734,9 @@ packages:
   undici@8.12.4:
     resolution: {integrity: sha512-8Mx+uNKKER2bA4AdtedkqRbwUCIJFr2nJckXRe5yrDqzePqwLP7VNcctN8/XdmDSbF7mS+jJKIszlL+vbam1VA==}
     engines: {node: '>=22.19.0'}
+
+  unicode-emoji-json@0.9.0:
+    resolution: {integrity: sha512-HdrQW/7SdbXUsTd8uTATv7LvQJkCSgbAgRCDCtOhQ6xn3EAx+xZHQtRniOXWJK3ywIqPegkNhP4U4EbuFsiQng==}
 
   unicode-emoji-modifier-base@1.0.0:
     resolution: {integrity: sha512-yLSH4py7oFH3oG/9K+XWrz1pSi3dfUrWEnInbxMfArOfc1+33BlGPQtLsOYwvdMy11AwUBetYuaRxSPqgkq+8g==}
@@ -8880,6 +8892,8 @@ snapshots:
 
   emojilib@2.4.0: {}
 
+  emojilib@4.0.3: {}
+
   emoticon@4.1.0: {}
 
   encodeurl@2.0.0: {}
@@ -11696,6 +11710,8 @@ snapshots:
     optional: true
 
   undici@8.12.4: {}
+
+  unicode-emoji-json@0.9.0: {}
 
   unicode-emoji-modifier-base@1.0.0: {}
 

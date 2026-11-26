@@ -99,6 +99,7 @@ import { readLocalNavigationDirectoryIndex } from "./app-server/navigation-direc
 import { setNavigationDetailPendingWakesProjector } from "./app-server/navigation-detail-service";
 import { appServerService } from "./app-server/desktop-app-server-service";
 import { startOwnerQueues } from "./owner-queue-services";
+import { changesOperatorQueueMounts } from "./operator-requests/operator-request-mount-change";
 import { disposeOperatorRequestService } from "./operator-requests/operator-request-runtime";
 
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
@@ -725,6 +726,16 @@ wireOwnerRendererEvents();
   }
 
   if (ownerShutdownStarted) throw new Error("Owner startup was cancelled by shutdown.");
+  const autoCompaction = createRegistryAutoCompactionMonitor({
+    registry,
+    resolveSavedRules: () => getDesktopSettingsService().resolveAutoCompactionRules(),
+    log: mainLog,
+  });
+  registry.setThreadAutoCompactionReader((backend, threadId) => autoCompaction.readStatus(backend, threadId));
+  ownerSubscriptions.add(() => {
+    registry.setThreadAutoCompactionReader(undefined);
+    autoCompaction.dispose();
+  });
   const queues = startOwnerQueues(federationRuntime, {
     registry,
     readDefaultMergeMethod: () => settings.resolveDefaultMergeMethod(),
@@ -735,18 +746,17 @@ wireOwnerRendererEvents();
       ...federationAgentToolOptions, operatorApproved: true, resolveMessageOrigin: () => messageOrigin,
     }),
   });
+  ownerSubscriptions.add(registry.onEvent((event) => {
+    if (changesOperatorQueueMounts(event)) {
+      queues.events.emit("operatorRequestsChanged", { reason: "questions" });
+    }
+  }));
   void startAppServerOwnerNavigation().catch((error) => {
     mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
   });
   scheduledActions.start();
   // Compacts threads past their model's auto-compaction threshold.
-  const autoCompaction = createRegistryAutoCompactionMonitor({
-    registry,
-    resolveSavedRules: () => getDesktopSettingsService().resolveAutoCompactionRules(),
-    log: mainLog,
-  });
   autoCompaction.start();
-  ownerSubscriptions.add(() => autoCompaction.dispose());
   // Windows read the status once at load; this tells them when another
   // instance on the profile takes or hands back scheduled automations.
   ownerSubscriptions.add(automations.onSchedulingStatusChanged((status) => {

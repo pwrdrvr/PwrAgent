@@ -25,7 +25,11 @@ import {
 import { buildActiveTurnKey, buildActiveTurnModeKey, parseActiveTurnKey, parseThreadTurnKeyBody } from "./thread-turn-keys";
 
 type TurnIdentity = { backend: AppServerBackendKind; threadId: string; turnId: string };
-type TurnInputSourceRecord = { source: TurnInputSource; admittedCodexTurnSequence?: number };
+type TurnInputSourceRecord = {
+  source: TurnInputSource;
+  reviewFix?: boolean;
+  admittedCodexTurnSequence?: number;
+};
 const turnInputSourceKey = ({ backend, threadId, turnId }: TurnIdentity): string => JSON.stringify([backend, threadId, turnId]);
 type CodexTurnReference = string | Pick<TurnIdentity, "threadId" | "turnId">;
 type TurnReference = string | TurnIdentity;
@@ -348,19 +352,45 @@ export class RegistryTurnState {
     else this.otherProviderOrigins.add(origin);
   }
 
-  rememberTurnInputSource(turn: TurnIdentity, source: TurnInputSource, admittedCodexTurnSequence?: number): void {
-    this.turnInputSources.set(turnInputSourceKey(turn), { source, admittedCodexTurnSequence });
+  rememberTurnInputSource(
+    turn: TurnIdentity,
+    source: TurnInputSource,
+    admittedCodexTurnSequence?: number,
+    reviewFix?: boolean,
+  ): void {
+    this.turnInputSources.set(turnInputSourceKey(turn), {
+      source,
+      ...(reviewFix ? { reviewFix: true } : {}),
+      admittedCodexTurnSequence,
+    });
   }
 
   readTurnInputSource(turn: TurnIdentity): TurnInputSource | undefined {
     return this.turnInputSources.get(turnInputSourceKey(turn))?.source;
   }
 
-  readPendingCodexTurnInputSource(threadId: string, observedSequence: number | undefined): TurnInputSource | undefined {
+  readTurnReviewFix(turn: TurnIdentity): boolean | undefined {
+    const record = this.turnInputSources.get(turnInputSourceKey(turn));
+    return record ? record.reviewFix === true : undefined;
+  }
+
+  private readPendingCodexTurnInputRecord(
+    threadId: string,
+    observedSequence: number | undefined,
+  ): TurnInputSourceRecord | undefined {
     const pending = this.turnInputSources.get(turnInputSourceKey({ backend: "codex", threadId, turnId: buildPendingTurnId(threadId) }));
     // A redelivered start for an older turn cannot consume a newer admission.
     if (observedSequence !== undefined && observedSequence <= (pending?.admittedCodexTurnSequence ?? -1)) return undefined;
-    return pending?.source;
+    return pending;
+  }
+
+  readPendingCodexTurnInputSource(threadId: string, observedSequence: number | undefined): TurnInputSource | undefined {
+    return this.readPendingCodexTurnInputRecord(threadId, observedSequence)?.source;
+  }
+
+  readPendingCodexTurnReviewFix(threadId: string, observedSequence: number | undefined): boolean | undefined {
+    const pending = this.readPendingCodexTurnInputRecord(threadId, observedSequence);
+    return pending ? pending.reviewFix === true : undefined;
   }
 
   /** Returns false when an older notification must leave the placeholder alone. */
@@ -368,9 +398,11 @@ export class RegistryTurnState {
     if (isPendingTurnId(threadId, turnId)) return true;
     const turn = { backend: "codex" as const, threadId, turnId };
     const pendingKey = turnInputSourceKey({ ...turn, turnId: buildPendingTurnId(threadId) });
-    const source = this.readPendingCodexTurnInputSource(threadId, observedSequence);
-    if (source === undefined) return !this.turnInputSources.has(pendingKey);
-    if (this.readTurnInputSource(turn) === undefined) this.rememberTurnInputSource(turn, source);
+    const pending = this.readPendingCodexTurnInputRecord(threadId, observedSequence);
+    if (pending === undefined) return !this.turnInputSources.has(pendingKey);
+    if (this.readTurnInputSource(turn) === undefined) {
+      this.rememberTurnInputSource(turn, pending.source, undefined, pending.reviewFix);
+    }
     this.turnInputSources.delete(pendingKey);
     return true;
   }

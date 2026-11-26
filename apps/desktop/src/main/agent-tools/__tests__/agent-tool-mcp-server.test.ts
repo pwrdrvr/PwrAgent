@@ -121,6 +121,36 @@ describe("AgentToolMcpServer", () => {
     }
   });
 
+  it("lets an ACP stdio client read its own review details while refusing review mutations", async () => {
+    const dispatch = vi.fn<AgentToolDefinition["dispatch"]>(() => agentToolSuccess({
+      reviews: [{ items: [{ title: "Use the selected folder", body: "The parent folder resolves a different README." }] }],
+    }));
+    const tool = (name: string): AgentToolDefinition => ({
+      namespace: "pwragent", name, description: name, inputSchema: { type: "object" }, dispatch,
+    });
+    const router = new AgentToolRouter([
+      tool("agent_memory"), tool("list_reviews"), tool("update_review_item"),
+    ]);
+    const server = new AgentToolMcpServer({
+      resolveCatalogs: () => [buildCatalog(router)],
+      resolveCallContext: (context) => context.threadId
+        ? { backend: context.backend, threadId: context.threadId, turnId: "turn-1" }
+        : undefined,
+    });
+    openServers.push(server);
+    const registration = await server.registerClient({ backend: "acp:kimi", stdioFallback: true, threadId: "review-owner" });
+    const client = await connectClient(registration);
+    try {
+      expect((await client.listTools()).tools.map(({ name }) => name)).toEqual(["agent_memory", "list_reviews"]);
+      expect(await registration.readTool?.("list_reviews")).toBeDefined();
+      expect((await client.callTool({ name: "list_reviews", arguments: {} })).structuredContent)
+        .toMatchObject({ reviews: [{ items: [{ body: "The parent folder resolves a different README." }] }] });
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith({}, expect.objectContaining({ backend: "acp:kimi", threadId: "review-owner" }));
+      expect((await client.callTool({ name: "update_review_item", arguments: {} })).isError).toBe(true);
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally { await client.close(); }
+  });
+
   it("reads a tool exactly as the registration's tools/list describes it", async () => {
     let allowed = true;
     const tool = (name: string, readOnlyHint: boolean): AgentToolDefinition => ({

@@ -40,9 +40,10 @@ type TranscriptWorkPhaseGroupProps = {
   skills: AppServerSkillSummary[];
   subAgents?: ThreadSubAgentSummary[];
   threadLinkSource?: ThreadLinkSource;
+  toggleKey?: string;
   onActivityExpandedChange?: (activityId: string, expanded: boolean) => void;
   onOpenImage?: (image: AppServerThreadImagePart) => void;
-  onToggle: () => void;
+  onToggle: (toggleKey?: string) => void;
 };
 
 export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
@@ -77,7 +78,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
             // A live review's visible text ticks every second; the name stays
             // the group label so it does not change under a screen reader.
             aria-label={props.label}
-            onClick={props.onToggle}
+            onClick={() => props.onToggle(props.toggleKey)}
           >
             <span className="transcript-work-phase-group__chevron" aria-hidden="true" />
             <span>

@@ -6591,6 +6591,53 @@ describe("Composer", () => {
     expect(commitsPerKey).toEqual(Array.from(message, () => 1));
   });
 
+  it("shows pending context usage after compaction until the provider reports a fresh fill", async () => {
+    const thread = {
+      id: "context-card-compaction",
+      source: "acp:antigravity" as const,
+      title: "Compaction fixture",
+      titleSource: "explicit" as const,
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const before = {
+      modelContextWindow: 1_048_576,
+      totalTokens: 457_959,
+      usedPercent: 43.67,
+    };
+    const after = { ...before, totalTokens: 21_436, usedPercent: 2.04 };
+    const { rerender } = render(<Composer
+      autoCompaction={{ threadId: thread.id, phase: "compacting" }}
+      contextWindow={before}
+      skills={[]}
+      thread={thread}
+    />);
+    const meter = screen.getByRole("img", { name: /44% full/ });
+    act(() => meter.focus());
+    await flushReactUpdates();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("44% full");
+
+    rerender(<Composer
+      autoCompaction={{ threadId: thread.id, phase: "verifying" }}
+      contextWindow={before}
+      skills={[]}
+      thread={thread}
+    />);
+    expect(screen.getByRole("img", { name: "Context usage pending" })).toBe(meter);
+    expect(meter).toHaveAccessibleDescription(/The context size updates on the next model call\./);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("The context size updates on the next model call.");
+    expect(screen.getByRole("tooltip")).not.toHaveTextContent("44% full");
+
+    rerender(<Composer
+      autoCompaction={{ threadId: thread.id, phase: "armed" }}
+      contextWindow={after}
+      skills={[]}
+      thread={thread}
+    />);
+    expect(screen.getByRole("img", { name: /2% full/ })).toBeInTheDocument();
+    expect(screen.getByRole("tooltip")).toHaveTextContent("2% full");
+  });
+
   it("opens Usage Activity from the context moon when the app can", () => {
     const openUsageActivity = vi.fn(async () => undefined);
     render(
@@ -9113,6 +9160,36 @@ describe("Composer", () => {
     }));
   });
 
+  it.each([
+    { setting: undefined, expected: "auto-fix" },
+    { setting: true, expected: "auto-fix" },
+    { setting: false, expected: "wait" },
+  ])("applies the Auto-fix default ($setting -> $expected) to direct /review commands with arguments", async ({ setting, expected }) => {
+    const startReview = vi.fn(async () => ({ backend: "codex" as const, threadId: "thread-1", reviewThreadId: "thread-1", turnId: "review" }));
+    const backend = backendSummary("codex");
+    backend.capabilities = { ...backend.capabilities, startReview: true, reviewRunMode: true, reviewRunner: true,
+      reviewCodexSubAgent: true, reviewAutoFix: true };
+    render(<Composer
+      backends={[backend]}
+      desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+      disabled={false} skills={[]}
+      reviewAutoFixDefault={setting}
+      thread={{
+        id: "thread-1", title: "Direct review", titleSource: "explicit",
+        source: "codex", executionMode: "default", inbox: { inInbox: false },
+        linkedDirectories: [],
+      }}
+    />);
+    fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review main" } });
+    await act(async () => { fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" }); });
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith(expect.objectContaining({
+        target: { type: "baseBranch", branch: "main" },
+        afterReview: expected,
+      }));
+    });
+  });
+
   /**
    * Rule: checking several attached PRs queues one review per PR, in the
    * list's order (open newest first, then finished newest first) whatever
@@ -10797,6 +10874,28 @@ describe("Composer", () => {
       if (busy) expect(screen.getByLabelText("Queued message")).toHaveTextContent(text);
       view.rerender(<Composer {...props} replySubmission={submission} />);
       expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+
+    it("forwards reviewFix on review card fix submissions", async () => {
+      const startTurn = vi.fn(async () => ({ backend: "codex" as const, threadId: thread.id, turnId: "turn-fix" }));
+      const onReplySubmissionSettled = vi.fn();
+      const props = {
+        backends: [backendSummary("codex")],
+        desktopApi: { onAgentEvent: () => () => undefined, startTurn },
+        onReplySubmissionSettled,
+        skills: [],
+        thread,
+      };
+      const view = render(<Composer {...props} />);
+      view.rerender(<Composer {...props} replySubmission={{
+        id: 1, threadId: thread.id, backend: "codex", text: "Auto-fix the finding from Review of PR #4493.",
+        busyBehavior: "queue", reviewFix: true,
+      }} />);
+      await waitFor(() => expect(onReplySubmissionSettled).toHaveBeenCalledWith(1, true));
+      expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+        threadId: thread.id,
+        reviewFix: true,
+      }));
     });
 
     it("still steers question replies during an active turn", async () => {

@@ -497,10 +497,11 @@ export const DirectoriesList = memo(function DirectoriesList(props: DirectoriesL
       for (const entry of entries) {
         const height = entry.borderBoxSize[0]?.blockSize;
         if (height === undefined) continue;
-        (entry.target.parentElement as HTMLElement | null)?.style.setProperty(
-          "--directory-row-header-height",
-          `${height}px`,
-        );
+        const parent = entry.target.parentElement as HTMLElement | null;
+        const value = `${height}px`;
+        if (parent && parent.style.getPropertyValue("--directory-row-header-height") !== value) {
+          parent.style.setProperty("--directory-row-header-height", value);
+        }
       }
     });
     const observer = directoryHeaderObserverRef.current;

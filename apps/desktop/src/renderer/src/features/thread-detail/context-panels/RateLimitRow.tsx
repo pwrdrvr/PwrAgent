@@ -26,7 +26,7 @@ export function RateLimitRow({ limit, now, account, labelTooltip }: {
     && !(candidate.projection.kind === "atReset" && candidate.projection.percent < row.usedPercent!)
     ? candidate
     : undefined;
-  // Each Antigravity pool is a separate weekly allowance. Elsewhere, keep
+  // Each Antigravity pool is a separate allowance. Elsewhere, keep
   // the sentence for the main window and any window about to run out.
   const sentence = described && (described.short || series === sinceResetSeries(account)
     || account?.provider === "google");

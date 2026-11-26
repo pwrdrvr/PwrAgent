@@ -19,6 +19,7 @@ import {
   useMemo,
   useState,
   type ClipboardEvent,
+  type CSSProperties,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -753,6 +754,7 @@ const markdownComponents: Components = {
     return (
       <td
         className="thread-markdown__td"
+        style={tableCellAlignStyle(tableCellProps.style)}
         data-col-kind={dataColKind(tableCellProps.node)}
       >
         {tableCellProps.children}
@@ -763,6 +765,7 @@ const markdownComponents: Components = {
     return (
       <th
         className="thread-markdown__th"
+        style={tableCellAlignStyle(tableHeaderCellProps.style)}
         data-col-kind={dataColKind(tableHeaderCellProps.node)}
       >
         {tableHeaderCellProps.children}
@@ -1289,6 +1292,15 @@ function dataColKind(node: unknown): string | undefined {
   const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
   const value = properties?.["dataColKind"] ?? properties?.["data-col-kind"];
   return typeof value === "string" ? value : undefined;
+}
+
+function tableCellAlignStyle(
+  style: CSSProperties | undefined,
+): CSSProperties | undefined {
+  const textAlign = style?.textAlign;
+  return textAlign === "left" || textAlign === "center" || textAlign === "right"
+    ? { textAlign }
+    : undefined;
 }
 
 function sourceForNode(

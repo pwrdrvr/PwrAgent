@@ -2,7 +2,7 @@ import fc from "fast-check";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import { runInNewContext } from "node:vm";
-import { buildAgentMemoryStdioServer } from "../agent-tools/agent-memory-mcp-stdio";
+import { buildAgentToolStdioServer } from "../agent-tools/agent-tool-mcp-stdio";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AGENT_MEMORY_INDEX_BYTES, AGENT_MEMORY_NOTE_BYTES } from "@pwragent/shared/contracts/agent-memory";
@@ -70,7 +70,7 @@ describe("Agent memory owner isolation", () => {
 });
 
 it("the ACP stdio bridge forwards MCP frames with its bound credential", async () => {
-  const config = buildAgentMemoryStdioServer({
+  const config = buildAgentToolStdioServer({
     name: "pwragent", type: "http", url: "http://127.0.0.1:1234/mcp",
     headers: [{ name: "Authorization", value: "Bearer fixture-token" }],
   });
@@ -92,10 +92,10 @@ it("the ACP stdio bridge forwards MCP frames with its bound credential", async (
     },
   });
   expect(fetched).toEqual([
-    [config.env.PWRAGENT_MEMORY_MCP_URL, expect.objectContaining({
+    [config.env.PWRAGENT_STDIO_MCP_URL, expect.objectContaining({
       body: JSON.stringify(initialize), headers: expect.objectContaining({ authorization: "Bearer fixture-token" }),
     })],
-    [config.env.PWRAGENT_MEMORY_MCP_URL, expect.objectContaining({
+    [config.env.PWRAGENT_STDIO_MCP_URL, expect.objectContaining({
       body: JSON.stringify(call), headers: expect.objectContaining({
         authorization: "Bearer fixture-token", "mcp-session-id": "fixture-session", "mcp-protocol-version": "2025-06-18",
       }),

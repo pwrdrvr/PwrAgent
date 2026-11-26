@@ -150,6 +150,8 @@ type AcpIdleClosedSession = {
   closed: Promise<void>;
   /** The session/load in flight, shared by every request that needs it. */
   reopening?: Promise<void>;
+  /** Whether the in-flight reopening suppresses transcript replay updates. */
+  reopeningSuppressed?: boolean;
   /** Load succeeded, but confirming its mode and closing the worker both failed. */
   workerOpen?: boolean;
 };
@@ -832,13 +834,33 @@ export class AcpAgentClient {
   ): Promise<void> {
     const idleClosed = this.idleClosedSessions.get(sessionId);
     if (!idleClosed) return;
-    if (idleClosed.reopening && options.antigravityModeSelection !== undefined) {
-      // An ordinary reload might still be trying the mode being replaced.
+    if (
+      idleClosed.reopening
+      && (
+        options.antigravityModeSelection !== undefined
+        || (options.suppressTranscriptReplay === false && idleClosed.reopeningSuppressed)
+      )
+    ) {
+      // Wait for an ordinary or suppressed reload to settle before applying a
+      // mode override or an unsuppressed transcript replay.
       await idleClosed.reopening.catch(() => undefined);
-      await this.reopenIdleClosedSession(sessionId, options);
+      if (this.idleClosedSessions.has(sessionId)) {
+        await this.reopenIdleClosedSession(sessionId, options);
+        return;
+      }
+      if (options.suppressTranscriptReplay === false) {
+        const metadata =
+          options.metadata
+          ?? this.options.store.getSession(this.options.backendId, sessionId);
+        if (!metadata) {
+          throw new Error(`ACP session not found: ${sessionId}`);
+        }
+        await this.loadSessionFromAgent(metadata, options);
+      }
       return;
     }
     if (!idleClosed.reopening) {
+      const suppressTranscriptReplay = options.suppressTranscriptReplay ?? true;
       const reopening = (async () => {
         await idleClosed.closed;
         // The close failed, or the session was archived meanwhile.
@@ -857,7 +879,7 @@ export class AcpAgentClient {
         await this.loadSessionFromAgent(metadata, {
           antigravityModeSelection: options.antigravityModeSelection,
           antigravityModeExplicit: options.antigravityModeExplicit,
-          suppressTranscriptReplay: options.suppressTranscriptReplay ?? true,
+          suppressTranscriptReplay,
         });
         if (this.idleClosedSessions.get(sessionId) === idleClosed) {
           this.idleClosedSessions.delete(sessionId);
@@ -865,9 +887,13 @@ export class AcpAgentClient {
         this.touchSession(sessionId);
       })();
       idleClosed.reopening = reopening;
+      idleClosed.reopeningSuppressed = suppressTranscriptReplay;
       // A failed load leaves the session unready; the next request retries.
       reopening.catch(() => {
-        if (idleClosed.reopening === reopening) idleClosed.reopening = undefined;
+        if (idleClosed.reopening === reopening) {
+          idleClosed.reopening = undefined;
+          idleClosed.reopeningSuppressed = undefined;
+        }
       });
     }
     await idleClosed.reopening;
@@ -1125,6 +1151,32 @@ export class AcpAgentClient {
       const delivery = readStringValue(result, "delivery");
       if (delivery !== "currentTurn" && delivery !== "nextTurn") {
         throw new Error("Grok steering response did not identify its delivery turn");
+      }
+      const lightweightAttachments = persistableAttachmentParts(params.parts);
+      if (lightweightAttachments?.length) {
+        const receivedAt = this.now();
+        const turnId =
+          this.activeTurns.get(params.sessionId)?.turnId ?? `steer:${params.interjectionId}`;
+        const displayPrompt = params.prompt ?? params.text;
+        try {
+          this.options.rolloutStore?.appendUpdate({
+            backendId: this.options.backendId,
+            sessionId: params.sessionId,
+            receivedAt,
+            update: {
+              kind: "pwragent_prompt_attachments",
+              turnId,
+              textDigest: acpReplayPromptTextDigest(displayPrompt),
+              attachmentParts: lightweightAttachments,
+            },
+          });
+        } catch (error) {
+          acpClientLog.warn("Could not persist accepted Grok steering attachments", {
+            sessionId: params.sessionId,
+            turnId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
       return { delivery };
     });
@@ -1496,6 +1548,7 @@ export class AcpAgentClient {
     });
     this.appendHistoryUpdate(params.sessionId, receivedAt, {
       kind: "pwragent_user_prompt",
+      reviewContextInjected: false,
       prompt: params.prompt,
       ...(params.parts?.length ? { parts: params.parts } : {}),
       turnId,
@@ -1571,67 +1624,18 @@ export class AcpAgentClient {
     // The caller may have captured metadata before awaiting client startup.
     // A replay read must preserve archive and other updates made meanwhile.
     this.options.store.upsertSession(storedMetadata);
-    const localHistory = this.hydrateSessionFromHistory(storedMetadata);
-    const fallbackNormalizer = this.normalizers.get(metadata.sessionId);
-    const hydratedMetadata =
-      this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
-      metadata;
     if (this.supportsSessionLoad()) {
-      const protocolSessionId = this.protocolSessionIdFor(metadata.sessionId);
-      this.sessionLoadReplays.delete(protocolSessionId);
-      const replayPrompts = localHistory.antigravityReplayPrompts;
-      // Antigravity's prompt identities annotate a clean provider transcript.
-      // Other incomplete fallbacks provide timestamps that agents such as
-      // Kimi omit, so those fallbacks merge with the incoming replay without
-      // enabling provider-prompt-replay mode on the hydrated fallback.
-      const useFreshProviderNormalizer =
-        localHistory.isComplete
-        || !localHistory.hasReplay
-        || (this.options.backendId === "acp:antigravity" && Boolean(replayPrompts));
-      if (useFreshProviderNormalizer) {
-        this.normalizers.delete(metadata.sessionId);
-      }
-      const providerNormalizer = useFreshProviderNormalizer && replayPrompts
-        ? this.normalizerFor(metadata.sessionId)
-        : undefined;
-      if (replayPrompts && providerNormalizer) {
-        providerNormalizer.beginProviderPromptReplay(replayPrompts);
-      }
-      try {
-        await this.ensureSession(hydratedMetadata, {
-          suppressTranscriptReplay: false,
-          ...(options?.antigravityModeSelection !== undefined
-            ? { antigravityModeSelection: options.antigravityModeSelection }
-            : {}),
-          ...(options?.antigravityModeExplicit !== undefined
-            ? { antigravityModeExplicit: options.antigravityModeExplicit }
-            : {}),
-        });
-      } catch (error) {
-        if (providerNormalizer && fallbackNormalizer) {
-          this.normalizers.set(metadata.sessionId, fallbackNormalizer);
-        }
-        throw error;
-      } finally {
-        providerNormalizer?.endProviderPromptReplay(
-          this.sessionLoadReplays.get(protocolSessionId)?.lastTimestampedTranscriptAt,
-        );
-      }
-      const sessionLoadReplay = this.sessionLoadReplays.get(protocolSessionId);
-      if (
-        sessionLoadReplay?.lastTimestampedTranscriptAt !== undefined ||
-        (!localHistory.isComplete && sessionLoadReplay)
-      ) {
-        return this.replayForSessionMetadata(
-          this.options.store.getSession(
-            this.options.backendId,
-            metadata.sessionId,
-          ) ?? metadata,
-        );
-      }
-      if (fallbackNormalizer) {
-        this.normalizers.set(metadata.sessionId, fallbackNormalizer);
-      }
+      await this.ensureSessionOperation(storedMetadata, {
+        suppressTranscriptReplay: false,
+        ...(options?.antigravityModeSelection !== undefined
+          ? { antigravityModeSelection: options.antigravityModeSelection }
+          : {}),
+        ...(options?.antigravityModeExplicit !== undefined
+          ? { antigravityModeExplicit: options.antigravityModeExplicit }
+          : {}),
+      });
+    } else {
+      this.hydrateSessionFromHistory(storedMetadata);
     }
     return this.replayForSessionMetadata(
       this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
@@ -1744,10 +1748,19 @@ export class AcpAgentClient {
     };
     if (this.idleClosedSessions.has(metadata.sessionId)) {
       this.options.store.upsertSession(metadata);
-      await this.reopenIdleClosedSession(metadata.sessionId, {
-        ...options,
-        metadata,
-      });
+      if (options.suppressTranscriptReplay === false) {
+        await this.loadWithReplayOverlay(metadata, async (hydratedMetadata) => {
+          await this.reopenIdleClosedSession(metadata.sessionId, {
+            ...options,
+            metadata: hydratedMetadata,
+          });
+        });
+      } else {
+        await this.reopenIdleClosedSession(metadata.sessionId, {
+          ...options,
+          metadata,
+        });
+      }
       return;
     }
     if (this.supportsSessionLoad() && this.isSessionLoaded(metadata)) {
@@ -1757,7 +1770,63 @@ export class AcpAgentClient {
     if (!this.supportsSessionLoad()) {
       return;
     }
-    await this.loadSessionFromAgent(metadata, options);
+    if (options.suppressTranscriptReplay === true) {
+      await this.loadSessionFromAgent(metadata, options);
+      return;
+    }
+    await this.loadWithReplayOverlay(metadata, async (hydratedMetadata) => {
+      await this.loadSessionFromAgent(hydratedMetadata, options);
+    });
+  }
+
+  private async loadWithReplayOverlay(
+    metadata: AcpSessionMetadata,
+    runLoad: (hydratedMetadata: AcpSessionMetadata) => Promise<void>,
+  ): Promise<void> {
+    const localHistory = this.hydrateSessionFromHistory(metadata);
+    const fallbackNormalizer = this.normalizers.get(metadata.sessionId);
+    const hydratedMetadata =
+      this.options.store.getSession(this.options.backendId, metadata.sessionId) ??
+      metadata;
+    const protocolSessionId = this.protocolSessionIdFor(metadata.sessionId);
+    this.sessionLoadReplays.delete(protocolSessionId);
+    const replayPrompts = localHistory.antigravityReplayPrompts;
+    // Start a fresh normalizer whenever local history is complete, empty, or
+    // carries prompt replay overlays (images, steers, or workspace rebind).
+    // Incomplete text-only fallbacks (such as Kimi, which omits timestamps)
+    // stay on their hydrated fallback normalizer so local timestamps survive.
+    const useFreshProviderNormalizer =
+      localHistory.isComplete
+      || !localHistory.hasReplay
+      || Boolean(replayPrompts);
+    if (useFreshProviderNormalizer) {
+      this.normalizers.delete(metadata.sessionId);
+    }
+    const providerNormalizer = useFreshProviderNormalizer && replayPrompts
+      ? this.normalizerFor(metadata.sessionId)
+      : undefined;
+    if (replayPrompts && providerNormalizer) {
+      providerNormalizer.beginProviderPromptReplay(replayPrompts);
+    }
+    try {
+      await runLoad(hydratedMetadata);
+    } catch (error) {
+      if (useFreshProviderNormalizer && fallbackNormalizer) {
+        this.normalizers.set(metadata.sessionId, fallbackNormalizer);
+      }
+      throw error;
+    } finally {
+      providerNormalizer?.endProviderPromptReplay(
+        this.sessionLoadReplays.get(protocolSessionId)?.lastTimestampedTranscriptAt,
+      );
+    }
+    const sessionLoadReplay = this.sessionLoadReplays.get(protocolSessionId);
+    const providerReplayedUsableHistory =
+      sessionLoadReplay?.lastTimestampedTranscriptAt !== undefined
+      || (!localHistory.isComplete && sessionLoadReplay !== undefined);
+    if (!providerReplayedUsableHistory && fallbackNormalizer) {
+      this.normalizers.set(metadata.sessionId, fallbackNormalizer);
+    }
   }
 
   /** Acknowledge dispatch after preflight. Completion still arrives through turn events. */
@@ -1823,6 +1892,7 @@ export class AcpAgentClient {
         });
         this.appendHistoryUpdate(params.sessionId, receivedAt, {
           kind: "pwragent_user_prompt",
+          reviewContextInjected: false,
           prompt: params.prompt,
           ...(params.parts?.length ? { parts: params.parts } : {}),
           turnId,
@@ -2997,11 +3067,16 @@ export class AcpAgentClient {
       this.normalizerOptionsFor(metadata),
     );
     let hasTranscriptHistory = false;
+    let hasMetadataOnlyPromptRecords = false;
     const replayPrompts: AcpReplayPromptIdentity[] = [];
     const { current: records } = this.workspaceHistory(metadata);
     for (const record of records) {
       if (isPwrAgentSyntheticAcpUpdate(record.update)) {
         continue;
+      }
+      const kind = readUpdateKind(record.update);
+      if (kind === "pwragent_antigravity_prompt_identity" || kind === "pwragent_prompt_attachments") {
+        hasMetadataOnlyPromptRecords = true;
       }
       const identity = readReplayPromptIdentity(record);
       if (identity) replayPrompts.push(identity);
@@ -3021,7 +3096,10 @@ export class AcpAgentClient {
       (metadata.antigravityWorkspaceRebound && replayPrompts.length > 0)
       || replayPrompts.some((prompt) => Boolean(prompt.steerMessageId || prompt.attachmentParts?.length));
     return {
-      isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
+      isComplete:
+        !hasMetadataOnlyPromptRecords
+        && (hasTranscriptHistory || hasReplay)
+        && replay.threadStatus === "idle",
       hasReplay,
       antigravityReplayPrompts: needsPromptReplayOverlay ? replayPrompts : undefined,
     };
@@ -3221,7 +3299,7 @@ export class AcpAgentClient {
     } finally {
       this.loadingSessions.delete(protocolSessionId);
     }
-    if (loadState.replayedTranscript) {
+    if (loadState.replayedTranscript && !loadState.suppressTranscriptReplay) {
       this.sessionLoadReplays.set(protocolSessionId, {
         ...(loadState.lastTimestampedTranscriptAt !== undefined
           ? {

@@ -11897,6 +11897,67 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("forwards prompt and parts when steering an active Grok turn with an image attachment", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const threadId = "grok-session-image-steer";
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: backend,
+        sessionId: threadId,
+        title: "Image steer",
+        createdAt: 1000,
+        updatedAt: 2000,
+        executionMode: "default",
+        status: "active",
+      },
+    ];
+    const installedAgent = {
+      ...createKimiAgentRecord(backend),
+      registryId: "grok",
+      name: "Grok Build",
+      version: "1.0.50-pwragent.1",
+    };
+    const { registry, steerSession } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent,
+      sessions,
+      supportsTurnSteering: true,
+    });
+    const pendingTurnId = `pending:${threadId}:1000`;
+    await emitStartedTurn(registry, backend, threadId, pendingTurnId);
+
+    const pngBase64 = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4,
+    ]).toString("base64");
+    await expect(registry.steerTurn({
+      backend,
+      threadId,
+      expectedTurnId: pendingTurnId,
+      input: [
+        { type: "text", text: "Use this layout" },
+        { type: "image", name: "grok-steer.png", url: `data:image/png;base64,${pngBase64}` },
+      ],
+      requestId: "grok-steer-img-1",
+    })).resolves.toEqual({
+      backend,
+      threadId,
+      turnId: pendingTurnId,
+      disposition: "steered",
+    });
+    expect(steerSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: threadId,
+      text: "Use this layout",
+      prompt: "Use this layout",
+      parts: [
+        { type: "text", text: "Use this layout" },
+        expect.objectContaining({ type: "image", alt: "grok-steer.png" }),
+      ],
+      interjectionId: "grok-steer-img-1",
+    }));
+
+    await registry.close();
+  });
+
   it("steers an active Antigravity turn and passes prompt and parts for live user-message publication", async () => {
     const backend = "acp:antigravity" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [

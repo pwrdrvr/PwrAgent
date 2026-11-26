@@ -11259,15 +11259,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   /** One commit per participating owner, including cached membership and ranks.
    * Never create a threads overlay for a row owned by another instance. */
-  applyArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): string[] {
+  applyArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): {
+    threadIds: string[];
+    remoteMountsChanged: boolean;
+  } {
     const { archived, anchor, parent, children } = promotion;
     const parentKey = parent && buildThreadIdentityKey(parent.backend, parent.threadId);
-    const selectPin = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins
-      WHERE instance_id = ? AND backend = ? AND thread_id = ? AND revoked_at IS NULL`);
-    const pinPayload = (owner: string, backend: AppServerBackendKind, id: string) => {
-      const row = selectPin.get(owner, backend, id) as { payload: string } | undefined;
-      return row ? JSON.parse(row.payload) as { summary?: NavigationThreadSummary; instanceLabel: string; pinnedVia?: RemoteThreadPin["pinnedVia"] } : undefined;
-    };
+    const selectPin = this.stateDb.raw.prepare(`SELECT payload, revoked_at FROM remote_thread_pins
+      WHERE instance_id = ? AND backend = ? AND thread_id = ?`);
+    const readPin = (owner: string, backend: AppServerBackendKind, id: string) =>
+      selectPin.get(owner, backend, id) as { payload: string; revoked_at: number | null } | undefined;
+    const livePinPayload = (row: ReturnType<typeof readPin>) => row?.revoked_at === null
+      ? JSON.parse(row.payload) as { summary?: NavigationThreadSummary; instanceLabel: string; pinnedVia?: RemoteThreadPin["pinnedVia"] }
+      : undefined;
+    const pinPayload = (owner: string, backend: AppServerBackendKind, id: string) => livePinPayload(readPin(owner, backend, id));
     const matches = (state: { parentThreadId?: string; parentThreadBackend?: AppServerBackendKind; parentThreadInstanceId?: string },
       owner: string, destination: typeof parent): boolean => destination === null ? !state.parentThreadId
       : state.parentThreadId === destination.threadId
@@ -11344,7 +11349,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             : pinPayload(owner, ref.backend, ref.threadId)?.summary;
           return ownParent.subthreadOrder!.includes(ref.threadId) && state && matches(state, owner, parent);
         });
-      if (promotion.dryRun) return ownParent?.subthreadOrder ?? [];
+      if (promotion.dryRun) return { threadIds: ownParent?.subthreadOrder ?? [], remoteMountsChanged: false };
       for (const { ref } of localChildren) {
         const current = this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId))!;
         if (matches(current, instanceId, parent)) continue;
@@ -11356,24 +11361,30 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       const writePin = this.stateDb.raw.prepare(`INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload)
         VALUES (?, ?, ?, ?, ?) ON CONFLICT(instance_id, backend, thread_id) DO UPDATE SET payload = excluded.payload`);
+      let remoteMountsChanged = false;
       for (const entry of children) {
         const owner = remotePinInstanceId(entry.ref);
         if (owner === instanceId) continue;
-        const existing = pinPayload(owner, entry.ref.backend, entry.ref.threadId);
+        const row = readPin(owner, entry.ref.backend, entry.ref.threadId);
+        const existing = livePinPayload(row);
         if (!existing && !ownParent) continue;
         // Cached summaries retain the relationship as expressed on the child
         // owner, even when the viewer owns the destination parent.
         const next = { ...existing, instanceLabel: existing?.instanceLabel ?? entry.instanceLabel,
           pinnedVia: existing?.pinnedVia ?? "child", summary: patch(entry.summary, owner) };
         if (JSON.stringify(existing) !== JSON.stringify(next)) {
-          writePin.run(owner, entry.ref.backend, entry.ref.threadId, Date.now(), JSON.stringify(next));
+          const result = writePin.run(owner, entry.ref.backend, entry.ref.threadId, Date.now(), JSON.stringify(next));
+          remoteMountsChanged ||= !row && result.changes > 0;
         }
       }
       if (parent && parent.instanceId !== instanceId && promotion.parentSummary && localChildren.length) {
-        const existing = pinPayload(parent.instanceId, parent.backend, parent.threadId);
-        if (!existing) writePin.run(parent.instanceId, parent.backend, parent.threadId, Date.now(), JSON.stringify({
-          instanceLabel: promotion.parentInstanceLabel ?? parent.instanceId, pinnedVia: "companion", summary: promotion.parentSummary,
-        }));
+        const row = readPin(parent.instanceId, parent.backend, parent.threadId);
+        if (!row || row.revoked_at !== null) {
+          const result = writePin.run(parent.instanceId, parent.backend, parent.threadId, Date.now(), JSON.stringify({
+            instanceLabel: promotion.parentInstanceLabel ?? parent.instanceId, pinnedVia: "companion", summary: promotion.parentSummary,
+          }));
+          remoteMountsChanged ||= !row && result.changes > 0;
+        }
       }
       if (archived.instanceId === instanceId) {
         const key = buildThreadIdentityKey(archived.backend, archived.threadId);
@@ -11384,8 +11395,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           this.putThread(key, { ...current, subthreadOrder: order });
         }
       }
-      if (!ownParent) return [];
-      if (preserveParentOrder) return ownParent.subthreadOrder!;
+      if (!ownParent) return { threadIds: [], remoteMountsChanged };
+      if (preserveParentOrder) return { threadIds: ownParent.subthreadOrder!, remoteMountsChanged };
       // Materialize the owner's current order, preserving unloaded remote slots.
       const saved = new Set(ownParent.subthreadOrder ?? []);
       const remoteRows = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins
@@ -11406,7 +11417,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (JSON.stringify(order) !== JSON.stringify(ownParent.subthreadOrder)) {
         this.putThread(parentKey!, { ...ownParent, subthreadOrder: order });
       }
-      return order;
+      return { threadIds: order, remoteMountsChanged };
     })();
   }
 

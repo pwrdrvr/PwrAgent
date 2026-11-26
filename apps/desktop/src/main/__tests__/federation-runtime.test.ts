@@ -26,6 +26,7 @@ import type { StarMapArrangementEntry } from "@pwragent/shared/contracts/star-ma
 import type { ThreadDependency } from "@pwragent/shared/contracts/thread-dependencies";
 import type { ThreadPricingSummary } from "@pwragent/shared/token-usage-pricing";
 import { FEDERATION_PROTOCOL_VERSION, buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
+import { changesOperatorQueueMounts } from "../operator-requests/operator-request-mount-change";
 import { MAX_CELESTIAL_ASSIGNMENTS } from "@pwragent/shared/contracts/celestial";
 import { buildThreadIdentityKey } from "@pwragent/shared/contracts/navigation";
 import {
@@ -1020,7 +1021,7 @@ describe("DesktopFederationRuntime", () => {
     }
   });
 
-  it("mounts a viewer's parent when the viewer moves one of this instance's threads under it", async () => {
+  it.each([false, true])("publishes queue membership when moving a thread under a remote parent (already mounted: %s)", async (alreadyMounted) => {
     await disposeDesktopFederationRuntime();
     const stateDb = openInMemoryStateDb();
     const overlayStore = new SqliteOverlayStore(stateDb);
@@ -1048,6 +1049,9 @@ describe("DesktopFederationRuntime", () => {
     });
     const publish = vi.spyOn(initializeDesktopBackendRegistry(() => createDesktopBackendRegistry()), "publishLocalEvent").mockResolvedValue(undefined);
     try {
+      const ref = buildFederatedThreadRef({ backend: "codex", threadId: "root", instanceId: "viewer" });
+      if (alreadyMounted) await overlayStore.addRemoteThreadPin({ ref, instanceLabel: "Viewer", pinnedVia: "companion" });
+      const mountsBefore = (await overlayStore.listRemoteThreadPins()).length;
       const response = await runtime.localBackend().setThreadParent({
         backend: "codex",
         threadId: "windows-e2e",
@@ -1061,13 +1065,16 @@ describe("DesktopFederationRuntime", () => {
         query: { kind: "exact", identities: [{ backend: "codex", threadId: "root", ownerInstanceId: "viewer" }],
           includeAncestry: false },
       }), expect.anything());
-      expect(await overlayStore.listRemoteThreadPins()).toEqual([expect.objectContaining({
+      const mounts = await overlayStore.listRemoteThreadPins();
+      expect(mounts).toEqual([expect.objectContaining({
         ref: { backend: "codex", target: { scope: "remote", instanceId: "viewer" }, threadId: "root" },
         pinnedVia: "companion",
       })]);
       expect(publish).toHaveBeenCalledWith(expect.objectContaining({
         notification: expect.objectContaining({ method: "thread/parent/set" }),
       }));
+      expect(publish.mock.calls.filter(([event]) => changesOperatorQueueMounts(event)))
+        .toHaveLength(mounts.length - mountsBefore);
     } finally {
       parentQuery.mockRestore();
       publish.mockRestore();
@@ -1297,9 +1304,11 @@ describe("DesktopFederationRuntime", () => {
             instanceId: "parent-peer",
             threadId: "parent",
             pinned: true,
+            membershipChanged: true,
           },
         },
       });
+      expect(publish.mock.calls.filter(([event]) => changesOperatorQueueMounts(event))).toHaveLength(1);
     } finally {
       materialize.mockRestore();
       publish.mockRestore();

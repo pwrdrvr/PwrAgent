@@ -1735,6 +1735,53 @@ describe("ThreadMarkdown", () => {
     expect(headerCellKinds).toEqual(["tag", "tag", "prose"]);
   });
 
+  it("preserves GFM column alignments on table header and body cells", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={`| Issue | Ref | Run A | Run B |
+| --- | :---: | ---: | :--- |
+| Check | **Found** | 42 | Left |`}
+      />
+    );
+
+    const headerCells = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("thead th")
+    );
+    const bodyCells = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("tbody td")
+    );
+
+    expect(headerCells.map((cell) => cell.style.textAlign)).toEqual([
+      "",
+      "center",
+      "right",
+      "left",
+    ]);
+    expect(bodyCells.map((cell) => cell.style.textAlign)).toEqual([
+      "",
+      "center",
+      "right",
+      "left",
+    ]);
+  });
+
+  it("profiles comparison tables with long headers over short body values as prose", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={`| Real Issue (Manually Verified at \`d693ea7d7\`) | Historical Codex Built-in Review (Ref) | **Exact \`#4445\` (\`e7d684457\`) — PwrAgent / Codex (\`6:09\`, \`5.95M\` tok, \`$1.22\`)** |
+| --- | :---: | :---: |
+| **B1 [P1]** Merge review ledger tools | **Found** | **Found** *(P2)* |
+| **B2 [P2]** Release ACP review sessions | **Found** | Missed |`}
+      />
+    );
+
+    const headerCellKinds = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("thead th")
+    ).map((cell) => cell.getAttribute("data-col-kind"));
+
+    expect(headerCellKinds).toEqual(["prose", "prose", "prose"]);
+  });
+
   it("skips raw html parsing for oversized html-like messages", () => {
     const oversizedHtml = "<em>safe</em>".repeat(2_000);
     const { container } = render(<ThreadMarkdown text={oversizedHtml} />);

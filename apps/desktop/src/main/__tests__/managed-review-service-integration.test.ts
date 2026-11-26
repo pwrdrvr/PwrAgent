@@ -1884,7 +1884,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("runs Kimi review in a hidden child and injects its output into the next parent turn", async () => {
+  it("keeps a managed review on its own card and out of the next ACP prompt and user message", async () => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const parentThreadId = "kimi-parent";
     const parentRuntime: BackendAcpSessionRuntimeState = {
@@ -1986,9 +1986,15 @@ describe("DesktopBackendRegistry", () => {
       backend: acpBackendId,
       threadId: parentThreadId,
     });
-    expect(completedOverlay?.pendingManagedReviewContextEntryIds).toEqual([
-      `managed-review:${response.turnId}:result`,
-    ]);
+    const resultEntry = completedOverlay?.managedReviewEntries?.find((entry) =>
+      entry.id === `managed-review:${response.turnId}:result`,
+    );
+    expect(resultEntry?.output?.overall_explanation).toBe("No blocking findings.");
+    if (!resultEntry) throw new Error("Managed review did not publish a result.");
+    // Old profiles can still have a pending context marker when they upgrade.
+    await overlayStore.upsertManagedReviewEntry({
+      backend: acpBackendId, threadId: parentThreadId, entry: resultEntry, pendingContext: true,
+    });
     await registry.close();
 
     const followupStartPrompt = vi.fn(
@@ -2015,15 +2021,29 @@ describe("DesktopBackendRegistry", () => {
       "scheduleThreadTitleGeneration",
     );
 
+    const events: AgentEvent[] = [];
+    const unsubscribe = followup.registry.onEvent((event) => { events.push(event); });
+    onTestFinished(unsubscribe);
     const nextTurn = await followup.registry.startTurn({
       backend: acpBackendId,
       threadId: parentThreadId,
       input: [{ type: "text", text: "Continue after review" }],
     });
     const nextPrompt = followupStartPrompt.mock.calls.at(-1)?.[0].prompt;
-    expect(nextPrompt).toContain("PwrAgent review sub-agent results");
-    expect(nextPrompt).toContain(reviewOutput);
-    expect(nextPrompt).toContain("Continue after review");
+    expect(nextPrompt).toBe("Continue after review");
+    expect(completedOverlay?.pendingManagedReviewContextEntryIds).toBeUndefined();
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      notification: expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          threadId: parentThreadId,
+          turnId: nextTurn.turnId,
+          item: expect.objectContaining({
+            id: `user:${nextTurn.turnId}`, type: "userMessage", text: "Continue after review",
+          }),
+        }),
+      }),
+    })));
     expect(scheduleTitleGeneration).toHaveBeenCalledWith({
       backend: acpBackendId,
       threadId: parentThreadId,

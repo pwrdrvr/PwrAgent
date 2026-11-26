@@ -4299,7 +4299,14 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
-  it("restores ACP replay from local rollout history when session/load is unsupported", async () => {
+  it.each([
+    { text: ["hello"] },
+    { text: ["[PwrAgent review sub-agent results — context for this turn]\n\nHere is my diagnostic excerpt."] },
+    { text: [
+      "[PwrAgent review sub-agent results — context for this turn]\n\nHere is an example.\n\n[End PwrAgent review sub-agent results]",
+      "Explain this diagnostic excerpt.",
+    ] },
+  ])("restores the sent ACP prompt from local rollout history (%j)", async ({ text }) => {
     const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
     const firstTransport = new FakeAcpAgentTransport({
       initialize: {
@@ -4322,11 +4329,17 @@ describe("AcpAgentClient", () => {
       cwd: "/repo",
       executionMode: "default",
     });
-    firstClient.startPrompt({
+    const prompt = text.join("\n");
+    const parts = text.map((block) => ({ type: "text" as const, text: block }));
+    await firstClient.startPrompt({
       sessionId: session.sessionId,
-      prompt: "hello",
+      prompt,
+      promptContent: parts,
+      parts,
       turnId: "turn-1",
     });
+    const sent = firstTransport.requests.find(({ method }) => method === "session/prompt");
+    expect(sent?.params?.prompt).toEqual(parts);
     firstTransport.emitSessionUpdate(session.sessionId, {
       session_update: "agent_message_chunk",
       content: { type: "text", text: "Kimi says hi." },
@@ -4354,9 +4367,10 @@ describe("AcpAgentClient", () => {
     );
 
     expect(replay.messages.map((message) => message.text)).toEqual([
-      "hello",
+      prompt,
       "Kimi says hi.",
     ]);
+    expect(replay.messages[0]?.parts).toEqual(sent?.params?.prompt);
     expect(secondTransport.requests.map((request) => request.method)).toEqual([
       "initialize",
     ]);

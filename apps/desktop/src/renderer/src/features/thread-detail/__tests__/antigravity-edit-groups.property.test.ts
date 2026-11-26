@@ -69,7 +69,7 @@ describe("Antigravity edit groups", () => {
     }]);
   });
 
-  it("keeps inline and referenced patches outside completed work groups", () => {
+  it("folds inline and referenced edits identically inside completed work groups", () => {
     for (const reference of ["diffRef", "diffRefs"] as const) {
       const edits = ["first", "second"].map((id) => ({
         ...edit(id, "/work/notes.md", "turn"),
@@ -90,8 +90,18 @@ describe("Antigravity edit groups", () => {
         }),
       }));
       const presentation = (entries: AppServerThreadEntry[]) => render(entries).map((item) =>
-        item.type === "entry" && item.entry.type === "activity" ? item.entry.summary : item.type);
-      expect(presentation(edits)).toEqual(["Edited 1 file · 2 edits"]);
+        item.type === "workPhaseGroup"
+          ? {
+              type: item.type,
+              label: item.label,
+              summaries: item.entries.map((entry) => entry.type === "activity" ? entry.summary : entry.type),
+            }
+          : item.type);
+      expect(presentation(edits)).toEqual([{
+        type: "workPhaseGroup",
+        label: "Worked for 1m 15s",
+        summaries: ["Edited 1 file · 2 edits"],
+      }]);
       expect(presentation(referenced)).toEqual(presentation(edits));
     }
   });

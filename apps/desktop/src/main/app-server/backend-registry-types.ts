@@ -1246,6 +1246,7 @@ export type StartingTurnOrigin = {
   admittedCodexTurnSequence?: number;
   origin?: AppServerThreadMessageOrigin;
   turnInputSource?: TurnInputSource;
+  reviewFix?: boolean;
   turnId?: string;
 };
 
@@ -1293,6 +1294,7 @@ export type CodexRetryableTurnStart = {
     input: AppServerTurnInputItem[];
     origin?: ThreadTurnQueueOrigin;
     turnInputSource?: TurnInputSource;
+    reviewFix?: boolean;
     executionMode?: ThreadExecutionMode;
     approvalPolicy?: string;
     sandbox?: string;

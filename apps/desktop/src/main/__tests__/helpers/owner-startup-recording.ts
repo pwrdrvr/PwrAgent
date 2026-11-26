@@ -22,8 +22,10 @@ export function recordOwnerCalls(getter: unknown, prefix: string, names: RegExp)
             : source.includes("research.observeStart") ? "research.subscribe"
             : source.includes("liveFeed.handleBackendEvent") ? "threadTodos.subscribe"
             : source.includes("this.handleEvent(event)") ? "operatorRequests.subscribe"
+            : source.includes("changesOperatorQueueMounts") ? "operatorRequestMounts.subscribe"
             : source.includes("this.observe(event)") ? "autoCompaction.subscribe"
-            : "renderer.subscribe";
+            : source.includes("host.renderer.agentEvent") ? "renderer.subscribe"
+            : label;
         }
         records.push({ name: label, order });
       }

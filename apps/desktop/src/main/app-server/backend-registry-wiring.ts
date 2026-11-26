@@ -1018,7 +1018,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               checkoutMode: ports.resourceCheckoutToolMode(context),
             }, {
               taskMonitorRole: "all",
-              antigravityMcpContext: context.backend === "acp:antigravity" && !context.memoryOnly,
+              antigravityMcpContext: context.backend === "acp:antigravity" && !context.stdioFallback,
             }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   MCP_CONNECTION_IDS,
   BOAT_API_URL,
@@ -96,6 +96,10 @@ export class McpConnectionRegistry {
   private readonly configPath: string;
   private readonly now: () => number;
   private readonly randomId: () => string;
+  private parsedConnections?: { contentHash: string } & (
+    | { table: Record<string, unknown> }
+    | { error: string }
+  );
 
   constructor(options: McpConnectionRegistryOptions = {}) {
     this.configPath = options.configPath ?? resolveDesktopConfigPath();
@@ -105,9 +109,8 @@ export class McpConnectionRegistry {
   }
 
   list(): McpConnectionRecord[] {
-    // One read, one parse. Each of these three used to open and parse
-    // config.toml for itself, so a single `list()` cost three -- and `get()`
-    // goes through `list()`, so every connection lookup did too.
+    // Pass a concrete table even when the section is absent so the helpers'
+    // default arguments cannot read the file again.
     const table = this.readConnectionsTable();
     const projects = readProjectToolApprovals(table);
     return [
@@ -350,13 +353,31 @@ export class McpConnectionRegistry {
     );
   }
 
-  /** The `[mcp_connections]` table, or undefined when there is no config yet. */
-  private readConnectionsTable(): Record<string, unknown> | undefined {
-    if (!fs.existsSync(this.configPath)) return undefined;
-    const source = fs.readFileSync(this.configPath, "utf8");
-    return parseTomlTables(source, this.configPath).mcp_connections as
-      | Record<string, unknown>
-      | undefined;
+  private readConnectionsTable(): Record<string, unknown> {
+    if (!fs.existsSync(this.configPath)) {
+      this.parsedConnections = undefined;
+      return {};
+    }
+    return this.parseConnectionsTable(fs.readFileSync(this.configPath, "utf8"));
+  }
+
+  private parseConnectionsTable(source: string): Record<string, unknown> {
+    const contentHash = createHash("sha256").update(source).digest("hex");
+    const cached = this.parsedConnections;
+    if (cached?.contentHash === contentHash) {
+      if ("error" in cached) throw new Error(cached.error);
+      return cached.table;
+    }
+    // This reader tolerates unsupported values outside the MCP table, so it
+    // keeps its own projection instead of using the desktop settings parser.
+    try {
+      const table = parseTomlTables(source, this.configPath).mcp_connections ?? {};
+      this.parsedConnections = { contentHash, table };
+      return table;
+    } catch (error) {
+      if (error instanceof Error) this.parsedConnections = { contentHash, error: error.message };
+      throw error;
+    }
   }
 
   private pwrSnapConnection(
@@ -778,7 +799,7 @@ export class McpConnectionRegistry {
       ? fs.readFileSync(this.configPath, "utf8")
       : "";
     const edited = edit(source);
-    const table = parseTomlTables(source, this.configPath).mcp_connections as Record<string, unknown> | undefined;
+    const table = this.parseConnectionsTable(source);
     const next = pinSandboxerTransport && edited !== source
       ? applyTomlEdits(edited, [{
           op: "set", path: ["mcp_connections", "sandboxer_transport"],

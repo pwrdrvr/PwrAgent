@@ -8391,6 +8391,7 @@ class DesktopAppServerService {
           instanceId,
           threadId: request.ref.threadId,
           pinned: Boolean(result.pinnedRank),
+          membershipChanged: false,
         },
       },
     });

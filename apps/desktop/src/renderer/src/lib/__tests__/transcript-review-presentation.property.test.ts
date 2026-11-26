@@ -1,6 +1,7 @@
 import type { AppServerReadThreadResponse, AppServerThreadEntry, AppServerThreadMessageEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import fc from "fast-check";
 import { expect, it } from "vitest";
+import { pullRequestReviewPrompt } from "../../../../shared/__tests__/fixtures/pull-request-review";
 import { appendTranscriptHistoryPage, combineTranscriptEntries, combineTranscriptMessages, createTranscriptHistoryIndex, createTranscriptReviewPresentation, prependTranscriptHistoryPage } from "../segmented-transcript";
 import { createTranscriptReviewHistoryIndex, deriveTranscriptReviewPresentation } from "../transcript-review-presentation";
 
@@ -175,4 +176,67 @@ it("agrees with a full replay when new pages actually share legacy review text",
       history = appendTranscriptHistoryPage({ history, index, page: replay(advanced), tailEntries: [] });
     }
   }));
+});
+
+it("hides split-turn native Codex review prompts across any page split and order while preserving authored, sourced, and steer messages", () => {
+  const branchPrompt =
+    "Review the code changes against the base branch 'origin/main'. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
+  fc.assert(fc.property(
+    fc.constantFrom("branch" as const, "pullRequest" as const),
+    fc.boolean(),
+    fc.boolean(),
+    fc.integer({ min: 0, max: 5 }),
+    fc.integer({ min: 0, max: 5 }),
+    (target, splitTurn, promptBeforeReview, splitA, splitB) => {
+      const text = target === "pullRequest" ? pullRequestReviewPrompt : branchPrompt;
+      const outerTurnId = "outer-review-turn";
+      const promptTurn = splitTurn
+        ? { id: "inner-review-turn", rootTurnId: outerTurnId, status: "interrupted" as const }
+        : { id: outerTurnId, status: "completed" as const };
+      const reviewTurn = { id: outerTurnId, rootTurnId: outerTurnId, status: "completed" as const };
+      const generated: AppServerThreadMessageEntry = {
+        type: "message", id: "generated", role: "user", text, turn: promptTurn,
+      };
+      const authored: AppServerThreadMessageEntry = {
+        type: "message", id: "authored", role: "user", text,
+        turn: { id: "ordinary-turn", rootTurnId: "ordinary-turn", status: "completed" },
+      };
+      const sourced: AppServerThreadMessageEntry = {
+        type: "message", id: "sourced", role: "user", text, origin: { kind: "messaging" }, turn: promptTurn,
+      };
+      const steer: AppServerThreadMessageEntry = {
+        type: "message", id: "steer", role: "user",
+        text: "Review these code changes for security and provide prioritized findings.",
+        turn: promptTurn,
+      };
+      const review: AppServerThreadEntry = {
+        type: "review", id: "review", review: "No findings.", turn: reviewTurn,
+      };
+      const all = promptBeforeReview
+        ? [authored, generated, sourced, steer, review]
+        : [authored, review, generated, sourced, steer];
+      const cut1 = Math.min(splitA, splitB, all.length);
+      const cut2 = Math.min(Math.max(splitA, splitB), all.length);
+      const page1 = all.slice(0, cut1);
+      const page2 = all.slice(cut1, cut2);
+      const tailEntries = all.slice(cut2);
+      const index = createTranscriptHistoryIndex();
+      let history: ReturnType<typeof appendTranscriptHistoryPage> | undefined;
+      for (const page of [page1, page2]) {
+        if (page.length === 0) continue;
+        history = appendTranscriptHistoryPage({ history, index, page: replay(page), tailEntries: [] });
+      }
+      const presentation = createTranscriptReviewPresentation({
+        history, index, tailEntries, tailMessages: replay(tailEntries).replay.messages,
+      });
+      const visibleEntries = [...combineTranscriptEntries(history, index, presentation.tailEntries, presentation)];
+      const visibleMessages = [...combineTranscriptMessages(history, index, presentation.tailMessages, presentation)];
+      expect(visibleEntries.map((entry) => entry.id)).toEqual(
+        all.filter((entry) => entry.id !== "generated").map((entry) => entry.id),
+      );
+      expect(visibleMessages.map((message) => message.id)).toEqual(
+        replay(all).replay.messages.filter((message) => message.id !== "generated").map((message) => message.id),
+      );
+    },
+  ));
 });

@@ -1819,10 +1819,27 @@ export type AppServerReadThreadRequest = {
   includeAccounting?: boolean;
 };
 
+/** The thread owner's transient auto-compaction state. */
+export type AppServerThreadAutoCompactionStatus = {
+  threadId: string;
+  phase: "armed" | "due" | "steering" | "starting" | "compacting" | "resume" | "verifying" | "held";
+  /** The live turn carrying the compaction, when known. */
+  turnId?: string;
+  triggerTokens?: number;
+  effectiveContextWindow?: number;
+  reportedContextWindow?: number;
+  via?: "steer" | "start";
+  /** The fill when PwrAgent asked for the compaction. */
+  dispatchedAtTokens?: number;
+  heldReason?: "no-shrink" | "refused" | "unsupported";
+};
+
 export type AppServerReadThreadResponse = {
   /** Isolated invocation bodies; never a transcript page or a complete activity group. */
   toolInvocationDetails?: { turnId: string; itemId: string; details: AppServerThreadActivityDetail[] };
   display?: ThreadDisplayData;
+  /** Transcript read: null if the owner tracks no compaction state. */
+  autoCompaction?: AppServerThreadAutoCompactionStatus | null;
   /** Opaque hash of the complete owner response, excluding observation timings. */
   replayRevision?: string;
   /** Only in response to knownRevision. Reuse that exact cached response, not this empty replay. */
@@ -2633,6 +2650,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
+        /** Server- or owner-correlated root turn ID when this item runs inside a child turn (e.g. inline Codex review). */
+        rootTurnId?: string | null;
         item: {
           id: string;
           type: string;
@@ -2779,23 +2798,9 @@ export type AppServerNotification =
       };
     }
   | {
-      /**
-       * The owner's auto-compaction state for a thread. Transient and never
-       * persisted: sent when the phase or the threshold changes, so a view
-       * opened later shows nothing until the next change.
-       */
+      /** Sent when the owner's transient compaction status changes. */
       method: "thread/autoCompaction/updated";
-      params: {
-        threadId: string;
-        phase: "armed" | "due" | "steering" | "starting" | "compacting" | "resume" | "verifying" | "held";
-        triggerTokens?: number;
-        effectiveContextWindow?: number;
-        reportedContextWindow?: number;
-        via?: "steer" | "start";
-        /** The fill when PwrAgent asked for the compaction. */
-        dispatchedAtTokens?: number;
-        heldReason?: "no-shrink" | "refused" | "unsupported";
-      };
+      params: AppServerThreadAutoCompactionStatus;
     }
   | {
       method: "thread/pricing/updated";
@@ -3204,6 +3209,11 @@ export type AppServerNotification =
         threadId: string;
         /** False only for producer-proven detail/accounting changes. */
         navigationChanged?: false;
+        /** Owner-correlated inner turn -> outer review root turn ID for inline native Codex reviews. */
+        correlatedTurn?: {
+          turnId: string;
+          rootTurnId: string;
+        };
         subAgents?: ThreadSubAgentSummary[];
       };
     }
@@ -3356,6 +3366,8 @@ export type AppServerNotification =
          */
         threadId?: string;
         pinned?: boolean;
+        /** Whether the saved mount set changed, independent of pin rank or snapshot updates. */
+        membershipChanged?: boolean;
         /** Correlates a completed explicit mount with its IPC reply. */
         publicationId?: string;
         /** All departing root anchors when the mount also ranks a companion. */

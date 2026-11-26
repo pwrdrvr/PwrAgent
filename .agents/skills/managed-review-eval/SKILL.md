@@ -7,7 +7,8 @@ description: Benchmark PwrAgent managed code reviews against pinned pull-request
 
 Use the checked-in `pwrdrvr/PwrAgent` cohorts to evaluate the managed code review pipeline. Run repository commands from the PwrAgent root and keep generated artifacts in `.local/managed-review-eval/`.
 
-- **Run or resume reviews.** Read [Running the matrix](references/run-matrix.md) for the access gate, arm selection, and smoke test.
+- **Run or resume development reviews.** Read [Running the matrix](references/run-matrix.md) for the access gate, arm selection, and smoke test.
+- **Run isolated blind holdouts.** Read [Isolated reviewer runner](references/isolated-runner.md) for controller/runner separation, synthetic canary verification, and running both managed arms on blind cohorts.
 - **Score existing reviews.** Read [Scoring and aggregation](references/scoring.md) for Decision invocation from Codex, result validation, and score interpretation.
 - **Verify or build cohorts.** Read [Cohort maintenance](references/cohort-maintenance.md) for Git verification, source provenance, and staging a new split.
 

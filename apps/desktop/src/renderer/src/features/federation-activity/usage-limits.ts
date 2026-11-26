@@ -202,21 +202,42 @@ export function buildLimitAccounts(sources: LimitSource[]): LimitAccount[] {
       }
     }
     const series = [...byLimit.entries()].map(([id, { reading, points }]) => describeSeries(account.provider, id, reading, points))
-      .sort((a, b) => windowOrder(a) - windowOrder(b));
+      .sort(compareSeriesOrder);
     return { key, provider: account.provider, accountKey: account.accountKey, planType: account.planType,
       owners: [...new Set(account.owners.values())], ownerKeys: [...account.owners.keys()], observedAt: newest.observedAt,
       observedBy: newest.owner, series, credits };
   }).sort((a, b) => b.observedAt - a.observedAt);
 }
 
-function windowOrder(series: LimitSeries) {
+function compareSeriesOrder(left: LimitSeries, right: LimitSeries): number {
+  const leftRank = seriesOrderRank(left);
+  const rightRank = seriesOrderRank(right);
+  if (leftRank.tier !== rightRank.tier) return leftRank.tier - rightRank.tier;
+  if (leftRank.pool !== rightRank.pool) return leftRank.pool.localeCompare(rightRank.pool);
+  return leftRank.window - rightRank.window;
+}
+
+function seriesOrderRank(series: LimitSeries): { tier: number; pool: string; window: number } {
   if (series.windowKey) {
-    return series.windowKey === "primary" ? 0 : series.windowKey === "secondary" ? 1 : series.windowKey === "individual" ? 2 : 3;
+    const window = series.windowKey === "primary" ? 0 : series.windowKey === "secondary" ? 1 : series.windowKey === "individual" ? 2 : 3;
+    return { tier: 0, pool: "", window };
   }
-  // Providers without Codex's slots: the 5-hour window, the account-wide
-  // weekly one, per-model weekly ones, then the rest in the provider's order.
-  return series.windowMinutes === 300 ? 0 : series.limitId === CLAUDE_WEEKLY_LIMIT_ID ? 1
-    : series.windowMinutes === 10_080 ? 2 : 3;
+  if (series.limitId === "five_hour") return { tier: 0, pool: "", window: 0 };
+  if (series.limitId === CLAUDE_WEEKLY_LIMIT_ID) return { tier: 1, pool: "", window: 0 };
+  // Keep pool-scoped limits (e.g. Antigravity's Gemini and Claude/GPT pools)
+  // paired by pool with 5h ahead of Weekly inside each pool.
+  const pooled = /^(5h|weekly)\s+(.+?)\s+limit$/i.exec(series.name.trim());
+  if (pooled) {
+    const pool = pooled[2]!.toLowerCase();
+    return {
+      tier: pool === "gemini" ? 2 : 3,
+      pool,
+      window: pooled[1]!.toLowerCase() === "5h" ? 0 : 1,
+    };
+  }
+  if (series.windowMinutes === 300) return { tier: 0, pool: "", window: 0 };
+  if (series.windowMinutes === 10_080) return { tier: 3, pool: "", window: 1 };
+  return { tier: 4, pool: "", window: 0 };
 }
 
 /** Claude's weekly limit across all models; the others are per model. */
@@ -338,10 +359,27 @@ export function sinceResetSeries(account: LimitAccount | undefined): LimitSeries
  * The account's 5-hour limit. Codex names its windows by position, not
  * length: an account with only a weekly limit reports it as `primary`, so a
  * primary window of another stated length is not the 5-hour limit.
+ *
+ * When a provider reports multiple 5-hour pools (Antigravity's Gemini and
+ * Claude/GPT pools), prefer a pool with a live `resetAt` over an idle pool
+ * whose reset was omitted (even if the idle pool has a historical reset's
+ * `windowStart`), breaking ties by higher usage and then existing order.
  */
 export function fiveHourSeries(account: LimitAccount | undefined): LimitSeries | undefined {
-  return account?.series.find((series) => series.windowMinutes === 300)
-    ?? account?.series.find((series) => series.windowKey === "primary" && series.windowMinutes === undefined);
+  const candidates = account?.series.filter((series) => series.windowMinutes === 300) ?? [];
+  if (candidates.length > 0) {
+    return candidates.reduce((best, candidate) => (
+      isBetterFiveHourSeries(candidate, best) ? candidate : best
+    ));
+  }
+  return account?.series.find((series) => series.windowKey === "primary" && series.windowMinutes === undefined);
+}
+
+function isBetterFiveHourSeries(candidate: LimitSeries, current: LimitSeries): boolean {
+  const candidateHasReset = candidate.latest.resetAt !== undefined;
+  const currentHasReset = current.latest.resetAt !== undefined;
+  if (candidateHasReset !== currentHasReset) return candidateHasReset;
+  return candidate.latest.usedPercent > current.latest.usedPercent;
 }
 
 /**
@@ -379,8 +417,10 @@ export function projectLimit(series: LimitSeries): LimitProjection | undefined {
 }
 
 export function limitLabel(series: LimitSeries): string {
-  if (series.windowMinutes === 300) return "5-hour window";
-  // Claude has several weekly limits (all models, Opus, Sonnet) and names each.
+  if (series.windowMinutes === 300) {
+    return series.windowKey || series.limitId === "five_hour" ? "5-hour window" : series.name;
+  }
+  // Claude and Antigravity have several weekly limits and name each.
   if (series.windowMinutes === 10_080) return series.windowKey ? "Weekly limit" : series.name;
   if (series.windowKey === "individual") return "Individual limit";
   return series.name;

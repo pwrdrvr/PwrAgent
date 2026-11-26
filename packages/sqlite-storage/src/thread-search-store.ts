@@ -42,6 +42,7 @@ type ThreadSearchFtsRow = ThreadSearchDocumentRow & {
 export class ThreadSearchStore implements ThreadSearchStorage {
   private readonly db: BetterSqlite3.Database;
   private readonly pruneCursors = new Map<string, string>();
+  private currentThreadStatement?: BetterSqlite3.Statement;
 
   constructor(stateDb: StateDb) {
     this.db = stateDb.raw;
@@ -57,7 +58,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
   }
 
   private hasCurrentThread(thread: AppServerThreadSummary): boolean {
-    return Boolean(this.db.prepare(`
+    const statement = this.currentThreadStatement ??= this.db.prepare(`
       SELECT 1 FROM thread_search_documents
       WHERE identity_key = ? AND backend IS ? AND thread_id IS ?
         AND title IS ? AND title_source IS ? AND summary IS ? AND project_key IS ?
@@ -70,7 +71,8 @@ export class ThreadSearchStore implements ThreadSearchStorage {
           WHERE k.identity_key = thread_search_documents.identity_key
             AND f.identity_key = k.identity_key
         )
-    `).get(
+    `);
+    return Boolean(statement.get(
       buildLegacyEncodedThreadIdentityKey(thread.source, thread.id), thread.source, thread.id,
       thread.title, thread.titleSource ?? null, thread.summary ?? null, thread.projectKey ?? null,
       thread.createdAt ?? null, thread.updatedAt ?? null, thread.archivedAt ?? null,

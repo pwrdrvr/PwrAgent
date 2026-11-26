@@ -36,7 +36,6 @@ import {
   AGENT_REVIEW_LIMIT,
   canClaimAgentReview,
   type AgentReviewRefusal,
-  type OperatorReviewInput,
 } from "@pwragent/owner-core/agent-review-admission";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
@@ -141,6 +140,7 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
   | "prepareTokenMiserRuntime"
 > {
   currentTurnInputSource(context: { backend: AppServerBackendKind; threadId: string; turnId: string }): TurnInputSource;
+  isReviewFixTurn(context: { backend: AppServerBackendKind; threadId: string; turnId: string }): boolean;
   readonly registrySessionId: string;
   readonly reservedAcpStartThreadKeys: Set<string>;
   readonly runtimeInstanceId: string;
@@ -188,7 +188,7 @@ export class ManagedReviewService {
   private readonly context: RegistryContext;
   private readonly host: RegistryHost<ManagedReviewServiceHost>;
   readonly candidateLedger: ManagedReviewCandidateLedger;
-  private readonly operatorReviewInputs = new Map<string, OperatorReviewInput>();
+  private readonly observedOperatorTurns = new Map<string, string>();
   private readonly drainingReviewTerminals = new Set<string>();
   private readonly pendingPrReviewStarts = new Map<string, object>();
   private readonly publishingReviewResults = new Set<ReviewSubAgentRecord>();
@@ -211,11 +211,10 @@ export class ManagedReviewService {
   observeOperatorReviewInput(turn: { backend: AppServerBackendKind; threadId: string; turnId: string }, source?: TurnInputSource): void {
     if (!isOperatorReviewInput(source)) return;
     const key = buildThreadIdentityKey(turn.backend, turn.threadId);
-    if (this.operatorReviewInputs.get(key)?.turnId === turn.turnId) return;
-    const input = { turnId: turn.turnId, observedAt: Date.now() };
+    if (this.observedOperatorTurns.get(key) === turn.turnId) return;
     try {
-      this.context.stores.reviews.rearmAgentReviews(turn, input);
-      this.operatorReviewInputs.set(key, input);
+      this.context.stores.reviews.rearmAgentReviews(turn, { turnId: turn.turnId });
+      this.observedOperatorTurns.set(key, turn.turnId);
     } catch (error) {
       // The provider already accepted the operator turn. A bookkeeping
       // failure cannot turn that successful send into a reported failure.
@@ -256,8 +255,31 @@ export class ManagedReviewService {
         buildActiveTurnModeKey(managedReview.reviewThreadId, managedReview.turnId),
       );
       const relatedReviewTurnId = turnId === managedReview.turnId ? interruptTurnId : managedReview.turnId;
-      if (relatedReviewTurnId && relatedReviewTurnId !== turnId) {
-        delivery.event = { ...event, relatedReviewTurnId };
+      const shouldAttachRootTurnId =
+        Boolean(turnId)
+        && turnId !== managedReview.turnId
+        && typeof notification.params.turn.rootTurnId !== "string";
+      if ((relatedReviewTurnId && relatedReviewTurnId !== turnId) || shouldAttachRootTurnId) {
+        delivery.event = {
+          ...event,
+          ...(relatedReviewTurnId && relatedReviewTurnId !== turnId
+            ? { relatedReviewTurnId }
+            : {}),
+          ...(shouldAttachRootTurnId
+            ? {
+                notification: {
+                  ...notification,
+                  params: {
+                    ...notification.params,
+                    turn: {
+                      ...notification.params.turn,
+                      rootTurnId: managedReview.turnId,
+                    },
+                  },
+                },
+              }
+            : {}),
+        } as AgentEvent;
       }
     }
     if (!turnId) return;
@@ -1712,12 +1734,23 @@ export class ManagedReviewService {
     // wrote, so a write without a status keeps a terminal's.
     await this.reviewCardWrites.run(reviewKey, async () => await this.writeReviewSubAgentCard(record, patch));
     this.host().invalidateThreadListCache(record.parentBackend);
+    const correlatedTurnId =
+      record.mode === "native"
+      && record.backend === "codex"
+      && record.reviewThreadId === record.parentThreadId
+        ? this.context.turnState.reviewInterrupt(
+            buildActiveTurnModeKey(record.reviewThreadId, record.turnId),
+          )
+        : undefined;
     await this.context.emit({
       backend: record.parentBackend,
       notification: {
         method: "thread/subAgents/updated",
         params: {
           threadId: record.parentThreadId,
+          ...(correlatedTurnId && correlatedTurnId !== record.turnId
+            ? { correlatedTurn: { turnId: correlatedTurnId, rootTurnId: record.turnId } }
+            : {}),
         },
       },
     });
@@ -2011,7 +2044,6 @@ export class ManagedReviewService {
         backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
         entry,
-        pendingContext: isAcpBackendId(params.record.parentBackend),
       });
       await this.context.emit({
         backend: params.record.parentBackend,
@@ -2296,12 +2328,17 @@ export class ManagedReviewService {
       const sessionMode = caller?.acpRuntime?.currentModeId;
       const { target, cwd, runMode: requestedRunMode } = request.args;
       const turn = { backend, threadId, turnId: invokingTurnId };
-      const threadKey = buildThreadIdentityKey(backend, threadId);
       const idempotencyKey = JSON.stringify(["agent-review", invokingTurnId]);
       const requestKey = JSON.stringify([target, cwd, requestedRunMode]);
+      const isOperatorTurn = (): boolean =>
+        !this.host().isReviewFixTurn(turn)
+        && isOperatorReviewInput(this.host().currentTurnInputSource(turn));
       const checkAdmission = (): PwrAgentThreadOrchestrationResponse | undefined => {
         if (!this.host().isLiveDynamicToolCall(backend, turn)) {
           return threadOrchestrationFailure("forbidden", "The requesting turn has ended. No review was scheduled.");
+        }
+        if (this.host().isReviewFixTurn(turn)) {
+          return this.agentReviewRefused("review_fix_turn");
         }
         this.observeOperatorReviewInput(turn, this.host().currentTurnInputSource(turn));
         const previous = this.context.turnState.reviewAdmissions().find(
@@ -2318,7 +2355,7 @@ export class ManagedReviewService {
       const existing = checkAdmission();
       if (existing) return existing;
       const refusal = canClaimAgentReview(this.context.stores.reviews.readAgentReviewBudget(turn), {
-        ...turn, operatorInput: this.operatorReviewInputs.get(threadKey),
+        ...turn, isOperatorTurn: isOperatorTurn(),
       });
       if (refusal) return this.agentReviewRefused(refusal);
 
@@ -2393,7 +2430,7 @@ export class ManagedReviewService {
       if (concurrent) return concurrent;
       this.host().assertThreadOwnership();
       const claimRefusal = this.context.stores.reviews.claimAgentReview({
-        ...turn, operatorInput: this.operatorReviewInputs.get(threadKey), diff,
+        ...turn, isOperatorTurn: isOperatorTurn(), diff,
       });
       if (claimRefusal) return this.agentReviewRefused(claimRefusal);
       const pending = this.scheduleReviewStart({
@@ -2426,6 +2463,11 @@ export class ManagedReviewService {
         return threadOrchestrationFailure(
           "forbidden",
           `PwrAgent stopped after ${AGENT_REVIEW_LIMIT} agent-requested reviews on this thread. Report the current review and CI status, then wait for the operator. Do not retry or schedule another review.`,
+        );
+      case "review_fix_turn":
+        return threadOrchestrationFailure(
+          "forbidden",
+          "PwrAgent does not schedule another review from a review-fix turn. Settle the open findings, report each outcome, and wait for the operator to decide whether to review again.",
         );
     }
   }
@@ -2570,13 +2612,95 @@ export class ManagedReviewService {
     } as AgentEvent);
   }
 
+  private resolveInlineNativeCodexReviewRootTurnId(
+    threadId: string,
+    turnId: string,
+  ): string | undefined {
+    const matches = (records: Iterable<ReviewSubAgentRecord>): string | undefined => {
+      for (const record of records) {
+        if (
+          record.mode !== "native"
+          || record.backend !== "codex"
+          || record.reviewThreadId !== record.parentThreadId
+          || record.reviewThreadId !== threadId
+          || record.turnId === turnId
+        ) {
+          continue;
+        }
+        const reviewTurnKey = buildActiveTurnModeKey(record.reviewThreadId, record.turnId);
+        if (this.context.turnState.reviewInterrupt(reviewTurnKey) === turnId) {
+          return record.turnId;
+        }
+      }
+      return undefined;
+    };
+    return (
+      matches(this.context.turnState.liveReviewRecords().values())
+      ?? matches(this.reviewSubAgentsByReviewTurn.values())
+    );
+  }
+
+  /**
+   * Resolve the owner's review turn ID for an active or recently started review
+   * when Codex emits a review item on a mismatched inner turn ID.
+   */
+  resolveReviewTurnId(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): string | undefined {
+    const reviewKey = buildReviewSubAgentKey(params.backend, params.threadId, params.turnId);
+    const record =
+      this.context.turnState.liveReviewRecords().get(reviewKey)
+      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey)
+      ?? this.findActiveReviewSubAgentForTerminal(params)?.record;
+    return record?.turnId;
+  }
+
   /**
    * Provider transcripts do not attach model settings to review-mode items.
    * The registry owns that association for the review's lifetime, so include
-   * it in the live item as well as the durable review artifact.
+   * it in the live item as well as the durable review artifact. Also propagate
+   * the outer review turn ID onto correlated inner inline Codex review events
+   * so renderers can suppress the generated review prompt live.
    */
   withReviewRuntimeMetadata(event: AgentEvent): AgentEvent {
-    if (event.notification.method !== "item/completed") {
+    const method = event.notification.method;
+    if (
+      event.backend === "codex"
+      && (
+        method === "turn/started"
+        || method === "turn/completed"
+        || method === "turn/failed"
+        || method === "turn/cancelled"
+      )
+    ) {
+      const params = readRecord(event.notification.params);
+      const threadId = readNonEmptyString(params?.threadId);
+      const turn = readRecord(params?.turn);
+      const turnId = readNonEmptyString(turn?.id) ?? readNonEmptyString(params?.turnId);
+      if (!threadId || !turn || !turnId || typeof turn.rootTurnId === "string") {
+        return event;
+      }
+      const rootTurnId = this.resolveInlineNativeCodexReviewRootTurnId(threadId, turnId);
+      if (!rootTurnId) {
+        return event;
+      }
+      return {
+        ...event,
+        notification: {
+          ...event.notification,
+          params: {
+            ...event.notification.params,
+            turn: {
+              ...turn,
+              rootTurnId,
+            },
+          },
+        },
+      } as AgentEvent;
+    }
+    if (method !== "item/started" && method !== "item/completed") {
       return event;
     }
     const params = readRecord(event.notification.params);
@@ -2584,10 +2708,30 @@ export class ManagedReviewService {
     const turnId = readNonEmptyString(params?.turnId);
     const item = readRecord(params?.item);
     const itemType = readNonEmptyString(item?.type);
+    if (!threadId || !turnId || !item) {
+      return event;
+    }
+    if (event.backend === "codex" && itemType === "userMessage") {
+      if (typeof params?.rootTurnId === "string") {
+        return event;
+      }
+      const rootTurnId = this.resolveInlineNativeCodexReviewRootTurnId(threadId, turnId);
+      if (!rootTurnId) {
+        return event;
+      }
+      return {
+        ...event,
+        notification: {
+          ...event.notification,
+          params: {
+            ...event.notification.params,
+            rootTurnId,
+          },
+        },
+      } as AgentEvent;
+    }
     if (
-      !threadId
-      || !turnId
-      || !item
+      method !== "item/completed"
       || (itemType !== "enteredReviewMode" && itemType !== "exitedReviewMode")
     ) {
       return event;
@@ -2595,7 +2739,12 @@ export class ManagedReviewService {
     const reviewKey = buildReviewSubAgentKey(event.backend, threadId, turnId);
     const record =
       this.context.turnState.liveReviewRecords().get(reviewKey)
-      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey);
+      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey)
+      ?? this.findActiveReviewSubAgentForTerminal({
+        backend: event.backend,
+        threadId,
+        turnId,
+      })?.record;
     if (!record) {
       return event;
     }

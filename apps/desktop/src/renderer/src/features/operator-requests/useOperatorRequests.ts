@@ -62,7 +62,6 @@ const EMPTY_UNAVAILABLE: TodoUnavailableInstance[] = [];
  */
 export function useOperatorRequests(
   desktopApi: OperatorRequestsApi | undefined,
-  mountedThreadKeys?: string,
 ): OperatorRequestsController {
   const api = desktopApi;
   const [ready, setReady] = useState(false);
@@ -136,7 +135,7 @@ export function useOperatorRequests(
       cancelled = true;
       unsubscribe?.();
     };
-  }, [api, reload, mountedThreadKeys]);
+  }, [api, reload]);
 
   const markSeen = useCallback((keys: readonly string[]): void => {
     const send = api?.markOperatorItemsSeen;

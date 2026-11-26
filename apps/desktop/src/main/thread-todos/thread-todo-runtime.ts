@@ -83,6 +83,7 @@ import { ThreadReviewError } from "../thread-reviews/thread-review-service";
 import {
   getReviewAutoFixArming,
   getReviewAutoFixRuns,
+  ReviewAutoFixDispatcher,
   reviewAutoFixMessage,
   setReviewAutoFixListener,
 } from "../thread-reviews/review-auto-fix";
@@ -359,66 +360,28 @@ export function installThreadTodoRuntime(params: {
   setReviewAutoFixListener((thread) => params.broadcast({ ...thread, at: Date.now() }));
   // Someone settling a finding has taken the review on, so a failed send no
   // longer needs saying.
-  reviews.setOnUpdated((review) => reviewAutoFixRuns.record(review, review.id, { kind: "reviewUpdated", at: Date.now() }));
-  const heldReviews = new Map<string, string>();
-  const checkingReviews = new Set<string>();
-  const sendReviewAutoFix = async (id: string): Promise<void> => {
-    if (checkingReviews.has(id)) return;
-    checkingReviews.add(id);
-    try {
-      const review = reviews.get(id);
-      const message = review && reviewAutoFixMessage(review);
-      if (!review || !message || registry.getThreadInfo(review)?.archived) {
-        heldReviews.delete(id);
-        if (review) reviewAutoFixRuns.record(review, id, { kind: "queue", status: "cancelled", at: Date.now() });
-        return;
-      }
-      if (params.readReviewStackHold) reviewAutoFixRuns.record(review, id, { kind: "queue", status: "held", at: Date.now() });
-      const hold = await params.readReviewStackHold?.(review);
-      if (hold) {
-        if (heldReviews.get(id) !== hold) {
-          threadTodoLog.debug("review Auto-fix held", { threadId: review.threadId, reason: hold });
-        }
-        heldReviews.set(id, hold);
-        return;
-      }
-      const current = reviews.get(id);
-      const latest = current && reviewAutoFixMessage(current);
-      if (!latest) {
-        heldReviews.delete(id);
-        reviewAutoFixRuns.record(review, id, { kind: "queue", status: "cancelled", at: Date.now() });
-        return;
-      }
-      const request = {
-        backend: review.backend, threadId: review.threadId,
-        input: [{ type: "text" as const, text: latest.text }],
-        origin: "automation" as const, messageOrigin: latest.messageOrigin,
-      };
-      if (params.readReviewStackHold) {
-        // Keep ownership until admission. A queued start could otherwise
-        // outlive the observation that cleared the gate.
-        const result = await registry.submitTurnIfIdle({
-          ...request, canAdmit: async () => !await params.readReviewStackHold?.(review),
-        });
-        if (result.status === "busy") {
-          heldReviews.set(id, "Waiting for turn admission");
-          return;
-        }
-      } else {
-        await registry.submitTurn(request);
-      }
-      heldReviews.delete(id);
-    } catch (error) {
-      heldReviews.delete(id);
-      const reason = error instanceof Error ? error.message : String(error);
-      const review = reviews.get(id);
-      if (!review) return;
-      threadTodoLog.warn("could not send a review's auto-fix", { error: reason, threadId: review.threadId });
-      reviewAutoFixRuns.record(review, id, { kind: "sendFailed", reason, at: Date.now() });
-    } finally {
-      checkingReviews.delete(id);
+  reviews.setOnUpdated((review) => {
+    reviewAutoFixRuns.record(review, review.id, { kind: "reviewUpdated", at: Date.now() });
+    if (!reviewAutoFixMessage(review)) {
+      reviewAutoFixDispatcher.wake(review);
     }
-  };
+  });
+  const reviewAutoFixDispatcher = new ReviewAutoFixDispatcher({
+    getReview: (id) => reviews.get(id),
+    isThreadArchived: (thread) => registry.getThreadInfo(thread)?.archived === true,
+    readStackHold: params.readReviewStackHold,
+    threadHasActiveTurn: registry.getActiveTurnForThread
+      ? (thread) => registry.getActiveTurnForThread(thread) !== undefined
+      : undefined,
+    suspendDispatch: registry.suspendTurnQueueDispatch
+      ? (thread) => registry.suspendTurnQueueDispatch(thread)
+      : undefined,
+    submitTurn: (request) => registry.submitTurn(request),
+    submitTurnIfIdle: (request) => registry.submitTurnIfIdle(request),
+    recordRun: (thread, reviewId, event) => reviewAutoFixRuns.record(thread, reviewId, event),
+    onHeld: (thread, reason) => threadTodoLog.debug("review Auto-fix held", { threadId: thread.threadId, reason }),
+    onSendFailed: (thread, error) => threadTodoLog.warn("could not send a review's auto-fix", { error, threadId: thread.threadId }),
+  });
   readDefaultMergeMethod = params.readDefaultMergeMethod;
   todos.setOnChanged(changed);
   todos.setRunners(createThreadTodoRunners({
@@ -446,7 +409,7 @@ export function installThreadTodoRuntime(params: {
   });
   // An archived thread's cards have nothing left to act on.
   unsubscribeArchive?.();
-  unsubscribeArchive = registry.onEvent((event) => {
+  const unsubscribeEvents = registry.onEvent((event) => {
     if (event.federationTarget?.scope === "remote") return;
     // Owner membership, titles, PR attachments and dispatch defaults.
     liveFeed.handleBackendEvent(event);
@@ -456,22 +419,41 @@ export function installThreadTodoRuntime(params: {
       params.broadcast({ at: Date.now() });
       return;
     }
+    let handledTerminalTurn = false;
+    if (event.notification.method === "turn/completed"
+      || event.notification.method === "turn/failed"
+      || event.notification.method === "turn/cancelled") {
+      handledTerminalTurn = true;
+      const { threadId, turnId } = event.notification.params;
+      const endedTurnIds = new Set<string>();
+      if (typeof turnId === "string") endedTurnIds.add(turnId);
+      if (typeof event.relatedReviewTurnId === "string") endedTurnIds.add(event.relatedReviewTurnId);
+      for (const endedTurnId of endedTurnIds) {
+        reviewAutoFix.turnEnded({ backend: event.backend, threadId }, endedTurnId);
+      }
+      reviewAutoFixDispatcher.onTurnEnded({ backend: event.backend, threadId }, endedTurnIds);
+    }
     const status = event.notification.method === "thread/status/changed" ? event.notification.params.status : undefined;
+    const queueStatus = event.notification.method === "thread/turnQueue/updated" ? event.notification.params.status : undefined;
     if (event.notification.method === "pullRequest/status/updated"
-      || event.notification.method === "thread/stackHold/updated" || event.notification.method === "turn/completed"
-      || (status && typeof status === "object" && "type" in status && status.type === "idle")) {
-      for (const id of heldReviews.keys()) void sendReviewAutoFix(id);
+      || event.notification.method === "thread/stackHold/updated") {
+      reviewAutoFixDispatcher.wake();
+    } else if (!handledTerminalTurn && (event.notification.method === "thread/lock/updated"
+      || (status && typeof status === "object" && "type" in status && status.type === "idle")
+      || queueStatus === "terminal" || queueStatus === "cancelled" || queueStatus === "failed")) {
+      const threadId = "threadId" in event.notification.params && typeof event.notification.params.threadId === "string"
+        ? event.notification.params.threadId : undefined;
+      reviewAutoFixDispatcher.wake(threadId ? { backend: event.backend, threadId } : undefined);
     }
     const completed = completedThreadReview(event);
     if (completed) {
       const review = importReview(completed.identity, completed.entry, "live");
-      if (reviewAutoFix.takeOnCompletion(completed.identity, completed.turnId) && review) void sendReviewAutoFix(review.id);
-    }
-    if (event.notification.method === "turn/completed"
-      || event.notification.method === "turn/failed"
-      || event.notification.method === "turn/cancelled") {
-      const { threadId, turnId } = event.notification.params;
-      if (typeof turnId === "string") reviewAutoFix.turnEnded({ backend: event.backend, threadId }, turnId);
+      const resolvedReviewTurnId = completed.turnId
+        ? registry.resolveReviewTurnId?.({ ...completed.identity, turnId: completed.turnId })
+        : undefined;
+      if (reviewAutoFix.takeOnCompletion(completed.identity, completed.turnId, resolvedReviewTurnId) && review) {
+        reviewAutoFixDispatcher.onReviewLanded(review.id, completed.identity, resolvedReviewTurnId ?? completed.turnId);
+      }
     }
     const autoFixQueue = reviewAutoFixQueueEvent(event);
     if (autoFixQueue) {
@@ -497,6 +479,10 @@ export function installThreadTodoRuntime(params: {
       params.broadcast({ backend: event.backend, threadId: event.notification.params.threadId, at: Date.now() });
     }
     if (event.notification.method !== "thread/archived") return;
+    reviewAutoFixDispatcher.onThreadArchived({
+      backend: event.backend,
+      threadId: event.notification.params.threadId,
+    });
     try {
       todos.dismissOpenForThread({
         backend: event.backend,
@@ -516,6 +502,10 @@ export function installThreadTodoRuntime(params: {
       params.broadcast({ backend: event.backend, threadId: event.notification.params.threadId, at: Date.now() });
     }
   });
+  unsubscribeArchive = () => {
+    unsubscribeEvents();
+    reviewAutoFixDispatcher.dispose();
+  };
   // A model the catalog does not list would start the handoff on the
   // default model without a word, so a card's model is settled when the
   // card is written. See resolveThreadTodoModel.

@@ -42,6 +42,8 @@ function threadKey(thread: ReviewAutoFixThread): string {
  */
 export class ReviewAutoFixArming {
   private readonly starts = new Map<string, Start[]>();
+  /** Turns that ended while a start on the same thread had no turn id yet. */
+  private readonly endedWhilePending = new Map<string, Set<string>>();
 
   /** Called when a thread's armed reviews change, so viewers can refresh. */
   constructor(private readonly onArmedChange: (thread: ReviewAutoFixThread) => void = () => {}) {}
@@ -87,10 +89,19 @@ export class ReviewAutoFixArming {
     this.replace(key, [...(this.starts.get(key) ?? []), start]);
     return {
       accepted: (turnId) => this.tracking(thread, () => {
+        const current = this.starts.get(key) ?? [];
+        const ended = this.endedWhilePending.get(key);
+        if (ended?.delete(turnId)) {
+          // The turn already ended before the start response arrived; drop it
+          // instead of arming a dead turn.
+          const remaining = current.filter((entry) => entry !== start);
+          this.replace(key, remaining);
+          return;
+        }
         // This review is now the thread's one running review, so earlier
         // accepted starts are over. Starts still in flight stay: each is
         // accepted or refused on its own.
-        const inFlight = (this.starts.get(key) ?? [])
+        const inFlight = current
           .filter((entry) => entry !== start && entry.turnId === undefined);
         start.turnId = turnId;
         this.replace(key, [...inFlight, start]);
@@ -106,10 +117,21 @@ export class ReviewAutoFixArming {
    * review started with auto-fix. A landed start stays recorded until its
    * turn ends, so its turn id never falls through to another start.
    */
-  takeOnCompletion(thread: ReviewAutoFixThread, turnId: string | undefined): boolean {
+  takeOnCompletion(
+    thread: ReviewAutoFixThread,
+    turnId: string | undefined,
+    relatedTurnId?: string,
+  ): boolean {
     return this.tracking(thread, () => {
-      const starts = this.starts.get(threadKey(thread)) ?? [];
+      const key = threadKey(thread);
+      const ended = this.endedWhilePending.get(key);
+      if ((turnId !== undefined && ended?.has(turnId))
+        || (relatedTurnId !== undefined && ended?.has(relatedTurnId))) {
+        return false;
+      }
+      const starts = this.starts.get(key) ?? [];
       const start = (turnId === undefined ? undefined : starts.find((entry) => entry.turnId === turnId))
+        ?? (relatedTurnId === undefined ? undefined : starts.find((entry) => entry.turnId === relatedTurnId))
         ?? starts.find((entry) => entry.turnId === undefined && !entry.landed);
       if (!start || start.landed) return false;
       start.landed = true;
@@ -125,13 +147,22 @@ export class ReviewAutoFixArming {
   turnEnded(thread: ReviewAutoFixThread, turnId: string): void {
     const key = threadKey(thread);
     this.tracking(thread, () => {
-      this.replace(key, (this.starts.get(key) ?? []).filter((start) => start.turnId !== turnId));
+      const remaining = (this.starts.get(key) ?? []).filter((start) => start.turnId !== turnId);
+      if (remaining.some((start) => start.turnId === undefined)) {
+        const ended = this.endedWhilePending.get(key) ?? new Set<string>();
+        ended.add(turnId);
+        this.endedWhilePending.set(key, ended);
+      }
+      this.replace(key, remaining);
     });
   }
 
   private replace(key: string, starts: Start[]): void {
     if (starts.length > 0) this.starts.set(key, starts);
     else this.starts.delete(key);
+    if (!starts.some((start) => start.turnId === undefined)) {
+      this.endedWhilePending.delete(key);
+    }
   }
 }
 
@@ -255,4 +286,254 @@ export function reviewAutoFixMessage(review: ThreadReview): {
       reviewAutoFix: { reviewId: review.id, title, findingCount: open.length },
     },
   };
+}
+
+export type ReviewAutoFixTurnRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  input: [{ type: "text"; text: string }];
+  origin: "automation";
+  messageOrigin: AppServerThreadMessageOrigin;
+};
+
+export type ReviewAutoFixDispatcherDeps = {
+  getReview: (id: string) => ThreadReview | undefined;
+  isThreadArchived: (thread: ReviewAutoFixThread) => boolean;
+  readStackHold?: (review: ThreadReview) => Promise<string | undefined>;
+  threadHasActiveTurn?: (thread: ReviewAutoFixThread) => boolean;
+  suspendDispatch?: (thread: ReviewAutoFixThread) => () => void;
+  submitTurn: (request: ReviewAutoFixTurnRequest) => Promise<unknown>;
+  submitTurnIfIdle: (
+    request: ReviewAutoFixTurnRequest & {
+      canAdmit: () => Promise<boolean>;
+      reviewAutoFixHandoff?: boolean;
+    },
+  ) => Promise<{ status: string }>;
+  recordRun: (thread: ReviewAutoFixThread, reviewId: string, event: ReviewAutoFixRunEvent) => void;
+  onHeld?: (thread: ReviewAutoFixThread, reason: string) => void;
+  onSendFailed?: (thread: ReviewAutoFixThread, reason: string) => void;
+  now?: () => number;
+};
+
+type HandoffSuspension = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  reviewTurnId?: string;
+  reviewTurnEnded: boolean;
+  release: () => void;
+};
+
+/**
+ * Sends Auto-fix turns for landed armed reviews, honoring stack holds without
+ * dropping wakeups or losing review-to-fix precedence over queued messages.
+ */
+export class ReviewAutoFixDispatcher {
+  private readonly heldReviews = new Map<string, string>();
+  private readonly checkingReviews = new Set<string>();
+  private readonly recheckReviews = new Set<string>();
+  private readonly handoffSuspensions = new Map<string, HandoffSuspension>();
+  private readonly now: () => number;
+
+  constructor(private readonly deps: ReviewAutoFixDispatcherDeps) {
+    this.now = deps.now ?? Date.now;
+  }
+
+  onReviewLanded(id: string, thread: ReviewAutoFixThread, reviewTurnId: string | undefined): void {
+    this.claimHandoffSuspension(id, thread, reviewTurnId);
+    void this.dispatch(id);
+  }
+
+  onTurnEnded(thread: ReviewAutoFixThread, endedTurnIds: ReadonlySet<string>): void {
+    for (const handoff of this.handoffSuspensions.values()) {
+      if (
+        handoff.backend === thread.backend
+        && handoff.threadId === thread.threadId
+        && (!handoff.reviewTurnId || endedTurnIds.has(handoff.reviewTurnId))
+      ) {
+        handoff.reviewTurnEnded = true;
+      }
+    }
+    this.wake(thread);
+  }
+
+  wake(thread?: ReviewAutoFixThread): void {
+    const matches = (id: string): boolean => {
+      if (!thread) return true;
+      const review = this.deps.getReview(id);
+      return !review || (review.backend === thread.backend && review.threadId === thread.threadId);
+    };
+    for (const id of this.checkingReviews) {
+      if (matches(id)) this.recheckReviews.add(id);
+    }
+    for (const id of [...this.heldReviews.keys()]) {
+      if (matches(id)) void this.dispatch(id);
+    }
+  }
+
+  onThreadArchived(thread: ReviewAutoFixThread): void {
+    const matchesThread = (id: string): boolean => {
+      const handoff = this.handoffSuspensions.get(id);
+      if (handoff) {
+        return handoff.backend === thread.backend && handoff.threadId === thread.threadId;
+      }
+      const review = this.deps.getReview(id);
+      return review !== undefined && review.backend === thread.backend && review.threadId === thread.threadId;
+    };
+    const cancelled = new Set<string>();
+    for (const id of [...this.handoffSuspensions.keys()]) {
+      if (matchesThread(id)) {
+        this.heldReviews.delete(id);
+        this.releaseHandoffSuspension(id);
+        cancelled.add(id);
+      }
+    }
+    for (const id of [...this.heldReviews.keys()]) {
+      if (matchesThread(id)) {
+        this.heldReviews.delete(id);
+        cancelled.add(id);
+      }
+    }
+    for (const id of this.checkingReviews) {
+      if (matchesThread(id)) {
+        this.recheckReviews.add(id);
+        cancelled.add(id);
+      }
+    }
+    for (const id of cancelled) {
+      this.deps.recordRun(thread, id, { kind: "queue", status: "cancelled", at: this.now() });
+    }
+  }
+
+  dispose(): void {
+    for (const id of [...this.handoffSuspensions.keys()]) {
+      this.releaseHandoffSuspension(id);
+    }
+    this.heldReviews.clear();
+    this.recheckReviews.clear();
+  }
+
+  private cancelReview(id: string, thread: ReviewAutoFixThread): void {
+    this.heldReviews.delete(id);
+    this.releaseHandoffSuspension(id);
+    this.deps.recordRun(thread, id, { kind: "queue", status: "cancelled", at: this.now() });
+  }
+
+  private releaseHandoffSuspension(id: string): void {
+    const handoff = this.handoffSuspensions.get(id);
+    if (!handoff) return;
+    this.handoffSuspensions.delete(id);
+    handoff.release();
+  }
+
+  private claimHandoffSuspension(
+    id: string,
+    thread: ReviewAutoFixThread,
+    reviewTurnId: string | undefined,
+  ): void {
+    if (!this.deps.readStackHold || !this.deps.suspendDispatch) return;
+    for (const [existingId, existing] of this.handoffSuspensions.entries()) {
+      if (existing.backend === thread.backend && existing.threadId === thread.threadId) {
+        this.releaseHandoffSuspension(existingId);
+      }
+    }
+    this.handoffSuspensions.set(id, {
+      backend: thread.backend,
+      threadId: thread.threadId,
+      reviewTurnId,
+      reviewTurnEnded: false,
+      release: this.deps.suspendDispatch(thread),
+    });
+  }
+
+  async dispatch(id: string): Promise<void> {
+    if (this.checkingReviews.has(id)) {
+      this.recheckReviews.add(id);
+      return;
+    }
+    this.checkingReviews.add(id);
+    try {
+      do {
+        this.recheckReviews.delete(id);
+        const review = this.deps.getReview(id);
+        const message = review && reviewAutoFixMessage(review);
+        if (!review || !message || this.deps.isThreadArchived(review)) {
+          if (review) {
+            this.cancelReview(id, review);
+          } else {
+            this.heldReviews.delete(id);
+            this.releaseHandoffSuspension(id);
+          }
+          return;
+        }
+        if (this.deps.readStackHold) {
+          this.deps.recordRun(review, id, { kind: "queue", status: "held", at: this.now() });
+        }
+        const hold = await this.deps.readStackHold?.(review);
+        const current = this.deps.getReview(id);
+        const latest = current && reviewAutoFixMessage(current);
+        if (!current || !latest || this.deps.isThreadArchived(current)) {
+          this.cancelReview(id, current ?? review);
+          return;
+        }
+        if (hold) {
+          if (this.heldReviews.get(id) !== hold) {
+            this.deps.onHeld?.(current, hold);
+          }
+          this.heldReviews.set(id, hold);
+          // Do not freeze queued user messages while a stack hold is active.
+          this.releaseHandoffSuspension(id);
+          continue;
+        }
+        const request: ReviewAutoFixTurnRequest = {
+          backend: current.backend,
+          threadId: current.threadId,
+          input: [{ type: "text", text: latest.text }],
+          origin: "automation",
+          messageOrigin: latest.messageOrigin,
+        };
+        if (this.deps.readStackHold) {
+          // Keep ownership until admission. A queued start could otherwise
+          // outlive the observation that cleared the gate.
+          const hasHandoff = this.handoffSuspensions.has(id);
+          const result = await this.deps.submitTurnIfIdle({
+            ...request,
+            canAdmit: async () => !await this.deps.readStackHold?.(current),
+            ...(hasHandoff ? { reviewAutoFixHandoff: true } : {}),
+          });
+          if (result.status === "busy") {
+            const afterBusy = this.deps.getReview(id);
+            if (!afterBusy || !reviewAutoFixMessage(afterBusy) || this.deps.isThreadArchived(afterBusy)) {
+              this.cancelReview(id, afterBusy ?? current);
+              return;
+            }
+            this.heldReviews.set(id, "Waiting for turn admission");
+            const handoff = this.handoffSuspensions.get(id);
+            const reviewTurnStillActive = handoff !== undefined
+              && !handoff.reviewTurnEnded
+              && (this.deps.threadHasActiveTurn?.(afterBusy) ?? true);
+            if (handoff && !reviewTurnStillActive && !this.recheckReviews.has(id)) {
+              this.releaseHandoffSuspension(id);
+            }
+            continue;
+          }
+        } else {
+          await this.deps.submitTurn(request);
+        }
+        this.heldReviews.delete(id);
+        this.releaseHandoffSuspension(id);
+        return;
+      } while (this.recheckReviews.has(id) && this.heldReviews.has(id));
+    } catch (error) {
+      this.heldReviews.delete(id);
+      this.releaseHandoffSuspension(id);
+      const reason = error instanceof Error ? error.message : String(error);
+      const review = this.deps.getReview(id);
+      if (!review) return;
+      this.deps.onSendFailed?.(review, reason);
+      this.deps.recordRun(review, id, { kind: "sendFailed", reason, at: this.now() });
+    } finally {
+      this.checkingReviews.delete(id);
+      this.recheckReviews.delete(id);
+    }
+  }
 }

@@ -59,7 +59,7 @@ const fixtures = {
   prose: "First **complete** paragraph.\n\nSecond with `code` and #42.\n\nThird paragraph.\n\n",
   references: "[Known]: https://example.com/a\n\nFirst [known].\n\nLater [missing].\n\n[missing]: https://example.com/b\n\nLast [known].\n\n",
   containers: "Intro.\n\n3. First\n\n   - Nested\n\n     continuation\n\n   - Next\n\n> quote\n>\n> paragraph\n\nEnd.\n\n",
-  tables: "Intro.\n\n| Name | Value |\n| --- | --- |\n| A | **bold** |\n| B | [link](https://example.com) |\n\nEnd.\n\n",
+  tables: "Intro.\n\n| Name | Value | Notes |\n| --- | :---: | ---: |\n| A | **bold** | 1 |\n| B | [link](https://example.com) | 2 |\n\nEnd.\n\n",
   fences: "Intro.\n\n```ts\n// [not a ref]\n\nconst text = '**literal**';\n```\n\nEnd.\n\n",
   html: "Intro.\n\n<div>\n\ninside\n\n</div>\n\n<script>bad()</script>\n\n[unsafe](javascript:bad)\n\nEnd.\n\n",
   footnotes: "Intro.\n\nA note[^a].\n\n[^a]: First\n\n    continuation\n\nAnother[^b].\n\n[^b]: Second\n\nEnd.\n\n",

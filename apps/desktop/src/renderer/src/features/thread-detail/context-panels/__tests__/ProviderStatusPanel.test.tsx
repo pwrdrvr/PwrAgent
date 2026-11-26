@@ -306,6 +306,59 @@ describe("ProviderStatusPanel", () => {
     expect(within(claudeRow).queryByText(/On pace for about 35%/)).not.toBeInTheDocument();
   });
 
+  it("paces Antigravity 5h buckets on their 300-minute window and omits reset text when absent", async () => {
+    const now = Date.UTC(2026, 10, 26, 14);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const gemini5h = {
+      name: "5h Gemini limit",
+      limitId: "gemini-5h",
+      usedPercent: 20,
+      resetAt: now + 3 * HOUR,
+      windowMinutes: 300,
+    };
+    const claude5h = {
+      name: "5h Claude/GPT limit",
+      limitId: "3p-5h",
+      usedPercent: 0,
+      windowMinutes: 300,
+    };
+    const geminiWeekly = {
+      name: "Weekly Gemini limit",
+      limitId: "gemini-weekly",
+      usedPercent: 10,
+      resetAt: now + 120 * HOUR,
+      windowMinutes: 10_080,
+    };
+    const limitObservations: UsageLimitObservation[] = [
+      { observedAt: now, provider: "google", limits: [gemini5h, claude5h, geminiWeekly] },
+    ];
+    const readUsageActivity = vi.fn(async () => ({
+      rows: [], readAt: now, rateLimits: [], truncated: false, limitObservations,
+    }));
+    const antigravity: BackendSummary = {
+      ...codexBackend,
+      kind: "acp:antigravity",
+      label: "Antigravity",
+      account: undefined,
+      rateLimits: [gemini5h, claude5h, geminiWeekly],
+    };
+    render(<ProviderStatusPanel backends={[antigravity]} desktopApi={{ readUsageActivity }} />);
+
+    // 2 hours into a 5-hour window at 20% used -> +10%/h, on pace for 50% at reset.
+    const gemini5hCell = valueFor("5h Gemini limit");
+    expect(await within(gemini5hCell).findByText(/\+10%\/h/)).toBeInTheDocument();
+    expect(within(gemini5hCell).getByText(/On pace for about 50%/)).toBeInTheDocument();
+
+    // Full 5h bucket without a real reset shows 0% used with no reset or pace text.
+    const claude5hCell = valueFor("5h Claude/GPT limit");
+    expect(claude5hCell).toHaveTextContent(/^0% used$/);
+    expect(within(claude5hCell).queryByText(/resets|1970|On pace/i)).not.toBeInTheDocument();
+
+    // Weekly bucket still uses its 10,080-minute (168h) window: 48h elapsed -> 35%.
+    const weeklyCell = valueFor("Weekly Gemini limit");
+    expect(within(weeklyCell).getByText(/On pace for about 35%/)).toBeInTheDocument();
+  });
+
   it("refreshes Antigravity's projection from a newer sample at the same percentage", async () => {
     const startedAt = Date.UTC(2026, 10, 24);
     const limit = { name: "Weekly Gemini limit", usedPercent: 10, resetAt: startedAt + 168 * HOUR, windowMinutes: 10_080 };

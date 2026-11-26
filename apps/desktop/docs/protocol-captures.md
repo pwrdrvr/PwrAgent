@@ -347,6 +347,27 @@ The November 25, 2026 macOS captures of Antigravity CLI `1.5.16` (`agy acp --pro
 
 Raw captures are under the ignored `apps/desktop/.local/protocol-captures/antigravity-steer-compact/`.
 
+The November 26 follow-up used Antigravity CLI `1.5.18` in a disposable
+session. The last normal request reported 9,943 tokens. Idle `/compact`
+reported 11,282 tokens and ended silently. The next model call reported
+10,559 tokens. Separate sessions tested load and `/context`.
+
+| ACP request | Result |
+| --- | --- |
+| `session/resume` on the open session | Session metadata, with no context count or `usage_update` |
+| Reapply the selected model with `session/set_config_option` | Config options, with no context count or `usage_update` |
+| `session/close` followed by `session/resume` | Session metadata, with no context count or `usage_update` |
+| `session/load`, both on the open session and after `session/close` | The cached compaction-call count, 38,996 tokens. The next model call reported 13,331. |
+| `/context` | The command list omitted `context`. The prompt went to the model and incurred usage. |
+
+The load probe also advertised `clientCapabilities.session.compaction`.
+Antigravity sent no `compaction_update` or `compaction_summary_chunk`.
+
+PwrAgent uses the next model call's fill report. The context indicator
+shows usage as pending between the compaction turn and that report. Raw
+captures are under the ignored
+`apps/desktop/.local/protocol-captures/antigravity-post-compact/`.
+
 ## Capturing Codex Account Protocol
 
 `scripts/capture-codex-usage-protocol.ts` records a complete Codex App Server

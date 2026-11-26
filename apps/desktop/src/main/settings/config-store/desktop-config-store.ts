@@ -293,16 +293,8 @@ export class DesktopConfigStore {
       this.now(),
     );
     if (observation.kind !== "valid") {
-      throw new Error(
-        observation.kind === "invalid"
-          ? observation.error
-          : `Settings config is missing: ${this.options.configPath}`,
-      );
+      throw new Error(observation.error);
     }
-    const domains = normalizeConfigDomains({
-      config: observation.config,
-      previousProviders: previous.domains.providers,
-    });
     const codexModelProvidersSaved = patch.models?.codex?.providers !== undefined;
     const next =
       previous.configFile.kind === "valid"
@@ -315,7 +307,10 @@ export class DesktopConfigStore {
               observedAt: observation.observedAt,
             },
             configRevision: observation.contentHash,
-            domains,
+            domains: normalizeConfigDomains({
+              config: observation.config,
+              previousProviders: previous.domains.providers,
+            }),
             codexModelProvidersSaved,
           });
     if (next === previous && codexModelProvidersSaved) this.notifyCodexModelProviders();

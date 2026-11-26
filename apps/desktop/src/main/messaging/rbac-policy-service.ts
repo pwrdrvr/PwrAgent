@@ -87,7 +87,7 @@ export class RbacPolicyService {
 
   /**
    * The cached policy, re-read whenever the backing files changed underneath
-   * us. Our own writes update the cache in place, so the fingerprint check is
+   * us. Our own writes clear the cache, so the fingerprint check is
    * for edits we did NOT make: a hand-edited `config.toml`, or another app
    * instance sharing this profile. Without it a revoked role kept working in
    * every other instance until restart — revocation that needs a relaunch is
@@ -98,10 +98,12 @@ export class RbacPolicyService {
    * inbound path.
    */
   private state(): RbacPolicyReadState {
+    // Sample before reading so a peer write during the read is checked again
+    // on the next decision.
     const fingerprint = rbacPolicySourceFingerprint(this.options);
-    if (!this.cache || fingerprint !== this.cacheFingerprint) {
+    if (fingerprint === null || !this.cache || fingerprint !== this.cacheFingerprint) {
       this.cache = readRbacPolicyState(this.options);
-      this.cacheFingerprint = fingerprint;
+      this.cacheFingerprint = this.cache.retryRead ? null : fingerprint;
     }
     return this.cache;
   }
@@ -163,7 +165,7 @@ export class RbacPolicyService {
     const state = this.state();
     return {
       enforced: state.policy.enforced,
-      roles: this.allRoles(),
+      roles: [...BUILT_IN_ROLES, ...state.policy.roles],
       attachments: state.policy.attachments,
       permissionCatalog: MESSAGING_PERMISSION_CATALOG,
       ...(state.failClosed ? { failClosed: true } : {}),
@@ -177,17 +179,16 @@ export class RbacPolicyService {
   // Mutations (used by IPC). Each persists + invalidates the cache.
   // -------------------------------------------------------------------------
 
-  private mutate(next: (policy: RbacPolicy) => RbacPolicy): void {
-    const updated = next(structuredClonePolicy(this.policy()));
+  private mutate(next: (policy: RbacPolicy) => RbacPolicy): { ok: boolean; error?: string } {
+    const state = this.state();
+    if (state.failClosed) {
+      return { ok: false, error: "Repair the RBAC policy file before making Access Control edits." };
+    }
+    const updated = next(structuredClonePolicy(state.policy));
     writeRbacPolicy(updated, this.options);
-    // Adopt the write directly, and re-fingerprint so our own write doesn't
-    // read back as an external change on the next resolve.
-    this.cache = {
-      policy: updated,
-      failClosed: false,
-      ignoredReservedRoleIds: [],
-    };
-    this.cacheFingerprint = rbacPolicySourceFingerprint(this.options);
+    // The next read loads the file that won the race with any peer writer.
+    this.reload();
+    return { ok: true };
   }
 
   /**
@@ -224,7 +225,7 @@ export class RbacPolicyService {
     const previous = this.policy().roles.find(
       (existing) => existing.id === role.id,
     );
-    this.mutate((policy) => {
+    const result = this.mutate((policy) => {
       const roles = policy.roles.filter((existing) => existing.id !== role.id);
       roles.push({
         id: role.id,
@@ -236,6 +237,7 @@ export class RbacPolicyService {
       });
       return { ...policy, roles };
     });
+    if (!result.ok) return result;
     this.audit({
       platform: "desktop",
       summary:
@@ -253,7 +255,7 @@ export class RbacPolicyService {
         editedBy: "local-operator",
       },
     });
-    return { ok: true };
+    return result;
   }
 
   deleteRole(roleId: string): { ok: boolean; error?: string } {
@@ -264,7 +266,7 @@ export class RbacPolicyService {
     const detachedFrom = this.policy().attachments.filter((attachment) =>
       attachment.roleIds.includes(roleId),
     ).length;
-    this.mutate((policy) => ({
+    const result = this.mutate((policy) => ({
       ...policy,
       roles: policy.roles.filter((role) => role.id !== roleId),
       // Also strip the deleted role from every attachment so no edge dangles.
@@ -275,6 +277,7 @@ export class RbacPolicyService {
         }))
         .filter((attachment) => attachment.roleIds.length > 0),
     }));
+    if (!result.ok) return result;
     if (previous) {
       this.audit({
         platform: "desktop",
@@ -292,7 +295,7 @@ export class RbacPolicyService {
         },
       });
     }
-    return { ok: true };
+    return result;
   }
 
   /** Upsert an attachment (replaces any existing edge for the same subject). */
@@ -300,7 +303,7 @@ export class RbacPolicyService {
     const previous = this.policy().attachments.find((existing) =>
       sameSubject(existing.subject, attachment.subject),
     );
-    this.mutate((policy) => {
+    const result = this.mutate((policy) => {
       const attachments = policy.attachments.filter(
         (existing) => !sameSubject(existing.subject, attachment.subject),
       );
@@ -315,6 +318,7 @@ export class RbacPolicyService {
       }
       return { ...policy, attachments };
     });
+    if (!result.ok) return result;
     const displayName = attachment.displayName ?? previous?.displayName;
     const subjectLabel = describeRbacSubject(attachment.subject, displayName);
     this.audit({
@@ -336,19 +340,20 @@ export class RbacPolicyService {
         editedBy: "local-operator",
       },
     });
-    return { ok: true };
+    return result;
   }
 
   deleteAttachment(subject: RbacSubject): { ok: boolean; error?: string } {
     const previous = this.policy().attachments.find((existing) =>
       sameSubject(existing.subject, subject),
     );
-    this.mutate((policy) => ({
+    const result = this.mutate((policy) => ({
       ...policy,
       attachments: policy.attachments.filter(
         (existing) => !sameSubject(existing.subject, subject),
       ),
     }));
+    if (!result.ok) return result;
     if (previous) {
       this.audit({
         platform: subject.platform,
@@ -365,7 +370,7 @@ export class RbacPolicyService {
         },
       });
     }
-    return { ok: true };
+    return result;
   }
 
   /**
@@ -385,7 +390,7 @@ export class RbacPolicyService {
       && before.attachments.length === 0
         ? synthesizedAttachments.length
         : 0;
-    this.mutate((policy) => ({
+    const result = this.mutate((policy) => ({
       ...policy,
       enforced,
       attachments:
@@ -399,6 +404,7 @@ export class RbacPolicyService {
             }))
           : policy.attachments,
     }));
+    if (!result.ok) return result;
     if (changed) {
       this.audit({
         platform: "desktop",
@@ -415,7 +421,7 @@ export class RbacPolicyService {
         },
       });
     }
-    return { ok: true };
+    return result;
   }
 }
 
