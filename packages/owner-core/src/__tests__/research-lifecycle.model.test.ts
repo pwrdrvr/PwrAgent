@@ -715,4 +715,75 @@ describe("native research run lifecycle model", () => {
     expect(stopped).toEqual([]);
     second.close();
   });
+
+  // Cancelling an approach while resume() is awaiting ports.notify() must wait for
+  // the in-flight resume receipt instead of stopping the stale pre-restart turn, then
+  // withdraw the new queued resume or stop the new resumed turn and settle cancellation.
+  it.each(["turn", "queued"] as const)("defers work cancellation while resume() notify is in flight (%s receipt)", async (receiptKind) => {
+    const storage = new MemoryResearchStorage();
+    let liveOwner = "owner-1";
+    const stopped: Array<{ threadId: string; turnId?: string }> = [];
+    const cancelledQueues: string[] = [];
+    let resolveNotify!: (receipt: { queueEntryId?: string; turnId?: string }) => void;
+    const notifyPromise = new Promise<{ queueEntryId?: string; turnId?: string }>((resolve) => {
+      resolveNotify = resolve;
+    });
+    let notifyStarted = false;
+    const makePorts = (ownerId: string): ResearchPorts => ({
+      ownerId,
+      ownerPid: 1,
+      ownerStartedAt: START_TIME,
+      isOwnerAlive: (o) => o.ownerId === liveOwner,
+      now: () => START_TIME,
+      schedule: () => () => {},
+      spawn: async (_c, _t, _title, _mode, onCreated) => {
+        const w = { backend: "codex" as const, threadId: "w-1", turnId: "t-old" };
+        onCreated(w);
+        return w;
+      },
+      stop: async (w) => { stopped.push({ threadId: w.threadId, turnId: w.turnId }); },
+      notify: async () => {
+        notifyStarted = true;
+        return await notifyPromise;
+      },
+      cancelQueued: async (entry) => { cancelledQueues.push(entry); return {}; },
+      changed: () => {},
+      onError: () => {},
+    });
+    const first = new ResearchService(storage, makePorts("owner-1"));
+    const started = await first.start({ objective: "Obj", workspaceMode: "none", approaches: [{ title: "A1", task: "T1" }] }, COORD_AGENT);
+    first.close();
+    liveOwner = "owner-2";
+    const second = new ResearchService(storage, makePorts("owner-2"));
+    second.initialize();
+
+    const resumePromise = second.update(started.id, "resume-1", { action: "resume", approachIds: ["a1"] }, OP);
+    expect(notifyStarted).toBe(true);
+
+    const item = second.readItem(started.id, "a1", OP).item;
+    const cancelDuringResume = await second.work(
+      started.id,
+      "cancel-inflight-1",
+      { action: "work", itemId: "a1", expectedVersion: item.version, state: "cancelled", reason: "Cancel during resume" },
+      OP,
+    );
+    // Must stay cancel_requested while resume is in flight and never stop the stale pre-restart turn.
+    expect(cancelDuringResume.work.state).toBe("cancel_requested");
+    expect(stopped).toEqual([]);
+
+    resolveNotify(receiptKind === "turn" ? { turnId: "t-new" } : { queueEntryId: "q-new" });
+    await resumePromise;
+
+    const settled = second.readItem(started.id, "a1", OP).item;
+    expect(settled.work.state).toBe("cancelled");
+    if (receiptKind === "turn") {
+      expect(stopped).toEqual([{ threadId: "w-1", turnId: "t-new" }]);
+      expect(cancelledQueues).toEqual([]);
+    } else {
+      expect(cancelledQueues).toEqual(["q-new"]);
+      expect(stopped).toEqual([]);
+    }
+    expect(second.read(started.id, OP).activeWorkers).toBe(0);
+    second.close();
+  });
 });

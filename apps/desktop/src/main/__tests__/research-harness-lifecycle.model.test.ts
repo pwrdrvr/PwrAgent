@@ -450,7 +450,12 @@ describe("Harness import, reconcile and discovery model over real SQLite", () =>
   // Page-split invariance: an import that resumed and ended again must settle to "ended"
   // whether resumed and ended arrive on one page or across two pages; an execute run that
   // resumed outside PwrAgent's admission stays "unknown" either way.
-  it.each(["import", "execute"] as const)("handles resumed-then-ended consistently across page boundaries in %s mode", async (mode) => {
+  it.each([
+    ["import", "single"],
+    ["import", "split"],
+    ["execute", "single"],
+    ["execute", "split"],
+  ] as const)("handles resumed-then-ended consistently (%s mode, %s page)", async (mode, paging) => {
     resetDb();
     const store = new ResearchStore(db);
     const stream = buildValidStream(1, [
@@ -480,6 +485,7 @@ describe("Harness import, reconcile and discovery model over real SQLite", () =>
             page++;
             if (page === 1) return { swarm: SWARM, records: [stream[0]!] };
             if (page === 2 && mode === "execute") throw new Error("bridge dropped");
+            if (paging === "single") return { swarm: SWARM, records: [stream[1]!, stream[2]!, stream[3]!, stream[4]!] };
             if (page === (mode === "execute" ? 3 : 2)) return { swarm: SWARM, records: [stream[1]!, stream[2]!], next: 3 };
             return { swarm: SWARM, records: [stream[3]!, stream[4]!] };
           }
@@ -496,6 +502,93 @@ describe("Harness import, reconcile and discovery model over real SQLite", () =>
     expect(reconciled.harness?.cursor).toBe(5);
     expect(reconciled.harness?.state).toBe(mode === "import" ? "ended" : "unknown");
     await harness.close();
+  });
+
+  // Multi-page reconcile must preserve ended state across pages so valid post-end
+  // observations (verdict, refused, additive events) keep the run ended and forbidden
+  // post-end mutations (finding, etc.) without a resume record are still rejected.
+  it("preserves ended state across reconcile pages for post-end observations and rejects forbidden post-end mutations", async () => {
+    resetDb();
+    const store = new ResearchStore(db);
+    const base = buildValidStream(1, [{ kind: "ended", outcome: "solved" }]);
+    const postEndVerdict = { seq: 3, at_ms: 3000, swarm: SWARM, event: "verdict", member: "m1", verdict: "accepted", note: "confirmed" };
+    let page = 0;
+    const harness = new ResearchHarnessService(store, {
+      ownerId: "owner-1",
+      ownerPid: 1,
+      ownerStartedAt: 1000,
+      isOwnerAlive: () => true,
+      changed: () => {},
+      now: () => 2000,
+      schedule: () => () => {},
+      onError: () => {},
+      probe: async () => {},
+      open: () => ({
+        source: "mathos:https://os.example.test#o-12345678-1234-4123-8123-123456789abc",
+        close: () => {},
+        request: async (method) => {
+          if (method === "hello") return { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION, import: true, execute: false, cancel: false, researchFunctions: false };
+          if (method === "records") {
+            page++;
+            if (page === 1) return { swarm: SWARM, records: [base[0]!] };
+            if (page === 2) return { swarm: SWARM, records: [base[1]!], next: 2 };
+            return { swarm: SWARM, records: [postEndVerdict] };
+          }
+          throw new Error(`Unexpected ${method}`);
+        },
+      }),
+    });
+    const started = await harness.start(
+      { ...COORD, requestId: randomUUID(), mode: "import", objective: "Import", project: PROJECT, session: SESSION, swarm: SWARM, budgetAcknowledged: false },
+      WORKSPACE,
+    );
+    const reconciled = await harness.reconcile(started.id, COORD);
+    expect(reconciled.harness?.cursor).toBe(3);
+    expect(reconciled.harness?.state).toBe("ended");
+    await harness.close();
+
+    // Forbidden post-end finding on page 2 without a resume record must be rejected.
+    resetDb();
+    const store2 = new ResearchStore(db);
+    const errors: unknown[] = [];
+    const forbiddenFinding = { seq: 3, at_ms: 3000, swarm: SWARM, event: "finding", member: "m1", direction: "d1", finding: "f1", label: "note", text: "late mutation", paths: [] };
+    let page2 = 0;
+    const harness2 = new ResearchHarnessService(store2, {
+      ownerId: "owner-1",
+      ownerPid: 1,
+      ownerStartedAt: 1000,
+      isOwnerAlive: () => true,
+      changed: () => {},
+      now: () => 2000,
+      schedule: () => () => {},
+      onError: (err) => errors.push(err),
+      probe: async () => {},
+      open: () => ({
+        source: "mathos:https://os.example.test#o-12345678-1234-4123-8123-123456789abc",
+        close: () => {},
+        request: async (method) => {
+          if (method === "hello") return { version: 1, upstreamRevision: RESEARCH_HARNESS_REVISION, import: true, execute: false, cancel: false, researchFunctions: false };
+          if (method === "records") {
+            page2++;
+            if (page2 === 1) return { swarm: SWARM, records: [base[0]!] };
+            if (page2 === 2) return { swarm: SWARM, records: [base[1]!], next: 2 };
+            return { swarm: SWARM, records: [forbiddenFinding] };
+          }
+          throw new Error(`Unexpected ${method}`);
+        },
+      }),
+    });
+    const started2 = await harness2.start(
+      { ...COORD, requestId: randomUUID(), mode: "import", objective: "Import", project: PROJECT, session: SESSION, swarm: SWARM, budgetAcknowledged: false },
+      WORKSPACE,
+    );
+    const reconciled2 = await harness2.reconcile(started2.id, COORD);
+    expect(reconciled2.harness?.cursor).toBe(2);
+    expect(store2.get(started2.id)?.findings).toHaveLength(0);
+    expect(errors.map((e) => (e instanceof Error ? e.message : String(e)))).toEqual([
+      expect.stringMatching(/changed after ending without a resume record/),
+    ]);
+    await harness2.close();
   });
 
   it("models discovery snapshots with valid/malformed trees and cancellation races over real SQLite", async () => {

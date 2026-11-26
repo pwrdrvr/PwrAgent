@@ -309,7 +309,11 @@ export class ResearchHarnessService {
         if (response.swarm !== before.swarm || !Array.isArray(response.records)) throw new Error("Invalid Harness records response");
         const current = this.run(id);
         if (current.harness!.state !== "reconciling" || current.harness!.cursor !== before.cursor) throw new Error("This run changed while reconciling");
-        const normalized = normalizeHarnessRecords({ ...current, approaches: this.approaches(id) }, response.records, (seq) => this.storage.harnessRecord(id, seq));
+        const normalized = normalizeHarnessRecords(
+          { ...current, harness: { ...current.harness!, state: ended ? "ended" : current.harness!.state }, approaches: this.approaches(id) },
+          response.records,
+          (seq) => this.storage.harnessRecord(id, seq),
+        );
         if (response.next !== undefined && (response.next !== normalized.state.cursor || normalized.state.cursor <= before.cursor)) throw new Error("Invalid Harness continuation cursor");
         if (normalized.events.length) {
           ended = normalized.ended;

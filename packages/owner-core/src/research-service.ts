@@ -394,8 +394,10 @@ export class ResearchService {
       for (const delivery of this.storage.deliveries(id, { open: true })) {
         if (delivery.approachId === cancellation) await this.cancelDelivery(id, delivery, actor);
       }
-      if (this.queuedResumes.get(id)?.has(cancellation)) await this.withdrawResume(id, cancellation, actor);
-      else await this.stopWorker(id, cancellation, actor);
+      if (!(this.pendingStarts.get(id)?.has(cancellation) && this.approach(id, cancellation)?.state === "starting")) {
+        if (this.queuedResumes.get(id)?.has(cancellation)) await this.withdrawResume(id, cancellation, actor);
+        else await this.stopWorker(id, cancellation, actor);
+      }
       this.settleItemCancellation(id, cancellation);
     }
     return this.storage.readItem(id, item.id)!;
@@ -978,6 +980,7 @@ export class ResearchService {
       } finally {
         starting.delete(approach.id);
         if (!starting.size && this.pendingStarts.get(id) === starting) this.pendingStarts.delete(id);
+        this.settleItemCancellation(id, approach.id);
       }
     }));
     const settled = this.requireHeader(id);

@@ -372,7 +372,7 @@ describe("MathOS Platform client model", () => {
     await expect(rt.request("whoami", {})).rejects.toThrow(/Not connected to the MathOS runtime/);
   });
 
-  it("models concurrent connect failure + immediate retry race without leaking sockets", async () => {
+  it("coalesces concurrent failed connects and shares a single recovery socket on retry", async () => {
     await fc.assert(
       fc.asyncProperty(fc.integer({ min: 2, max: 6 }), async (callers) => {
         let openAttempt = 0;
@@ -408,7 +408,6 @@ describe("MathOS Platform client model", () => {
         }
         const conn = openMathosPlatformConnection({ origin: ORIGIN, team: TEAM, apiKey: KEY }, { fetch, WebSocket: RaceSocket, sleep: async () => {} });
         let retryPromise: Promise<unknown> | undefined;
-        // Caller 0 immediately retries in its catch handler BEFORE caller 1..N's catch handlers run!
         const firstBatch = Array.from({ length: callers }, (_, i) =>
           conn.request("records", { project: "p", session: "s", swarm: "sw" }).catch((e) => {
             if (i === 0) retryPromise = conn.request("records", { project: "p", session: "s", swarm: "sw-retry" });
@@ -416,10 +415,9 @@ describe("MathOS Platform client model", () => {
           }));
         gate1.resolve();
         await Promise.all(firstBatch);
-        // Now launch another concurrent request while retryPromise is connecting!
         const followUp = conn.request("records", { project: "p", session: "s", swarm: "sw-follow" });
         await Promise.all([retryPromise, followUp]);
-        // Only ONE reconnect attempt (openAttempt === 2) should have happened — NOT two!
+        // Concurrent initial failures coalesce on attempt 1, and concurrent recovery callers share attempt 2's socket.
         expect(openAttempt).toBe(2);
         expect(openedSockets).toHaveLength(1);
         conn.close();
@@ -535,6 +533,7 @@ describe("MathOS Platform client model", () => {
   it("stops polling a preparing VM immediately once the connection is closed", async () => {
     let polls = 0;
     let clock = 0;
+    let sleeping = false;
     const gate = Promise.withResolvers<void>();
     const fetch: MathosPlatformDeps["fetch"] = async (input) => {
       if (input === `${ORIGIN}/app/`) return new Response(`<script src="/app/assets/index-Prep1.js"></script>`, { status: 200 });
@@ -552,17 +551,22 @@ describe("MathOS Platform client model", () => {
         WebSocket: ModelSocket as unknown as MathosPlatformDeps["WebSocket"],
         now: () => clock,
         sleep: async (ms) => {
+          sleeping = true;
           clock += ms;
           if (polls === 1) await gate.promise;
         },
       },
     );
     const req = conn.request("hello", {});
-    await vi.waitFor(() => expect(polls).toBe(1));
+    await vi.waitFor(() => expect(sleeping).toBe(true));
     conn.close();
-    gate.resolve();
-    await expect(req).rejects.toThrow(/closed/i);
-    expect(polls).toBe(1);
+    try {
+      // Must reject immediately via abort signal while the polling sleep is still pending.
+      await expect(req).rejects.toThrow(/closed/i);
+      expect(polls).toBe(1);
+    } finally {
+      gate.resolve();
+    }
   });
 
   it("enforces connect and request timeouts cleanly with fake timers", async () => {

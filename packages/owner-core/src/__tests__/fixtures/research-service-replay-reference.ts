@@ -307,8 +307,10 @@ export class ReplayResearchService {
       for (const delivery of this.requireRun(id).deliveries) {
         if (delivery.approachId === cancellation && !["cancelled", "ended"].includes(delivery.state)) await this.cancelDelivery(id, delivery, actor);
       }
-      if (this.queuedResumes.has(`${id}:${cancellation}`)) await this.withdrawResume(id, cancellation, actor);
-      else await this.stopWorker(id, cancellation, actor);
+      if (!(this.pendingStarts.has(`${id}:${cancellation}`) && this.requireRun(id).approaches.find((a) => a.id === cancellation)?.state === "starting")) {
+        if (this.queuedResumes.has(`${id}:${cancellation}`)) await this.withdrawResume(id, cancellation, actor);
+        else await this.stopWorker(id, cancellation, actor);
+      }
       this.settleItemCancellation(id, cancellation);
     }
     return this.storage.readItem(id, item.id)!;
@@ -855,6 +857,7 @@ export class ReplayResearchService {
         }
       } finally {
         this.pendingStarts.delete(`${id}:${approach.id}`);
+        this.settleItemCancellation(id, approach.id);
       }
     }));
     const settled = this.requireRun(id);
