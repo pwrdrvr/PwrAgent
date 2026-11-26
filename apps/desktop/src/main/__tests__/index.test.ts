@@ -1006,8 +1006,11 @@ describe("bootstrapApp", () => {
       "registry.onCodexAppServerRestartStatusChanged", "registry.onThreadArchiveSweepStatusChanged",
     ]);
     assertOwnerHooksBeforeWork(events, [...coreHandlers, "research.subscribe"], ["maintenance.start"]);
+    // Both owners observe mount membership before navigation and intake start.
+    expect(events.filter((name) => name === "operatorRequestMounts.subscribe")).toHaveLength(1);
     assertOwnerHooksBeforeWork(events, [
       ...handlers, "research.subscribe", "threadTodos.subscribe", "operatorRequests.subscribe", "operatorRequests.prune",
+      "operatorRequestMounts.subscribe",
     ], ["navigation.start", "scheduled.start", "automations.start", "gateway.start", "federation.start", "messaging.start"]);
     // Auto-compaction dispatches through the registry, so it observes only once every handler is bound.
     expect(events.filter((name) => name === "autoCompaction.subscribe")).toHaveLength(1);
