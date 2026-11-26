@@ -1,7 +1,10 @@
 import { filePreviewKind, isFilePreviewPath } from "@pwragent/shared/file-preview";
 import { findSharedSkillNames, isSharedSkillName } from "@pwragent/shared/skill-origin";
 import { isThreadUrl, PWRAGENT_URL_SCHEME } from "@pwragent/shared/contracts/thread-link";
-import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
+import {
+  extractInlineMarkdownDestination,
+  isWindowsFilesystemPath,
+} from "@pwragent/shared/path-display";
 import {
   type AppServerSkillSummary,
   type AppServerThreadImagePart,
@@ -1233,9 +1236,7 @@ function encodePosixPathForFileUrl(filePath: string): string {
     .replace(/\?/g, "%3F");
 }
 
-function normalizePosixPath(filePath: string): string {
-  const isUnc = filePath.startsWith("//") && !filePath.startsWith("///");
-  const segments = filePath.split("/");
+function normalizePathSegments(segments: readonly string[]): string[] {
   const normalized: string[] = [];
   for (const segment of segments) {
     if (!segment || segment === ".") {
@@ -1247,7 +1248,33 @@ function normalizePosixPath(filePath: string): string {
     }
     normalized.push(segment);
   }
-  return `${isUnc ? "//" : "/"}${normalized.join("/")}`;
+  return normalized;
+}
+
+function normalizePosixPath(filePath: string): string {
+  return `/${normalizePathSegments(filePath.split("/")).join("/")}`;
+}
+
+function normalizeWindowsDrivePath(filePath: string): string {
+  const slashPath = filePath.replace(/\\/g, "/");
+  const drive = slashPath.slice(0, 2);
+  const normalized = normalizePathSegments(slashPath.slice(2).split("/"));
+  return `${drive}/${normalized.join("/")}`;
+}
+
+function normalizeWindowsUncPath(filePath: string): string {
+  const parts = filePath.replace(/\\/g, "/").replace(/^\/+/, "").split("/").filter(Boolean);
+  const [host, share, ...rest] = parts;
+  if (!host) {
+    return "/";
+  }
+  if (!share) {
+    return `//${host}`;
+  }
+  const normalized = normalizePathSegments(rest);
+  return normalized.length > 0
+    ? `//${host}/${share}/${normalized.join("/")}`
+    : `//${host}/${share}`;
 }
 
 const normalizeMarkdownUrl: UrlTransform = (url) => {
@@ -1410,8 +1437,8 @@ function isKnownTextFile(filePath: string): boolean {
 function localFileTargetFromHref(
   href: string
 ): LocalFileTarget | undefined {
-  if (href.startsWith("file://")) {
-    return splitFileLineSuffix(decodeMarkdownDestination(href.replace(/^file:\/\//, "")));
+  if (/^file:\/\//i.test(href)) {
+    return splitFileLineSuffix(decodeMarkdownDestination(href.replace(/^file:\/\//i, "")));
   }
 
   if (href.startsWith("/")) {
@@ -1425,36 +1452,49 @@ function windowsMarkdownDestinationFromSource(source: string | undefined): strin
   // CommonMark treats '\\.' and '\\_' as escapes, even inside Windows paths.
   // Match the original destination used by main's image materializer, before
   // Markdown removes those filesystem separators.
-  const match = /^!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))/.exec(source ?? "");
-  const destination = match?.[2] ?? match?.[3];
-  return destination && isWindowsFilesystemPath(decodeMarkdownDestination(destination))
+  const destination = extractInlineMarkdownDestination(source);
+  return destination
+    && destination.includes("\\")
+    && isWindowsFilesystemPath(decodeMarkdownDestination(destination))
     ? `file://${destination}`
     : undefined;
 }
 
 function markdownImagePathFromHref(href: string): string | undefined {
   let imagePath = href;
-  if (href.startsWith("file://")) {
+  let isUnc = false;
+  if (/^file:\/\//i.test(href)) {
     // Markdown encodes backslashes. The renderer's file:// wrapper can
-    // therefore contain a drive path rather than a standard file URL.
+    // therefore contain a drive or UNC path rather than a standard file URL.
     const localPath = decodeMarkdownDestination(href.slice("file://".length));
-    if (isWindowsFilesystemPath(localPath)) {
+    if (/^[a-z]:[\\/]/i.test(localPath)) {
       imagePath = localPath;
+    } else if (localPath.startsWith("\\\\")) {
+      imagePath = localPath;
+      isUnc = true;
     } else {
       try {
         const url = new URL(href);
-        const host = url.hostname && url.hostname.toLowerCase() !== "localhost" ? `//${url.hostname}` : "";
-        imagePath = decodeURIComponent(`${host}${url.pathname}`);
+        const hasUncHost = Boolean(url.hostname && url.hostname.toLowerCase() !== "localhost");
+        isUnc = hasUncHost;
+        imagePath = decodeURIComponent(
+          hasUncHost ? `//${url.hostname}${url.pathname}` : url.pathname,
+        );
       } catch {
         return undefined;
       }
     }
+  } else if (href.startsWith("\\\\")) {
+    isUnc = true;
   }
   // File URLs prefix drive paths with '/', and Windows uses either separator.
   // Infer the owning platform from the path, including for federated images.
-  if (/^\/[a-z]:[\\/]/i.test(imagePath)) imagePath = imagePath.slice(1);
-  if (isWindowsFilesystemPath(imagePath)) {
-    return splitFileLineSuffix(imagePath.replace(/\\/g, "/")).path;
+  if (!isUnc && /^\/[a-z]:[\\/]/i.test(imagePath)) imagePath = imagePath.slice(1);
+  if (/^[a-z]:[\\/]/i.test(imagePath)) {
+    return normalizeWindowsDrivePath(splitFileLineSuffix(imagePath.replace(/\\/g, "/")).path);
+  }
+  if (isUnc) {
+    return normalizeWindowsUncPath(splitFileLineSuffix(imagePath.replace(/\\/g, "/")).path);
   }
   return imagePath.startsWith("/")
     ? normalizePosixPath(splitFileLineSuffix(imagePath).path)

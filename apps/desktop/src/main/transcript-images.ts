@@ -4,7 +4,10 @@ import {
   MAX_TRANSCRIPT_IMAGE_BYTES,
   pwrSnapToolImageParts,
 } from "@pwragent/shared/transcript-image-sources";
-import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
+import {
+  extractInlineMarkdownDestination,
+  isWindowsFilesystemPath,
+} from "@pwragent/shared/path-display";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 import type {
@@ -1427,9 +1430,10 @@ function sourceSliceForMdastNode(text: string, node: MdastLikeNode): string | un
 }
 
 function windowsDestinationFromInlineSource(source: string | undefined): string | undefined {
-  const match = /^!?\[[\s\S]*?\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))/.exec(source ?? "");
-  const destination = match?.[1] ?? match?.[2];
-  return destination && isWindowsFilesystemPath(safelyDecodeUriComponent(destination))
+  const destination = extractInlineMarkdownDestination(source);
+  return destination
+    && destination.includes("\\")
+    && isWindowsFilesystemPath(safelyDecodeUriComponent(destination))
     ? destination
     : undefined;
 }
@@ -1437,7 +1441,9 @@ function windowsDestinationFromInlineSource(source: string | undefined): string 
 function windowsDestinationFromDefinitionSource(source: string | undefined): string | undefined {
   const match = /^\s*\[[^\]]+\]:\s*(?:<([^>\r\n]+)>|(\S+))/.exec(source ?? "");
   const destination = match?.[1] ?? match?.[2];
-  return destination && isWindowsFilesystemPath(safelyDecodeUriComponent(destination))
+  return destination
+    && destination.includes("\\")
+    && isWindowsFilesystemPath(safelyDecodeUriComponent(destination))
     ? destination
     : undefined;
 }
@@ -1459,8 +1465,9 @@ function extractMarkdownLinkedImageParts(text: string): Array<{
   alt?: string;
   sourcePath: string;
 }> {
-  // Every CommonMark inline or reference link/image contains `](` or a `]:` definition.
-  if (!text.includes("](") && !text.includes("]:")) {
+  // Every CommonMark inline link/image, reference definition, or file://
+  // autolink contains `](`, `]:`, or `<file://`.
+  if (!text.includes("](") && !text.includes("]:") && !/<file:\/\//i.test(text)) {
     return [];
   }
 
@@ -1532,7 +1539,7 @@ function stripOptionalFileLineSuffix(filePath: string): string {
 
 function localImageLinkPath(destination: string): string | undefined {
   const trimmed = destination.trim();
-  if (trimmed.startsWith("file://")) {
+  if (/^file:\/\//i.test(trimmed)) {
     try {
       const parsed = new URL(trimmed);
       if (parsed.protocol !== "file:") {

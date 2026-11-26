@@ -1,5 +1,8 @@
 import { TOOL_DETAILS_UNAVAILABLE_LABEL } from "@pwragent/shared/tool-activity-burst";
-import { type AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type AppServerNotification,
+  type AppServerThreadImagePart,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   isAcpModelProgressUpdate,
   isAcpRetryStateUpdateKind,
@@ -123,6 +126,26 @@ function readFiniteNumber(
  * follow-up updates the same way `AcpSessionReplayNormalizer` does.
  */
 const resolvedFileReads = new WeakMap<Record<string, unknown>, AcpFileRead>();
+const resolvedToolImages = new WeakMap<Record<string, unknown>, AppServerThreadImagePart[]>();
+
+function mergeAcpToolImages(
+  existing: readonly AppServerThreadImagePart[] | undefined,
+  incoming: readonly AppServerThreadImagePart[] | undefined,
+): AppServerThreadImagePart[] | undefined {
+  if (!existing?.length && !incoming?.length) {
+    return undefined;
+  }
+  const seen = new Set<string>();
+  const combined: AppServerThreadImagePart[] = [];
+  for (const image of [...(existing ?? []), ...(incoming ?? [])]) {
+    if (seen.has(image.url)) {
+      continue;
+    }
+    seen.add(image.url);
+    combined.push(image);
+  }
+  return combined;
+}
 
 export class AcpLiveToolUpdateResolver {
   private readonly activeUpdates = new Map<string, Record<string, unknown>>();
@@ -131,6 +154,7 @@ export class AcpLiveToolUpdateResolver {
   private readonly terminalUpdates = new Map<string, Record<string, unknown>>();
   private readonly providerTools = new Map<string, AcpProviderTool>();
   private readonly fileReads = new Map<string, AcpFileRead>();
+  private readonly toolImages = new Map<string, AppServerThreadImagePart[]>();
 
   resolve(params: {
     backendId: string;
@@ -197,6 +221,14 @@ export class AcpLiveToolUpdateResolver {
     if (fileRead) {
       this.fileReads.set(key, fileRead);
       resolvedFileReads.set(resolved, fileRead);
+    }
+    const mergedImages = mergeAcpToolImages(
+      this.toolImages.get(key),
+      extractAcpToolImageParts(params.update, readString(resolved, "title")),
+    );
+    if (mergedImages?.length) {
+      this.toolImages.set(key, mergedImages);
+      resolvedToolImages.set(resolved, mergedImages);
     }
     if (isTerminalToolStatus(resolved.status)) {
       this.activeUpdates.delete(key);
@@ -271,6 +303,11 @@ export class AcpLiveToolUpdateResolver {
         this.fileReads.delete(key);
       }
     }
+    for (const key of this.toolImages.keys()) {
+      if (key.startsWith(`${prefix}\0`)) {
+        this.toolImages.delete(key);
+      }
+    }
   }
 
   clear(): void {
@@ -279,6 +316,7 @@ export class AcpLiveToolUpdateResolver {
     this.terminalUpdates.clear();
     this.providerTools.clear();
     this.fileReads.clear();
+    this.toolImages.clear();
   }
 
   private rememberTerminalUpdate(key: string, update: Record<string, unknown>): void {
@@ -295,6 +333,7 @@ export class AcpLiveToolUpdateResolver {
       this.deferredTerminalUpdateKeys.delete(oldest);
       this.providerTools.delete(oldest);
       this.fileReads.delete(oldest);
+      this.toolImages.delete(oldest);
     }
   }
 }
@@ -546,7 +585,7 @@ function liveItemForAcpToolUpdate(
         ? command
         : title,
   });
-  const images = extractAcpToolImageParts(update, title);
+  const images = resolvedToolImages.get(update) ?? extractAcpToolImageParts(update, title);
   const item: Record<string, unknown> = {
     id: id ?? `${toolKind}:${title}`,
     type: "commandExecution",

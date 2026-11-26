@@ -52,7 +52,7 @@ function imagePartFromAcpBlock(
     };
   }
   const uri = readString(block, "uri") ?? readString(block, "url");
-  if (uri && /^(?:data:image\/|pwragent-image:\/\/|https?:\/\/)/iu.test(uri)) {
+  if (uri && /^(?:data:image\/|https?:\/\/)/iu.test(uri)) {
     return {
       type: "image",
       url: uri,

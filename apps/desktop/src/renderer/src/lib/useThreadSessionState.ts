@@ -5512,7 +5512,7 @@ function hasCompletedAssistantMessageForTurn(
   ].filter((entry) => entry.phase !== "commentary");
   const withoutWhitespace = (value: string) => value.replace(/\s+/g, "");
   return (
-    replies.length > 1
+    replies.length > 0
     && withoutWhitespace(replies.map((entry) => entry.text).join(""))
       === withoutWhitespace(text)
   );

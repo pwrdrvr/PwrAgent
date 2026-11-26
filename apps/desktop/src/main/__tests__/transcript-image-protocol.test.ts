@@ -1438,6 +1438,45 @@ describe("transcript image protocol", () => {
     expect(materializedTool.rendererImageParts).toHaveLength(1);
     expect(materializedTool.rendererImageParts?.[0]?.url).toMatch(/^pwragent-image:\/\/file\//);
   });
+
+  it("extracts standalone CommonMark file:// autolinks and preserves Windows balanced-parenthesis destinations", async () => {
+    const { extractInlineMarkdownDestination } = await import("@pwragent/shared/path-display");
+    expect(extractInlineMarkdownDestination(String.raw`[shot](C:\work\shot(1).png)`)).toBe(
+      String.raw`C:\work\shot(1).png`,
+    );
+    expect(extractInlineMarkdownDestination(String.raw`[Run [1]](C:\work\shot(1).png "title")`)).toBe(
+      String.raw`C:\work\shot(1).png`,
+    );
+
+    const { materializeTranscriptImageUrlsForRenderer } = await import(
+      "../shell/transcript-image-protocol"
+    );
+    const worktree = path.join(tempDir, "autolink-worktree");
+    await mkdir(worktree, { recursive: true });
+    const autolinkShot = path.join(worktree, "solo-autolink.png");
+    await writeFile(autolinkShot, Buffer.from([7, 8, 9]));
+    const text = `See <${pathToFileURL(autolinkShot).toString()}>`;
+
+    const result = await materializeTranscriptImageUrlsForRenderer(
+      {
+        backend: "acp:antigravity",
+        threadId: "autolink-only",
+        fetchedAt: 1,
+        replay: {
+          entries: [{ type: "message", id: "m1", role: "assistant", text }],
+          messages: [{ id: "m1", role: "assistant", text }],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      },
+      { resolveRoot: () => path.join(tempDir, "cache"), retainLocalImage: async () => undefined },
+      { approvedLocalImageRoots: [worktree] },
+    );
+
+    const sourceUrls = (result.replay.messages[0]?.parts ?? [])
+      .filter((part) => part.type === "image")
+      .map((part) => part.sourceUrl);
+    expect(sourceUrls).toEqual([pathToFileURL(autolinkShot).toString()]);
+  });
 });
 
 function toProtocolUrl(filePath: string): string {

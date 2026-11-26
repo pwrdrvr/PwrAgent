@@ -98,6 +98,103 @@ export function isWindowsFilesystemPath(value: string): boolean {
   return /^[a-z]:[\\/]/i.test(trimmed) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(trimmed);
 }
 
+/**
+ * Extract the raw destination from a single CommonMark inline link or image
+ * slice (e.g. `[Run [1]](C:\work\shot(1).png)`), respecting nested brackets,
+ * code spans in the label, angle-bracket destinations, and balanced
+ * parentheses per CommonMark.
+ */
+export function extractInlineMarkdownDestination(source: string | undefined): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+  const openBracket = source.startsWith("![") ? 1 : source.startsWith("[") ? 0 : -1;
+  if (openBracket < 0) {
+    return undefined;
+  }
+
+  let index = openBracket + 1;
+  let bracketDepth = 1;
+  while (index < source.length && bracketDepth > 0) {
+    const ch = source[index];
+    if (ch === "\\") {
+      index += 2;
+      continue;
+    }
+    if (ch === "`") {
+      let tickEnd = index;
+      while (tickEnd < source.length && source[tickEnd] === "`") {
+        tickEnd += 1;
+      }
+      const ticks = source.slice(index, tickEnd);
+      const closeTick = source.indexOf(ticks, tickEnd);
+      if (closeTick >= 0) {
+        index = closeTick + ticks.length;
+        continue;
+      }
+      index = tickEnd;
+      continue;
+    }
+    if (ch === "[") {
+      bracketDepth += 1;
+    } else if (ch === "]") {
+      bracketDepth -= 1;
+      if (bracketDepth === 0) {
+        index += 1;
+        break;
+      }
+    }
+    index += 1;
+  }
+
+  if (bracketDepth !== 0 || source[index] !== "(") {
+    return undefined;
+  }
+  index += 1;
+  while (index < source.length && /\s/.test(source[index]!)) {
+    index += 1;
+  }
+  if (index >= source.length) {
+    return undefined;
+  }
+
+  if (source[index] === "<") {
+    const destStart = index + 1;
+    let cursor = destStart;
+    while (cursor < source.length) {
+      const ch = source[cursor];
+      if (ch === "\r" || ch === "\n") {
+        return undefined;
+      }
+      if (ch === ">") {
+        return cursor > destStart ? source.slice(destStart, cursor) : undefined;
+      }
+      cursor += 1;
+    }
+    return undefined;
+  }
+
+  const destStart = index;
+  let parenDepth = 0;
+  let cursor = destStart;
+  while (cursor < source.length) {
+    const ch = source[cursor]!;
+    if (/\s/.test(ch)) {
+      break;
+    }
+    if (ch === "(") {
+      parenDepth += 1;
+    } else if (ch === ")") {
+      if (parenDepth === 0) {
+        break;
+      }
+      parenDepth -= 1;
+    }
+    cursor += 1;
+  }
+  return cursor > destStart ? source.slice(destStart, cursor) : undefined;
+}
+
 function normalizePath(value: string): string {
   const trimmed = value.trim();
   const normalized = isWindowsFilesystemPath(trimmed) ? trimmed.replace(/\\/g, "/") : trimmed;
