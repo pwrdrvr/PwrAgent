@@ -4046,6 +4046,18 @@ export class DesktopFederationRuntime {
             });
           });
       },
+      onArchivedMountRemoved: ({ backend, threadId, target }) => {
+        if (!isRemoteFederationTarget(target)) return;
+        void getDesktopBackendRegistry().publishLocalEvent({
+          backend,
+          notification: {
+            method: "navigation/remoteThreadPins/changed",
+            params: { instanceId: target.instanceId, threadId, pinned: false },
+          },
+        }).catch((error: unknown) => {
+          log.warn("archived mount removal publish failed", { error: String(error) });
+        });
+      },
     });
     return this.remoteThreadSummaryCache;
   }
@@ -4205,7 +4217,14 @@ export class DesktopFederationRuntime {
       }
     }
     const apply = async (instanceId: string, dryRun: boolean) => {
-      if (instanceId === localInstanceId) return store.applyArchiveSubthreadPromotion({ ...promotion, dryRun }, instanceId);
+      if (instanceId === localInstanceId) {
+        const { threadIds, remoteMountsChanged } = store.applyArchiveSubthreadPromotion({ ...promotion, dryRun }, instanceId);
+        if (remoteMountsChanged) await getDesktopBackendRegistry().publishLocalEvent({
+          backend: params.backend,
+          notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId, membershipChanged: true } },
+        });
+        return threadIds;
+      }
       const response = await this.remoteBackend({ scope: "remote", instanceId }).updateSubthreadOrder({
         backend: parent?.backend ?? params.backend, parentThreadId: parent?.threadId ?? params.parentThreadId,
         archivePromotion: { ...promotion, dryRun },
@@ -7759,6 +7778,7 @@ async function mountRemoteParentForLocalChild(
         instanceId: parentInstanceId,
         threadId: parentThreadId,
         pinned: true,
+        membershipChanged: !existingPin,
       },
     },
   });
@@ -8290,7 +8310,7 @@ function localBackendOperations(
       if (request.archivePromotion) {
         const instanceId = (await getDesktopFederationRuntime().health()).instanceId;
         if (!instanceId) throw new Error("Federation identity is unavailable.");
-        const threadIds = getDesktopOverlayStore().applyArchiveSubthreadPromotion(request.archivePromotion, instanceId);
+        const { threadIds, remoteMountsChanged } = getDesktopOverlayStore().applyArchiveSubthreadPromotion(request.archivePromotion, instanceId);
         if (!request.archivePromotion.dryRun) {
           const { parent, children } = request.archivePromotion;
           for (const { ref } of children) {
@@ -8307,7 +8327,7 @@ function localBackendOperations(
               params: { parentThreadId: parent.threadId, threadIds } },
           });
           await getDesktopBackendRegistry().publishLocalEvent({ backend: request.backend ?? "codex",
-            notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId } },
+            notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId, membershipChanged: remoteMountsChanged } },
           });
         }
         return { backend: request.backend ?? "codex", parentThreadId: request.parentThreadId, threadIds };

@@ -4,6 +4,6 @@ import type { AgentEvent } from "@pwragent/shared/contracts/agent";
 export function changesOperatorQueueMounts({ notification, federationTarget }: AgentEvent): boolean {
   return federationTarget?.scope !== "remote"
     && notification.method === "navigation/remoteThreadPins/changed"
-    && notification.params.pinned !== undefined
-    && notification.params.membershipChanged !== false;
+    && (notification.params.membershipChanged === true
+      || (notification.params.membershipChanged !== false && notification.params.pinned !== undefined));
 }

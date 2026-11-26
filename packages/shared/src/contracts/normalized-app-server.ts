@@ -3306,8 +3306,8 @@ export type AppServerNotification =
          */
         threadId?: string;
         pinned?: boolean;
-        /** False when only the rank of an existing mount changed. */
-        membershipChanged?: false;
+        /** Whether the saved mount set changed, independent of pin rank or snapshot updates. */
+        membershipChanged?: boolean;
         /** Correlates a completed explicit mount with its IPC reply. */
         publicationId?: string;
         /** All departing root anchors when the mount also ranks a companion. */
