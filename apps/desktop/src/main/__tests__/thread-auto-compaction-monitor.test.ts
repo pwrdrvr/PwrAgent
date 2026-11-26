@@ -30,6 +30,7 @@ function fakeRegistry(options: {
   model?: string;
   canSteer?: boolean;
   canStart?: "yes" | "blocked" | "unsupported";
+  reportsFillOnNextTurn?: boolean;
 } = {}) {
   let listener: ((event: AgentEvent) => void | Promise<void>) | undefined;
   let activeTurn: string | undefined;
@@ -43,6 +44,7 @@ function fakeRegistry(options: {
     autoCompactionSupport: vi.fn(() => ({
       canSteer: options.canSteer ?? true,
       canStart: options.canStart ?? "yes",
+      ...(options.reportsFillOnNextTurn ? { reportsFillOnNextTurn: true } : {}),
     })),
     resolveAutoCompactionModel: vi.fn(async () => options.model ?? "gemini-4-neon-high"),
     startAutoCompaction: vi.fn(async () => ({ status: "started" as const, turnId: "turn-compact" })),
@@ -72,6 +74,13 @@ function fakeRegistry(options: {
       emit({
         method: "turn/completed",
         params: { threadId: "thread-1", turnId, turn: { id: turnId, status: "completed" } },
+      } as AgentEvent["notification"]);
+    },
+    turnCancelled: (turnId: string) => {
+      activeTurn = undefined;
+      emit({
+        method: "turn/cancelled",
+        params: { threadId: "thread-1", turnId, turn: { id: turnId, status: "cancelled" } },
       } as AgentEvent["notification"]);
     },
     emit,
@@ -230,6 +239,65 @@ describe("ThreadAutoCompactionMonitor", () => {
     })).toEqual({ usedTokens: 120_000, reportedContextWindow: 272_000 });
     expect(readCodexContextFill({ last: { totalTokens: 1 } })).toBeUndefined();
   });
+
+  it("continues immediately on Antigravity after steered /compact emits a higher summarization fill, then re-arms on the continuation turn", async () => {
+    const world = fakeRegistry({ reportsFillOnNextTurn: true });
+    const monitor = start(world);
+    world.turnStarted("turn-1");
+    world.fill(412_000);
+    await monitor.idle();
+
+    expect(world.registry.steerTurn).toHaveBeenCalledTimes(1);
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("compacting");
+
+    // Antigravity emits the summarization call's higher usage_update right before turn/completed.
+    world.fill(425_000);
+    world.turnCompleted("turn-1");
+    await monitor.idle();
+
+    expect(world.registry.startAutoCompaction).not.toHaveBeenCalled();
+    expect(world.registry.submitTurnIfIdle).toHaveBeenCalledTimes(1);
+    expect(world.registry.submitTurnIfIdle).toHaveBeenCalledWith(expect.objectContaining({
+      input: [{ type: "text", text: AUTO_COMPACTION_CONTINUATION_TEXT }],
+      messageOrigin: AUTO_COMPACTION_ORIGIN,
+    }));
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("verifying");
+
+    // The continuation turn's first usage_update reports the actual compacted fill.
+    world.turnStarted("turn-2");
+    world.fill(21_436);
+    await monitor.idle();
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("armed");
+    expect(world.published.map((event) => (event.notification.params as { phase: string }).phase))
+      .toEqual(["steering", "compacting", "verifying", "armed"]);
+    monitor.dispose();
+  });
+
+  it("clears compacting immediately without a continuation or delayed idle retry when a steered Antigravity /compact turn is cancelled", async () => {
+    vi.useFakeTimers();
+    try {
+      const world = fakeRegistry({ reportsFillOnNextTurn: true });
+      const monitor = start(world);
+      world.turnStarted("turn-1");
+      world.fill(412_000);
+      await monitor.idle();
+      world.turnCancelled("turn-1");
+      await monitor.idle();
+
+      expect(world.registry.submitTurnIfIdle).not.toHaveBeenCalled();
+      expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("armed");
+
+      // Advancing past the 15s settle timeout must not start an unrequested idle /compact.
+      await vi.advanceTimersByTimeAsync(20_000);
+      await monitor.idle();
+      expect(world.registry.startAutoCompaction).not.toHaveBeenCalled();
+      expect(world.registry.submitTurnIfIdle).not.toHaveBeenCalled();
+      expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("armed");
+      monitor.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("ACP registry cache fallback and shared /compact dispatch", () => {
@@ -323,7 +391,7 @@ describe("ACP registry cache fallback and shared /compact dispatch", () => {
 
     await expect(
       fixture.registry.autoCompactionSupport({ backend: ANTIGRAVITY, threadId: SESSION_ID }),
-    ).resolves.toEqual({ canSteer: false, canStart: "yes" });
+    ).resolves.toEqual({ canSteer: false, canStart: "yes", reportsFillOnNextTurn: true });
     expect(startSession).not.toHaveBeenCalled();
 
     const monitor = createRegistryAutoCompactionMonitor({

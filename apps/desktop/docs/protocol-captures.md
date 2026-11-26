@@ -331,6 +331,22 @@ The November 23–24, 2026 macOS captures of Antigravity CLI `1.5.15` (`agy acp 
 - Antigravity does not emit a live `user_message_chunk` for the steered prompt during the active turn, but `session/load` replays both prompts as `user_message_chunk` notifications separated by the assistant output.
 - Sending a concurrent `session/prompt` while the active prompt is blocked on `session/request_permission` immediately rejects the second request with JSON-RPC `-32603` (`the running prompt is waiting for a permission or question answer; answer it or send session/cancel, then send this prompt again`) while leaving the first prompt running.
 
+### Antigravity steered and idle `/compact`
+
+The November 25, 2026 macOS captures of Antigravity CLI `1.5.16` (`agy acp --process-per-session`, `gemini-4-neon` / `high`, disposable workspace) probed both idle `/compact` and concurrent mid-turn steered `/compact` (mid-stream and mid-tool-round on `usage_update`) against ~81k-token seeded sessions:
+
+- `available_commands_update` advertises `compact` (`"Compact the conversation now (summarize history to free up the context window)."`).
+- Sending a concurrent `session/prompt` with `[{ "type": "text", "text": "/compact" }]` during a running turn detaches the original `session/prompt` in ~10–11 ms with `{ "stopReason": "end_turn" }` (carrying pre-steer `usage` once a model call has finished) and transfers the active turn to the `/compact` prompt.
+- After the in-flight step finishes, Antigravity executes `/compact` silently as a real command (not chat text): zero `agent_message_chunk` or `agent_thought_chunk` output is emitted for the compaction itself. In a tool-only turn with no prior assistant text, the entire turn finishes with empty assistant text, so `AcpAgentClient.steerAntigravitySession` marks `activeTurn.isCompactCommand = true` upon steer adoption (preventing `missingPromptResponseError` and clearing `deliveredAgentInstructionsDigest` on completion).
+- Antigravity emits no dedicated compaction notification (`auto_compact_completed`, `thread/compacted`, `contextCompaction` item, or `_meta` marker) and no new turn. Right before `session/prompt` settles, it emits `usage_update` reporting the compaction summarization model call's own usage, which is higher than the pre-compaction context fill, followed by silence across a 16-second drain:
+  - Idle `/compact`: `80,888` before → `82,714` at `/compact` end → 16 s silence → `20,551` on the next turn.
+  - Mid-stream steered `/compact`: `80,875` before → `82,501` at stream finish → `84,441` at `/compact` end → 16 s silence → `20,655` on the next turn.
+  - Mid-tool-round steered `/compact`: `81,312` at steer → `97,465` after the in-flight second read → `104,920` at `/compact` end → 16 s silence → `21,436` on the continuation turn.
+- The original multi-step turn ends right after `/compact` (`{ "stopReason": "end_turn" }`) without running remaining steps (`part3.txt` and the final summary), so PwrAgent's continuation prompt is required and resumes the interrupted work while eliciting the lowered post-compaction `usage_update`.
+- `ThreadAutoCompactionMonitor` and `stepAutoCompaction` therefore treat `acp:antigravity` as a deferred-fill provider (`reportsFillOnNextTurn: true`): a cleanly completed steered `/compact` immediately sends the continuation prompt and enters `verifying` (instead of waiting 15 s and retrying a redundant idle `/compact`), and an idle `/compact` stays in `verifying` across idle time until the next turn reports a fill below trigger (`armed`) or still at/above trigger (`held` with `no-shrink`).
+
+Raw captures are under the ignored `apps/desktop/.local/protocol-captures/antigravity-steer-compact/`.
+
 ## Capturing Codex Account Protocol
 
 `scripts/capture-codex-usage-protocol.ts` records a complete Codex App Server

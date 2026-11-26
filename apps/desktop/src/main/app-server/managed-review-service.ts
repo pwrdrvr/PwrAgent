@@ -274,7 +274,12 @@ export class ManagedReviewService {
     arrivedBeforeStart = false,
   ): Promise<void> {
     const ledgerSummary = record?.mode === "managed" ? this.candidateLedger.snapshot(terminal) : undefined;
-    // Once terminal ingress has fenced the tools, only the counts are needed.
+    const submittedOutput = terminal.method === "turn/completed"
+      ? terminal.submittedOutput ?? this.candidateLedger.submittedOutput(terminal)
+      : undefined;
+    // Capture output before clearing the ledger. Terminal evidence also
+    // carries it when the child finished before its start acknowledgement.
+    const evidence = submittedOutput ? { ...terminal, submittedOutput } : terminal;
     this.candidateLedger.clearTurn(terminal);
     // Keep suppression through publication. The live turn itself is removed
     // synchronously by completeReviewSubAgent, so redelivery cannot settle it twice.
@@ -282,7 +287,7 @@ export class ManagedReviewService {
       this.publishingReviewResults.add(record);
     }
     try {
-      await this.completeReviewSubAgent(terminal).catch((error) => {
+      await this.completeReviewSubAgent(evidence).catch((error) => {
         if (record?.mode !== "managed") throw error;
         // Card bookkeeping must not prevent publishing the managed review
         // result or delivering the terminal to its parent.
@@ -292,7 +297,7 @@ export class ManagedReviewService {
       });
       if (record && ledgerSummary) {
         if (arrivedBeforeStart) await this.emitManagedReviewStarted(record);
-        await this.publishManagedReviewTerminal({ ...terminal, record }, ledgerSummary);
+        await this.publishManagedReviewTerminal({ ...evidence, record }, ledgerSummary);
       }
     } finally {
       if (record) {
@@ -1968,11 +1973,14 @@ export class ManagedReviewService {
     const completedAt = params.completedAt ?? Date.now();
     const completedItemOutput = this.takeManagedReviewOutput(params.record);
     if (params.method === "turn/completed") {
-      const output = await this.readManagedReviewOutput(params.record, params.output, completedItemOutput);
-      const parsed = parseReviewOutputText(output);
+      const { submittedOutput } = params;
+      const output = submittedOutput
+        ? undefined
+        : await this.readManagedReviewOutput(params.record, params.output, completedItemOutput);
+      const parsed = submittedOutput ?? parseReviewOutputText(output);
       const review = parsed
         ? formatReviewOutputText(parsed)
-        : output?.trim() || "Review completed without output.";
+        : output ?? "Review completed without output.";
       const entry: AppServerThreadReviewEntry = {
         type: "review",
         id: `managed-review:${params.record.turnId}:result`,
@@ -2019,6 +2027,7 @@ export class ManagedReviewService {
         parentThreadId: params.record.parentThreadId,
         reviewThreadId: params.record.reviewThreadId,
         structured: Boolean(parsed),
+        outputSource: submittedOutput ? "tool" : output ? "text" : "none",
         turnId: params.record.turnId,
         ...(ledgerSummary.total > 0
           ? {

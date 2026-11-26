@@ -52,6 +52,7 @@ import {
   type AppServerThreadActivityEntry,
   type AppServerThreadActivityDetail,
   type AppServerReviewContext,
+  type AppServerReviewOutput,
   type AppServerThreadImagePart,
   type AppServerThreadMessageOrigin,
   type AppServerThreadReplay,
@@ -862,6 +863,7 @@ export type ReviewTerminal = {
   errorMessage?: string;
   method: "turn/completed" | "turn/failed" | "turn/cancelled";
   output?: Extract<AppServerNotification, { method: "turn/completed" }>["params"]["turn"]["output"];
+  submittedOutput?: AppServerReviewOutput;
   threadId: string;
   turnId: string;
 };

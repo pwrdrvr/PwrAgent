@@ -2908,6 +2908,7 @@ describe("DesktopBackendRegistry", () => {
           "record_review_candidate",
           "list_review_candidates",
           "dispose_review_candidate",
+          "submit_review_output",
         ],
       );
       expect(codexClient.lastStartThreadParams?.dynamicTools).toEqual([

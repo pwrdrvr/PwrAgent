@@ -3872,6 +3872,34 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("publishes submitted output when a managed child completes twice before its start acknowledgement", async () => {
+    const { registry, codexClient, request } = await prReviewStartFixture();
+    const output = { findings: [], overall_correctness: "patch is correct" as const, overall_explanation: "The structured review passed." };
+    const ledger = registryModules(registry).managedReviewService.candidateLedger;
+    const events: AgentEvent[] = [];
+    onTestFinished(registry.onEvent((event) => { events.push(event); }));
+
+    const start = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementationOnce(async (params) => {
+      const response = await start(params);
+      expect(ledger.submitOutput({ backend: "codex", ...response }, output).ok).toBe(true);
+      const terminal = reviewTerminal("completed", { reviewThreadId: response.threadId, turnId: response.turnId });
+      await codexClient.emit(terminal);
+      await codexClient.emit(terminal);
+      return response;
+    });
+
+    await registry.startReview({ ...request, threadId: "independent" }, true);
+    expect([...registry.reviewsInProgress()]).toEqual([]);
+    expect(events.filter((event) => isCompletedItemType(event, "exitedReviewMode"))).toEqual([
+      expect.objectContaining({ notification: expect.objectContaining({
+        params: expect.objectContaining({ item: expect.objectContaining({
+          data: expect.objectContaining({ reviewOutput: output }),
+        }) }),
+      }) }),
+    ]);
+  });
+
   it("fingerprints failed review starts by target and error, not snapshot time", () => {
     // Each scheduled pull request review captures a new snapshot. Comparing
     // whole targets let every retry of a failing PR review send a new notice.

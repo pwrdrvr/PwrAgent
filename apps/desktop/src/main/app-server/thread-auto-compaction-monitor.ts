@@ -47,8 +47,8 @@ export type ThreadAutoCompactionHost = {
   /** The running turn's id, or undefined when the thread is idle. */
   activeTurnId(params: { backend: AppServerBackendKind; threadId: string }): string | undefined;
   support(params: { backend: AppServerBackendKind; threadId: string }):
-    | Pick<AutoCompactionContext, "canSteer" | "canStart">
-    | Promise<Pick<AutoCompactionContext, "canSteer" | "canStart">>;
+    | Pick<AutoCompactionContext, "canSteer" | "canStart" | "reportsFillOnNextTurn">
+    | Promise<Pick<AutoCompactionContext, "canSteer" | "canStart" | "reportsFillOnNextTurn">>;
   steerCompact(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -75,6 +75,8 @@ type ThreadEntry = {
   threadId: string;
   state: AutoCompactionState;
   threshold?: AutoCompactionThreshold;
+  /** Remembered from the last support lookup so hot-path events avoid async support I/O. */
+  reportsFillOnNextTurn?: boolean;
   /** Serializes this thread's inputs across awaits. */
   chain: Promise<void>;
   settleTimer?: unknown;
@@ -203,9 +205,15 @@ export class ThreadAutoCompactionMonitor {
       case "turn/cancelled": {
         const ended = (notification as Notification<"turn/completed" | "turn/failed" | "turn/cancelled">).params;
         const turnId = providerTurnId(ended.turnId ?? undefined);
+        const outcome = notification.method === "turn/completed"
+          ? "completed"
+          : notification.method === "turn/failed"
+            ? "failed"
+            : "cancelled";
         this.enqueueKnown(event.backend, threadId, async (entry) => this.apply(entry, {
           kind: "turn-ended",
           ...(turnId ? { turnId } : {}),
+          outcome,
           context: await this.context(entry, {
             ended: true,
             includeSupport: entry.state.phase === "due",
@@ -296,13 +304,15 @@ export class ThreadAutoCompactionMonitor {
     entry: ThreadEntry,
     options: { ended?: boolean; includeSupport?: boolean } = {},
   ): Promise<AutoCompactionContext> {
-    let support: Pick<AutoCompactionContext, "canSteer" | "canStart"> = {
+    let support: Pick<AutoCompactionContext, "canSteer" | "canStart" | "reportsFillOnNextTurn"> = {
       canSteer: false,
       canStart: "blocked",
+      ...(entry.reportsFillOnNextTurn ? { reportsFillOnNextTurn: true } : {}),
     };
     if (options.includeSupport !== false) {
       try {
         support = await this.host.support(entry);
+        entry.reportsFillOnNextTurn = support.reportsFillOnNextTurn === true;
       } catch (error) {
         this.host.log.warn("auto-compaction support check failed", {
           backend: entry.backend,
@@ -319,6 +329,7 @@ export class ThreadAutoCompactionMonitor {
       ...(turnId ? { turnId } : {}),
       canSteer: support.canSteer,
       canStart: support.canStart,
+      ...(support.reportsFillOnNextTurn ? { reportsFillOnNextTurn: true } : {}),
     };
   }
 
@@ -518,8 +529,8 @@ export type AutoCompactionRegistry = {
   onEvent(listener: (event: AgentEvent) => void | Promise<void>): () => void;
   getActiveTurnForThread(params: { backend: AppServerBackendKind; threadId: string }): { turnId: string } | undefined;
   autoCompactionSupport(params: { backend: AppServerBackendKind; threadId: string }):
-    | Pick<AutoCompactionContext, "canSteer" | "canStart">
-    | Promise<Pick<AutoCompactionContext, "canSteer" | "canStart">>;
+    | Pick<AutoCompactionContext, "canSteer" | "canStart" | "reportsFillOnNextTurn">
+    | Promise<Pick<AutoCompactionContext, "canSteer" | "canStart" | "reportsFillOnNextTurn">>;
   resolveAutoCompactionModel(params: { backend: AppServerBackendKind; threadId: string }): Promise<string | undefined>;
   startAutoCompaction(params: {
     backend: AppServerBackendKind;
