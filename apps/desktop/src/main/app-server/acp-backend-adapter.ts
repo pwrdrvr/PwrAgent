@@ -1055,7 +1055,7 @@ export async function inputToAcpPrompt(
   const promptContent: AcpPromptContentBlock[] = [];
   const parts: AppServerThreadMessagePart[] = [];
   const hasPromptText = input.some(
-    (item) => (item.type === "text" && item.text.trim().length > 0) || item.type === "localFile" || item.type === "file",
+    (item) => (item.type === "text" && item.text.trim().length > 0) || item.type === "localFile",
   );
 
   let lastPromptContentWasUserText = false;

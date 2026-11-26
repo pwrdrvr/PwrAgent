@@ -1073,7 +1073,7 @@ export class AcpSessionReplayNormalizer {
       // If the previous user message is an empty-text image-only message that
       // already consumed its overlay image slots, a new annotation belongs to a
       // subsequent image-only turn rather than appending to the earlier bubble.
-      if (lastEntry.text || alreadyMatched === 0) {
+      if (lastEntry.text || !this.overlayImageParts.has(lastEntry.id)) {
         const matchedParts = this.consumeAttachmentReplayPartsForUserMessage(lastEntry.text, fileName);
         if (matchedParts?.length) {
           this.attachPartsToUserMessage(lastEntry.id, matchedParts);
@@ -1285,6 +1285,9 @@ export class AcpSessionReplayNormalizer {
     for (let index = replay.attachmentNextIndex; index < replay.prompts.length; index += 1) {
       const candidate = replay.prompts[index]!;
       if (candidate.textDigest !== textDigest) {
+        if (candidate.attachmentParts?.length) {
+          break;
+        }
         continue;
       }
       if (!candidate.attachmentParts?.length) {

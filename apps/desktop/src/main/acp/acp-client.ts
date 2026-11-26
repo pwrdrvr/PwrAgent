@@ -150,6 +150,8 @@ type AcpIdleClosedSession = {
   closed: Promise<void>;
   /** The session/load in flight, shared by every request that needs it. */
   reopening?: Promise<void>;
+  /** Whether the in-flight reopening suppresses transcript replay updates. */
+  reopeningSuppressed?: boolean;
   /** Load succeeded, but confirming its mode and closing the worker both failed. */
   workerOpen?: boolean;
 };
@@ -832,13 +834,33 @@ export class AcpAgentClient {
   ): Promise<void> {
     const idleClosed = this.idleClosedSessions.get(sessionId);
     if (!idleClosed) return;
-    if (idleClosed.reopening && options.antigravityModeSelection !== undefined) {
-      // An ordinary reload might still be trying the mode being replaced.
+    if (
+      idleClosed.reopening
+      && (
+        options.antigravityModeSelection !== undefined
+        || (options.suppressTranscriptReplay === false && idleClosed.reopeningSuppressed)
+      )
+    ) {
+      // Wait for an ordinary or suppressed reload to settle before applying a
+      // mode override or an unsuppressed transcript replay.
       await idleClosed.reopening.catch(() => undefined);
-      await this.reopenIdleClosedSession(sessionId, options);
+      if (this.idleClosedSessions.has(sessionId)) {
+        await this.reopenIdleClosedSession(sessionId, options);
+        return;
+      }
+      if (options.suppressTranscriptReplay === false) {
+        const metadata =
+          options.metadata
+          ?? this.options.store.getSession(this.options.backendId, sessionId);
+        if (!metadata) {
+          throw new Error(`ACP session not found: ${sessionId}`);
+        }
+        await this.loadSessionFromAgent(metadata, options);
+      }
       return;
     }
     if (!idleClosed.reopening) {
+      const suppressTranscriptReplay = options.suppressTranscriptReplay ?? true;
       const reopening = (async () => {
         await idleClosed.closed;
         // The close failed, or the session was archived meanwhile.
@@ -857,7 +879,7 @@ export class AcpAgentClient {
         await this.loadSessionFromAgent(metadata, {
           antigravityModeSelection: options.antigravityModeSelection,
           antigravityModeExplicit: options.antigravityModeExplicit,
-          suppressTranscriptReplay: options.suppressTranscriptReplay ?? true,
+          suppressTranscriptReplay,
         });
         if (this.idleClosedSessions.get(sessionId) === idleClosed) {
           this.idleClosedSessions.delete(sessionId);
@@ -865,9 +887,13 @@ export class AcpAgentClient {
         this.touchSession(sessionId);
       })();
       idleClosed.reopening = reopening;
+      idleClosed.reopeningSuppressed = suppressTranscriptReplay;
       // A failed load leaves the session unready; the next request retries.
       reopening.catch(() => {
-        if (idleClosed.reopening === reopening) idleClosed.reopening = undefined;
+        if (idleClosed.reopening === reopening) {
+          idleClosed.reopening = undefined;
+          idleClosed.reopeningSuppressed = undefined;
+        }
       });
     }
     await idleClosed.reopening;
@@ -1132,17 +1158,25 @@ export class AcpAgentClient {
         const turnId =
           this.activeTurns.get(params.sessionId)?.turnId ?? `steer:${params.interjectionId}`;
         const displayPrompt = params.prompt ?? params.text;
-        this.options.rolloutStore?.appendUpdate({
-          backendId: this.options.backendId,
-          sessionId: params.sessionId,
-          receivedAt,
-          update: {
-            kind: "pwragent_prompt_attachments",
+        try {
+          this.options.rolloutStore?.appendUpdate({
+            backendId: this.options.backendId,
+            sessionId: params.sessionId,
+            receivedAt,
+            update: {
+              kind: "pwragent_prompt_attachments",
+              turnId,
+              textDigest: acpReplayPromptTextDigest(displayPrompt),
+              attachmentParts: lightweightAttachments,
+            },
+          });
+        } catch (error) {
+          acpClientLog.warn("Could not persist accepted Grok steering attachments", {
+            sessionId: params.sessionId,
             turnId,
-            textDigest: acpReplayPromptTextDigest(displayPrompt),
-            attachmentParts: lightweightAttachments,
-          },
-        });
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
       return { delivery };
     });
@@ -3263,7 +3297,7 @@ export class AcpAgentClient {
     } finally {
       this.loadingSessions.delete(protocolSessionId);
     }
-    if (loadState.replayedTranscript) {
+    if (loadState.replayedTranscript && !loadState.suppressTranscriptReplay) {
       this.sessionLoadReplays.set(protocolSessionId, {
         ...(loadState.lastTimestampedTranscriptAt !== undefined
           ? {
