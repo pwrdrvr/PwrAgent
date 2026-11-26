@@ -1,6 +1,5 @@
 import { discoverGithubEnterpriseAccounts } from "../../pr-status/github-enterprise-auth";
 import { addAbortListener } from "node:events";
-import { join } from "node:path";
 import { codexAuthState } from "../../codex-auth-state";
 import { claudeEnvironment, inspectClaudeInstallation, isClaudeInstallationAvailable } from "../../claude/claude-executable";
 import { resolveMainEntryPath } from "../../runtime-resources";
@@ -146,7 +145,6 @@ import {
 import type { ManagedRuntimeProgress } from "../../../shared/managed-runtime-progress";
 import { readManagedRuntimeProgress } from "../../managed-runtime-progress";
 import type { DesktopSettingsService } from "../../settings/desktop-settings-service";
-import { E2E_ACP_DISCOVERY_ROOT_ENV } from "../../settings/desktop-settings-env";
 import { checkDecisionProvider, listDecisionModels } from "../../decision/decision-provider-check";
 import type { DecisionModelListing, DecisionProviderId } from "@pwragent/shared/decision-models";
 import {
@@ -198,6 +196,7 @@ import type { AcpAgentStrategy } from "@pwrdrvr/agent-acp/strategies";
 import { AcpAgentService } from "../../acp/acp-agent-service";
 import { isBannedAcpRegistryId } from "../../acp/acp-agent-allowlist";
 import { discoverLocalAcpAgentRecords } from "../../acp/acp-instance-discovery";
+import { resolveE2eAcpDiscoveryOptions } from "../../acp/acp-e2e-discovery";
 import { ACP_LOCAL_AGENT_STRATEGIES, ANTIGRAVITY_ACP_STRATEGY } from "../../acp/acp-local-strategies";
 import { registerAntigravitySetupIpc } from "./antigravity-setup";
 import { grokUpdateChecksDisabled } from "../../acp/grok-cli-update";
@@ -902,10 +901,7 @@ async function listInstalledAndLocalAcpAgents(
           preferences[registryId] = { overridePath: override };
         }
       }
-      const fixtureRoot = app?.isPackaged === false && process.env.PWRAGENT_E2E === "1"
-        ? process.env[E2E_ACP_DISCOVERY_ROOT_ENV]
-        : undefined;
-      const fixtureBin = fixtureRoot ? join(fixtureRoot, ".local", "bin") : undefined;
+      const fixtureDiscovery = resolveE2eAcpDiscoveryOptions(app?.isPackaged);
       discovered = (await discoverLocalAcpAgentRecords({
         enabledRegistryIds: discoveryRegistryIds,
         useManagedAntigravity: true,
@@ -928,14 +924,7 @@ async function listInstalledAndLocalAcpAgents(
           requirePlatformSignature: app?.isPackaged === true,
         },
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
-        ...(fixtureBin
-          ? {
-              env: { ...process.env, PATH: fixtureBin },
-              pathProbeRootDir: fixtureBin,
-              fallbackRootDir: fixtureRoot,
-              bundledGrokCommand: null,
-            }
-          : options?.env ? { env: options.env } : {}),
+        ...(fixtureDiscovery ?? (options?.env ? { env: options.env } : {})),
       })).map((record) => {
         const configDependencyFingerprint = providerProjectionForRegistryId(
           providers,
