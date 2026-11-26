@@ -3536,7 +3536,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     return {
       backendId: acpBackendId,
       sessionId: "s1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd,
       createdAt: 1000,
       updatedAt: 1000,

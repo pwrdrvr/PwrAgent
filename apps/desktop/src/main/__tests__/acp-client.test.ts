@@ -3655,7 +3655,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 1000,
       updatedAt: 1000,
@@ -4278,7 +4278,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 1000,
       updatedAt: 1000,
@@ -4557,7 +4557,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 1000,
       updatedAt: 1000,
@@ -5086,7 +5086,7 @@ describe("AcpAgentClient", () => {
           id: session.sessionId,
           linkedDirectories: [],
           source: "acp:grok",
-          title: "ACP session",
+          title: "Untitled thread",
           titleSource: "fallback",
           updatedAt: metadata?.updatedAt,
         },
@@ -6002,7 +6002,7 @@ describe("AcpAgentClient", () => {
     const replay = await client.loadSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 900,
       updatedAt: 950,
@@ -6045,7 +6045,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo/worktree",
       createdAt: 900,
       updatedAt: 950,
@@ -6264,7 +6264,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:kimi",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 900,
       updatedAt: 1000,
@@ -6308,7 +6308,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:kimi",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 900,
       updatedAt: 1000,
@@ -6333,5 +6333,62 @@ describe("AcpAgentClient", () => {
     expect(
       readRawAcpSessionPayload("acp:kimi", "session-1")?.transcriptUpdates,
     ).toBeUndefined();
+  });
+
+  it("defaults new sessions to 'Untitled thread' and lets a provider topic update replace a prompt placeholder once", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      transport,
+      now: () => 2000,
+    });
+    await client.initialize();
+
+    const unnamed = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    expect(unnamed).toMatchObject({
+      title: "Untitled thread",
+      titleSource: "fallback",
+    });
+    expect(unnamed.promptPlaceholderTitle).toBeUndefined();
+
+    const seeded = await client.startSession({
+      sessionId: "session-placeholder",
+      cwd: "/repo",
+      executionMode: "default",
+      title: "Investigate flaky auth retry",
+      titleSource: "derived",
+      promptPlaceholderTitle: true,
+    });
+    expect(seeded).toMatchObject({
+      title: "Investigate flaky auth retry",
+      titleSource: "derived",
+      promptPlaceholderTitle: true,
+    });
+
+    transport.emitSessionUpdate(seeded.agentSessionId ?? seeded.sessionId, {
+      sessionUpdate: "session_info_update",
+      title: "Auth Retry Fix",
+    });
+    expect(store.getSession("acp:antigravity", seeded.sessionId)).toMatchObject({
+      title: "Auth Retry Fix",
+      titleSource: "derived",
+    });
+    expect(
+      store.getSession("acp:antigravity", seeded.sessionId)?.promptPlaceholderTitle,
+    ).toBeUndefined();
+
+    // A later topic update must not overwrite the durable provider title.
+    transport.emitSessionUpdate(seeded.agentSessionId ?? seeded.sessionId, {
+      sessionUpdate: "session_info_update",
+      title: "Stale Late Title",
+    });
+    expect(store.getSession("acp:antigravity", seeded.sessionId)).toMatchObject({
+      title: "Auth Retry Fix",
+      titleSource: "derived",
+    });
   });
 });

@@ -125,7 +125,7 @@ it("keeps provider-specific notification order and generated provenance", async 
     const attempt = g.lifecycle.beginTitleGeneration(id);
     if (isAcpBackendId(kind)) {
       // The provider's generic fallback must match its own placeholder.
-      g.host.readTitle = async () => ({ id: id.threadId, title: "ACP session", titleSource: "fallback", source: kind, linkedDirectories: [] });
+      g.host.readTitle = async () => ({ id: id.threadId, title: "Untitled thread", titleSource: "fallback", source: kind, linkedDirectories: [] });
     }
     expect((await g.lifecycle.applyGeneratedTitle({ attempt, prompt: "Prompt", title: "Generated" })).applied).toBe(true);
     expect(g.events[0].notification).toMatchObject({ method: "thread/name/updated", params: { threadName: "Generated", titleSource: "derived" } });
@@ -140,7 +140,7 @@ it("omits fallback on the wire while preserving it at the ACP storage port", asy
   let storedSource: unknown;
   const rename = f.host.renameProvider;
   f.host.renameProvider = async (request, source) => { storedSource = source; return await rename(request, source); };
-  f.host.readTitle = async () => ({ id: id.threadId, title: "ACP session", titleSource: "fallback", source: id.backend, linkedDirectories: [] });
+  f.host.readTitle = async () => ({ id: id.threadId, title: "Untitled thread", titleSource: "fallback", source: id.backend, linkedDirectories: [] });
   const attempt = f.lifecycle.beginTitleGeneration(id);
   await f.lifecycle.applyGeneratedTitle({ attempt, prompt: "Prompt", title: "Prompt", titleSource: "fallback" });
   expect(storedSource).toBe("fallback");

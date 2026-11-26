@@ -75,6 +75,7 @@ it("matches the prepared-input admission model across identities and capability 
     const attempted = new Set<string>();
     const expectedCalls: typeof f.calls = [];
     const expectedNames: typeof f.names = new Map();
+    let expectedEventCount = 0;
     for (const op of operations) {
       const id = { backend: op.backend, threadId: op.threadId };
       const k = key(id);
@@ -95,12 +96,15 @@ it("matches the prepared-input admission model across identities and capability 
         attempted.add(k);
         if (op.backend !== "acp:claude") expectedCalls.push({ ...id, userPrompt: prompt });
         expectedNames.set(k, { title: op.backend === "acp:claude" ? prompt.split(/\s+/u).join(" ") : `Generated ${prompt}`,
-          source: op.backend === "acp:claude" ? "fallback" : "derived" });
+          source: "derived" });
+        // Non-Claude ACP threads emit the prompt placeholder immediately and
+        // then the generated title when the helper finishes.
+        expectedEventCount += isAcpBackendId(op.backend) && op.backend !== "acp:claude" ? 2 : 1;
       }
       await f.lifecycle.whenSettled();
       expect(f.calls).toEqual(expectedCalls);
       expect(f.names).toEqual(expectedNames);
-      expect(f.events).toHaveLength(attempted.size);
+      expect(f.events).toHaveLength(expectedEventCount);
     }
   }));
 });
@@ -128,7 +132,7 @@ it("preserves result metadata, terminal helper effects and ACP fallback without 
       expect(calls).toBe(0);
       expect(f.preparations).toEqual([]);
       expect(f.updates).toEqual([]);
-      expect(f.names.get(key(id))).toEqual({ title: "Prompt", source: "fallback" });
+      expect(f.names.get(key(id))).toEqual({ title: "Prompt", source: "derived" });
     } else {
       expect(calls).toBe(1);
       expect(f.preparations).toEqual(kind === "claude" ? [] : [key(id)]);
@@ -138,14 +142,14 @@ it("preserves result metadata, terminal helper effects and ACP fallback without 
         ...(!generated ? { existingOnly: true, reason: outcome === "throw" ? "helper refused" : outcome === "missing" ? "title_generation_unavailable" : outcome } : {}),
         ...(generated || outcome === "invalid" ? { result } : {}),
       }]);
-      const fallback = !generated && isAcpBackendId(kind) && outcome !== "throw";
+      const placeholder = !generated && isAcpBackendId(kind);
       expect(f.names.get(key(id))).toEqual(generated ? { title: "Helper", source: "derived" }
-        : fallback ? { title: "Prompt", source: "fallback" } : undefined);
+        : placeholder ? { title: "Prompt", source: "derived" } : undefined);
     }
     for (const event of f.events) {
       expect(event.notification).toMatchObject({ method: "thread/name/updated" });
       if (event.notification.method !== "thread/name/updated") throw new Error("Unexpected event");
-      expect(event.notification.params.titleSource).toBe(f.names.get(key(id))?.source === "derived" ? "derived" : undefined);
+      expect(event.notification.params.titleSource).toBe("derived");
     }
   }));
 });
@@ -177,7 +181,9 @@ it("fences late helper results with the naming owner's explicit intent and isola
         status: "success", existingOnly: true, reason: "The thread was renamed before title application.",
         result: { tokenUsage: { total: 12 } },
       });
-      expect(f.events.filter((event) => event.backend === kind)).toHaveLength(1);
+      expect(f.events.filter((event) => event.backend === kind)).toHaveLength(
+        isAcpBackendId(kind) ? 2 : 1,
+      );
     }));
 });
 

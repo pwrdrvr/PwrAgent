@@ -5108,7 +5108,7 @@ describe("useThreadNavigation", () => {
       | undefined;
     const readPopulation = vi
       .fn()
-      .mockResolvedValue(acpFallbackTitleSnapshot("ACP session", 1_000));
+      .mockResolvedValue(acpFallbackTitleSnapshot("Untitled thread", 1_000));
     const desktopApi: DesktopApi = {
       readPopulation,
       onAgentEvent: (callback) => {
@@ -5119,7 +5119,7 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.threads[0]?.title).toBe("ACP session");
+      expect(result.current.threads[0]?.title).toBe("Untitled thread");
     });
     act(() => {
       agentEventHandler?.({
@@ -5147,7 +5147,7 @@ describe("useThreadNavigation", () => {
       | undefined;
     const readPopulation = vi
       .fn()
-      .mockResolvedValueOnce(acpFallbackTitleSnapshot("ACP session", 1_000))
+      .mockResolvedValueOnce(acpFallbackTitleSnapshot("Untitled thread", 1_000))
       .mockResolvedValueOnce(
         acpDerivedTitleSnapshot("Investigate the flaky handshake test", 2_000),
       )
@@ -5164,7 +5164,7 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.threads[0]?.title).toBe("ACP session");
+      expect(result.current.threads[0]?.title).toBe("Untitled thread");
     });
     act(() => {
       agentEventHandler?.({
