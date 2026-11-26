@@ -521,6 +521,7 @@ export class ThreadUsageLedger {
   private tokenMiserLedgerPersistenceChain: Promise<void> = Promise.resolve();
 
   private tokenMiserLedgerReconciliation: Promise<void> = Promise.resolve();
+  private tokenMiserRestoreCompactionBoundaries?: Map<string, number | undefined>;
 
   private liveThreadUsageObservationSequence = 0;
 
@@ -2878,16 +2879,25 @@ export class ThreadUsageLedger {
     }
     const compactedAtByThread = new Map<string, number | undefined>();
     const pricingChanged = new Set<string>();
-    await yieldToEventLoop();
-    for (const page of host.tokenMiserStore.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE)) {
-      const metadata = await this.stopTokenMiserGatesCompactedWhileClosed(host.tokenMiserStore, page, compactedAtByThread);
-      for (const entry of metadata) {
-        this.rememberActiveTokenMiserReplayEntry(entry);
-        this.seedTokenMiserRequestCursor(entry);
-      }
-      const changed = await this.persistTokenMiserLedgerEntries(metadata, { publishPricing: false });
-      for (const threadId of changed) pricingChanged.add(threadId);
+    this.tokenMiserRestoreCompactionBoundaries = compactedAtByThread;
+    try {
       await yieldToEventLoop();
+      for (const page of host.tokenMiserStore.listMetadataPages(TOKEN_MISER_LEDGER_BATCH_SIZE)) {
+        const metadata = await this.restoreTokenMiserLedgerPage(host.tokenMiserStore, page, compactedAtByThread);
+        try {
+          const changed = await this.persistTokenMiserLedgerEntries(metadata, { publishPricing: false });
+          for (const threadId of changed) pricingChanged.add(threadId);
+        } catch (error) {
+          // A failed historical write must not block replay tracking for
+          // gates on later pages.
+          backendRegistryLog.warn("Token Miser ledger page persistence failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+        await yieldToEventLoop();
+      }
+    } finally {
+      this.tokenMiserRestoreCompactionBoundaries = undefined;
     }
     for (const threadId of pricingChanged) {
       await this.emitThreadPricingUpdated({ backend: "codex", threadId });
@@ -2895,41 +2905,40 @@ export class ThreadUsageLedger {
     }
   }
 
-  /**
-   * Close gates whose thread compacted while the instance was stopped. Use the
-   * updated row so a restored gate never re-enters the active set with the
-   * replay state it had before the stop.
-   */
-  private async stopTokenMiserGatesCompactedWhileClosed(
+  private async restoreTokenMiserLedgerPage(
     store: TokenMiserStore,
     metadata: readonly TokenMiserObjectMetadata[],
     compactedAtByThread: Map<string, number | undefined>,
   ): Promise<TokenMiserObjectMetadata[]> {
     const restored: TokenMiserObjectMetadata[] = [];
     for (const entry of metadata) {
-      if (entry.replayTrackingVersion !== 2 || entry.replayTrackingStoppedAt !== undefined) {
-        restored.push(entry);
-        continue;
+      let current: TokenMiserObjectMetadata | undefined = entry;
+      if (entry.replayTrackingVersion === 2 && entry.replayTrackingStoppedAt === undefined) {
+        if (!compactedAtByThread.has(entry.threadId)) {
+          const compactions = await this.context.stores.usage.listThreadCompactions?.({
+            backend: "codex", threadId: entry.threadId,
+          });
+          const persistedAt = compactions?.at(-1)?.observedAt;
+          const liveAt = compactedAtByThread.get(entry.threadId);
+          compactedAtByThread.set(entry.threadId,
+            liveAt === undefined || (persistedAt !== undefined && persistedAt > liveAt) ? persistedAt : liveAt);
+        }
+        const compactedAt = compactedAtByThread.get(entry.threadId);
+        if (compactedAt !== undefined && compactedAt > entry.createdAt) {
+          // Publish from the reconciled page. A peer may have already
+          // stopped or removed this gate since the page read.
+          const stopped = await store.stopReplayTracking({
+            objectId: entry.objectId, stoppedAt: compactedAt, restoring: true,
+          });
+          current = stopped ?? await store.readMetadata(entry.objectId, entry.threadId);
+        }
       }
-      if (!compactedAtByThread.has(entry.threadId)) {
-        const compactions = await this.context.stores.usage.listThreadCompactions?.({
-          backend: "codex", threadId: entry.threadId,
-        });
-        compactedAtByThread.set(entry.threadId, compactions?.at(-1)?.observedAt);
-      }
-      const compactedAt = compactedAtByThread.get(entry.threadId);
-      if (compactedAt === undefined || compactedAt <= entry.createdAt) {
-        restored.push(entry);
-        continue;
-      }
-      // Startup publishes from the reconciled page instead of doing a full
-      // live ledger read for each stopped gate.
-      const stopped = await store.stopReplayTracking({
-        objectId: entry.objectId, stoppedAt: compactedAt, restoring: true,
-      });
-      // A peer may have already stopped or removed it since the page read.
-      const current = stopped ?? await store.readMetadata(entry.objectId, entry.threadId);
-      if (current) restored.push(current);
+      if (!current) continue;
+      // Register immediately so the live handler can stop this gate even if
+      // a later entry on the same page awaits a compaction lookup.
+      this.rememberActiveTokenMiserReplayEntry(current);
+      this.seedTokenMiserRequestCursor(current);
+      restored.push(current);
     }
     return restored;
   }
@@ -3207,10 +3216,10 @@ export class ThreadUsageLedger {
    * notification — or a `ContextCompaction` item plus `thread/compacted` for
    * the same item — does not become a second compaction.
    */
-  private async recordThreadCompaction(event: AgentEvent): Promise<boolean> {
+  private async recordThreadCompaction(event: AgentEvent): Promise<number | undefined> {
     const boundary = readThreadCompactionBoundary(event);
     if (!boundary) {
-      return false;
+      return undefined;
     }
     const threadId = boundary.threadId;
     const itemId = boundary.itemId;
@@ -3250,7 +3259,7 @@ export class ThreadUsageLedger {
         observedAt,
         turnId: reportedBoundary.turnId ?? turnId,
       });
-      return false;
+      return undefined;
     }
     const compactionId = buildThreadCompactionIdentity({
       backend: event.backend,
@@ -3279,7 +3288,7 @@ export class ThreadUsageLedger {
           turnId,
         });
       }
-      return recorded;
+      return recorded ? observedAt : undefined;
     } catch (error) {
       backendRegistryLog.warn("compaction marker write failed", {
         backend: event.backend,
@@ -3288,7 +3297,7 @@ export class ThreadUsageLedger {
       });
       // The notification is still authoritative even when durable accounting
       // is unavailable. Stop the pre-compaction replay window conservatively.
-      return true;
+      return observedAt;
     }
   }
 
@@ -3325,8 +3334,8 @@ export class ThreadUsageLedger {
     ) {
       this.reportedCompactionRequestBoundaries.delete(threadKey);
     }
+    const observedAt = Date.now();
     try {
-      const observedAt = Date.now();
       const recorded = await this.context.stores.usage.recordThreadCompaction?.({
         compaction: {
           backend: params.backend,
@@ -3354,6 +3363,7 @@ export class ThreadUsageLedger {
       });
       await this.stopTokenMiserReplayTrackingAtBoundary({
         backend: params.backend,
+        observedAt,
         threadId: params.threadId,
       });
     } catch (error) {
@@ -3366,6 +3376,7 @@ export class ThreadUsageLedger {
       // accounting even when durable marker storage is unavailable.
       await this.stopTokenMiserReplayTrackingAtBoundary({
         backend: params.backend,
+        observedAt,
         threadId: params.threadId,
       });
     }
@@ -3390,6 +3401,7 @@ export class ThreadUsageLedger {
 
   private async stopTokenMiserReplayTrackingAtCompaction(
     event: AgentEvent,
+    observedAt: number,
   ): Promise<void> {
     const boundary = readThreadCompactionBoundary(event);
     if (!boundary) {
@@ -3397,16 +3409,25 @@ export class ThreadUsageLedger {
     }
     await this.stopTokenMiserReplayTrackingAtBoundary({
       backend: event.backend,
+      observedAt,
       threadId: boundary.threadId,
     });
   }
 
   private async stopTokenMiserReplayTrackingAtBoundary(params: {
     backend: AppServerBackendKind;
+    observedAt: number;
     threadId: string;
   }): Promise<void> {
     if (params.backend !== "codex" || !this.host().tokenMiserStore) {
       return;
+    }
+    const restoreBoundaries = this.tokenMiserRestoreCompactionBoundaries;
+    if (restoreBoundaries) {
+      const previous = restoreBoundaries.get(params.threadId);
+      if (previous === undefined || params.observedAt > previous) {
+        restoreBoundaries.set(params.threadId, params.observedAt);
+      }
     }
     const entries = this.activeTokenMiserReplayEntries.get(params.threadId);
     if (!entries || entries.size === 0) {
@@ -3429,9 +3450,9 @@ export class ThreadUsageLedger {
   async handleThreadCompactionReplayBoundary(
     event: AgentEvent,
   ): Promise<void> {
-    const shouldStopReplayTracking = await this.recordThreadCompaction(event);
-    if (shouldStopReplayTracking) {
-      await this.stopTokenMiserReplayTrackingAtCompaction(event);
+    const observedAt = await this.recordThreadCompaction(event);
+    if (observedAt !== undefined) {
+      await this.stopTokenMiserReplayTrackingAtCompaction(event, observedAt);
     }
   }
 

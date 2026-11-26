@@ -263,10 +263,12 @@ describe("Token Miser persistence work budgets", () => {
     } finally { done = true; await observing; db.close(); }
   }));
 
-  it("matches the full legacy replay oracle without reading the thread's full invocation ledger", ownLedgerTest(async () => {
+  it("matches the full legacy replay oracle while streaming a tied timestamp once for all matching gates", ownLedgerTest(async () => {
     const { db, store, internals } = fixture();
     try {
       const entry = { ...gate(0), replayTrackingVersion: undefined, toolUseId: "gate-tool" };
+      const entries = [entry, { ...entry, objectId: "gate-1", toolUseId: "other" },
+        { ...entry, objectId: "gate-2", toolUseId: "same-collation" }];
       const insert = db.raw.prepare(`INSERT INTO thread_tool_invocations (
         invocation_id, backend, thread_id, turn_id, item_id, tool_name, category, status,
         observed_at, updated_at, output_chars, output_lines, estimated_output_tokens, warning_lines,
@@ -279,13 +281,30 @@ describe("Token Miser persistence work budgets", () => {
       insert.run("unrelated", THREAD, "later-turn", "gate-tool", 30);
       const readAll = vi.spyOn(store, "readThreadToolAccounting");
       const { invocations } = await store.readThreadToolAccounting({ backend: "codex", threadId: THREAD, includeAllInvocations: true });
-      const expected = indexTokenMiserCachedReplays(invocations).countAfterInvocation(entry);
+      const expected = indexTokenMiserCachedReplays(invocations);
       readAll.mockClear();
-      await internals.persistTokenMiserLedgerEntries([entry]);
-      const card = await store.getThreadSubAgent({ backend: "codex", threadId: THREAD, monitorId: "system:token-miser:gate-0" });
-      expect(expected).toBeGreaterThan(0);
-      expect(card?.tokenMiserAccounting?.cachedReplayCount).toBe(expected);
+      const prepare = db.raw.prepare.bind(db.raw);
+      let streamedRows = 0;
+      vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (!sql.includes("FROM thread_tool_invocations")) return statement;
+        const iterate = statement.iterate.bind(statement);
+        statement.iterate = function* (...args: unknown[]) {
+          for (const row of Reflect.apply(iterate, undefined, args) as Iterable<unknown>) {
+            streamedRows += 1;
+            yield row;
+          }
+        };
+        return statement;
+      });
+      await internals.persistTokenMiserLedgerEntries(entries);
+      for (const gate of entries) {
+        const card = await store.getThreadSubAgent({ backend: "codex", threadId: THREAD, monitorId: `system:token-miser:${gate.objectId}` });
+        expect(card?.tokenMiserAccounting?.cachedReplayCount).toBe(expected.countAfterInvocation(gate));
+      }
       expect(readAll).not.toHaveBeenCalled();
+      // Five rows in the requested turn plus four in the tied timestamp.
+      expect(streamedRows).toBeLessThanOrEqual(9);
     } finally { db.close(); }
   }));
 
