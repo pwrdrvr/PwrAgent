@@ -509,11 +509,17 @@ export function useStarMapChatCards(params: {
     (placeholderInstanceId: string, durableInstanceId: string) => {
       if (placeholderInstanceId === durableInstanceId) return;
       const current = stateRef.current;
-      if (
-        !current.cards.some(
-          (card) => card.ownerInstanceId === placeholderInstanceId,
-        )
-      ) {
+      const hasMatchingCard = current.cards.some(
+        (card) => card.ownerInstanceId === placeholderInstanceId,
+      );
+      const hasMatchingView = WORKSPACE_LAYOUTS.some((layout) => {
+        const anchor = current.views[layout]?.anchor;
+        return (
+          anchor?.kind === "instance"
+          && anchor.instanceId === placeholderInstanceId
+        );
+      });
+      if (!hasMatchingCard && !hasMatchingView) {
         return;
       }
       const cards: StarMapChatCardEntry[] = [];
@@ -537,7 +543,24 @@ export function useStarMapChatCards(params: {
         if (duplicate >= 0) cards.splice(duplicate, 1);
         cards.push(remapped);
       }
-      applyState({ ...current, cards }, true);
+      const views = hasMatchingView
+        ? Object.fromEntries(
+            Object.entries(current.views).map(([layout, view]) => [
+              layout,
+              view?.anchor?.kind === "instance"
+              && view.anchor.instanceId === placeholderInstanceId
+                ? {
+                    ...view,
+                    anchor: {
+                      kind: "instance" as const,
+                      instanceId: durableInstanceId,
+                    },
+                  }
+                : view,
+            ]),
+          )
+        : current.views;
+      applyState({ ...current, cards, views }, true);
     },
     [applyState],
   );

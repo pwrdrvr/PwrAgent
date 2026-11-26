@@ -182,8 +182,12 @@ import {
   MIN_ZOOM,
   overviewChromeScale,
   placeStarMapView,
+  resolveRestoredStarMapView,
+  serializeStarMapWorkspaceView,
   starMapSkyOffset,
+  type StarMapContentBox,
   type StarMapView,
+  type StarMapViewAnchorPoint,
 } from "./star-map-view-geometry";
 import {
   starMapFlightScale,
@@ -207,6 +211,7 @@ import {
 import { StarMapStackEdges } from "../stacks/StarMapStackEdges";
 import {
   estimateStarMapEdgeLabelWidth,
+  STAR_MAP_EDGE_BODY_HALF_EXTENT,
   type StarMapEdgeObstacle,
 } from "./star-map-edge-arrows";
 import { useStarMapCameraKeys } from "./useStarMapCameraKeys";
@@ -798,6 +803,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * — in place, since the drag itself holds the same object.
    */
   const panBaseRef = useRef<StarMapView | undefined>(undefined);
+  /** Visible anchor bodies for view serialization in callbacks defined above layout. */
+  const viewRestoreAnchorsRef = useRef<readonly StarMapViewAnchorPoint[]>([]);
 
   /**
    * Whoever wants to know about a view write the moment it is painted,
@@ -881,7 +888,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const commitViewAndPersist = useCallback(
     (next: StarMapView) => {
       commitView(next);
-      chatCards.commitView(preferences.layout, next);
+      chatCards.commitView(
+        preferences.layout,
+        serializeStarMapWorkspaceView({
+          view: next,
+          viewport: viewportSizeRef.current,
+          anchors: viewRestoreAnchorsRef.current,
+        }),
+      );
     },
     [chatCards, commitView, preferences.layout],
   );
@@ -1203,7 +1217,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [chatCards, health?.instanceId]);
   const peers = useMemo(() => {
     const visible = (health?.peers ?? []).filter(
-      (peer) => peer.status !== "revoked",
+      (peer) => !peer.revokedAt && peer.status !== "revoked",
     );
     // Hiding offline instances is about the operator's own fleet noise (an
     // unused dev profile), so it only ever drops peers - the local body
@@ -1238,7 +1252,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const hiddenInstanceCount = useMemo(() => {
     if (!preferences.hideOfflineInstances) return 0;
     return (health?.peers ?? []).filter(
-      (peer) => peer.status !== "revoked" && peer.status !== "connected",
+      (peer) =>
+        !peer.revokedAt
+        && peer.status !== "revoked"
+        && peer.status !== "connected",
     ).length;
   }, [health, preferences.hideOfflineInstances]);
 
@@ -2425,6 +2442,24 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const canvasBoundsRef = useRef(panZoomCanvas);
   canvasBoundsRef.current = panZoomCanvas;
 
+  /** Visible bodies that a saved camera view can anchor to and restore against. */
+  const viewRestoreAnchors = useMemo<StarMapViewAnchorPoint[]>(
+    () =>
+      projectsMode
+        ? projectLayout.projects.map((project) => ({
+            anchor: { kind: "project", projectKey: project.key },
+            x: project.x,
+            y: project.y,
+          }))
+        : bodies.map((body) => ({
+            anchor: { kind: "instance", instanceId: body.instanceId },
+            x: body.x,
+            y: body.y,
+          })),
+    [bodies, projectLayout.projects, projectsMode],
+  );
+  viewRestoreAnchorsRef.current = viewRestoreAnchors;
+
   /**
    * The body the map opens on, in canvas units: this machine's own
    * cluster, or the heaviest project in the lens that has no instances.
@@ -2600,6 +2635,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
     };
   }, [abortFlight, commitView, commitViewAndPersist, paintView]);
 
+  const heldAnchor = orbitMode || projectsMode ? viewAnchor : undefined;
+  const viewAnchorRef = useRef<
+    { layout: string; x: number; y: number } | undefined
+  >(undefined);
+
   // A lens switch is a different map, so the view starts placed again.
   // A layout effect, and declared above the placement below, because that
   // is now one too: a passive release would land after the placement had
@@ -2625,21 +2665,88 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // The operator may use the map while a peer's first snapshot is still
     // loading. Their movement outranks a delayed startup restoration.
     if (operatorMovedViewRef.current) return;
-    operatorMovedViewRef.current = true;
-    commitView(
-      clampStarMapView({
-        view: saved,
-        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
-        viewport: { width: viewportSize.width, height: viewportSize.height },
+    const contentBoxes: StarMapContentBox[] = viewRestoreAnchors.map(
+      ({ x, y }) => ({
+        left: x - STAR_MAP_EDGE_BODY_HALF_EXTENT,
+        top: y - STAR_MAP_EDGE_BODY_HALF_EXTENT,
+        right: x + STAR_MAP_EDGE_BODY_HALF_EXTENT,
+        bottom: y + STAR_MAP_EDGE_BODY_HALF_EXTENT,
       }),
     );
+    if (orbitMode) {
+      for (const body of bodies) {
+        for (const cluster of body.clusters ?? []) {
+          contentBoxes.push({
+            left: body.x + cluster.center.x - cluster.extent.rx,
+            top: body.y + cluster.center.y - cluster.extent.ry,
+            right: body.x + cluster.center.x + cluster.extent.rx,
+            bottom: body.y + cluster.center.y + cluster.extent.ry,
+          });
+        }
+      }
+    } else if (projectsMode) {
+      for (const project of projectLayout.projects) {
+        for (const cluster of projectClouds?.get(project.key)?.clusters ?? []) {
+          contentBoxes.push({
+            left: project.x + cluster.center.x - cluster.extent.rx,
+            top: project.y + cluster.center.y - cluster.extent.ry,
+            right: project.x + cluster.center.x + cluster.extent.rx,
+            bottom: project.y + cluster.center.y + cluster.extent.ry,
+          });
+        }
+      }
+    }
+    for (const rect of flightRectsRef.current.values()) {
+      contentBoxes.push({
+        left: rect.x,
+        top: rect.y,
+        right: rect.x + rect.width,
+        bottom: rect.y + rect.height,
+      });
+    }
+    for (const card of chatCards.cards) {
+      if (card.pendingAnchorRestore) continue;
+      contentBoxes.push({
+        left: card.rect.left,
+        top: card.rect.top,
+        right: card.rect.left + card.rect.width,
+        bottom: card.rect.top + card.rect.height,
+      });
+    }
+    const restored = resolveRestoredStarMapView({
+      saved,
+      anchors: viewRestoreAnchors,
+      contentBoxes,
+      canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+      viewport: { width: viewportSize.width, height: viewportSize.height },
+      localInstanceId,
+      localPlaceholderId: STAR_MAP_LOCAL_INSTANCE_PLACEHOLDER,
+    });
+    if (!restored) return;
+    // Sync the anchor ref before the anchor-hold effect runs in this same
+    // commit: `restored` is already placed against the current `heldAnchor`,
+    // so letting anchor-hold subtract `heldAnchor - previous` would shift the
+    // camera off the body on the exact frame federation layout settles.
+    viewAnchorRef.current = heldAnchor
+      ? { layout: preferences.layout, ...heldAnchor }
+      : undefined;
+    operatorMovedViewRef.current = true;
+    commitView(restored);
   }, [
+    bodies,
     chatCards,
     commitView,
     federationLayoutReady,
+    heldAnchor,
+    localInstanceId,
+    orbitMode,
     panZoomCanvas.height,
     panZoomCanvas.width,
     preferences.layout,
+    projectClouds,
+    projectLayout.projects,
+    projectsMode,
+    viewRestoreAnchors,
     viewportSize.height,
     viewportSize.width,
   ]);
@@ -2750,10 +2857,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * Lanes is exempt: its canvas grows down and to the right from a fixed
    * corner, so nothing it lays out moves what is already drawn.
    */
-  const heldAnchor = orbitMode || projectsMode ? viewAnchor : undefined;
-  const viewAnchorRef = useRef<
-    { layout: string; x: number; y: number } | undefined
-  >(undefined);
   useLayoutEffect(() => {
     const previous = viewAnchorRef.current;
     viewAnchorRef.current = heldAnchor

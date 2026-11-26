@@ -55,7 +55,15 @@ export const DEFAULT_STAR_MAP_PREFERENCES: StarMapViewPreferences = {
     secondaryDirectories: false,
     terminalPullRequests: false,
   },
-  hideOfflineInstances: false,
+  /**
+   * Connected peers only by default, matching machine pickers: offline
+   * profiles and asleep machines cannot host actions and mostly add empty
+   * bodies and edge arrows that push the live fleet apart. An operator who
+   * explicitly turns on "Show offline instances" persists that choice with
+   * `STAR_MAP_PREFERENCES_VERSION`, so pre-v2 blobs that merely serialized
+   * the old `false` default upgrade cleanly to hiding offline peers.
+   */
+  hideOfflineInstances: true,
 };
 
 export const STAR_MAP_CARD_FIELD_LABELS: Record<
@@ -70,13 +78,18 @@ export const STAR_MAP_CARD_FIELD_LABELS: Record<
 };
 
 const STORAGE_KEY = "pwragent.starMap.viewPreferences";
+const STAR_MAP_PREFERENCES_VERSION = 2;
+
+type StoredStarMapViewPreferences = Partial<StarMapViewPreferences> & {
+  version?: number;
+};
 
 export function readStoredPreferences(): StarMapViewPreferences {
   if (typeof window === "undefined") return DEFAULT_STAR_MAP_PREFERENCES;
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_STAR_MAP_PREFERENCES;
-    const parsed = JSON.parse(raw) as Partial<StarMapViewPreferences>;
+    const parsed = JSON.parse(raw) as StoredStarMapViewPreferences;
     return {
       // Every recognized layout is accepted verbatim; anything else —
       // including a blob from before `layout` existed — falls back to
@@ -93,8 +106,10 @@ export function readStoredPreferences(): StarMapViewPreferences {
         ...(parsed.cardFields ?? {}),
       },
       hideOfflineInstances:
-        parsed.hideOfflineInstances
-        ?? DEFAULT_STAR_MAP_PREFERENCES.hideOfflineInstances,
+        parsed.version === STAR_MAP_PREFERENCES_VERSION
+        && typeof parsed.hideOfflineInstances === "boolean"
+          ? parsed.hideOfflineInstances
+          : DEFAULT_STAR_MAP_PREFERENCES.hideOfflineInstances,
     };
   } catch {
     return DEFAULT_STAR_MAP_PREFERENCES;
@@ -103,7 +118,10 @@ export function readStoredPreferences(): StarMapViewPreferences {
 
 export function writeStoredPreferences(value: StarMapViewPreferences): void {
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
+    window.localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ ...value, version: STAR_MAP_PREFERENCES_VERSION }),
+    );
   } catch {
     // View preferences are disposable; losing them is harmless.
   }
