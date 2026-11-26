@@ -423,7 +423,7 @@ export class ManagedReviewCandidateLedger {
 }
 
 function isWindowsAbsolutePath(value: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]/.test(value);
+  return /^[A-Za-z]:[\\/]/.test(value) || /^[\\/]{2}[^\\/]+[\\/][^\\/]+/.test(value);
 }
 
 function resolveCandidateFilePath(file: string, cwd?: string): string {
@@ -441,9 +441,9 @@ function resolveCandidateFilePath(file: string, cwd?: string): string {
 
 /**
  * Synthesize a structured review artifact from the `keep` entries of a turn's
- * in-memory candidate ledger when the reviewer's final message fails JSON
- * parsing (for example, an unescaped quote or invalid escape inside a long
- * code snippet). Returns `undefined` when no candidate was marked `keep`.
+ * in-memory candidate ledger when the reviewer's final report is unreadable
+ * (for example, invalid JSON from an unescaped quote in a code snippet).
+ * Returns `undefined` when no candidate was marked `keep`.
  */
 export function buildReviewOutputFromCandidateLedger(
   candidates: readonly ManagedReviewCandidate[],

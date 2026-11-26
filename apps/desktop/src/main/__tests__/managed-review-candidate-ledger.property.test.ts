@@ -1,10 +1,12 @@
 import path from "node:path";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import fc from "fast-check";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
 import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import { AgentToolMcpServer, type AgentToolHttpMcpServerConfig } from "../agent-tools/agent-tool-mcp-server";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
@@ -28,11 +30,12 @@ import {
 import {
   formatReviewOutputText,
   parseReviewOutputText,
+  reviewEntryFindings,
 } from "../../shared/review-output";
 import type { StateDb } from "../state/state-db";
 import { AcpAgentStore } from "../storage/acp-agent-store";
 import { AcpSessionStore } from "../storage/acp-session-store";
-import { createOverlayStoreMock, MockBackendClient } from "./helpers/backend-registry-fixture";
+import { createOverlayStoreMock, git, MockBackendClient } from "./helpers/backend-registry-fixture";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
 const BACKENDS: readonly AppServerBackendKind[] = ["codex", "acp:antigravity", "acp:grok"];
@@ -930,7 +933,28 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
     }
   });
 
-  it("recovers kept candidate-ledger findings when final review JSON has a syntax error", async () => {
+  it.each([
+    {
+      name: "recovers kept findings from the checkout root when final review JSON has a syntax error",
+      output: '{"findings":[{"title":"Broken","body":"Scans `["main", "master"]` directly"}],"overall_correctness":"patch is incorrect"}',
+      recovered: true,
+    },
+    {
+      name: "preserves a readable plain-text final review when the ledger has kept findings",
+      output: [
+        "The final review corrected the first finding and found a second issue.",
+        "",
+        "Review comments:",
+        "",
+        "- [P1] Keep the merge guard — /repo/src/a.ts:14-16",
+        "  The retry path bypasses the merge guard.",
+        "",
+        "- [P2] Flush the queue — /repo/src/e.ts:4",
+        "  The queue never flushes after the retry.",
+      ].join("\n"),
+      recovered: false,
+    },
+  ])("$name", async ({ output, recovered }) => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
       models: [{ id: "gpt-6.1-terra", label: "GPT-6.1-Terra", current: true, supportsReasoning: true }],
@@ -952,8 +976,13 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
     });
 
     try {
-      const repoCwd = path.resolve("/repo");
-      const parent = await registry.startThread({ backend: "codex", cwd: repoCwd });
+      const repo = await mkdtemp(path.join(os.tmpdir(), "pwragent-managed-review-ledger-"));
+      onTestFinished(() => rm(repo, { recursive: true, force: true }));
+      await git(repo, ["init", "-b", "main"]);
+      const cwd = path.join(repo, "packages", "ui");
+      await mkdir(cwd, { recursive: true });
+      const checkoutRoot = await git(cwd, ["rev-parse", "--show-toplevel"]);
+      const parent = await registry.startThread({ backend: "codex", cwd });
       const review = await registry.startReview({
         backend: "codex",
         threadId: parent.threadId,
@@ -981,7 +1010,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
 
       expect(
         (await callLedgerTool("r1", "record_review_candidate", {
-          file: "src/b.ts",
+          file: "packages/ui/src/b.ts",
           start_line: 20,
           end_line: 24,
           category: "parity",
@@ -1044,9 +1073,6 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
         })).success,
       ).toBe(true);
 
-      // Emit malformed final JSON (unescaped quotes inside code snippet, matching real LLM output).
-      const malformedJson =
-        '{"findings":[{"title":"Broken","body":"Scans `["main", "master"]` directly"}],"overall_correctness":"patch is incorrect"}';
       await codexClient.emit({
         method: "item/completed",
         params: {
@@ -1055,7 +1081,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
           item: {
             id: "assistant-final",
             type: "agentMessage",
-            text: malformedJson,
+            text: output,
           },
         },
       });
@@ -1077,6 +1103,7 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
         );
         expect(exited).toBeDefined();
         const item = exited!.notification.params.item as {
+          review: string;
           data?: {
             reviewOutput?: {
               overall_correctness: string;
@@ -1088,6 +1115,16 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
             };
           };
         };
+        // A final report the transcript can read owns its own text and findings.
+        if (!recovered) {
+          expect(item.review).toBe(output);
+          expect(item.data?.reviewOutput).toBeUndefined();
+          expect(reviewEntryFindings(item).map((finding) => finding.title)).toEqual([
+            "Keep the merge guard",
+            "Flush the queue",
+          ]);
+          return;
+        }
         expect(item.data?.reviewOutput?.overall_correctness).toBe("patch is incorrect");
         expect(item.data?.reviewOutput?.findings).toHaveLength(2);
         expect(item.data?.reviewOutput?.findings[0]).toMatchObject({
@@ -1102,14 +1139,14 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
           title: "Lower priority parity bug",
           priority: 2,
           code_location: {
-            absolute_file_path: path.resolve(repoCwd, "src/b.ts"),
+            absolute_file_path: path.join(checkoutRoot, "packages", "ui", "src", "b.ts"),
             line_range: { start: 20, end: 24 },
           },
         });
       });
-    expect(
-      registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
-    ).toBe(0);
+      expect(
+        registryModules(registry).managedReviewService.candidateLedger.activeTurnCount,
+      ).toBe(0);
     } finally {
       unsubscribe();
       await registry.close();
@@ -1118,7 +1155,6 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
 
   it("property: buildReviewOutputFromCandidateLedger recovers only kept entries sorted stably by priority", () => {
     const candidateArb = fc.record({
-      id: fc.string({ minLength: 1, maxLength: 6 }).map((s) => `C${s}`),
       file: fc.oneof(
         fc.constantFrom("src/a.ts", "packages/shared/b.ts", "src\\win-rel.ts"),
         fc.constantFrom("/abs/x.ts", "/repo/sub/y.ts", "D:\\abs\\z.ts"),
@@ -1131,10 +1167,16 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       disposition: fc.constantFrom<"pending" | "keep" | "drop">("pending", "keep", "drop"),
       priority: priorityArb,
     });
-    const cwdArb = fc.constantFrom("/repo", "C:\\work\\repo", "C:/work/repo");
+    const checkoutArb = fc.constantFrom(
+      { checkoutRoot: "/repo", joinedRoot: "/repo", separator: "/" },
+      { checkoutRoot: "C:\\work\\repo", joinedRoot: "C:\\work\\repo", separator: "\\" },
+      { checkoutRoot: "C:/work/repo", joinedRoot: "C:\\work\\repo", separator: "\\" },
+      { checkoutRoot: "\\\\server\\share\\repo", joinedRoot: "\\\\server\\share\\repo", separator: "\\" },
+      { checkoutRoot: "//server/share/repo", joinedRoot: "\\\\server\\share\\repo", separator: "\\" },
+    );
 
     fc.assert(
-      fc.property(fc.array(candidateArb, { maxLength: 15 }), cwdArb, (raw, cwd) => {
+      fc.property(fc.array(candidateArb, { maxLength: 15 }), checkoutArb, (raw, checkout) => {
         const candidates: ManagedReviewCandidate[] = raw.map((c, idx) => ({
           id: `C${idx + 1}`,
           file: c.file,
@@ -1147,51 +1189,71 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
           ...(c.disposition === "keep" ? { priority: c.priority } : {}),
         }));
         const expectedKept = candidates.filter((c) => c.disposition === "keep");
-        const recovered = buildReviewOutputFromCandidateLedger(candidates, cwd);
+        const recovered = buildReviewOutputFromCandidateLedger(candidates, checkout.checkoutRoot);
 
         if (expectedKept.length === 0) {
           expect(recovered).toBeUndefined();
           return;
         }
 
-        const expectedSorted = expectedKept
-          .map((candidate, index) => ({ candidate, index }))
-          .sort((a, b) => {
-            const pDiff = (a.candidate.priority ?? 3) - (b.candidate.priority ?? 3);
-            return pDiff !== 0 ? pDiff : a.index - b.index;
-          })
-          .map((entry) => entry.candidate);
+        // Read each priority bucket in capture order, including same-file findings.
+        const expectedSorted = [0, 1, 2, 3].flatMap((priority) =>
+          expectedKept.filter((candidate) => candidate.priority === priority),
+        );
 
         expect(recovered).toBeDefined();
         expect(recovered!.overall_correctness).toBe("patch is incorrect");
-        expect(recovered!.findings).toHaveLength(expectedSorted.length);
-        for (let i = 1; i < recovered!.findings.length; i += 1) {
-          expect(recovered!.findings[i]!.priority ?? 3).toBeGreaterThanOrEqual(
-            recovered!.findings[i - 1]!.priority ?? 3,
-          );
-        }
-        for (let i = 0; i < recovered!.findings.length; i += 1) {
-          const finding = recovered!.findings[i]!;
-          const sourceFile = expectedSorted[i]!.file;
-          const resolvedPath = finding.code_location.absolute_file_path;
-          if (sourceFile.startsWith("/") || /^[A-Za-z]:[\\/]/.test(sourceFile)) {
-            expect(resolvedPath).toBe(sourceFile);
-          } else if (cwd.startsWith("/")) {
-            expect(resolvedPath.startsWith(`${cwd}/`)).toBe(true);
-            expect(resolvedPath).not.toContain("\\");
-          } else {
-            const winPrefix = `${path.win32.normalize(cwd)}\\`;
-            expect(resolvedPath.startsWith(winPrefix)).toBe(true);
-            expect(resolvedPath).not.toContain("/");
-          }
-          expect(finding.code_location.line_range.end).toBeGreaterThanOrEqual(
-            finding.code_location.line_range.start,
-          );
-        }
+        expect(recovered!.findings).toMatchObject(expectedSorted.map((candidate) => ({
+          title: candidate.summary,
+          body: candidate.mechanism,
+          priority: candidate.priority,
+          code_location: {
+            absolute_file_path: candidate.file.startsWith("/") || candidate.file.startsWith("D:")
+              ? candidate.file
+              : [checkout.joinedRoot, ...candidate.file.split(/[\\/]/)].join(checkout.separator),
+            line_range: { start: candidate.startLine, end: candidate.endLine },
+          },
+        })));
         const roundTripped = parseReviewOutputText(JSON.stringify(recovered));
         expect(roundTripped?.findings).toHaveLength(expectedKept.length);
         expect(formatReviewOutputText(recovered!)).toContain(recovered!.findings[0]!.title);
       }),
     );
+  });
+
+  it("keeps capture order for same-file findings at the same priority", () => {
+    const candidates: ManagedReviewCandidate[] = [
+      { id: "C1", summary: "Preserve the retry", startLine: 20, endLine: 25 },
+      { id: "C2", summary: "Release the queue", startLine: 2, endLine: 4 },
+    ].map((candidate) => ({
+      ...candidate,
+      file: "src/a.ts",
+      category: "correctness",
+      mechanism: "Verified defect.",
+      disposition: "keep",
+      priority: 2,
+    }));
+
+    expect(buildReviewOutputFromCandidateLedger(candidates, "/repo")?.findings).toMatchObject([
+      { title: "Preserve the retry", code_location: { line_range: { start: 20, end: 25 } } },
+      { title: "Release the queue", code_location: { line_range: { start: 2, end: 4 } } },
+    ]);
+  });
+
+  it("resolves repository-relative findings on a forward-slash UNC share", () => {
+    const candidate: ManagedReviewCandidate = {
+      id: "C1",
+      file: "src/a.ts",
+      startLine: 2,
+      endLine: 4,
+      category: "correctness",
+      summary: "Release the queue",
+      mechanism: "Verified defect.",
+      disposition: "keep",
+      priority: 2,
+    };
+
+    const output = buildReviewOutputFromCandidateLedger([candidate], "//server/share/repo");
+    expect(output?.findings[0]?.code_location.absolute_file_path).toBe("\\\\server\\share\\repo\\src\\a.ts");
   });
 });

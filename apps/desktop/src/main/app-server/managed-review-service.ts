@@ -47,7 +47,7 @@ import {
   prefersClaudeCodeReview,
   type NamedReviewPullRequest,
 } from "../../shared/review-command";
-import { formatReviewOutputText, parseReviewOutputText } from "../../shared/review-output";
+import { formatReviewOutputText, parsePlainReview, parseReviewOutputText } from "../../shared/review-output";
 import type { CodexPwrdrvrTokenMiserActivation } from "../codex-app-server/desktop-client";
 import { getMainLogger } from "../log";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
@@ -73,6 +73,7 @@ import type {
 import { buildCodexTokenMiserDynamicToolSpecs, mergeCodexDynamicToolSpecs } from "./codex-thread-config";
 import type { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import { executionModeSettings } from "./execution-mode-settings";
+import { runGitCommand } from "./git-executable";
 import { normalizeLinkedDirectoryIdentityPath } from "./linked-directory-identity";
 import { buildManagedReviewPrompt, managedReviewAcpRuntime } from "./managed-review";
 import {
@@ -598,6 +599,7 @@ export class ManagedReviewService {
     let result: { threadId: string; reviewThreadId: string; turnId: string };
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
+    let checkoutRoot: string | undefined;
     let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let reviewContext: AppServerReviewContext | undefined;
     let tokenMiserEnabled = false;
@@ -683,14 +685,21 @@ export class ManagedReviewService {
         executionTarget: codexEnvironmentRuntime?.executionTarget,
         target: params.target,
       });
-      reviewContext = await this.resolveReviewContext({
-        backend: params.backend,
-        cwd,
-        executionTarget: codexEnvironmentRuntime?.executionTarget,
-        overlay,
-        target: params.target,
-        threadId: params.threadId,
-      });
+      [reviewContext, checkoutRoot] = await Promise.all([
+        this.resolveReviewContext({
+          backend: params.backend,
+          cwd,
+          executionTarget: codexEnvironmentRuntime?.executionTarget,
+          overlay,
+          target: params.target,
+          threadId: params.threadId,
+        }),
+        managedMode && cwd && (reviewBackendDiffers || codexEnvironmentRuntime?.executionTarget !== "remote")
+          ? runGitCommand(cwd, ["rev-parse", "--show-toplevel"], { timeout: 10_000 })
+              .then(({ stdout }) => stdout.replace(/\r?\n$/, "") || undefined)
+              .catch(() => undefined)
+          : undefined,
+      ]);
       // A review on another provider cannot inherit the parent thread's model
       // settings — that model belongs to a different catalog. Fall back to the
       // review backend's own defaults instead of carrying gpt-5.6-sol onto a
@@ -845,6 +854,7 @@ export class ManagedReviewService {
     }
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
       backend: reviewBackend,
+      ...(checkoutRoot ? { checkoutRoot } : {}),
       createdAt: Date.now(),
       displayText: reviewTaskLabel(params.target),
       ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
@@ -1917,16 +1927,16 @@ export class ManagedReviewService {
         completedItemOutput,
       );
       const parsedOutput = parseReviewOutputText(output);
-      const recoveredFromLedger = !parsedOutput
+      const recoveredFromLedger = !parsedOutput && parsePlainReview(output ?? "").findings.length === 0
         ? buildReviewOutputFromCandidateLedger(
             ledgerSnapshot.candidates,
-            params.record.context?.workspacePath,
+            params.record.checkoutRoot ?? params.record.context?.workspacePath,
           )
         : undefined;
       const parsed = parsedOutput ?? recoveredFromLedger;
       const review = parsed
         ? formatReviewOutputText(parsed)
-        : output?.trim() || "Review completed without output.";
+        : output || "Review completed without output.";
       const entry: AppServerThreadReviewEntry = {
         type: "review",
         id: `managed-review:${params.record.turnId}:result`,

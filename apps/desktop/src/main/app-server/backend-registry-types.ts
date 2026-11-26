@@ -826,6 +826,8 @@ export type TaskMonitorDelegationRecord = {
 export type ReviewSubAgentRecord = {
   /** Backend running the review child. */
   backend: AppServerBackendKind;
+  /** Local managed review's Git checkout root at start, for repository-relative findings. */
+  checkoutRoot?: string;
   /**
    * Workspace, branch, and pull request the review was started against,
    * resolved once at start. Held on the record so the completion entry reports
