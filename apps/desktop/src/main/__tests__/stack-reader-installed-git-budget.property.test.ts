@@ -21,6 +21,14 @@ function git(cwd: string, ...args: string[]): string {
   return runIsolatedGitSync(cwd, args).trim();
 }
 
+function missingCheckoutError(cwd: string): Error {
+  return Object.assign(new Error("not found"), {
+    code: 128,
+    killed: false,
+    stderr: `fatal: cannot change to '${cwd}': No such file or directory\n`,
+  });
+}
+
 function initialize(cwd: string): string {
   git(cwd, "init", "-q", "-b", "main");
   git(cwd, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-q", "-m", "trunk");
@@ -403,6 +411,8 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-ttl-budget-")));
     restoreGit = isolateProcessGitEnvironment();
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    const realRunGit = gitExecutable.runGitCommand;
+    const runSpy = vi.spyOn(gitExecutable, "runGitCommand");
     try {
       const tracked = path.join(sandbox, "tracked");
       await mkdir(tracked, { recursive: true });
@@ -416,8 +426,25 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       ];
 
       process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
-      const probedPaths = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
+      const fixturePaths = new Set(rows.map((item) => item.linkedDirectories[0]!.path));
+      const observed = new Map<string, ReturnType<typeof realRunGit>>();
+      // Sample the real checkout once. The generated cases vary only the
+      // clock and revalidation budget, so they need the same Git answers.
+      runSpy.mockImplementation((cwd, args, options) => {
+        const answer = realRunGit(cwd, args, options);
+        if (cwd === tracked) observed.set(JSON.stringify(args), answer);
+        return answer;
+      });
       const oracle = await new StackReader().read([rows[0]!], []);
+      start.mockClear();
+      runSpy.mockImplementation(async (cwd, args, options) => {
+        const answer = cwd === tracked ? observed.get(JSON.stringify(args)) : undefined;
+        if (answer) return await answer;
+        if (cwd !== tracked && fixturePaths.has(cwd) && args[0] === "rev-parse") throw missingCheckoutError(cwd);
+        return await realRunGit(cwd, args, options);
+      });
+      const probedPaths = () => runSpy.mock.calls
+        .filter(([cwd, args]) => fixturePaths.has(cwd) && args[0] === "rev-parse").map(([cwd]) => cwd);
 
       await fc.assert(fc.asyncProperty(
         fc.integer({ min: 1, max: 4 }),
@@ -429,7 +456,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
           let now = 0;
           const reader = new StackReader(() => now, budget);
 
-          start.mockClear();
+          runSpy.mockClear();
           const cold = await reader.read(subset, []);
           expect(cold.stacks).toEqual(oracle.stacks);
           expect(probedPaths()).toHaveLength(subsetSize);
@@ -437,7 +464,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
           now += 31_000;
           const refreshedPaths = new Set<string>();
           for (let pass = 0; pass < Math.ceil(subsetSize / budget); pass++) {
-            start.mockClear();
+            runSpy.mockClear();
             const refreshed = await reader.read(subset, []);
             expect(refreshed.stacks).toEqual(oracle.stacks);
             const paths = probedPaths();
@@ -448,7 +475,9 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
           expect(refreshedPaths).toEqual(new Set(subset.map((item) => item.linkedDirectories[0]!.path)));
         },
       ), { numRuns: 4 });
+      expect(start.mock.calls.filter(([cwd]) => fixturePaths.has(cwd))).toEqual([]);
     } finally {
+      runSpy.mockRestore();
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }
@@ -505,23 +534,21 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       const count = 2_060;
       const dirs = Array.from({ length: count }, (_, index) =>
         path.join(sandbox, `deleted-${String(index).padStart(4, "0")}`));
+      const fixturePaths = new Set(dirs);
       const rows = dirs.map((dir, index) => row(dir, `deleted-${index}`));
       const preflight = dirs[0]!;
       let initialized = false;
       const runSpy = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "rev-parse" && cwd.startsWith(sandbox) && !(initialized && cwd === preflight)) {
-          throw Object.assign(new Error("not found"), {
-            code: 128,
-            killed: false,
-            stderr: `fatal: cannot change to '${cwd}': No such file or directory\n`,
-          });
+        if (args[0] === "rev-parse" && fixturePaths.has(cwd) && !(initialized && cwd === preflight)) {
+          throw missingCheckoutError(cwd);
         }
         return await realRunGit(cwd, args, options);
       });
       try {
         let now = 0;
         const reader = new StackReader(() => now);
-        const revParseCalls = () => runSpy.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
+        const revParseCalls = () => runSpy.mock.calls
+          .filter(([cwd, args]) => fixturePaths.has(cwd) && args[0] === "rev-parse").length;
 
         await reader.read(rows, []);
         expect(revParseCalls()).toBe(count);
