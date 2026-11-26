@@ -1229,6 +1229,7 @@ export class StackReader {
       .filter((checkout) => wanted.has(checkout.commonDir)).map((checkout) => [checkout.commonDir, checkout]));
     const attachments = validateAttachments && observeStackAttachments(checkouts, observation, retried);
     const attachmentWitnesses = new Set<Checkout>();
+    const attachmentBindingClones = new Set<string>();
     let validatedAny = false;
     const rows = validateAttachments && attachments ? await Promise.all(local.map(async (row) => {
       if (!row.prs?.length) return row;
@@ -1240,9 +1241,13 @@ export class StackReader {
       validatedAny = true;
       const prs = await validateAttachments({ ...row, prs: row.prs }, attachments.demand);
       if (backgroundNavigation) {
-        // Only a validated attachment can extend the evidence required by
-        // this background scan. Retain alternate paths for clone ambiguity,
-        // exact provenance paths, and the checkout that projects each clone.
+        // A row without a PR can still supply the binding for a layer in a
+        // clone whose attachments were validated.
+        for (const cwd of paths) {
+          const checkout = checkouts.get(cwd);
+          if (checkout && cloneCheckouts.has(checkout.commonDir)) attachmentBindingClones.add(checkout.commonDir);
+        }
+        // Retain alternate paths for clone ambiguity and exact provenance.
         const provenance = [...row.prs, ...prs].flatMap((pr) => pr.linkedDirectoryPaths ?? []);
         for (const cwd of [...paths, ...provenance]) {
           const checkout = checkouts.get(cwd);
@@ -1345,7 +1350,8 @@ export class StackReader {
     const activityByThread = new Map(await Promise.all([...threadKeys].map(async (key) => [key, await activity?.(key)] as const)));
     demand.signal?.throwIfAborted();
     const witnessedCheckouts = validatedAny && !backgroundNavigation ? checkouts.values()
-      : [...checkouts.values()].filter((checkout) => attachmentWitnesses.has(checkout) || observation.rosterMember(checkout));
+      : [...checkouts.values()].filter((checkout) => attachmentBindingClones.has(checkout.commonDir)
+        || attachmentWitnesses.has(checkout) || observation.rosterMember(checkout));
     if (!await observation.checkoutsStillMatch(witnessedCheckouts) || !await observation.rostersStillMatch(checkouts.values())
       || (validatedAny && !await attachments!.unchanged())) {
       if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
