@@ -18,6 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isNativeClaudeSourceKey, nativeClaudeReviewCommand } from "./native-claude-capture.mjs";
 import { reviewedMergeBase } from "./review-range.mjs";
 import { checkoutReviewSnapshot, initReviewWorkspace } from "./review-workspace.mjs";
 import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
@@ -78,7 +79,8 @@ type CohortFile =
       cases: CohortCase[];
     };
 
-type ArmId = "codex" | "neon";
+type ArmId = "codex" | "neon" | "claude-native";
+const armBackend = { codex: "codex", neon: "acp:antigravity", "claude-native": "claude" } as const;
 type Outcome = { status: "completed" | "failed" | "cancelled" | "timeout"; error?: string };
 const deadlineExceeded = Symbol("deadline exceeded");
 const approvalMethods = new Set([
@@ -209,6 +211,8 @@ async function main() {
   const codexEffortOverride = parseArg("--codex-effort", "xhigh");
   const neonModelOverride = parseArg("--neon-model", "gemini-4-neon");
   const neonEffortOverride = parseArg("--neon-effort", "high");
+  const claudeModel = parseArg("--claude-model", "") || undefined;
+  const claudeEffort = parseArg("--claude-effort", "high");
   const force = process.argv.includes("--force");
 
   const allowFullAccess = process.argv.includes("--allow-full-access");
@@ -222,8 +226,12 @@ async function main() {
     throw new Error("Concurrency and timeout must be positive integers within the supported bounds.");
   }
   const requestedArms = [...new Set(armsArg.split(",").map((arm) => arm.trim()))];
-  if (!requestedArms.length || !requestedArms.every((arm): arm is ArmId => arm === "codex" || arm === "neon")) {
-    throw new Error("Arms must be codex, neon, or both.");
+  if (!requestedArms.length || !requestedArms.every((arm): arm is ArmId => Object.hasOwn(armBackend, arm))) {
+    throw new Error("Arms must be codex, neon, or claude-native.");
+  }
+  const nativeCollection = requestedArms.includes("claude-native");
+  if (nativeCollection && (requestedArms.length !== 1 || allowFullAccess)) {
+    throw new Error("Native Claude baseline collection runs on its own with Default Access.");
   }
   const selectedCases = casesArg === "all"
     ? allCases
@@ -233,8 +241,7 @@ async function main() {
     throw new Error("Select at least one case with a unique, valid case ID.");
   }
   const bundleSha256 = createHash("sha256").update(fs.readFileSync(__filename)).digest("hex");
-  const requiredBackends: AppServerBackendKind[] = requestedArms.map((arm) =>
-    arm === "codex" ? "codex" : "acp:antigravity");
+  const requiredBackends: AppServerBackendKind[] = requestedArms.map((arm) => armBackend[arm]);
   const totals = { completed: 0, failed: 0, cancelled: 0, timeout: 0, skipped: 0 };
   let stopReason: string | undefined;
 
@@ -390,7 +397,10 @@ async function main() {
           const e = backendsList.find((b) => b.kind === "acp:antigravity");
           return Boolean(e?.available && getModels(e).some((m) => m.id === neonModelOverride || /neon/i.test(m.id)));
         })();
-      if (codexOk && neonOk) break;
+      const claudeEntry = backendsList.find((b) => b.kind === "claude");
+      const claudeOk = !nativeCollection || Boolean(claudeEntry?.available
+        && (!claudeModel || getModels(claudeEntry).some((model) => model.id === claudeModel)));
+      if (codexOk && neonOk && claudeOk) break;
       if (Date.now() - waitStart > 90_000) {
         throw new Error(
           `Timed out waiting for backends ${requiredBackends.join(", ")}. Current: ${JSON.stringify(
@@ -431,6 +441,8 @@ async function main() {
       reviewThreadId?: string;
       reviewOutput?: AppServerReviewOutput;
       reviewText?: string;
+      reviewerModel?: string;
+      nativeSources: Set<string>;
       approvals: Set<string>;
       resolve(result: Outcome): void;
     };
@@ -481,6 +493,13 @@ async function main() {
         const data = item.data as Record<string, unknown> | undefined;
         if (data?.reviewOutput) wait.reviewOutput = data.reviewOutput as AppServerReviewOutput;
         if (typeof item.review === "string") wait.reviewText = item.review;
+        if (event.backend === "claude" && typeof item.id === "string" && isNativeClaudeSourceKey(item.id)) {
+          wait.nativeSources.add(item.id);
+          const reviewer = data?.reviewer as { backend?: string; model?: string } | undefined;
+          if (reviewer?.backend === "claude" && typeof reviewer.model === "string") {
+            wait.reviewerModel = reviewer.model;
+          }
+        }
       } else if (method === "turn/failed" || (method === "turn/completed" && turn?.status === "failed")) {
         wait.resolve({ status: "failed", error: turn?.error?.message ?? "turn failed" });
       } else if (method === "turn/cancelled" || (method === "turn/completed"
@@ -498,9 +517,9 @@ async function main() {
     async function runOne(c: CohortCase, arm: ArmId) {
       const outPath = path.join(resultsDir, `${c.id}--${arm}.json`);
       const prNum = c.baseline.prNumber ?? c.pr;
-      const backend: AppServerBackendKind = arm === "codex" ? "codex" : "acp:antigravity";
-      const model = arm === "codex" ? codexModel : neonModel;
-      const reasoningEffort = arm === "codex" ? codexEffortOverride : neonEffort;
+      const backend: AppServerBackendKind = armBackend[arm];
+      const model = arm === "codex" ? codexModel : arm === "neon" ? neonModel : claudeModel;
+      const reasoningEffort = arm === "codex" ? codexEffortOverride : arm === "neon" ? neonEffort : claudeEffort;
       const identity = createHash("sha256").update(JSON.stringify({
         c, arm, backend, model, reasoningEffort, bundleSha256, repoCwd, executionMode,
       })).digest("hex");
@@ -529,6 +548,7 @@ async function main() {
       let key: string | undefined;
       let waiter: Waiter | undefined;
       let started: StartReviewResponse | undefined;
+      let nativeDispatch: { command: string; dispatchedAt: number } | undefined;
       let outcome: Outcome;
       const timedOut = (stage: string): Outcome => ({ status: "timeout", error: `Timed out during ${stage} after ${timeoutMs}ms` });
       try {
@@ -542,7 +562,8 @@ async function main() {
           });
           signal.throwIfAborted();
           const parent = await registry.startThread({
-            backend, cwd, executionMode, model, mcpProviderServersEnabled: false, mcpConnectionIds: [],
+            backend, cwd, executionMode, ...(model ? { model } : {}),
+            mcpProviderServersEnabled: false, mcpConnectionIds: [],
             ...(reasoningEffort ? { reasoningEffort } : {}),
           });
           const prUrl =
@@ -584,7 +605,7 @@ async function main() {
           key = `${backend}:${parent.threadId}`;
           let resolve!: Waiter["resolve"];
           const terminal = new Promise<Outcome>((done) => { resolve = done; });
-          waiter = { backend, parentThreadId: parent.threadId, approvals: new Set(), resolve };
+          waiter = { backend, parentThreadId: parent.threadId, approvals: new Set(), nativeSources: new Set(), resolve };
           waiters.set(key, waiter);
 
           const request: StartReviewRequest = {
@@ -593,7 +614,7 @@ async function main() {
             threadId: parent.threadId,
             runMode: "pwragent-sub-agent",
             cwd,
-            model,
+            ...(model ? { model } : {}),
             ...(reasoningEffort ? { reasoningEffort } : {}),
             target: {
               type: "pullRequest",
@@ -620,7 +641,16 @@ async function main() {
           const antigravityAccess = arm === "neon" && !allowFullAccess
             ? { mode: "plan" as const, fullAccess: false }
             : undefined;
-          const starting = registry.startReview(request, true, undefined, antigravityAccess);
+          let starting: Promise<StartReviewResponse>;
+          if (arm === "claude-native") {
+            const command = nativeClaudeReviewCommand(mergeBase, c.baseline.headCommit, claudeEffort);
+            nativeDispatch = { command, dispatchedAt: Date.now() };
+            starting = registry.startTurn({
+              backend, threadId: parent.threadId, input: [{ type: "text", text: command }],
+            }).then((turn) => ({ ...turn, reviewThreadId: turn.threadId }));
+          } else {
+            starting = registry.startReview(request, true, undefined, antigravityAccess);
+          }
           const accepted = await beforeDeadline(starting, remaining());
           if (accepted === deadlineExceeded) {
             outcome = timedOut("review start");
@@ -634,7 +664,7 @@ async function main() {
             for (const pending of registry.listPendingServerRequests()) {
               void answerApproval(pending.backend, pending.notification);
             }
-            if (!blind) console.log(`[START] ${c.id} | ${arm} (${model}/${reasoningEffort ?? "model-pinned"})`);
+            if (!blind) console.log(`[START] ${c.id} | ${arm} (${model ?? "session default"}/${reasoningEffort ?? "model-pinned"})`);
             const result = await beforeDeadline(terminal, remaining());
             if (result === deadlineExceeded) {
               outcome = timedOut("review");
@@ -646,6 +676,8 @@ async function main() {
               outcome = result;
               if (outcome.status === "completed" && !Array.isArray(waiter.reviewOutput?.findings)) {
                 outcome = { status: "failed", error: "Review completed without structured findings." };
+              } else if (outcome.status === "completed" && nativeDispatch && waiter.nativeSources.size !== 1) {
+                outcome = { status: "failed", error: "Native review did not produce one identifying artifact." };
               }
             }
           }
@@ -659,10 +691,12 @@ async function main() {
       const review = waiter?.reviewOutput;
       const findings = review?.findings ?? [];
       const ledger = started ? readLedgerStatsFromLog(mainLogPath, started.turnId) : null;
+      const nativeSource = waiter?.nativeSources.values().next().value;
       const record = {
         identity,
-        caseId: c.id, prNumber: prNum, arm, backend, model,
+        caseId: c.id, prNumber: prNum, arm, backend, model: waiter?.reviewerModel ?? model,
         baseCommit: c.baseline.baseCommit, headCommit: c.baseline.headCommit, mergeBaseCommit, workspacePath,
+        baseBranch: c.baseline.baseBranch,
         reasoningEffort: reasoningEffort ?? null,
         status: outcome.status, error: outcome.error ?? null,
         elapsedSec: Math.round(elapsed() / 1000),
@@ -670,6 +704,9 @@ async function main() {
         parentThreadId: waiter?.parentThreadId,
         reviewThreadId: started?.reviewThreadId,
         turnId: started?.turnId,
+        ...(outcome.status === "completed" && nativeDispatch && nativeSource
+          ? { nativeClaude: { ...nativeDispatch, sourceKey: nativeSource } }
+          : {}),
         structured: Array.isArray(review?.findings),
         findingsCount: findings.length,
         overallCorrectness: review?.overall_correctness ?? null,

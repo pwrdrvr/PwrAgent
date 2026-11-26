@@ -16,7 +16,7 @@ const driver = fileURLToPath(new URL("../review-matrix-driver.ts", import.meta.u
 const registryStub = `
   import fs from "node:fs";
   const scenario = process.env.MATRIX_TEST_SCENARIO;
-  const backend = scenario === "neon" ? "acp:antigravity" : "codex";
+  const backend = scenario === "neon" ? "acp:antigravity" : scenario === "claude" ? "claude" : "codex";
   const audit = (record) => fs.appendFileSync(process.env.MATRIX_TEST_AUDIT, JSON.stringify(record) + "\\n");
   let listener;
   let parents = 0;
@@ -29,6 +29,7 @@ const registryStub = `
   };
   async function finish(threadId, turnId) {
     await send("item/completed", { threadId, turnId, item: {
+      id: "toolu_Review" + threadId,
       type: "exitedReviewMode", data: { reviewOutput: { findings: [] } },
     } });
     await terminal(threadId, turnId);
@@ -37,6 +38,12 @@ const registryStub = `
     listBackends: async () => ({ backends: [{ kind: backend, available: true,
       launchpadOptions: { models: [{ id: scenario === "neon" ? "gemini-4-neon" : "gpt-6.2-sol" }] } }] }),
     onEvent: (callback) => { listener = callback; return () => {}; },
+    startTurn: async ({ threadId, input }) => {
+      const turnId = "native-" + threadId;
+      audit({ command: input[0].text });
+      setTimeout(() => void finish(threadId, turnId), 5);
+      return { backend, threadId, turnId };
+    },
     startThread: async (options) => {
       audit({
         parent: ++parents, mode: options.executionMode, cwd: options.cwd,
@@ -170,6 +177,20 @@ test("matrix ownership, permissions, setup isolation and resume identity", async
     }
     assert.equal(workspaces.size, 2);
     assert.equal(fs.readFileSync(path.join(candidate, "fixture.txt"), "utf8"), "base-only\n");
+  });
+
+  await t.test("native Claude receives an exact commit range and capture identifies its automatic artifact", () => {
+    const result = run("claude", { arm: "claude-native", blind: true });
+    assert.equal(result.status, 0, result.stderr);
+    const command = `/code-review high ${mergeBaseCommit}..${headCommit}`;
+    assert.equal(result.logs.find((row) => row.command)?.command, command);
+    const cell = result.cell(1);
+    assert.equal(cell.status, "completed");
+    assert.deepEqual(cell.nativeClaude, {
+      command, dispatchedAt: cell.nativeClaude.dispatchedAt, sourceKey: "toolu_Review1",
+    });
+    assert.ok(cell.nativeClaude.dispatchedAt <= Date.parse(cell.completedAt));
+    assert.doesNotMatch(result.stdout + result.stderr, /private-case/);
   });
 
   await t.test("default read-only access, explicit Full Access, and no blind case metadata", () => {

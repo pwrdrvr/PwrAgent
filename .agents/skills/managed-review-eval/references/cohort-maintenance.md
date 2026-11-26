@@ -14,6 +14,8 @@ This checks Git reachability of the pinned snapshots, unique PR numbers across s
 
 ## Stage a new cohort
 
+If the verified inventory is short of native Claude cases, read [Collect native Claude baselines](native-claude-baselines.md) for immutable dispatch, private settlement, and the fresh split checks.
+
 Use the read-only PwrAgent profile database (`~/.pwragent/profiles/<profile>/state/state.db`). Select the source profile explicitly and stage the draft away from the checked-in files.
 
 ```bash

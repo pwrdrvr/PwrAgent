@@ -18,8 +18,17 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { baselineProvenance, capturedRange, containsMachinePath, sanitizeItems, sanitizeText } from "./cohort-data.mjs";
+import {
+  nativeClaudeCapturedRange,
+  nativeClaudeCaptureKey,
+  nativeClaudeCaptureMatchesTranscript,
+} from "./native-claude-capture.mjs";
 
 const checkedInCohorts = fileURLToPath(new URL("../cohorts/", import.meta.url));
+const splitRecipe = {
+  "codex-findings-high": 2, "codex-findings-med": 2, "codex-clean": 2,
+  "claude-findings": 3, "claude-noisy": 1,
+};
 
 function parseArg(name, fallback) {
   const idx = process.argv.indexOf(name);
@@ -43,6 +52,45 @@ function resolveSqliteBinary() {
     }
   }
   throw new Error("sqlite3 binary not found on PATH or at /usr/bin/sqlite3");
+}
+
+function readReviewRows(sqlite, db, limit, claudeCollection = false) {
+  const where = claudeCollection ? "backend = 'claude'" : "status = 'handled'";
+  const rows = execFileSync(sqlite, [
+    "-readonly", "-json", db,
+    `SELECT status, updated_at, payload FROM thread_reviews WHERE ${where} ORDER BY updated_at DESC LIMIT ${limit};`,
+  ], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  return JSON.parse(rows || "[]");
+}
+
+function readClaudeCaptureRun(sqlite, directory, limit) {
+  const results = path.join(directory, "results");
+  const captures = new Map();
+  for (const file of fs.readdirSync(results).filter((name) => name.endsWith("--claude-native.json"))) {
+    const cell = JSON.parse(fs.readFileSync(path.join(results, file), "utf8"));
+    if (!cell.nativeClaude || cell.status !== "completed") continue;
+    const key = nativeClaudeCaptureKey(cell.parentThreadId, cell.nativeClaude.sourceKey);
+    if (captures.has(key)) throw new Error("Collection run contains a duplicated native Claude capture.");
+    captures.set(key, cell);
+  }
+  const state = path.join(directory, "pwragent-home", "profiles", "eval", "state");
+  const db = path.join(state, "state.db");
+  return readReviewRows(sqlite, db, limit, true).flatMap((row) => {
+    const payload = JSON.parse(row.payload);
+    const cell = captures.get(nativeClaudeCaptureKey(payload.threadId, payload.sourceKey));
+    const range = nativeClaudeCapturedRange(payload, cell);
+    if (!range || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(payload.threadId)) return [];
+    // This is the normalized transcript written by the PwrAgent Claude owner.
+    // Match the recorded command and automatic review to one completed turn.
+    try {
+      const transcript = fs.readFileSync(path.join(state, "claude", `${payload.threadId}.jsonl`), "utf8");
+      const entries = transcript.split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      if (nativeClaudeCaptureMatchesTranscript(cell, entries)) return [{ ...row, range, receipt: cell }];
+    } catch {
+      // Missing or damaged evidence cannot be used for a blind cohort.
+    }
+    return [];
+  });
 }
 
 function git(repo, args, allowFailure = false) {
@@ -97,6 +145,56 @@ function diffStats(repo, baseCommit, headCommit) {
   return { files, adds, dels };
 }
 
+function stageClaudePlan({ repo, remote, prHeads, reviewRows, excluded, count, noisyCount, seed, file }) {
+  // These are prospective snapshots for new reviews. Prior artifacts help
+  // sample likely strata; they supply no range or finding evidence to the draw.
+  const main = git(repo, ["rev-parse", "--verify", `${remote}/main^{commit}`]);
+  const planned = new Set();
+  const pools = { findings: [], noisy: [] };
+  for (const row of reviewRows) {
+    const payload = JSON.parse(row.payload);
+    if (baselineProvenance(payload)?.backend !== "claude") continue;
+    const context = payload.context ?? {};
+    if ((context.pullRequests?.length ?? 0) > 1 || (context.pullRequestSnapshots?.length ?? 0) > 1) continue;
+    const match = /^https:\/\/github\.com\/pwrdrvr\/PwrAgent\/pull\/([1-9]\d*)\/?$/i.exec(context.pullRequest?.url ?? "");
+    const pr = Number(match?.[1]);
+    if (!Number.isSafeInteger(pr) || excluded.has(pr) || planned.has(pr)) continue;
+    const items = Array.isArray(payload.items) ? payload.items : [];
+    const noisy = items.filter((item) => item.status === "declined").length >= 2;
+    if (!noisy && items.filter((item) => item.status === "addressed" || item.status === "deferred").length < 2) continue;
+    const headCommit = context.headCommit;
+    if (!hasLocalCommit(repo, headCommit)) continue;
+    const baseCommit = git(repo, ["merge-base", "--all", main, headCommit], true);
+    if (!baseCommit || !/^[a-f0-9]{40}$/.test(baseCommit) || baseCommit === headCommit) continue;
+    const surv = checkSurvivability(repo, pr, baseCommit, headCommit, prHeads, false, remote);
+    if (!surv.ok || surv.tier === "PERM_MAIN") continue;
+    const stats = diffStats(repo, baseCommit, headCommit);
+    if (stats.adds + stats.dels === 0) continue;
+    pools[noisy ? "noisy" : "findings"].push({
+      id: `pr${pr}-native-claude`, pr, backend: "claude",
+      baseline: { baseCommit, headCommit, prNumber: pr },
+    });
+    planned.add(pr);
+  }
+  const selected = [
+    ...shuffleWithSeed(pools.findings, seed).slice(0, count - noisyCount),
+    ...shuffleWithSeed(pools.noisy, seed + 1).slice(0, noisyCount),
+  ];
+  if (selected.length !== count) {
+    throw new Error(`Only ${selected.length} of ${count} prospective Claude cases are available in the requested strata.`);
+  }
+  const cases = shuffleWithSeed(selected, seed + 2);
+  const plan = buildCohortDoc(
+    "native-claude-collection", "collection", true,
+    "Pinned targets for new native Claude reviews. This is a collection plan.",
+    cases,
+  );
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `${JSON.stringify(plan, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+  console.log(JSON.stringify({ planned: cases.length, historicalFindingsStratum: count - noisyCount,
+    historicalNoisyStratum: noisyCount, blind: true }, null, 2));
+}
+
 function checkSurvivability(repo, prNumber, baseCommit, headCommit, prHeads, fetchMissing = false, remote = "origin") {
   const remoteTip = prHeads.get(prNumber) ?? null;
   if (!remoteTip) {
@@ -143,13 +241,17 @@ function shuffleWithSeed(items, seed) {
   return arr;
 }
 
-function verifyCohorts(repo, outDir, remote) {
+function verifyCohorts(repo, outDir, remote, staged) {
   const files = fs.readdirSync(outDir).filter((f) => f.endsWith(".json")).sort();
   if (files.length === 0) {
     throw new Error(`No cohort JSON files found in ${outDir}`);
   }
   const prHeads = loadOriginPrHeads(repo, remote);
-  const seenPrs = new Map();
+  const published = new Set(staged ? fs.readdirSync(checkedInCohorts)
+    .filter((name) => name.endsWith(".json"))
+    .flatMap((name) => JSON.parse(fs.readFileSync(path.join(checkedInCohorts, name), "utf8")).cases.map((c) => c.pr)) : []);
+  const seenPrs = new Set();
+  const splits = { dev: 0, test: 0 };
   let failures = 0;
 
   for (const file of files) {
@@ -160,13 +262,23 @@ function verifyCohorts(repo, outDir, remote) {
       failures += 1;
     }
     const cases = Array.isArray(cohort.cases) ? cohort.cases : [];
+    if (staged) {
+      if (Object.hasOwn(splits, cohort.split)) splits[cohort.split] += 1;
+      if (cohort.blind !== (cohort.split === "test")
+        || cases.length !== 10 || cases.some((c) => c.baseline.reviewedRangeVerified !== true)
+        || Object.entries(splitRecipe).some(([bucket, count]) =>
+          cases.filter((c) => c.bucket === bucket).length !== count)) {
+        console.error(`[FAIL] ${file}: verification, blinding, or the balanced split recipe is incomplete.`);
+        failures += 1;
+      }
+    }
     let okCount = 0;
     for (const c of cases) {
-      if (seenPrs.has(c.pr)) {
-        console.error(`[FAIL] ${file}: duplicate PR #${c.pr} (also in ${seenPrs.get(c.pr)})`);
+      if (seenPrs.has(c.pr) || published.has(c.pr)) {
+        console.error(`[FAIL] ${file}: a PR overlaps a published or staged cohort.`);
         failures += 1;
       } else {
-        seenPrs.set(c.pr, file);
+        seenPrs.add(c.pr);
       }
       const surv = checkSurvivability(
         repo,
@@ -177,8 +289,9 @@ function verifyCohorts(repo, outDir, remote) {
         true,
         remote,
       );
-      if (!surv.ok) {
-        console.error(`[FAIL] ${file} ${c.id} (PR #${c.pr}): ${surv.reason}`);
+      if (!surv.ok || (staged && c.backend === "claude" && surv.tier === "PERM_MAIN")) {
+        const reason = surv.ok ? "missing retained PR lineage" : surv.reason;
+        console.error(`[FAIL] ${file}: a pinned snapshot is unavailable (${reason}).`);
         failures += 1;
       } else {
         okCount += 1;
@@ -187,6 +300,10 @@ function verifyCohorts(repo, outDir, remote) {
     console.log(
       `[OK] ${file.padEnd(14)} split=${cohort.split} blind=${cohort.blind} cases=${cases.length} survivable=${okCount}/${cases.length}`,
     );
+  }
+  if (staged && (files.length !== 3 || splits.dev !== 1 || splits.test !== 2)) {
+    console.error("[FAIL] Expected one development split and two blind holdouts.");
+    failures += 1;
   }
   if (failures > 0) {
     throw new Error(`Cohort verification failed with ${failures} error(s)`);
@@ -237,12 +354,14 @@ function summarizeCohortSafe(doc) {
 
 function main() {
   const repo = path.resolve(parseArg("--repo", process.cwd()));
-  const verify = hasFlag("--verify");
+  const verifyStaged = hasFlag("--verify-staged");
+  const verify = hasFlag("--verify") || verifyStaged;
   const outDir = path.resolve(parseArg("--out", verify ? checkedInCohorts : path.join(repo, ".local/managed-review-eval/new-cohorts")));
   const remote = parseArg("--remote", "origin");
 
   if (verify) {
-    verifyCohorts(repo, outDir, remote);
+    if (verifyStaged && !hasFlag("--out")) throw new Error("--verify-staged requires the private staging directory in --out.");
+    verifyCohorts(repo, outDir, remote, verifyStaged);
     return;
   }
 
@@ -252,21 +371,37 @@ function main() {
   const seedDev1Path = parseArg("--seed-dev1", "");
   const seed = Number(parseArg("--seed", "20261125"));
   const limit = Number(parseArg("--limit", "1000"));
+  const inventory = hasFlag("--inventory");
+  const claudePlan = parseArg("--plan-claude", "");
+  const planCount = Number(parseArg("--plan-count", "12"));
+  const planNoisy = Number(parseArg("--plan-noisy", String(Math.ceil(planCount / 4))));
+  const claudeRuns = [...new Set(process.argv.flatMap((arg, index) => {
+    if (arg !== "--claude-captures") return [];
+    const directory = process.argv[index + 1];
+    if (!directory || directory.startsWith("--")) throw new Error("--claude-captures requires a run directory.");
+    return [path.resolve(directory)];
+  }))];
   if (!Number.isSafeInteger(seed) || !Number.isSafeInteger(limit) || limit < 1) {
     throw new Error("Seed and limit must be integers, and limit must be positive.");
   }
+  if (claudePlan && (!Number.isSafeInteger(planCount) || planCount < 1
+    || !Number.isSafeInteger(planNoisy) || planNoisy < 0 || planNoisy > planCount || inventory)) {
+    throw new Error("Specify valid plan counts and run planning separately from inventory.");
+  }
 
-  fs.mkdirSync(outDir, { recursive: true });
   const sqlite = resolveSqliteBinary();
   const prHeads = loadOriginPrHeads(repo, remote);
 
   // Exclude published cases even when a caller runs without a dev-1 seed.
   const usedPrs = new Set();
   const lockedPrs = new Set();
+  const lastSplit = { dev: 0, test: 0 };
   const extraExclusions = parseArg("--exclude-cohorts", "");
   for (const directory of [checkedInCohorts, ...(extraExclusions ? [extraExclusions] : [])]) {
     for (const name of fs.readdirSync(directory).filter((file) => file.endsWith(".json"))) {
       const cohort = JSON.parse(fs.readFileSync(path.join(directory, name), "utf8"));
+      const split = /^(dev|test)-([1-9]\d*)\.json$/.exec(name);
+      if (split) lastSplit[split[1]] = Math.max(lastSplit[split[1]], Number(split[2]));
       const cases = Array.isArray(cohort) ? cohort : cohort.cases;
       for (const c of cases) {
         usedPrs.add(c.pr);
@@ -320,18 +455,9 @@ function main() {
     }
   }
 
-  // 2. Query PwrAgent-owned state.db (read-only) for remaining settled reviews
-  const reviewsJson = execFileSync(
-    sqlite,
-    [
-      "-readonly",
-      "-json",
-      dbPath,
-      `SELECT updated_at, payload FROM thread_reviews WHERE status = 'handled' ORDER BY updated_at DESC LIMIT ${limit};`,
-    ],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
-  const reviewRows = JSON.parse(reviewsJson || "[]");
+  const captured = claudeRuns.flatMap((directory) => readClaudeCaptureRun(sqlite, directory, limit));
+  const reviewRows = [...readReviewRows(sqlite, dbPath, limit),
+    ...captured.filter((row) => row.status === "handled")];
 
   const perPrCandidates = new Map();
   for (const row of reviewRows) {
@@ -342,17 +468,19 @@ function main() {
       continue;
     }
     const ctx = payload.context || {};
-    const range = capturedRange(ctx);
     const provenance = baselineProvenance(payload);
+    // Normal Claude PR artifacts can carry context assembled after the turn.
+    // Only an independently recorded native dispatch binds the actual range.
+    const range = provenance?.backend === "claude" ? row.range : capturedRange(ctx);
     if (!range || !provenance || usedPrs.has(range.pr)) continue;
     const { pr: prNum, baseCommit, headCommit } = range;
     const { backend, reviewMode } = provenance;
     if (!hasLocalCommit(repo, baseCommit) || !hasLocalCommit(repo, headCommit)
       || !isAncestor(repo, baseCommit, headCommit)) continue;
-    const baseBranch = ctx.baseBranch || ctx.pullRequest?.baseRefName || "main";
+    const baseBranch = row.receipt?.baseBranch || ctx.baseBranch || ctx.pullRequest?.baseRefName || "main";
 
     const surv = checkSurvivability(repo, prNum, baseCommit, headCommit, prHeads, false, remote);
-    if (!surv.ok) continue;
+    if (!surv.ok || (backend === "claude" && surv.tier === "PERM_MAIN")) continue;
 
     const stats = diffStats(repo, baseCommit, headCommit);
     if (stats.files === 0 || (stats.adds + stats.dels) === 0) continue;
@@ -385,8 +513,8 @@ function main() {
       updatedAt: row.updated_at,
       baseline: {
         reviewerBackend: backend,
-        reviewerModel: null,
-        reviewerEffort: null,
+        reviewerModel: row.receipt?.model ?? null,
+        reviewerEffort: row.receipt?.reasoningEffort ?? null,
         reviewMode,
         prNumber: prNum,
         prUrl: `https://github.com/pwrdrvr/PwrAgent/pull/${prNum}`,
@@ -407,14 +535,24 @@ function main() {
     const prev = perPrCandidates.get(prNum);
     if (
       !prev
-      || (cand.baseline.counts.total > 0 && prev.baseline.counts.total === 0)
-      || (cand.baseline.counts.total === prev.baseline.counts.total && cand.updatedAt > prev.updatedAt)
+      || (backend === "claude" && prev.backend !== "claude")
+      || (backend === prev.backend && (
+        (cand.baseline.counts.total > 0 && prev.baseline.counts.total === 0)
+        || (cand.baseline.counts.total === prev.baseline.counts.total && cand.updatedAt > prev.updatedAt)
+      ))
     ) {
       perPrCandidates.set(prNum, cand);
     }
   }
 
   const allPool = [...perPrCandidates.values()];
+  if (claudePlan) {
+    stageClaudePlan({
+      repo, remote, prHeads, reviewRows, excluded: new Set([...usedPrs, ...perPrCandidates.keys()]),
+      count: planCount, noisyCount: planNoisy, seed, file: path.resolve(claudePlan),
+    });
+    return;
+  }
   const pools = {
     "codex-findings-high": shuffleWithSeed(allPool.filter((c) => c.bucket === "codex-findings-high"), seed + 1),
     "codex-findings-med": shuffleWithSeed(allPool.filter((c) => c.bucket === "codex-findings-med"), seed + 2),
@@ -422,25 +560,28 @@ function main() {
     "claude-findings": shuffleWithSeed(allPool.filter((c) => c.bucket === "claude-findings"), seed + 4),
     "claude-noisy": shuffleWithSeed(allPool.filter((c) => c.bucket === "claude-noisy"), seed + 5),
   };
-
-  function takeFrom(bucketName, count) {
-    const arr = pools[bucketName];
-    if (arr.length < count) {
-      throw new Error(`Not enough candidates in bucket ${bucketName}: need ${count}, have ${arr.length}`);
-    }
-    return arr.splice(0, count).map(({ updatedAt: _u, ...rest }) => rest);
+  const required = Object.fromEntries(Object.entries(splitRecipe).map(([bucket, count]) => [bucket, 3 * count]));
+  const poolCountsBeforeDraw = Object.fromEntries(Object.entries(pools).map(([name, cases]) => [name, cases.length]));
+  const shortages = Object.fromEntries(Object.entries(required)
+    .filter(([name, count]) => poolCountsBeforeDraw[name] < count)
+    .map(([name, count]) => [name, count - poolCountsBeforeDraw[name]]));
+  if (inventory) {
+    console.log(JSON.stringify({
+      poolCountsBeforeDraw, required, shortages,
+      nativeClaudeCaptures: {
+        verified: captured.length,
+        awaitingSettlement: captured.filter((row) => row.status === "open").length,
+      },
+    }, null, 2));
+    return;
+  }
+  if (Object.keys(shortages).length) {
+    throw new Error(`Insufficient verified baselines for three disjoint splits: ${JSON.stringify(shortages)}`);
   }
 
-  // Exact stratified recipe matching dev-1 (10 cases per cohort):
-  //   2 codex-findings-high + 2 codex-findings-med + 2 codex-clean + 3 claude-findings + 1 claude-noisy
   function drawCohortCases() {
-    return [
-      ...takeFrom("codex-findings-high", 2),
-      ...takeFrom("codex-findings-med", 2),
-      ...takeFrom("codex-clean", 2),
-      ...takeFrom("claude-findings", 3),
-      ...takeFrom("claude-noisy", 1),
-    ];
+    return Object.entries(splitRecipe).flatMap(([bucket, count]) =>
+      pools[bucket].splice(0, count).map(({ updatedAt: _u, ...rest }) => rest));
   }
 
   const docs = [];
@@ -457,43 +598,40 @@ function main() {
   }
   docs.push(
     buildCohortDoc(
-      "dev-2",
+      `dev-${lastSplit.dev + 1}`,
       "dev",
       false,
-      "Secondary development cohort (10 PRs) for iterative prompt tuning and error analysis.",
+      "Verified development cohort (10 PRs) for iterative prompt tuning and error analysis.",
       drawCohortCases(),
     ),
     buildCohortDoc(
-      "test-1",
+      `test-${lastSplit.test + 1}`,
       "test",
       true,
-      "Held-out blind test cohort 1 (10 PRs). Do NOT inspect individual findings or diffs when tuning prompts; read aggregate Decision scores only.",
+      "Verified blind holdout (10 PRs). Report aggregate Decision scores only.",
       drawCohortCases(),
     ),
     buildCohortDoc(
-      "test-2",
+      `test-${lastSplit.test + 2}`,
       "test",
       true,
-      "Held-out blind lockbox test cohort 2 (10 PRs). Reserve for final pre-release validation; never inspect individual cases.",
+      "Verified blind lockbox (10 PRs) for final validation.",
       drawCohortCases(),
     ),
   );
 
   if (docs.some(containsMachinePath)) throw new Error("Draft cohorts contain machine-local paths.");
+  if (docs.some((doc) => fs.existsSync(path.join(outDir, `${doc.name}.json`)))) {
+    throw new Error("This staging directory already contains one of the proposed splits.");
+  }
+  fs.mkdirSync(outDir, { recursive: true });
   for (const doc of docs) {
     const outPath = path.join(outDir, `${doc.name}.json`);
-    fs.writeFileSync(outPath, `${JSON.stringify(doc, null, 2)}\n`, "utf8");
+    fs.writeFileSync(outPath, `${JSON.stringify(doc, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
   }
 
   console.log(JSON.stringify({
-    poolCountsBeforeDraw: {
-      totalDisjointSurvivable: allPool.length,
-      codexFindingsHigh: allPool.filter((c) => c.bucket === "codex-findings-high").length,
-      codexFindingsMed: allPool.filter((c) => c.bucket === "codex-findings-med").length,
-      codexClean: allPool.filter((c) => c.bucket === "codex-clean").length,
-      claudeFindings: allPool.filter((c) => c.bucket === "claude-findings").length,
-      claudeNoisy: allPool.filter((c) => c.bucket === "claude-noisy").length,
-    },
+    poolCountsBeforeDraw,
     cohorts: docs.map(summarizeCohortSafe),
   }, null, 2));
 }
