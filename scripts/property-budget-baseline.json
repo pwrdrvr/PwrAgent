@@ -781,6 +781,9 @@
     "apps/desktop/src/main/__tests__/stack-reader.property.test.ts": {
       "heavyFixture": 2
     },
+    "apps/desktop/src/main/__tests__/stack-recovery.property.test.ts": {
+      "heavyFixture": 1
+    },
     "apps/desktop/src/main/__tests__/starting-thread-placement.property.test.ts": {
       "highNumRunsWithoutComment": 1
     },
@@ -1088,6 +1091,9 @@
       "heavyFixture": 1
     },
     "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-meta-wait-scope.property.test.tsx": {
+      "heavyFixture": 1
+    },
+    "apps/desktop/src/renderer/src/features/navigation/__tests__/thread-row-work-progress.model.test.tsx": {
       "heavyFixture": 1
     },
     "apps/desktop/src/renderer/src/features/notifications/__tests__/thread-action-error-notice.property.test.tsx": {
