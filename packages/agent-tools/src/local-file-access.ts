@@ -1,4 +1,4 @@
-import { realpath } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -22,6 +22,10 @@ const PRIVATE_STORAGE_ROOT_FILES = [
 export type ReadableLocalFilePathResult =
   | { ok: true; path: string }
   | { ok: false; reason: "forbidden" | "not_found" };
+
+export type WritableLocalFilePathResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: "forbidden" | "invalid" | "symlink" | "not_a_file" };
 
 /**
  * Canonicalize a local path and refuse Codex/PwrAgent private storage.
@@ -69,6 +73,98 @@ export async function resolveReadableLocalFilePath(
     }
   }
   return { ok: true, path: resolvedPath };
+}
+
+/**
+ * Canonicalize a destination path for a new or overwritten local file,
+ * refusing Codex/PwrAgent private storage, symlinks, non-file targets, and
+ * anything outside `allowedRoots`. Missing parent directories are resolved
+ * against their nearest existing ancestor so symlinked ancestors cannot escape
+ * `allowedRoots`.
+ */
+export async function resolveWritableLocalFilePath(
+  filePath: string,
+  options: {
+    allowedRoots: readonly string[];
+    privateStorageRoots?: readonly string[];
+    deniedRoots?: readonly string[];
+  },
+): Promise<WritableLocalFilePathResult> {
+  if (!filePath.trim() || filePath.includes("\0") || !path.isAbsolute(filePath)) {
+    return { ok: false, reason: "invalid" };
+  }
+  const configuredRoots = configuredPrivateStorageRoots(
+    options.privateStorageRoots ?? [],
+  );
+  const deniedRoots = options.deniedRoots ?? [];
+  const denied = (file: string, roots: readonly string[]) => roots.some((root) => {
+    const relative = path.relative(path.resolve(root), path.resolve(file));
+    return relative === "" || isPathInsideRoot(relative);
+  });
+  const resolvedPath = path.resolve(filePath);
+  if (isPrivateStoragePath(resolvedPath, configuredRoots) || denied(resolvedPath, deniedRoots)) {
+    return { ok: false, reason: "forbidden" };
+  }
+  if (options.allowedRoots.length === 0) {
+    return { ok: false, reason: "forbidden" };
+  }
+
+  const targetStats = await lstat(resolvedPath).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT" || error.code === "ENOTDIR") return undefined;
+    throw error;
+  });
+  if (targetStats) {
+    if (targetStats.isSymbolicLink()) return { ok: false, reason: "symlink" };
+    if (!targetStats.isFile()) return { ok: false, reason: "not_a_file" };
+  }
+
+  const missingSegments: string[] = [];
+  let cursor = path.dirname(resolvedPath);
+  let canonicalAncestor: string | undefined;
+  while (true) {
+    const ancestorStats = await lstat(cursor).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (ancestorStats) {
+      if (!ancestorStats.isDirectory() && !ancestorStats.isSymbolicLink()) {
+        return { ok: false, reason: "invalid" };
+      }
+      try {
+        canonicalAncestor = await realpath(cursor);
+      } catch {
+        return { ok: false, reason: "invalid" };
+      }
+      const resolvedAncestorStats = await lstat(canonicalAncestor).catch(() => undefined);
+      if (!resolvedAncestorStats?.isDirectory()) {
+        return { ok: false, reason: "invalid" };
+      }
+      break;
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return { ok: false, reason: "invalid" };
+    missingSegments.unshift(path.basename(cursor));
+    cursor = parent;
+  }
+
+  const canonicalTarget = path.join(
+    canonicalAncestor,
+    ...missingSegments,
+    path.basename(resolvedPath),
+  );
+  const canonicalPrivateRoots = await canonicalizeRoots(configuredRoots);
+  if (isPrivateStoragePath(canonicalTarget, canonicalPrivateRoots)
+    || denied(canonicalTarget, await canonicalizeRoots(deniedRoots))) {
+    return { ok: false, reason: "forbidden" };
+  }
+  const canonicalAllowedRoots = await canonicalizeRoots(options.allowedRoots);
+  const allowed = canonicalAllowedRoots.some((root) =>
+    isPathInsideRoot(path.relative(root, canonicalTarget)),
+  );
+  if (!allowed) {
+    return { ok: false, reason: "forbidden" };
+  }
+  return { ok: true, path: canonicalTarget };
 }
 
 async function canonicalizeRoots(roots: readonly string[]): Promise<string[]> {
