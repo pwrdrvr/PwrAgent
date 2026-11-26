@@ -4797,6 +4797,7 @@ function useThreadQuestionReplies(
     federationTarget?: FederationRemoteTarget;
     text: string;
     busyBehavior?: "queue";
+    reviewFix?: boolean;
   }>();
   // Dismissing Codex's async questions only hides their controls, so it is
   // this window's choice for the session, as skipping is in Codex's own UI.
@@ -4853,7 +4854,11 @@ function useThreadQuestionReplies(
       setAsyncQuestionReply(undefined);
     };
   }, [asyncQuestionThreadKey]);
-  const handleAnswerAsyncQuestions = useEventCallback((text: string, busyBehavior?: "queue"): Promise<boolean> => {
+  const handleAnswerAsyncQuestions = useEventCallback((
+    text: string,
+    busyBehavior?: "queue",
+    reviewFix?: boolean,
+  ): Promise<boolean> => {
     // One answer at a time: the composer applies only the newest submission.
     if (
       props.composerDisabled
@@ -4878,6 +4883,7 @@ function useThreadQuestionReplies(
         federationTarget: questionFederationTarget,
         text,
         busyBehavior,
+        ...(reviewFix ? { reviewFix: true } : {}),
       });
     });
   });
@@ -4951,12 +4957,12 @@ function useThreadQuestionReplies(
     todo: ThreadTodo,
     options?: ThreadTodoDoHereOptions,
   ): Promise<boolean> => {
-    const { prompt, ...resolveOptions } = options ?? {};
+    const { prompt, reviewFix, ...resolveOptions } = options ?? {};
     const handoff = todo.action?.type === "start_thread" || todo.action?.type === "send_message" ? todo.action.prompt : undefined;
     const text = prompt ?? handoff;
     if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
     try {
-      const accepted = await handleAnswerAsyncQuestions(text, "queue");
+      const accepted = await handleAnswerAsyncQuestions(text, "queue", reviewFix);
       if (accepted && prompt === undefined) {
         await props.threadTodos?.resolve(todo, "done", "sent_here", resolveOptions);
       }

@@ -41,6 +41,7 @@ export type ThreadTurnQueueEntry = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  reviewFix?: boolean;
   isCompactCommand?: boolean;
   automationRunId?: string;
   automationName?: string;
@@ -287,7 +288,7 @@ function sameAcceptance(left: ThreadTurnQueueEntry, right: ThreadTurnQueueEntry)
   const fields = [
     "backend", "threadId", "origin", "turnInputSource", "messageOrigin", "delivery", "input",
     "executionMode", "approvalPolicy", "sandbox", "model", "collaborationMode",
-    "serviceTier", "reasoningEffort", "fastMode", "automationRunId", "automationName",
+    "serviceTier", "reasoningEffort", "fastMode", "reviewFix", "automationRunId", "automationName",
     "agentMessages", "agentMessageOrigins", "restartContinuation",
   ] as const;
   return isDeepStrictEqual(

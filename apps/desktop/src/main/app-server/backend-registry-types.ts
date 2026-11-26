@@ -1246,6 +1246,7 @@ export type StartingTurnOrigin = {
   admittedCodexTurnSequence?: number;
   origin?: AppServerThreadMessageOrigin;
   turnInputSource?: TurnInputSource;
+  reviewFix?: boolean;
   turnId?: string;
 };
 

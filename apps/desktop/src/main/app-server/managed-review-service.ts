@@ -36,7 +36,6 @@ import {
   AGENT_REVIEW_LIMIT,
   canClaimAgentReview,
   type AgentReviewRefusal,
-  type OperatorReviewInput,
 } from "@pwragent/owner-core/agent-review-admission";
 import type {
   DynamicToolSpec as CodexDynamicToolSpec,
@@ -141,6 +140,7 @@ export interface ManagedReviewServiceHost extends Pick<RegistryHostPorts,
   | "prepareTokenMiserRuntime"
 > {
   currentTurnInputSource(context: { backend: AppServerBackendKind; threadId: string; turnId: string }): TurnInputSource;
+  isReviewFixTurn(context: { backend: AppServerBackendKind; threadId: string; turnId: string }): boolean;
   readonly registrySessionId: string;
   readonly reservedAcpStartThreadKeys: Set<string>;
   readonly runtimeInstanceId: string;
@@ -188,7 +188,7 @@ export class ManagedReviewService {
   private readonly context: RegistryContext;
   private readonly host: RegistryHost<ManagedReviewServiceHost>;
   readonly candidateLedger: ManagedReviewCandidateLedger;
-  private readonly operatorReviewInputs = new Map<string, OperatorReviewInput>();
+  private readonly observedOperatorTurns = new Map<string, string>();
   private readonly drainingReviewTerminals = new Set<string>();
   private readonly pendingPrReviewStarts = new Map<string, object>();
   private readonly publishingReviewResults = new Set<ReviewSubAgentRecord>();
@@ -211,11 +211,10 @@ export class ManagedReviewService {
   observeOperatorReviewInput(turn: { backend: AppServerBackendKind; threadId: string; turnId: string }, source?: TurnInputSource): void {
     if (!isOperatorReviewInput(source)) return;
     const key = buildThreadIdentityKey(turn.backend, turn.threadId);
-    if (this.operatorReviewInputs.get(key)?.turnId === turn.turnId) return;
-    const input = { turnId: turn.turnId, observedAt: Date.now() };
+    if (this.observedOperatorTurns.get(key) === turn.turnId) return;
     try {
-      this.context.stores.reviews.rearmAgentReviews(turn, input);
-      this.operatorReviewInputs.set(key, input);
+      this.context.stores.reviews.rearmAgentReviews(turn, { turnId: turn.turnId });
+      this.observedOperatorTurns.set(key, turn.turnId);
     } catch (error) {
       // The provider already accepted the operator turn. A bookkeeping
       // failure cannot turn that successful send into a reported failure.
@@ -2329,12 +2328,17 @@ export class ManagedReviewService {
       const sessionMode = caller?.acpRuntime?.currentModeId;
       const { target, cwd, runMode: requestedRunMode } = request.args;
       const turn = { backend, threadId, turnId: invokingTurnId };
-      const threadKey = buildThreadIdentityKey(backend, threadId);
       const idempotencyKey = JSON.stringify(["agent-review", invokingTurnId]);
       const requestKey = JSON.stringify([target, cwd, requestedRunMode]);
+      const isOperatorTurn = (): boolean =>
+        !this.host().isReviewFixTurn(turn)
+        && isOperatorReviewInput(this.host().currentTurnInputSource(turn));
       const checkAdmission = (): PwrAgentThreadOrchestrationResponse | undefined => {
         if (!this.host().isLiveDynamicToolCall(backend, turn)) {
           return threadOrchestrationFailure("forbidden", "The requesting turn has ended. No review was scheduled.");
+        }
+        if (this.host().isReviewFixTurn(turn)) {
+          return this.agentReviewRefused("review_fix_turn");
         }
         this.observeOperatorReviewInput(turn, this.host().currentTurnInputSource(turn));
         const previous = this.context.turnState.reviewAdmissions().find(
@@ -2351,7 +2355,7 @@ export class ManagedReviewService {
       const existing = checkAdmission();
       if (existing) return existing;
       const refusal = canClaimAgentReview(this.context.stores.reviews.readAgentReviewBudget(turn), {
-        ...turn, operatorInput: this.operatorReviewInputs.get(threadKey),
+        ...turn, isOperatorTurn: isOperatorTurn(),
       });
       if (refusal) return this.agentReviewRefused(refusal);
 
@@ -2426,7 +2430,7 @@ export class ManagedReviewService {
       if (concurrent) return concurrent;
       this.host().assertThreadOwnership();
       const claimRefusal = this.context.stores.reviews.claimAgentReview({
-        ...turn, operatorInput: this.operatorReviewInputs.get(threadKey), diff,
+        ...turn, isOperatorTurn: isOperatorTurn(), diff,
       });
       if (claimRefusal) return this.agentReviewRefused(claimRefusal);
       const pending = this.scheduleReviewStart({
@@ -2459,6 +2463,11 @@ export class ManagedReviewService {
         return threadOrchestrationFailure(
           "forbidden",
           `PwrAgent stopped after ${AGENT_REVIEW_LIMIT} agent-requested reviews on this thread. Report the current review and CI status, then wait for the operator. Do not retry or schedule another review.`,
+        );
+      case "review_fix_turn":
+        return threadOrchestrationFailure(
+          "forbidden",
+          "PwrAgent does not schedule another review from a review-fix turn. Settle the open findings, report each outcome, and wait for the operator to decide whether to review again.",
         );
     }
   }

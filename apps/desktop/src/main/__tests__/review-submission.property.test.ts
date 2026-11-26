@@ -7,6 +7,7 @@ import type { AppServerReviewPullRequestSnapshot, AppServerReviewTarget } from "
 import { createDesktopBackendRegistry, registryModules } from "../app-server/backend-registry-wiring";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { immutableReviewDiffHash } from "../app-server/agent-review-submission";
+import { autoFixReviewFindingsPrompt, fixReviewFindingsPrompt } from "../../shared/review-fix-prompts";
 import * as gitExecutable from "../app-server/git-executable";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
@@ -324,5 +325,154 @@ describe("agent review submission", () => {
       removeTempStateDbDir(tempDir);
       vi.unstubAllEnvs();
     }
+  });
+
+  it("refuses start_review from review-fix turns and never lets review-card Auto-fix or Fix turns reset the cap", async () => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const { dbPath, tempDir } = createTempStateDb("review-fix-loop-");
+    const stateDb = StateDb.open(dbPath);
+    try {
+      await withReviewOwner(async (owner) => {
+        // Reproduce PR #4493: agent handoff + PR watch wakes interleaved with
+        // desktop/federation Review card Auto-fix, Fix, and automatic Auto-fix turns.
+        const handoff = await owner.start("automation");
+        expect(await owner.ask(handoff, commit(1), "handoff-1")).toBe(true);
+        await owner.complete(handoff);
+        await owner.complete("review-1");
+
+        const watch1 = await owner.start("automation");
+        expect(await owner.ask(watch1, commit(2), "watch-1")).toBe(true);
+        await owner.complete(watch1);
+        await owner.complete("review-2");
+
+        // Card-clicked Auto-fix from desktop (explicit reviewFix: true):
+        // must NOT reset attempts (still 2/3) and must refuse start_review with 0 SQLite writes.
+        const cardAutoFix = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: autoFixReviewFindingsPrompt("Review of PR #4493", [{ title: "Keep search available", priority: 2 }]) }],
+          reviewFix: true,
+        }, "desktop");
+        const refusedCard = await measureSqliteWrites(() => owner.ask(cardAutoFix.turnId, commit(3), "card-autofix-review"));
+        expect(refusedCard.result).toBe(false);
+        expectSqliteWriteBudget({
+          scenario: "agent-review-refusal",
+          note: "A review refused inside a review-fix turn makes no writes.",
+          writes: refusedCard.writes,
+        });
+        await owner.complete(cardAutoFix.turnId);
+
+        // Card-clicked Fix from an older Federation viewer (no reviewFix flag, canonical prompt only):
+        // must ALSO refuse start_review and must NOT reset attempts (still 2/3).
+        const legacyFedFix = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: fixReviewFindingsPrompt("Review of PR #4493", [{ title: "Keep search available", priority: 2 }]) }],
+        }, "federation");
+        expect(await owner.ask(legacyFedFix.turnId, commit(4), "legacy-fed-fix-review")).toBe(false);
+        await owner.complete(legacyFedFix.turnId);
+
+        // Automatic review Auto-fix (messageOrigin.reviewAutoFix):
+        // must refuse start_review and must NOT reset attempts (still 2/3).
+        const automaticAutoFix = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: "Fix review findings" }],
+          messageOrigin: { kind: "pwragent", reviewAutoFix: { reviewId: "rev-2", title: "Review of PR #4493", findingCount: 1 } },
+        }, "automation");
+        expect(await owner.ask(automaticAutoFix.turnId, commit(5), "auto-autofix-review")).toBe(false);
+        await owner.complete(automaticAutoFix.turnId);
+
+        // Next PR watch wake consumes the 3rd and final slot (3/3).
+        const watch2 = await owner.start("automation");
+        expect(await owner.ask(watch2, commit(6), "watch-2")).toBe(true);
+        await owner.complete(watch2);
+        await owner.complete("review-3");
+
+        // Another Review card Auto-fix click after hitting the limit still does NOT reset!
+        const cardAutoFixAtCap = await owner.registry.startTurn({
+          ...thread,
+          input: [{ type: "text", text: autoFixReviewFindingsPrompt("Review of PR #4493", [{ title: "Still failing", priority: 2 }]) }],
+          reviewFix: true,
+        }, "desktop");
+        expect(await owner.ask(cardAutoFixAtCap.turnId, commit(7), "card-at-cap")).toBe(false);
+        await owner.complete(cardAutoFixAtCap.turnId);
+
+        // Next PR watch wake is hard-stopped at 3/3 (loop broken!).
+        const watch3 = await owner.start("automation");
+        expect(await owner.ask(watch3, commit(8), "watch-3")).toBe(false);
+        await owner.complete(watch3);
+
+        expect(owner.providerStarts()).toBe(3);
+
+        // A genuine typed operator turn still rearms the allowance.
+        const genuineOperator = await owner.start("desktop");
+        expect(await owner.ask(genuineOperator, commit(8), "after-genuine-operator")).toBe(true);
+        await owner.complete(genuineOperator);
+        await owner.complete("review-4");
+        expect(owner.providerStarts()).toBe(4);
+      }, { overlayStore: new SqliteOverlayStore(stateDb) });
+    } finally {
+      stateDb.close();
+      removeTempStateDbDir(tempDir);
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("rearms on a genuine operator turn even when Date.now ties or steps backwards", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
+    try {
+      await withReviewOwner(async (owner) => {
+        for (const value of [1, 2, 3]) {
+          const turn = await owner.start("automation");
+          expect(await owner.ask(turn, commit(value), `auto-${value}`)).toBe(true);
+          await owner.complete(turn);
+          await owner.complete(`review-${value}`);
+        }
+        nowSpy.mockReturnValue(1_700_000_000_000 - 50);
+        const operator = await owner.start("desktop");
+        expect(await owner.ask(operator, commit(1), "rearmed-same-ms")).toBe(true);
+        await owner.complete(operator);
+        await owner.complete("review-4");
+        expect(owner.providerStarts()).toBe(4);
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("preserves reviewFix across queued turns so a queued review-card Auto-fix still refuses start_review and keeps the cap", async () => {
+    await withReviewOwner(async (owner) => {
+      for (const value of [1, 2, 3]) {
+        const turn = await owner.start("automation");
+        expect(await owner.ask(turn, commit(value), `auto-${value}`)).toBe(true);
+        await owner.complete(turn);
+        await owner.complete(`review-${value}`);
+      }
+      // Start an active turn so the card Auto-fix submission queues behind it.
+      const active = await owner.start("automation");
+      const queuedStarted = createDeferred<string>();
+      owner.registry.onEvent(({ notification }) => {
+        if (notification.method === "thread/turnQueue/updated" && notification.params.status === "started"
+          && typeof notification.params.turnId === "string") {
+          queuedStarted.resolve(notification.params.turnId);
+        }
+      });
+      const queued = await owner.registry.submitTurn({
+        ...thread,
+        input: [{ type: "text", text: autoFixReviewFindingsPrompt("Review of PR #4493", [{ title: "Queued finding", priority: 2 }]) }],
+        origin: "manual",
+        reviewFix: true,
+      }, "desktop");
+      expect(queued.status).toBe("queued");
+
+      await owner.complete(active);
+      const queuedTurnId = await queuedStarted.promise;
+      expect(await owner.ask(queuedTurnId, commit(4), "queued-review-fix")).toBe(false);
+      await owner.complete(queuedTurnId);
+
+      // Next automated wake is still refused at 3/3.
+      const watch = await owner.start("automation");
+      expect(await owner.ask(watch, commit(5), "watch-after-queued-fix")).toBe(false);
+      await owner.complete(watch);
+      expect(owner.providerStarts()).toBe(3);
+    });
   });
 });

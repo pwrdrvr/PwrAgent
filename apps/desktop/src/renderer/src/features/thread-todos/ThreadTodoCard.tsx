@@ -321,7 +321,7 @@ function TrackedReviewCard(props: ThreadTodoCardProps) {
               ? autoFixReviewFindingsPrompt(todo.title, findings, review?.context)
               : fixReviewFindingsPrompt(todo.title, findings, review?.context);
             const failureAt = autoFixRun?.phase === "failed" ? autoFixRun.at : undefined;
-            const sent = await onDoHere(todo, { prompt });
+            const sent = await onDoHere(todo, { prompt, reviewFix: true });
             if (sent === false) {
               setSendError("The thread did not accept the repair request. Try again.");
               return;
