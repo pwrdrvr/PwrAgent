@@ -35,6 +35,7 @@ describe("main logger compact formatting", () => {
 
   it.each([
     { size: 3 * 1024 * 1024, rotates: false },
+    { size: 4 * 1024 * 1024, rotates: false },
     { size: 4 * 1024 * 1024 + 1, rotates: true },
   ])("preserves the previous main log until the 4 MiB rotation threshold ($size bytes)", ({ size, rotates }) => {
     const directory = mkdtempSync(path.join(tmpdir(), "pwragent-log-rotation-"));
