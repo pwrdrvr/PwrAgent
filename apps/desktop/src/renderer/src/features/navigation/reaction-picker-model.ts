@@ -328,76 +328,131 @@ function normalizeSearchToken(value: string): string {
   return value.toLowerCase().replace(/[_-]+/g, " ").trim();
 }
 
+type PrecomputedSearchEntry = {
+  normalizedEmoji: string;
+  lowerName: string;
+  nameWords: readonly string[];
+  lowerShortcode: string;
+  normalizedShortcode: string;
+  lowerKeywords: readonly string[];
+  normalizedKeywords: readonly string[];
+  searchable: string;
+};
+
+const searchEntryCache = new WeakMap<ReactionEmojiEntry, PrecomputedSearchEntry>();
+
+function getPrecomputedSearchEntry(entry: ReactionEmojiEntry): PrecomputedSearchEntry {
+  const cached = searchEntryCache.get(entry);
+  if (cached) {
+    return cached;
+  }
+  const lowerName = entry.name.toLowerCase();
+  const lowerShortcode = entry.shortcode.toLowerCase();
+  const normalizedShortcode = normalizeSearchToken(entry.shortcode);
+  const lowerKeywords = entry.keywords.map((keyword) => keyword.toLowerCase());
+  const normalizedKeywords = entry.keywords.map((keyword) => normalizeSearchToken(keyword));
+  const precomputed: PrecomputedSearchEntry = {
+    normalizedEmoji: normalizeEmojiKey(entry.emoji),
+    lowerName,
+    nameWords: lowerName.split(/\s+/),
+    lowerShortcode,
+    normalizedShortcode,
+    lowerKeywords,
+    normalizedKeywords,
+    searchable: `${lowerName} ${lowerShortcode} ${normalizedShortcode} ${lowerKeywords.join(" ")}`,
+  };
+  searchEntryCache.set(entry, precomputed);
+  return precomputed;
+}
+
 function scoreEntry(
   entry: ReactionEmojiEntry,
   rawLower: string,
+  normalizedRawEmoji: string,
   normalizedQuery: string,
   queryTokens: readonly string[],
 ): number | undefined {
+  const indexed = getPrecomputedSearchEntry(entry);
   if (
     entry.emoji === rawLower
-    || normalizeEmojiKey(entry.emoji) === normalizeEmojiKey(rawLower)
+    || indexed.normalizedEmoji === normalizedRawEmoji
   ) {
     return 0;
   }
 
-  const lowerName = entry.name.toLowerCase();
-  const lowerShortcode = entry.shortcode.toLowerCase();
-  const normalizedShortcode = normalizeSearchToken(entry.shortcode);
   const hasNormalizedQuery = normalizedQuery.length > 0;
 
   if (
-    lowerShortcode === rawLower
-    || (hasNormalizedQuery && (lowerName === normalizedQuery || normalizedShortcode === normalizedQuery))
+    indexed.lowerShortcode === rawLower
+    || (hasNormalizedQuery
+      && (indexed.lowerName === normalizedQuery || indexed.normalizedShortcode === normalizedQuery))
   ) {
     return 1;
   }
 
   if (
-    lowerShortcode.startsWith(rawLower)
+    indexed.lowerShortcode.startsWith(rawLower)
     || (hasNormalizedQuery
-      && (lowerName.startsWith(normalizedQuery)
-        || normalizedShortcode.startsWith(normalizedQuery)))
+      && (indexed.lowerName.startsWith(normalizedQuery)
+        || indexed.normalizedShortcode.startsWith(normalizedQuery)))
     || (entry.isQuick === true
-      && entry.keywords.some(
-        (keyword) =>
-          keyword.toLowerCase() === rawLower
-          || (hasNormalizedQuery && normalizeSearchToken(keyword) === normalizedQuery),
-      ))
+      && hasExactKeywordMatch(indexed, rawLower, normalizedQuery, hasNormalizedQuery))
   ) {
     return 2;
   }
 
-  if (
-    entry.keywords.some(
-      (keyword) =>
-        keyword.toLowerCase() === rawLower
-        || (hasNormalizedQuery && normalizeSearchToken(keyword) === normalizedQuery),
-    )
-  ) {
+  if (hasExactKeywordMatch(indexed, rawLower, normalizedQuery, hasNormalizedQuery)) {
     return 3;
   }
 
-  const words = lowerName.split(/\s+/);
   if (
-    (hasNormalizedQuery && words.some((word) => word.startsWith(normalizedQuery)))
-    || entry.keywords.some(
-      (keyword) =>
-        keyword.toLowerCase().startsWith(rawLower)
-        || (hasNormalizedQuery && normalizeSearchToken(keyword).startsWith(normalizedQuery)),
-    )
+    (hasNormalizedQuery && indexed.nameWords.some((word) => word.startsWith(normalizedQuery)))
+    || hasPrefixKeywordMatch(indexed, rawLower, normalizedQuery, hasNormalizedQuery)
   ) {
     return 4;
   }
 
   if (queryTokens.length > 0) {
-    const searchable = `${lowerName} ${lowerShortcode} ${normalizedShortcode} ${entry.keywords.join(" ").toLowerCase()}`;
-    if (queryTokens.every((token) => searchable.includes(token))) {
+    if (queryTokens.every((token) => indexed.searchable.includes(token))) {
       return 5;
     }
   }
 
   return undefined;
+}
+
+function hasExactKeywordMatch(
+  indexed: PrecomputedSearchEntry,
+  rawLower: string,
+  normalizedQuery: string,
+  hasNormalizedQuery: boolean,
+): boolean {
+  for (let i = 0; i < indexed.lowerKeywords.length; i += 1) {
+    if (
+      indexed.lowerKeywords[i] === rawLower
+      || (hasNormalizedQuery && indexed.normalizedKeywords[i] === normalizedQuery)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasPrefixKeywordMatch(
+  indexed: PrecomputedSearchEntry,
+  rawLower: string,
+  normalizedQuery: string,
+  hasNormalizedQuery: boolean,
+): boolean {
+  for (let i = 0; i < indexed.lowerKeywords.length; i += 1) {
+    if (
+      indexed.lowerKeywords[i]!.startsWith(rawLower)
+      || (hasNormalizedQuery && indexed.normalizedKeywords[i]!.startsWith(normalizedQuery))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function searchReactionEmojis(
@@ -412,6 +467,7 @@ export function searchReactionEmojis(
 
   const strippedColons = trimmed.replace(/^:+|:+$/g, "").trim();
   const rawLower = (strippedColons || trimmed).toLowerCase();
+  const normalizedRawEmoji = normalizeEmojiKey(rawLower);
   const normalizedQuery = normalizeSearchToken(rawLower);
   const queryTokens = normalizedQuery
     .split(/\s+/)
@@ -420,7 +476,7 @@ export function searchReactionEmojis(
   const scored: { entry: ReactionEmojiEntry; tier: number; order: number }[] = [];
   for (let index = 0; index < entries.length; index++) {
     const entry = entries[index]!;
-    const tier = scoreEntry(entry, rawLower, normalizedQuery, queryTokens);
+    const tier = scoreEntry(entry, rawLower, normalizedRawEmoji, normalizedQuery, queryTokens);
     if (tier !== undefined) {
       scored.push({ entry, tier, order: index });
     }

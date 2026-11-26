@@ -7,9 +7,11 @@ import {
   QUICK_REACTIONS,
 } from "../../features/navigation/reaction-picker-model";
 import {
+  advanceCodeFenceState,
+  extractCodeFenceMarkers,
   findEmojiShortcodeTrigger,
   findExactEmojiShortcodeBeforeColon,
-  hasPotentialEmojiShortcode,
+  isCurrentLineInsideUnclosedCode,
   isInsideUnclosedCodeContext,
   replaceEmojiShortcodesInText,
   resolveEmojiShortcode,
@@ -218,11 +220,66 @@ describe("emoji shortcode boundary safety properties", () => {
     expect(findEmojiShortcodeTrigger(":+1", 3, { atLineStart: false })).toBeUndefined();
   });
 
-  it("fast-paths potential shortcode detection without false negatives on formatted prose", () => {
-    expect(hasPotentialEmojiShortcode("Plain text with no colons")).toBe(false);
-    expect(hasPotentialEmojiShortcode("Meeting at 12:30 today")).toBe(false);
-    expect(hasPotentialEmojiShortcode("std::vector<int>")).toBe(false);
-    expect(hasPotentialEmojiShortcode(":+1:")).toBe(true);
-    expect(hasPotentialEmojiShortcode("**:+1:**")).toBe(true);
+  it("is idempotent on arbitrary colon/punctuation/shortcode combinations", () => {
+    const tokenArb = fc.oneof(
+      fc.constantFrom(":", " ", "\n", "(", ")", ".", ",", "!", "?", ";", "/", "_"),
+      fc.constantFrom("+1", "-1", "rocket", "avocado", "100", "foo", "30"),
+    );
+    const messyArb = fc.array(tokenArb, { minLength: 1, maxLength: 24 }).map((parts) => parts.join(""));
+
+    fc.assert(
+      fc.property(messyArb, fc.boolean(), fc.boolean(), (text, allowLeadingStart, allowTrailingEnd) => {
+        const once = replaceEmojiShortcodesInText(text, {
+          catalog,
+          allowLeadingStart,
+          allowTrailingEnd,
+        });
+        const twice = replaceEmojiShortcodesInText(once, {
+          catalog,
+          allowLeadingStart,
+          allowTrailingEnd,
+        });
+        expect(twice).toBe(once);
+      }),
+    );
+  });
+
+  it("extractCodeFenceMarkers + advanceCodeFenceState matches isInsideUnclosedCodeContext", () => {
+    const lineArb = fc.constantFrom(
+      "normal prose",
+      "```ts",
+      "```",
+      "````md",
+      "````",
+      "~~~",
+      "~~~py",
+      "  ```",
+      "    ```",
+      "`inline`",
+      "`unclosed",
+    );
+
+    fc.assert(
+      fc.property(
+        fc.array(lineArb, { minLength: 1, maxLength: 8 }),
+        lineArb,
+        (priorLines, currentLine) => {
+          const priorText = priorLines.join("\n");
+          const fullText = `${priorText}\n${currentLine}`;
+          const expected = isInsideUnclosedCodeContext(fullText, fullText.length);
+
+          let activeFence: { char: "`" | "~"; length: number } | undefined;
+          for (const line of priorLines) {
+            const markers = extractCodeFenceMarkers(line);
+            if (markers.length > 0) {
+              activeFence = advanceCodeFenceState(activeFence, markers);
+            }
+          }
+          const actual =
+            activeFence !== undefined || isCurrentLineInsideUnclosedCode(currentLine);
+          expect(actual).toBe(expected);
+        },
+      ),
+    );
   });
 });

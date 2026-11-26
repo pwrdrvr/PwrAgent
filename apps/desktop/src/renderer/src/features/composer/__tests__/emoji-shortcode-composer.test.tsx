@@ -157,9 +157,30 @@ describe("ComposerTiptapInput :shortcode: auto-expansion", () => {
       typeTextIntoEditor(markdownView.editor, ":+1:");
     });
     expect(markdownView.textbox.textContent).toContain("👍");
+
+    // 4. MBT counterexample: unclosed backticks earlier on the same line before an inline code mark still suppress expansion.
+    act(() => {
+      markdownView.editor.commands.setContent("<p>``<code> (</code> </p>");
+      markdownView.editor.commands.setTextSelection(
+        markdownView.editor.state.doc.content.size - 1,
+      );
+      typeTextIntoEditor(markdownView.editor, ":rocket:");
+    });
+    expect(markdownView.textbox.textContent).toContain(":rocket:");
+    expect(markdownView.textbox.textContent).not.toContain("🚀");
+
+    // 5. MBT counterexample: inline code mark before literal `~~~` on the same line is NOT a column-0 opening fence.
+    act(() => {
+      markdownView.editor.commands.setContent("<p><code>x</code> ~~~hello</p>");
+      markdownView.editor.commands.setTextSelection(
+        markdownView.editor.state.doc.content.size - 1,
+      );
+      typeTextIntoEditor(markdownView.editor, " :+1:");
+    });
+    expect(markdownView.textbox.textContent).toContain("👍");
   });
 
-  it("skips full-document traversal on caret moves when no emoji trigger exists", async () => {
+  it("skips full-document traversal on caret moves when no emoji trigger exists and caches per-doc fence state", async () => {
     await loadEmojiCatalog();
     const onReferenceSelectionChange = vi.fn();
     const { editor, inputRef } = renderControlledTiptap({
@@ -186,17 +207,18 @@ describe("ComposerTiptapInput :shortcode: auto-expansion", () => {
     expect(priorBlockCallsWithoutTrigger).toEqual([]);
     nodesBetweenSpy.mockRestore();
 
-    // Once a boundary-safe :shortcode candidate exists, prior blocks are inspected lazily.
+    // Once a boundary-safe :shortcode candidate exists, onTransaction populates the per-doc
+    // fence cache once and subsequent getEmojiTrigger() reads on the same doc avoid re-walking.
     act(() => {
       typeTextIntoEditor(editor, " :thumbs");
     });
     const activeNodesBetweenSpy = vi.spyOn(editor.state.doc, "nodesBetween");
     const trigger = inputRef.current?.getEmojiTrigger();
     expect(trigger?.query).toBe("thumbs");
-    const priorBlockCallsWithTrigger = activeNodesBetweenSpy.mock.calls.filter(
+    const priorBlockCallsAfterCache = activeNodesBetweenSpy.mock.calls.filter(
       ([from, to]) => from === 0 && to === blockStart,
     );
-    expect(priorBlockCallsWithTrigger).toHaveLength(1);
+    expect(priorBlockCallsAfterCache).toEqual([]);
     activeNodesBetweenSpy.mockRestore();
   });
 

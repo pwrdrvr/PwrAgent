@@ -1,12 +1,23 @@
 import "@testing-library/jest-dom/vitest";
 import { StrictMode } from "react";
 import { cleanup, render, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  advanceIncrementalParse,
+  type AdvanceOptions,
+  type IncrementalParseState,
+} from "@ai-markdown/engine";
+import remarkBreaks from "remark-breaks";
+import remarkGfm from "remark-gfm";
+import { buildReactionEmojiCatalog } from "../../navigation/reaction-emoji-catalog";
 import { loadEmojiCatalog } from "../../../lib/emoji-shortcodes";
 import {
   MarkdownRenderingOptionsProvider,
   useIncrementalMarkdownRenderer,
 } from "../../../lib/markdown-rendering-options";
+import { remarkEmojiShortcodes } from "../remark-emoji-shortcodes";
+import { remarkPullRequestReferences } from "../remark-pull-request-references";
+import { remarkTableProfile } from "../remark-table-profile";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
 function RenderMarkdown(props: { incremental?: boolean; text: string }) {
@@ -45,7 +56,7 @@ describe.each([false, true])(
       const markdown = [
         "Ship it :rocket:! :+1: and :thumbsup: (plus :avocado:).",
         "",
-        "**:tada:**",
+        "**:tada:** and (**:+1:**) and foo (**:+1:**) vs foo(**:+1:**)",
         "",
         "- Done :white_check_mark:",
       ].join("\n");
@@ -56,7 +67,7 @@ describe.each([false, true])(
 
       const paragraphs = container.querySelectorAll("p");
       expect(paragraphs[0]?.textContent).toBe("Ship it 🚀! 👍 and 👍 (plus 🥑).");
-      expect(container.querySelector("strong")?.textContent).toBe("🎉");
+      expect(paragraphs[1]?.textContent).toBe("🎉 and (👍) and foo (👍) vs foo(:+1:)");
       expect(container.querySelector("li")?.textContent).toBe("Done ✅");
     });
 
@@ -129,5 +140,51 @@ describe("IncrementalMarkdown streaming parity for emoji shortcodes", () => {
       );
       standardView.unmount();
     }
+  });
+
+  it("keeps streaming parse work strictly linear across appends with timestamps, colons, and shortcodes", () => {
+    const catalog = buildReactionEmojiCatalog();
+    let parsedCharacters = 0;
+    const onMissingCatalog = vi.fn();
+    const observe = () => (_tree: unknown, file: { value: unknown }) => {
+      parsedCharacters += String(file.value).length;
+    };
+    const plugins: AdvanceOptions["remarkPlugins"] = [
+      remarkBreaks,
+      [remarkGfm, { singleTilde: false }],
+      remarkPullRequestReferences,
+      [remarkEmojiShortcodes, { catalog, onMissingCatalog }],
+      remarkTableProfile,
+      observe,
+    ];
+    const options: AdvanceOptions = {
+      remarkPlugins: plugins,
+      rehypePlugins: [],
+      remarkRehypeOptions: undefined,
+      depsKey: [plugins],
+      defListEnabled: false,
+      gfmTaskListItems: true,
+      mathFlow: false,
+    };
+
+    let state: IncrementalParseState | null = null;
+    let content = "";
+    let incrementalFrames = 0;
+    const chunks = 64;
+    for (let index = 0; index < chunks; index += 1) {
+      content +=
+        index === 48
+          ? "Shipped at 12:30:00 with :avocado: and (**:+1:**).\n\n"
+          : `Log entry at 12:30 for service: worker-${index} :rocket:.\n\n`;
+      const result = advanceIncrementalParse(state, content, options);
+      state = result.nextState;
+      if (result.usedIncremental) {
+        incrementalFrames += 1;
+      }
+    }
+
+    expect(incrementalFrames).toBe(chunks - 1);
+    expect(parsedCharacters).toBeLessThanOrEqual(content.length * 2);
+    expect(onMissingCatalog).not.toHaveBeenCalled();
   });
 });

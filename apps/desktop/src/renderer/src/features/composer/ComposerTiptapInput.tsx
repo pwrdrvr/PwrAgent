@@ -47,9 +47,12 @@ import {
 import { buildInstanceReferenceMarkdown } from "../../lib/instance-references";
 import { findHashReferenceTrigger } from "../../lib/hash-references";
 import {
+  advanceCodeFenceState,
+  extractCodeFenceMarkers,
   findEmojiShortcodeTrigger,
   findExactEmojiShortcodeBeforeColon,
   preloadEmojiCatalog,
+  type CodeFenceMarker,
 } from "../../lib/emoji-shortcodes";
 import { parsePullRequestUrl } from "../../lib/pull-request-links";
 import { resolveThreadIdText, useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
@@ -2636,6 +2639,13 @@ function getSelectionDraftRange(
   };
 }
 
+const MAX_EMOJI_TAIL_CHARS = 68;
+const textblockFenceMarkersCache = new WeakMap<ProseMirrorNode, readonly CodeFenceMarker[]>();
+const priorFenceStateCache = new WeakMap<
+  ProseMirrorNode,
+  Map<number, { char: "`" | "~"; length: number } | undefined>
+>();
+
 function serializeTextblockForFenceCheck(block: ProseMirrorNode): string {
   let line = "";
   block.forEach((child) => {
@@ -2650,13 +2660,57 @@ function serializeTextblockForFenceCheck(block: ProseMirrorNode): string {
   return line;
 }
 
-function readContiguousPlainTextBeforeCaret(
+function getTextblockFenceMarkers(block: ProseMirrorNode): readonly CodeFenceMarker[] {
+  const cached = textblockFenceMarkersCache.get(block);
+  if (cached) {
+    return cached;
+  }
+  const markers = extractCodeFenceMarkers(serializeTextblockForFenceCheck(block));
+  textblockFenceMarkersCache.set(block, markers);
+  return markers;
+}
+
+function computePriorBlockFenceState(
+  doc: ProseMirrorNode,
+  blockStart: number,
+): { char: "`" | "~"; length: number } | undefined {
+  if (blockStart <= 0) {
+    return undefined;
+  }
+  let perDoc = priorFenceStateCache.get(doc);
+  if (perDoc?.has(blockStart)) {
+    return perDoc.get(blockStart);
+  }
+  let activeFence: { char: "`" | "~"; length: number } | undefined;
+  doc.nodesBetween(0, blockStart, (node) => {
+    if (node.type.spec.code) {
+      return false;
+    }
+    if (node.isTextblock) {
+      const markers = getTextblockFenceMarkers(node);
+      if (markers.length > 0) {
+        activeFence = advanceCodeFenceState(activeFence, markers);
+      }
+      return false;
+    }
+    return undefined;
+  });
+  if (!perDoc) {
+    perDoc = new Map();
+    priorFenceStateCache.set(doc, perDoc);
+  }
+  perDoc.set(blockStart, activeFence);
+  return activeFence;
+}
+
+function readPlainTailBeforeCaret(
   doc: ProseMirrorNode,
   pos: number,
 ): {
   atLineStart: boolean;
   prefix: string;
-  getPriorText: () => string | undefined;
+  getCurrentLine: () => string;
+  isInsidePriorFence: () => boolean;
 } | undefined {
   const $pos = doc.resolve(pos);
   if (!$pos.parent.inlineContent || $pos.parent.type.spec.code) {
@@ -2666,59 +2720,93 @@ function readContiguousPlainTextBeforeCaret(
     return undefined;
   }
 
+  // Scan backward at most MAX_EMOJI_TAIL_CHARS (68) chars so normal typing
+  // and caret moves in long paragraphs stay strictly O(1) without copying the
+  // whole paragraph or walking preceding blocks.
   let prefix = "";
   let atLineStart = true;
-  let currentLine = "";
-  const parentPriorLines: string[] = [];
-  $pos.parent.nodesBetween(0, $pos.parentOffset, (node, position) => {
-    if (node.isText && !node.marks.some((mark) => mark.type.spec.code)) {
-      const slice = node.text!.slice(0, $pos.parentOffset - position);
-      prefix += slice;
-      currentLine += slice;
-    } else if (node.type.name === "hardBreak") {
-      parentPriorLines.push(currentLine);
-      currentLine = "";
-      prefix = "";
-      atLineStart = true;
+  let childIndex = $pos.index();
+  if ($pos.textOffset > 0) {
+    const activeChild = $pos.parent.child(childIndex);
+    if (activeChild.isText && !activeChild.marks.some((mark) => mark.type.spec.code)) {
+      const text = activeChild.text!;
+      if ($pos.textOffset > MAX_EMOJI_TAIL_CHARS) {
+        prefix = text.slice($pos.textOffset - MAX_EMOJI_TAIL_CHARS, $pos.textOffset);
+        atLineStart = false;
+        childIndex = -1;
+      } else {
+        prefix = text.slice(0, $pos.textOffset);
+        childIndex -= 1;
+      }
     } else {
-      currentLine += "x";
-      prefix = "";
       atLineStart = false;
+      childIndex = -1;
     }
-  });
+  } else {
+    childIndex -= 1;
+  }
 
-  const blockStart = $pos.before($pos.depth);
-  let cachedPriorText: string | undefined;
-  let computedPriorText = false;
-  const getPriorText = (): string | undefined => {
-    if (computedPriorText) {
-      return cachedPriorText;
+  while (childIndex >= 0 && prefix.length < MAX_EMOJI_TAIL_CHARS) {
+    const child = $pos.parent.child(childIndex);
+    if (child.isText && !child.marks.some((mark) => mark.type.spec.code)) {
+      const text = child.text!;
+      const needed = MAX_EMOJI_TAIL_CHARS - prefix.length;
+      if (text.length > needed) {
+        prefix = text.slice(text.length - needed) + prefix;
+        atLineStart = false;
+        break;
+      }
+      prefix = text + prefix;
+    } else if (child.type.name === "hardBreak") {
+      atLineStart = true;
+      break;
+    } else {
+      atLineStart = false;
+      break;
     }
-    computedPriorText = true;
+    childIndex -= 1;
+  }
+
+  let parentScan: { currentLine: string; priorLinesText: string } | undefined;
+  const ensureParentScan = () => {
+    if (parentScan) {
+      return parentScan;
+    }
+    let currentLine = "";
     const priorLines: string[] = [];
-    if (blockStart > 0) {
-      doc.nodesBetween(0, blockStart, (node) => {
-        if (node.type.spec.code) {
-          return false;
-        }
-        if (node.isTextblock) {
-          priorLines.push(serializeTextblockForFenceCheck(node));
-          return false;
-        }
-        return undefined;
-      });
-    }
-    if (parentPriorLines.length > 0) {
-      priorLines.push(...parentPriorLines);
-    }
-    cachedPriorText = priorLines.length > 0 ? priorLines.join("\n") : undefined;
-    return cachedPriorText;
+    $pos.parent.nodesBetween(0, $pos.parentOffset, (node, position) => {
+      if (node.isText && !node.marks.some((mark) => mark.type.spec.code)) {
+        currentLine += node.text!.slice(0, $pos.parentOffset - position);
+      } else if (node.type.name === "hardBreak") {
+        priorLines.push(currentLine);
+        currentLine = "";
+      } else {
+        currentLine += "x";
+      }
+    });
+    parentScan = {
+      currentLine,
+      priorLinesText: priorLines.join("\n"),
+    };
+    return parentScan;
   };
 
+  const blockStart = $pos.before($pos.depth);
   return {
     atLineStart,
     prefix,
-    getPriorText,
+    getCurrentLine: () => ensureParentScan().currentLine,
+    isInsidePriorFence: () => {
+      let activeFence = computePriorBlockFenceState(doc, blockStart);
+      const { priorLinesText } = ensureParentScan();
+      if (priorLinesText.length > 0) {
+        const markers = extractCodeFenceMarkers(priorLinesText);
+        if (markers.length > 0) {
+          activeFence = advanceCodeFenceState(activeFence, markers);
+        }
+      }
+      return activeFence !== undefined;
+    },
   };
 }
 
@@ -2744,13 +2832,14 @@ function readEmojiTrigger(
   if (editor.state.storedMarks?.some((mark) => mark.type.spec.code)) {
     return undefined;
   }
-  const context = readContiguousPlainTextBeforeCaret(editor.state.doc, $from.pos);
+  const context = readPlainTailBeforeCaret(editor.state.doc, $from.pos);
   if (!context) {
     return undefined;
   }
   const trigger = findEmojiShortcodeTrigger(context.prefix, context.prefix.length, {
     atLineStart: context.atLineStart,
-    getPriorText: context.getPriorText,
+    getCurrentLine: context.getCurrentLine,
+    isInsidePriorFence: context.isInsidePriorFence,
   });
   if (!trigger) {
     return undefined;
@@ -3272,14 +3361,15 @@ export const ComposerTiptapInput = forwardRef<
                 ) {
                   return false;
                 }
-                const context = readContiguousPlainTextBeforeCaret(view.state.doc, from);
+                const context = readPlainTailBeforeCaret(view.state.doc, from);
                 if (!context) {
                   return false;
                 }
                 const suffix = readFollowingBoundaryText(view.state.doc, to);
                 const match = findExactEmojiShortcodeBeforeColon(context.prefix, suffix, {
                   atLineStart: context.atLineStart,
-                  getPriorText: context.getPriorText,
+                  getCurrentLine: context.getCurrentLine,
+                  isInsidePriorFence: context.isInsidePriorFence,
                 });
                 if (!match) {
                   return false;

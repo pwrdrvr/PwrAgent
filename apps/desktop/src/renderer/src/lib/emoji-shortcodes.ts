@@ -24,9 +24,43 @@ export type EmojiShortcodeMatch = {
 };
 
 const SHORTCODE_BODY_PATTERN = /^[A-Za-z0-9_+-]{1,64}$/;
-const SHORTCODE_CANDIDATE_PATTERN = /:([A-Za-z0-9_+-]{1,64}):/g;
-const POTENTIAL_SHORTCODE_PATTERN = /:[A-Za-z0-9_+-]{1,64}:/;
 const TRAILING_PUNCTUATION_PATTERN = /^[.,!?;)]$/;
+const MAX_SHORTCODE_LENGTH = 64;
+
+function isShortcodeBodyChar(code: number): boolean {
+  return (
+    (code >= 97 && code <= 122) // a-z
+    || (code >= 65 && code <= 90) // A-Z
+    || (code >= 48 && code <= 57) // 0-9
+    || code === 95 // _
+    || code === 43 // +
+    || code === 45 // -
+  );
+}
+
+/**
+ * Scans backward at most `MAX_SHORTCODE_LENGTH + 1` characters from `endOffset`
+ * in `text` to find a `:shortcode` candidate ending right at `endOffset`.
+ * Runs in strictly O(1) time regardless of `text.length`.
+ */
+function scanShortcodeSuffix(
+  text: string,
+  endOffset: number,
+): { start: number; shortcode: string } | undefined {
+  let cursor = endOffset;
+  const minCursor = Math.max(0, endOffset - MAX_SHORTCODE_LENGTH);
+  while (cursor > minCursor && isShortcodeBodyChar(text.charCodeAt(cursor - 1))) {
+    cursor -= 1;
+  }
+  if (cursor === endOffset || cursor === 0 || text.charCodeAt(cursor - 1) !== 58 /* : */) {
+    return undefined;
+  }
+  const start = cursor - 1;
+  return {
+    start,
+    shortcode: text.slice(cursor, endOffset),
+  };
+}
 
 const emojiCatalogCache = createLazyValueCache<ReactionEmojiCatalog>(() =>
   import("../features/navigation/reaction-emoji-catalog").then((module) =>
@@ -127,10 +161,6 @@ export function searchEmojiShortcodes(
   return searchReactionEmojis(source, query, limit);
 }
 
-export function hasPotentialEmojiShortcode(text: string): boolean {
-  return text.includes(":") && POTENTIAL_SHORTCODE_PATTERN.test(text);
-}
-
 function parseOpeningFence(line: string): { char: "`" | "~"; length: number } | undefined {
   const match = /^[ \t]{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
   if (!match) {
@@ -185,6 +215,71 @@ function hasUnclosedInlineCodeSpan(line: string): boolean {
   return openTicks > 0;
 }
 
+export type CodeFenceMarker = {
+  char: "`" | "~";
+  length: number;
+  closingOnly: boolean;
+};
+
+/**
+ * Extracts only the CommonMark fence-opening or fence-closing lines from `text`
+ * so callers can cache fence transitions per immutable document block.
+ */
+export function extractCodeFenceMarkers(text: string): readonly CodeFenceMarker[] {
+  if (!text.includes("```") && !text.includes("~~~")) {
+    return EMPTY_FENCE_MARKERS;
+  }
+  const lines = text.split(/\r?\n/);
+  const markers: CodeFenceMarker[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    const closingMatch = /^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
+    if (closingMatch) {
+      const token = closingMatch[1]!;
+      markers.push({
+        char: token[0] as "`" | "~",
+        length: token.length,
+        closingOnly: false,
+      });
+      continue;
+    }
+    const opening = parseOpeningFence(line);
+    if (opening) {
+      markers.push({
+        char: opening.char,
+        length: opening.length,
+        closingOnly: true,
+      });
+    }
+  }
+  return markers.length > 0 ? markers : EMPTY_FENCE_MARKERS;
+}
+
+const EMPTY_FENCE_MARKERS: readonly CodeFenceMarker[] = [];
+
+export function advanceCodeFenceState(
+  activeFence: { char: "`" | "~"; length: number } | undefined,
+  markers: readonly CodeFenceMarker[],
+): { char: "`" | "~"; length: number } | undefined {
+  let state = activeFence;
+  for (let index = 0; index < markers.length; index += 1) {
+    const marker = markers[index]!;
+    if (state) {
+      // A line with an info string (`closingOnly: true`) cannot close an open fence.
+      if (!marker.closingOnly && marker.char === state.char && marker.length >= state.length) {
+        state = undefined;
+      }
+    } else {
+      state = { char: marker.char, length: marker.length };
+    }
+  }
+  return state;
+}
+
+export function isCurrentLineInsideUnclosedCode(line: string): boolean {
+  return Boolean(parseOpeningFence(line)) || hasUnclosedInlineCodeSpan(line);
+}
+
 /**
  * Returns true when `caret` sits inside an unclosed fenced code block or an
  * unclosed inline backtick code span in `text`.
@@ -213,10 +308,7 @@ export function isInsideUnclosedCodeContext(
   }
 
   const currentLine = lines[lines.length - 1] ?? "";
-  if (parseOpeningFence(currentLine)) {
-    return true;
-  }
-  return hasUnclosedInlineCodeSpan(currentLine);
+  return isCurrentLineInsideUnclosedCode(currentLine);
 }
 
 function hasValidLeadingBoundary(
@@ -263,32 +355,46 @@ export function findEmojiShortcodeTrigger(
   caret: number,
   options?: {
     atLineStart?: boolean;
+    getCurrentLine?: () => string;
     getPriorText?: () => string | undefined;
+    isInsidePriorFence?: () => boolean;
     priorText?: string;
   },
 ): EmojiShortcodeTrigger | undefined {
   const safeCaret = Math.max(0, Math.min(caret, text.length));
-  const prefix = text.slice(0, safeCaret);
-  const match = /:([A-Za-z0-9_+-]{1,64})$/.exec(prefix);
-  if (!match) {
+  const candidate = scanShortcodeSuffix(text, safeCaret);
+  if (!candidate) {
     return undefined;
   }
-  const start = prefix.length - match[0].length;
   const allowStart = options?.atLineStart !== false;
-  if (!hasValidLeadingBoundary(prefix, start, allowStart, false)) {
+  if (!hasValidLeadingBoundary(text, candidate.start, allowStart, false)) {
     return undefined;
   }
-  const priorText = options?.priorText ?? options?.getPriorText?.();
-  const codeContextText = priorText
-    ? `${priorText}\n${prefix}`
-    : prefix;
-  if (isInsideUnclosedCodeContext(codeContextText, codeContextText.length)) {
-    return undefined;
+  if (options?.isInsidePriorFence) {
+    if (options.isInsidePriorFence()) {
+      return undefined;
+    }
+    const line = options.getCurrentLine
+      ? options.getCurrentLine()
+      : text.slice(text.lastIndexOf("\n", safeCaret - 1) + 1, safeCaret);
+    if (isCurrentLineInsideUnclosedCode(line)) {
+      return undefined;
+    }
+  } else {
+    const prefix = text.slice(0, safeCaret);
+    const priorText = options?.priorText ?? options?.getPriorText?.();
+    const currentLine = options?.getCurrentLine ? options.getCurrentLine() : prefix;
+    const codeContextText = priorText
+      ? `${priorText}\n${currentLine}`
+      : currentLine;
+    if (isInsideUnclosedCodeContext(codeContextText, codeContextText.length)) {
+      return undefined;
+    }
   }
   return {
-    start,
+    start: candidate.start,
     end: safeCaret,
-    query: match[1]!,
+    query: candidate.shortcode,
   };
 }
 
@@ -302,38 +408,51 @@ export function findExactEmojiShortcodeBeforeColon(
   options?: {
     atLineStart?: boolean;
     catalog?: ReactionEmojiCatalog;
+    getCurrentLine?: () => string;
     getPriorText?: () => string | undefined;
+    isInsidePriorFence?: () => boolean;
     priorText?: string;
   },
 ): EmojiShortcodeMatch | undefined {
-  const match = /:([A-Za-z0-9_+-]{1,64})$/.exec(prefix);
-  if (!match) {
+  const candidate = scanShortcodeSuffix(prefix, prefix.length);
+  if (!candidate) {
     return undefined;
   }
-  const start = prefix.length - match[0].length;
   const allowStart = options?.atLineStart !== false;
-  if (!hasValidLeadingBoundary(prefix, start, allowStart, true)) {
+  if (!hasValidLeadingBoundary(prefix, candidate.start, allowStart, true)) {
     return undefined;
   }
   if (!hasValidTrailingBoundary(suffix, 0, true)) {
     return undefined;
   }
-  const shortcode = match[1]!;
-  const entry = resolveEmojiShortcode(shortcode, options?.catalog);
+  const entry = resolveEmojiShortcode(candidate.shortcode, options?.catalog);
   if (!entry) {
     return undefined;
   }
-  const priorText = options?.priorText ?? options?.getPriorText?.();
-  const codeContextText = priorText
-    ? `${priorText}\n${prefix}`
-    : prefix;
-  if (isInsideUnclosedCodeContext(codeContextText, codeContextText.length)) {
-    return undefined;
+  if (options?.isInsidePriorFence) {
+    if (options.isInsidePriorFence()) {
+      return undefined;
+    }
+    const line = options.getCurrentLine
+      ? options.getCurrentLine()
+      : prefix.slice(prefix.lastIndexOf("\n") + 1);
+    if (isCurrentLineInsideUnclosedCode(line)) {
+      return undefined;
+    }
+  } else {
+    const priorText = options?.priorText ?? options?.getPriorText?.();
+    const currentLine = options?.getCurrentLine ? options.getCurrentLine() : prefix;
+    const codeContextText = priorText
+      ? `${priorText}\n${currentLine}`
+      : currentLine;
+    if (isInsideUnclosedCodeContext(codeContextText, codeContextText.length)) {
+      return undefined;
+    }
   }
   return {
-    start,
+    start: candidate.start,
     end: prefix.length,
-    shortcode,
+    shortcode: candidate.shortcode,
     entry,
   };
 }
@@ -349,38 +468,57 @@ export function replaceEmojiShortcodesInText(
     catalog?: ReactionEmojiCatalog;
     allowLeadingStart?: boolean;
     allowTrailingEnd?: boolean;
+    onMissingCatalog?: () => void;
   },
 ): string {
-  if (!text.includes(":")) {
+  let colonIndex = text.indexOf(":");
+  if (colonIndex === -1) {
     return text;
   }
   const allowLeadingStart = options?.allowLeadingStart !== false;
   const allowTrailingEnd = options?.allowTrailingEnd !== false;
+  const activeCatalog = options?.catalog ?? emojiCatalogCache.getCached();
+  const onMissingCatalog = !activeCatalog ? options?.onMissingCatalog : undefined;
 
-  SHORTCODE_CANDIDATE_PATTERN.lastIndex = 0;
   let output = "";
   let cursor = 0;
-  let match: RegExpExecArray | null;
 
-  while ((match = SHORTCODE_CANDIDATE_PATTERN.exec(text)) !== null) {
-    const start = match.index;
-    const end = start + match[0].length;
-    const shortcode = match[1]!;
-
-    if (!hasValidLeadingBoundary(text, start, allowLeadingStart, true)) {
+  while (colonIndex !== -1) {
+    if (!hasValidLeadingBoundary(text, colonIndex, allowLeadingStart, true)) {
+      colonIndex = text.indexOf(":", colonIndex + 1);
       continue;
     }
+
+    let scan = colonIndex + 1;
+    const maxEnd = Math.min(text.length, scan + MAX_SHORTCODE_LENGTH);
+    while (scan < maxEnd && isShortcodeBodyChar(text.charCodeAt(scan))) {
+      scan += 1;
+    }
+
+    if (scan === colonIndex + 1 || scan >= text.length || text.charCodeAt(scan) !== 58 /* : */) {
+      colonIndex = text.indexOf(":", scan);
+      continue;
+    }
+
+    const end = scan + 1;
     if (!hasValidTrailingBoundary(text, end, allowTrailingEnd)) {
+      // `scan` is preceded by a shortcode body char, so it can never be a valid
+      // leading boundary for a subsequent shortcode.
+      colonIndex = text.indexOf(":", end);
       continue;
     }
 
-    const entry = resolveEmojiShortcode(shortcode, options?.catalog);
+    const shortcode = text.slice(colonIndex + 1, scan);
+    const entry = resolveEmojiShortcode(shortcode, activeCatalog);
     if (!entry) {
+      onMissingCatalog?.();
+      colonIndex = text.indexOf(":", end);
       continue;
     }
 
-    output += text.slice(cursor, start) + entry.emoji;
+    output += text.slice(cursor, colonIndex) + entry.emoji;
     cursor = end;
+    colonIndex = text.indexOf(":", end);
   }
 
   if (cursor === 0) {
