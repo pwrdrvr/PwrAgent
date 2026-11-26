@@ -14870,6 +14870,57 @@ describe("useThreadSessionState", () => {
     },
   );
 
+  it("keeps a snapshot-only running review header through lagging reads until terminal replay acknowledges it", async () => {
+    let hydratedEntries: AppServerThreadEntry[] = [];
+    const desktopApi: DesktopApi = {
+      readThread: async () => readThreadResponse({
+        entries: hydratedEntries,
+        hasPreviousPage: false,
+      }),
+    };
+    const thread = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+    await waitForThreadHydration(result);
+
+    let placeholderId!: string;
+    act(() => {
+      placeholderId = result.current.addOptimisticReviewEntry("Review changes against main");
+    });
+    const header: AppServerThreadReviewEntry = {
+      id: "owner-start",
+      type: "review",
+      review: "Review changes against main at 2b6d941ea0",
+      displayText: "Review changes against main at 2b6d941ea0",
+      context: { workspacePath: "/repo/example", headCommit: "2b6d941ea0" },
+      reviewer: { backend: "codex", model: "sample-reviewer" },
+      turn: { id: "review-turn", status: "in_progress" },
+    };
+    const reloadWith = async (entries: AppServerThreadEntry[]) => {
+      hydratedEntries = entries;
+      await act(async () => { await result.current.reload(); });
+    };
+
+    await reloadWith([header]);
+    act(() => result.current.bindOptimisticReviewEntryToTurn(placeholderId, "review-turn"));
+    expect(result.current.entries).toMatchObject([header]);
+
+    // The receipt identifies this start, but the running read can regress.
+    // Keep the owner's row and provenance available until a terminal read.
+    await reloadWith([]);
+    expect(result.current.entries).toMatchObject([header]);
+    await reloadWith([header]);
+    await reloadWith([]);
+    expect(result.current.entries).toMatchObject([header]);
+
+    const settledHeader: AppServerThreadReviewEntry = {
+      ...header, id: "settled-start", turn: { id: "review-turn", status: "completed" },
+    };
+    await reloadWith([settledHeader]);
+    expect(result.current.entries).toMatchObject([settledHeader]);
+    await reloadWith([]);
+    expect(result.current.entries).toEqual([]);
+  });
+
   it("keeps the review start marker when only the final review item arrives live", async () => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
@@ -15037,6 +15088,49 @@ describe("useThreadSessionState", () => {
       },
       reviewer: { backend: "codex", model: "gpt-5.6-sol" },
     });
+  });
+
+  it("replaces a settled placeholder when a native header arrives late without a turn ID or timestamp", async () => {
+    let emit!: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0];
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        emit = listener;
+        return () => undefined;
+      },
+      readThread: async () => readThreadResponse({ entries: [], hasPreviousPage: false }),
+    };
+    const thread = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const { result } = renderHook(() => useThreadSessionState({ desktopApi, thread }));
+    await waitForThreadHydration(result);
+
+    const review = "Review changes against main";
+    const turnId = "native-review";
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_790_000_000_000);
+    try {
+      await act(async () => {
+        const id = result.current.addOptimisticReviewEntry(review);
+        result.current.bindOptimisticReviewEntryToTurn(id, turnId);
+        result.current.setActiveTurnId(turnId);
+        emit({ backend: "codex", notification: { method: "turn/completed", params: {
+          threadId: thread.id, turnId,
+          turn: { id: turnId, status: "completed", completedAt: Date.now(), output: [] },
+        } } });
+      });
+      expect(result.current.entries).toMatchObject([{ turn: { id: turnId, status: "completed" } }]);
+
+      // This native item has only a thread ID. Its arrival time is newer
+      // than completion, but the same header still replaces the local copy.
+      now.mockReturnValue(1_790_000_000_001);
+      await act(async () => {
+        emit({ backend: "codex", notification: { method: "item/completed", params: {
+          threadId: thread.id,
+          item: { id: "owner-start", type: "enteredReviewMode", review },
+        } } });
+      });
+      expect(result.current.entries).toMatchObject([{ id: "owner-start", displayText: review }]);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it.each([false, true])("retains all pinned PR commits on a live inline scope card (bound placeholder: %s)", async (bindPlaceholder) => {

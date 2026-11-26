@@ -17,10 +17,9 @@ function reviewStartTimestamp(entry: AppServerThreadReviewEntry): number | undef
 }
 
 function reviewStartAllowsUnboundLabelMatch(entry: AppServerThreadReviewEntry): boolean {
-  // Binding a local header records the accepted turn's identity only. A
-  // native start without a turn ID can still replace it by label.
-  return entry.turn?.status === "in_progress"
-    || (entry.turn?.status === undefined && isPendingEntryId(entry.id));
+  // A native start with no turn ID can arrive even after completion. The
+  // receipt-bound local header is still only a placeholder for that start.
+  return entry.turn?.status === "in_progress" || isPendingEntryId(entry.id);
 }
 
 function reviewStartMatchesUnboundHeader(

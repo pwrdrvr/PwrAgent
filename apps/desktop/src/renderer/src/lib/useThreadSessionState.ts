@@ -8732,22 +8732,25 @@ export function useThreadSessionState(params: {
         );
         if (!pending || pending.turn?.id === turnId) return current;
 
-        // The owner can publish its header before returning from startReview.
-        // When it already has, remove only our placeholder for that start.
-        const isOwnerHeader = (entry: AppServerThreadEntry) =>
+        const isOwnerHeader = (entry: AppServerThreadEntry): entry is AppServerThreadReviewEntry =>
           entry.type === "review"
           && entry.turn?.id === turnId
           && !isPendingEntryId(entry.id)
           && isReviewStartEntry(entry);
-        const ownerHeaderExists =
-          current.response?.replay.entries.some(isOwnerHeader)
-          || current.optimisticEntries.some(isOwnerHeader);
-        const bound = { ...pending, turn: { id: turnId } };
+        const replayHeader = current.response?.replay.entries.find(isOwnerHeader);
+        const headerAlreadyRetainedOrSettled =
+          current.optimisticEntries.some(isOwnerHeader)
+          || (replayHeader && replayHeader.turn?.status !== "in_progress");
+        // A running read can get here before the receipt and be absent from
+        // the next read. Keep that owner's header until replay settles it.
+        const fallback = replayHeader
+          ? preserveReviewMetadata(pending, replayHeader)
+          : { ...pending, turn: { id: turnId } };
         return {
           ...current,
-          optimisticEntries: ownerHeaderExists
+          optimisticEntries: headerAlreadyRetainedOrSettled
             ? current.optimisticEntries.filter((entry) => entry.id !== id)
-            : current.optimisticEntries.map((entry) => entry.id === id ? bound : entry),
+            : current.optimisticEntries.map((entry) => entry.id === id ? fallback : entry),
         };
       });
     },
