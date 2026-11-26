@@ -92,6 +92,10 @@ Read this before changing dependencies that ship, license tooling or allowlists,
 
 ### Changing the allowlist
 
+- PwrDrvr LLC owns PwrAgent. Preserve MIT licensing, `LICENSE`, every
+  package's `license: "MIT"`, and third-party disclosures. Changing
+  first-party licensing or removing a disclosure requires an explicit PwrDrvr
+  LLC policy change.
 - Adding an id to `ALLOWED_LICENSE_IDS` is a legal decision.
 - Make that decision in a commit that says why.
 - Never add an id to make CI green.
