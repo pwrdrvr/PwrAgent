@@ -13,7 +13,7 @@ const MAX_INHERIT_DEPTH = 10;
 const SKILL_HEADER = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)^---[ \t]*(?:\r?\n|$)/m;
 
 type Scope = "repo" | "antigravity-user";
-type Filter = { include?: string[]; exclude: string[] };
+type Filter = { include?: ReadonlySet<string>; exclude: ReadonlySet<string> };
 type SkillSource = { plugin?: string; cliGlobal?: boolean; mentionOnly?: boolean };
 
 const PLUGIN_MANIFESTS = [".antigravity-plugin/plugin.json", "plugin.json", ".gemini-plugin/plugin.json"];
@@ -95,34 +95,40 @@ async function readSkill(file: string, scope: Scope, plugin?: string): Promise<A
   }
 }
 
-function matches(patterns: string[], relativeName: string): boolean {
-  return patterns.includes(relativeName) || patterns.includes(path.posix.basename(relativeName));
+/** Match complete path segments, including when a manifest points straight at a skill file. */
+function matchesFolderSuffix(patterns: ReadonlySet<string>, directory: string): boolean {
+  if (patterns.size === 0) return false;
+  const parts = directory.split(path.sep);
+  let suffix = "";
+  for (const part of parts.reverse()) {
+    if (!part) break;
+    suffix = suffix ? `${part}/${suffix}` : part;
+    if (patterns.has(suffix)) return true;
+  }
+  return false;
 }
 
-function matchesFilters(filters: Filter[], relativeName: string): boolean {
+function matchesFilters(filters: Filter[], directory: string): boolean {
   return filters.every(({ include, exclude }) =>
-    (!include?.length || matches(include, relativeName)) && !matches(exclude, relativeName));
+    (!include?.size || matchesFolderSuffix(include, directory)) && !matchesFolderSuffix(exclude, directory));
 }
 
 function entryFilter(entry: Record<string, unknown>): Filter {
-  return { include: strings(entry.include_only), exclude: strings(entry.exclude) };
+  return { include: new Set(strings(entry.include_only)), exclude: new Set(strings(entry.exclude)) };
 }
 
 function isProjectConfigDirectory(directory: string): boolean {
   return PROJECT_CONFIG_NAMES.includes(path.basename(directory));
 }
 
-/** Match complete path segments, including when a manifest points straight at a skill file. */
-function matchesExcludedFolder(excludes: ReadonlySet<string>, directory: string): boolean {
-  if (excludes.size === 0) return false;
-  const parts = directory.split(path.sep);
-  let suffix = "";
-  for (const part of parts.reverse()) {
-    if (!part) break;
-    suffix = suffix ? `${part}/${suffix}` : part;
-    if (excludes.has(suffix)) return true;
+function currentUsername(): string | undefined {
+  const username = process.platform === "win32" ? process.env.USERNAME : process.env.USER;
+  if (username) return username;
+  try {
+    return os.userInfo().username || undefined;
+  } catch {
+    return undefined;
   }
-  return false;
 }
 
 async function workspaceAncestors(cwd: string, spendPath: () => void): Promise<string[]> {
@@ -185,10 +191,11 @@ async function discoverAntigravitySkills(
     spendPath();
     const { personal_customization_dir: personal } = await readJson(path.join(repo, ".gemini", "config.json"));
     if (typeof personal === "string" && personal) {
-      const username = (process.platform === "win32" ? process.env.USERNAME : process.env.USER)
-        || os.userInfo().username;
-      const directory = path.resolve(repo, personal.replaceAll("{user}", username));
-      projectConfigs.unshift(...PROJECT_CONFIG_NAMES.map((name) => ({ directory: path.join(directory, name), base: repo })));
+      const username = currentUsername();
+      if (username) {
+        const directory = path.resolve(repo, personal.replaceAll("{user}", username));
+        projectConfigs.unshift(...PROJECT_CONFIG_NAMES.map((name) => ({ directory: path.join(directory, name), base: directory })));
+      }
     }
   }
   const configs: Array<{ directory: string; base: string; scope: Scope; manifest: Record<string, unknown> }> = [];
@@ -217,7 +224,7 @@ async function discoverAntigravitySkills(
 
   async function add(file: string, scope: Scope, source: SkillSource = {}) {
     spendPath();
-    if (!source.cliGlobal && matchesExcludedFolder(excludes, path.dirname(file))) return;
+    if (!source.cliGlobal && matchesFolderSuffix(excludes, path.dirname(file))) return;
     const skill = await readSkill(file, scope, source.plugin);
     if (skill && (source.cliGlobal || !excludes.has(skill.name)) && !skills.has(skill.name)) {
       skills.set(skill.name, source.mentionOnly ? { ...skill, mentionOnly: true } : skill);
@@ -228,12 +235,13 @@ async function discoverAntigravitySkills(
     spendPath();
     // Default discovery is one level deep. Manifest include_only can point
     // directly to a nested skill without recursively crawling the checkout.
-    const nested = filters.flatMap(({ include }) => include ?? [])
+    const nested = filters.flatMap(({ include }) => [...(include ?? [])])
       .filter((name) => name.includes("/") && !name.split("/").some((part) => !part || part === "." || part === ".." || part.includes("\\")));
     const candidates = new Set([...(await children(directory)), ...nested]);
     for (const candidate of candidates) {
-      if (matchesFilters(filters, candidate)) {
-        await add(path.join(directory, candidate, "SKILL.md"), scope, source);
+      const folder = path.join(directory, candidate);
+      if (matchesFilters(filters, folder)) {
+        await add(path.join(folder, "SKILL.md"), scope, source);
       }
     }
   }
@@ -247,7 +255,7 @@ async function discoverAntigravitySkills(
     ancestors: string[],
   ): Promise<void> {
     if (ancestors.length > MAX_INHERIT_DEPTH) return;
-    const activeFilters = [...filters, { exclude: strings(manifest.exclude) }];
+    const activeFilters = [...filters, { exclude: new Set(strings(manifest.exclude)) }];
     for (const entry of records(manifest.inherits)) {
       if (typeof entry.path !== "string" || !entry.path) continue;
       spendPath();
@@ -267,11 +275,11 @@ async function discoverAntigravitySkills(
       const target = await resolveEntry(base, repositoryRoot, entry.path);
       const entryFilters = [...activeFilters, entryFilter(entry)];
       if (path.basename(target).toLowerCase() === "skill.md") {
-        if (matchesFilters(entryFilters, path.basename(path.dirname(target)))) await add(target, scope);
+        if (matchesFilters(entryFilters, path.dirname(target))) await add(target, scope);
       } else {
         const direct = path.join(target, "SKILL.md");
         if ((await fileInfo(direct))?.isFile()) {
-          if (matchesFilters(entryFilters, path.basename(target))) await add(direct, scope);
+          if (matchesFilters(entryFilters, target)) await add(direct, scope);
         } else {
           await scan(target, scope, entryFilters);
         }

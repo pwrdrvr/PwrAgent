@@ -123,6 +123,75 @@ it("follows inherited manifests and explicit nested entries when the repository 
   });
 });
 
+it.each(["skill file", "skill folder", "collection"] as const)("applies complete path suffix filters to a manifest %s", async (kind) => {
+  await withWorkspace(async ({ home, repo, skill, write }) => {
+    const shared = path.join(home, "shared");
+    const allowed = await skill(shared, "public", "team/public");
+    const candidates = [
+      allowed,
+      await skill(shared, "private", "team/private"),
+      await skill(shared, "restricted", "team/restricted"),
+      await skill(shared, "other-public", "other-team/public"),
+    ];
+    const targets = kind === "collection"
+      ? [path.join(shared, "team"), path.join(shared, "other-team")]
+      : candidates.map((file) => kind === "skill file" ? file : path.dirname(file));
+    const inherited = path.join(shared, "skills.json");
+    await write(inherited, JSON.stringify({
+      exclude: ["team/restricted"],
+      entries: targets.map((target) => ({ path: target, exclude: ["team/private"] })),
+    }));
+    await write(path.join(repo, ".agents", "skills.json"), JSON.stringify({
+      inherits: [{ path: inherited, include_only: ["team/public", "team/private", "team/restricted"] }],
+    }));
+    const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+    const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
+    expect(data[0]?.skills.map(({ path }) => path)).toEqual([allowed]);
+  });
+});
+
+it("resolves personal customization paths before falling back to the repository root", async () => {
+  vi.stubEnv("USER", "test-user");
+  vi.stubEnv("USERNAME", "test-user");
+  try {
+    await withWorkspace(async ({ repo, skill, write }) => {
+      const personal = path.join(repo, "personal", "test-user");
+      const preferred = await skill(personal, "personal-audit", "audit");
+      await skill(repo, "repo-audit", "audit");
+      const fallback = await skill(repo, "fallback");
+      await write(path.join(repo, ".gemini", "config.json"), JSON.stringify({ personal_customization_dir: "personal/{user}" }));
+      await write(path.join(personal, ".agents", "skills.json"), JSON.stringify({
+        entries: [{ path: "audit" }, { path: "fallback/SKILL.md" }],
+      }));
+      const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+      const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
+      expect(data[0]?.skills.map(({ path }) => path)).toEqual([preferred, fallback]);
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("discovers workspace skills when the current UID has no username", async () => {
+  vi.stubEnv("USER", undefined);
+  vi.stubEnv("USERNAME", undefined);
+  const userInfo = vi.spyOn(os, "userInfo").mockImplementation(() => {
+    throw Object.assign(new Error("No entry for UID"), { code: "ERR_SYSTEM_ERROR" });
+  });
+  try {
+    await withWorkspace(async ({ repo, skill, write }) => {
+      const workspace = await skill(path.join(repo, ".agents", "skills"), "workspace");
+      await write(path.join(repo, ".gemini", "config.json"), JSON.stringify({ personal_customization_dir: "personal/{user}" }));
+      const { registry } = createKimiAcpRegistry({ acpBackendId: backend });
+      const { data } = await registry.listSkills({ backend, cwd: repo, catalog: "skills" });
+      expect(data[0]?.skills.map(({ path }) => path)).toEqual([workspace]);
+    });
+  } finally {
+    userInfo.mockRestore();
+    vi.unstubAllEnvs();
+  }
+});
+
 it("uses the enclosing folder when a skill omits its name", async () => {
   await withWorkspace(async ({ repo, write }) => {
     const file = path.join(repo, ".agents", "skills", "release-checks", "SKILL.md");
