@@ -1453,6 +1453,7 @@ export class StackReader {
     const unavailablePaths = new Set<string>();
     const backgroundNavigation = !directories
       && (demand.priority?.() ?? PR_METADATA_PRIORITY.background) === PR_METADATA_PRIORITY.background;
+    const packagedHintVersion = backgroundNavigation && !retried ? hints.packagedDiscoveryHintVersion() : undefined;
     if (backgroundNavigation && this.deferredTtlRevalidations.size) {
       const currentPaths = new Set(paths);
       // Reserve slots before the concurrent probes so faster checkouts cannot
@@ -1465,7 +1466,9 @@ export class StackReader {
     }
     const scan = new IterableMapper(paths, async (cwd) => {
       const found = anchorPaths.has(cwd) ? undefined : await hints.possibleCommonDirs(cwd);
-      if (found && !hints.requiresGitDiscovery) {
+      // An explicit path to this package's Git can rule out unrelated
+      // checkouts too. Empty or inconclusive hints still go through Git.
+      if (found && (!hints.requiresGitDiscovery || (packagedHintVersion && found.length))) {
         if (found.length) hinted.add(cwd);
         return [cwd, found] as const;
       }
@@ -1732,7 +1735,8 @@ export class StackReader {
       : [...checkouts.values()].filter((checkout) => attachmentBindingClones.has(checkout.commonDir)
         || attachmentWitnesses.has(checkout) || observation.rosterMember(checkout));
     if (!await observation.checkoutsStillMatch(witnessedCheckouts) || !await observation.rostersStillMatch(checkouts.values())
-      || (validatedAny && !await attachments!.unchanged())) {
+      || (validatedAny && !await attachments!.unchanged())
+      || (packagedHintVersion && packagedHintVersion !== hints.packagedDiscoveryHintVersion())) {
       if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
       return await this.readProjection(threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments);
     }

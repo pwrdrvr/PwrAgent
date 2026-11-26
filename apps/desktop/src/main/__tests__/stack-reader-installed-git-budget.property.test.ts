@@ -5,6 +5,7 @@ import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import * as gitExecutable from "../app-server/git-executable";
+import { bundledGitDirectory, bundledGitExecutable, configureBundledGit } from "../bundled-git";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
@@ -54,6 +55,103 @@ function row(cwd: string, id: string): NavigationThreadSummary {
 }
 
 describe("StackReader installed-Git and unavailable checkout budgets", () => {
+  it.skipIf(process.platform === "win32")("skips ordinary unrelated checkouts for explicitly selected packaged Git while matching the live Git projection", async ({ onTestFinished }) => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-packaged-selection-")));
+    onTestFinished(async () => await rm(sandbox, { recursive: true, force: true }));
+    onTestFinished(isolateProcessGitEnvironment());
+    onTestFinished(() => { vi.unstubAllEnvs(); configureBundledGit(undefined); });
+    for (const key of Object.keys(process.env)) {
+      if (/^(?:DYLD_|LD_|GIT_TEST_|GIT_IMPLICIT_WORK_TREE$)/i.test(key)) vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("HOME", sandbox);
+    vi.stubEnv("USERPROFILE", sandbox);
+    vi.stubEnv("XDG_CONFIG_HOME", sandbox);
+    configureBundledGit(path.dirname(bundledGitDirectory()));
+    const executable = bundledGitExecutable();
+    const stacked = path.join(sandbox, "stacked");
+    const unrelated = path.join(sandbox, "unrelated");
+    const nested = path.join(unrelated, "nested");
+    const missing = path.join(sandbox, "missing");
+    for (const cwd of [stacked, unrelated]) {
+      await mkdir(cwd);
+      initialize(cwd);
+    }
+    await mkdir(nested);
+    await writeCatalog(stacked, "stacked");
+    const wrapper = path.join(sandbox, "git-wrapper");
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    await writeFile(wrapper, `#!/bin/sh\nexec ${quote(executable)} "$@"\n`, { mode: 0o700 });
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    onTestFinished(() => starts.mockRestore());
+    const layer = { ...row(stacked, "stacked"), gitBranch: "feat" };
+    const checkoutReads = () => starts.mock.calls.filter(([, [verb], purpose]) =>
+      verb === "rev-parse" && purpose === "stack-checkout").map(([cwd]) => cwd);
+
+    // Adding unrelated rows must preserve the Git-backed catalog and bindings.
+    // Only the package's own entry point may prune their ordinary checkouts.
+    await fc.assert(fc.asyncProperty(fc.shuffledSubarray([unrelated, nested], { minLength: 1 }), async (paths) => {
+      const rows = [layer, row(missing, "missing"), ...paths.map((cwd) => row(cwd, cwd))];
+      process.env.PWRAGENT_GIT_PATH = wrapper;
+      const oracle = await new StackReader().read(rows, []);
+      expect(oracle.stacks[0]?.layers[0]?.thread?.key).toContain("stacked");
+      starts.mockClear();
+      process.env.PWRAGENT_GIT_PATH = executable;
+      const actual = await new StackReader().read(rows, []);
+      expect(actual).toEqual(oracle);
+      expect(checkoutReads()).toContain(stacked);
+      expect(checkoutReads()).toContain(missing);
+      expect(checkoutReads().filter((cwd) => paths.includes(cwd))).toEqual([]);
+    }), { numRuns: 3, examples: [[[unrelated, nested]]] });
+
+    // A wrapper can discover the stack from a path with no catalog of its own.
+    await writeFile(wrapper, [
+      "#!/bin/sh",
+      `if [ "$1" = "-C" ] && [ "$2" = ${quote(unrelated)} ]; then shift 2; set -- -C ${quote(stacked)} "$@"; fi`,
+      `exec ${quote(executable)} "$@"`,
+      "",
+    ].join("\n"));
+    process.env.PWRAGENT_GIT_PATH = wrapper;
+    starts.mockClear();
+    const redirectedRow: NavigationThreadSummary = { ...row(unrelated, "redirected"), gitBranch: "feat" };
+    const redirected = await new StackReader().read([redirectedRow], []);
+    expect(redirected.stacks[0]?.layers[0]?.thread?.key).toContain("redirected");
+    expect(redirected.stacks[0]?.repository).toBe("github.com:fixture/stacked");
+    expect(checkoutReads()).toContain(unrelated);
+
+    process.env.PWRAGENT_GIT_PATH = executable;
+    vi.stubEnv("GIT_COMMON_DIR", path.join(stacked, ".git"));
+    starts.mockClear();
+    const overridden = await new StackReader().read([redirectedRow], []);
+    expect(overridden.stacks[0]?.repository).toBe("github.com:fixture/stacked");
+    expect(checkoutReads()).toContain(unrelated);
+    vi.stubEnv("GIT_COMMON_DIR", undefined);
+
+    const withAttachment: NavigationThreadSummary = { ...layer, prs: [{
+      number: 1, provider: "github.com", org: "fixture", repo: "stacked", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stacked/pull/1", explicitlyAttached: true,
+      headRefName: "feat", linkedDirectoryPaths: [stacked],
+    }] };
+    const rows = [withAttachment, redirectedRow];
+    const validate = async (candidate: Pick<NavigationThreadSummary, "prs">) => candidate.prs ?? [];
+    process.env.PWRAGENT_GIT_PATH = wrapper;
+    const oracle = await new StackReader().read(rows, [], undefined, undefined, undefined, validate);
+    starts.mockClear();
+    process.env.PWRAGENT_GIT_PATH = executable;
+    const afterSelectionChange = await new StackReader().read(rows, [], undefined, undefined, undefined, async (candidate) => {
+      process.env.PWRAGENT_GIT_PATH = wrapper;
+      return await validate(candidate);
+    });
+    expect(afterSelectionChange).toEqual(oracle);
+    expect(checkoutReads()).toContain(unrelated);
+
+    process.env.PWRAGENT_GIT_PATH = executable;
+    const reader = new StackReader();
+    const unrelatedRows = [{ ...row(unrelated, "new-stack"), gitBranch: "feat" }];
+    expect((await reader.read(unrelatedRows, [])).stacks).toEqual([]);
+    await writeCatalog(unrelated, "unrelated");
+    expect((await reader.read(unrelatedRows, [])).stacks[0]?.repository).toBe("github.com:fixture/unrelated");
+  });
+
   it("revalidates attachment checkouts without repeating Git on unrelated repositories", async () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-witnesses-")));
     restoreGit = isolateProcessGitEnvironment(sandbox);

@@ -45,8 +45,8 @@ export function createStackCheckoutHints(demand: PrMetadataDemand, purpose: "rea
   const selectsPackagedGit = () => configuredGit !== undefined && isPackagedBundledGit(configuredGit)
     && gitCommandPreference(process.env) === configuredGit && !hasGitDiscoveryOverrides()
     && !Object.keys(process.env).some((key) => /^(?:DYLD_|LD_|GIT_TEST_)/.test(key));
-  const usePackagedRecoveryHints = purpose === "recovery" && process.platform !== "win32"
-    && !discoveryOverrides && selectsPackagedGit();
+  const usePackagedDiscoveryHints = process.platform !== "win32" && selectsPackagedGit();
+  const usePackagedRecoveryHints = purpose === "recovery" && usePackagedDiscoveryHints;
   // A selected executable can be a wrapper. Its Git result is required on
   // the first read and retained only while the environment and disk agree.
   const installedGitVersion = configuredGit && !discoveryOverrides && !Object.keys(process.env).some((key) =>
@@ -60,7 +60,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand, purpose: "rea
   function possiblyLossyPath(value: string): boolean {
     // Git reads POSIX pointer paths as bytes. A replacement character can
     // represent an invalid UTF-8 byte sequence in a different path.
-    return usePackagedRecoveryHints && value.includes("\uFFFD");
+    return usePackagedDiscoveryHints && value.includes("\uFFFD");
   }
 
   async function probe<T>(read: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -176,6 +176,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand, purpose: "rea
     requiresGitDiscovery,
     installedGitVersion,
     gitEnvironmentVersion,
+    packagedDiscoveryHintVersion: () => usePackagedDiscoveryHints && selectsPackagedGit() ? gitEnvironmentVersion() : undefined,
     async checkoutIdentity(cwd: string) {
       const env = process.env;
       if (!gitEnvironmentVersion()) return undefined;
