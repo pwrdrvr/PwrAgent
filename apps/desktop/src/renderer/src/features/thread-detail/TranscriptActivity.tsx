@@ -13,8 +13,14 @@ import type {
 } from "@pwragent/shared/contracts/settings";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
+import { formatBrowserUrlDisplay } from "@pwragent/shared/codex-browser-use";
 import { formatActivityText } from "./activity-path-display";
+import { buildBrowserUsePresentation } from "./codex-browser-completion";
 import { ThreadMarkdown } from "./ThreadMarkdown";
+import {
+  buildBrowserUseCopyText,
+  TranscriptBrowserUseActivity,
+} from "./TranscriptBrowserUseActivity";
 import {
   describePullRequestWatchTool,
   isThreadReferenceToolDetail,
@@ -106,6 +112,43 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
     );
   }
 
+  const toggleExpanded = (): void => {
+    const nextExpanded = !isExpanded;
+    if (props.expanded !== undefined) {
+      props.onExpandedChange?.(entry.id, nextExpanded);
+      return;
+    }
+    setUncontrolledExpanded(nextExpanded);
+  };
+
+  const browserUse = entry.browserUse ?? buildBrowserUsePresentation(entry);
+  if (browserUse) {
+    return (
+      <TranscriptBrowserUseActivity
+        browserUse={browserUse}
+        copyText={buildBrowserUseCopyText(entry, browserUse)}
+        desktopApi={props.desktopApi}
+        detailsContent={renderActivityDetails({
+          details,
+          detailsId,
+          directDetail,
+          entry,
+          hasDetails,
+          isExpanded,
+          props,
+        })}
+        detailsId={detailsId}
+        displaySummary={displaySummary}
+        entry={entry}
+        hasDetails={hasDetails}
+        imagesContent={renderActivityImages(images, props.onOpenImage)}
+        isExpanded={isExpanded}
+        onOpenImage={props.onOpenImage}
+        onToggleExpanded={toggleExpanded}
+      />
+    );
+  }
+
   return (
     <aside
       className={className}
@@ -119,14 +162,7 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
               className="transcript-activity__toggle"
               aria-controls={detailsId}
               aria-expanded={isExpanded}
-              onClick={() => {
-                const nextExpanded = !isExpanded;
-                if (props.expanded !== undefined) {
-                  props.onExpandedChange?.(entry.id, nextExpanded);
-                  return;
-                }
-                setUncontrolledExpanded(nextExpanded);
-              }}
+              onClick={toggleExpanded}
             >
               <span className="transcript-activity__chevron" aria-hidden="true" />
               <span className="transcript-activity__label">{displaySummary}</span>
@@ -177,74 +213,125 @@ export const TranscriptActivity = memo(function TranscriptActivity(props: Transc
         )}
       </header>
 
-      {images.length > 0 ? (
-        <div className="transcript-activity__images">
-          {images.map((image, index) => transcriptImageUnavailableReason(image) ? (
-            <div key={`${index}:${image.url.slice(0, 80)}`} className="transcript-message__image-fallback">
-              <div className="transcript-message__image-fallback-main">
-                <span className="transcript-message__image-fallback-title">
-                  {transcriptImageUnavailableReason(image)}
-                </span>
-              </div>
-            </div>
-          ) : (
-            <button
-              key={`${index}:${image.url.slice(0, 80)}`}
-              type="button"
-              className="transcript-activity__image-button"
-              aria-label={`Expand tool result image ${index + 1}`}
-              onClick={() => {
-                props.onOpenImage?.(image);
-              }}
-            >
-              <TranscriptImage
-                className="transcript-activity__image"
-                src={image.url}
-                alt={image.alt ?? "Tool result"}
-                loading="lazy"
-              />
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {renderActivityImages(images, props.onOpenImage)}
+      {renderActivityDetails({
+        details,
+        detailsId,
+        directDetail,
+        entry,
+        hasDetails,
+        isExpanded,
+        props,
+      })}
+    </aside>
+  );
+});
 
-      {isExpanded && details.error ? (
-        <div id={detailsId} className="transcript-activity__detail-body" role="alert">
-          {details.error} <button type="button" className="transcript-activity__detail-toggle" onClick={() => { void details.load().catch(() => undefined); }}>Retry</button>
+function renderActivityImages(
+  images: AppServerThreadImagePart[],
+  onOpenImage: TranscriptActivityProps["onOpenImage"],
+) {
+  if (images.length === 0) return null;
+  return (
+    <div className="transcript-activity__images">
+      {images.map((image, index) => transcriptImageUnavailableReason(image) ? (
+        <div key={`${index}:${image.url.slice(0, 80)}`} className="transcript-message__image-fallback">
+          <div className="transcript-message__image-fallback-main">
+            <span className="transcript-message__image-fallback-title">
+              {transcriptImageUnavailableReason(image)}
+            </span>
+          </div>
         </div>
-      ) : isExpanded && entry.detailsRef ? (
-        <div id={detailsId} className="transcript-activity__detail-body" role="status">Loading activity details…</div>
-      ) : hasDetails && directDetail && isExpanded ? (
-        <div id={detailsId} className="transcript-activity__detail-body">
-          <TranscriptCommandOutput
+      ) : (
+        <button
+          key={`${index}:${image.url.slice(0, 80)}`}
+          type="button"
+          className="transcript-activity__image-button"
+          aria-label={`Expand tool result image ${index + 1}`}
+          onClick={() => {
+            onOpenImage?.(image);
+          }}
+        >
+          <TranscriptImage
+            className="transcript-activity__image"
+            src={image.url}
+            alt={image.alt ?? "Tool result"}
+            loading="lazy"
+          />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function renderActivityDetails(params: {
+  details: ReturnType<typeof useTranscriptActivityDetails>;
+  detailsId: string;
+  directDetail: AppServerThreadActivityDetail | undefined;
+  entry: AppServerThreadActivityEntry;
+  hasDetails: boolean;
+  isExpanded: boolean;
+  props: TranscriptActivityProps;
+}) {
+  const { details, detailsId, directDetail, entry, hasDetails, isExpanded, props } = params;
+  if (isExpanded && details.error) {
+    return (
+      <div id={detailsId} className="transcript-activity__detail-body" role="alert">
+        {details.error}{" "}
+        <button
+          type="button"
+          className="transcript-activity__detail-toggle"
+          onClick={() => {
+            void details.load().catch(() => undefined);
+          }}
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (isExpanded && entry.detailsRef) {
+    return (
+      <div id={detailsId} className="transcript-activity__detail-body" role="status">
+        Loading activity details…
+      </div>
+    );
+  }
+  if (hasDetails && directDetail && isExpanded) {
+    return (
+      <div id={detailsId} className="transcript-activity__detail-body">
+        <TranscriptCommandOutput
+          applications={props.applications}
+          desktopApi={props.desktopApi}
+          detail={directDetail}
+          directoryPaths={props.directoryPaths}
+          fileViewerContext={props.fileViewerContext}
+          skills={props.skills}
+          threadLinkSource={props.threadLinkSource}
+        />
+      </div>
+    );
+  }
+  if (hasDetails && isExpanded) {
+    return (
+      <ul id={detailsId} className="transcript-activity__details">
+        {entry.details.map((detail) => (
+          <TranscriptActivityDetailRow
+            key={detail.id}
             applications={props.applications}
             desktopApi={props.desktopApi}
-            detail={directDetail}
+            detail={detail}
             directoryPaths={props.directoryPaths}
             fileViewerContext={props.fileViewerContext}
             skills={props.skills}
             threadLinkSource={props.threadLinkSource}
           />
-        </div>
-      ) : hasDetails && isExpanded ? (
-        <ul id={detailsId} className="transcript-activity__details">
-          {entry.details.map((detail) => (
-            <TranscriptActivityDetailRow
-              key={detail.id}
-              applications={props.applications}
-              desktopApi={props.desktopApi}
-              detail={detail}
-              directoryPaths={props.directoryPaths}
-              fileViewerContext={props.fileViewerContext}
-              skills={props.skills}
-              threadLinkSource={props.threadLinkSource}
-            />
-          ))}
-        </ul>
-      ) : null}
-    </aside>
-  );
-});
+        ))}
+      </ul>
+    );
+  }
+  return null;
+}
 
 type TranscriptActivityRunProps = Omit<
   TranscriptActivityProps,
@@ -356,6 +443,18 @@ function TranscriptActivityDetailRow(props: {
           ) : (
             markdownContent ?? label
           )}
+          {detail.browserUse?.url && /^https?:\/\//i.test(detail.browserUse.url)
+            && !displayLabel.includes(formatBrowserUrlDisplay(detail.browserUse.url)) ? (
+            <a
+              className="transcript-browser-use__detail-url"
+              href={detail.browserUse.url}
+              target="_blank"
+              rel="noreferrer"
+              title={detail.browserUse.url}
+            >
+              {formatBrowserUrlDisplay(detail.browserUse.url)}
+            </a>
+          ) : null}
           {detail.fileDiff ? (
             <span className="transcript-activity__detail-stats" aria-label="File diff summary">
               <span className="transcript-activity__detail-stat transcript-activity__detail-stat--removed">
@@ -417,6 +516,7 @@ function hasOnlyRepeatedLabel(entry: AppServerThreadActivityEntry): boolean {
   const isPathOnlyEdit = detail.kind === "write"
     && (detail.status === undefined || detail.status === "completed");
   return !hasCommandDetails
+    && !detail.browserUse
     && !detail.fileDiff
     && !detail.markdown
     && !detail.url

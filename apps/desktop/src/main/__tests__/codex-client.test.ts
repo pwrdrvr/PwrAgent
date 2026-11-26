@@ -7958,6 +7958,233 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("extracts Codex Browser Use _meta from replayed mcpToolCall items without deduplicating repeated labels", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const previewUrl =
+      "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==";
+    MockTransport.readThreadResultByThreadId.set("thread-browser-use-replay", {
+      thread: {
+        turns: [
+          {
+            id: "turn-browser-use",
+            startedAt: 1_763_500_200,
+            items: [
+              {
+                type: "mcpToolCall",
+                id: "browser-call-1",
+                server: "node_repl",
+                tool: "js",
+                status: "completed",
+                result: {
+                  content: [{ type: "text", text: "navigated" }],
+                  _meta: {
+                    "codex/browserUse": true,
+                    "codex/toolSurface": {
+                      kind: "browserUse",
+                      backend: "iab",
+                      browserId: "iab",
+                      history: { provider: "iab", browser_id: "iab", screenshot: true },
+                    },
+                    browser_use: { url: "http://localhost:3000/checkout" },
+                  },
+                },
+              },
+              {
+                type: "mcpToolCall",
+                id: "browser-call-2",
+                server: "node_repl",
+                tool: "js",
+                status: "completed",
+                result: {
+                  content: [{ type: "text", text: "verified" }],
+                  _meta: {
+                    "codex/browserUse": true,
+                    "codex/toolSurface": {
+                      kind: "browserUse",
+                      backend: "iab",
+                      browserId: "iab",
+                      screenshot: {
+                        url: previewUrl,
+                        tabId: "1",
+                        pageUrl: "http://localhost:3000/checkout",
+                        canPersist: true,
+                      },
+                      history: {
+                        provider: "iab",
+                        browser_id: "iab",
+                        screenshot: true,
+                        handoff: { tabId: "1", providerTabId: "tab-1", reason: "authentication" },
+                      },
+                    },
+                    browser_use: { url: "http://localhost:3000/checkout" },
+                  },
+                },
+              },
+              {
+                type: "agentMessage",
+                id: "browser-complete-1",
+                phase: "commentary",
+                text: '::browser-complete{title="Paused for a sign-in code"}',
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId: "thread-browser-use-replay" });
+    const activity = replay.entries.find((entry) => entry.type === "activity");
+    expect(activity).toMatchObject({
+      type: "activity",
+      summary: "Paused for sign-in",
+      details: [
+        expect.objectContaining({
+          id: "browser-call-1",
+          label: "In-app browser · localhost:3000/checkout",
+          browserUse: {
+            backend: "iab",
+            browserId: "iab",
+            url: "http://localhost:3000/checkout",
+          },
+        }),
+        expect.objectContaining({
+          id: "browser-call-2",
+          label: "In-app browser · localhost:3000/checkout",
+          browserUse: {
+            backend: "iab",
+            browserId: "iab",
+            url: "http://localhost:3000/checkout",
+            tabId: "1",
+            handoffReason: "authentication",
+            screenshotUrl: previewUrl,
+          },
+        }),
+      ],
+    });
+    expect(replay.entries.some((entry) => entry.id === "browser-complete-1")).toBe(true);
+
+    await client.close();
+  });
+
+  it("unwraps JSON-serialized cua_repl _meta and keeps auxiliary browser batch tools out of the summary prefix", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
+    const previewUrl =
+      "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==";
+    MockTransport.readThreadResultByThreadId.set("thread-wrapped-browser-use-replay", {
+      thread: {
+        turns: [
+          {
+            id: "turn-wrapped-browser-use",
+            startedAt: 1_763_500_200,
+            items: [
+              {
+                type: "mcpToolCall",
+                id: "summary-call",
+                server: "codex_app",
+                tool: "update_running_summary",
+                status: "completed",
+                result: { content: [{ type: "text", text: "Running summary updated." }] },
+              },
+              {
+                type: "mcpToolCall",
+                id: "chrome-probe-failed",
+                server: "cua_repl",
+                tool: "js",
+                status: "failed",
+                arguments: { title: "Opening Example Domain" },
+                result: {
+                  content: [{ type: "text", text: "Browser is not available: chrome" }],
+                  _meta: { "codex/telemetry": { error_code: "browser_error" } },
+                },
+              },
+              {
+                type: "mcpToolCall",
+                id: "iab-open-call",
+                server: "cua_repl",
+                tool: "js",
+                status: "failed",
+                arguments: { title: "Opening page in browser" },
+                result: {
+                  content: [{ type: "text", text: "tab is not defined" }],
+                  _meta: {
+                    "codex/browserUse": true,
+                    "codex/toolSurface": {
+                      kind: "browserUse",
+                      backend: "iab",
+                      browserId: "3",
+                      history: { provider: "iab", browser_id: "3" },
+                    },
+                    browser_use: { url: "https://example.com/" },
+                  },
+                },
+              },
+              {
+                type: "mcpToolCall",
+                id: "iab-inspect-wrapped",
+                server: "cua_repl",
+                tool: "js",
+                status: "completed",
+                arguments: { title: "Inspecting page content" },
+                result: {
+                  _meta: null,
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({
+                        content: [{ type: "text", text: "Browser tab: 1" }],
+                        isError: false,
+                        _meta: {
+                          "codex/browserUse": true,
+                          "codex/toolSurface": {
+                            kind: "browserUse",
+                            backend: "iab",
+                            browserId: "3",
+                            history: { provider: "iab", browser_id: "3", screenshot: true },
+                            screenshot: {
+                              canPersist: true,
+                              pageUrl: "https://example.com",
+                              tabId: "1",
+                              url: previewUrl,
+                            },
+                          },
+                          browser_use: { url: "https://example.com/" },
+                        },
+                      }),
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId: "thread-wrapped-browser-use-replay" });
+    const activity = replay.entries.find((entry) => entry.type === "activity");
+    expect(activity?.summary).toBe("Browsed example.com");
+    const wrappedDetail = activity?.details.find((detail) => detail.id === "iab-inspect-wrapped");
+    expect(wrappedDetail?.browserUse).toEqual({
+      backend: "iab",
+      browserId: "3",
+      url: "https://example.com/",
+      tabId: "1",
+      screenshotUrl: previewUrl,
+    });
+
+    await client.close();
+  });
+
   it("renders JSON-wrapped MCP image results and attaches them to the final message", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     const imageUrl = "data:image/webp;base64,AQID";
