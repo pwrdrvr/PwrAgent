@@ -623,8 +623,6 @@ export class ResearchService {
       data = { type: "abandoned", approachId: command.approachId, reason: command.reason };
     }
     this.append(run, requestId, actor, data, signature);
-    const staleReviewNotice = command.action === "review" ? this.takeCoordinatorReviewNotice(id, command.submissionId) : undefined;
-    let cancelledNotice = false;
     if ((actor.kind === "agent" && actor.turnId && actor.callId && command.action === "submit") || revisionApproachId) {
       const approachId = revisionApproachId;
       const target = approachId ? this.requireApproach(id, approachId).worker : run.coordinator;
@@ -636,7 +634,6 @@ export class ResearchService {
           this.append(this.requireHeader(id), `pending:${deliveryId}`, actor, { type: "delivery", delivery: { id: deliveryId, target, approachId, state: "pending" } });
         }
         try {
-          if (staleReviewNotice) { cancelledNotice = true; await this.cancelCoordinatorReviewNotice(staleReviewNotice); }
           const receipt = await this.ports.notify(actor, target,
             `Research run ${id}: ${command.action === "submit" ? "A candidate is ready for review" : "Revision requested"}. Read research_read with runId=${id}. ${command.action === "review" ? command.reason : "Review the submission and its evidence; acceptance is not formal verification."}`);
           if (approachId) {
@@ -670,7 +667,8 @@ export class ResearchService {
         }
       }
     }
-    if (staleReviewNotice && !cancelledNotice) await this.cancelCoordinatorReviewNotice(staleReviewNotice);
+    const staleReviewNotice = command.action === "review" ? this.takeCoordinatorReviewNotice(id, command.submissionId) : undefined;
+    if (staleReviewNotice) await this.cancelCoordinatorReviewNotice(staleReviewNotice);
     return this.requireHeader(id);
   }
 
@@ -832,7 +830,7 @@ export class ResearchService {
     if (this.closed || (turnId !== undefined && researchTurnIsPlaceholder(thread, turnId)) || !["started", "terminal", "cancelled", "failed", "blocked"].includes(status)) return;
     for (const run of this.storage.activeRuns(thread)) {
       if (run.ownerId !== this.ports.ownerId) continue;
-      if (sameResearchThread(run.coordinator, thread) && this.forgetCoordinatorReviewNotice(run.id, queueEntryId)) continue;
+      if (sameResearchThread(run.coordinator, thread) && this.observeCoordinatorReviewNotice(run.id, queueEntryId, status)) continue;
       const resumed = [...this.queuedResumes.get(run.id) ?? []].find(([, entry]) => entry === queueEntryId)?.[0];
       if (resumed !== undefined) {
         // A started turn is recorded by observeStart. A message that will never start leaves the worker cut off, to resume again.
@@ -1042,13 +1040,16 @@ export class ResearchService {
     if (queued && !queued.size) this.queuedResumes.delete(id);
   }
 
-  private forgetCoordinatorReviewNotice(id: string, queueEntryId: string): boolean {
+  private observeCoordinatorReviewNotice(id: string, queueEntryId: string, status: string): boolean {
     const notices = this.queuedReviewNotices.get(id);
     if (!notices) return false;
     for (const [submissionId, entryId] of notices) {
       if (entryId !== queueEntryId) continue;
-      notices.delete(submissionId);
-      if (!notices.size) this.queuedReviewNotices.delete(id);
+      // "blocked" keeps the entry held at the front of the FIFO, so retain tracking for later withdrawal.
+      if (status !== "blocked") {
+        notices.delete(submissionId);
+        if (!notices.size) this.queuedReviewNotices.delete(id);
+      }
       return true;
     }
     return false;

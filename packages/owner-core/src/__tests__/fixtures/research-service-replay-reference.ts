@@ -528,8 +528,6 @@ export class ReplayResearchService {
       data = { type: "abandoned", approachId: command.approachId, reason: command.reason };
     }
     this.append(run, requestId, actor, data, signature);
-    const staleReviewNotice = command.action === "review" ? this.takeCoordinatorReviewNotice(id, command.submissionId) : undefined;
-    let cancelledNotice = false;
     run = this.requireRun(id);
     if ((actor.kind === "agent" && actor.turnId && actor.callId && command.action === "submit") || (command.action === "review" && command.decision === "revision_requested")) {
       const target = command.action === "submit" ? run.coordinator
@@ -544,7 +542,6 @@ export class ReplayResearchService {
           this.append(this.requireRun(id), `pending:${deliveryId}`, actor, { type: "delivery", delivery: { id: deliveryId, target, approachId, state: "pending" } });
         }
         try {
-          if (staleReviewNotice) { cancelledNotice = true; await this.cancelCoordinatorReviewNotice(staleReviewNotice); }
           const receipt = await this.ports.notify(actor, target,
             `Research run ${id}: ${command.action === "submit" ? "A candidate is ready for review" : "Revision requested"}. Read research_read with runId=${id}. ${command.action === "review" ? command.reason : "Review the submission and its evidence; acceptance is not formal verification."}`);
           if (revision) {
@@ -579,7 +576,8 @@ export class ReplayResearchService {
         }
       }
     }
-    if (staleReviewNotice && !cancelledNotice) await this.cancelCoordinatorReviewNotice(staleReviewNotice);
+    const staleReviewNotice = command.action === "review" ? this.takeCoordinatorReviewNotice(id, command.submissionId) : undefined;
+    if (staleReviewNotice) await this.cancelCoordinatorReviewNotice(staleReviewNotice);
     return this.requireRun(id);
   }
 
@@ -736,7 +734,7 @@ export class ReplayResearchService {
     if (this.closed || (turnId !== undefined && researchTurnIsPlaceholder(thread, turnId)) || !["started", "terminal", "cancelled", "failed", "blocked"].includes(status)) return;
     for (const run of this.storage.list(thread)) {
       if (run.ownerId !== this.ports.ownerId || !["running", "stopping"].includes(run.status)) continue;
-      if (sameResearchThread(run.coordinator, thread) && this.forgetCoordinatorReviewNotice(run.id, queueEntryId)) continue;
+      if (sameResearchThread(run.coordinator, thread) && this.observeCoordinatorReviewNotice(run.id, queueEntryId, status)) continue;
       const resumed = [...this.queuedResumes].find(([key, entry]) => key.startsWith(`${run.id}:`) && entry === queueEntryId)?.[0].slice(run.id.length + 1);
       if (resumed !== undefined) {
         if (["cancelled", "failed", "blocked"].includes(status)) {
@@ -909,13 +907,15 @@ export class ReplayResearchService {
     if (now().state === "running") await this.stopWorker(id, approachId, actor, note);
   }
 
-  private forgetCoordinatorReviewNotice(id: string, queueEntryId: string): boolean {
+  private observeCoordinatorReviewNotice(id: string, queueEntryId: string, status: string): boolean {
     const notices = this.queuedReviewNotices.get(id);
     if (!notices) return false;
     for (const [submissionId, entryId] of notices) {
       if (entryId !== queueEntryId) continue;
-      notices.delete(submissionId);
-      if (!notices.size) this.queuedReviewNotices.delete(id);
+      if (status !== "blocked") {
+        notices.delete(submissionId);
+        if (!notices.size) this.queuedReviewNotices.delete(id);
+      }
       return true;
     }
     return false;
