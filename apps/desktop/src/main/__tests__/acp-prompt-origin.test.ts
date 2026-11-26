@@ -2,7 +2,6 @@ import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
-import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -143,59 +142,65 @@ it("writes a messaging turn's prompt origin once", async () => {
   });
 });
 
-it("gives every ACP prompt item its turn's origin and leaves no context behind", async () => {
-  // Rule: the prompt item of an ACP turn carries the origin it was sent with
-  // and claims the context its start registered, however late its delivery
-  // reaches the message-context stage, whatever the agent's prompt adds to
-  // the operator's words, and whether the context holds an origin, images,
-  // or both.
-  //
-  // Live items on a thread are delivered in order behind any image work in
-  // flight, so a reply whose images are still loading when the prompt is
-  // dispatched holds the prompt item back until after the start returns.
-  // An attached file adds its reference to the agent's prompt, so the
-  // prompt's text differs from the operator's words the context records.
-  // A start with neither an origin nor an image registers no context.
-  await fc.assert(fc.asyncProperty(
-    fc.array(fc.constantFrom("ship the release notes", "then tag it", "and post the link"), { minLength: 1, maxLength: 3 }),
-    fc.boolean(),
-    fc.boolean(),
-    fc.boolean(),
-    fc.boolean(),
-    async (texts, fromMessaging, attachImage, attachFile, imageWorkInFlight) => {
-      const { root, registry, promptItem, onEvent } = await createFixture();
-      const { threadId } = await registry.startThread({ backend: ACP, cwd: root });
-      const notes = path.join(root, "notes.txt");
-      if (attachFile) await writeFile(notes, "release notes\n");
-      const imageWork = Promise.withResolvers<void>();
-      const internals = registry as unknown as {
-        transcriptImageWork: Map<string, Promise<void>>;
-        pendingThreadMessageContexts: Map<string, { threadId: string }>;
-      };
-      onEvent((event) => {
-        // The reply's images start loading once the turn is under way.
-        if (imageWorkInFlight && event.notification.method === "turn/started") {
-          internals.transcriptImageWork.set(`${ACP}:${threadId}`, imageWork.promise);
-        }
-      });
+// The prompt item of an ACP turn carries the origin it was sent with and
+// claims the context its start registered, however late its delivery reaches
+// the message-context stage, whatever the agent's prompt adds to the
+// operator's words, and whether the context holds an origin, images, or both.
+//
+// Live items on a thread are delivered in order behind any image work in
+// flight, so a reply whose images are still loading when the prompt is
+// dispatched holds the prompt item back until after the start returns. An
+// attached file adds its reference to the agent's prompt, so the prompt's
+// text differs from the operator's words the context records.
+//
+// Each case drives a real registry over SQLite, so the cases are the shrunk
+// counterexamples rather than a generated loop.
+it.each([
+  {
+    name: "a messaging prompt held behind image work in flight",
+    texts: ["ship the release notes"], fromMessaging: true, attachImage: false, attachFile: false, imageWorkInFlight: true,
+  },
+  {
+    name: "a messaging prompt whose attached file changes the agent's text",
+    texts: ["ship the release notes", "then tag it"], fromMessaging: true, attachImage: false, attachFile: true, imageWorkInFlight: false,
+  },
+  {
+    name: "a prompt with an image and a file but no origin, behind image work",
+    texts: ["and post the link"], fromMessaging: false, attachImage: true, attachFile: true, imageWorkInFlight: true,
+  },
+])("gives the prompt item its turn's origin and leaves no context behind: $name", async ({
+  texts, fromMessaging, attachImage, attachFile, imageWorkInFlight,
+}) => {
+  const { root, registry, promptItem, onEvent } = await createFixture();
+  const { threadId } = await registry.startThread({ backend: ACP, cwd: root });
+  const notes = path.join(root, "notes.txt");
+  if (attachFile) await writeFile(notes, "release notes\n");
+  const imageWork = Promise.withResolvers<void>();
+  const internals = registry as unknown as {
+    transcriptImageWork: Map<string, Promise<void>>;
+    pendingThreadMessageContexts: Map<string, { threadId: string }>;
+  };
+  onEvent((event) => {
+    // The reply's images start loading once the turn is under way.
+    if (imageWorkInFlight && event.notification.method === "turn/started") {
+      internals.transcriptImageWork.set(`${ACP}:${threadId}`, imageWork.promise);
+    }
+  });
 
-      const started = await registry.startTurn({
-        backend: ACP, threadId,
-        ...(fromMessaging ? { messageOrigin: { kind: "messaging" as const } } : {}),
-        input: [
-          ...texts.map((text) => ({ type: "text" as const, text })),
-          ...(attachImage ? [{ type: "image" as const, url: PIXEL, name: "chart.png" }] : []),
-          ...(attachFile ? [{ type: "localFile" as const, path: notes, name: "notes.txt" }] : []),
-        ],
-      });
-      imageWork.resolve();
-      const event = await promptItem(started.turnId);
+  const started = await registry.startTurn({
+    backend: ACP, threadId,
+    ...(fromMessaging ? { messageOrigin: { kind: "messaging" as const } } : {}),
+    input: [
+      ...texts.map((text) => ({ type: "text" as const, text })),
+      ...(attachImage ? [{ type: "image" as const, url: PIXEL, name: "chart.png" }] : []),
+      ...(attachFile ? [{ type: "localFile" as const, path: notes, name: "notes.txt" }] : []),
+    ],
+  });
+  imageWork.resolve();
+  const event = await promptItem(started.turnId);
 
-      expect((event.notification.params as { item: { origin?: unknown } }).item.origin)
-        .toEqual(fromMessaging ? { kind: "messaging" } : undefined);
-      expect([...internals.pendingThreadMessageContexts.values()]
-        .filter((pending) => pending.threadId === threadId)).toEqual([]);
-      await cleanUp();
-    },
-  ), { numRuns: 24 });
+  expect((event.notification.params as { item: { origin?: unknown } }).item.origin)
+    .toEqual(fromMessaging ? { kind: "messaging" } : undefined);
+  expect([...internals.pendingThreadMessageContexts.values()]
+    .filter((pending) => pending.threadId === threadId)).toEqual([]);
 });
