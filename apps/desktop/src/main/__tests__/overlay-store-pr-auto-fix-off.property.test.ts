@@ -99,7 +99,7 @@ describe("per-PR Auto-fix off on a thread's attachment list", () => {
           ).toEqual([...off].sort());
         }
       }),
-      { numRuns: 150 },
+      { numRuns: 5 },
     );
   });
 

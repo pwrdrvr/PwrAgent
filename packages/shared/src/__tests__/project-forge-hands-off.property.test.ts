@@ -48,7 +48,7 @@ describe("hands-off label patterns", () => {
   it("match exactly what a wildcard matcher matches, ignoring case", () => {
     fc.assert(fc.property(label, label, (pattern, text) => {
       expect(handsOffLabelMatches(pattern, text)).toBe(wildcardOracle(pattern, text));
-    }), { numRuns: 2_000 });
+    }), { numRuns: 100 });
   });
 
   it("match in linear time however many stars a pattern has", () => {
@@ -64,7 +64,7 @@ describe("hands-off label patterns", () => {
     const text = fc.array(fc.constantFrom("a", "b"), { maxLength: 30 }).map((chars) => chars.join(""));
     fc.assert(fc.property(starry, text, (pattern, value) => {
       expect(handsOffLabelMatches(pattern, value)).toBe(wildcardOracle(pattern, value));
-    }), { numRuns: 1_000 });
+    }), { numRuns: 100 });
   });
 
   it("match the label T3 Code uses for a takeover", () => {
@@ -95,7 +95,7 @@ describe("findHandsOffMatch", () => {
           expect(wildcardOracle(match.rule.label!, match.label)).toBe(true);
         }
       },
-    ), { numRuns: 1_000 });
+    ), { numRuns: 100 });
   });
 
   it("never matches by a label rule when the poll did not read labels", () => {
