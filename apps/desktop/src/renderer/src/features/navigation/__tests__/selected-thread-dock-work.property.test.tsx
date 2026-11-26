@@ -413,7 +413,7 @@ it("performs no geometry reads on commits that leave the sidebar DOM unchanged",
         await fixture.settle();
       }
       expect(fixture.work).toEqual({ row: 0, sticky: 0, selectors: 0, reserveLifts: 0 });
-    }), { numRuns: 5 });
+    }), { numRuns: 5, examples: [[1], [6]] });
   } finally {
     fixture.cleanup();
   }
@@ -496,7 +496,7 @@ it("samples the project under the new sticky line when the index observer runs f
       expect(fixture.edge()).toBeUndefined();
       expect(fixture.currentProject()).toBe(fixture.projectKey(0));
       expect(fixture.work.row).toBe(1);
-    }), { numRuns: 5 });
+    }), { numRuns: 5, examples: [[PITCH - 55], [PITCH - 15]] });
   } finally {
     fixture.cleanup();
   }
@@ -513,7 +513,7 @@ it("samples successive pure scrolls whose observed box sizes stay fixed", () => 
         expect(fixture.edge()).toBe(edge);
         expect(fixture.work.row).toBe(1);
       }
-    }), { numRuns: 5 });
+    }), { numRuns: 5, examples: [[700], [1000]] });
   } finally {
     fixture.cleanup();
   }

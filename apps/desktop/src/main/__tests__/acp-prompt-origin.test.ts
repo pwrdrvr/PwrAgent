@@ -153,8 +153,8 @@ it("writes a messaging turn's prompt origin once", async () => {
 // attached file adds its reference to the agent's prompt, so the prompt's
 // text differs from the operator's words the context records.
 //
-// Each case drives a real registry over SQLite, so the cases are the shrunk
-// counterexamples rather than a generated loop.
+// Each case drives a real registry over SQLite, so these are named cases
+// built around the counterexamples a generated loop found, not a loop.
 it.each([
   {
     name: "a messaging prompt held behind image work in flight",
@@ -199,8 +199,9 @@ it.each([
   imageWork.resolve();
   const event = await promptItem(started.turnId);
 
-  expect((event.notification.params as { item: { origin?: unknown } }).item.origin)
-    .toEqual(fromMessaging ? { kind: "messaging" } : undefined);
+  const item = (event.notification.params as { item: { origin?: unknown; content?: Array<{ type?: unknown }> } }).item;
+  expect(item.origin).toEqual(fromMessaging ? { kind: "messaging" } : undefined);
+  expect(item.content?.some((part) => part.type === "image") ?? false).toBe(attachImage);
   expect([...internals.pendingThreadMessageContexts.values()]
     .filter((pending) => pending.threadId === threadId)).toEqual([]);
 });
