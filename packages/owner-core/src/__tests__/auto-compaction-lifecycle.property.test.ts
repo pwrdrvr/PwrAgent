@@ -24,7 +24,7 @@ const REARM = 900;
 type Op =
   | { kind: "fill"; used: number }
   | { kind: "start-turn" }
-  | { kind: "end-turn" }
+  | { kind: "end-turn"; outcome: "completed" | "failed" | "cancelled" }
   | { kind: "provider-compaction" }
   | { kind: "accept" }
   | { kind: "refuse" }
@@ -32,12 +32,19 @@ type Op =
   | { kind: "settle-timeout" }
   | { kind: "set-steer"; canSteer: boolean }
   | { kind: "set-start"; canStart: AutoCompactionContext["canStart"] }
-  | { kind: "set-during-turn"; duringTurn: "steer" | "wait" };
+  | { kind: "set-during-turn"; duringTurn: "steer" | "wait" }
+  | { kind: "set-deferred-fill"; reportsFillOnNextTurn: boolean };
 
 const opArb: fc.Arbitrary<Op> = fc.oneof(
   { weight: 6, arbitrary: fc.integer({ min: 0, max: 2_000 }).map((used) => ({ kind: "fill" as const, used })) },
   { weight: 3, arbitrary: fc.constant({ kind: "start-turn" as const }) },
-  { weight: 3, arbitrary: fc.constant({ kind: "end-turn" as const }) },
+  {
+    weight: 3,
+    arbitrary: fc.constantFrom("completed", "completed", "completed", "failed", "cancelled").map((outcome) => ({
+      kind: "end-turn" as const,
+      outcome: outcome as "completed" | "failed" | "cancelled",
+    })),
+  },
   { weight: 1, arbitrary: fc.constant({ kind: "provider-compaction" as const }) },
   { weight: 3, arbitrary: fc.constant({ kind: "accept" as const }) },
   { weight: 2, arbitrary: fc.constant({ kind: "refuse" as const }) },
@@ -58,6 +65,13 @@ const opArb: fc.Arbitrary<Op> = fc.oneof(
       duringTurn: duringTurn as "steer" | "wait",
     })),
   },
+  {
+    weight: 1,
+    arbitrary: fc.boolean().map((reportsFillOnNextTurn) => ({
+      kind: "set-deferred-fill" as const,
+      reportsFillOnNextTurn,
+    })),
+  },
 );
 
 type World = {
@@ -67,6 +81,7 @@ type World = {
   canSteer: boolean;
   canStart: AutoCompactionContext["canStart"];
   duringTurn: "steer" | "wait";
+  reportsFillOnNextTurn: boolean;
   /** The request the reducer made and the world has not answered. */
   open?: AutoCompactionCommand & { kind: "steer-compact" | "start-compact" };
 };
@@ -85,12 +100,20 @@ function context(world: World): AutoCompactionContext {
     ...(world.turnId ? { turnId: world.turnId } : {}),
     canSteer: world.canSteer,
     canStart: world.canStart,
+    ...(world.reportsFillOnNextTurn ? { reportsFillOnNextTurn: true } : {}),
   };
 }
 
 /** Replays operations, returning every reducer step with the world it saw. */
 function run(ops: readonly Op[]): Trace[] {
-  const world: World = { turnRunning: false, nextTurn: 1, canSteer: true, canStart: "yes", duringTurn: "steer" };
+  const world: World = {
+    turnRunning: false,
+    nextTurn: 1,
+    canSteer: true,
+    canStart: "yes",
+    duringTurn: "steer",
+    reportsFillOnNextTurn: false,
+  };
   let state = INITIAL_AUTO_COMPACTION_STATE;
   const traces: Trace[] = [];
   const feed = (input: AutoCompactionInput) => {
@@ -127,7 +150,12 @@ function run(ops: readonly Op[]): Trace[] {
           const turnId = world.turnId;
           world.turnRunning = false;
           world.turnId = undefined;
-          feed({ kind: "turn-ended", ...(turnId ? { turnId } : {}), context: context(world) });
+          feed({
+            kind: "turn-ended",
+            ...(turnId ? { turnId } : {}),
+            outcome: op.outcome,
+            context: context(world),
+          });
         }
         break;
       case "provider-compaction":
@@ -175,6 +203,9 @@ function run(ops: readonly Op[]): Trace[] {
         break;
       case "set-during-turn":
         world.duringTurn = op.duringTurn;
+        break;
+      case "set-deferred-fill":
+        world.reportsFillOnNextTurn = op.reportsFillOnNextTurn;
         break;
     }
   }
@@ -304,6 +335,73 @@ describe("auto-compaction lifecycle", () => {
       expect(step.command?.kind).toBe("start-compact");
     }));
   });
+
+  it("never sends a continuation when a steered turn was cancelled or failed", () => {
+    fc.assert(fc.property(opsArb, (ops) => {
+      let abortedSteer = false;
+      for (const trace of run(ops)) {
+        if (trace.before.phase === "armed") {
+          abortedSteer = false;
+        }
+        if (
+          trace.before.via === "steer"
+          && trace.input.kind === "turn-ended"
+          && trace.input.outcome !== "completed"
+          && (trace.input.turnId === undefined || trace.before.turnId === undefined || trace.input.turnId === trace.before.turnId)
+        ) {
+          abortedSteer = true;
+        }
+        if (abortedSteer) {
+          expect(trace.command?.kind).not.toBe("start-continuation");
+        }
+      }
+    }));
+  });
+
+  it("clears compacting immediately without retry or false no-shrink hold when a compaction turn is cancelled or fails", () => {
+    fc.assert(fc.property(opsArb, (ops) => {
+      for (const trace of run(ops)) {
+        if (
+          trace.before.phase === "compacting"
+          && trace.input.kind === "turn-ended"
+          && trace.input.outcome !== "completed"
+          && (trace.input.turnId === undefined || trace.before.turnId === undefined || trace.input.turnId === trace.before.turnId)
+        ) {
+          expect(trace.after.phase).toBe("armed");
+          expect(trace.command).toBeUndefined();
+        }
+      }
+    }));
+  });
+
+  it("continues immediately on a deferred-fill provider when a steered compaction completes cleanly", () => {
+    fc.assert(fc.property(opsArb, (ops) => {
+      for (const trace of run(ops)) {
+        if (
+          trace.before.phase === "compacting"
+          && trace.before.via === "steer"
+          && trace.input.kind === "turn-ended"
+          && trace.input.outcome === "completed"
+          && trace.input.context.reportsFillOnNextTurn === true
+          && (trace.input.turnId === undefined || trace.before.turnId === undefined || trace.input.turnId === trace.before.turnId)
+        ) {
+          expect(trace.command).toEqual({ kind: "start-continuation" });
+          expect(trace.after.phase).toBe("verifying");
+        }
+      }
+    }));
+  });
+
+  it("never holds a deferred-fill compaction on settle timeout before the next turn reports", () => {
+    fc.assert(fc.property(opsArb, (ops) => {
+      for (const trace of run(ops)) {
+        if (trace.before.phase === "verifying" && trace.input.kind === "settle-timeout") {
+          expect(trace.after.phase).toBe("verifying");
+          expect(trace.command).toBeUndefined();
+        }
+      }
+    }));
+  });
 });
 
 function isInFlightRequest(state: AutoCompactionState): boolean {
@@ -402,5 +500,127 @@ describe("auto-compaction lifecycle examples", () => {
       kind: "fill", usedTokens: 500_000, threshold, context: { ...idle, canStart: "unsupported" },
     });
     expect(step.state).toMatchObject({ phase: "held", heldReason: "unsupported" });
+  });
+
+  // Counterexamples from live Antigravity (agy 1.5.16) ACP protocol captures:
+  // /compact emits the summarization call's higher usage_update at turn end and
+  // reports the lowered context fill only on the next turn's first model call.
+  it("continues immediately on Antigravity after steered /compact ends with a higher summarization fill, then re-arms on the continuation's fill", () => {
+    const agyRunning: AutoCompactionContext = { ...running, reportsFillOnNextTurn: true };
+    const agyIdle: AutoCompactionContext = { ...idle, reportsFillOnNextTurn: true };
+    let step = stepAutoCompaction(INITIAL_AUTO_COMPACTION_STATE, {
+      kind: "fill", usedTokens: 412_000, threshold, context: agyRunning,
+    });
+    expect(step.command).toEqual({ kind: "steer-compact", turnId: "t1", usedTokens: 412_000, triggerTokens: 409_600 });
+    step = stepAutoCompaction(step.state, { kind: "dispatch-accepted", context: agyRunning });
+    // Summarization call itself reports higher usage than pre-compaction context.
+    step = stepAutoCompaction(step.state, { kind: "fill", usedTokens: 425_000, threshold, context: agyRunning });
+    expect(step.state.phase).toBe("compacting");
+    // Steered turn completes cleanly: continue immediately without retrying idle /compact.
+    step = stepAutoCompaction(step.state, { kind: "turn-ended", turnId: "t1", outcome: "completed", context: agyIdle });
+    expect(step.command).toEqual({ kind: "start-continuation" });
+    expect(step.state.phase).toBe("verifying");
+    // Continuation turn starts and reports the actual compacted context fill.
+    step = stepAutoCompaction(step.state, { kind: "turn-started", turnId: "t2" });
+    step = stepAutoCompaction(step.state, {
+      kind: "fill", usedTokens: 21_436, threshold, context: { ...agyRunning, turnId: "t2" },
+    });
+    expect(step.command).toBeUndefined();
+    expect(step.state.phase).toBe("armed");
+  });
+
+  it("holds instead of looping when Antigravity's continuation turn still reports a fill above trigger", () => {
+    const agyRunning: AutoCompactionContext = { ...running, reportsFillOnNextTurn: true };
+    const agyIdle: AutoCompactionContext = { ...idle, reportsFillOnNextTurn: true };
+    let step = stepAutoCompaction(INITIAL_AUTO_COMPACTION_STATE, {
+      kind: "fill", usedTokens: 412_000, threshold, context: agyRunning,
+    });
+    step = stepAutoCompaction(step.state, { kind: "dispatch-accepted", context: agyRunning });
+    step = stepAutoCompaction(step.state, { kind: "fill", usedTokens: 425_000, threshold, context: agyRunning });
+    step = stepAutoCompaction(step.state, { kind: "turn-ended", turnId: "t1", outcome: "completed", context: agyIdle });
+    expect(step.command).toEqual({ kind: "start-continuation" });
+    step = stepAutoCompaction(step.state, { kind: "turn-started", turnId: "t2" });
+    step = stepAutoCompaction(step.state, {
+      kind: "fill", usedTokens: 420_000, threshold, context: { ...agyRunning, turnId: "t2" },
+    });
+    expect(step.command).toBeUndefined();
+    expect(step.state).toMatchObject({ phase: "held", heldReason: "no-shrink" });
+  });
+
+  it("keeps an idle Antigravity /compact verifying across settle timeouts until the next turn reports", () => {
+    const agyRunning: AutoCompactionContext = { ...running, turnId: "t2", reportsFillOnNextTurn: true };
+    const agyIdle: AutoCompactionContext = { ...idle, reportsFillOnNextTurn: true };
+    let step = stepAutoCompaction(INITIAL_AUTO_COMPACTION_STATE, {
+      kind: "fill", usedTokens: 412_000, threshold, context: agyIdle,
+    });
+    expect(step.command?.kind).toBe("start-compact");
+    step = stepAutoCompaction(step.state, { kind: "turn-started", turnId: "t2" });
+    step = stepAutoCompaction(step.state, { kind: "dispatch-accepted", turnId: "t2", context: agyRunning });
+    step = stepAutoCompaction(step.state, { kind: "fill", usedTokens: 425_000, threshold, context: agyRunning });
+    step = stepAutoCompaction(step.state, { kind: "turn-ended", turnId: "t2", outcome: "completed", context: agyIdle });
+    expect(step.command).toBeUndefined();
+    expect(step.state.phase).toBe("verifying");
+    // Idle wait beyond 15s must not falsely hold as no-shrink.
+    step = stepAutoCompaction(step.state, { kind: "settle-timeout", context: agyIdle });
+    expect(step.state.phase).toBe("verifying");
+    expect(step.command).toBeUndefined();
+    // Next user turn drops below trigger -> re-armed.
+    step = stepAutoCompaction(step.state, { kind: "turn-started", turnId: "t3" });
+    step = stepAutoCompaction(step.state, {
+      kind: "fill", usedTokens: 20_551, threshold, context: { ...agyRunning, turnId: "t3" },
+    });
+    expect(step.state.phase).toBe("armed");
+  });
+
+  it("does not send a continuation, retry idle /compact, or hold when a steered Antigravity /compact turn is cancelled or fails", () => {
+    const agyRunning: AutoCompactionContext = { ...running, reportsFillOnNextTurn: true };
+    const agyIdle: AutoCompactionContext = { ...idle, reportsFillOnNextTurn: true };
+    for (const outcome of ["cancelled", "failed"] as const) {
+      let step = stepAutoCompaction(INITIAL_AUTO_COMPACTION_STATE, {
+        kind: "fill", usedTokens: 412_000, threshold, context: agyRunning,
+      });
+      step = stepAutoCompaction(step.state, { kind: "dispatch-accepted", context: agyRunning });
+      step = stepAutoCompaction(step.state, { kind: "turn-ended", turnId: "t1", outcome, context: agyIdle });
+      expect(step.command).toBeUndefined();
+      expect(step.state.phase).toBe("armed");
+      // Neither a settle timeout nor a later compaction signal sends a continuation or idle retry.
+      step = stepAutoCompaction(step.state, { kind: "settle-timeout", context: agyIdle });
+      expect(step.command).toBeUndefined();
+      expect(step.state.phase).toBe("armed");
+      step = stepAutoCompaction(step.state, { kind: "compaction-observed", context: agyIdle });
+      expect(step.command).toBeUndefined();
+      expect(step.state.phase).toBe("armed");
+    }
+  });
+
+  it("suppresses start-continuation in completed() when evidence arrived before dispatch-accepted on a cancelled steered turn", () => {
+    let step = stepAutoCompaction(INITIAL_AUTO_COMPACTION_STATE, {
+      kind: "fill", usedTokens: 412_000, threshold, context: running,
+    });
+    step = stepAutoCompaction(step.state, { kind: "compaction-observed", context: running });
+    step = stepAutoCompaction(step.state, { kind: "turn-ended", turnId: "t1", outcome: "cancelled", context: idle });
+    step = stepAutoCompaction(step.state, { kind: "dispatch-accepted", context: idle });
+    expect(step.command).toBeUndefined();
+    expect(step.state.phase).toBe("armed");
+  });
+
+  it("does not inherit turnEnded from a different turn when dispatch-accepted arrives for an idle compaction", () => {
+    const agyIdle: AutoCompactionContext = { ...idle, reportsFillOnNextTurn: true };
+    const agyRunningT3: AutoCompactionContext = { ...running, turnId: "t3", reportsFillOnNextTurn: true };
+    let step = stepAutoCompaction(INITIAL_AUTO_COMPACTION_STATE, {
+      kind: "fill", usedTokens: 412_000, threshold, context: agyIdle,
+    });
+    expect(step.command?.kind).toBe("start-compact");
+    // Unrelated turn t2 runs and completes while start-compact is still awaiting its turnId.
+    step = stepAutoCompaction(step.state, { kind: "turn-started", turnId: "t2" });
+    step = stepAutoCompaction(step.state, { kind: "turn-ended", turnId: "t2", outcome: "completed", context: agyIdle });
+    // Now start-compact resolves with its own turnId t3 while t3 is running.
+    step = stepAutoCompaction(step.state, { kind: "dispatch-accepted", turnId: "t3", context: agyRunningT3 });
+    expect(step.state.phase).toBe("compacting");
+    expect(step.state.turnId).toBe("t3");
+    expect(step.state.turnEnded).toBe(false);
+    // t3's own summarization fill must not falsely transition to held("no-shrink").
+    step = stepAutoCompaction(step.state, { kind: "fill", usedTokens: 425_000, threshold, context: agyRunningT3 });
+    expect(step.state.phase).toBe("compacting");
   });
 });
