@@ -2600,6 +2600,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
+        /** Server- or owner-correlated root turn ID when this item runs inside a child turn (e.g. inline Codex review). */
+        rootTurnId?: string | null;
         item: {
           id: string;
           type: string;
@@ -3157,6 +3159,11 @@ export type AppServerNotification =
         threadId: string;
         /** False only for producer-proven detail/accounting changes. */
         navigationChanged?: false;
+        /** Owner-correlated inner turn -> outer review root turn ID for inline native Codex reviews. */
+        correlatedTurn?: {
+          turnId: string;
+          rootTurnId: string;
+        };
         subAgents?: ThreadSubAgentSummary[];
       };
     }
