@@ -1,14 +1,24 @@
 import fc from "fast-check";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import type {
+  ManageThreadDependenciesRequest,
   ThreadDependencyCondition,
   ThreadDependencyEvidence,
   ThreadDependencyMergeBuildObservation,
 } from "@pwragent/shared/contracts/thread-dependencies";
 import { StateDb } from "../state/state-db";
 import { ThreadDependencyStore } from "../state/thread-dependency-store";
-import { ThreadDependencyCoordinator, buildDependencyPrompt } from "../app-server/thread-dependency-coordinator";
+import { ThreadDependencyCoordinator, buildDependencyPrompt, validateDependencyCreate } from "../app-server/thread-dependency-coordinator";
+import { readFederationThreadDependenciesRequest } from "../app-server/thread-dependencies-federation";
+import {
+  cancelMergeBuildWatches,
+  createMergeBuildWatch,
+  describeMergeBuildWatch,
+  mergeBuildPullRequestUrl,
+  mergeBuildWaitForPr,
+  ownMergeBuildWaits,
+} from "../../renderer/src/features/pr-watches/merge-build-watches";
 import {
   MERGE_BUILD_NO_CHECKS_MS,
   MERGE_BUILD_SETTLE_MS,
@@ -412,5 +422,251 @@ describe("Continue After a merge build", () => {
       }));
     });
     expectSqliteWriteBudget({ scenario: "thread-dependency-merge-build-lifecycle", note: "One automatic merge build watch: registration, the merged evaluation and the quiet pass; checks in between write nothing. About 33 KB WAL per merge, so twenty merges a day is ~0.7 MB/day.", writes });
+  });
+
+  it("preserves wakeOn across federation dependency requests", () => {
+    const forwarded = readFederationThreadDependenciesRequest({
+      action: "create",
+      backend: "codex",
+      threadId: "feature",
+      conditions: [{ backend: "codex", threadId: "feature", when: "merge_build", prUrl: PR_URL }],
+      continuation: "Report the merge build result.",
+      wakeOn: "failure",
+    });
+    expect(forwarded?.wakeOn).toBe("failure");
+  });
+
+  it("lets createMergeBuildWatch register through strict continuation validation, with or without a PR", async () => {
+    const agent = coordinator();
+    const sent: ManageThreadDependenciesRequest[] = [];
+    const api = {
+      manageThreadDependencies: async (request: ManageThreadDependenciesRequest) => {
+        sent.push(request);
+        if (request.action === "create") {
+          validateDependencyCreate(request);
+          if (typeof request.continuation !== "string" || !request.continuation.trim()) {
+            throw new Error("Write what this thread should do when the prerequisites are met.");
+          }
+        }
+        return await agent.manage({ ...request, backend: "codex", threadId: "feature" });
+      },
+    };
+    const thread: Pick<NavigationThreadSummary, "id" | "source" | "federation" | "title"> = {
+      id: "feature", source: "codex", title: "Widgets",
+    };
+    await createMergeBuildWatch(api, thread, undefined);
+    expect(sent[0]?.continuation?.trim()).toBeTruthy();
+    expect(store.active()).toHaveLength(1);
+  });
+
+  it("ignores old closed and already-merged PRs for an unnamed self merge_build wait until a new PR opens", async () => {
+    const closed: PrSummary = { ...openPr(), number: 40, url: "https://github.com/example/app/pull/40", state: "closed", lifecycleState: "closed" };
+    const earlierMerged: PrSummary = { ...openPr(), number: 39, url: "https://github.com/example/app/pull/39", state: "merged", lifecycleState: "merged", mergedAt: now - 300_000 };
+    let prs: PrSummary[] = [earlierMerged, closed];
+    const agent = new ThreadDependencyCoordinator({
+      store,
+      readThread: async () => ({ turns: [], prs: prs.map((item) => ({ pr: item, fetchedAt: now })) }),
+      submit, changed: async () => undefined, now: () => now,
+      hasDeliveryReceipt: (item) => store.hasDeliveryReceipt(item),
+    });
+
+    const [created] = (await watch(agent)).dependencies;
+    expect(created).toMatchObject({ status: "waiting", evidence: [{ state: "waiting", reason: "Waiting for a primary-workspace PR" }] });
+    expect(submit).not.toHaveBeenCalled();
+
+    // Opening a new PR attaches it to the thread (`thread/pullRequests/updated`),
+    // binding the unnamed wait cleanly instead of failing on "multiple PRs".
+    const fresh = openPr();
+    prs = [earlierMerged, closed, fresh];
+    await agent.handleThreadEvent({ backend: "codex", threadId: "feature" });
+    expect(store.active()[0]!.evidence[0]).toMatchObject({ state: "waiting", reason: MERGE_BUILD_WAITING_FOR_MERGE_REASON, prUrl: fresh.url });
+  });
+
+  it("binds an unpinned self merge_build wait to a PR that opened and merged after arming", async () => {
+    const earlierMerged: PrSummary = { ...openPr(), number: 39, url: "https://github.com/example/app/pull/39", state: "merged", lifecycleState: "merged", mergedAt: now - 300_000 };
+    let prs: PrSummary[] = [earlierMerged];
+    const agent = new ThreadDependencyCoordinator({
+      store,
+      readThread: async () => ({ turns: [], prs: prs.map((item) => ({ pr: item, fetchedAt: now })) }),
+      submit, changed: async () => undefined, now: () => now,
+      hasDeliveryReceipt: (item) => store.hasDeliveryReceipt(item),
+    });
+
+    await watch(agent);
+    expect(store.active()[0]!.evidence[0]).toMatchObject({ state: "waiting", reason: "Waiting for a primary-workspace PR" });
+
+    // A new PR opens and merges before PwrAgent ever observes it in the open state.
+    now += 30_000;
+    const fastMerged: PrSummary = { ...openPr(), number: 42, url: "https://github.com/example/app/pull/42", state: "merged", lifecycleState: "merged", mergedAt: now };
+    prs = [earlierMerged, fastMerged];
+    await agent.handleThreadEvent({ backend: "codex", threadId: "feature" });
+    expect(store.active()[0]!.evidence[0]).toMatchObject({ state: "waiting", reason: MERGE_BUILD_WAITING_REASON, prUrl: fastMerged.url });
+    expect(agent.mergeBuildUrls()).toEqual([fastMerged.url]);
+  });
+
+  it("keeps describeMergeBuildWatch opt-out in agreement with armMergeBuild", async () => {
+    let prs: PrSummary[] = [];
+    const agent = new ThreadDependencyCoordinator({
+      store,
+      readThread: async () => ({ turns: [], prs: prs.map((item) => ({ pr: item, fetchedAt: now })) }),
+      submit, changed: async () => undefined, now: () => now,
+      hasDeliveryReceipt: (item) => store.hasDeliveryReceipt(item),
+    });
+
+    // Toggle on then cancel before any PR exists: future PRs are NOT opted out.
+    const [created] = (await watch(agent)).dependencies;
+    await agent.manage({ action: "cancel", backend: "codex", threadId: "feature", dependencyId: created!.id });
+    const nextPr: PrSummary = { ...openPr(), state: "merged", lifecycleState: "merged", mergedAt: now };
+    prs = [nextPr];
+    const waits = ownMergeBuildWaits(store.list("codex", "feature"), { backend: "codex", threadId: "feature" });
+    expect(describeMergeBuildWatch({ waits, defaultOn: true, prUrl: nextPr.url }).detail).not.toBe("Off for this PR");
+    expect(await agent.armMergeBuild({ backend: "codex", threadId: "feature" }, { url: nextPr.url })).toBe("armed");
+  });
+
+  it("holds renderer-vs-owner merge build watch invariants across random PR and click sequences", async () => {
+    type Op =
+      | { kind: "openPr" }
+      | { kind: "mergePr"; index: number }
+      | { kind: "closePr"; index: number }
+      | { kind: "composerClick" }
+      | { kind: "chipStop"; index: number }
+      | { kind: "buildFinish"; index: number; conclusion: "success" | "failure" }
+      | { kind: "toggleDefault" };
+
+    const opArb: fc.Arbitrary<Op> = fc.oneof(
+      fc.constant({ kind: "openPr" as const }),
+      fc.record({ kind: fc.constant("mergePr" as const), index: fc.integer({ min: 0, max: 2 }) }),
+      fc.record({ kind: fc.constant("closePr" as const), index: fc.integer({ min: 0, max: 2 }) }),
+      fc.constant({ kind: "composerClick" as const }),
+      fc.record({ kind: fc.constant("chipStop" as const), index: fc.integer({ min: 0, max: 2 }) }),
+      fc.record({
+        kind: fc.constant("buildFinish" as const),
+        index: fc.integer({ min: 0, max: 2 }),
+        conclusion: fc.constantFrom("success" as const, "failure" as const),
+      }),
+      fc.constant({ kind: "toggleDefault" as const }),
+    );
+
+    await fc.assert(
+      fc.asyncProperty(
+        fc.boolean(),
+        fc.boolean(),
+        fc.array(opArb, { minLength: 2, maxLength: 14 }),
+        async (initialDefaultOn, remote, ops) => {
+          db.raw.exec("DELETE FROM thread_dependencies; DELETE FROM thread_message_origins;");
+          let clock = 2_000_000;
+          let defaultOn = initialDefaultOn;
+          let nextNum = 100;
+          const prs: PrSummary[] = [];
+          const wakes: string[] = [];
+          const target = { backend: "codex" as const, threadId: "feature" };
+          const thread: NavigationThreadSummary = {
+            id: "feature", source: "codex", title: "Widgets", titleSource: "explicit",
+            inbox: { inInbox: false }, linkedDirectories: [], primaryGitRepository: "github.com/example/app",
+            ...(remote ? { federation: { ref: { target: { scope: "remote", instanceId: "peer-m5" }, threadId: "feature" } } as NavigationThreadSummary["federation"] } : {}),
+          };
+          const agent = new ThreadDependencyCoordinator({
+            store,
+            readThread: async () => ({ turns: [], prs: prs.map((item) => ({ pr: item, fetchedAt: clock })) }),
+            submit: async (params) => { wakes.push(params.input[0]?.text ?? ""); return { status: "started", turnId: `t-${wakes.length}` }; },
+            changed: async () => undefined,
+            now: () => clock,
+            hasDeliveryReceipt: (item) => store.hasDeliveryReceipt(item),
+          });
+          const api = {
+            manageThreadDependencies: async (request: ManageThreadDependenciesRequest) => {
+              const { federationTarget, ...rest } = request;
+              const owned = federationTarget?.scope === "remote" ? readFederationThreadDependenciesRequest(rest) : rest;
+              expect(owned).toBeDefined();
+              if (owned!.action === "create") {
+                validateDependencyCreate(owned!);
+                expect(typeof owned!.continuation === "string" && owned!.continuation.trim().length > 0).toBe(true);
+              }
+              return await agent.manage({ ...owned!, backend: "codex", threadId: "feature" });
+            },
+          };
+          const listWaits = () => ownMergeBuildWaits(agent.withCiRunObservations(store.list("codex", "feature")), target);
+
+          for (const op of ops) {
+            if (op.kind === "openPr") {
+              clock += 10_000;
+              const number = nextNum++;
+              const item: PrSummary = {
+                provider: "github.com", org: "example", repo: "app", number,
+                url: `https://github.com/example/app/pull/${number}`, title: `PR #${number}`,
+                state: "passing", checkState: "passing", lifecycleState: "open", createdAt: clock, headSha: `sha-${number}`,
+              };
+              prs.push(item);
+              await agent.handleThreadEvent(target);
+              await agent.handlePrEvent(item.url);
+            } else if (op.kind === "closePr") {
+              const open = prs.filter((item) => item.lifecycleState === "open");
+              if (!open.length) continue;
+              const chosen = open[op.index % open.length]!;
+              clock += 10_000;
+              chosen.lifecycleState = "closed";
+              chosen.state = "closed";
+              await agent.handlePrEvent(chosen.url);
+            } else if (op.kind === "mergePr") {
+              const open = prs.filter((item) => item.lifecycleState === "open");
+              if (!open.length) continue;
+              const chosen = open[op.index % open.length]!;
+              const before = describeMergeBuildWatch({ waits: listWaits(), defaultOn, prUrl: chosen.url });
+              clock += 10_000;
+              chosen.lifecycleState = "merged";
+              chosen.state = "merged";
+              chosen.mergedAt = clock;
+              await agent.handlePrEvent(chosen.url);
+              if (defaultOn) {
+                const armed = await agent.armMergeBuild(target, { url: chosen.url, title: chosen.title });
+                if (before.detail === "Off for this PR") expect(armed).toBe("covered");
+                if (!before.checked && before.detail !== "Off for this PR") expect(armed).toBe("armed");
+              }
+            } else if (op.kind === "composerClick") {
+              const waitsBefore = listWaits();
+              const prUrl = mergeBuildPullRequestUrl(prs, waitsBefore);
+              const stateBefore = describeMergeBuildWatch({ waits: waitsBefore, defaultOn, prUrl });
+              const wakesBefore = wakes.length;
+              if (stateBefore.checked) {
+                await cancelMergeBuildWatches(api, thread, waitsBefore);
+                const waitsAfter = listWaits();
+                expect(describeMergeBuildWatch({ waits: waitsAfter, defaultOn, prUrl: mergeBuildPullRequestUrl(prs, waitsAfter) }).checked).toBe(false);
+              } else {
+                await createMergeBuildWatch(api, thread, prUrl);
+                expect(wakes.slice(wakesBefore).some((text) => text.includes("PR closed without merging"))).toBe(false);
+                const waitsAfter = listWaits();
+                expect(describeMergeBuildWatch({ waits: waitsAfter, defaultOn, prUrl: mergeBuildPullRequestUrl(prs, waitsAfter) }).checked).toBe(true);
+              }
+            } else if (op.kind === "chipStop") {
+              const watched = prs.filter((item) => mergeBuildWaitForPr(listWaits(), item));
+              if (!watched.length) continue;
+              const chosen = watched[op.index % watched.length]!;
+              await cancelMergeBuildWatches(api, thread, [mergeBuildWaitForPr(listWaits(), chosen)!]);
+              expect(mergeBuildWaitForPr(listWaits(), chosen)).toBeUndefined();
+            } else if (op.kind === "buildFinish") {
+              const mergedList = prs.filter((item) => item.lifecycleState === "merged");
+              if (!mergedList.length) continue;
+              const chosen = mergedList[op.index % mergedList.length]!;
+              clock += MERGE_BUILD_SETTLE_MS + 10_000;
+              await agent.handleMergeBuildObservation(chosen.url, {
+                mergeCommitSha: `merge-${chosen.number}`.padEnd(40, "0"),
+                baseBranch: "main",
+                mergedAt: chosen.mergedAt,
+                status: "completed",
+                conclusion: op.conclusion,
+                checks: op.conclusion === "success"
+                  ? { total: 2, passed: 2, failed: 0, cancelled: 0, running: 0, queued: 0, skipped: 0 }
+                  : { total: 2, passed: 1, failed: 1, cancelled: 0, running: 0, queued: 0, skipped: 0 },
+                checkedAt: clock,
+              });
+              agent.mergeBuildUrls();
+            } else if (op.kind === "toggleDefault") {
+              defaultOn = !defaultOn;
+            }
+          }
+        },
+      ),
+      { numRuns: 5 },
+    );
   });
 });

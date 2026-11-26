@@ -2112,8 +2112,50 @@ describe("app server ipc", () => {
       action: "create", backend: "codex", threadId: "waiting",
       conditions: [{ backend: "codex", threadId: "prerequisite", when: "turn_completed" }], continuation: "  ",
     })).rejects.toThrow("Write what this thread should do");
+    // Explicit blank continuations and operator reminders are never defaulted,
+    // even for a single self merge_build condition.
+    await expect(handler({ sender: { id: 1 } }, {
+      action: "create", backend: "codex", threadId: "waiting",
+      conditions: [{ backend: "codex", threadId: "waiting", when: "merge_build" }], continuation: "  ",
+    })).rejects.toThrow("Write what this thread should do");
+    await expect(handler({ sender: { id: 1 } }, {
+      action: "create", backend: "codex", threadId: "waiting", deliver: "operator",
+      conditions: [{ backend: "codex", threadId: "waiting", when: "merge_build" }],
+    })).rejects.toThrow("Write what this thread should do");
+    // A legacy operator/peer self merge_build watch (v1.5.1 omitted continuation)
+    // injects the default continuation before reaching coordinator.manage.
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const internal = appServerService as unknown as {
+      backgroundPrPollingEnabled: boolean;
+      readDependencyThread: (condition: unknown) => Promise<unknown>;
+      getThreadDependencyCoordinator: () => { manage: (request: Record<string, unknown>) => Promise<{ dependencies: [] }> };
+    };
+    const manage = vi.fn(async () => ({ dependencies: [] as [] }));
+    const previousPolling = internal.backgroundPrPollingEnabled;
+    internal.backgroundPrPollingEnabled = true;
+    const readSpy = vi.spyOn(internal, "readDependencyThread").mockResolvedValue({ turns: [], prs: [] });
+    const coordSpy = vi.spyOn(internal, "getThreadDependencyCoordinator").mockReturnValue({ manage });
+    try {
+      await expect(handler({ sender: { id: 1 } }, {
+        action: "create", backend: "codex", threadId: "waiting",
+        conditions: [{ backend: "codex", threadId: "waiting", when: "merge_build" }],
+      })).resolves.toEqual({ dependencies: [] });
+      expect(manage).toHaveBeenCalledWith(
+        expect.objectContaining({ continuation: "Report the merge build result." }),
+        undefined,
+        "operator",
+      );
+    } finally {
+      internal.backgroundPrPollingEnabled = previousPolling;
+      readSpy.mockRestore();
+      coordSpy.mockRestore();
+    }
     const tool = setThreadDependencyToolHandler.mock.calls.at(-1)?.[0];
     await expect(tool({ action: "create", backend: "codex", threadId: "" })).resolves.toMatchObject({ ok: false, error: { code: "invalid_arguments" } });
+    await expect(tool({
+      action: "create", backend: "codex", threadId: "waiting",
+      conditions: [{ backend: "codex", threadId: "waiting", when: "merge_build" }],
+    }, undefined, "agent:codex:waiting")).resolves.toMatchObject({ ok: false, error: { message: expect.stringContaining("Write what this thread should do") } });
   });
 
   it("lists every active registration for sidebar status", async () => {
