@@ -4159,6 +4159,12 @@ export function useThreadNavigation(
   // Each resource's read when a command or event last patched a directory
   // row. A page from a read that began no later predates that patch.
   const directoryPatchReadsRef = useRef(new Map<string, ReadonlyMap<string, { request: unknown; sequence: number }>>());
+  // Each resource's read when a command or event last patched a thread's
+  // reactions. A page from a read that began no later predates that patch and
+  // must not roll reactions back after a completed write leaves the pending queue.
+  const threadReactionPatchReadsRef = useRef(
+    new Map<string, ReadonlyMap<string, { request: unknown; sequence: number }>>(),
+  );
   // A read started after an optimistic patch can still precede the owner's
   // write. Keep that field until every in-flight pin command has answered.
   const pendingDirectoryPinsRef = useRef(new Map<string, number>());
@@ -4188,6 +4194,11 @@ export function useThreadNavigation(
     const reads = new Map([...navigationResourcesRef.current].map(([id, resource]) =>
       [id, { request: resource.state.request, sequence: resource.state.pendingSequence }]));
     for (const key of directoryKeys) directoryPatchReadsRef.current.set(key, reads);
+  }, []);
+  const noteThreadReactionPatch = useCallback((mutationKey: string): void => {
+    const reads = new Map([...navigationResourcesRef.current].map(([id, resource]) =>
+      [id, { request: resource.state.request, sequence: resource.state.pendingSequence }]));
+    threadReactionPatchReadsRef.current.set(mutationKey, reads);
   }, []);
   const acceptedDefaultsRef = useRef<unknown>(undefined);
   const acceptedDraftHydrationRef = useRef<number | undefined>(undefined);
@@ -4251,6 +4262,25 @@ export function useThreadNavigation(
       for (const key of directoryPatchReadsRef.current.keys()) {
         if (!directoryRows.has(key)) directoryPatchReadsRef.current.delete(key);
       }
+      if (threadReactionPatchReadsRef.current.size > 0) {
+        const retainedReactionKeys = new Set(
+          [...pages.values(), ...boundedNavigation.selectionAncestry ? [boundedNavigation.selectionAncestry] : []]
+            .flatMap((page) =>
+              page.entries.map(({ row }) =>
+                buildThreadReactionMutationKey(
+                  row.source,
+                  row.id,
+                  row.federation?.ref.target ?? rendererFederationTarget,
+                ),
+              ),
+            ),
+        );
+        for (const key of threadReactionPatchReadsRef.current.keys()) {
+          if (!retainedReactionKeys.has(key)) {
+            threadReactionPatchReadsRef.current.delete(key);
+          }
+        }
+      }
       setState((current) => {
         // Unchanged resource pages must not roll back canonical row events or
         // resurrect tombstones when another resource finishes loading.
@@ -4308,15 +4338,35 @@ export function useThreadNavigation(
               presentedRow = { ...presentedRow, title: observedName.threadName, titleSource: observedName.titleSource };
             }
           }
-          if (pendingThreadReactionsRef.current.size > 0) {
-            const pendingReactions = pendingThreadReactionsRef.current.get(
-              buildThreadReactionMutationKey(
-                presentedRow.source,
-                presentedRow.id,
-                presentedRow.federation?.ref.target ?? rendererFederationTarget,
-              ),
-            )?.pending;
-            if (pendingReactions && pendingReactions.length > 0) {
+          if (
+            pendingThreadReactionsRef.current.size > 0
+            || threadReactionPatchReadsRef.current.size > 0
+          ) {
+            const mutationKey = buildThreadReactionMutationKey(
+              presentedRow.source,
+              presentedRow.id,
+              presentedRow.federation?.ref.target ?? rendererFederationTarget,
+            );
+            const pendingReactions =
+              pendingThreadReactionsRef.current.get(mutationKey)?.pending;
+            const resourceState = boundedNavigation.resources.get(id)?.state;
+            const patchedRead =
+              threadReactionPatchReadsRef.current.get(mutationKey)?.get(id);
+            const pagePredatesReactionPatch = Boolean(
+              patchedRead
+              && resourceState
+              && patchedRead.request === resourceState.request
+              && resourceState.pendingSequence <= patchedRead.sequence,
+            );
+            const hasPendingReactions = Boolean(
+              pendingReactions && pendingReactions.length > 0,
+            );
+            if (previous !== undefined && (pagePredatesReactionPatch || hasPendingReactions)) {
+              presentedRow = {
+                ...presentedRow,
+                reactions: previous.reactions,
+              };
+            } else if (hasPendingReactions && pendingReactions) {
               presentedRow = {
                 ...presentedRow,
                 reactions: applyPendingThreadReactions(
@@ -5001,6 +5051,7 @@ export function useThreadNavigation(
           threadId,
           event.federationTarget,
         );
+        noteThreadReactionPatch(mutationKey);
         const pendingReactions =
           pendingThreadReactionsRef.current.get(mutationKey)?.pending;
         const effectiveReactions =
@@ -5773,6 +5824,7 @@ export function useThreadNavigation(
     deferNestedArchiveRemoval,
     updateArchivedThreadKey,
     noteDirectoryPatch,
+    noteThreadReactionPatch,
     setSelectedItemKey,
     backgroundCleanupReport,
     presentArchiveCleanup,
@@ -9809,6 +9861,7 @@ export function useThreadNavigation(
         pendingThreadReactionsRef.current.set(mutationKey, queue);
       }
       queue.pending.push({ id: mutationId, emoji, present });
+      noteThreadReactionPatch(mutationKey);
 
       // Optimistic update computed from live loaded rows so rapid multi-select
       // toggles compose cleanly even within the same render tick.
@@ -9854,6 +9907,7 @@ export function useThreadNavigation(
           if (!mountedRef.current) {
             return;
           }
+          noteThreadReactionPatch(mutationKey);
           // Reconcile with the authoritative server response while preserving
           // any newer toggles still queued behind this mutation.
           const reconciled = remaining.length > 0
@@ -9882,7 +9936,7 @@ export function useThreadNavigation(
       );
       await task;
     },
-    [setThreadReactionRequest],
+    [noteThreadReactionPatch, setThreadReactionRequest],
   );
 
   const setThreadLock = useCallback(
