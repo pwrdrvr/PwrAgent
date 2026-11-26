@@ -43,7 +43,11 @@ import { READ_NAVIGATION_BACKEND_METADATA } from "./navigation-backend-metadata"
 import { sqliteBackendChangeVersion } from "./sqlite-backend-change-version";
 import { sqliteThreadChangeVersion } from "./sqlite-thread-change-version";
 import { sqliteUsageLedgerVersions } from "./sqlite-usage-ledger-change-version";
-import { PROJECT_CHECKOUT_GROUPS_META_KEY, sqliteNavigationChangeVersion } from "./sqlite-navigation-change-version";
+import {
+  PROJECT_CHECKOUT_GROUPS_META_KEY,
+  sqliteNavigationChangeVersion,
+  sqliteOwnerNavigationChangeVersion,
+} from "./sqlite-navigation-change-version";
 import { buildAppendPinRank, buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import { insertSubthreadIdAfter, sortSubthreadSummaries } from "@pwragent/shared/subthreads";
 import { navigationLaunchpadProviderKey } from "@pwragent/shared/contracts/navigation";
@@ -893,6 +897,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
   readNavigationSourceVersion(): string {
     const external = this.stateDb.raw.pragma("data_version", { simple: true });
     const local = sqliteNavigationChangeVersion(this.stateDb.raw);
+    return `${external}:${local}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
+  }
+
+  /** Owner-only stamp so viewer pin snapshot writes never invalidate native owner scans. */
+  readOwnerNavigationSourceVersion(): string {
+    const external = this.stateDb.raw.pragma("data_version", { simple: true });
+    const local = sqliteOwnerNavigationChangeVersion(this.stateDb.raw);
     return `${external}:${local}${this.stateDb.raw.inTransaction ? `:transaction:${++this.transactionNavigationRead}` : ""}`;
   }
 

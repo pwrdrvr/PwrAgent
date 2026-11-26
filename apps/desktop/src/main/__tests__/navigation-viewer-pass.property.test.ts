@@ -355,7 +355,7 @@ it("fences a disconnect during an active pin projection without discarding the u
     expect({ ipc: f.read.mock.calls.length, listings: f.provider.mock.calls.length,
       materializations: f.materialize.mock.calls.length, pins: f.resolve.mock.calls.length,
       snapshots: f.snapshots.mock.calls.length, commits: writes.commits })
-      .toEqual({ ipc: 3, listings: 1, materializations: 1, pins: 2, snapshots: 2, commits: 0 });
+      .toEqual({ ipc: 3, listings: 0, materializations: 0, pins: 2, snapshots: 2, commits: 0 });
   } finally { finish(); f.close(); vi.useRealTimers(); }
 });
 
