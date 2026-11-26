@@ -12156,6 +12156,96 @@ describe("app server ipc", () => {
     await checkOutstandingPrStatus({ laterObservation: "identical-poll", headCheck: "pending" });
   });
 
+  it("reuses the stacked index across pending GitHub mergeability reads and refreshes it for real status changes", async () => {
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const { loadLocalNavigationQueryIndex } = await import("../app-server/navigation-query-source");
+    const { StackReader } = await import("../stacks/stack-reader");
+    const { getDesktopBackendRegistry } = await import("../app-server/backend-registry");
+    const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
+    const service = appServerService as unknown as {
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
+      nextPrObservationTimestamp: () => number;
+      handlePrAutoDispatchSnapshots: () => Promise<void>;
+      prStatusRegistry: Map<string, { pr: PrSummary; fetchedAt: number }>;
+    };
+    await withRenamedRepositoryStore("transient-mergeability-", async ({ store }) => {
+      const pr = githubPr({
+        org: "fixture", repo: "stack-mergeability", number: 1, state: "passing", mergeState: "mergeable",
+        url: "https://github.com/fixture/stack-mergeability/pull/1",
+        headRefName: "topic", baseRefName: "main", headSha: "a".repeat(40), baseSha: "b".repeat(40),
+      });
+      const key = buildPullRequestStatusKey(pr);
+      const unknown = { ...pr, mergeState: "unknown" as const };
+      const thread: NavigationThreadSummary = {
+        id: "stack-mergeability", source: "codex", title: "Stacked", titleSource: "explicit", gitBranch: "topic",
+        linkedDirectories: [{ id: "/repo/stack", path: "/repo/stack", kind: "local", label: "Stack" }],
+        inbox: { inInbox: false },
+      };
+      const registry = {
+        ...getDesktopBackendRegistry(), listThreads: async () => [thread],
+      } as unknown as ReturnType<typeof getDesktopBackendRegistry>;
+      const read = () => loadLocalNavigationQueryIndex({ registry, callerReason: "stack-mergeability", includeStacks: true });
+      const stackReads = vi.spyOn(StackReader.prototype, "read").mockResolvedValue({ stacks: [], catalogs: [] });
+      const automation = vi.spyOn(service, "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+      overlayStoreFixture.stable = getDesktopOverlayStore();
+      publishLocalEvent.mockImplementation(async (event) => {
+        emitRegistryEvent(event);
+        return undefined;
+      });
+      const poll = (observed: PrSummary) => service.applyPolledPrStatuses([observed], service.nextPrObservationTimestamp());
+      const statuses = () => publishLocalEvent.mock.calls.flatMap(([event]) => {
+        const notification = (event as AgentEvent).notification;
+        return notification.method === "pullRequest/status/updated" && notification.params.prKey === key
+          ? [notification.params.pr as PrSummary] : [];
+      });
+      try {
+        const initial = service.nextPrObservationTimestamp();
+        await store.writePrStatusCacheEntries([{ provider: pr.provider, prKey: key, pr, fetchedAt: initial }]);
+        service.rememberPrStatuses([pr], initial, "seed");
+        await read();
+        expect(stackReads).toHaveBeenCalledTimes(1);
+
+        // Pending computations between the same tips must leave the last result
+        // and the existing stack projection intact, even after GitHub settles again.
+        const changedKeys: string[] = [];
+        for (const observation of [unknown, pr, unknown, pr]) {
+          changedKeys.push(...await poll(observation));
+          await read();
+        }
+        expect({ statuses: statuses().map((status) => status.mergeState), stackReads: stackReads.mock.calls.length })
+          .toEqual({ statuses: [], stackReads: 1 });
+        expect(changedKeys).toEqual([]);
+        expect(service.prStatusRegistry.get(key)?.fetchedAt).toBeGreaterThan(initial);
+        expect((await store.readPrStatusCache())[key]?.fetchedAt).toBe(initial);
+
+        const conflict = { ...pr, mergeState: "conflicting" as const };
+        await expect(poll(conflict)).resolves.toEqual([key]);
+        await read();
+        await expect(poll(unknown)).resolves.toEqual([]);
+        await read();
+        await expect(poll(pr)).resolves.toEqual([key]);
+        await read();
+        // Independent readiness changes still reach stack readers while GitHub computes.
+        await expect(poll({ ...unknown, state: "failing", checkState: "failing" })).resolves.toEqual([key]);
+        await read();
+        expect(statuses().map(({ mergeState, checkState }) => [mergeState, checkState])).toEqual([
+          ["conflicting", "passing"], ["mergeable", "passing"], ["mergeable", "failing"],
+        ]);
+        expect(stackReads).toHaveBeenCalledTimes(4);
+      } finally {
+        emitRegistryEvent({ notification: { method: "thread/name/updated" } });
+        publishLocalEvent.mockImplementation(async () => undefined);
+        overlayStoreFixture.stable = undefined;
+        service.prStatusRegistry.delete(key);
+        clock.mockRestore();
+        automation.mockRestore();
+        stackReads.mockRestore();
+      }
+    });
+  });
+
   it.each((["in-app-merge", "identical-poll"] as const).flatMap(laterObservation =>
     (["pending", "failing"] as const).map(headCheck => ({ laterObservation, headCheck }))))(
     "preserves terminal PR status across $laterObservation with a $headCheck check",

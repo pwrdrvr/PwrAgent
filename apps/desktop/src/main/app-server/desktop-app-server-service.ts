@@ -8,6 +8,7 @@ import {
   normalizePrSummary,
   mergeLinkedDirectoryPaths,
   stripPrLinkedDirectoryPaths,
+  stabilizePolledPrMergeState,
   dedupePrsByStatusKey,
   getPrStatusKey,
   prSummariesEqual,
@@ -6659,8 +6660,9 @@ class DesktopAppServerService {
       onTargetsHandled: (keys) => this.transcriptPrSubscriptions.markHandled(keys),
       applyResults: async (prs, fetchedAt, fetchedAtByKey) => {
         // Mention-only results must never enter persistence, transitions, or
-        // automatic repair. Attached PRs keep their existing result path.
-        this.transcriptPrSubscriptions.observe(prs, fetchedAt, fetchedAtByKey);
+        // automatic repair. The registry supplies the status for attached PRs.
+        const mentions = prs.filter((pr) => !this.primaryPrThreadsByKey.has(getPrStatusKey(pr)));
+        this.transcriptPrSubscriptions.observe(mentions, fetchedAt, fetchedAtByKey);
         const attached = prs.filter((pr) =>
           this.primaryPrThreadsByKey.has(getPrStatusKey(pr))
         );
@@ -7541,8 +7543,9 @@ class DesktopAppServerService {
     // overwrite a richer commit set retained from an older snapshot.
     const merged = prs.map((pr) => {
       const previous = this.prStatusRegistry.get(getPrStatusKey(pr))?.pr;
-      const commitShas = mergeCommitShas(previous?.commitShas, pr.commitShas);
-      return commitShas.length > 0 ? { ...pr, commitShas } : pr;
+      const status = stabilizePolledPrMergeState(previous, pr);
+      const commitShas = mergeCommitShas(previous?.commitShas, status.commitShas);
+      return commitShas.length > 0 ? { ...status, commitShas } : status;
     });
 
     const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll", { fetchedAtByKey });

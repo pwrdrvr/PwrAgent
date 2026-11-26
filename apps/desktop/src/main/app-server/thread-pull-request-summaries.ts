@@ -57,6 +57,19 @@ export function normalizePrSummary(pr: PrSummary): PrSummary {
   return normalized;
 }
 
+/** Keep GitHub's last computed result while it recalculates for the same tips. */
+export function stabilizePolledPrMergeState(previous: PrSummary | undefined, next: PrSummary): PrSummary {
+  if (next.provider === "github.com" && next.lifecycleState === "open" && next.mergeState === "unknown"
+    && previous?.lifecycleState === "open"
+    && (previous.mergeState === "mergeable" || previous.mergeState === "conflicting")
+    && next.headSha && next.headSha === previous.headSha
+    && next.baseSha && next.baseSha === previous.baseSha
+    && next.headRefName === previous.headRefName && next.baseRefName === previous.baseRefName) {
+    return { ...next, mergeState: previous.mergeState };
+  }
+  return next;
+}
+
 export function mergeLinkedDirectoryPaths(
   left: string[] | undefined,
   right: string[] | undefined,
