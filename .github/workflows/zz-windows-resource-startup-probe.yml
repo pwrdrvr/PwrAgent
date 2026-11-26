@@ -6,6 +6,11 @@ permissions:
   contents: read
 jobs:
   probe:
+    name: Native Windows (${{ matrix.variant }})
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [before, after]
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
@@ -15,14 +20,25 @@ jobs:
           node-version: "^24.22.1"
           working-directory: .
           cache-electron: "true"
-      - name: Concurrent cold starts
+      - name: Restore pre-fix startup for the regression control
+        if: matrix.variant == 'before'
+        shell: pwsh
+        run: |
+          git fetch --depth=1 origin 34dff4c764c66361d192aa255e602f3ef28d53ee
+          git restore --source=FETCH_HEAD -- apps/desktop/src/main/profile.ts apps/desktop/src/main/state/app-state.ts
+      - name: Verify Windows profile startup and checkout ownership
         shell: pwsh
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
           PWRAGENT_WINDOWS_STARTUP_PROBE: ${{ github.workspace }}/apps/desktop/startup-probe.ndjson
         run: |
-          pnpm test:desktop-e2e e2e/resource-checkouts.spec.ts -g 'default and dev contend' --repeat-each 10 --retries=0 --max-failures=2 --trace=retain-on-failure
+          if ("${{ matrix.variant }}" -eq "before") {
+            pnpm test:desktop-e2e e2e/resource-checkouts.spec.ts -g 'while another process reads' --retries=0 --trace=retain-on-failure
+          } else {
+            pnpm test:desktop-e2e e2e/resource-checkouts.spec.ts --repeat-each 10 --retries=0 --trace=retain-on-failure
+          }
+          exit $LASTEXITCODE
       - name: Collect startup evidence
         if: always()
         shell: pwsh
@@ -33,7 +49,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: windows-startup-probe
+          name: windows-startup-probe-${{ matrix.variant }}
           path: |
             apps/desktop/startup-probe.ndjson
             apps/desktop/test-results/
