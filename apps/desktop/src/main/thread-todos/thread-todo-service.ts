@@ -26,6 +26,11 @@ import type {
 import type { CodexSpeed } from "@pwragent/shared/codex-speed";
 import type { ThreadTodoNativeAccessMode } from "@pwragent/shared/thread-todo-access";
 import {
+  resolveInitialThreadContinueAfter,
+  type InitialThreadContinueAfter,
+  type ResolvedInitialThreadContinueAfter,
+} from "@pwragent/shared/contracts/thread-dependencies";
+import {
   DEFAULT_THREAD_TODO_MERGE_METHOD,
   THREAD_TODO_MAX_OPEN_PER_THREAD,
   THREAD_TODO_MERGE_METHODS,
@@ -54,6 +59,11 @@ import {
 } from "./thread-todo-plan.js";
 
 type StartThreadAction = Extract<ThreadTodoAction, { type: "start_thread" }>;
+export type AddThreadTodoAction =
+  | Exclude<ThreadTodoAction, StartThreadAction>
+  | (Omit<StartThreadAction, "continueAfter"> & {
+      continueAfter?: InitialThreadContinueAfter | ResolvedInitialThreadContinueAfter;
+    });
 
 /**
  * The two actions that run in the main process. `start_review` is not here:
@@ -103,6 +113,7 @@ export type ThreadTodoActionRunners = {
     plan?: ThreadTodoPlan;
   } & ThreadTodoStartChoices) => Promise<ThreadTodoStartedThread & {
     dispatchSettings?: { settings: ThreadTodoModelSettings; source: ThreadTodoModelSettings };
+    notice?: string;
   }>;
   /** The same, on a federation peer, in that peer's copy of `project`. */
   startThreadOnInstance?: (params: {
@@ -155,7 +166,7 @@ export type AddThreadTodoInput = {
    */
   prerequisites?: string[];
   key?: string;
-  action?: ThreadTodoAction;
+  action?: AddThreadTodoAction;
   /** The project name or path the thread named, resolved by the runtime. */
   project?: string;
 };
@@ -173,6 +184,7 @@ export type ThreadTodoActionPatch = {
   executionMode?: ThreadExecutionMode | null;
   workMode?: ThreadTodoWorkMode | null;
   placement?: ThreadTodoPlacement | null;
+  continueAfter?: InitialThreadContinueAfter | ResolvedInitialThreadContinueAfter | null;
   pullRequest?: string;
 };
 
@@ -200,6 +212,7 @@ const START_THREAD_PATCH_FIELDS = [
   "executionMode",
   "workMode",
   "placement",
+  "continueAfter",
 ] as const;
 
 export class ThreadTodoError extends Error {
@@ -313,14 +326,21 @@ export class ThreadTodoService {
     input: AddThreadTodoInput;
   }): { todo: ThreadTodo; created: boolean } {
     const { backend, threadId, input, sourceProject } = params;
-    const kind = threadTodoKindForAction(input.action);
+    const action: ThreadTodoAction | undefined =
+      input.action?.type === "start_thread" && input.action.continueAfter
+        ? {
+            ...input.action,
+            continueAfter: resolveInitialThreadContinueAfter(input.action.continueAfter, { backend, threadId }),
+          }
+        : input.action as ThreadTodoAction | undefined;
+    const kind = threadTodoKindForAction(action);
     // Naming the thread's own project is not a target: there is nothing
     // to point at that the source does not already say.
     const targetProject = params.targetProject
       && params.targetProject.key !== sourceProject?.key
       ? params.targetProject
       : undefined;
-    assertPlacementFitsProject(input.action?.type === "start_thread" ? input.action.placement : undefined, targetProject);
+    assertPlacementFitsProject(action?.type === "start_thread" ? action.placement : undefined, targetProject);
     const now = this.now();
     // Read and write in one transaction: a re-raise merges into the steps
     // the operator may be ticking from another window at the same moment.
@@ -342,7 +362,7 @@ export class ThreadTodoService {
                 this.newId,
                 input.prerequisites,
               ),
-          action: input.action,
+          action,
           cwd: params.cwd,
           sourceProject,
           targetProject,
@@ -370,7 +390,7 @@ export class ThreadTodoService {
           this.newId,
           input.prerequisites ?? [],
         ),
-        action: input.action,
+        action,
         cwd: params.cwd,
         sourceProject,
         targetProject,
@@ -933,7 +953,7 @@ export class ThreadTodoService {
       ? current.items ?? []
       : mergeThreadTodoItems(current.items, params.items, this.newId, params.prerequisites);
     const items = applyItemChecks(merged, params.check ?? [], params.uncheck ?? []);
-    const action = patchAction(current.action, params.action);
+    const action = patchAction(current.action, params.action, current);
     const targetProject = params.targetProject === undefined
       ? current.targetProject
       : params.targetProject !== null
@@ -1059,7 +1079,13 @@ export class ThreadTodoService {
           sourceBackend: todo.backend, sourceThreadId: todo.threadId, target, prompt: action.prompt,
           todo: dispatchCard,
         });
-        return this.finish(id, { result: sent.summary });
+        const notice = action.type === "start_thread" && action.continueAfter
+          ? "Continue After was not registered because the request was sent to an existing thread."
+          : undefined;
+        const result = notice
+          ? (sent.summary.endsWith(".") ? `${sent.summary} ${notice}` : `${sent.summary}. ${notice}`)
+          : sent.summary;
+        return this.finish(id, { result });
       }
       if (action.type === "merge_pull_request") {
         const method = settleMergeMethod({
@@ -1268,6 +1294,7 @@ function applyItemChecks(
 function patchAction(
   action: ThreadTodoAction | undefined,
   patch: ThreadTodoActionPatch | undefined,
+  source: Pick<ThreadTodo, "backend" | "threadId">,
 ): ThreadTodoAction | undefined {
   if (!patch || Object.keys(patch).length === 0) {
     return action;
@@ -1315,6 +1342,11 @@ function patchAction(
       if (value === null) {
         // The prompt is required: null cannot clear it.
         if (field !== "prompt") delete (next as Record<string, unknown>)[field];
+      } else if (field === "continueAfter") {
+        next.continueAfter = resolveInitialThreadContinueAfter(
+          value as InitialThreadContinueAfter,
+          source,
+        );
       } else {
         (next as Record<string, unknown>)[field] = value;
       }

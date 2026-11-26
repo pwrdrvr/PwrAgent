@@ -29546,6 +29546,45 @@ button.stack-display__thread,
   text-align: right;
 }
 
+.thread-todo-continue-after {
+  margin-top: 6px;
+}
+
+.thread-todo-continue-after__conditions {
+  margin: 2px 0 0;
+  padding-left: 14px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.thread-todo-continue-after__conditions li {
+  overflow-wrap: anywhere;
+}
+
+.thread-todo-continue-after__continuation {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.thread-todo-continue-after__continuation.is-clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.thread-todo-continue-after__note {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .thread-todo-card__facts {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);

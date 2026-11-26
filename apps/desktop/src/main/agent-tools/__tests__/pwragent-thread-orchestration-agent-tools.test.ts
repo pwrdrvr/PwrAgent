@@ -656,6 +656,92 @@ describe("pwragent thread orchestration agent tools", () => {
     expect((tool.inputSchema as { required: string[] }).required).toEqual(["task"]);
   });
 
+  it("advertises and normalizes handoff_task continueAfter and surfaces specific validation errors", async () => {
+    const handler = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        backend: "codex" as const,
+        threadId: "child-1",
+        threadUrl: "pwragent://thread/child-1?backend=codex",
+        threadLink: "[child-1](pwragent://thread/child-1?backend=codex)",
+        seedMode: "clean" as const,
+        groupingMode: "subthread" as const,
+        inheritedSettings: { backend: "codex" as const },
+        origin: {
+          sourceBackend: "codex" as const,
+          sourceThreadId: "thread-1",
+          seedMode: "clean" as const,
+          groupingMode: "subthread" as const,
+          createdAt: 1,
+          workspace: { mode: "none" as const, git: { kind: "none" as const, worktreeCreationAvailable: false as const, unavailableReason: "none" } },
+        },
+        workspace: { mode: "none" as const, git: { kind: "none" as const, worktreeCreationAvailable: false as const, unavailableReason: "none" } },
+        messagingAttachment: { requested: false as const, outcome: "not_requested" as const },
+      },
+    }));
+    const tool = buildPwrAgentThreadOrchestrationToolDefinitions(handler)
+      .find((definition) => definition.name === "handoff_task")!;
+    expect(tool.description).toContain("continueAfter");
+    expect(tool.inputSchema).toMatchObject({
+      properties: {
+        continueAfter: {
+          type: "object",
+          required: ["conditions", "continuation"],
+        },
+      },
+    });
+
+    const router = buildPwrAgentThreadOrchestrationToolRouter(handler);
+    const okResult = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-ca-1",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Fix pointer-travel on top of #688",
+          continueAfter: {
+            conditions: [{ when: "pr_merged", prUrl: " https://github.com/pwrdrvr/PwrGit/pull/688 " }],
+            continuation: "  Rebase onto main and open PR.  ",
+          },
+        },
+      },
+    });
+    expect(okResult.success).toBe(true);
+    expect(handler).toHaveBeenCalledWith(expect.objectContaining({
+      operation: "handoff_task",
+      args: expect.objectContaining({
+        continueAfter: {
+          conditions: [{ when: "pr_merged", prUrl: "https://github.com/pwrdrvr/PwrGit/pull/688" }],
+          continuation: "Rebase onto main and open PR.",
+        },
+      }),
+    }));
+
+    const badResult = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-ca-2",
+        namespace: "pwragent",
+        tool: "handoff_task",
+        arguments: {
+          task: "Fix pointer-travel",
+          continueAfter: {
+            conditions: [{ when: "compaction_completed" }],
+            continuation: "Invalid.",
+          },
+        },
+      },
+    });
+    expect(badResult.success).toBe(false);
+    const badText = badResult.contentItems[0]?.type === "inputText" ? badResult.contentItems[0].text : "";
+    expect(badText).toContain("continueAfter.conditions[0].when");
+  });
+
   it("normalizes send_message_to_thread identifiers while preserving prompt content and caller context", async () => {
     const handler = vi.fn(async () => ({
       ok: true as const,

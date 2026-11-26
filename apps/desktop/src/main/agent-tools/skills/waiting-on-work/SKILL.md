@@ -122,6 +122,14 @@ thread and spends no model turns while waiting, whether the wait takes minutes
 or days. After registration succeeds, end the turn. This schedules the follow-up;
 it does not merge any prerequisite PR or enforce their merge order.
 
+When delegating child work that should automatically resume after a prerequisite
+(for example, building on top of this thread's PR now and opening the child PR
+once this thread's PR merges), pass `continueAfter` directly on `handoff_task`
+or `add_todo` (`action.type: "start_thread"`). Omit `backend` and `threadId` in
+a condition to wait on the parent/raising thread. PwrAgent registers the durable
+Continue After on the child as soon as its first turn starts so the follow-up
+does not get lost in prose instructions or compaction.
+
 ## An existing local watcher
 
 When an external command already watches a release and writes a marker after

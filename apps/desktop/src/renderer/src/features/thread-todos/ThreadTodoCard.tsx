@@ -17,6 +17,10 @@ import {
   type Ref,
 } from "react";
 import type { PrMergeQueueStatus } from "@pwragent/shared/contracts/navigation";
+import {
+  describeInitialContinueAfterCondition,
+  type ResolvedInitialThreadContinueAfter,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
 import type {
   ThreadTodo,
@@ -1332,6 +1336,20 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
               </div>
             </dl>
           ) : null}
+          {action?.type === "start_thread" && action.continueAfter ? (
+            <ThreadTodoContinueAfter
+              continueAfter={action.continueAfter}
+              expanded={resting.expanded}
+              continuationRef={resting.continuationRef}
+              note={
+                sendingMessage
+                  ? "Not registered when sending to an existing thread."
+                  : !target.onOwner
+                    ? "Registered only when starting on this card's own PwrAgent."
+                    : undefined
+              }
+            />
+          ) : null}
           {sendingMessage && !canSendMessage ? (
             <p role="status">Update the card's PwrAgent owner to send requests to existing threads.</p>
           ) : null}
@@ -1415,6 +1433,45 @@ function ActionThreadTodoCard(props: ThreadTodoCardProps) {
       </div>
       {copying.menu}
     </article>
+  );
+}
+
+function ThreadTodoContinueAfter(props: {
+  continueAfter: ResolvedInitialThreadContinueAfter;
+  expanded: boolean;
+  continuationRef: Ref<HTMLParagraphElement>;
+  note?: string;
+}) {
+  const { continueAfter, expanded, continuationRef, note } = props;
+  const qualifiers = [
+    continueAfter.conditions.length > 1 && continueAfter.mode === "any" ? "any" : undefined,
+    continueAfter.deliver === "operator" ? "reminds you" : undefined,
+    continueAfter.holdMerge ? "holds merge" : undefined,
+  ].filter(Boolean);
+  return (
+    <div className="thread-todo-continue-after">
+      <p className="thread-todo-card__group-label">
+        Continue after{qualifiers.length > 0 ? ` · ${qualifiers.join(" · ")}` : ""}
+      </p>
+      <ul className="thread-todo-continue-after__conditions">
+        {continueAfter.conditions.map((condition, index) => (
+          <li key={`${condition.backend}:${condition.threadId}:${condition.when}:${index}`}>
+            {describeInitialContinueAfterCondition(condition)}
+          </li>
+        ))}
+      </ul>
+      <p
+        ref={continuationRef}
+        className={`thread-todo-continue-after__continuation${expanded ? "" : " is-clamped"}`}
+      >
+        {continueAfter.continuation}
+      </p>
+      {note ? (
+        <p className="thread-todo-continue-after__note">
+          {note}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -1579,10 +1636,15 @@ function useRestingCard(todo: ThreadTodo) {
   // they are what holds the card back.
   const items = threadTodoSteps(todo);
   const plan = todo.action?.type === "start_thread" || todo.action?.type === "send_message";
+  const continueAfterContinuation = todo.action?.type === "start_thread"
+    ? todo.action.continueAfter?.continuation
+    : undefined;
   const [expanded, setExpanded] = useState(false);
   const [anchor, setAnchor] = useState(() => restingStepStart(items));
   const [detailCut, setDetailCut] = useState(false);
+  const [continuationCut, setContinuationCut] = useState(false);
   const detailRef = useRef<HTMLParagraphElement>(null);
+  const continuationRef = useRef<HTMLParagraphElement>(null);
   const toggleRef = useRef<HTMLButtonElement>(null);
   const revealToggleRef = useRef(false);
   const bodyId = useId();
@@ -1599,14 +1661,19 @@ function useRestingCard(todo: ThreadTodo) {
   // width, which the rail and the transcript corner set differently.
   useLayoutEffect(() => {
     const detail = detailRef.current;
-    if (expanded || !detail) return;
-    const measure = () => setDetailCut(detail.scrollHeight > detail.clientHeight + 1);
+    const continuation = continuationRef.current;
+    if (expanded || (!detail && !continuation)) return;
+    const measure = () => {
+      setDetailCut(detail ? detail.scrollHeight > detail.clientHeight + 1 : false);
+      setContinuationCut(continuation ? continuation.scrollHeight > continuation.clientHeight + 1 : false);
+    };
     measure();
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
-    observer.observe(detail);
+    if (detail) observer.observe(detail);
+    if (continuation) observer.observe(continuation);
     return () => observer.disconnect();
-  }, [expanded, todo.detail]);
+  }, [expanded, todo.detail, continueAfterContinuation]);
 
   // Opening grows the text above the toggle, and the body starts at its
   // top. A keyboard user's focus stays on the toggle, so scroll it just
@@ -1625,7 +1692,7 @@ function useRestingCard(todo: ThreadTodo) {
       ? "Show more"
       : hiddenSteps > 0
         ? `Show all ${items.length} steps`
-        : detailCut ? "Show more" : undefined;
+        : (detailCut || continuationCut) ? "Show more" : undefined;
   const toggleDetail = plan && hiddenSteps > 0 ? `· ${items.length}-step plan` : undefined;
   // Set by the step count alone, not by whether the card is open, so Show
   // less sits where Show more was. A plan opens under the description.
@@ -1635,6 +1702,7 @@ function useRestingCard(todo: ThreadTodo) {
     expanded,
     bodyId,
     detailRef,
+    continuationRef,
     steps: expanded ? items : plan ? [] : items.slice(start, start + RESTING_STEP_ROWS),
     toggleLabel,
     toggleDetail,

@@ -17,6 +17,10 @@ import type {
   ThreadAutoPinFailure,
 } from "./agent";
 import type { MessagingChannelKind, MessagingConversationKind } from "./messaging";
+import type {
+  InitialThreadContinueAfter,
+  ThreadDependency,
+} from "./thread-dependencies";
 
 export const PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES = [
   "attach_thread_directory",
@@ -132,6 +136,11 @@ export type HandoffTaskToolArgs = {
    * `none`. Omitted: a same-project child inherits the parent's environment.
    */
   environment?: string;
+  /**
+   * Optional durable Continue After wait registered on the child thread as
+   * soon as its initial turn starts (e.g. resume after the parent's PR merges).
+   */
+  continueAfter?: InitialThreadContinueAfter;
 };
 
 export type SendMessageToThreadToolArgs = {
@@ -425,6 +434,18 @@ export type HandoffTaskMessagingAttachment =
       reason: string;
     };
 
+export type HandoffTaskContinueAfterResult =
+  | {
+      status: "registered";
+      dependencyId: string;
+      dependencyStatus: ThreadDependency["status"];
+      projectNotice?: string;
+    }
+  | {
+      status: "failed" | "skipped";
+      error: string;
+    };
+
 export type HandoffTaskResult = {
   backend: AppServerBackendKind;
   handoffId?: string;
@@ -454,6 +475,8 @@ export type HandoffTaskResult = {
     message: string;
     phase: "turn";
   };
+  /** Result of registering `args.continueAfter` on the created child thread. */
+  continueAfter?: HandoffTaskContinueAfterResult;
 };
 
 export type SendMessageToThreadResult = {

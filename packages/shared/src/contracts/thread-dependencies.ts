@@ -1,4 +1,5 @@
 import type { FederationCapability, FederationTarget } from "./federation";
+import { isAppServerBackendKind } from "./navigation";
 import type { AppServerBackendKind } from "./normalized-app-server";
 
 export const THREAD_DEPENDENCIES_CHANNEL = "thread:dependencies";
@@ -454,4 +455,520 @@ export function threadDependencyMarkDoneIndex(dependency: Pick<ThreadDependency,
   if (requested !== undefined) return open(requested) ? requested : undefined;
   const index = dependency.conditions.findIndex((_, candidate) => open(candidate));
   return index >= 0 ? index : undefined;
+}
+
+/**
+ * Prerequisite kinds a newly created thread (via `handoff_task` or a
+ * `start_thread` to-do card) can register right from creation. Excludes
+ * same-thread Codex compaction hooks, caller-workspace local file watchers,
+ * and owner-internal resource checkouts.
+ */
+export const INITIAL_THREAD_DEPENDENCY_CONDITIONS = [
+  "turn_completed",
+  "pr_attached",
+  "ci_passed",
+  "pr_merged",
+  "merge_build",
+  "marked_done",
+  "ci_run",
+] as const;
+
+export type InitialThreadDependencyConditionWhen =
+  (typeof INITIAL_THREAD_DEPENDENCY_CONDITIONS)[number];
+
+/**
+ * One prerequisite passed on `handoff_task.continueAfter` or
+ * `add_todo.action.continueAfter`. For a thread prerequisite, omitting both
+ * `backend` and `threadId` targets the parent/raising thread.
+ */
+export type InitialThreadDependencyCondition = {
+  backend?: AppServerBackendKind;
+  threadId?: string;
+  when: InitialThreadDependencyConditionWhen;
+  turnId?: string;
+  prUrl?: string;
+  headSha?: string;
+  title?: string;
+  subject?: string;
+  target?: Extract<FederationTarget, { scope: "remote" }>;
+  ciRun?: ThreadDependencyCiRun;
+};
+
+/**
+ * Continue After registration attached to a `handoff_task` call or a
+ * `start_thread` to-do card so the child thread's follow-up wait is registered
+ * durably when the child starts instead of living only in prompt prose.
+ */
+export type InitialThreadContinueAfter = {
+  conditions: InitialThreadDependencyCondition[];
+  mode?: "all" | "any";
+  onFailure?: "notify" | "wait";
+  continuation: string;
+  deliver?: ThreadDependencyDeliveryTarget;
+  handoff?: boolean;
+  steps?: string[];
+  holdMerge?: boolean;
+  wakeOn?: "failure";
+};
+
+/** One resolved prerequisite condition on an initial Continue After registration. */
+export type ResolvedInitialThreadDependencyCondition = InitialThreadDependencyCondition & {
+  backend: AppServerBackendKind;
+  threadId: string;
+};
+
+/** Initial Continue After after resolving defaulted parent thread references. */
+export type ResolvedInitialThreadContinueAfter = Omit<InitialThreadContinueAfter, "conditions"> & {
+  conditions: ResolvedInitialThreadDependencyCondition[];
+};
+
+const INITIAL_CONTINUE_AFTER_KEYS = new Set([
+  "conditions",
+  "mode",
+  "onFailure",
+  "continuation",
+  "deliver",
+  "handoff",
+  "steps",
+  "holdMerge",
+  "wakeOn",
+]);
+
+const INITIAL_CONTINUE_AFTER_CONDITION_KEYS = new Set([
+  "backend",
+  "threadId",
+  "when",
+  "turnId",
+  "prUrl",
+  "headSha",
+  "title",
+  "subject",
+  "target",
+  "ciRun",
+]);
+
+const INITIAL_CONTINUE_AFTER_CI_RUN_KEYS = new Set(["url", "on", "environments"]);
+const INITIAL_CONTINUE_AFTER_CONTINUATION_MAX_LENGTH = 8_000;
+const INITIAL_CONTINUE_AFTER_MAX_CONDITIONS = 16;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+type RuntimeUrlLike = {
+  protocol: string;
+  username: string;
+  password: string;
+  host: string;
+  pathname: string;
+};
+
+function parseHttpsUrl(value: string): RuntimeUrlLike | undefined {
+  const UrlCtor = (globalThis as { URL?: new (input: string) => RuntimeUrlLike }).URL;
+  if (typeof UrlCtor === "function") {
+    try {
+      const url = new UrlCtor(value);
+      if (url.protocol !== "https:" || url.username || url.password) return undefined;
+      return url;
+    } catch {
+      return undefined;
+    }
+  }
+  const match = /^https:\/\/([^/?#@\s]+)(\/[^?#\s]*)(?:\?[^#\s]*)?(?:#\S*)?$/.exec(value);
+  if (!match) return undefined;
+  const rawHost = match[1]!.toLowerCase();
+  return {
+    protocol: "https:",
+    username: "",
+    password: "",
+    host: rawHost.endsWith(":443") ? rawHost.slice(0, -4) : rawHost,
+    pathname: match[2]!,
+  };
+}
+
+function isPlausibleCiRunUrl(value: string): boolean {
+  const url = parseHttpsUrl(value);
+  if (!url || !url.host) return false;
+  if (url.host === "gitlab.com") {
+    const match = url.pathname.match(/^\/((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/-\/pipelines\/(\d{1,19})\/?$/);
+    const runId = Number(match?.[3]);
+    return Boolean(match) && Number.isSafeInteger(runId) && runId >= 1;
+  }
+  const match = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/actions\/runs\/(\d{1,19})(?:\/attempts\/\d+)?\/?$/);
+  if (!match) return false;
+  const runId = Number(match[3]);
+  return Number.isSafeInteger(runId) && runId >= 1;
+}
+
+/**
+ * Validates and normalizes `continueAfter` on `handoff_task` or a
+ * `start_thread` to-do card before any workspace or thread is created.
+ */
+export function parseInitialThreadContinueAfter(
+  value: unknown,
+  field = "continueAfter",
+): { ok: true; value: InitialThreadContinueAfter } | { ok: false; message: string } {
+  if (!isPlainRecord(value)) {
+    return { ok: false, message: `${field} must be an object with conditions and continuation.` };
+  }
+  for (const key of Object.keys(value)) {
+    if (!INITIAL_CONTINUE_AFTER_KEYS.has(key)) {
+      return { ok: false, message: `Unknown ${field} field "${key}".` };
+    }
+  }
+  if (typeof value.continuation !== "string" || !value.continuation.trim()) {
+    return {
+      ok: false,
+      message: `${field}.continuation is required: concrete steps for when the prerequisites are met.`,
+    };
+  }
+  const continuation = value.continuation.trim();
+  if (continuation.length > INITIAL_CONTINUE_AFTER_CONTINUATION_MAX_LENGTH) {
+    return {
+      ok: false,
+      message: `${field}.continuation must be at most ${INITIAL_CONTINUE_AFTER_CONTINUATION_MAX_LENGTH} characters.`,
+    };
+  }
+  if (value.mode !== undefined && value.mode !== "all" && value.mode !== "any") {
+    return { ok: false, message: `${field}.mode must be all or any.` };
+  }
+  if (value.onFailure !== undefined && value.onFailure !== "notify" && value.onFailure !== "wait") {
+    return { ok: false, message: `${field}.onFailure must be notify or wait.` };
+  }
+  if (value.deliver !== undefined && !THREAD_DEPENDENCY_DELIVERY_TARGETS.includes(value.deliver as ThreadDependencyDeliveryTarget)) {
+    return { ok: false, message: `${field}.deliver must be agent or operator.` };
+  }
+  if (value.handoff !== undefined && typeof value.handoff !== "boolean") {
+    return { ok: false, message: `${field}.handoff must be true or false.` };
+  }
+  if (value.handoff && value.deliver !== "operator") {
+    return { ok: false, message: `${field}.handoff requires deliver: "operator".` };
+  }
+  if (value.holdMerge !== undefined && typeof value.holdMerge !== "boolean") {
+    return { ok: false, message: `${field}.holdMerge must be true or false.` };
+  }
+  if (value.wakeOn !== undefined && value.wakeOn !== "failure") {
+    return { ok: false, message: `${field}.wakeOn must be "failure", or omitted to wake on either outcome.` };
+  }
+  if (value.wakeOn === "failure" && value.deliver === "operator") {
+    return { ok: false, message: `${field}.wakeOn: "failure" cannot be used with deliver: "operator".` };
+  }
+  let steps: string[] | undefined;
+  if (value.steps !== undefined) {
+    if (value.deliver !== "operator") {
+      return { ok: false, message: `${field}.steps require deliver: "operator".` };
+    }
+    if (
+      !Array.isArray(value.steps)
+      || value.steps.length > THREAD_DEPENDENCY_MAX_STEPS
+      || value.steps.some((step) => typeof step !== "string" || !step.trim() || step.trim().length > THREAD_DEPENDENCY_STEP_MAX_LENGTH)
+    ) {
+      return {
+        ok: false,
+        message: `${field}.steps must be at most ${THREAD_DEPENDENCY_MAX_STEPS} nonempty lines of at most ${THREAD_DEPENDENCY_STEP_MAX_LENGTH} characters.`,
+      };
+    }
+    steps = value.steps.map((step: string) => step.trim());
+  }
+  if (
+    !Array.isArray(value.conditions)
+    || value.conditions.length < 1
+    || value.conditions.length > INITIAL_CONTINUE_AFTER_MAX_CONDITIONS
+  ) {
+    return {
+      ok: false,
+      message: `${field}.conditions must contain between 1 and ${INITIAL_CONTINUE_AFTER_MAX_CONDITIONS} prerequisite conditions.`,
+    };
+  }
+  const conditions: InitialThreadDependencyCondition[] = [];
+  for (const [index, raw] of value.conditions.entries()) {
+    const parsed = parseInitialCondition(raw, `${field}.conditions[${index}]`, Boolean(value.holdMerge));
+    if (!parsed.ok) return parsed;
+    conditions.push(parsed.value);
+  }
+  return {
+    ok: true,
+    value: {
+      conditions,
+      continuation,
+      ...(value.mode ? { mode: value.mode } : {}),
+      ...(value.onFailure ? { onFailure: value.onFailure } : {}),
+      ...(value.deliver ? { deliver: value.deliver as ThreadDependencyDeliveryTarget } : {}),
+      ...(value.handoff ? { handoff: true } : {}),
+      ...(steps && steps.length > 0 ? { steps } : {}),
+      ...(value.holdMerge ? { holdMerge: true } : {}),
+      ...(value.wakeOn === "failure" ? { wakeOn: "failure" as const } : {}),
+    },
+  };
+}
+
+function parseInitialCondition(
+  raw: unknown,
+  field: string,
+  holdMerge: boolean,
+): { ok: true; value: InitialThreadDependencyCondition } | { ok: false; message: string } {
+  if (!isPlainRecord(raw)) {
+    return { ok: false, message: `${field} must be a condition object.` };
+  }
+  for (const key of Object.keys(raw)) {
+    if (!INITIAL_CONTINUE_AFTER_CONDITION_KEYS.has(key)) {
+      return { ok: false, message: `Unknown ${field} field "${key}".` };
+    }
+  }
+  if (typeof raw.when !== "string" || !(INITIAL_THREAD_DEPENDENCY_CONDITIONS as readonly string[]).includes(raw.when)) {
+    return {
+      ok: false,
+      message: `${field}.when must be one of ${INITIAL_THREAD_DEPENDENCY_CONDITIONS.join(", ")}.`,
+    };
+  }
+  const when = raw.when as InitialThreadDependencyConditionWhen;
+  if (raw.backend !== undefined && (typeof raw.backend !== "string" || !isAppServerBackendKind(raw.backend.trim()))) {
+    return { ok: false, message: `${field}.backend must name a known PwrAgent backend.` };
+  }
+  const backend = typeof raw.backend === "string" ? raw.backend.trim() as AppServerBackendKind : undefined;
+  if (raw.threadId !== undefined && typeof raw.threadId !== "string") {
+    return { ok: false, message: `${field}.threadId must be a string.` };
+  }
+  const threadId = typeof raw.threadId === "string" ? raw.threadId.trim() : undefined;
+  if (raw.title !== undefined && (typeof raw.title !== "string" || raw.title.trim().length > 200)) {
+    return { ok: false, message: `${field}.title must be text of at most 200 characters.` };
+  }
+  const title = typeof raw.title === "string" && raw.title.trim() ? raw.title.trim() : undefined;
+
+  if (when === "ci_run" || raw.ciRun !== undefined) {
+    if (when !== "ci_run" || !isPlainRecord(raw.ciRun)) {
+      return { ok: false, message: `${field} with ci_run requires ciRun: { url, on?, environments? }.` };
+    }
+    if ((threadId !== undefined && threadId !== "") || raw.subject !== undefined || raw.target !== undefined
+      || raw.turnId !== undefined || raw.prUrl !== undefined || raw.headSha !== undefined) {
+      return { ok: false, message: `${field} ci_run names no thread and takes no turn, PR, subject or target fields.` };
+    }
+    for (const key of Object.keys(raw.ciRun)) {
+      if (!INITIAL_CONTINUE_AFTER_CI_RUN_KEYS.has(key)) {
+        return { ok: false, message: `Unknown ${field}.ciRun field "${key}".` };
+      }
+    }
+    if (typeof raw.ciRun.url !== "string" || !raw.ciRun.url.trim() || raw.ciRun.url.trim().length > 2000) {
+      return { ok: false, message: `${field}.ciRun.url must be a nonempty URL of at most 2000 characters.` };
+    }
+    const ciRunUrl = raw.ciRun.url.trim();
+    if (!isPlausibleCiRunUrl(ciRunUrl)) {
+      return {
+        ok: false,
+        message: `${field}.ciRun.url must be an https:// GitHub Actions run (/actions/runs/<id>) or GitLab pipeline (/-/pipelines/<id>) URL.`,
+      };
+    }
+    let on: ThreadDependencyCiRunOutcome[] | undefined;
+    if (raw.ciRun.on !== undefined) {
+      if (
+        !Array.isArray(raw.ciRun.on)
+        || raw.ciRun.on.length < 1
+        || raw.ciRun.on.some((outcome) => !(THREAD_DEPENDENCY_CI_RUN_OUTCOMES as readonly unknown[]).includes(outcome))
+      ) {
+        return { ok: false, message: `${field}.ciRun.on lists one or more of ${THREAD_DEPENDENCY_CI_RUN_OUTCOMES.join(", ")}.` };
+      }
+      on = raw.ciRun.on as ThreadDependencyCiRunOutcome[];
+    }
+    let environments: string[] | undefined;
+    if (raw.ciRun.environments !== undefined) {
+      if (
+        !Array.isArray(raw.ciRun.environments)
+        || raw.ciRun.environments.length > THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS
+        || raw.ciRun.environments.some((name) => typeof name !== "string" || !name.trim() || name.trim().length > 100)
+      ) {
+        return {
+          ok: false,
+          message: `${field}.ciRun.environments lists at most ${THREAD_DEPENDENCY_CI_RUN_MAX_ENVIRONMENTS} nonempty environment names.`,
+        };
+      }
+      if (on && !on.includes("approval_gate")) {
+        return { ok: false, message: `${field}.ciRun.environments narrows approval_gate; include approval_gate in ciRun.on.` };
+      }
+      environments = raw.ciRun.environments.map((name: string) => name.trim());
+    }
+    return {
+      ok: true,
+      value: {
+        when: "ci_run",
+        ...(backend ? { backend } : {}),
+        ...(raw.threadId !== undefined ? { threadId: "" } : {}),
+        ...(title ? { title } : {}),
+        ciRun: {
+          url: raw.ciRun.url.trim(),
+          ...(on ? { on } : {}),
+          ...(environments ? { environments } : {}),
+        },
+      },
+    };
+  }
+
+  if (raw.subject !== undefined) {
+    if (typeof raw.subject !== "string" || !raw.subject.trim() || raw.subject.trim().length > THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH) {
+      return { ok: false, message: `${field}.subject must be nonempty text of at most ${THREAD_DEPENDENCY_SUBJECT_MAX_LENGTH} characters.` };
+    }
+    if (when !== "marked_done" || (threadId !== undefined && threadId !== "") || raw.target !== undefined
+      || raw.turnId !== undefined || raw.prUrl !== undefined || raw.headSha !== undefined) {
+      return { ok: false, message: `${field} with subject names no thread and must use when: "marked_done".` };
+    }
+    return {
+      ok: true,
+      value: {
+        when: "marked_done",
+        ...(backend ? { backend } : {}),
+        ...(raw.threadId !== undefined ? { threadId: "" } : {}),
+        subject: raw.subject.trim(),
+        ...(title ? { title } : {}),
+      },
+    };
+  }
+
+  // Thread prerequisite: omit both backend and threadId to wait on the parent/raising thread.
+  const hasBackend = backend !== undefined;
+  const hasThreadId = threadId !== undefined && threadId.length > 0;
+  if (raw.threadId !== undefined && !hasThreadId) {
+    return { ok: false, message: `${field}.threadId must be nonempty, or omit both backend and threadId to wait on this thread.` };
+  }
+  if (hasBackend !== hasThreadId) {
+    return { ok: false, message: `${field} must provide both backend and threadId to wait on another thread, or omit both to wait on this thread.` };
+  }
+
+  let target: Extract<FederationTarget, { scope: "remote" }> | undefined;
+  if (raw.target !== undefined) {
+    if (
+      !isPlainRecord(raw.target)
+      || raw.target.scope !== "remote"
+      || typeof raw.target.instanceId !== "string"
+      || !raw.target.instanceId.trim()
+      || raw.target.instanceId.trim().length > 200
+    ) {
+      return { ok: false, message: `${field}.target must be { scope: "remote", instanceId }.` };
+    }
+    if (when !== "marked_done") {
+      return { ok: false, message: `${field} targeting another machine can only use when: "marked_done".` };
+    }
+    if (!hasBackend || !hasThreadId) {
+      return { ok: false, message: `${field} targeting another machine must provide explicit backend and threadId.` };
+    }
+    target = { scope: "remote", instanceId: raw.target.instanceId.trim() };
+  }
+
+  const readIdentifier = (val: unknown, name: string): { ok: true; value?: string } | { ok: false; message: string } => {
+    if (val === undefined) return { ok: true };
+    if (typeof val !== "string" || !val.trim() || val.trim().length > 2000) {
+      return { ok: false, message: `${field}.${name} must be nonempty text of at most 2000 characters.` };
+    }
+    return { ok: true, value: val.trim() };
+  };
+  const turnId = readIdentifier(raw.turnId, "turnId");
+  if (!turnId.ok) return turnId;
+  const prUrl = readIdentifier(raw.prUrl, "prUrl");
+  if (!prUrl.ok) return prUrl;
+  const headSha = readIdentifier(raw.headSha, "headSha");
+  if (!headSha.ok) return headSha;
+
+  if (when === "turn_completed" && (prUrl.value || headSha.value)) {
+    return { ok: false, message: `${field} cannot use prUrl or headSha with turn_completed.` };
+  }
+  if (when === "marked_done" && (prUrl.value || headSha.value)) {
+    return { ok: false, message: `${field} cannot use prUrl or headSha with marked_done.` };
+  }
+  if (when === "merge_build" && headSha.value) {
+    return { ok: false, message: `${field} cannot use headSha with merge_build.` };
+  }
+  if (when === "merge_build" && holdMerge) {
+    return { ok: false, message: `${field} merge_build cannot be combined with holdMerge.` };
+  }
+  if (when !== "turn_completed" && turnId.value) {
+    return { ok: false, message: `${field}.turnId is only valid with turn_completed.` };
+  }
+
+  return {
+    ok: true,
+    value: {
+      when,
+      ...(backend && threadId ? { backend, threadId } : {}),
+      ...(turnId.value ? { turnId: turnId.value } : {}),
+      ...(prUrl.value ? { prUrl: prUrl.value } : {}),
+      ...(headSha.value ? { headSha: headSha.value } : {}),
+      ...(title ? { title } : {}),
+      ...(target ? { target } : {}),
+    },
+  };
+}
+
+/**
+ * Resolves omitted `backend`/`threadId` fields in `InitialThreadContinueAfter`
+ * against the parent/raising thread so the result is ready to persist on a
+ * to-do card or pass to `manage_thread_dependencies`.
+ */
+export function resolveInitialThreadContinueAfter(
+  spec: InitialThreadContinueAfter,
+  source: { backend: AppServerBackendKind; threadId: string; title?: string },
+): ResolvedInitialThreadContinueAfter {
+  const sourceTitle = source.title?.trim() ? source.title.trim().slice(0, 200) : undefined;
+  return {
+    ...spec,
+    conditions: spec.conditions.map((condition): ResolvedInitialThreadDependencyCondition => {
+      if (condition.when === "ci_run" || condition.subject !== undefined) {
+        return {
+          ...condition,
+          backend: condition.backend ?? source.backend,
+          threadId: "",
+        };
+      }
+      const defaultedToSource = !condition.backend && !condition.threadId;
+      const backend = condition.backend ?? source.backend;
+      const threadId = condition.threadId ?? source.threadId;
+      const matchesSource = defaultedToSource
+        || (!condition.target && backend === source.backend && threadId === source.threadId);
+      const title = condition.title ?? (matchesSource ? sourceTitle : undefined);
+      return {
+        ...condition,
+        backend,
+        threadId,
+        ...(title ? { title } : {}),
+      };
+    }),
+  };
+}
+
+/**
+ * Human-readable one-line summary of one prerequisite condition, used on
+ * `start_thread` to-do cards, Markdown copies, and child handoff prompt notes.
+ */
+export function describeInitialContinueAfterCondition(
+  condition: Pick<ThreadDependencyCondition, "when" | "prUrl" | "subject" | "title" | "threadId" | "ciRun" | "localFile" | "resourceCheckout">,
+): string {
+  const prNumber = condition.when !== "turn_completed"
+    ? condition.prUrl?.match(/\/(?:pull|merge_requests)\/(\d+)/)?.[1]
+    : undefined;
+  const label = prNumber
+    ? `PR #${prNumber}`
+    : threadDependencyConditionName(condition)
+      || (condition.threadId ? `Thread ${condition.threadId.slice(0, 8)}` : "Prerequisite");
+  return `${label} ${threadDependencyConditionPhrase(condition)}`;
+}
+
+/**
+ * Note appended to a child thread's first prompt when PwrAgent registers an
+ * initial Continue After wait for it, so the child does not poll or duplicate
+ * the registration.
+ */
+export function formatInitialContinueAfterPromptNote(
+  continueAfter: ResolvedInitialThreadContinueAfter,
+): string {
+  const lead = continueAfter.deliver === "operator"
+    ? "PwrAgent is registering a Continue After reminder for the operator on this thread once its prerequisites are met:"
+    : "PwrAgent is registering a Continue After wait on this thread so you will be resumed automatically once its prerequisites are met:";
+  const modeNote = continueAfter.conditions.length > 1 && continueAfter.mode === "any"
+    ? " (triggers when any prerequisite is met)"
+    : "";
+  const lines = [
+    `${lead}${modeNote}`,
+    ...continueAfter.conditions.map((condition) => `- ${describeInitialContinueAfterCondition(condition)}`),
+    continueAfter.deliver === "operator"
+      ? "Do not register a duplicate Continue After wait or poll these prerequisites."
+      : "Finish your initial task here and end your turn. Do not register a duplicate Continue After wait or poll these prerequisites.",
+  ];
+  return lines.join("\n");
 }

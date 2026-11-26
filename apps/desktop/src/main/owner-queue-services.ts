@@ -43,13 +43,14 @@ function isLocalTodoInstance(runtime: DesktopFederationRuntime, instanceId: stri
 }
 
 type TodoRuntimeOptions = Pick<Parameters<typeof installThreadTodoRuntime>[0],
-  "registry" | "readDefaultMergeMethod" | "federation" | "federationWithOrigin" | "readReviewStackHold">;
+  "registry" | "readDefaultMergeMethod" | "federation" | "federationWithOrigin" | "readReviewStackHold" | "registerContinueAfter">;
 
 /** Federation and the desktop windows serve the same owner-local queues. */
 export function startOwnerQueues(runtime: DesktopFederationRuntime, options: TodoRuntimeOptions) {
   const events: OwnerQueueEvents = new EventEmitter();
   installThreadTodoRuntime({
     ...options,
+    isLocalInstance: (instanceId) => isLocalTodoInstance(runtime, instanceId),
     broadcast: (event) => {
       runtime.publishThreadTodosChanged(event);
       events.emit("threadTodosChanged", event);

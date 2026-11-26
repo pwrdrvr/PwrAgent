@@ -40,6 +40,13 @@ import { NAVIGATION_QUERY_MAX_PAGE_ROWS } from "@pwragent/shared/contracts/navig
 import { defaultModelOption } from "@pwragent/shared/model-defaults";
 import { normalizePullRequestUrl } from "@pwragent/shared/pull-request-review";
 import { resolveThreadTodoStartAccess } from "@pwragent/shared/thread-todo-access";
+import {
+  formatInitialContinueAfterPromptNote,
+  isThreadDependencyLocalThreadCondition,
+  resolveInitialThreadContinueAfter,
+  type InitialThreadContinueAfter,
+  type ResolvedInitialThreadContinueAfter,
+} from "@pwragent/shared/contracts/thread-dependencies";
 import { threadReviewTodo } from "@pwragent/shared/contracts/thread-reviews";
 import type { PwrAgentFederationHandler } from "../agent-tools/pwragent-federation-agent-tools.js";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry.js";
@@ -287,6 +294,13 @@ export type ThreadTodoPeerPlans = {
   raise: (instanceId: string, request: RaiseThreadTodoPlanRequest) => Promise<unknown>;
 };
 
+/** Registers a card's Continue After wait on a locally started child thread. */
+export type ThreadTodoContinueAfterRegistrar = (params: {
+  backend: AppServerBackendKind;
+  threadId: string;
+  continueAfter: ResolvedInitialThreadContinueAfter;
+}) => Promise<void>;
+
 /**
  * Connects the service to the registry: the agent tools raise cards through
  * it, and its main-process actions run through the registry, gh, and the
@@ -306,6 +320,10 @@ export function installThreadTodoRuntime(params: {
   federationWithOrigin?: (messageOrigin: AppServerThreadMessageOrigin) => PwrAgentFederationHandler;
   /** Plan cards for threads started on a peer. */
   peerPlans?: ThreadTodoPeerPlans;
+  /** Registers `action.continueAfter` on threads started on this machine. */
+  registerContinueAfter?: ThreadTodoContinueAfterRegistrar;
+  /** True when a picked federation instance id names this machine. */
+  isLocalInstance?: (instanceId: string) => boolean;
   /** What the live card feed reads besides the services, and where it publishes. */
   feed: Pick<ThreadTodoFeedSource, "loadOwners" | "managedThreadKeys"> & {
     onDelta: (delta: ThreadTodoFeedDelta) => void;
@@ -393,6 +411,8 @@ export function installThreadTodoRuntime(params: {
       raiseHere: (thread, plan) => raiseThreadTodoPlan(registry, thread, plan, todos),
       ...(params.peerPlans ? { peer: params.peerPlans } : {}),
     },
+    ...(params.registerContinueAfter ? { registerContinueAfter: params.registerContinueAfter } : {}),
+    ...(params.isLocalInstance ? { isLocalInstance: params.isLocalInstance } : {}),
   }));
   todos.setDispatchSettingsReader(async (thread) => {
     const settings = await registry.readThreadHandoffSettings(thread);
@@ -557,6 +577,26 @@ export function installThreadTodoRuntime(params: {
     }
     return match.project;
   };
+  const resolveContinueAfter = (
+    thread: { backend: AppServerBackendKind; threadId: string },
+    spec: InitialThreadContinueAfter,
+  ): ResolvedInitialThreadContinueAfter => {
+    const resolved = resolveInitialThreadContinueAfter(spec, {
+      ...thread,
+      title: registry.getThreadInfo?.(thread)?.title,
+    });
+    return {
+      ...resolved,
+      conditions: resolved.conditions.map((condition) => {
+        if (condition.title || !isThreadDependencyLocalThreadCondition(condition)) return condition;
+        const title = registry.getThreadInfo?.({
+          backend: condition.backend,
+          threadId: condition.threadId,
+        })?.title?.trim();
+        return title ? { ...condition, title: title.slice(0, 200) } : condition;
+      }),
+    };
+  };
   const settleAddInput = async (
     thread: { backend: AppServerBackendKind; threadId: string },
     input: AddThreadTodoInput,
@@ -575,13 +615,14 @@ export function installThreadTodoRuntime(params: {
     }
     if (action?.type !== "start_thread") return input;
     const { model, reasoningEffort } = await settleModel(thread, action);
-    const { model: _model, reasoningEffort: _effort, ...rest } = action;
+    const { model: _model, reasoningEffort: _effort, continueAfter, ...rest } = action;
     return {
       ...input,
       action: {
         ...rest,
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(continueAfter ? { continueAfter: resolveContinueAfter(thread, continueAfter) } : {}),
       },
     };
   };
@@ -649,6 +690,12 @@ export function installThreadTodoRuntime(params: {
           ...action,
           model: settled.model ?? null,
           reasoningEffort: settled.reasoningEffort ?? null,
+        };
+      }
+      if (action?.continueAfter && current.action?.type === "start_thread") {
+        action = {
+          ...action,
+          continueAfter: resolveContinueAfter(context, action.continueAfter),
         };
       }
       let targetProject: ThreadTodoProject | null | undefined;
@@ -776,8 +823,31 @@ export function createThreadTodoRunners(params: {
     raiseHere: (thread: { backend: AppServerBackendKind; threadId: string }, plan: ThreadTodoPlan) => Promise<unknown>;
     peer?: ThreadTodoPeerPlans;
   };
+  /** Registers `action.continueAfter` on locally started threads. */
+  registerContinueAfter?: ThreadTodoContinueAfterRegistrar;
+  /** True when a federation instance id names this machine. */
+  isLocalInstance?: (instanceId: string) => boolean;
 }): ThreadTodoActionRunners {
-  const { registry, federation, plans } = params;
+  const { registry, federation, plans, registerContinueAfter, isLocalInstance } = params;
+  const registerCardContinueAfter = async (
+    thread: { backend: AppServerBackendKind; threadId: string },
+    continueAfter: ResolvedInitialThreadContinueAfter,
+  ): Promise<string | undefined> => {
+    if (!registerContinueAfter) {
+      return "Continue After is not available on this PwrAgent and was not registered.";
+    }
+    try {
+      await registerContinueAfter({ ...thread, continueAfter });
+      return undefined;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      threadTodoLog.warn("could not register the started thread's Continue After wait", {
+        error: message,
+        threadId: thread.threadId,
+      });
+      return `Continue After could not be registered: ${message}`;
+    }
+  };
   // A failed plan card leaves the start as it was before plan cards: the
   // prompt alone, which add_todo asks to carry the steps too.
   const raisePlan = async (
@@ -975,13 +1045,23 @@ export function createThreadTodoRunners(params: {
         threadId: sourceThreadId,
         todo,
       });
+      const basePrompt = planned ? withThreadTodoPlanNote(action.prompt) : action.prompt;
+      const initialPrompt = action.continueAfter && registerContinueAfter
+        ? `${basePrompt.trimEnd()}\n\n${formatInitialContinueAfterPromptNote(action.continueAfter)}`
+        : basePrompt;
       await registry.startTurn({
         backend: started.backend,
         threadId: started.threadId,
-        input: [{ type: "text", text: planned ? withThreadTodoPlanNote(action.prompt) : action.prompt }],
+        input: [{ type: "text", text: initialPrompt }],
         messageOrigin,
         ...settings,
       });
+      const continueAfterNotice = action.continueAfter
+        ? await registerCardContinueAfter(
+            { backend: started.backend, threadId: started.threadId },
+            action.continueAfter,
+          )
+        : undefined;
       return {
         backend: started.backend, threadId: started.threadId,
         dispatchSettings: { settings: chosen, source: sourceSettings },
@@ -989,6 +1069,7 @@ export function createThreadTodoRunners(params: {
         ...(started.codexEnvironmentStartupFailure
           ? { setupFailure: started.codexEnvironmentStartupFailure.message }
           : {}),
+        ...(continueAfterNotice ? { notice: continueAfterNotice } : {}),
       };
     },
     ...(federation
@@ -1071,12 +1152,20 @@ export function createThreadTodoRunners(params: {
             // An older peer gets the prompt alone.
             const peerPlans = plans?.peer;
             const plannable = plan !== undefined && peerPlans?.supports(instanceId) === true;
+            const willRegisterLocalContinueAfter =
+              action.continueAfter !== undefined
+              && registerContinueAfter !== undefined
+              && isLocalInstance?.(instanceId) === true;
             const messageOrigin = await registry.buildThreadTodoMessageOrigin({
               backend: sourceBackend,
               threadId: sourceThreadId,
               todo,
             });
             const createThread = params.federationWithOrigin?.(messageOrigin) ?? federation;
+            const peerBasePrompt = plannable ? withThreadTodoPlanNote(action.prompt) : action.prompt;
+            const peerPrompt = willRegisterLocalContinueAfter && action.continueAfter
+              ? `${peerBasePrompt.trimEnd()}\n\n${formatInitialContinueAfterPromptNote(action.continueAfter)}`
+              : peerBasePrompt;
             // No title: create_instance_thread has none to set, and the
             // peer names the thread from its first turn.
             const created = await createThread({
@@ -1085,7 +1174,7 @@ export function createThreadTodoRunners(params: {
               args: {
                 instanceId,
                 projectKey: counterpart.key,
-                input: plannable ? withThreadTodoPlanNote(action.prompt) : action.prompt,
+                input: peerPrompt,
                 executionMode: action.executionMode ?? source.executionMode,
                 ...(destinationSettings
                   ? {
@@ -1116,18 +1205,31 @@ export function createThreadTodoRunners(params: {
                 : peerPlans.raise(thread.instanceId, { ...started, title: plan.title, items: plan.items }),
               { threadId: thread.threadId, instanceId: thread.instanceId });
             }
+            let continueAfterNotice: string | undefined;
+            if (action.continueAfter) {
+              continueAfterNotice = thread.isLocal
+                ? await registerCardContinueAfter(
+                    { backend: thread.backend, threadId: thread.threadId },
+                    action.continueAfter,
+                  )
+                : `Continue After was not registered because the thread started on ${thread.instanceLabel}.`;
+            }
             // An owner that predates requiredWorkMode falls back instead of
             // refusing. The thread exists by now, so say where it runs.
             const fellBack = (workMode ?? action.workMode) === "worktree" && thread.workMode === "local";
+            const notices = [
+              ...(fellBack
+                ? [`${thread.instanceLabel} could not create a worktree. The thread runs in its project checkout.`]
+                : []),
+              ...(continueAfterNotice ? [continueAfterNotice] : []),
+            ];
             return {
               backend: thread.backend,
               threadId: thread.threadId,
               ...(thread.isLocal
                 ? {}
                 : { instanceId: thread.instanceId, instanceLabel: thread.instanceLabel }),
-              ...(fellBack
-                ? { notice: `${thread.instanceLabel} could not create a worktree. The thread runs in its project checkout.` }
-                : {}),
+              ...(notices.length > 0 ? { notice: notices.join(" ") } : {}),
             };
           },
         }
