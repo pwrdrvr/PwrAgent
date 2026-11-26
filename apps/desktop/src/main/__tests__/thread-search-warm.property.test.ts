@@ -153,18 +153,21 @@ it.each([
     const listed = indexesProjection || duringReconcile ? { ...thread, title: "Asterism revised" } : thread;
     const store = new ThreadSearchStore(db);
     store.upsertThreads([thread]);
+    const touchMetadata = peer.raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
     const commitPeerChange = vi.fn(() => {
       if (indexesProjection) {
         new ThreadSearchStore(peer).upsertThread(listed);
       } else {
-        peer.raw.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("contrived-search-peer", "updated");
+        touchMetadata.run("contrived-search-peer", "updated");
       }
       if (holdsWriter) peer.raw.exec("BEGIN IMMEDIATE");
     });
     if (duringReconcile) {
-      // Skip the preflight version and commit after reconciliation has pinned
-      // its own WAL snapshot, before the first write attempts to upgrade it.
-      afterVersionRead(() => afterVersionRead(commitPeerChange));
+      // Invalidate the first attempt, then commit again inside its retry.
+      afterVersionRead(() => {
+        touchMetadata.run("contrived-search-peer", "attempt");
+        afterVersionRead(commitPeerChange);
+      });
     } else {
       afterVersionRead(commitPeerChange);
     }
@@ -227,22 +230,115 @@ it.each([
   }
 });
 
+it("repairs an FTS row lost during a no-change verification", async () => {
+  const temp = createTempStateDb("search-fallback-drift-");
+  const db = StateDb.open(temp.dbPath);
+  const peer = StateDb.open(temp.dbPath);
+  try {
+    const { afterVersionRead, afterProjectionRead } = interceptProjectionReads(db);
+    const listed = summary("visible");
+    const store = new ThreadSearchStore(db);
+    store.upsertThread(listed);
+    const removeFtsRow = vi.fn(() => {
+      peer.raw.prepare("DELETE FROM thread_search_fts WHERE identity_key = ?").run("codex:visible");
+    });
+    afterVersionRead(() => {
+      peer.raw.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("contrived-search-peer", "updated");
+      afterProjectionRead(removeFtsRow);
+    });
+
+    const service = new ThreadSearchService(store, async () => [listed]);
+    const result = await service.search({ query: "Asterism", contentMode: "metadata" });
+    expect(removeFtsRow).toHaveBeenCalledOnce();
+    expect(result.results.map((row) => row.threadId)).toEqual([listed.id]);
+  } finally { peer.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
+});
+
+it("returns the peer's repair after repeated snapshot invalidation while the peer holds the writer lock", async () => {
+  const temp = createTempStateDb("search-fallback-lock-");
+  const db = StateDb.open(temp.dbPath);
+  const peer = StateDb.open(temp.dbPath);
+  try {
+    db.raw.pragma("busy_timeout = 0");
+    const { afterProjectionRead } = interceptProjectionReads(db);
+    const thread = summary("concurrent");
+    const listed = { ...thread, title: "Asterism revised" };
+    const store = new ThreadSearchStore(db);
+    const peerStore = new ThreadSearchStore(peer);
+    store.upsertThread(thread);
+    const touchMetadata = peer.raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
+    afterProjectionRead(() => {
+      touchMetadata.run("contrived-search-peer", "first");
+      afterProjectionRead(() => {
+        touchMetadata.run("contrived-search-peer", "second");
+        afterProjectionRead(() => {
+          peerStore.upsertThread(listed);
+          peer.raw.exec("BEGIN IMMEDIATE");
+        });
+      });
+    });
+
+    const service = new ThreadSearchService(store, async () => [listed]);
+    const result = await service.search({ query: "Asterism", contentMode: "metadata" });
+    expect(peer.raw.inTransaction).toBe(true);
+    expect(result.results.map((row) => [row.threadId, row.title])).toEqual([[listed.id, listed.title]]);
+  } finally {
+    if (peer.raw.inTransaction) peer.raw.exec("ROLLBACK");
+    peer.close();
+    db.close();
+    removeTempStateDbDir(temp.tempDir);
+  }
+});
+
+it("bounds verification when every read snapshot is invalidated by a peer commit", async () => {
+  const temp = createTempStateDb("search-fallback-budget-");
+  const db = StateDb.open(temp.dbPath);
+  const peer = StateDb.open(temp.dbPath);
+  try {
+    const afterVersionRead = interceptProjectionVersion(db);
+    const listed = summary("current");
+    const store = new ThreadSearchStore(db);
+    store.upsertThread(listed);
+    const touchMetadata = peer.raw.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)");
+    let peerWrites = 0;
+    const commitPeerChange = vi.fn(() => {
+      touchMetadata.run("contrived-search-peer", String(++peerWrites));
+      afterVersionRead(commitPeerChange);
+    });
+    afterVersionRead(commitPeerChange);
+
+    const service = new ThreadSearchService(store, async () => [listed]);
+    await expect(service.search({ query: "Asterism", contentMode: "metadata" })).rejects.toMatchObject({ code: "SQLITE_BUSY" });
+    expect(commitPeerChange).toHaveBeenCalledTimes(4);
+  } finally { peer.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
+});
+
 function interceptProjectionVersion(db: StateDb) {
+  return interceptProjectionReads(db).afterVersionRead;
+}
+
+function interceptProjectionReads(db: StateDb) {
   const prepare = db.raw.prepare.bind(db.raw);
-  let next: (() => void) | undefined;
+  const pending: Partial<Record<"version" | "projection", () => void>> = {};
   vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
     const statement = prepare(sql);
-    if (sql.includes("pragma_data_version")) {
+    const kind = sql.includes("pragma_data_version") ? "version"
+      : sql.includes("SELECT 1 FROM thread_search_documents d") ? "projection" : undefined;
+    if (kind) {
       const get = statement.get.bind(statement);
       statement.get = (...args: unknown[]) => {
         const result = get(...args);
-        const notify = next;
-        next = undefined;
+        if (kind === "version" && !db.raw.inTransaction) return result;
+        const notify = pending[kind];
+        delete pending[kind];
         notify?.();
         return result;
       };
     }
     return statement;
   });
-  return (callback: () => void) => { next = callback; };
+  return {
+    afterVersionRead: (callback: () => void) => { pending.version = callback; },
+    afterProjectionRead: (callback: () => void) => { pending.projection = callback; },
+  };
 }

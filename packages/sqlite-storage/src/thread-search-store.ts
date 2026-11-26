@@ -50,6 +50,7 @@ type ProjectionCache = {
 type ChangedProjection = { projection: SearchProjection; bindings: SearchProjectionBindings };
 
 const MAX_VERIFIED_PROJECTIONS = 8192;
+const MAX_PROJECTION_WRITE_ATTEMPTS = 3;
 const projectionCaches = new WeakMap<BetterSqlite3.Database, ProjectionCache>();
 
 export class ThreadSearchStore implements ThreadSearchStorage {
@@ -106,60 +107,52 @@ export class ThreadSearchStore implements ThreadSearchStorage {
     }
 
     const cache = this.projectionCache;
-    let preflight = this.db.transaction(() => {
-      // Pin the version and the projection reads to the same snapshot.
+    let snapshot: ProjectionVersion | undefined;
+    const reconcile = this.db.transaction((allowWrites: boolean) => {
       const version = this.refreshProjectionCache();
-      return { version, changed: this.findChanges(threads, cache) };
-    })();
-    if (preflight.changed.length === 0) {
-      // The final search can see commits hidden by the preflight snapshot.
-      const version = this.refreshProjectionCache();
-      if (version === preflight.version) return;
-      // Recheck with fresh per-row reads. An unrelated commit should leave
-      // this slice read-only, even if a peer still holds the writer lock.
-      preflight = { version, changed: this.findChanges(threads) };
-      if (preflight.changed.length === 0) return;
-    }
-
-    let reconciliationVersion: ProjectionVersion | undefined;
-    const reconcile = this.db.transaction(() => {
-      // A peer may have reconciled these rows since preflight. Recheck first
-      // so SQLite only upgrades to a write transaction if work remains.
-      const version = this.refreshProjectionCache();
-      reconciliationVersion = version;
-      const changed = version === preflight.version ? preflight.changed : this.findChanges(threads, cache);
+      snapshot = version;
+      const changed = this.findChanges(threads, cache);
       return {
-        written: this.writeChangedProjections(changed, indexedAt),
-        external: version.external,
+        version,
+        current: changed.length === 0,
+        written: allowWrites && changed.length > 0 ? this.writeChangedProjections(changed, indexedAt) : undefined,
       };
     });
-    let committed: ReturnType<typeof reconcile> | undefined;
-    let retryVersion: ProjectionVersion | undefined;
-    try {
-      committed = reconcile.deferred();
-    } catch (error) {
-      if (this.db.inTransaction || !reconciliationVersion
-        || !(error instanceof BetterSqlite3.SqliteError)
-        || (error.code !== "SQLITE_BUSY_SNAPSHOT" && error.code !== "SQLITE_BUSY")) {
-        throw error;
+
+    let busyError: Error | undefined;
+    for (let attempt = 0; attempt < MAX_PROJECTION_WRITE_ATTEMPTS; attempt++) {
+      snapshot = undefined;
+      let checked: ReturnType<typeof reconcile> | undefined;
+      try {
+        // A deferred transaction takes the writer lock only at the first
+        // actual write. If a peer advanced the snapshot, the transaction
+        // rolls back after a failed upgrade and the next attempt sees newer rows.
+        checked = reconcile.deferred(true);
+      } catch (error) {
+        if (this.db.inTransaction || !snapshot || !(error instanceof BetterSqlite3.SqliteError)
+          || (error.code !== "SQLITE_BUSY_SNAPSHOT" && error.code !== "SQLITE_BUSY")) throw error;
+        busyError = error;
       }
-      retryVersion = this.refreshProjectionCache();
-      if (error.code === "SQLITE_BUSY" && retryVersion.external === reconciliationVersion.external) throw error;
+      if (checked?.written) {
+        // FTS can flush shadow changes during commit. Preserve the external
+        // version from the snapshot and sample our own count after commit.
+        cache.version = { external: checked.version.external, local: this.readLocalChanges.get()! };
+        for (const projection of checked.written.values()) rememberProjection(cache, projection);
+        return;
+      }
+      // A read-only pass only proves currency if its generation still
+      // matches after the transaction closes.
+      if (this.refreshProjectionCache() === snapshot) {
+        if (checked?.current) return;
+        break;
+      }
     }
-    if (!committed?.written.size) {
-      // A no-write reconciliation can also miss a peer commit behind its
-      // snapshot. Use fresh reads before asking for the writer lock.
-      const version = retryVersion ?? this.refreshProjectionCache();
-      if (committed && version === reconciliationVersion) return;
-      preflight = { version, changed: this.findChanges(threads) };
-      if (preflight.changed.length === 0) return;
-      committed = reconcile.immediate();
-    }
-    if (committed.written.size === 0) return;
-    // Keep the external version from the transaction snapshot. FTS can flush
-    // shadow changes at commit, so sample our own count after the commit.
-    cache.version = { external: committed.external, local: this.readLocalChanges.get()! };
-    for (const projection of committed.written.values()) rememberProjection(cache, projection);
+
+    // A peer can finish a repair and keep the writer lock. Give the newest
+    // snapshot one read-only check before reporting persistent contention.
+    const finalCheck = reconcile.deferred(false);
+    if (finalCheck.current && this.refreshProjectionCache() === finalCheck.version) return;
+    throw busyError ?? new BetterSqlite3.SqliteError("Thread search projection changed during verification", "SQLITE_BUSY");
   }
 
   private refreshProjectionCache(): ProjectionVersion {
