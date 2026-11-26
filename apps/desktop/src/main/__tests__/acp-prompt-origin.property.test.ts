@@ -24,6 +24,8 @@ import { createTempStateDb } from "./sqlite-test-utils";
 vi.mock("../log", () => ({ getMainLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }));
 
 const ACP = "acp:fixture" as const;
+/** A 1x1 PNG, as a pasted image arrives. */
+const PIXEL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
 const registries: DesktopBackendRegistry[] = [];
 const transports: HeldPromptTransport[] = [];
@@ -144,19 +146,23 @@ it("writes a messaging turn's prompt origin once", async () => {
 it("gives every ACP prompt item its turn's origin and leaves no context behind", async () => {
   // Rule: the prompt item of an ACP turn carries the origin it was sent with
   // and claims the context its start registered, however late its delivery
-  // reaches the message-context stage and whatever the agent's prompt adds
-  // to the operator's words.
+  // reaches the message-context stage, whatever the agent's prompt adds to
+  // the operator's words, and whether the context holds an origin, images,
+  // or both.
   //
   // Live items on a thread are delivered in order behind any image work in
   // flight, so a reply whose images are still loading when the prompt is
   // dispatched holds the prompt item back until after the start returns.
   // An attached file adds its reference to the agent's prompt, so the
   // prompt's text differs from the operator's words the context records.
+  // A start with neither an origin nor an image registers no context.
   await fc.assert(fc.asyncProperty(
     fc.array(fc.constantFrom("ship the release notes", "then tag it", "and post the link"), { minLength: 1, maxLength: 3 }),
     fc.boolean(),
     fc.boolean(),
-    async (texts, attachFile, imageWorkInFlight) => {
+    fc.boolean(),
+    fc.boolean(),
+    async (texts, fromMessaging, attachImage, attachFile, imageWorkInFlight) => {
       const { root, registry, promptItem, onEvent } = await createFixture();
       const { threadId } = await registry.startThread({ backend: ACP, cwd: root });
       const notes = path.join(root, "notes.txt");
@@ -174,19 +180,22 @@ it("gives every ACP prompt item its turn's origin and leaves no context behind",
       });
 
       const started = await registry.startTurn({
-        backend: ACP, threadId, messageOrigin: { kind: "messaging" },
+        backend: ACP, threadId,
+        ...(fromMessaging ? { messageOrigin: { kind: "messaging" as const } } : {}),
         input: [
           ...texts.map((text) => ({ type: "text" as const, text })),
+          ...(attachImage ? [{ type: "image" as const, url: PIXEL, name: "chart.png" }] : []),
           ...(attachFile ? [{ type: "localFile" as const, path: notes, name: "notes.txt" }] : []),
         ],
       });
       imageWork.resolve();
       const event = await promptItem(started.turnId);
 
-      expect((event.notification.params as { item: { origin?: unknown } }).item.origin).toEqual({ kind: "messaging" });
+      expect((event.notification.params as { item: { origin?: unknown } }).item.origin)
+        .toEqual(fromMessaging ? { kind: "messaging" } : undefined);
       expect([...internals.pendingThreadMessageContexts.values()]
         .filter((pending) => pending.threadId === threadId)).toEqual([]);
       await cleanUp();
     },
-  ), { numRuns: 12 });
+  ), { numRuns: 24 });
 });

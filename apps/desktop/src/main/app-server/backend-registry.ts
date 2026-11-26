@@ -12012,9 +12012,10 @@ export class DesktopBackendRegistry {
           ...identity, input,
           origin: resolveThreadMessageOrigin(params),
           text: extractFirstMeaningfulTextInput(params.input),
-          // persistOrigin writes the prompt's origin row once the agent
-          // accepts the turn, before or after the prompt's item lands.
-          turnStartWritesPromptOrigin: true,
+          // The prompt's own item claims this context by turn. persistOrigin
+          // writes its origin row once the agent accepts the turn, before or
+          // after that item lands.
+          turnStartPrompt: true,
         }),
         beginOrigin: () => this.beginStartingTurnOrigin({
           ...identity, origin: resolveThreadMessageOrigin(params), turnInputSource: resolveTurnInputSource(params),
@@ -12432,7 +12433,7 @@ export class DesktopBackendRegistry {
     text?: string;
     turnId?: string;
     retainAttachments?: boolean;
-    turnStartWritesPromptOrigin?: boolean;
+    turnStartPrompt?: boolean;
   }): Promise<string | undefined> {
     const admittedCodexTurnSequence = params.backend === "codex" && !params.turnId
       ? this.codexMessageContextTurnSequence
@@ -12463,7 +12464,7 @@ export class DesktopBackendRegistry {
       ...(imageParts.length > 0 ? { imageParts } : {}),
       ...(retainedInput.length > 0 ? { retainedInput } : {}),
       ...(params.origin ? { origin: params.origin } : {}),
-      ...(params.origin && params.turnStartWritesPromptOrigin ? { turnStartWritesPromptOrigin: true as const } : {}),
+      ...(params.turnStartPrompt ? { turnStartPrompt: true as const } : {}),
       ...(params.text ? { text: params.text } : {}),
       threadId: params.threadId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
@@ -12554,7 +12555,7 @@ export class DesktopBackendRegistry {
       // words, such as review context or several text parts. A thread starts
       // one ACP turn at a time, so an unbound start context is this turn's.
       if (params.turnId && params.messageId === buildTurnUserMessageOriginId(params.turnId)) {
-        const start = candidates.find((pending) => pending.turnStartWritesPromptOrigin);
+        const start = candidates.find((pending) => pending.turnStartPrompt);
         if (start) {
           return start;
         }
@@ -12655,7 +12656,7 @@ export class DesktopBackendRegistry {
     if (notification.method === "item/completed" && notification.params.turnId && !pending.turnId) {
       this.bindPendingThreadMessageContext(pending.id, notification.params.turnId);
     }
-    const turnStartWritesThisRow = pending.turnStartWritesPromptOrigin === true
+    const turnStartWritesThisRow = pending.turnStartPrompt === true
       && notification.params.turnId !== undefined
       && notification.params.item.id === buildTurnUserMessageOriginId(notification.params.turnId);
     if (!turnStartWritesThisRow) {

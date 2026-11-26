@@ -1244,10 +1244,11 @@ export type PendingThreadMessageContext = {
   retainedInput?: AppServerTurnInputItem[];
   origin?: AppServerThreadMessageOrigin;
   /**
-   * The turn start writes this origin as the turn's `user:<turnId>` row, so
-   * the prompt's own user item carries it without writing that row again.
+   * Registered by an ACP turn start for its prompt. The prompt's own user
+   * item (`user:<turnId>`) claims it by turn, and the start writes its origin
+   * as that row, so the item carries the origin without writing it again.
    */
-  turnStartWritesPromptOrigin?: true;
+  turnStartPrompt?: true;
   text?: string;
   threadId: string;
   turnId?: string;
