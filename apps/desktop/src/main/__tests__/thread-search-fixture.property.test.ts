@@ -34,16 +34,26 @@ it("compiles fixture SQL once while preserving the uncached store's documents, F
           path: `/fixture/${i}`, worktreePath: `/fixture/worktree/${i}`, kind: "local" }] : [],
       }));
       const originalStore = new ThreadSearchStore(baseline);
-      // Initial inserts, unchanged rows and replacements must all agree with
-      // the production store. The unchanged batch must still make no writes.
-      for (const batch of [threads, threads, threads.map((thread) => ({
-        ...thread, title: `Revised ${thread.title}`,
-      }))]) {
-        const oldSources = preparations(baseline, () => originalStore.upsertThreads(batch));
+      const totalChanges = baseline.raw.prepare("SELECT total_changes()").pluck();
+      const batches = [
+        { threads, writes: true },
+        { threads, writes: false },
+        { threads: threads.map((thread) => ({ ...thread, title: `Revised ${thread.title}` })), writes: true },
+      ];
+      for (const { threads: batch, writes } of batches) {
+        const before = totalChanges.get();
+        // Match the fixture's store lifetime so both probes include its
+        // constructor preparations. Each connection retains its verified rows.
+        const oldSources = preparations(baseline, () => new ThreadSearchStore(baseline).upsertThreads(batch));
         const sources = preparations(fixture, () => seedSearchThreads(fixture, batch));
-        // Negative control: the exact pre-fix setup recompiles SQL per row,
-        // violating this same compile-once property on every generated input.
-        expect(oldSources.length).toBeGreaterThan(new Set(oldSources).size);
+        // The normal store still prepares write statements for each changed row.
+        // The unchanged batch must skip both those prepares and the writes.
+        if (writes) {
+          expect(oldSources.length).toBeGreaterThan(new Set(oldSources).size);
+        } else {
+          expect(oldSources.length).toBe(new Set(oldSources).size);
+          expect(totalChanges.get()).toBe(before);
+        }
         expect(sources.length).toBe(new Set(sources).size);
         expect(new Set(sources)).toEqual(new Set(oldSources));
         totals.baseline += oldSources.length;
