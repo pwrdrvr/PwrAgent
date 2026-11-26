@@ -64,7 +64,7 @@ export function buildApprovalIntent(params: {
     ...(context ? { context } : {}),
     body: [
       mcpToolName
-        ? ["```", mcpToolDetail ? `${mcpToolName}\n${mcpToolDetail}` : mcpToolName, "```"].join("\n")
+        ? markdownCodeBlock(mcpToolDetail ? `${mcpToolName}\n${mcpToolDetail}` : mcpToolName)
         : undefined,
       prompt,
       command
@@ -580,6 +580,17 @@ function formatMessagingMcpDetail(detail: string | undefined): string | undefine
   return redacted.length > MCP_PARAM_VALUE_LIMIT
     ? `${redacted.slice(0, MCP_PARAM_VALUE_LIMIT)}… (${redacted.length.toLocaleString("en-US")} characters; the desktop card shows all of it)`
     : redacted;
+}
+
+function markdownCodeBlock(text: string, language = ""): string {
+  const normalized = text.replace(/\r\n/gu, "\n").trim();
+  const longestFence = [...normalized.matchAll(/`{3,}/gu)].reduce(
+    (max, match) => Math.max(max, match[0].length),
+    2,
+  );
+  const fence = "`".repeat(longestFence + 1);
+  const languageTag = language.trim();
+  return `${fence}${languageTag}\n${normalized}\n${fence}`;
 }
 
 function stringField(value: unknown): string | undefined {

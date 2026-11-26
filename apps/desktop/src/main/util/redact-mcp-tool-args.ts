@@ -1,9 +1,11 @@
 import { isSecretFieldName } from "@pwragent/shared/secret-field-names";
 
 const INLINE_SECRET_FLAG_PATTERN =
-  /((?:--?)?(?:api[-_]?key|token|secret|password|passphrase|passcode|authorization)(?:=|\s+))("[^"]*"|'[^']*'|\S+)/giu;
+  /((?:--?)?(?:api[-_]?key|token|secret|password|passphrase|passcode|authorization)(?:=|\s*:\s*|\s+))(?:(?:bearer|basic)\s+(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"']+)|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"']+)/giu;
+const INLINE_BEARER_PATTERN =
+  /\b(bearer\s+)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"']+)/giu;
 const INLINE_ENV_SECRET_PATTERN =
-  /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION)[A-Z0-9_]*=)("[^"]*"|'[^']*'|\S+)/gu;
+  /\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|AUTHORIZATION)[A-Z0-9_]*=)(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s"']+)/gu;
 const JSON_SECRET_MEMBER_PATTERN =
   /("[^"]*?(?:api[-_]?key|token|secret|password|passphrase|passcode|authorization|credentials?|private[-_]?key)"\s*:\s*)(?:"(?:[^"\\]|\\.)*"|[^,}\]\s]+)/giu;
 
@@ -21,6 +23,7 @@ export function redactSecretStringValue(value: string): string {
   return value
     .replace(JSON_SECRET_MEMBER_PATTERN, "$1\"[redacted]\"")
     .replace(INLINE_SECRET_FLAG_PATTERN, "$1[redacted]")
+    .replace(INLINE_BEARER_PATTERN, "$1[redacted]")
     .replace(INLINE_ENV_SECRET_PATTERN, "$1[redacted]");
 }
 

@@ -173,10 +173,9 @@ function inspectClaudeMcpToolApproval(
     };
   }
 
-  const isPwrAgentTool =
-    serverName === PWRAGENT_TOOL_NAMESPACE && (!context.mcpServer || isVerifiedPwrAgent);
+  const isPwrAgentTool = serverName === PWRAGENT_TOOL_NAMESPACE && isVerifiedPwrAgent;
   const isUntrustedPwrAgentNamesake =
-    serverName === PWRAGENT_TOOL_NAMESPACE && Boolean(context.mcpServer) && !isVerifiedPwrAgent;
+    serverName === PWRAGENT_TOOL_NAMESPACE && !isVerifiedPwrAgent;
   const acpMcpToolName = isUntrustedPwrAgentNamesake
     ? toolName
     : isPwrAgentTool
@@ -238,12 +237,28 @@ export function createClaudePermissionHandler(options: {
    * process's permission mode.
    */
   planTurn?: () => boolean;
+  /**
+   * Key representing the active MCP server configuration for this live session.
+   * When it changes (for example after `query.setMcpServers`), in-memory
+   * conversation MCP grants are cleared so grants cannot carry over to newly
+   * configured servers under the same name.
+   */
+  mcpKey?: () => string | undefined;
   request: (request: AppServerPendingRequestNotification, signal: AbortSignal) => Promise<unknown>;
   cancelRequest: (requestId: string, turnId: string) => Promise<void>;
 }): CanUseTool {
   // In-memory conversation-scoped MCP tool grants. Never written to Claude CLI
   // permission rules, and bypassed whenever a plan turn or operator ask rule applies.
   const sessionMcpGrants = new Set<string>();
+  let lastMcpKey = options.mcpKey?.();
+  const syncMcpGrantGeneration = (): string | undefined => {
+    const currentMcpKey = options.mcpKey?.();
+    if (currentMcpKey !== lastMcpKey) {
+      sessionMcpGrants.clear();
+      lastMcpKey = currentMcpKey;
+    }
+    return currentMcpKey;
+  };
   return async (toolName, input, context) => {
     if (context.signal.aborted) return { behavior: "deny", message: "Turn cancelled.", interrupt: true };
     if (toolName === CLAUDE_EXIT_PLAN_TOOL && options.planTurn?.()) return { behavior: "deny", message: CLAUDE_PLAN_HANDOFF };
@@ -255,6 +270,7 @@ export function createClaudePermissionHandler(options: {
     if (toolName === CLAUDE_MCP_GATEWAY_TOOL && options.planTurn?.()
       && context.mcpServer?.source === "sdk" && context.mcpServer.name === PWRAGENT_TOOL_NAMESPACE
       && !context.matchedAskRule) return { behavior: "allow", updatedInput: input };
+    const mcpKeyAtStart = syncMcpGrantGeneration();
     const allowConversationGrant = !options.planTurn?.() && !context.matchedAskRule;
     const mcpApproval = inspectClaudeMcpToolApproval(toolName, input, context, allowConversationGrant);
     if (mcpApproval?.grantKey && sessionMcpGrants.has(mcpApproval.grantKey)) {
@@ -344,7 +360,9 @@ export function createClaudePermissionHandler(options: {
       // Only explicitly offered approval can authorize execution.
       // Never turn a generic UI response into a saved CLI permission rule.
       if (mcpApproval?.grantKey && decision === "accept_for_session") {
-        sessionMcpGrants.add(mcpApproval.grantKey);
+        if (syncMcpGrantGeneration() === mcpKeyAtStart) {
+          sessionMcpGrants.add(mcpApproval.grantKey);
+        }
         return { behavior: "allow", updatedInput: input };
       }
       if (decision === "accept" || decision === "approve") {

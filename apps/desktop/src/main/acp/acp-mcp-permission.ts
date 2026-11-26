@@ -95,14 +95,16 @@ export function inspectAcpMcpPermission(params: {
   toolCall: Record<string, unknown>;
   servers?: AcpSessionMcpServerInfo;
 }): AcpMcpPermissionInspection | undefined {
-  const { requesterName, toolCall, servers } = params;
+  const { backendId, requesterName, toolCall, servers } = params;
   const rawInput = asRecord(toolCall.rawInput);
   const xaiMeta = asRecord(asRecord(toolCall._meta)?.["x.ai/tool"]);
 
   // Case 1: Grok's `use_tool` / `UseTool` MCP dispatcher.
   if (
-    readString(rawInput, "variant") === "UseTool"
-    || readString(xaiMeta, "name") === "use_tool"
+    backendId === "acp:grok"
+    && (toolCall.kind === undefined || toolCall.kind === "other")
+    && (readString(rawInput, "variant") === "UseTool"
+      || readString(xaiMeta, "name") === "use_tool")
   ) {
     return inspectGrokUseToolPermission({ requesterName, toolCall, rawInput, servers });
   }
@@ -135,8 +137,14 @@ function inspectGrokUseToolPermission(params: {
   const rawToolName = readString(rawInput, "tool_name");
   const innerInput = rawInput?.tool_input;
   const innerInputRecord = asRecord(innerInput);
-  const hasRegisteredServers = Boolean(servers?.registeredNames);
+  const hasRegisteredServers = Boolean(
+    servers?.registeredNames && servers.registeredNames.size > 0,
+  );
   const pwragentRegistered = Boolean(servers?.registeredNames?.has(PWRAGENT_TOOL_NAMESPACE));
+  const onlyPwrAgentServer =
+    pwragentRegistered
+    && servers !== undefined
+    && new Set(servers.agentNames).size === 1;
 
   if (!rawToolName) {
     return {
@@ -150,9 +158,10 @@ function inspectGrokUseToolPermission(params: {
   const split = splitGrokToolName(rawToolName);
   const isPwrAgentNamespace = split?.serverName === PWRAGENT_TOOL_NAMESPACE;
   const effectiveTool = split?.toolName ?? rawToolName;
+  const isVerifiedPwrAgentWrapper = isPwrAgentNamespace || (!split && onlyPwrAgentServer);
 
   // Nested `call_mcp_tool` inside Grok's `use_tool`.
-  if (effectiveTool === CALL_MCP_TOOL && (!split || isPwrAgentNamespace)) {
+  if (effectiveTool === CALL_MCP_TOOL && isVerifiedPwrAgentWrapper) {
     const gatewayTarget = readGatewayCallTarget(innerInputRecord);
     const displayToolName = gatewayTarget
       ? formatExternalMcpDisplayName(gatewayTarget.connectionId, gatewayTarget.toolName)
@@ -167,7 +176,7 @@ function inspectGrokUseToolPermission(params: {
       ),
       prompt: buildMcpPrompt(headline, toolCall, rawToolName, innerInputRecord),
       isWrapper: true,
-      ...(pwragentRegistered && (!split || isPwrAgentNamespace)
+      ...(pwragentRegistered
         ? {
             hostApprovalTarget: {
               serverName: PWRAGENT_TOOL_NAMESPACE,
@@ -181,7 +190,7 @@ function inspectGrokUseToolPermission(params: {
   }
 
   // Nested `call_pwragent_tool` inside Grok's `use_tool`.
-  if (effectiveTool === CALL_PWRAGENT_TOOL && (!split || isPwrAgentNamespace)) {
+  if (effectiveTool === CALL_PWRAGENT_TOOL && isVerifiedPwrAgentWrapper) {
     const target = readPwrAgentCallTarget(innerInput);
     if (target && !NON_GRANTABLE_WRAPPED_PWRAGENT_TOOLS.has(target.name)) {
       return {
@@ -201,7 +210,9 @@ function inspectGrokUseToolPermission(params: {
                 toolName: CALL_PWRAGENT_TOOL,
                 args: innerInput,
               },
-              grantKey: `use_tool:pwragent_wrapped:${target.name}`,
+              grantKey: isPwrAgentNamespace
+                ? `use_tool:pwragent_wrapped:${target.name}`
+                : `use_tool:bare_pwragent_wrapped:${target.name}`,
               grantLabel: formatConversationGrantLabel(target.name),
             }
           : {}),
@@ -261,9 +272,6 @@ function inspectGrokUseToolPermission(params: {
     };
   }
 
-  const onlyPwrAgentServer = pwragentRegistered
-    && servers !== undefined
-    && new Set(servers.agentNames).size === 1;
   return {
     displayToolName: rawToolName,
     displayDetail: formatRedactedToolArguments(omitKeys(innerInputRecord, ["toolSummary"])),
@@ -283,7 +291,7 @@ function inspectGrokUseToolPermission(params: {
           },
         }
       : {}),
-    ...(hasRegisteredServers
+    ...(hasRegisteredServers && !NON_GRANTABLE_WRAPPED_PWRAGENT_TOOLS.has(rawToolName)
       ? {
           grantKey: `use_tool:bare:${rawToolName}`,
           grantLabel: formatConversationGrantLabel(rawToolName),
@@ -444,12 +452,12 @@ function inspectFlattenedMcpPermission(params: {
 
 function readReportedMcpToolName(toolCall: Record<string, unknown>): string | undefined {
   const direct = readString(toolCall, "name");
-  if (direct && /^mcp_[A-Za-z0-9_-]+$/u.test(direct)) {
-    return direct;
+  if (direct !== undefined) {
+    return /^mcp_[A-Za-z0-9_.-]+$/u.test(direct) ? direct : undefined;
   }
   const title = readString(toolCall, "title");
   if (title) {
-    const match = /^Run\s+(mcp_[A-Za-z0-9_-]+)$/u.exec(title);
+    const match = /^Run\s+(mcp_[A-Za-z0-9_.-]+)$/u.exec(title);
     if (match?.[1]) {
       return match[1];
     }

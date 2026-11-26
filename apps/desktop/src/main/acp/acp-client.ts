@@ -2994,7 +2994,7 @@ export class AcpAgentClient {
     const allowOnce = allowOncePermissionOptionId(options);
     if (!mcpInspection || !allowOnce) return undefined;
     const servers = this.sessionMcpServers.get(sessionId);
-    if (!servers?.registeredNames) return undefined;
+    if (!servers?.registeredNames || servers.registeredNames.size === 0) return undefined;
     if (mcpInspection.grantKey && this.sessionMcpToolGrants.get(sessionId)?.has(mcpInspection.grantKey)) {
       return allowOnce;
     }
