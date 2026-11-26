@@ -171,8 +171,8 @@ describe("usage limit history", () => {
     const [account] = buildLimitAccounts([{ ...studio, current: antigravity }]);
     expect(account.series.map(limitLabel)).toEqual([
       "5h Gemini limit",
-      "5h Claude/GPT limit",
       "Weekly Gemini limit",
+      "5h Claude/GPT limit",
       "Weekly Claude/GPT limit",
     ]);
     const gemini5h = account.series.find((series) => series.limitId === "gemini-5h")!;
