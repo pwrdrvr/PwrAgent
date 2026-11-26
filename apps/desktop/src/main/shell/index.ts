@@ -1219,6 +1219,7 @@ export function bootstrapApp(): void {
   rejectDevOnlyEnvVarsInProduction();
   app.setName(APP_NAME);
   const bootDecision = resolveProfileBootDecision();
+  (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("profile-decision", bootDecision);
   initializeMainLogger({
     profileName: resolveMainLogProfileName(bootDecision),
     logDirectory: app.getPath("logs"),
@@ -1350,6 +1351,7 @@ export function bootstrapApp(): void {
         bootMode,
       },
     });
+    (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("start-owner");
     const ownerServices = await startOwnerServices(createDesktopOwnerHostServices(), {
       bootMode,
       startedAt: mainProcessStartedAt,
@@ -1378,6 +1380,7 @@ export function bootstrapApp(): void {
   },
       },
     });
+    (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("owner-started");
     // Skip the focus-request watcher in bootstrap mode. The watcher
     // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
     // catch "focus existing window" requests from sibling PwrAgent
@@ -1501,6 +1504,7 @@ export function bootstrapApp(): void {
     registerMessagingStatusIpcHandlers();
     registerMessagingRbacIpcHandlers();
     recordStartupProfileEvent({ type: "main-window-create:start" });
+    (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("create-window");
     const mainWindow = createMainWindow({
       onShown: markMainWindowBooted,
       startupCpuProfiler,
@@ -1535,6 +1539,7 @@ export function bootstrapApp(): void {
     // A throw anywhere in the startup chain above rejects this promise. Without
     // this handler the rejection was silent and the rest of boot just stopped,
     // leaving a windowless, unusable process. Surface it instead.
+    (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("boot-error", error instanceof Error ? { message: error.message, stack: error.stack } : String(error));
     surfaceBootFailure("whenReady", error);
   });
 

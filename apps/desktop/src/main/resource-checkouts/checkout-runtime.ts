@@ -53,9 +53,11 @@ export async function initializeResourceCheckouts(
   localThreadDirectories?: (thread: Pick<ResourceThreadRef, "backend" | "threadId">) => readonly string[] | undefined,
 ): Promise<DesktopResourceCheckoutService> {
   const root = resolvePwragentRoot();
+  (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("read-checkout-evidence");
   const [machineId, evidence] = await Promise.all([
     readOrCreateFederationMachineId({ rootDir: root }), readMachineCheckoutEvidence(),
   ]);
+  (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("checkout-evidence-read", Boolean(machineId));
   const profile = resolveActiveProfileName();
   const instanceId = federation.resourceCheckoutInstanceId();
   const warn = (error: unknown) => {
@@ -79,6 +81,7 @@ export async function initializeResourceCheckouts(
     const identity = JSON.stringify([machineId, evidence.hostBinding ?? null]);
     machineUnresolved = OWNERSHIP_CONFLICTS.alternateRoot;
     if (await checkoutRootCanHostMachine(root, resolvePwragentRoot({ env: {} }), isPackaged)) {
+      (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("open-machine-store");
       try { machineStore = await openCheckoutStorage(() => openMachineCheckoutStorage(root, identity)); }
       catch (error) {
         warn(error);
@@ -105,6 +108,7 @@ export async function initializeResourceCheckouts(
     localThreadDirectories,
     warn,
   });
+  (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("create-checkout-service", Boolean(machineStore));
   runtime = new DesktopResourceCheckoutService({
     viewer: { instanceId, profile, machineId, instanceLabel: defaultInstanceLabel() },
     machineStore, machineUnresolved, adoptMachineStore, machineCpuCount: cpus().length, externalStore, externalUnresolved,

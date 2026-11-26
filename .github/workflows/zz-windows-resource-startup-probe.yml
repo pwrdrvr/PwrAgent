@@ -1,0 +1,39 @@
+name: Windows resource checkout startup probe
+on:
+  push:
+    branches: [ci/windows-resource-startup-probe]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pwrdrvr/configure-nodejs@9bb6e786801cf822d57b2298e02ccefd05e8ef0f
+        with:
+          node-version: "^24.22.1"
+          working-directory: .
+          cache-electron: "true"
+      - name: Concurrent cold starts
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          PWRAGENT_WINDOWS_STARTUP_PROBE: ${{ github.workspace }}/apps/desktop/startup-probe.ndjson
+        run: |
+          pnpm test:desktop-e2e e2e/resource-checkouts.spec.ts -g 'default and dev contend' --repeat-each 10 --retries=0 --max-failures=2 --trace=retain-on-failure
+      - name: Collect startup evidence
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path apps/desktop/startup-probe.ndjson) {
+            Get-Content apps/desktop/startup-probe.ndjson | Select-Object -Last 70
+          }
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: windows-startup-probe
+          path: |
+            apps/desktop/startup-probe.ndjson
+            apps/desktop/test-results/

@@ -419,7 +419,9 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     ],
   });
   const bootMode = options.bootMode;
+  (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("initialize-state");
   const state = initializeDesktopState(bootMode);
+  (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("state-initialized");
   options.onStateInitialized?.(state);
   const leaseManager = initializeRuntimeLeaseManager({ exitedInstanceIds: host.runtimePolicy?.exitedRuntimeInstanceIds });
   if (host.runtimePolicy?.exclusiveProfileOwner) {
@@ -465,6 +467,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   }
   const federationRuntime = initializeDesktopFederationRuntime();
   const resourceCheckoutsEnabled = () => getDesktopSettingsService().resolveResourceCheckoutsEnabled?.() === true;
+  (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("initialize-checkouts");
   const resourceCheckouts = bootMode === "active-profile"
     ? await initializeResourceCheckouts(
       federationRuntime, options.approvedLabCheckouts, host.application.isPackaged,
@@ -485,6 +488,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       },
     )
     : undefined;
+  (globalThis as { __pwrStartupProbe?: (stage: string, detail?: unknown) => void }).__pwrStartupProbe?.("checkouts-initialized");
   if (resourceCheckouts) registry.setResourceCheckoutHandler(
     createResourceCheckoutToolHandler(
       resourceCheckouts,

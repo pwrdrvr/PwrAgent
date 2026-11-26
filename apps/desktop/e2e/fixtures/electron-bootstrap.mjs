@@ -3,7 +3,7 @@
 // Keep this entry in process.argv: profile helpers relaunch the same entry.
 import "./github-release-stubs.cjs";
 import { app } from "electron";
-import { mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 const chromiumRoot = process.env.PWRAGENT_E2E_CHROMIUM_ROOT;
@@ -18,6 +18,17 @@ const userData = path.join(chromiumRoot, String(process.pid));
 mkdirSync(userData, { recursive: true });
 app.setPath("userData", userData);
 app.setPath("sessionData", userData);
+
+const probeFile = process.env.PWRAGENT_WINDOWS_STARTUP_PROBE;
+if (probeFile) {
+  const probe = (stage, detail) => appendFileSync(probeFile, JSON.stringify({
+    stage, detail, pid: process.pid, profile: process.env.PWRAGENT_PROFILE ?? "default", time: Date.now(),
+  }) + "\n");
+  globalThis.__pwrStartupProbe = probe;
+  probe("bootstrap", { userData, sessionData: app.getPath("sessionData"), logs: app.getPath("logs"), root: process.env.PWRAGENT_HOME });
+  app.on("ready", () => probe("electron-ready"));
+  app.on("browser-window-created", () => probe("window-created"));
+}
 
 // Set paths before the application can create its first Chromium session.
 await import("../../out/main/index.js");
