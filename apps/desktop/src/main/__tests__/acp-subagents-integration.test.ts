@@ -372,6 +372,9 @@ describe("ACP sub-agent cards persistence & navigation projection", () => {
         description: "Research Cloudflare",
         model: "grok-4.7",
       });
+      await vi.waitFor(() => {
+        expect(recordSubAgents).toHaveBeenCalledTimes(1);
+      });
       for (let i = 1; i <= 25; i += 1) {
         transport.emitSessionUpdate(session.sessionId, {
           sessionUpdate: "subagent_progress",
@@ -484,6 +487,167 @@ describe("ACP sub-agent cards persistence & navigation projection", () => {
       registryInternals.acpBackend.listSessions = origListSessions;
       registryInternals.acpBackend.listAllSessions = origListAllSessions;
       registryInternals.acpBackend.getSession = origGetSession;
+    }
+  });
+
+  it("settles running protocol sub-agents on prompt failure, cancel, and adapter close", async () => {
+    const backendId: AcpBackendId = "acp:grok";
+    const agent = buildInstalledAgent(backendId, "grok");
+    const promptResolvers: Array<{ resolve: (v: unknown) => void; reject: (e: unknown) => void }> = [];
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "grok-lifecycle-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        return await new Promise((resolve, reject) => {
+          promptResolvers.push({ resolve, reject });
+        });
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+
+    const recorded: AcpSubAgentCard[] = [];
+    const recordSubAgents = vi.fn(async (params: {
+      backend: AcpBackendId;
+      threadId: string;
+      subAgents: AcpSubAgentCard[];
+    }) => {
+      recorded.push(...params.subAgents);
+    });
+    const sessions = new Map<string, AcpSessionMetadata>();
+    const adapter = new AcpBackendAdapter({
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      acpAgentStore: {
+        getInstalledAgent: (id) => (id === backendId ? agent : undefined),
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: () => {},
+      },
+      acpSessionStore: {
+        getSession: (_backendId, sessionId) => sessions.get(sessionId),
+        listSessions: () => [...sessions.values()],
+        upsertSession: (metadata) => { sessions.set(metadata.sessionId, metadata); },
+      },
+      createAcpTransport: () => transport,
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+      recordSubAgents,
+    });
+
+    const latestById = () => {
+      const map = new Map<string, AcpSubAgentCard>();
+      for (const card of recorded) map.set(card.monitorId, card);
+      return map;
+    };
+
+    try {
+      const client = await adapter.getClient(backendId);
+      const session = await client.startSession({ cwd: "/tmp/grok-lifecycle", executionMode: "default" });
+
+      // 1. Prompt error settles running protocol sub-agent as failure.
+      await client.startPrompt({ sessionId: session.sessionId, prompt: "Turn 1", turnId: "t1" });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "subagent_spawned",
+        subagent_id: "grok-err-1",
+        description: "Check error settlement",
+      });
+      await vi.waitFor(() => expect(latestById().get("acp-native:grok-err-1")?.status).toBe("running"));
+      promptResolvers.shift()!.reject(new Error("Upstream disconnect"));
+      await vi.waitFor(() => expect(latestById().get("acp-native:grok-err-1")?.status).toBe("failure"));
+
+      // 2. Cancelled turn settles running protocol sub-agent as cancelled.
+      await client.startPrompt({ sessionId: session.sessionId, prompt: "Turn 2", turnId: "t2" });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "subagent_spawned",
+        subagent_id: "grok-cancel-1",
+        description: "Check cancel settlement",
+      });
+      await vi.waitFor(() => expect(latestById().get("acp-native:grok-cancel-1")?.status).toBe("running"));
+      promptResolvers.shift()!.resolve({ stopReason: "cancelled" });
+      await vi.waitFor(() => expect(latestById().get("acp-native:grok-cancel-1")?.status).toBe("cancelled"));
+
+      // 3. Adapter close settles still-running sub-agent and awaits flush before resolving.
+      await client.startPrompt({ sessionId: session.sessionId, prompt: "Turn 3", turnId: "t3" });
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "subagent_spawned",
+        subagent_id: "grok-close-1",
+        description: "Check close settlement",
+      });
+      await vi.waitFor(() => expect(latestById().get("acp-native:grok-close-1")?.status).toBe("running"));
+    } finally {
+      await adapter.close();
+    }
+    expect(latestById().get("acp-native:grok-close-1")?.status).toBe("cancelled");
+  });
+
+  it("settles a prior turn's running invoke_subagent immediately when the next turn dispatches", async () => {
+    const backendId: AcpBackendId = "acp:antigravity";
+    const agent = buildInstalledAgent(backendId, "antigravity");
+    const promptResolvers: Array<{ resolve: (v: unknown) => void; reject: (e: unknown) => void }> = [];
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "agy-next-turn-session" },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        transport.requests.push({ method, params, timeoutMs });
+        return await new Promise((resolve, reject) => {
+          promptResolvers.push({ resolve, reject });
+        });
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+
+    const recorded: AcpSubAgentCard[] = [];
+    const sessions = new Map<string, AcpSessionMetadata>();
+    const adapter = new AcpBackendAdapter({
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      acpAgentStore: {
+        getInstalledAgent: (id) => (id === backendId ? agent : undefined),
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: () => {},
+      },
+      acpSessionStore: {
+        getSession: (_backendId, sessionId) => sessions.get(sessionId),
+        listSessions: () => [...sessions.values()],
+        upsertSession: (metadata) => { sessions.set(metadata.sessionId, metadata); },
+      },
+      createAcpTransport: () => transport,
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+      recordSubAgents: async ({ subAgents }) => { recorded.push(...subAgents); },
+    });
+
+    try {
+      const client = await adapter.getClient(backendId);
+      const session = await client.startSession({ cwd: "/tmp/ag-next-turn", executionMode: "default" });
+      // An un-settled invoke_subagent from a prior turn that missed turn_finished
+      // (session is idle again, so the next prompt can dispatch).
+      transport.emitSessionUpdate(session.sessionId, {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_prior_turn",
+        name: "invoke_subagent",
+        status: "in_progress",
+        args: { Role: "Prior Auditor", TypeName: "research", Prompt: "Audit" },
+      });
+      await vi.waitFor(() =>
+        expect(recorded.at(-1)).toMatchObject({ monitorId: "acp-native:call_prior_turn", status: "running" }),
+      );
+
+      // Turn 2 dispatches and fails immediately before emitting any update.
+      // `onTurnStarted` must settle the prior worker immediately on dispatch.
+      await client.startPrompt({ sessionId: session.sessionId, prompt: "Turn 2", turnId: "t2" });
+      promptResolvers[0]!.reject(new Error("Immediate rejection before update"));
+
+      await vi.waitFor(() => {
+        const latest = [...recorded].reverse().find((c) => c.monitorId === "acp-native:call_prior_turn");
+        expect(latest?.status).toBe("success");
+      });
+    } finally {
+      await adapter.close();
     }
   });
 });

@@ -2653,6 +2653,79 @@ describe("AcpSessionReplayNormalizer", () => {
         }),
       ]);
     });
+
+    it("updates invoke_subagent replay labels on repeated and sparse failed or cancelled tool_call_update frames", () => {
+      const normalizer = startTurn();
+      apply(normalizer, 1002, {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_sparse_fail",
+        name: "invoke_subagent",
+        status: "in_progress",
+        title: "Run invoke_subagent",
+        args: {
+          Role: "Parser Auditor",
+          TypeName: "research",
+          Prompt: "Audit parser",
+        },
+      });
+      // Sparse failure omits name, title, and args.
+      apply(normalizer, 1003, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call_sparse_fail",
+        status: "failed",
+      });
+
+      apply(normalizer, 1004, {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_full_cancel",
+        name: "invoke_subagent",
+        status: "in_progress",
+        title: "Run invoke_subagent",
+        args: {
+          Role: "Layout Auditor",
+          TypeName: "research",
+          Prompt: "Audit layout",
+        },
+      });
+      // Repeated-args cancellation.
+      apply(normalizer, 1005, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call_full_cancel",
+        name: "invoke_subagent",
+        status: "cancelled",
+        title: "Run invoke_subagent",
+        args: {
+          Role: "Layout Auditor",
+          TypeName: "research",
+          Prompt: "Audit layout",
+        },
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          id: "call_sparse_fail",
+          summary: "Sub-agent failed: Parser Auditor",
+          status: "failed",
+          details: [
+            expect.objectContaining({
+              label: "Sub-agent failed: Parser Auditor (research)",
+              status: "failed",
+            }),
+          ],
+        }),
+        expect.objectContaining({
+          id: "call_full_cancel",
+          summary: "Sub-agent cancelled: Layout Auditor",
+          status: "cancelled",
+          details: [
+            expect.objectContaining({
+              label: "Sub-agent cancelled: Layout Auditor (research)",
+              status: "cancelled",
+            }),
+          ],
+        }),
+      ]);
+    });
   });
 
   it("updates known tool progress without splitting a streaming assistant message", () => {

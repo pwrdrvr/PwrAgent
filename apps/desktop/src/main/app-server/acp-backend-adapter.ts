@@ -1437,9 +1437,13 @@ export class AcpBackendAdapter {
   private readonly subAgentSessions = new Map<
     string,
     {
+      backend: AcpBackendId;
+      sessionId: string;
+      client?: AcpRuntimeClient;
       tracker: AcpSubAgentTracker;
       recordedKeys: Map<string, string>;
       lastTurnId?: string;
+      flushTimer?: ReturnType<typeof setTimeout>;
       flushChain: Promise<void>;
     }
   >();
@@ -1896,7 +1900,13 @@ export class AcpBackendAdapter {
     }
     this.acpRolloutStore.deleteSession(backendId, sessionId);
     this.acpSessionStore.deleteSession(backendId, sessionId);
-    this.subAgentSessions.delete(`${backendId}:${sessionId}`);
+    const subAgentKey = `${backendId}:${sessionId}`;
+    const subAgentState = this.subAgentSessions.get(subAgentKey);
+    if (subAgentState?.flushTimer) {
+      clearTimeout(subAgentState.flushTimer);
+      subAgentState.flushTimer = undefined;
+    }
+    this.subAgentSessions.delete(subAgentKey);
     if (backendId === "acp:antigravity") this.antigravitySessionOwners.delete(sessionId);
   }
 
@@ -3413,15 +3423,16 @@ export class AcpBackendAdapter {
     this.pendingCapabilityProbes.clear();
     this.liveTurnUsage.clear();
     this.liveContextWindows.clear();
-    this.subAgentSessions.clear();
+    const subAgentFlushes = this.endAllAcpSubAgents("cancelled");
     this.localAgentSnapshot = [];
-    this.closePromise = this.closeResources(acpClients, quotaProbes);
+    this.closePromise = this.closeResources(acpClients, quotaProbes, subAgentFlushes);
     return await this.closePromise;
   }
 
   private async closeResources(
     acpClients: Array<[AcpBackendId, AcpClientEntry]>,
     quotaProbes: Array<Promise<AcpProviderStatus | undefined>>,
+    subAgentFlushes: Array<Promise<void>> = [],
   ): Promise<void> {
     const resources = [
       ...acpClients.map(async ([backend, entry]) => {
@@ -3435,6 +3446,7 @@ export class AcpBackendAdapter {
         }
         acpBackendAdapterLog.info("acp_client_closed", { backend });
       }),
+      ...subAgentFlushes,
       ...[...this.ephemeralRuns].map(async (run) => {
         const [closed, drained] = await Promise.allSettled([
           this.closeEphemeralTransport(run), run.drained,
@@ -3488,7 +3500,11 @@ export class AcpBackendAdapter {
 
   private disposeAcpClient(entry: AcpClientEntry): Promise<void> {
     entry.disposePromise ??= Promise.resolve().then(async () => {
-      await entry.client.dispose();
+      try {
+        await entry.client.dispose();
+      } finally {
+        await this.endAcpSubAgentsForClient(entry.client, "cancelled");
+      }
       const backend = this.ownedAcpClients.get(entry);
       this.ownedAcpClients.delete(entry);
       if (backend === "acp:antigravity") {
@@ -3646,6 +3662,9 @@ export class AcpBackendAdapter {
       agentDisplayName: agent.name,
       initialRuntimeCapabilities: acpRuntimeCapabilitiesForAgent(agent),
       onSessionStartError: (error) => this.recordSessionStartRejection(agent, error),
+      onTurnStarted: ({ sessionId, turnId }) => {
+        this.notifyAcpSessionTurnStarted(agent.backendId, sessionId, turnId, client);
+      },
       supportsTurnSteering: effectiveAcpAgentCapabilities(agent).steerTurn,
       rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStorage,
@@ -3722,6 +3741,7 @@ export class AcpBackendAdapter {
             backend: agent.backendId,
             sessionId,
             turnId,
+            client,
             update,
             turnSettledOutcome: promptSettledTurnFinished
               ? (update.stopReason === "cancelled" ? "cancelled" : "completed")
@@ -4320,24 +4340,57 @@ export class AcpBackendAdapter {
     return client;
   }
 
-  private getOrCreateSubAgentSession(backend: AcpBackendId, sessionId: string) {
+  private getOrCreateSubAgentSession(
+    backend: AcpBackendId,
+    sessionId: string,
+    client?: AcpRuntimeClient,
+  ) {
     const key = `${backend}:${sessionId}`;
     let state = this.subAgentSessions.get(key);
     if (!state) {
       state = {
+        backend,
+        sessionId,
+        ...(client ? { client } : {}),
         tracker: new AcpSubAgentTracker(),
         recordedKeys: new Map(),
         flushChain: Promise.resolve(),
       };
       this.subAgentSessions.set(key, state);
+    } else if (client && state.client !== client) {
+      state.client = client;
     }
     return state;
+  }
+
+  private notifyAcpSessionTurnStarted(
+    backend: AcpBackendId,
+    sessionId: string,
+    turnId: string,
+    client?: AcpRuntimeClient,
+  ): void {
+    if (!this.options.recordSubAgents) {
+      return;
+    }
+    const state = this.subAgentSessions.get(`${backend}:${sessionId}`);
+    if (!state) {
+      return;
+    }
+    if (client && state.client !== client) {
+      state.client = client;
+    }
+    const dirty = state.lastTurnId !== turnId ? state.tracker.onTurnStarted(turnId) : false;
+    state.lastTurnId = turnId;
+    if (dirty) {
+      this.scheduleAcpSessionSubAgentFlush(state);
+    }
   }
 
   private observeAcpSubAgentUpdate(params: {
     backend: AcpBackendId;
     sessionId: string;
     turnId?: string;
+    client?: AcpRuntimeClient;
     update: Record<string, unknown>;
     turnSettledOutcome?: "completed" | "cancelled";
   }): void {
@@ -4356,7 +4409,10 @@ export class AcpBackendAdapter {
     if (!existing && !isRelevantUpdate) {
       return;
     }
-    const state = existing ?? this.getOrCreateSubAgentSession(params.backend, params.sessionId);
+    const state = existing ?? this.getOrCreateSubAgentSession(params.backend, params.sessionId, params.client);
+    if (params.client && state.client !== params.client) {
+      state.client = params.client;
+    }
     let dirty = false;
     if (params.turnId && state.lastTurnId && state.lastTurnId !== params.turnId) {
       dirty = state.tracker.onTurnStarted(params.turnId) || dirty;
@@ -4380,7 +4436,13 @@ export class AcpBackendAdapter {
     if (!dirty) {
       return;
     }
-    this.enqueueAcpSessionSubAgentFlush(params.backend, params.sessionId, state);
+    if (params.turnSettledOutcome) {
+      // Terminal turn settlement flushes immediately so callers observing
+      // turn completion see settled cards without waiting for another tick.
+      this.drainAcpSessionSubAgentFlush(state);
+    } else {
+      this.scheduleAcpSessionSubAgentFlush(state);
+    }
   }
 
   private settleAcpSessionSubAgents(params: {
@@ -4399,22 +4461,80 @@ export class AcpBackendAdapter {
     if (!state.tracker.settleTurn({ turnId: params.turnId, outcome: params.outcome })) {
       return;
     }
-    this.enqueueAcpSessionSubAgentFlush(params.backend, params.sessionId, state);
+    this.drainAcpSessionSubAgentFlush(state);
   }
 
-  private enqueueAcpSessionSubAgentFlush(
-    backend: AcpBackendId,
-    sessionId: string,
-    state: {
-      tracker: AcpSubAgentTracker;
-      recordedKeys: Map<string, string>;
-      flushChain: Promise<void>;
-    },
-  ): void {
+  private async endAcpSubAgentsForClient(
+    client: AcpRuntimeClient,
+    status: "cancelled" | "failure",
+  ): Promise<void> {
+    const flushes: Array<Promise<void>> = [];
+    for (const [key, state] of [...this.subAgentSessions]) {
+      if (state.client !== client) {
+        continue;
+      }
+      if (state.tracker.endRunningSubAgents(status) || state.flushTimer !== undefined) {
+        this.drainAcpSessionSubAgentFlush(state);
+      }
+      flushes.push(state.flushChain);
+      this.subAgentSessions.delete(key);
+    }
+    if (flushes.length > 0) {
+      await Promise.allSettled(flushes);
+    }
+  }
+
+  private endAllAcpSubAgents(status: "cancelled" | "failure"): Array<Promise<void>> {
+    const flushes: Array<Promise<void>> = [];
+    for (const [key, state] of [...this.subAgentSessions]) {
+      if (state.tracker.endRunningSubAgents(status) || state.flushTimer !== undefined) {
+        this.drainAcpSessionSubAgentFlush(state);
+      }
+      flushes.push(state.flushChain);
+      this.subAgentSessions.delete(key);
+    }
+    return flushes;
+  }
+
+  private scheduleAcpSessionSubAgentFlush(state: {
+    backend: AcpBackendId;
+    sessionId: string;
+    tracker: AcpSubAgentTracker;
+    recordedKeys: Map<string, string>;
+    flushTimer?: ReturnType<typeof setTimeout>;
+    flushChain: Promise<void>;
+  }): void {
+    if (!this.options.recordSubAgents || state.flushTimer !== undefined) {
+      return;
+    }
+    // Coalesce parallel sub-agent launches arriving within one 25ms burst into
+    // a single SQLite transaction instead of one commit per tool_call update.
+    // Terminal turn settlement, prompt errors, client disposal, and close drain
+    // immediately without waiting for the timer.
+    state.flushTimer = setTimeout(() => {
+      state.flushTimer = undefined;
+      this.drainAcpSessionSubAgentFlush(state);
+    }, 25);
+    state.flushTimer.unref?.();
+  }
+
+  private drainAcpSessionSubAgentFlush(state: {
+    backend: AcpBackendId;
+    sessionId: string;
+    tracker: AcpSubAgentTracker;
+    recordedKeys: Map<string, string>;
+    flushTimer?: ReturnType<typeof setTimeout>;
+    flushChain: Promise<void>;
+  }): void {
+    if (state.flushTimer !== undefined) {
+      clearTimeout(state.flushTimer);
+      state.flushTimer = undefined;
+    }
     const recordSubAgents = this.options.recordSubAgents;
     if (!recordSubAgents) {
       return;
     }
+    const { backend, sessionId } = state;
     const changed = state.tracker.subAgentCards().flatMap((card) => {
       const fingerprint = JSON.stringify(card);
       return state.recordedKeys.get(card.monitorId) === fingerprint
@@ -4425,7 +4545,7 @@ export class AcpBackendAdapter {
       return;
     }
     // Optimistically stamp fingerprints before enqueueing so rapid back-to-back
-    // updates only emit deltas, and clear them if persistence fails so a later
+    // updates only emit deltas, and restore them if persistence fails so a later
     // update can retry.
     const previousFingerprints = changed.map(({ card, fingerprint }) => ({
       monitorId: card.monitorId,

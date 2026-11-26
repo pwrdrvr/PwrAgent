@@ -21,6 +21,8 @@ import { projectActiveThreadSubAgents } from "@pwragent/shared/subagent-visibili
 import type { AutomationRunSourceMetadata } from "@pwragent/shared/contracts/automations";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeAcpAgentTransport } from "../acp/testing/fake-acp-agent";
+import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
+import { AcpBackendAdapter, type AcpSessionMetadata } from "../app-server/acp-backend-adapter";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { runGitCommand } from "../app-server/git-executable";
 import { CodexEnvironmentHydrationStore } from "../storage/codex-environment-hydration-store";
@@ -686,52 +688,225 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
-  it("budgets ACP native sub-agent card writes (Antigravity launch/settle and Grok zero-write progress)", async () => {
+  it("budgets real streamed ACP native sub-agent writes (Antigravity coalesced launch/settle and Grok zero-write progress)", async () => {
     const registry = createDesktopBackendRegistry({
       codexClient: createStubBackendClient(), overlayStore: store,
       agentToolMcpServer: null, pdfToolMcpServer: null,
     });
     const internal = registryModules(registry).subAgentMonitorService;
+    const buildAgent = (backendId: "acp:antigravity" | "acp:grok", registryId: string): AcpInstalledAgentRecord => ({
+      backendId,
+      registryId,
+      name: registryId,
+      version: "1.0.0",
+      installStatus: "installed",
+      authStatus: "authenticated",
+      distributionKind: "local",
+      distributionSource: registryId,
+      verificationStatus: "not-applicable",
+      allowlistRuleId: `local-${registryId}`,
+      launchDescriptor: {
+        backendId,
+        registryId,
+        distributionKind: "local",
+        command: `/opt/example/${registryId}`,
+        args: [],
+        env: {},
+      },
+      installedAt: 1_000,
+      updatedAt: 1_000,
+    });
+
+    // 1. Antigravity: 4 parallel invoke_subagent tool_calls coalesced into 1 launch commit
+    //    + 1 turn-settlement commit (2 commits total) driven through AcpBackendAdapter.
+    let resolveAgPrompt!: (value: { stopReason: string }) => void;
+    const agTransport = new FakeAcpAgentTransport({ "session/new": { sessionId: "ag-thread" } });
+    const agBaseRequest = agTransport.request.bind(agTransport);
+    agTransport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        agTransport.requests.push({ method, params, timeoutMs });
+        return await new Promise((resolve) => {
+          resolveAgPrompt = resolve as (value: { stopReason: string }) => void;
+        });
+      }
+      return await agBaseRequest(method, params, timeoutMs);
+    };
+    const agAgent = buildAgent("acp:antigravity", "antigravity");
+    const agSessions = new Map<string, AcpSessionMetadata>();
+    const agAdapter = new AcpBackendAdapter({
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      acpAgentStore: {
+        getInstalledAgent: (id) => (id === "acp:antigravity" ? agAgent : undefined),
+        listInstalledAgents: () => [agAgent],
+        upsertInstalledAgent: () => {},
+      },
+      acpSessionStore: {
+        getSession: (_backendId, sessionId) => agSessions.get(sessionId),
+        listSessions: () => [...agSessions.values()],
+        upsertSession: (metadata) => { agSessions.set(metadata.sessionId, metadata); },
+      },
+      createAcpTransport: () => agTransport,
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+      recordSubAgents: async (params) => { await internal.recordAcpSubAgents(params); },
+    });
+
+    // 2. Grok: 25 streamed subagent_progress ticks through AcpBackendAdapter write 0 commits.
+    let resolveGrokPrompt!: (value: { stopReason: string }) => void;
+    const grokTransport = new FakeAcpAgentTransport({ "session/new": { sessionId: "grok-thread" } });
+    const grokBaseRequest = grokTransport.request.bind(grokTransport);
+    grokTransport.request = async (method, params, timeoutMs) => {
+      if (method === "session/prompt") {
+        grokTransport.requests.push({ method, params, timeoutMs });
+        return await new Promise((resolve) => {
+          resolveGrokPrompt = resolve as (value: { stopReason: string }) => void;
+        });
+      }
+      return await grokBaseRequest(method, params, timeoutMs);
+    };
+    const grokAgent = buildAgent("acp:grok", "grok");
+    const grokSessions = new Map<string, AcpSessionMetadata>();
+    const grokAdapter = new AcpBackendAdapter({
+      captureStores: [],
+      discoverLocalAcpAgents: async () => [],
+      acpAgentStore: {
+        getInstalledAgent: (id) => (id === "acp:grok" ? grokAgent : undefined),
+        listInstalledAgents: () => [grokAgent],
+        upsertInstalledAgent: () => {},
+      },
+      acpSessionStore: {
+        getSession: (_backendId, sessionId) => grokSessions.get(sessionId),
+        listSessions: () => [...grokSessions.values()],
+        upsertSession: (metadata) => { grokSessions.set(metadata.sessionId, metadata); },
+      },
+      createAcpTransport: () => grokTransport,
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+      recordSubAgents: async (params) => { await internal.recordAcpSubAgents(params); },
+    });
+
     try {
-      const { writes } = await measureSqliteWrites(async () => {
-        // Antigravity: 4 parallel invoke_subagent launches, then turn settlement, then a late repeat.
-        const cards = [1, 2, 3, 4].map((index) => ({
-          monitorId: `acp-native:call-${index}`,
-          subAgentId: `call-${index}`,
-          task: `Audit repo ${index}`,
-          displayTitle: `Auditor ${index}`,
-          agentName: `Auditor ${index}`,
-          agentRole: "research",
-          startedAt: 1_000 + index,
-        }));
-        await internal.recordAcpSubAgents({
-          backend: "acp:antigravity",
-          threadId: "ag-thread",
-          subAgents: cards.map((card) => ({ ...card, status: "running" as const })),
+      const agClient = await agAdapter.getClient("acp:antigravity");
+      const agSession = await agClient.startSession({ cwd: "/tmp/ag-budget", executionMode: "default" });
+      await agClient.startPrompt({ sessionId: agSession.sessionId, prompt: "Audit four repos", turnId: "ag-turn-1" });
+
+      const agMeasured = await measureSqliteWrites(async () => {
+        for (const index of [1, 2, 3, 4]) {
+          agTransport.emitSessionUpdate(agSession.sessionId, {
+            sessionUpdate: "tool_call",
+            toolCallId: `call-${index}`,
+            name: "invoke_subagent",
+            title: "Run invoke_subagent",
+            status: "in_progress",
+            args: { Role: `Auditor ${index}`, TypeName: "research", Prompt: `Audit repo ${index}` },
+          });
+          agTransport.emitSessionUpdate(agSession.sessionId, {
+            sessionUpdate: "tool_call_update",
+            toolCallId: `call-${index}`,
+            status: "completed",
+          });
+        }
+        const monitorIds = [1, 2, 3, 4].map((index) => `acp-native:call-${index}`);
+        await vi.waitFor(async () => {
+          const cards = await store.getThreadSubAgents({
+            backend: "acp:antigravity",
+            threadId: agSession.sessionId,
+            monitorIds,
+          });
+          expect(cards).toHaveLength(4);
+          expect(cards.every((c) => c.status === "running")).toBe(true);
         });
-        await internal.recordAcpSubAgents({
-          backend: "acp:antigravity",
-          threadId: "ag-thread",
-          subAgents: cards.map((card) => ({ ...card, status: "success" as const })),
+
+        agTransport.emitSessionUpdate(agSession.sessionId, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Finished auditing all four repos." },
         });
-        // Late redelivery after terminal writes nothing.
-        await internal.recordAcpSubAgents({
-          backend: "acp:antigravity",
-          threadId: "ag-thread",
-          subAgents: cards.map((card) => ({ ...card, status: "running" as const })),
+        resolveAgPrompt({ stopReason: "end_turn" });
+
+        await vi.waitFor(async () => {
+          const cards = await store.getThreadSubAgents({
+            backend: "acp:antigravity",
+            threadId: agSession.sessionId,
+            monitorIds,
+          });
+          expect(cards).toHaveLength(4);
+          expect(cards.every((c) => c.status === "success")).toBe(true);
         });
       });
+
       expect(await store.readThreadSubAgentLensCounts({
         backend: "acp:antigravity",
-        threadId: "ag-thread",
+        threadId: agSession.sessionId,
         visibleSince: 0,
       })).toEqual({ harness: 4, pwragent: 0, "token-miser": 0 });
       expectSqliteWriteBudget({
         scenario: "acp-subagent-cards",
-        note: "four parallel ACP native sub-agents started in one batch and settled together, then a late report: 2 commits total; ~1.5 MB/day at 20 batches/day, zero progress/idle writes",
-        writes,
+        note: "four parallel Antigravity invoke_subagent session/updates coalesced into 1 launch commit + 1 turn-settlement commit through AcpBackendAdapter (2 commits total; ~1.0 MB/day at 20 batches/day, zero progress/idle writes)",
+        writes: agMeasured.writes,
       });
-    } finally { await registry.close(); }
+
+      const grokClient = await grokAdapter.getClient("acp:grok");
+      const grokSession = await grokClient.startSession({ cwd: "/tmp/grok-budget", executionMode: "default" });
+      await grokClient.startPrompt({ sessionId: grokSession.sessionId, prompt: "Research docs", turnId: "grok-turn-1" });
+      grokTransport.emitSessionUpdate(grokSession.sessionId, {
+        sessionUpdate: "subagent_spawned",
+        subagent_id: "grok-sa-budget-1",
+        subagent_type: "Explore",
+        description: "Research docs",
+        model: "grok-4.7",
+      });
+      await vi.waitFor(async () => {
+        const stored = await store.getThreadSubAgent({
+          backend: "acp:grok",
+          threadId: grokSession.sessionId,
+          monitorId: "acp-native:grok-sa-budget-1",
+        });
+        expect(stored?.status).toBe("running");
+      });
+
+      const progressMeasured = await measureSqliteWrites(async () => {
+        for (let tick = 1; tick <= 25; tick += 1) {
+          grokTransport.emitSessionUpdate(grokSession.sessionId, {
+            sessionUpdate: "subagent_progress",
+            subagent_id: "grok-sa-budget-1",
+            tool_calls: tick,
+            tokens_used: tick * 500,
+          });
+        }
+        // Wait past the 25ms coalescing window so any regressed scheduled flush fires inside measurement.
+        await new Promise((resolve) => setTimeout(resolve, 40));
+      });
+      expectSqliteWriteBudget({
+        scenario: "acp-subagent-progress",
+        note: "25 streamed Grok subagent_progress ticks through AcpBackendAdapter; progress stays in memory, zero commits",
+        writes: progressMeasured.writes,
+      });
+
+      grokTransport.emitSessionUpdate(grokSession.sessionId, {
+        sessionUpdate: "subagent_finished",
+        subagent_id: "grok-sa-budget-1",
+        status: "completed",
+        output: "Done",
+      });
+      grokTransport.emitSessionUpdate(grokSession.sessionId, {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Done." },
+      });
+      resolveGrokPrompt({ stopReason: "end_turn" });
+      await vi.waitFor(async () => {
+        const stored = await store.getThreadSubAgent({
+          backend: "acp:grok",
+          threadId: grokSession.sessionId,
+          monitorId: "acp-native:grok-sa-budget-1",
+        });
+        expect(stored?.status).toBe("success");
+      });
+    } finally {
+      await agAdapter.close();
+      await grokAdapter.close();
+      await registry.close();
+    }
   });
 
   it("persists a federated bulk dismissal in one commit and retains the original cards", async () => {

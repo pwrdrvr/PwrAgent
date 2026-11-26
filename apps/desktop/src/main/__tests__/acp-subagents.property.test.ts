@@ -331,7 +331,13 @@ describe("AcpSubAgentTracker model-based tests", () => {
             const status: ThreadSubAgentStatus =
               ev.outcome === "completed" ? "success" : ev.outcome === "cancelled" ? "cancelled" : "failure";
             for (const agent of ref.values()) {
-              if (!TERMINAL.has(agent.status) && agent.settlesWithTurn && (!agent.turnId || agent.turnId === ev.turnId)) {
+              if (TERMINAL.has(agent.status)) {
+                continue;
+              }
+              if (
+                ev.outcome !== "completed"
+                || (agent.settlesWithTurn && (!agent.turnId || agent.turnId === ev.turnId))
+              ) {
                 settleRef(agent, status, ts);
               }
             }

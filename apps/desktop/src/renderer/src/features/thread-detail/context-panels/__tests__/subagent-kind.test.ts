@@ -1,4 +1,5 @@
 import type { ThreadSubAgentSummary } from "@pwragent/shared/contracts/navigation";
+import { projectActiveThreadSubAgents } from "@pwragent/shared/subagent-visibility";
 import { describe, expect, it } from "vitest";
 import {
   isSystemQueuedMessageTitleHelperSubAgent,
@@ -96,5 +97,26 @@ describe("Token Miser sub-agent presentation", () => {
     expect(subAgentOriginLabel(claude)).toBe("Claude");
     expect(subAgentUsageLabel(claude)).toBe("Claude");
     expect(subAgentPricingUsageTitle(claude)).toBe("Claude sub-agent usage");
+  });
+
+  it("preserves displayTitle for ACP native sub-agents in projectActiveThreadSubAgents", () => {
+    const projected = projectActiveThreadSubAgents([
+      {
+        monitorId: "acp-native:call-no-role",
+        backend: "acp:antigravity",
+        displayTitle: "Audit streaming parser bounds",
+        task: "Inspect the streaming parser for quadratic loops across 10k-event sessions and summarize every offending pass.",
+        status: "running",
+        createdAt: 1_000,
+        updatedAt: 1_000,
+      },
+    ]);
+
+    expect(projected).toEqual([
+      expect.objectContaining({
+        monitorId: "acp-native:call-no-role",
+        displayTitle: "Audit streaming parser bounds",
+      }),
+    ]);
   });
 });

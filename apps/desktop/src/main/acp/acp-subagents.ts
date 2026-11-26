@@ -361,26 +361,31 @@ export class AcpSubAgentTracker {
   }
 
   /**
-   * Settles every turn-bound (`invoke_subagent`) sub-agent that belongs to the
-   * finished turn (or has no recorded turn ID). Protocol-managed sub-agents
-   * with explicit `subagent_finished` events are left alone unless the session
-   * itself closes.
+   * Settles sub-agents when a turn finishes, fails, or is cancelled.
+   *
+   * - On `"completed"`: settles turn-bound (`invoke_subagent`) sub-agents
+   *   belonging to `turnId` (or without a recorded turn ID). Protocol-managed
+   *   sub-agents (`subagent_spawned`) wait for their explicit
+   *   `subagent_finished` event.
+   * - On `"failed"` or `"cancelled"`: settles every still-running sub-agent on
+   *   the session (both turn-bound and protocol-managed, regardless of turn ID)
+   *   so a failed or aborted prompt never strands running cards in SQLite.
    */
   settleTurn(params: {
     turnId?: string;
     outcome: "completed" | "failed" | "cancelled";
     at?: number;
   }): boolean {
+    const timestamp = params.at ?? this.now();
+    if (params.outcome === "failed" || params.outcome === "cancelled") {
+      return this.endRunningSubAgents(
+        params.outcome === "cancelled" ? "cancelled" : "failure",
+        timestamp,
+      );
+    }
     if (this.activeTurnBoundIds.size === 0) {
       return false;
     }
-    const timestamp = params.at ?? this.now();
-    const status: ThreadSubAgentStatus =
-      params.outcome === "completed"
-        ? "success"
-        : params.outcome === "cancelled"
-          ? "cancelled"
-          : "failure";
     let changed = false;
     for (const id of [...this.activeTurnBoundIds]) {
       const agent = this.agents.get(id);
@@ -391,7 +396,7 @@ export class AcpSubAgentTracker {
       if (params.turnId && agent.turnId && agent.turnId !== params.turnId) {
         continue;
       }
-      this.settleAgent(agent, status, undefined, timestamp);
+      this.settleAgent(agent, "success", undefined, timestamp);
       changed = true;
     }
     return changed;

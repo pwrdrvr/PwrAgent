@@ -2,7 +2,7 @@ import type {
   CodexNativeSubAgentSummary,
 } from "./contracts/normalized-app-server";
 import type { ThreadActiveSubAgent, ThreadSubAgentSummary } from "./contracts/navigation";
-import { isDecisionBatchSubAgent, isHarnessSubAgent } from "./subagent-kind";
+import { isAcpNativeSubAgent, isDecisionBatchSubAgent, isHarnessSubAgent } from "./subagent-kind";
 import { taskMonitorDisplayTitle } from "./task-monitor-display-title";
 
 export const CODEX_NATIVE_SUBAGENT_NAVIGATION_RETENTION_MS = 60 * 60 * 1000;
@@ -50,7 +50,8 @@ export function projectActiveThreadSubAgents(
     .filter((agent) => !isDecisionBatchSubAgent(agent))
     .filter((agent) => agent.status === "failed" || agent.status === "failure" || !hasTerminalEvidence(agent))
     .map((agent) => {
-      const displayTitle = taskMonitorDisplayTitle(agent);
+      const displayTitle = taskMonitorDisplayTitle(agent)
+        ?? (isAcpNativeSubAgent(agent) ? agent.displayTitle : undefined);
       return {
         monitorId: agent.monitorId,
         ...(agent.attemptId ? { attemptId: agent.attemptId } : {}),

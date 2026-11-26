@@ -58,6 +58,7 @@ import { extractAcpContentImageParts, extractAcpToolImageParts } from "./acp-too
 import {
   formatAcpInvokeSubAgentLabel,
   readAcpInvokeSubAgentDetails,
+  type AcpInvokeSubAgentDetails,
 } from "./acp-subagents.js";
 import { reduceNormalizedThread } from "./normalized-thread-reducer.js";
 import { normalizedThreadToReplay, normalizedToolCallToReplayDetail } from "./normalized-thread-to-replay.js";
@@ -361,6 +362,7 @@ export class AcpSessionReplayNormalizer {
    * can drop the input that names it, and its title is the absolute path.
    */
   private readonly fileReads = new Map<string, AcpFileRead>();
+  private readonly invokeSubAgents = new Map<string, AcpInvokeSubAgentDetails>();
   /** The retry run whose row is still in progress, if any. */
   private openRetry?: { id: string; attempts: number };
   /** The automatic compaction whose row is still in progress, if any. */
@@ -458,6 +460,7 @@ export class AcpSessionReplayNormalizer {
     // call's for the whole session would grow without bound.
     this.providerTools.clear();
     this.fileReads.clear();
+    this.invokeSubAgents.clear();
     this.upsertMessage({
       id,
       role: "user",
@@ -1566,6 +1569,14 @@ export class AcpSessionReplayNormalizer {
     const preferredMcpLabel = mcpToolLabel && mcpToolLabel !== mcpToolName
       ? mcpToolLabel
       : undefined;
+    const previousInvokeSubAgent = toolCallId ? this.invokeSubAgents.get(toolCallId) : undefined;
+    const parsedInvokeSubAgent = readAcpInvokeSubAgentDetails(update.update);
+    const invokeSubAgent = parsedInvokeSubAgent
+      ? { ...previousInvokeSubAgent, ...parsedInvokeSubAgent }
+      : previousInvokeSubAgent;
+    if (toolCallId && invokeSubAgent) {
+      this.invokeSubAgents.set(toolCallId, invokeSubAgent);
+    }
     this.upsertActivity(
       toolActivity(
         update,
@@ -1576,6 +1587,7 @@ export class AcpSessionReplayNormalizer {
         this.fileEditOptions,
         followsTitleScript,
         this.options.replayKit,
+        invokeSubAgent,
       ),
       providerTool
         ? (label) => isProviderToolPlaceholder(label, providerTool)
@@ -2543,6 +2555,7 @@ function toolActivity(
   fileEditOptions?: ReadAcpFileEditOptions,
   followsTitleScript = false,
   replayKit?: AcpReplayKit,
+  trackedInvokeSubAgent?: AcpInvokeSubAgentDetails,
 ): AppServerThreadActivityEntry {
   const id =
     readAcpToolCallId(update.update) ??
@@ -2590,7 +2603,7 @@ function toolActivity(
     };
   }
 
-  const invokeSubAgent = readAcpInvokeSubAgentDetails(update.update);
+  const invokeSubAgent = trackedInvokeSubAgent ?? readAcpInvokeSubAgentDetails(update.update);
   if (invokeSubAgent) {
     const status = readToolActivityStatus(update.update) ?? "in_progress";
     const summary = formatAcpInvokeSubAgentLabel(invokeSubAgent, status);
@@ -2862,6 +2875,22 @@ function settledSearchLabel(
 ): string {
   if (status === "in_progress" || status === undefined) {
     return label;
+  }
+  if (
+    status === "failed"
+    && /^Sub-agent(?::|\b)/u.test(label)
+    && !label.startsWith("Sub-agent failed")
+    && !label.startsWith("Sub-agent cancelled")
+  ) {
+    return label.replace(/^Sub-agent\b/u, "Sub-agent failed");
+  }
+  if (
+    status === "cancelled"
+    && /^Sub-agent(?::|\b)/u.test(label)
+    && !label.startsWith("Sub-agent failed")
+    && !label.startsWith("Sub-agent cancelled")
+  ) {
+    return label.replace(/^Sub-agent\b/u, "Sub-agent cancelled");
   }
   return label
     .replace(/^Searching code\b/u, "Searched code")
