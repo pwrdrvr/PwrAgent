@@ -27143,6 +27143,29 @@ button.stack-display__thread,
   color: var(--text-secondary);
 }
 
+.compact-composer__mention-option--emoji {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.compact-composer__mention-emoji {
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.compact-composer__mention-option--emoji .compact-composer__mention-title {
+  flex: 0 1 auto;
+  font-family: var(--font-mono);
+}
+
+.compact-composer__mention-option--emoji .compact-composer__mention-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+}
+
 /* Chip + menu wrapper: the chip must be able to shrink and truncate, and
    the menu anchors to it. */
 .compact-composer__menu {
@@ -52021,6 +52044,52 @@ button.composer__subthread-source-parent:hover {
 .composer__autocomplete--hash-references {
   right: auto;
   width: min(100%, 440px);
+}
+
+.composer__autocomplete--emoji {
+  right: auto;
+  width: min(100%, 340px);
+  gap: 2px;
+  padding: 6px;
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-popover);
+}
+
+.composer__autocomplete--emoji .composer__autocomplete-option {
+  display: grid;
+  grid-template-columns: 22px auto minmax(0, 1fr);
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+}
+
+.composer__autocomplete-emoji {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.composer__autocomplete-emoji-shortcode {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__autocomplete-emoji-name {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* The kind badge is the row's only classifier, so it never shrinks — the

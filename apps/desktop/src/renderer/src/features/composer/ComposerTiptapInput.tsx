@@ -46,6 +46,14 @@ import {
 } from "../../lib/directory-references";
 import { buildInstanceReferenceMarkdown } from "../../lib/instance-references";
 import { findHashReferenceTrigger } from "../../lib/hash-references";
+import {
+  advanceCodeFenceState,
+  extractCodeFenceMarkers,
+  findEmojiShortcodeTrigger,
+  findExactEmojiShortcodeBeforeColon,
+  preloadEmojiCatalog,
+  type CodeFenceMarker,
+} from "../../lib/emoji-shortcodes";
 import { parsePullRequestUrl } from "../../lib/pull-request-links";
 import { resolveThreadIdText, useThreadLinks, type ResolvedThreadLink } from "../../lib/thread-links";
 import { composerThreadLabel, findComposerThreadReferences, resolveComposerThreadHref, useComposerThreadReference } from "./composer-thread-references";
@@ -2631,6 +2639,244 @@ function getSelectionDraftRange(
   };
 }
 
+const MAX_EMOJI_TAIL_CHARS = 68;
+const textblockFenceMarkersCache = new WeakMap<ProseMirrorNode, readonly CodeFenceMarker[]>();
+const priorFenceStateCache = new WeakMap<
+  ProseMirrorNode,
+  Map<number, { char: "`" | "~"; length: number } | undefined>
+>();
+
+function serializeTextblockForFenceCheck(block: ProseMirrorNode): string {
+  let line = "";
+  block.forEach((child) => {
+    if (child.type.name === "hardBreak") {
+      line += "\n";
+    } else if (child.isText && !child.marks.some((mark) => mark.type.spec.code)) {
+      line += child.text!;
+    } else {
+      line += "x";
+    }
+  });
+  return line;
+}
+
+function getTextblockFenceMarkers(block: ProseMirrorNode): readonly CodeFenceMarker[] {
+  const cached = textblockFenceMarkersCache.get(block);
+  if (cached) {
+    return cached;
+  }
+  const markers = extractCodeFenceMarkers(serializeTextblockForFenceCheck(block));
+  textblockFenceMarkersCache.set(block, markers);
+  return markers;
+}
+
+function computePriorBlockFenceState(
+  doc: ProseMirrorNode,
+  blockStart: number,
+): { char: "`" | "~"; length: number } | undefined {
+  if (blockStart <= 0) {
+    return undefined;
+  }
+  let perDoc = priorFenceStateCache.get(doc);
+  if (perDoc?.has(blockStart)) {
+    return perDoc.get(blockStart);
+  }
+  let activeFence: { char: "`" | "~"; length: number } | undefined;
+  doc.nodesBetween(0, blockStart, (node) => {
+    if (node.type.spec.code) {
+      return false;
+    }
+    if (node.isTextblock) {
+      const markers = getTextblockFenceMarkers(node);
+      if (markers.length > 0) {
+        activeFence = advanceCodeFenceState(activeFence, markers);
+      }
+      return false;
+    }
+    return undefined;
+  });
+  if (!perDoc) {
+    perDoc = new Map();
+    priorFenceStateCache.set(doc, perDoc);
+  }
+  perDoc.set(blockStart, activeFence);
+  return activeFence;
+}
+
+function readPlainTailBeforeCaret(
+  doc: ProseMirrorNode,
+  pos: number,
+): {
+  atLineStart: boolean;
+  prefix: string;
+  getCurrentLine: () => string;
+  isInsidePriorFence: () => boolean;
+} | undefined {
+  const $pos = doc.resolve(pos);
+  if (!$pos.parent.inlineContent || $pos.parent.type.spec.code) {
+    return undefined;
+  }
+  if ($pos.marks().some((mark) => mark.type.spec.code)) {
+    return undefined;
+  }
+
+  // Scan backward at most MAX_EMOJI_TAIL_CHARS (68) chars so normal typing
+  // and caret moves in long paragraphs stay strictly O(1) without copying the
+  // whole paragraph or walking preceding blocks.
+  let prefix = "";
+  let atLineStart = true;
+  let childIndex = $pos.index();
+  if ($pos.textOffset > 0) {
+    const activeChild = $pos.parent.child(childIndex);
+    if (activeChild.isText && !activeChild.marks.some((mark) => mark.type.spec.code)) {
+      const text = activeChild.text!;
+      if ($pos.textOffset > MAX_EMOJI_TAIL_CHARS) {
+        prefix = text.slice($pos.textOffset - MAX_EMOJI_TAIL_CHARS, $pos.textOffset);
+        atLineStart = false;
+        childIndex = -1;
+      } else {
+        prefix = text.slice(0, $pos.textOffset);
+        childIndex -= 1;
+      }
+    } else {
+      atLineStart = false;
+      childIndex = -1;
+    }
+  } else {
+    childIndex -= 1;
+  }
+
+  while (childIndex >= 0 && prefix.length < MAX_EMOJI_TAIL_CHARS) {
+    const child = $pos.parent.child(childIndex);
+    if (child.isText && !child.marks.some((mark) => mark.type.spec.code)) {
+      const text = child.text!;
+      const needed = MAX_EMOJI_TAIL_CHARS - prefix.length;
+      if (text.length > needed) {
+        prefix = text.slice(text.length - needed) + prefix;
+        atLineStart = false;
+        break;
+      }
+      prefix = text + prefix;
+    } else if (child.type.name === "hardBreak") {
+      atLineStart = true;
+      break;
+    } else {
+      atLineStart = false;
+      break;
+    }
+    childIndex -= 1;
+  }
+
+  let parentScan: { currentLine: string; priorLinesText: string } | undefined;
+  const ensureParentScan = () => {
+    if (parentScan) {
+      return parentScan;
+    }
+    let currentLine = "";
+    const priorLines: string[] = [];
+    $pos.parent.nodesBetween(0, $pos.parentOffset, (node, position) => {
+      if (node.isText && !node.marks.some((mark) => mark.type.spec.code)) {
+        currentLine += node.text!.slice(0, $pos.parentOffset - position);
+      } else if (node.type.name === "hardBreak") {
+        priorLines.push(currentLine);
+        currentLine = "";
+      } else {
+        currentLine += "x";
+      }
+    });
+    parentScan = {
+      currentLine,
+      priorLinesText: priorLines.join("\n"),
+    };
+    return parentScan;
+  };
+
+  const blockStart = $pos.before($pos.depth);
+  return {
+    atLineStart,
+    prefix,
+    getCurrentLine: () => ensureParentScan().currentLine,
+    isInsidePriorFence: () => {
+      let activeFence = computePriorBlockFenceState(doc, blockStart);
+      const { priorLinesText } = ensureParentScan();
+      if (priorLinesText.length > 0) {
+        const markers = extractCodeFenceMarkers(priorLinesText);
+        if (markers.length > 0) {
+          activeFence = advanceCodeFenceState(activeFence, markers);
+        }
+      }
+      return activeFence !== undefined;
+    },
+  };
+}
+
+function readFollowingBoundaryText(doc: ProseMirrorNode, pos: number): string {
+  const $pos = doc.resolve(pos);
+  const nodeAfter = $pos.nodeAfter;
+  if (!nodeAfter) {
+    return "";
+  }
+  if (nodeAfter.type.name === "hardBreak") {
+    return "\n";
+  }
+  if (nodeAfter.isText && !nodeAfter.marks.some((mark) => mark.type.spec.code)) {
+    return nodeAfter.text?.slice(0, 1) ?? "";
+  }
+  return "x";
+}
+
+function readEmojiTrigger(
+  editor: TiptapEditor,
+): ComposerReferenceTrigger | undefined {
+  const { $from } = editor.state.selection;
+  if (editor.state.storedMarks?.some((mark) => mark.type.spec.code)) {
+    return undefined;
+  }
+  const context = readPlainTailBeforeCaret(editor.state.doc, $from.pos);
+  if (!context) {
+    return undefined;
+  }
+  const trigger = findEmojiShortcodeTrigger(context.prefix, context.prefix.length, {
+    atLineStart: context.atLineStart,
+    getCurrentLine: context.getCurrentLine,
+    isInsidePriorFence: context.isInsidePriorFence,
+  });
+  if (!trigger) {
+    return undefined;
+  }
+  return {
+    start: $from.pos - context.prefix.length + trigger.start,
+    end: $from.pos,
+    query: trigger.query,
+  };
+}
+
+function replaceEditorEmojiTrigger(editor: TiptapEditor, emoji: string): void {
+  const trigger = readEmojiTrigger(editor);
+  if (!trigger) {
+    return;
+  }
+  const { to, $to } = editor.state.selection;
+  const start = trigger.start;
+  const following = $to.nodeAfter?.text ?? "";
+  const hasSpace = /^[^\S\r\n]/.test(following);
+  const addSpace = !hasSpace && !/^[\p{Pe}\p{Pf}]/u.test(following);
+  const inserted = addSpace ? `${emoji} ` : emoji;
+
+  const transaction = closeHistory(editor.state.tr);
+  transaction.insertText(inserted, start, to);
+  const caret = start + inserted.length + (hasSpace ? 1 : 0);
+  transaction.setSelection(
+    TextSelection.create(
+      transaction.doc,
+      Math.min(caret, transaction.doc.content.size),
+    ),
+  );
+  editor.view.dispatch(transaction);
+  closeEditorHistory(editor);
+  editor.commands.focus();
+}
+
 function readReferenceTriggers(
   editor: TiptapEditor,
 ): ReturnType<ComposerInputHandle["getReferenceTriggers"]> {
@@ -3059,6 +3305,7 @@ export const ComposerTiptapInput = forwardRef<
   const controlledRedoStackRef = useRef<ControlledHistoryEntry[]>([]);
   const applyingControlledHistoryRef = useRef(false);
   const controlledChangeInProgressRef = useRef(false);
+  const imeComposingKeyRef = useRef(false);
   const readMode: TiptapReadMode = props.markdownConversion ? "markdown" : "text";
   const propsSignature = getContentSignature({
     value: props.value,
@@ -3082,6 +3329,60 @@ export const ComposerTiptapInput = forwardRef<
               const transaction = state.tr;
               replacePastedThreadReferences(transaction, range, links);
               return transaction.docChanged ? transaction : null;
+            },
+          })];
+        },
+      }),
+      Extension.create({
+        name: "composerEmojiShortcodeExpansion",
+        addProseMirrorPlugins() {
+          return [new Plugin({
+            props: {
+              handleDOMEvents: {
+                compositionstart: () => {
+                  imeComposingKeyRef.current = true;
+                  return false;
+                },
+                compositionend: () => {
+                  imeComposingKeyRef.current = false;
+                  return false;
+                },
+              },
+              handleTextInput(view, from, to, text) {
+                if (propsRef.current.readOnly || propsRef.current.disabled) {
+                  return false;
+                }
+                if (text === ":") {
+                  preloadEmojiCatalog();
+                }
+                if (
+                  text !== ":"
+                  || from !== to
+                  || view.composing
+                  || imeComposingKeyRef.current
+                  || view.state.storedMarks?.some((mark) => mark.type.spec.code)
+                ) {
+                  return false;
+                }
+                const context = readPlainTailBeforeCaret(view.state.doc, from);
+                if (!context) {
+                  return false;
+                }
+                const suffix = readFollowingBoundaryText(view.state.doc, to);
+                const match = findExactEmojiShortcodeBeforeColon(context.prefix, suffix, {
+                  atLineStart: context.atLineStart,
+                  getCurrentLine: context.getCurrentLine,
+                  isInsidePriorFence: context.isInsidePriorFence,
+                });
+                if (!match) {
+                  return false;
+                }
+                const replaceFrom = from - (match.end - match.start);
+                view.dispatch(
+                  view.state.tr.insertText(match.entry.emoji, replaceFrom, to).scrollIntoView(),
+                );
+                return true;
+              },
             },
           })];
         },
@@ -3293,6 +3594,10 @@ export const ComposerTiptapInput = forwardRef<
           // Let the browser select, copy, and scroll, without running editor
           // commands (including undo and the composer's submit shortcuts).
           if (propsRef.current.readOnly) return true;
+          imeComposingKeyRef.current = event.isComposing || event.keyCode === 229;
+          if (imeComposingKeyRef.current) {
+            return true;
+          }
           const currentEditorForHint = editorRef.current;
           if (
             currentEditorForHint &&
@@ -3590,7 +3895,10 @@ export const ComposerTiptapInput = forwardRef<
       const notify = propsRef.current.onReferenceSelectionChange;
       if (!notify || (!transaction.docChanged && !transaction.selectionSet)) return;
       const references = readReferenceTriggers(nextEditor);
-      const key = references["#"] || references["@"] ? JSON.stringify(references) : "";
+      const emoji = readEmojiTrigger(nextEditor);
+      const key = references["#"] || references["@"] || emoji
+        ? JSON.stringify({ ...references, ":": emoji })
+        : "";
       if (key === referenceSelectionKeyRef.current) return;
       referenceSelectionKeyRef.current = key;
       // Normal document edits already rerender the host via onChange.
@@ -4037,12 +4345,18 @@ export const ComposerTiptapInput = forwardRef<
         editor?.commands.focus();
       }
     },
+    getEmojiTrigger: () => editor ? readEmojiTrigger(editor) : undefined,
     getReferenceTriggers: () => editor ? readReferenceTriggers(editor) : {},
     insertMentionToken: (token) => {
       if (!editor || propsRef.current.readOnly) {
         return false;
       }
       return insertMentionTokenAtSelection({ editor, readMode, token });
+    },
+    replaceEmojiTrigger: (emoji) => {
+      if (editor?.isEditable && !propsRef.current.readOnly) {
+        replaceEditorEmojiTrigger(editor, emoji);
+      }
     },
     replaceReference: (sigil, tokens) => {
       if (editor?.isEditable && !propsRef.current.readOnly) {
@@ -4128,7 +4442,14 @@ export const ComposerTiptapInput = forwardRef<
         });
       }}
       onKeyDownCapture={(event) => {
-        if (!editor || event.defaultPrevented || propsRef.current.readOnly) {
+        if (
+          !editor
+          || event.defaultPrevented
+          || propsRef.current.readOnly
+          || (event as { isComposing?: boolean }).isComposing
+          || event.nativeEvent?.isComposing
+          || event.keyCode === 229
+        ) {
           return;
         }
         if (

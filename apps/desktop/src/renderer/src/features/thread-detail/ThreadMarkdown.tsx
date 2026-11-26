@@ -63,7 +63,9 @@ import {
   parsePullRequestNumberHref,
   remarkPullRequestReferences,
 } from "./remark-pull-request-references";
+import { remarkEmojiShortcodes, type RemarkEmojiShortcodesOptions } from "./remark-emoji-shortcodes";
 import { remarkTableProfile } from "./remark-table-profile";
+import { useDeferredEmojiShortcodeCatalog } from "../../lib/useEmojiShortcodeCatalog";
 import { buildSelectionClipboard } from "./selection-clipboard";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
@@ -811,13 +813,22 @@ const MarkdownDocumentContent = memo(function MarkdownDocumentContent(props: {
   IncrementalRenderer: ReturnType<typeof useIncrementalMarkdownRenderer>;
 }) {
   const { IncrementalRenderer } = props;
+  const { catalog: emojiCatalog, requestCatalog: requestEmojiCatalog } =
+    useDeferredEmojiShortcodeCatalog();
   const remarkPlugins = useMemo<Options["remarkPlugins"]>(() => [
     ...(props.mathRuntime?.remarkPlugins ?? []),
     remarkBreaks,
     [remarkGfm, { singleTilde: false }],
     remarkPullRequestReferences,
+    [
+      remarkEmojiShortcodes,
+      {
+        catalog: emojiCatalog,
+        onMissingCatalog: requestEmojiCatalog,
+      } satisfies RemarkEmojiShortcodesOptions,
+    ],
     remarkTableProfile,
-  ], [props.mathRuntime]);
+  ], [emojiCatalog, props.mathRuntime, requestEmojiCatalog]);
   const components = useMemo(() => ({
     ...markdownComponents, ...props.mathRuntime?.components,
   }), [props.mathRuntime]);
@@ -1017,7 +1028,10 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         <TranscriptFileRegistrationContext.Provider value={registerInlineFile}>
           <MarkdownCodeApiContext.Provider value={props.desktopApi}>
             <MathClipboardApiContext.Provider value={props.desktopApi}>
-              <MarkdownDocument text={markdownText} mathRuntime={mathRuntime} />
+              <MarkdownDocument
+                text={markdownText}
+                mathRuntime={mathRuntime}
+              />
             </MathClipboardApiContext.Provider>
           </MarkdownCodeApiContext.Provider>
         </TranscriptFileRegistrationContext.Provider>
