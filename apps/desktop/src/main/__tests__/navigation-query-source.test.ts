@@ -1257,6 +1257,89 @@ it("observes a retired Git stack before starting a new viewer lease", async () =
   });
 });
 
+it("isolates local owner listing and stack projection from remote pin and peer-status churn", async () => {
+  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+    const started = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(started);
+    const stackReads = vi.spyOn(StackReader.prototype, "read");
+    const materialize = mocks.store.readNavigationQueryIndex;
+    let pinTitle = "Viewer pin v0";
+    let peerOnline = true;
+    const dynamicViewer = {
+      source: viewer.source,
+      project: async (index: NavigationQueryIndex) => {
+        const pin: NavigationThreadSummary = {
+          id: "remote",
+          source: "codex",
+          title: pinTitle,
+          titleSource: "explicit",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            instanceLabel: "Peer",
+            peerStatus: peerOnline ? "connected" : "disconnected",
+            ref: buildFederatedThreadRef({ backend: "codex", threadId: "remote", instanceId: "peer" }),
+          },
+        };
+        return appendViewerNavigationPins(index, [pin]);
+      },
+    };
+    try {
+      await fc.assert(fc.asyncProperty(
+        fc.array(
+          fc.constantFrom("remote-pin", "peer-disconnect", "peer-reconnect", "local-name"),
+          { minLength: 4, maxLength: 8, size: "max" },
+        ),
+        async (events) => {
+          // Reset caches cleanly at a fresh timestamp for each generated run.
+          clock.mockReturnValue(Date.now() + 2_000);
+          source.emit("thread/name/updated");
+          pinTitle = "Viewer pin warm";
+          peerOnline = true;
+          const warm = await read(dynamicViewer);
+          expect(warm.stacks).toHaveLength(1);
+          expect(warm.threads.find((t) => t.id === "remote")?.title).toBe(pinTitle);
+
+          source.listThreads.mockClear();
+          materialize.mockClear();
+          stackReads.mockClear();
+
+          let expectedLocalRebuilds = 0;
+          let step = 0;
+          for (const kind of events) {
+            step += 1;
+            if (kind === "remote-pin") {
+              pinTitle = `Viewer pin v${step}`;
+              source.emit("navigation/remoteThreadPins/changed");
+            } else if (kind === "peer-disconnect") {
+              peerOnline = false;
+              source.emit("federation/peerStatus/changed");
+            } else if (kind === "peer-reconnect") {
+              peerOnline = true;
+              source.emit("federation/peerStatus/changed");
+            } else {
+              expectedLocalRebuilds += 1;
+              source.emit("thread/name/updated");
+            }
+            const next = await read(dynamicViewer);
+            expect(next.stacks).toHaveLength(1);
+            const remote = next.threads.find((t) => t.id === "remote");
+            expect(remote?.title).toBe(pinTitle);
+            expect(remote?.federation?.peerStatus).toBe(peerOnline ? "connected" : "disconnected");
+          }
+
+          expect(source.listThreads).toHaveBeenCalledTimes(expectedLocalRebuilds);
+          expect(materialize).toHaveBeenCalledTimes(expectedLocalRebuilds);
+          expect(stackReads).toHaveBeenCalledTimes(expectedLocalRebuilds);
+        },
+      ), { numRuns: 5 });
+    } finally {
+      stackReads.mockRestore();
+      clock.mockRestore();
+    }
+  });
+});
+
 it("never requests stack projection for composer mention queries", () => {
   const queries: NavigationQueryRequest["query"][] = [
     { kind: "lens", lens: "inbox" },

@@ -42,8 +42,15 @@ const indexReads = new NavigationIndexReadPool(1_000, 15_000);
 const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = getDesktopStackReader();
 
+/** Events that affect only viewer-mounted remote pins, never local owner membership or stacks. */
+function viewerOnlyNavigationEvent(method: string): boolean {
+  return method === "navigation/remoteThreadPins/changed"
+    || method === "federation/peerStatus/changed";
+}
+
 /** A stacked index read is stale after this event; its stack inputs may have changed. */
 function stackIndexEventInvalidates(notification: { method: string; params?: unknown }): boolean {
+  if (viewerOnlyNavigationEvent(notification.method)) return false;
   return notification.method === "pullRequest/status/updated"
     || navigationQueryEventRequiresRefresh(notification.method, notification.params);
 }
@@ -75,8 +82,15 @@ type StackProjectionRecord = {
 };
 const latestStackProjections = new WeakMap<DesktopBackendRegistry, StackProjectionRecord>();
 
-function navigationIndexVersion(registry: DesktopBackendRegistry, overlayStore: ReturnType<typeof getDesktopOverlayStore>): string {
-  return `${overlayStore.readNavigationSourceVersion?.() ?? ""}|${registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
+function navigationIndexVersion(
+  registry: DesktopBackendRegistry,
+  overlayStore: ReturnType<typeof getDesktopOverlayStore>,
+  includeViewerTables = true,
+): string {
+  const sourceVersion = includeViewerTables
+    ? overlayStore.readNavigationSourceVersion?.() ?? ""
+    : overlayStore.readOwnerNavigationSourceVersion?.() ?? overlayStore.readNavigationSourceVersion?.() ?? "";
+  return `${sourceVersion}|${registry.getStartupProviderRefreshStatus?.()?.state ?? ""}`;
 }
 
 /**
@@ -89,7 +103,7 @@ function currentStackProjection(registry: DesktopBackendRegistry): StackProjecti
   const record = latestStackProjections.get(registry);
   const overlayStore = getDesktopOverlayStore();
   if (!record || record.overlayStore !== overlayStore || record.epoch !== stackInputEpochs.get(registry)?.value
-    || record.version !== navigationIndexVersion(registry, overlayStore)) return undefined;
+    || record.version !== navigationIndexVersion(registry, overlayStore, false)) return undefined;
   const age = Date.now() - record.completedAt;
   return age >= 0 && age <= STACK_DETAIL_REUSE_MS ? record : undefined;
 }
@@ -195,6 +209,8 @@ export async function loadLocalNavigationQueryIndex(params: {
    * that source must publish a navigation invalidation through the registry.
    */
   viewer?: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> };
+  /** Internal scope to keep a viewer's native stack lease independent of the owner's without re-scanning on remote pin churn. */
+  stackLeaseScope?: object;
 }): Promise<NavigationQueryIndex> {
   params.signal?.throwIfAborted();
   const registry = params.registry ?? getDesktopBackendRegistry();
@@ -206,27 +222,31 @@ export async function loadLocalNavigationQueryIndex(params: {
   // in-flight index that predates it, nor overtake other readers' scans.
   const key = JSON.stringify([sourceId(registry), sourceId(overlayStore), backend,
     ...(params.viewer ? ["viewer", sourceId(params.viewer.source)] : []),
-    ...(params.includeStacks ? ["stacks"] : []),
+    ...(params.includeStacks
+      ? params.stackLeaseScope ? ["stacks", sourceId(params.stackLeaseScope)] : ["stacks"]
+      : []),
     ...(params.refreshProviders ? ["refresh-providers"] : [])]);
   // An index's coverage reads the startup refresh state, so an index built
   // while startup was checking must not serve a reader after it finishes.
   // The refreshed event invalidates the read too, but a listener that runs
   // before the pool's (owner PR metadata) would join the stale index.
-  const version = navigationIndexVersion(registry, overlayStore);
+  const version = navigationIndexVersion(registry, overlayStore, Boolean(params.viewer));
   return reads.read(key, async (signal, checkpoint, previous) => {
     let navigationChanged = false;
     // An event during a scan stops later readers from joining it; they share
     // one follow-up scan. Each run owns its listener, because the pool can
     // run this same load again for a follow-up.
     const unsubscribe = registry.onEvent?.((event) => {
-      // Connectivity changes the liveness of retained peer pins without
-      // changing SQLite membership or the local provider inventory.
+      // Connectivity and remote pin publications change viewer-mounted rows
+      // without changing local owner membership, SQLite overlays, or stacks.
       // A PR status observation changes page chips, not the compact index's
       // attachments. The page reads those statuses from the live registry.
+      const viewerEvent = viewerOnlyNavigationEvent(event.notification.method);
       if ((params.includeStacks ? stackIndexEventInvalidates(event.notification)
-        : event.notification.method !== "pullRequest/status/updated"
+        : !viewerEvent
+          && event.notification.method !== "pullRequest/status/updated"
           && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))
-        || (params.viewer && event.notification.method === "federation/peerStatus/changed")) {
+        || (params.viewer && viewerEvent)) {
         navigationChanged = true;
         reads.invalidate(key);
       }
@@ -235,10 +255,61 @@ export async function loadLocalNavigationQueryIndex(params: {
     // Eviction/expiry/cancellation aborts the lifetime and releases it.
     signal.addEventListener("abort", () => unsubscribe?.(), { once: true });
     if (params.includeStacks) {
+      if (params.viewer) {
+        // Share the viewer's stack-free pass across stack-free and stack-bearing
+        // readers, while keeping the native stack lease independent of remote
+        // pin and peer-status churn. Start both concurrently so the native stack
+        // lease joins the same owner observation before viewer pin publication
+        // can advance any durable navigation version.
+        const [viewerLocal, nativeStacks] = await Promise.all([
+          loadLocalNavigationQueryIndex({ ...params, includeStacks: false, signal }),
+          loadLocalNavigationQueryIndex({
+            ...params,
+            viewer: undefined,
+            includeStacks: true,
+            stackLeaseScope: params.viewer.source,
+            signal,
+          }),
+        ]);
+        signal.throwIfAborted();
+        if (!nativeStacks.stacks?.length) return viewerLocal;
+        const nativeRows = navigationQuerySnapshotSharedThreads(viewerLocal);
+        const pins = nativeRows && viewerLocal.threads !== nativeRows ? viewerLocal.threads.slice(nativeRows.length) : [];
+        const share = nativeRows && viewerLocal.observedAt !== undefined
+          && nativeStacks.observedAt === viewerLocal.observedAt
+          && nativeStacks.threads.length === nativeRows.length
+          && pins.every((thread) => thread.federation);
+        let threads: NavigationThreadSummary[];
+        if (share) {
+          threads = pins.length ? [...nativeStacks.threads, ...pins] : nativeStacks.threads;
+        } else {
+          const stackThreadsByKey = new Map<string, NavigationThreadSummary>();
+          for (const thread of nativeStacks.threads) {
+            if (!thread.federation && (thread.stackMemberships?.length || thread.stackLeadPrKey)) {
+              stackThreadsByKey.set(buildThreadIdentityKey(thread.source, thread.id), thread);
+            }
+          }
+          threads = viewerLocal.threads.map((thread) => {
+            if (thread.federation) return thread;
+            const stacked = stackThreadsByKey.get(buildThreadIdentityKey(thread.source, thread.id));
+            if (!stacked) return thread;
+            return {
+              ...thread,
+              ...(stacked.stackMemberships ? { stackMemberships: stacked.stackMemberships } : {}),
+              ...(stacked.stackLeadPrKey ? { stackLeadPrKey: stacked.stackLeadPrKey } : {}),
+            };
+          });
+        }
+        return createNavigationQuerySnapshot({
+          ...viewerLocal,
+          stacks: nativeStacks.stacks,
+          threads,
+        }, undefined, viewerLocal, previous());
+      }
       // Taken before reading: a change during the read makes its result stale.
       const epoch = backend === "all" && !params.requireVerifiedDirectories ? stackInputEpoch(registry)?.value : undefined;
-      // Share the same membership and viewer projection with stack-free queries.
-      const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, signal });
+      // Share the same membership with stack-free queries.
+      const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, stackLeaseScope: undefined, signal });
       const projected = await projectNavigationIndexStacks(local, registry, version, signal, previous);
       // Owner and viewer leases project the same native stacks, so either can
       // answer a later stack detail read. A slower read that started before
@@ -261,7 +332,9 @@ export async function loadLocalNavigationQueryIndex(params: {
     // listings for a boundary before it tells listeners, so this listing
     // reflects every boundary observed before this value.
     const observedAt = nextNavigationObservation();
-    const visibilitySourceVersion = publishesSidebar ? overlayStore.readNavigationSourceVersion?.() : undefined;
+    const visibilitySourceVersion = publishesSidebar
+      ? overlayStore.readOwnerNavigationSourceVersion?.() ?? overlayStore.readNavigationSourceVersion?.()
+      : undefined;
     const directoryScopeCheckpoint = publishesSidebar ? registry.navigationDirectoryScope?.checkpoint() : undefined;
     if (publishesSidebar) latestVisibilityScanByRegistry.set(registry, observedAt);
     const index = { ...await buildLocalNavigationQueryIndex({ ...params, registry, signal, checkpoint }), observedAt };
@@ -274,7 +347,7 @@ export async function loadLocalNavigationQueryIndex(params: {
     if (publishesSidebar
       && latestVisibilityScanByRegistry.get(registry) === observedAt
       && !navigationChanged
-      && visibilitySourceVersion === overlayStore.readNavigationSourceVersion?.()) {
+      && visibilitySourceVersion === (overlayStore.readOwnerNavigationSourceVersion?.() ?? overlayStore.readNavigationSourceVersion?.())) {
       if (directoryScopeCheckpoint !== undefined) registry.navigationDirectoryScope.remember(index, directoryScopeCheckpoint);
       if (index.coverage?.state === "complete") registry.rememberNavigationVisibilityIndex?.(index);
     }
@@ -466,7 +539,7 @@ async function readActiveNavigationStacks(
     }
   });
   let unsubscribe: (() => void) | undefined = registry.onEvent?.((event) => {
-    if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) release();
+    if (stackIndexEventInvalidates(event.notification)) release();
   });
   read.signal.addEventListener("abort", release, { once: true });
   activeStackReads.set(key, read);
