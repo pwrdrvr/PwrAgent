@@ -14,10 +14,12 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import { reviewedMergeBase } from "./review-range.mjs";
-import fs from "node:fs";
-import path from "node:path";
+import { checkoutReviewSnapshot, initReviewWorkspace } from "./review-workspace.mjs";
 import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
 import type {
   AgentEvent,
@@ -128,6 +130,8 @@ async function ensureCommitPresent(
   remote: string,
   prNumber: number,
   sha: string,
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
 ): Promise<void> {
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("Expected a pinned commit SHA.");
   if (hasCommit(repoCwd, sha)) return;
@@ -135,16 +139,17 @@ async function ensureCommitPresent(
     await runFile(
       "git",
       ["-C", repoCwd, "fetch", "--no-tags", "--no-write-fetch-head", remote, `refs/pull/${prNumber}/head`],
-      { timeout: 60_000 },
+      { timeout: 60_000, env, signal },
     );
   } catch {
     // try direct SHA fetch fallback
+    signal.throwIfAborted();
   }
   if (!hasCommit(repoCwd, sha)) {
     await runFile(
       "git",
       ["-C", repoCwd, "fetch", "--no-tags", "--no-write-fetch-head", remote, sha],
-      { timeout: 60_000 },
+      { timeout: 60_000, env, signal },
     );
   }
   if (!hasCommit(repoCwd, sha)) {
@@ -234,10 +239,22 @@ async function main() {
   let stopReason: string | undefined;
 
   const resultsDir = path.join(outDir, "results");
+  const workspacesDir = path.join(outDir, "workspaces");
   const pwragentHome = path.join(outDir, "pwragent-home");
   fs.mkdirSync(resultsDir, { recursive: true });
+  fs.mkdirSync(workspacesDir, { recursive: true });
   fs.mkdirSync(pwragentHome, { recursive: true });
 
+  // Keep the host's ordinary authentication and URL rewrites for missing
+  // source objects. Review processes should only see their own Git checkout.
+  const sourceGitEnv = { ...process.env };
+  const localGitVariables = execFileSync("git", ["rev-parse", "--local-env-vars"], { encoding: "utf8" });
+  for (const key of localGitVariables.trim().split(/\s+/)) {
+    delete sourceGitEnv[key];
+    delete process.env[key];
+  }
+  process.env.GIT_CONFIG_NOSYSTEM = "1";
+  process.env.GIT_CONFIG_GLOBAL = os.devNull;
   process.env.PWRAGENT_HOME = pwragentHome;
   process.env.PWRAGENT_PROFILE = "eval";
   process.env.PWRAGENT_DISABLE_MESSAGING = "1";
@@ -349,9 +366,10 @@ async function main() {
         refreshedAgy = true;
         console.log("[eval] Hydrating acp:antigravity model catalog via warmup session...");
         try {
+          const cwd = await initReviewWorkspace(workspacesDir, "catalog", undefined);
           await registry.startThread({
             backend: "acp:antigravity",
-            cwd: repoCwd,
+            cwd,
             executionMode,
           });
         } catch (err) {
@@ -504,7 +522,10 @@ async function main() {
       const startedAt = Date.now();
       const elapsed = () => Date.now() - startedAt;
       const remaining = () => timeoutMs - elapsed();
+      const setupAbort = new AbortController();
+      const { signal } = setupAbort;
       let mergeBaseCommit: string | undefined;
+      let workspacePath: string | undefined;
       let key: string | undefined;
       let waiter: Waiter | undefined;
       let started: StartReviewResponse | undefined;
@@ -512,15 +533,21 @@ async function main() {
       const timedOut = (stage: string): Outcome => ({ status: "timeout", error: `Timed out during ${stage} after ${timeoutMs}ms` });
       try {
         const setup = await beforeDeadline((async () => {
-          await ensureCommitPresent(repoCwd, remote, prNum, c.baseline.baseCommit);
-          await ensureCommitPresent(repoCwd, remote, prNum, c.baseline.headCommit);
+          await ensureCommitPresent(repoCwd, remote, prNum, c.baseline.baseCommit, sourceGitEnv, signal);
+          await ensureCommitPresent(repoCwd, remote, prNum, c.baseline.headCommit, sourceGitEnv, signal);
           const mergeBase = reviewedMergeBase(repoCwd, c.baseline.baseCommit, c.baseline.headCommit);
+          const cwd = await checkoutReviewSnapshot({
+            source: repoCwd, parent: workspacesDir, name: `${c.id}--${arm}`,
+            base: c.baseline.baseCommit, head: c.baseline.headCommit, mergeBase, signal,
+          });
+          signal.throwIfAborted();
           const parent = await registry.startThread({
-            backend, cwd: repoCwd, executionMode, model, mcpProviderServersEnabled: false, mcpConnectionIds: [],
+            backend, cwd, executionMode, model, mcpProviderServersEnabled: false, mcpConnectionIds: [],
             ...(reasoningEffort ? { reasoningEffort } : {}),
           });
           const prUrl =
             c.baseline.prUrl ?? `https://github.com/pwrdrvr/PwrAgent/pull/${prNum}`;
+          signal.throwIfAborted();
           await getDesktopOverlayStore().setThreadPullRequests({
             backend,
             threadId: parent.threadId,
@@ -537,21 +564,23 @@ async function main() {
                 baseSha: c.baseline.baseCommit,
                 headSha: c.baseline.headCommit,
                 source: "branch",
-                linkedDirectoryPaths: [repoCwd],
+                linkedDirectoryPaths: [cwd],
               } as never,
             ],
             fetchedAt: Date.now(),
           });
 
-          return { parent, prUrl, mergeBase };
+          return { parent, prUrl, mergeBase, cwd };
         })(), remaining());
         if (setup === deadlineExceeded) {
+          setupAbort.abort();
           outcome = timedOut("cell setup");
         } else if (stopReason) {
           outcome = { status: "cancelled", error: stopReason };
         } else {
-          const { parent, prUrl, mergeBase } = setup;
+          const { parent, prUrl, mergeBase, cwd } = setup;
           mergeBaseCommit = mergeBase;
+          workspacePath = cwd;
           key = `${backend}:${parent.threadId}`;
           let resolve!: Waiter["resolve"];
           const terminal = new Promise<Outcome>((done) => { resolve = done; });
@@ -563,7 +592,7 @@ async function main() {
             reviewBackend: backend,
             threadId: parent.threadId,
             runMode: "pwragent-sub-agent",
-            cwd: repoCwd,
+            cwd,
             model,
             ...(reasoningEffort ? { reasoningEffort } : {}),
             target: {
@@ -633,7 +662,7 @@ async function main() {
       const record = {
         identity,
         caseId: c.id, prNumber: prNum, arm, backend, model,
-        baseCommit: c.baseline.baseCommit, headCommit: c.baseline.headCommit, mergeBaseCommit,
+        baseCommit: c.baseline.baseCommit, headCommit: c.baseline.headCommit, mergeBaseCommit, workspacePath,
         reasoningEffort: reasoningEffort ?? null,
         status: outcome.status, error: outcome.error ?? null,
         elapsedSec: Math.round(elapsed() / 1000),

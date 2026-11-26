@@ -38,14 +38,17 @@ const registryStub = `
       launchpadOptions: { models: [{ id: scenario === "neon" ? "gemini-4-neon" : "gpt-6.2-sol" }] } }] }),
     onEvent: (callback) => { listener = callback; return () => {}; },
     startThread: async (options) => {
-      audit({ parent: ++parents, mode: options.executionMode });
+      audit({
+        parent: ++parents, mode: options.executionMode, cwd: options.cwd,
+        systemConfig: process.env.GIT_CONFIG_NOSYSTEM, globalConfig: process.env.GIT_CONFIG_GLOBAL,
+      });
       if (scenario === "setup" && parents === 1) throw Error("setup rejected");
       return { threadId: String(parents) };
     },
-    startReview: async ({ threadId }, _trusted, _attribution, access) => {
+    startReview: async ({ threadId, cwd, target }, _trusted, _attribution, access) => {
       const turnId = "turn-" + threadId;
       const reviewThreadId = "child-" + threadId;
-      audit({ start: turnId, access });
+      audit({ start: turnId, access, cwd, snapshot: target.snapshot });
       live = { backend, threadId, turnId, reviewThreadId };
       if (scenario === "start-timeout") return new Promise(() => {});
       if (scenario === "approvals") {
@@ -74,10 +77,12 @@ const registryStub = `
   export const isAppStateInitialized = () => false;
   export const disposeAppState = () => {};
   export const issueProviderDiscoveryPermit = () => {};
-  export const createHeadlessOwnerHostServices = (options) => ({ runtimePolicy: options.runtimePolicy ?? {} });
+  export const createHeadlessOwnerHostServices = (options) => ({
+    runtimePolicy: options.runtimePolicy ?? {}, appRoot: options.runtime.appRoot,
+  });
   export const createOutpostRuntimePolicy = () => ({});
-  export const startOwnerServices = async ({ runtimePolicy }) => {
-    audit({ policy: runtimePolicy }); return { prewarm() {}, registry };
+  export const startOwnerServices = async ({ runtimePolicy, appRoot }) => {
+    audit({ policy: runtimePolicy, appRoot }); return { prewarm() {}, registry };
   };
   export const prepareOwnerShutdown = () => {};
   export const disposeOwnerServices = async () => { audit({ shutdown: true }); };
@@ -101,10 +106,19 @@ test("matrix ownership, permissions, setup isolation and resume identity", async
     "-c", "commit.gpgsign=false", ...args,
   ], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
   git("init", "-q");
-  git("commit", "-qm", "base", "--allow-empty");
+  fs.writeFileSync(path.join(tmp, "fixture.txt"), "common\n");
+  git("add", "fixture.txt");
+  git("commit", "-qm", "common");
+  const mergeBaseCommit = git("rev-parse", "HEAD");
+  fs.writeFileSync(path.join(tmp, "fixture.txt"), "base-only\n");
+  git("commit", "-qam", "base");
   const baseCommit = git("rev-parse", "HEAD");
-  git("commit", "-qm", "head", "--allow-empty");
+  git("switch", "--detach", mergeBaseCommit);
+  fs.writeFileSync(path.join(tmp, "fixture.txt"), "reviewed-head\n");
+  git("commit", "-qam", "head");
   const headCommit = git("rev-parse", "HEAD");
+  const candidate = path.join(tmp, "candidate");
+  git("worktree", "add", "--detach", candidate, baseCommit);
   const cohort = path.join(tmp, "cohort.json");
   const cases = [1, 2].map((pr) => ({ id: `private-case-${pr}`, pr, baseline: { baseCommit, headCommit } }));
   const run = (scenario, { blind = false, extra = [], out = scenario, arm = "codex" } = {}) => {
@@ -113,11 +127,11 @@ test("matrix ownership, permissions, setup isolation and resume identity", async
     fs.writeFileSync(audit, "");
     const resultDir = path.join(tmp, out);
     const child = spawnSync(process.execPath, [
-      bundle, "--repo", tmp, "--cohort", cohort, "--out", resultDir, "--arms", arm,
-      "--concurrency", "1", "--timeout-ms", "180", ...extra,
+      bundle, "--repo", candidate, "--cohort", cohort, "--out", resultDir, "--arms", arm,
+      "--concurrency", "1", "--timeout-ms", "750", ...extra,
     ], {
       env: { ...process.env, MATRIX_TEST_SCENARIO: scenario, MATRIX_TEST_AUDIT: audit },
-      encoding: "utf8", timeout: 2800,
+      encoding: "utf8", timeout: 5000,
     });
     return {
       ...child,
@@ -125,6 +139,38 @@ test("matrix ownership, permissions, setup isolation and resume identity", async
       cell: (n) => JSON.parse(fs.readFileSync(path.join(resultDir, "results", `private-case-${n}--${arm}.json`))),
     };
   };
+
+  await t.test("Default Access reviews use independent Git snapshots when the candidate is a linked worktree", () => {
+    const result = run("neon", { arm: "neon", out: "linked-worktree" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.logs[0].appRoot, path.join(candidate, "apps/desktop"));
+    assert.ok(fs.statSync(path.join(candidate, ".git")).isFile());
+    const workspaces = new Set();
+    for (const index of [1, 2]) {
+      const cell = result.cell(index);
+      const parent = result.logs.find((row) => row.parent === index);
+      const review = result.logs.find((row) => row.start === `turn-${index}`);
+      // Each workspace carries the whole reviewed range under its own .git.
+      assert.equal(cell.status, "completed");
+      assert.notEqual(parent.cwd, candidate);
+      assert.equal(parent.cwd, review.cwd);
+      assert.equal(cell.workspacePath, parent.cwd);
+      assert.equal(parent.systemConfig, "1");
+      assert.equal(parent.globalConfig, os.devNull);
+      assert.ok(fs.statSync(path.join(parent.cwd, ".git")).isDirectory());
+      assert.equal(git("-C", parent.cwd, "rev-parse", "--git-common-dir"), ".git");
+      assert.equal(fs.existsSync(path.join(parent.cwd, ".git/objects/info/alternates")), false);
+      assert.equal(git("-C", parent.cwd, "remote", "get-url", "origin"), "https://github.com/pwrdrvr/PwrAgent.git");
+      assert.equal(git("-C", parent.cwd, "rev-parse", "HEAD"), headCommit);
+      assert.equal(git("-C", parent.cwd, "merge-base", baseCommit, headCommit), mergeBaseCommit);
+      assert.equal(git("-C", parent.cwd, "diff", mergeBaseCommit, headCommit), git("diff", mergeBaseCommit, headCommit));
+      assert.equal(review.snapshot.mergeBaseCommit, mergeBaseCommit);
+      assert.equal(fs.readFileSync(path.join(parent.cwd, "fixture.txt"), "utf8"), "reviewed-head\n");
+      workspaces.add(parent.cwd);
+    }
+    assert.equal(workspaces.size, 2);
+    assert.equal(fs.readFileSync(path.join(candidate, "fixture.txt"), "utf8"), "base-only\n");
+  });
 
   await t.test("default read-only access, explicit Full Access, and no blind case metadata", () => {
     const blind = run("clean", { blind: true });

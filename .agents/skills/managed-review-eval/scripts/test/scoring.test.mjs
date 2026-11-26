@@ -80,6 +80,24 @@ test("precision evidence is from Git's reviewed range and includes the finding i
   assert.doesNotMatch(item.diff, /base_only_text/);
 });
 
+test("all scoring inputs use the recorded reviewer workspace for absolute finding paths", (t) => {
+  const f = fixture(t);
+  const workspacePath = path.join(f.tmp, "matrix-run", "workspaces", "fixture--codex");
+  const record = read(f.cell);
+  // Archived results can be scored after the reviewer workspace is removed.
+  record.workspacePath = workspacePath;
+  record.findings[0].code_location.absolute_file_path = path.join(workspacePath, "example.txt");
+  write(f.cell, record);
+  const result = f.prepare();
+  assert.equal(result.status, 0, result.stderr);
+  const manifest = read(path.join(f.scoring, "chunks-manifest.json"));
+  const item = read(manifest.precision[0].file)[0];
+  assert.equal(item.finding.loc, "example.txt:120");
+  assert.match(item.diff, /\+line_120 /);
+  assert.match(read(manifest.recall[0].file)[0].candidate_findings, /example\.txt:120/);
+  assert.match(read(manifest.holistic[0].file)[1].findings, /example\.txt:120/);
+});
+
 test("holistic inputs do not identify the baseline or include candidate-only fields", (t) => {
   const f = fixture(t);
   const result = f.prepare();

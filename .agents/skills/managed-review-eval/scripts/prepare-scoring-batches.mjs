@@ -50,17 +50,21 @@ const definitionSha256 = createHash("sha256").update(fs.readFileSync(definitions
 
 const repoRoot = fs.realpathSync(repoCwd);
 
-function relPath(value) {
-  if (!value) return "";
-  const normalized = value.replace(/\\/g, "/");
-  const relative = path.isAbsolute(value)
-    ? path.relative(repoCwd, value)
-    : path.win32.isAbsolute(value) ? "" : normalized;
-  const resolved = !relative || relative === ".." || relative.startsWith(`..${path.sep}`)
-    ? (path.isAbsolute(value) ? path.relative(repoRoot, value) : relative)
-    : relative;
-  const portable = path.posix.normalize(resolved.split(path.sep).join("/"));
-  return !resolved || portable === "." || portable === ".." || portable.startsWith("../") ? "" : portable;
+function relPath(value, workspacePath) {
+  if (typeof value !== "string" || !value) return "";
+  let relative = value;
+  if (path.isAbsolute(value)) {
+    const roots = typeof workspacePath === "string" && path.isAbsolute(workspacePath)
+      ? [workspacePath]
+      : [repoCwd, repoRoot];
+    relative = roots.map((root) => path.relative(root, value)).find((candidate) =>
+      candidate && !path.isAbsolute(candidate)
+      && candidate !== ".." && !candidate.startsWith(`..${path.sep}`)) ?? "";
+  } else if (path.win32.isAbsolute(value)) {
+    return "";
+  }
+  const portable = path.posix.normalize(relative.replace(/\\/g, "/"));
+  return !relative || portable === "." || portable === ".." || portable.startsWith("../") ? "" : portable;
 }
 
 function centeredExcerpt(text, center, limit) {
@@ -113,13 +117,15 @@ function ensureCommit(prNumber, sha) {
   }
 }
 
-function getFileDiffExcerpt(baseCommit, headCommit, filePath, startLine, maxChars = 1600) {
-  const rel = relPath(filePath);
+function getFileDiffExcerpt(baseCommit, headCommit, rel, startLine, maxChars = 1600) {
   if (!rel) return "(no file path specified)";
   try {
     const diff = execFileSync(
       "git",
-      ["-C", repoCwd, "diff", "-U3", `${baseCommit}..${headCommit}`, "--", rel],
+      [
+        "-C", repoCwd, "--literal-pathspecs", "diff", "--no-ext-diff", "--no-textconv",
+        "-U3", `${baseCommit}..${headCommit}`, "--", rel,
+      ],
       { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 },
     );
     if (!diff.trim()) {
@@ -144,8 +150,8 @@ function getFileDiffExcerpt(baseCommit, headCommit, filePath, startLine, maxChar
   }
 }
 
-function fmtFindingShort(f, idx) {
-  const file = relPath(f.code_location?.absolute_file_path ?? f.file ?? "");
+function fmtFindingShort(f, idx, workspacePath) {
+  const file = relPath(f.code_location?.absolute_file_path ?? f.file, workspacePath);
   const lr = f.code_location?.line_range;
   const lines = lr
     ? `${lr.start}-${lr.end}`
@@ -187,7 +193,7 @@ for (const c of cohortCases) {
     for (const arm of arms) {
       const res = resultsByArm[arm];
       const candList = res.findings.length
-        ? res.findings.map((f, idx) => fmtFindingShort(f, idx)).join("\n\n")
+        ? res.findings.map((f, idx) => fmtFindingShort(f, idx, res.workspacePath)).join("\n\n")
         : "(Candidate review reported 0 findings.)";
       recallMeta.push({
         index: recallInputs.length,
@@ -231,7 +237,7 @@ for (const c of cohortCases) {
     const res = resultsByArm[arm];
     for (let fi = 0; fi < res.findings.length; fi += 1) {
       const f = res.findings[fi];
-      const fPath = f.code_location?.absolute_file_path ?? "";
+      const fPath = relPath(f.code_location?.absolute_file_path ?? f.file, res.workspacePath);
       const fStart = f.code_location?.line_range?.start ?? null;
       const fEnd = f.code_location?.line_range?.end ?? null;
       const diffExcerpt = getFileDiffExcerpt(
@@ -252,7 +258,7 @@ for (const c of cohortCases) {
         title: f.title,
         priority: f.priority ?? null,
         confidence: f.confidence_score ?? null,
-        file: relPath(fPath),
+        file: fPath,
         startLine: fStart,
         endLine: fEnd,
       });
@@ -261,7 +267,7 @@ for (const c of cohortCases) {
         finding: {
           title: f.title,
           p: f.priority,
-          loc: `${relPath(fPath)}${fStart ? `:${fStart}${fEnd && fEnd !== fStart ? `-${fEnd}` : ""}` : ""}`,
+          loc: `${fPath}${fStart ? `:${fStart}${fEnd && fEnd !== fStart ? `-${fEnd}` : ""}` : ""}`,
           body: (f.body || "").slice(0, 600),
         },
         baseline_findings: baselineSummary,
@@ -272,10 +278,12 @@ for (const c of cohortCases) {
 
   const armsForHolistic = [
     { arm: "baseline", findings: c.baseline.items },
-    ...arms.map((arm) => ({ arm, findings: resultsByArm[arm].findings })),
+    ...arms.map((arm) => ({
+      arm, findings: resultsByArm[arm].findings, workspacePath: resultsByArm[arm].workspacePath,
+    })),
   ];
 
-  for (const { arm, findings } of armsForHolistic) {
+  for (const { arm, findings, workspacePath } of armsForHolistic) {
     holisticMeta.push({
       index: holisticInputs.length,
       caseId: c.id,
@@ -288,7 +296,7 @@ for (const c of cohortCases) {
     holisticInputs.push({
       pr: `PR #${c.pr}: ${c.baseline.prTitle ?? c.id} (${c.baseline.diffFiles} files, +${c.baseline.diffAdds}/-${c.baseline.diffDels})`,
       count: findings.length,
-      findings: findings.map((finding, index) => fmtFindingShort(finding, index).slice(0, 320))
+      findings: findings.map((finding, index) => fmtFindingShort(finding, index, workspacePath).slice(0, 320))
         .join("\n---\n")
         .slice(0, 2800),
     });
