@@ -57,14 +57,20 @@ async function writeCatalog(cwd: string, name: string) {
 
 describe("stack checkout demand", () => {
   it.each([
-    { kind: "attached", worktreeConfig: false },
-    { kind: "detached", worktreeConfig: false },
-    { kind: "attached", worktreeConfig: true },
-    { kind: "detached", worktreeConfig: true },
-  ])("reuses Git's registered inventory for $kind checkouts with worktree config $worktreeConfig", async ({ kind, worktreeConfig }) => {
+    { kind: "attached", worktreeConfig: false, nested: false },
+    { kind: "detached", worktreeConfig: false, nested: false },
+    { kind: "attached", worktreeConfig: true, nested: false },
+    { kind: "detached", worktreeConfig: true, nested: false },
+    { kind: "attached", worktreeConfig: true, nested: true },
+  ])("reuses Git's registered inventory for $kind checkouts with worktree config $worktreeConfig and enclosing checkout $nested", async ({ kind, worktreeConfig, nested }) => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-worktree-inventory-")));
-    const primary = path.join(sandbox, "primary");
+    const fleet = nested ? path.join(sandbox, "outer") : sandbox;
+    const primary = path.join(fleet, "primary");
     try {
+      if (nested) {
+        await mkdir(fleet);
+        initialize(fleet);
+      }
       const home = path.join(sandbox, "home");
       await Promise.all([mkdir(primary), mkdir(home)]);
       vi.stubEnv("HOME", home);
@@ -76,7 +82,7 @@ describe("stack checkout demand", () => {
       await writeCatalog(primary, "registered");
       const worktrees = await Promise.all(Array.from({ length: 7 }, async (_, index) => {
         const branch = `sibling-${index}`;
-        const cwd = path.join(sandbox, branch);
+        const cwd = path.join(fleet, branch);
         if (kind === "detached") git(primary, "worktree", "add", "--detach", cwd);
         else git(primary, "worktree", "add", "-b", branch, cwd);
         const [root, common] = git(cwd, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir").split("\n");

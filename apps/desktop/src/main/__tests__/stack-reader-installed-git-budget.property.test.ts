@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -54,6 +54,47 @@ function row(cwd: string, id: string): NavigationThreadSummary {
 }
 
 describe("StackReader installed-Git and unavailable checkout budgets", () => {
+  it("drops an alias-backed attachment when selected Git rejects changed global config", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-installed-alias-")));
+    restoreGit = isolateProcessGitEnvironment();
+    try {
+      const checkout = path.join(sandbox, "checkout");
+      const alias = path.join(sandbox, "alias");
+      const home = path.join(sandbox, "home");
+      const config = path.join(home, ".gitconfig");
+      await Promise.all([mkdir(checkout), mkdir(home)]);
+      initialize(checkout);
+      await writeCatalog(checkout, "tracked");
+      await symlink(checkout, alias, "junction");
+      vi.stubEnv("HOME", home);
+      vi.stubEnv("USERPROFILE", home);
+      vi.stubEnv("XDG_CONFIG_HOME", home);
+      await writeFile(config, "[user]\n\tname = Fixture\n");
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      const rows: NavigationThreadSummary[] = [{ ...row(checkout, "tracked"), prs: [{
+        number: 1, provider: "github.com", org: "fixture", repo: "tracked", lifecycleState: "open", state: "passing",
+        url: "https://github.com/fixture/tracked/pull/1", headRefName: "feat", linkedDirectoryPaths: [alias],
+        explicitlyAttached: true,
+      }] }];
+      const reader = new StackReader(() => 0);
+      const layer = async () => (await reader.read(rows, [])).stacks[0]?.layers[0];
+      expect((await layer())?.pullRequest?.number).toBe(1);
+
+      await writeFile(config, "[invalid config\n");
+      await expect(gitExecutable.runGitCommand(alias, ["rev-parse", "--show-toplevel"])).rejects.toMatchObject({ code: 128 });
+      // The catalog can still show the layer, but Git no longer corroborates its attachment.
+      const invalid = await layer();
+      expect(invalid).toMatchObject({ branch: "feat" });
+      expect(invalid?.pullRequest).toBeUndefined();
+
+      await writeFile(config, "[user]\n\tname = Fixture\n");
+      expect((await layer())?.pullRequest?.number).toBe(1);
+    } finally {
+      vi.unstubAllEnvs();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("caches broken .git pointers for background reads while keeping scoped reads live and honoring disk repair", async () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-broken-git-")));
     restoreGit = isolateProcessGitEnvironment();
