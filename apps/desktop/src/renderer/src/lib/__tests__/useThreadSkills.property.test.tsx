@@ -269,7 +269,10 @@ describe("skill picker catalog freshness", () => {
   });
 });
 
-async function checkAntigravityCommandOrdering(commandsArriveFirst: boolean) {
+it.each([
+  { order: "before", commandsArriveFirst: true },
+  { order: "after", commandsArriveFirst: false },
+])("keeps both Antigravity catalogs when commands arrive $order skills", async ({ commandsArriveFirst }) => {
   const thread: NavigationThreadSummary = {
     id: "agy-session", source: "acp:antigravity", title: "Garden release", titleSource: "explicit",
     inbox: { inInbox: false },
@@ -309,14 +312,6 @@ async function checkAntigravityCommandOrdering(commandsArriveFirst: boolean) {
   } finally {
     unmount();
   }
-}
-
-it("keeps the filesystem catalog when an Antigravity command update arrives afterward", async () => {
-  await checkAntigravityCommandOrdering(false);
-});
-
-it("keeps both Antigravity catalogs regardless of command update and filesystem response order", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), checkAntigravityCommandOrdering), { numRuns: 8 });
 });
 
 it("loads Antigravity skills while an unopened launchpad's slash-command probe is pending", async () => {
@@ -339,8 +334,9 @@ it("loads Antigravity skills while an unopened launchpad's slash-command probe i
   }
 });
 
-it("retries empty Antigravity command lookups on reopen and reuses the first successful result", async () => {
-  await fc.assert(fc.asyncProperty(fc.integer({ min: 1, max: 4 }), async (misses) => {
+it.each([1, 2, 3, 4])(
+  "retries after %i empty Antigravity command lookups and reuses the first successful result",
+  async (misses) => {
     const draft = { ...launchpad(0, false), backend: "acp:antigravity" as const };
     const commands = [{ name: "compact" }];
     let attempts = 0;
@@ -362,12 +358,18 @@ it("retries empty Antigravity command lookups on reopen and reuses the first suc
     } finally {
       unmount();
     }
-  }), { numRuns: 8 });
-});
+  },
+);
 
-it("attributes only unique Antigravity slash skill matches, regardless of catalog arrival order", async () => {
-  await fc.assert(fc.asyncProperty(fc.boolean(), fc.boolean(), async (commandsFirst, peer) => {
-    const draft = { ...launchpad(0, peer), backend: "acp:antigravity" as const };
+it.each([
+  ["commands", "local"],
+  ["commands", "remote"],
+  ["skills", "local"],
+  ["skills", "remote"],
+] as const)(
+  "attributes only unique Antigravity slash skill matches with %s first on a %s launchpad",
+  async (first, owner) => {
+    const draft = { ...launchpad(0, owner === "remote"), backend: "acp:antigravity" as const };
     const backend = draft.backend;
     type Catalog = Awaited<ReturnType<NonNullable<DesktopApi["listSkills"]>>>;
     const commands = Promise.withResolvers<Catalog>();
@@ -390,7 +392,7 @@ it("attributes only unique Antigravity slash skill matches, regardless of catalo
           commands.resolve({ backend, fetchedAt: 1, data: [{ commands: slashRows, skills: [] }] });
         });
       };
-      if (commandsFirst) {
+      if (first === "commands") {
         await resolveCommands();
         expect(result.current.providerCommands).toHaveLength(slashRows.length);
         expect(result.current.providerCommands.every((command) => !("skill" in command))).toBe(true);
@@ -408,7 +410,7 @@ it("attributes only unique Antigravity slash skill matches, regardless of catalo
           },
         ] }] });
       });
-      if (!commandsFirst) await resolveCommands();
+      if (first === "skills") await resolveCommands();
       expect(result.current.providerCommands.find(({ name }) => name === "/release")).toMatchObject({
         name: "/release",
         skill: { path: releasePath, origin: { kind: "project", label: "project-0" } },
@@ -422,8 +424,8 @@ it("attributes only unique Antigravity slash skill matches, regardless of catalo
     } finally {
       unmount();
     }
-  }), { examples: [[true, false], [false, true]], numRuns: 6 });
-});
+  },
+);
 
 it("leaves slash provenance unknown when the matching skill is available only as a mention", async () => {
   const draft = { ...launchpad(0, false), backend: "acp:antigravity" as const };
