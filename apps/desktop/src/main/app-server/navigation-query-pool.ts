@@ -113,7 +113,8 @@ export class NavigationQueryPool {
       ownerKey: ownerKey(params.request.federationTarget),
       // Mention reads omit stack projection even when their query matches a full navigation read.
       key: JSON.stringify(["query", params.scopeKey ?? "renderer", params.request.federationTarget ?? { scope: "local" },
-        params.request.consumer === "mentions", navigationQueryKey(params.request)]),
+        params.request.consumer === "mentions", params.request.query.kind === "group-members" && params.request.readReason === "pins",
+        navigationQueryKey(params.request)]),
       operationKey: JSON.stringify([params.request.cursor ?? null, params.request.anchor ?? null,
         params.request.completeBaselineRevision ?? null, params.request.retainedRange ?? null, params.request.pageSize ?? 100]),
       deadlineAt: params.request.deadlineAt,

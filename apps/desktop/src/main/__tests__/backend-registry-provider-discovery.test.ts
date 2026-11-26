@@ -2584,6 +2584,41 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  it("serves every retained navigation row after a bounded startup prewarm", async () => {
+    const provider = createDeferred<void>();
+    const acpDiscovery = createDeferred<void>();
+    const codexClient = new MockBackendClient({ listThreadsDelay: provider.promise });
+    const threads = Array.from({ length: 70 }, (_, index) => ({
+      id: `saved-${index}`, source: "codex" as const, title: `Saved ${index}`,
+      titleSource: "explicit" as const, linkedDirectories: [], updatedAt: 100 - index,
+    }));
+    const registry = createDesktopBackendRegistry({
+      codexClient, overlayStore: createOverlayStoreMock(), discoverLocalAcpAgents: async () => {
+        await acpDiscovery.promise;
+        return [];
+      },
+      providerThreadSnapshotStore: {
+        list: () => [{ backend: "codex", observedAt: 100, threads }], replace: vi.fn(),
+      },
+    });
+    await registry.listThreads({ callerReason: "startup-prewarm", limit: 50, maxPages: 1 });
+    expect(registry.readStartupNavigationThreads()).toBeUndefined();
+    registry.markStartupProviderRefreshPending();
+    const refresh = registry.refreshProvidersAtStartup(issueProviderDiscoveryPermit("startup"));
+    const sidebar = registry.readStartupNavigationThreads();
+    try {
+      // A display read must finish with complete saved membership while a live
+      // provider read cannot make progress.
+      await vi.waitFor(() => expect(codexClient.listThreadsCallCount).toBe(1));
+      expect((await sidebar)?.map(({ id }) => id)).toEqual(threads.map(({ id }) => id));
+    } finally {
+      provider.resolve();
+      acpDiscovery.resolve();
+      await Promise.allSettled([refresh, sidebar]);
+      await registry.close();
+    }
+  });
+
   it.each(["before", "after"] as const)("keeps the live inventory when startup publishes %s the first live read", async (publication) => {
     const listed = createDeferred<void>();
     const publish = createDeferred<void>();
