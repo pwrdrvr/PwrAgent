@@ -71,6 +71,19 @@ describe("AcpAvailableCommandsStore", () => {
     });
   });
 
+  it("retains where a repository's Antigravity commands were observed", () => {
+    const record = {
+      backendId: "acp:antigravity" as const,
+      repositoryPath: "/repo",
+      workspaceCwd: "/worktree",
+      commands: [{ name: "release" }],
+      observedAt: 1234,
+    };
+    store.upsert(record);
+
+    expect(store.get(record.backendId, record.repositoryPath)).toEqual(record);
+  });
+
   it("prunes rows for repositories nothing has re-observed", () => {
     const now = Date.UTC(2026, 7, 8);
     const retentionMs = 90 * 24 * 60 * 60 * 1000;

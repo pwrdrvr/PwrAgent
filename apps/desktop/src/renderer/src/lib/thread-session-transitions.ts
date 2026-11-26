@@ -1,9 +1,20 @@
 import type {
+  AppServerNotification,
   AppServerPendingRequestNotification,
   AppServerThreadTurnMetadata,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type { PendingQuestionnaireState } from "../features/thread-detail/questionnaire";
 import type { PendingMcpInteractionState } from "../features/thread-detail/mcp-elicitation";
+
+export type ThreadAutoCompactionStatus = Extract<
+  AppServerNotification,
+  { method: "thread/autoCompaction/updated" }
+>["params"];
+
+/** Phases where PwrAgent's own compaction is open. */
+export function isAutoCompactionActive(status: ThreadAutoCompactionStatus | undefined): boolean {
+  return status?.phase === "steering" || status?.phase === "starting" || status?.phase === "compacting";
+}
 
 export type ThreadLiveLifecycleVersion = { revision: number; turnRevision: number };
 export type ThreadHydrationAttempt = {

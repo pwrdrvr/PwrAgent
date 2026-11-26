@@ -1,6 +1,13 @@
 import { expect, it } from "vitest";
 import { usageChartStep, usageRollupStep } from "@pwragent/shared/contracts/usage-activity";
-import { usageBucketBounds, usageBucketLabel, usageCompletionBuckets, usageSpendStrip } from "./usage-activity-presentation";
+import {
+  describeLimitPace,
+  usageBucketBounds,
+  usageBucketLabel,
+  usageCompletionBuckets,
+  usageSpendStrip,
+} from "./usage-activity-presentation";
+import { buildLimitAccounts, sinceResetSeries } from "./usage-limits";
 import { usageFixture } from "./usage-activity-fixture";
 
 const MINUTE = 60_000;
@@ -79,4 +86,23 @@ it("names what each bucket stacks, with the turns and threads behind every segme
     { key: "kimi", cost: 20, rows: 1, threads: 1, owners: ["Local"] },
   ]);
   expect(first.members.reduce((total, member) => total + member.cost, 0)).toBe(first.cost);
+});
+
+it("withholds stale pace descriptions once the reset or projected exhaustion has passed", () => {
+  const start = at(28, 0);
+  const resetAt = start + 5 * HOUR;
+  const [account] = buildLimitAccounts([{
+    owner: "Local",
+    target: { scope: "local" },
+    current: {
+      observedAt: start + HOUR,
+      accountKey: "a",
+      limits: [{ name: "5h", windowKey: "primary", usedPercent: 50, resetAt, windowMinutes: 300 }],
+    },
+  }]);
+  const series = sinceResetSeries(account)!;
+  // Projected 100% is at start + 2h: valid at start + 1h, stale at start + 3h, expired at resetAt.
+  expect(describeLimitPace(series, start + HOUR, true)?.short).toBe(true);
+  expect(describeLimitPace(series, start + 3 * HOUR, true)).toBeUndefined();
+  expect(describeLimitPace(series, resetAt, true)).toBeUndefined();
 });

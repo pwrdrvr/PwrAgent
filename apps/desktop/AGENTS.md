@@ -92,6 +92,8 @@ rollout files, or sqlite databases, even when the protocol returns a path; use
 App Server protocol fields and never bypass `pnpm lint:codex-storage`. Before
 touching a Codex-owned path or the one authorized recovery exception, read
 [docs/codex-data-boundary.md](docs/codex-data-boundary.md#codex-data-boundary).
+Before touching harness credentials or usage probes, read
+[../../docs/harness-and-provider-usage.md](../../docs/harness-and-provider-usage.md).
 
 ## Codex Runtime Safety
 

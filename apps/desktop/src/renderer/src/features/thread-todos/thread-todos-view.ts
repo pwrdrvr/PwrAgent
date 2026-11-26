@@ -59,7 +59,11 @@ export type ThreadTodoResolveOptions = Pick<ResolveThreadTodoRequest, "allowOpen
  * sends in place of a hand-off's prompt. A card that sends its own prompt
  * stays open; the reply's work settles it.
  */
-export type ThreadTodoDoHereOptions = ThreadTodoResolveOptions & { prompt?: string };
+export type ThreadTodoDoHereOptions = ThreadTodoResolveOptions & {
+  prompt?: string;
+  /** True when submitted from a review card's Auto-fix / Fix control. */
+  reviewFix?: boolean;
+};
 
 /** What a card's project menu reads and writes. */
 export type ThreadTodoProjectMenu = {

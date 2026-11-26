@@ -219,6 +219,52 @@ describe("stack checkout demand", () => {
     }
   });
 
+  it("rechecks a PR-less layer binding when its Git checkout alias moves during validation", async () => {
+    const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-binding-move-")));
+    const primary = path.join(root, "z-primary");
+    const topic = path.join(root, "topic");
+    const other = path.join(root, "other");
+    const alias = path.join(root, "a-alias");
+    try {
+      await Promise.all([mkdir(primary), mkdir(other)]);
+      initialize(primary);
+      initialize(other);
+      git(primary, "checkout", "-b", "main");
+      git(primary, "worktree", "add", topic, "topic");
+      await writeCatalog(topic, "shared");
+      await symlink(topic, alias, "junction");
+      expect((await gitCheckout(alias)).root).toBe(topic);
+
+      // The explicit Git selection makes each path supply its own checkout
+      // evidence. The primary sorts last and represents this clone.
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      const rows = [row(alias, "moving"), {
+        ...row(primary, "primary"), prs: [inferredPr(1, "topic", "main", primary)],
+      }];
+      const reader = new StackReader();
+      let moved = false;
+      const interrupted = await reader.read(rows, [], undefined, undefined, new StackReadObservation(), async ({ prs }) => {
+        if (!moved) {
+          await rm(alias);
+          await symlink(other, alias, "junction");
+          moved = true;
+        }
+        return prs;
+      });
+
+      expect(moved).toBe(true);
+      expect((await gitCheckout(alias)).root).toBe(other);
+      // A concurrent read must agree with a fresh read after Git confirms the
+      // alias no longer points to the layer's checked-out branch.
+      const fresh = await new StackReader().read(rows, []);
+      expect(fresh.stacks[0]?.layers[0]).toMatchObject({ branch: "topic", role: "unbound" });
+      expect(interrupted.stacks[0]?.layers[0]).toMatchObject({ branch: "topic", role: "unbound" });
+      expect(interrupted.stacks[0]?.layers[0]?.thread).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("leaves each checkout to Git when a global conditional include can differ across siblings", async () => {
     const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-conditional-config-")));
     const primary = path.join(root, "primary");

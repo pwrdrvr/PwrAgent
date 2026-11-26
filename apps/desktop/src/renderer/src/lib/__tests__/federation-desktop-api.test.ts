@@ -242,4 +242,85 @@ describe("scopeDesktopApiToFederationTarget", () => {
       desktopApi,
     );
   });
+
+  it("scopes thread Research APIs and bus updates to the owner and removes local-only helpers", async () => {
+    let agentListener: ((event: unknown) => void) | undefined;
+    const target = { scope: "remote" as const, instanceId: "owner-mac" };
+    const researchSnapshot = vi.fn(async () => ({ runs: [], writableRunIds: [] }));
+    const researchChanges = vi.fn(async () => ({ runId: "r1", revision: 1, state: {} as never, items: [], writable: true }));
+    const readResearchEvents = vi.fn(async () => ({ runId: "r1", revision: 1, events: [] }));
+    const searchResearch = vi.fn(async () => ({ runId: "r1", revision: 1, total: 0, items: [] }));
+    const readResearchItem = vi.fn(async () => ({ run: {} as never, item: {} as never }));
+    const updateResearchItem = vi.fn(async () => ({ run: {} as never, item: {} as never }));
+    const prepareResearch = vi.fn(async () => ({ intentId: "intent-1" }));
+    const withdrawResearch = vi.fn(async () => {});
+    const updateResearch = vi.fn(async () => ({ runId: "r1", revision: 2, status: "stopped" as const }));
+    const researchHarnessStatus = vi.fn(async () => ({ configured: false, source: "mathos" as const }));
+    const checkResearchHarness = vi.fn(async () => ({ ok: false as const, checkedAt: 1, error: "not configured" }));
+    const startResearchHarness = vi.fn(async () => ({ runId: "r2", revision: 1, status: "running" as const }));
+    const reconcileResearchHarness = vi.fn(async () => ({ runId: "r2", revision: 2, status: "running" as const }));
+    const listMathosSwarms = vi.fn(async () => ({ ok: true as const, swarms: [], sessions: 0, truncated: false }));
+    const submitThreadReply = vi.fn(async () => ({ backend: "codex" as const, threadId: "t1", queueEntryId: "q-1", queueStatus: "started" as const, turnId: "turn-1" }));
+    const onAgentEvent = vi.fn((cb: (event: unknown) => void) => { agentListener = cb; return () => {}; });
+
+    const scoped = scopeDesktopApiToFederationTarget({
+      researchSnapshot, researchChanges, readResearchEvents, searchResearch, readResearchItem, updateResearchItem,
+      prepareResearch, withdrawResearch, updateResearch, researchHarnessStatus, checkResearchHarness,
+      startResearchHarness, reconcileResearchHarness, listMathosSwarms, submitThreadReply,
+      onAgentEvent: onAgentEvent as unknown as DesktopApi["onAgentEvent"],
+      onResearchChanged: vi.fn(() => () => {}),
+      openResearchEvidence: vi.fn(),
+      revealResearchHarnessConfig: vi.fn(),
+      checkResearchHarnessBridge: vi.fn(),
+      pickResearchHarnessBridge: vi.fn(),
+      listMathosTeams: vi.fn(),
+      researchProfileRuns: vi.fn(),
+      openResearchWindow: vi.fn(),
+    } as DesktopApi, target)!;
+
+    await scoped.researchSnapshot!({ backend: "codex", threadId: "t1" });
+    await scoped.researchChanges!({ backend: "codex", threadId: "t1", runId: "r1" });
+    await scoped.readResearchEvents!({ backend: "codex", threadId: "t1", runId: "r1", range: { limit: 10 } });
+    await scoped.searchResearch!({ backend: "codex", threadId: "t1", runId: "r1", query: {} });
+    await scoped.readResearchItem!({ backend: "codex", threadId: "t1", runId: "r1", itemId: "i1" });
+    await scoped.updateResearchItem!({
+      backend: "codex", threadId: "t1", runId: "r1", requestId: "w1",
+      command: { action: "work", itemId: "i1", expectedVersion: 1, state: "claimed", reason: "Check" },
+    });
+    await scoped.prepareResearch!({ backend: "codex", threadId: "t1", objective: "Obj", workers: 2, workspaceMode: "none" });
+    await scoped.withdrawResearch!({ backend: "codex", threadId: "t1" });
+    await scoped.updateResearch!({ backend: "codex", threadId: "t1", runId: "r1", requestId: "u1", command: { action: "stop", reason: "Stop" } });
+    await scoped.researchHarnessStatus!({ backend: "codex", threadId: "t1" });
+    await scoped.checkResearchHarness!({ backend: "codex", threadId: "t1" });
+    await scoped.startResearchHarness!({
+      backend: "codex", threadId: "t1", requestId: "h1", mode: "import",
+      project: "p", session: "s", swarm: "sw", objective: "Import", budgetAcknowledged: false,
+    });
+    await scoped.reconcileResearchHarness!({ backend: "codex", threadId: "t1", runId: "r2" });
+    await scoped.listMathosSwarms!();
+    await scoped.submitThreadReply!({ backend: "codex", threadId: "t1", input: [{ type: "text", text: "Go" }] });
+
+    for (const fn of [
+      researchSnapshot, researchChanges, readResearchEvents, searchResearch, readResearchItem, updateResearchItem,
+      prepareResearch, withdrawResearch, updateResearch, researchHarnessStatus, checkResearchHarness,
+      startResearchHarness, reconcileResearchHarness, listMathosSwarms, submitThreadReply,
+    ]) {
+      expect(fn).toHaveBeenCalledWith(expect.objectContaining({ federationTarget: target }));
+    }
+
+    const received: unknown[] = [];
+    scoped.onResearchChanged!((change) => received.push(change));
+    agentListener!({ backend: "codex", notification: { method: "thread/research/changed", params: { backend: "codex", threadId: "t1", runId: "local", revision: 1 } } });
+    agentListener!({ backend: "codex", federationTarget: { scope: "remote", instanceId: "other" }, notification: { method: "thread/research/changed", params: { backend: "codex", threadId: "t1", runId: "other", revision: 1 } } });
+    agentListener!({ backend: "codex", federationTarget: target, notification: { method: "thread/research/changed", params: { backend: "codex", threadId: "t1", runId: "r1", revision: 3 } } });
+    expect(received).toEqual([{ backend: "codex", threadId: "t1", runId: "r1", revision: 3 }]);
+
+    expect(scoped.openResearchEvidence).toBeUndefined();
+    expect(scoped.revealResearchHarnessConfig).toBeUndefined();
+    expect(scoped.checkResearchHarnessBridge).toBeUndefined();
+    expect(scoped.pickResearchHarnessBridge).toBeUndefined();
+    expect(scoped.listMathosTeams).toBeUndefined();
+    expect(scoped.researchProfileRuns).toBeUndefined();
+    expect(scoped.openResearchWindow).toBeUndefined();
+  });
 });

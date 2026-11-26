@@ -462,11 +462,18 @@ export class NavigationWindowQueries {
     }
     if (changed) this.trimRetained(this.activePageBytes);
     if (changed) navigationListingDiagnostics.record({ ...this.diagnostic, phase: "demand", count: added.length });
-    if (changed || admissionError !== this.snapshot.admissionError) {
+    let startedReads = false;
+    if (this.visible) {
+      for (const resource of added) {
+        const read = this.read(resource, false, undefined, false, "demand", false);
+        startedReads ||= Boolean(resource.pending);
+        void read;
+      }
+    }
+    if (changed || startedReads || admissionError !== this.snapshot.admissionError) {
       this.snapshot = { ...this.snapshot, admissionError };
       this.publish();
     }
-    if (this.visible) for (const resource of added) void this.read(resource, false, undefined, false, "demand");
   }
 
   setVisible(visible: boolean): void {
@@ -485,7 +492,7 @@ export class NavigationWindowQueries {
         if (!next.resumeExpansion) budget = this.armResume(next, budget);
         this.resources.set(resource.value.id, next);
         next.diagnosticCause = "visibility";
-        void this.read(next, false);
+        void this.read(next, false, undefined, false, undefined, false);
       }
     }
     this.publish();

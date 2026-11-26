@@ -33,6 +33,7 @@ import type {
 } from "@pwragent/shared/pending-request-response";
 import type {
   NavigationThreadSummary,
+  ThreadLaunchedThread,
   ThreadMessagingBindingTransition,
   ThreadPermissionTransition,
   ThreadQuestionnaireActivity,
@@ -41,7 +42,10 @@ import type {
   ThreadSubAgentSummary,
 } from "@pwragent/shared/contracts/navigation";
 import type { ForgeApprovalRememberOptionId } from "@pwragent/shared/contracts/forge-agent-tools";
-import type { ThreadTodoMergeMethod } from "@pwragent/shared/contracts/thread-todos";
+import type {
+  ThreadTodo,
+  ThreadTodoMergeMethod,
+} from "@pwragent/shared/contracts/thread-todos";
 import { anchorTurnUsageEntries } from "@pwragent/shared/thread-usage-display";
 import {
   buildPendingRequestActions,
@@ -52,6 +56,14 @@ import { TranscriptPrContextProvider } from "../pr-status/transcript-pr-context"
 import { injectMessagingBindingTransitions } from "./messaging-binding-transition-entries";
 import { injectPermissionTransitions } from "./permission-transition-entries";
 import { injectQuestionnaireActivities } from "./questionnaire-activity-entries";
+import {
+  injectPreparedLaunchedThreads,
+  isLaunchedTodoEntry,
+  launchedTodoIdFromEntry,
+  prepareLaunchedThreadEntries,
+} from "./launched-todo-entries";
+import { useThreadLinks } from "../../lib/thread-links";
+import { TranscriptLaunchedTodo } from "./TranscriptLaunchedTodo";
 import {
   injectRewindMarkers,
   isRewindMarkerEntry,
@@ -118,6 +130,11 @@ type TranscriptListProps = {
   };
   /** The thread's rewinds, each drawn as a marker where its turns were. */
   rewinds?: ThreadRewindRecord[];
+  /** Completed handoff to-do cards that launched a thread from this thread. */
+  launchedTodos?: readonly ThreadTodo[];
+  /** Child threads launched from this thread via agent tools (`handoff_task`, `create_instance_thread`). */
+  launchedThreads?: readonly ThreadLaunchedThread[];
+  onOpenLaunchedTodoThread?: (todo: ThreadTodo) => void;
   /** Undo for the latest rewind, where its provider kept the removed turns. */
   rewindUndo?: {
     busyId?: string;
@@ -504,7 +521,14 @@ function pendingRequestPrompt(
     typeof request.params.prompt === "string" ? request.params.prompt.trim() : "";
   const reason = typeof request.params.reason === "string" ? request.params.reason.trim() : "";
   if (request.params.acpMcpToolName) {
-    return [prompt || reason, markdownCodeBlock(request.params.acpMcpToolName, "")]
+    const detail =
+      typeof request.params.acpMcpToolDetail === "string"
+        ? request.params.acpMcpToolDetail.trim()
+        : "";
+    const toolBlock = detail
+      ? `${request.params.acpMcpToolName}\n${detail}`
+      : request.params.acpMcpToolName;
+    return [prompt || reason, markdownCodeBlock(toolBlock, "")]
       .filter(Boolean).join("\n\n");
   }
   const command = approvalDisplayCommand(request.params);
@@ -908,6 +932,24 @@ export function TranscriptList(props: TranscriptListProps) {
     [props.pendingRequest],
   );
 
+  const threadLinks = useThreadLinks();
+  const preparedLaunched = useMemo(
+    () =>
+      prepareLaunchedThreadEntries({
+        launchedTodos: props.launchedTodos,
+        launchedThreads: props.launchedThreads,
+        ownerInstanceId: props.threadLinkSource?.instanceId,
+        localInstanceId: threadLinks?.localInstanceId,
+      }),
+    [
+      props.launchedThreads,
+      props.launchedTodos,
+      props.threadLinkSource?.instanceId,
+      threadLinks?.localInstanceId,
+    ],
+  );
+  const launchedRecordById = preparedLaunched.byId;
+
   const transcriptEntries = useMemo(() => {
     const entries = [...props.entries];
     const transientMessageEntries: AppServerThreadMessageEntry[] =
@@ -928,30 +970,41 @@ export function TranscriptList(props: TranscriptListProps) {
       insertPendingEntry(entries, pendingEntry);
     }
     // Pending rows (a pending total included) and synthetic rows (transitions,
-    // questionnaires, turn failures) are placed by time. A row of a turn placed
-    // after that turn's total would leave the total mid-turn, so the rendered
-    // list ends with each total back at the end of its turn.
+    // questionnaires, turn failures, launched child threads) are placed by
+    // time. A row of a turn placed after that turn's total would leave the
+    // total mid-turn, so the rendered list ends with each total back at the
+    // end of its turn.
     return anchorTurnUsageEntries(
-      injectRewindMarkers(
-        injectTurnFailures(
-          injectQuestionnaireActivities(
-            injectMessagingBindingTransitions(
-              injectPermissionTransitions(entries, props.permissionTransitions),
-              props.messagingBindingTransitions,
+      injectPreparedLaunchedThreads(
+        injectRewindMarkers(
+          injectTurnFailures(
+            injectQuestionnaireActivities(
+              injectMessagingBindingTransitions(
+                injectPermissionTransitions(entries, props.permissionTransitions),
+                props.messagingBindingTransitions,
+              ),
+              props.questionnaireActivities,
             ),
-            props.questionnaireActivities,
+            props.turnFailures,
           ),
-          props.turnFailures,
+          props.rewinds,
         ),
-        props.rewinds,
+        preparedLaunched.syntheticEntries,
+        {
+          hasPreviousPage: canLoadOlder,
+          prependAnchorId: props.prependAnchorId,
+        },
       ),
     );
   }, [
+    canLoadOlder,
+    preparedLaunched.syntheticEntries,
     props.entries,
     props.pendingActivityEntry,
     props.pendingProtocolActivityEntries,
     props.pendingUsageActivityEntry,
     pendingAssistantPreview,
+    props.prependAnchorId,
     props.transientMessage,
     props.transientMessages,
     props.pendingPlanEntry,
@@ -1016,29 +1069,47 @@ export function TranscriptList(props: TranscriptListProps) {
     () => (directoryPathsKey ? directoryPathsKey.split("\u0000") : undefined),
     [directoryPathsKey],
   );
-  const transcriptRenderItems = useMemo(
-    () =>
-      buildTranscriptRenderItems({
-        entries: transcriptEntries,
-        backend: props.parentThreadBackend,
-        activeTurnId: props.activeTurnId,
-        activeTurnStartedAt: props.activeTurnStartedAt,
-        activeMessageId:
-          props.transientMessage?.id ?? props.pendingAssistantMessage?.id,
-        alwaysVisibleEntryIds: alwaysVisibleTransientMessageIds,
-        now: renderNow,
-      }),
-    [
-      props.activeTurnId,
-      props.activeTurnStartedAt,
-      props.parentThreadBackend,
-      props.pendingAssistantMessage?.id,
-      props.transientMessage?.id,
-      alwaysVisibleTransientMessageIds,
-      renderNow,
-      transcriptEntries,
-    ]
-  );
+  const previousWorkGroupEntriesRef = useRef<Map<string, AppServerThreadEntry[]>>(new Map());
+  const transcriptRenderItems = useMemo(() => {
+    const items = buildTranscriptRenderItems({
+      entries: transcriptEntries,
+      backend: props.parentThreadBackend,
+      activeTurnId: props.activeTurnId,
+      activeTurnStartedAt: props.activeTurnStartedAt,
+      activeMessageId:
+        props.transientMessage?.id ?? props.pendingAssistantMessage?.id,
+      alwaysVisibleEntryIds: alwaysVisibleTransientMessageIds,
+      now: renderNow,
+    });
+    const prevById = previousWorkGroupEntriesRef.current;
+    const nextById = new Map<string, AppServerThreadEntry[]>();
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i]!;
+      if (item.type !== "workPhaseGroup") continue;
+      const prevEntries = prevById.get(item.id);
+      if (
+        prevEntries
+        && prevEntries.length === item.entries.length
+        && prevEntries.every((entry, idx) => entry === item.entries[idx])
+      ) {
+        items[i] = { ...item, entries: prevEntries };
+        nextById.set(item.id, prevEntries);
+      } else {
+        nextById.set(item.id, item.entries);
+      }
+    }
+    previousWorkGroupEntriesRef.current = nextById;
+    return items;
+  }, [
+    props.activeTurnId,
+    props.activeTurnStartedAt,
+    props.parentThreadBackend,
+    props.pendingAssistantMessage?.id,
+    props.transientMessage?.id,
+    alwaysVisibleTransientMessageIds,
+    renderNow,
+    transcriptEntries,
+  ]);
   const visibleItemCount =
     transcriptEntries.length +
     (props.pendingStatusText || props.runningTurnUsageText ? 1 : 0) +
@@ -1088,7 +1159,14 @@ export function TranscriptList(props: TranscriptListProps) {
     };
   }, [props.activeTurnId, props.activeTurnStartedAt, transcriptEntries]);
 
-  const toggleCommentaryGroup = useCallback((groupId: string) => {
+  const controlledExpandedCommentaryGroupIdsRef = useRef(controlledExpandedCommentaryGroupIds);
+  controlledExpandedCommentaryGroupIdsRef.current = controlledExpandedCommentaryGroupIds;
+  const onExpandedWorkPhaseGroupIdsChangeRef = useRef(onExpandedWorkPhaseGroupIdsChange);
+  onExpandedWorkPhaseGroupIdsChangeRef.current = onExpandedWorkPhaseGroupIdsChange;
+  const toggleCommentaryGroup = useCallback((groupId?: string) => {
+    if (!groupId) {
+      return;
+    }
     const toggle = (current: Set<string>): Set<string> => {
       const next = new Set(current);
       if (next.has(groupId)) {
@@ -1099,18 +1177,16 @@ export function TranscriptList(props: TranscriptListProps) {
       return next;
     };
 
-    if (controlledExpandedCommentaryGroupIds) {
-      onExpandedWorkPhaseGroupIdsChange?.([
-        ...toggle(controlledExpandedCommentaryGroupIds),
+    const controlled = controlledExpandedCommentaryGroupIdsRef.current;
+    if (controlled) {
+      onExpandedWorkPhaseGroupIdsChangeRef.current?.([
+        ...toggle(controlled),
       ]);
       return;
     }
 
     setUncontrolledExpandedCommentaryGroupIds(toggle);
-  }, [
-    controlledExpandedCommentaryGroupIds,
-    onExpandedWorkPhaseGroupIdsChange,
-  ]);
+  }, []);
 
   const setActivityExpanded = useCallback((activityId: string, expanded: boolean) => {
     if (!controlledExpandedActivityIds) {
@@ -1468,12 +1544,47 @@ export function TranscriptList(props: TranscriptListProps) {
       return undefined;
     }
 
-    const observer = new ResizeObserver(() => {
-      // While the sidebar is being dragged the main pane reflows every frame.
-      // Reading/writing scroll geometry + re-rendering on each of those frames
-      // is a layout-thrash amplifier; skip it here and re-sync once when the
-      // drag ends (see the subscribeSidebarResizing effect below).
-      if (isSidebarResizing()) {
+    const lastBlockSizes = new WeakMap<Element, number>();
+    const observer = new ResizeObserver((entries) => {
+      let blockChanged = !entries || entries.length === 0;
+      if (entries && entries.length > 0) {
+        let hadInitialObservation = false;
+        for (const entry of entries) {
+          const blockSize = entry.borderBoxSize?.[0]?.blockSize
+            ?? entry.contentBoxSize?.[0]?.blockSize;
+          if (blockSize === undefined) {
+            blockChanged = true;
+            continue;
+          }
+          const prev = lastBlockSizes.get(entry.target);
+          if (prev !== blockSize) {
+            lastBlockSizes.set(entry.target, blockSize);
+            if (prev !== undefined) {
+              blockChanged = true;
+            } else {
+              hadInitialObservation = true;
+            }
+          }
+        }
+        // Keep lastBlockSizes current during sidebar drags, then defer
+        // scroll/render sync until the drag ends (subscribeSidebarResizing).
+        if (isSidebarResizing()) {
+          return;
+        }
+        if (!blockChanged && hadInitialObservation) {
+          const snap = snapshotRef.current;
+          if (
+            snap === undefined
+            || container.clientHeight !== snap.clientHeight
+            || container.scrollHeight !== snap.scrollHeight
+          ) {
+            blockChanged = true;
+          }
+        }
+        if (!blockChanged) {
+          return;
+        }
+      } else if (isSidebarResizing()) {
         return;
       }
       const { scrollToBottom, syncScrollState, requestOlderPageIfUnderflowing } = resizeActionsRef.current;
@@ -1642,11 +1753,10 @@ export function TranscriptList(props: TranscriptListProps) {
                   skills={skills}
                   subAgents={props.subAgents}
                   threadLinkSource={props.threadLinkSource}
+                  toggleKey={workPhaseGroupToggleKey(item)}
                   onActivityExpandedChange={setActivityExpanded}
                   onOpenImage={props.onOpenImage}
-                  onToggle={() => {
-                    toggleCommentaryGroup(workPhaseGroupToggleKey(item));
-                  }}
+                  onToggle={toggleCommentaryGroup}
                 />
               ) : isRewindMarkerEntry(item.entry) && item.entry.type === "activity" ? (
                 <TranscriptRewindMarker
@@ -1659,6 +1769,17 @@ export function TranscriptList(props: TranscriptListProps) {
                         onUndo: () => props.rewindUndo?.onUndo(undoableRewind!),
                       }
                     : undefined}
+                />
+              ) : isLaunchedTodoEntry(item.entry)
+                && launchedRecordById.has(launchedTodoIdFromEntry(item.entry) ?? "") ? (
+                <TranscriptLaunchedTodo
+                  applications={props.applications}
+                  desktopApi={props.desktopApi}
+                  fileViewerContext={props.fileViewerContext}
+                  record={launchedRecordById.get(launchedTodoIdFromEntry(item.entry)!)!}
+                  skills={skills}
+                  threadLinkSource={props.threadLinkSource}
+                  onOpenStartedThread={props.onOpenLaunchedTodoThread}
                 />
               ) : item.entry.type === "activity" ? (
                 <TranscriptActivity

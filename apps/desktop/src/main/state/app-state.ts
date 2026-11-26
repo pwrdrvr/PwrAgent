@@ -1,6 +1,6 @@
 import {
+  ensureActiveProfileDirectory,
   ensureBootstrapProfileDir,
-  ensureProfileExists,
   getProcessRuntimeIdentity,
   resolveActiveProfilePath,
   resolveBootstrapProfilePath,
@@ -10,6 +10,7 @@ import {
   updateLastUsed,
 } from "../profile";
 import fs from "node:fs";
+import { getMainLogger } from "../log";
 import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store.js";
 import { getAutomationRunOwner } from "../automations/automation-run-owner.js";
 import { AutomationStore } from "../storage/automation-store.js";
@@ -18,6 +19,8 @@ import { SqliteMessagingStore } from "../storage/messaging-store-sqlite.js";
 import { SqliteOverlayStore } from "../storage/overlay-store-sqlite.js";
 import { type AutoVacuumConversion, StateDb } from "./state-db.js";
 
+const log = getMainLogger("pwragent:state");
+const PROFILE_REGISTRATION_RETRY_MS = 1_000;
 let stateDb: StateDb | null = null;
 let existingDatabase = false;
 export function hadExistingAppStateDatabase(): boolean { return existingDatabase; }
@@ -25,6 +28,7 @@ let messagingStore: SqliteMessagingStore | null = null;
 let overlayStore: SqliteOverlayStore | null = null;
 let runtimeInstanceStore: AppRuntimeInstanceStore | null = null;
 let profileRuntimeHeartbeat: ProfileRuntimeHeartbeat | null = null;
+let profileRegistrationRetry: NodeJS.Timeout | undefined;
 let automationStore: AutomationStore | null = null;
 let scheduledThreadActionStore: ScheduledThreadActionStore | null = null;
 let activeMode: AppStateMode | null = null;
@@ -43,7 +47,7 @@ let currentBootDecision: ProfileBootDecision | null = null;
  * - `active-profile`: today's flow. The active profile (resolved via
  *   CLI flag / env var / registry / migration) gets its directory
  *   materialized, state.db opened, heartbeat started, last_used
- *   stamped in profiles.toml. Used when `resolveProfileBootDecision`
+ *   stamped in profiles.toml when available. Used when `resolveProfileBootDecision`
  *   returns `open`.
  *
  * - `bootstrap`: state lives under `.bootstrap/` (sibling to
@@ -62,6 +66,39 @@ export function recordBootDecision(decision: ProfileBootDecision): void {
 
 export function getBootDecision(): ProfileBootDecision | null {
   return currentBootDecision;
+}
+
+function isWindowsRegistryRenameContention(error: unknown): boolean {
+  if (!(error instanceof Error) || process.platform !== "win32") return false;
+  const { code, syscall } = error as NodeJS.ErrnoException;
+  return syscall === "rename" && (code === "EPERM" || code === "EACCES" || code === "EBUSY");
+}
+
+function stopProfileRegistrationRetry(): void {
+  clearInterval(profileRegistrationRetry);
+  profileRegistrationRetry = undefined;
+}
+
+function recordProfileStartup(profile: { profileName: string; profileDir: string }): void {
+  const { profileName, profileDir } = profile;
+  try {
+    updateLastUsed(profileName);
+  } catch (error) {
+    if (!isWindowsRegistryRenameContention(error)) throw error;
+    log.warn("Could not record profile startup in the registry", { profileName, error: String(error) });
+    // The registry is shared across profiles. Register on a later tick so
+    // a Windows reader cannot block startup. Reread the registry on each
+    // attempt to pick up changes made while it was busy.
+    profileRegistrationRetry = setInterval(() => {
+      try {
+        if (fs.existsSync(profileDir)) updateLastUsed(profileName, { onlyIfMissing: true });
+      } catch (retryError) {
+        if (isWindowsRegistryRenameContention(retryError)) return;
+        log.warn("Could not register active profile", { profileName, error: String(retryError) });
+      }
+      stopProfileRegistrationRetry();
+    }, PROFILE_REGISTRATION_RETRY_MS).unref();
+  }
 }
 
 export function initializeAppState(
@@ -107,13 +144,14 @@ export function initializeAppState(
     // profile is transient and must not appear in any user-facing
     // profile listing.
   } else {
-    const { profileName } = ensureProfileExists();
+    const profile = ensureActiveProfileDirectory();
+    const { profileName } = profile;
     const dbPath = resolveActiveProfilePath("state/state.db");
     existingDatabase = fs.existsSync(dbPath);
     stateDb = StateDb.open(dbPath, { profileName });
     stateDb.startDeferredGc();
 
-    updateLastUsed(profileName);
+    recordProfileStartup(profile);
     const processIdentity = getProcessRuntimeIdentity();
     profileRuntimeHeartbeat = startProfileRuntimeHeartbeat(profileName, {
       instanceId: processIdentity.instanceId,
@@ -186,15 +224,17 @@ export function getAppScheduledThreadActionStore(): ScheduledThreadActionStore {
 }
 
 /**
- * Shutdown has released the runtime: stop the heartbeat's periodic
- * main-thread writes. The marker stays until `disposeAppState` removes it at
+ * Shutdown has released the runtime: stop profile bookkeeping. The
+ * heartbeat marker stays until `disposeAppState` removes it at
  * process exit, and its last write keeps it fresh for the heartbeat TTL.
  */
 export function stopProfileRuntimeHeartbeatRefresh(): void {
+  stopProfileRegistrationRetry();
   profileRuntimeHeartbeat?.stopRefreshing();
 }
 
 export function disposeAppState(): void {
+  stopProfileRegistrationRetry();
   if (profileRuntimeHeartbeat) {
     profileRuntimeHeartbeat.stop();
     profileRuntimeHeartbeat = null;
@@ -214,6 +254,7 @@ export function disposeAppState(): void {
 }
 
 export function resetAppStateForTests(): void {
+  stopProfileRegistrationRetry();
   profileRuntimeHeartbeat?.stop();
   profileRuntimeHeartbeat = null;
   // Close the sqlite handle before dropping the reference. On Windows an open

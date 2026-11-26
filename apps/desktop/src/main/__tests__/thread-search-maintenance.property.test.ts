@@ -90,6 +90,28 @@ it.each([100, 1000])("keeps repeated searches independent of %i omitted index/le
   } finally { db.close(); removeTempStateDbDir(temp.tempDir); }
 });
 
+it("reuses the current-row statement across overlapping searches of more than one slice", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new ThreadSearchStore(db);
+    const threads = Array.from({ length: 65 }, (_, i) => summary(`visible-${i}`));
+    const service = new ThreadSearchService(store, async () => structuredClone(threads));
+    const search = () => service.search({ query: "Needle", contentMode: "metadata", limit: 100 });
+    await search();
+
+    const prepare = vi.spyOn(db.raw, "prepare");
+    const results = await Promise.all([search(), search()]);
+    const expected = threads.map((thread) => thread.id).sort();
+    for (const result of results) {
+      expect(result.results.map((row) => row.threadId).sort()).toEqual(expected);
+    }
+    const verifierPreparations = prepare.mock.calls.filter(([sql]) =>
+      /^\s*SELECT\b/.test(sql) && sql.includes("thread_search_documents") && sql.includes("thread_search_fts_rows"),
+    );
+    expect(verifierPreparations).toHaveLength(0);
+  } finally { db.close(); }
+});
+
 it("yields and honors cancellation before indexing another 64-provider-row slice", async () => {
   const db = openInMemoryStateDb();
   try {

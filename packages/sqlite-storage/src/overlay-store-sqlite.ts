@@ -93,6 +93,7 @@ import type {
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   RemoteThreadPin,
+  ThreadLaunchedThread,
   ThreadQuestionnaireActivity,
   ThreadRewindRecord,
   ThreadSubAgentSummary,
@@ -153,6 +154,7 @@ import {
 import {
   DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
+  MAX_LAUNCHED_THREAD_LOG_ENTRIES,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
   MAX_MANAGED_REVIEW_ENTRIES,
   MAX_PERMISSION_TRANSITION_LOG_ENTRIES,
@@ -1420,6 +1422,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           turnFailureLog: current?.turnFailureLog,
           questionnaireActivityLog: current?.questionnaireActivityLog,
           rewindLog: current?.rewindLog,
+          launchedThreadLog: current?.launchedThreadLog,
         });
       }
     }
@@ -7119,7 +7122,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
         SELECT json_extract(requested.value, '$.id') AS id,
           json_remove(threads.payload, '$.immutableUsageActivities', '$.managedReviewEntries',
             '$.permissionTransitionLog', '$.messagingBindingTransitionLog',
-            '$.turnFailureLog', '$.questionnaireActivityLog', '$.rewindLog', '$.subAgents') AS payload
+            '$.turnFailureLog', '$.questionnaireActivityLog', '$.rewindLog', '$.launchedThreadLog', '$.subAgents') AS payload
         FROM json_each(?) AS requested
         LEFT JOIN threads ON threads.thread_id = json_extract(requested.value, '$.key')
       `).all(JSON.stringify(requested)) as Array<{ id: string; payload: string | null }>;
@@ -7438,6 +7441,43 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     return nextState;
   }
 
+  async appendLaunchedThread(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    launch: ThreadLaunchedThread;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const existing = Array.isArray(current.launchedThreadLog)
+      ? current.launchedThreadLog
+      : [];
+    const withoutDup = existing.filter((entry) => entry.id !== params.launch.id);
+    const nextLog = [
+      ...withoutDup,
+      params.launch,
+    ].sort((left, right) => {
+      if (left.occurredAt !== right.occurredAt) {
+        return left.occurredAt - right.occurredAt;
+      }
+      return left.id.localeCompare(right.id);
+    });
+    const trimmed =
+      nextLog.length > MAX_LAUNCHED_THREAD_LOG_ENTRIES
+        ? nextLog.slice(nextLog.length - MAX_LAUNCHED_THREAD_LOG_ENTRIES)
+        : nextLog;
+    const nextState: ThreadOverlayState = {
+      ...current,
+      launchedThreadLog: trimmed,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async appendThreadRewind(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -7458,6 +7498,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       messagingBindingTransitionLog: undefined,
       turnFailureLog: undefined,
       questionnaireActivityLog: undefined,
+      launchedThreadLog: undefined,
       managedReviewEntries: undefined,
       pendingManagedReviewContextEntryIds: undefined,
       rewindLog: [params.rewind],
@@ -11259,15 +11300,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
 
   /** One commit per participating owner, including cached membership and ranks.
    * Never create a threads overlay for a row owned by another instance. */
-  applyArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): string[] {
+  applyArchiveSubthreadPromotion(promotion: ArchiveSubthreadPromotion, instanceId: string): {
+    threadIds: string[];
+    remoteMountsChanged: boolean;
+  } {
     const { archived, anchor, parent, children } = promotion;
     const parentKey = parent && buildThreadIdentityKey(parent.backend, parent.threadId);
-    const selectPin = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins
-      WHERE instance_id = ? AND backend = ? AND thread_id = ? AND revoked_at IS NULL`);
-    const pinPayload = (owner: string, backend: AppServerBackendKind, id: string) => {
-      const row = selectPin.get(owner, backend, id) as { payload: string } | undefined;
-      return row ? JSON.parse(row.payload) as { summary?: NavigationThreadSummary; instanceLabel: string; pinnedVia?: RemoteThreadPin["pinnedVia"] } : undefined;
-    };
+    const selectPin = this.stateDb.raw.prepare(`SELECT payload, revoked_at FROM remote_thread_pins
+      WHERE instance_id = ? AND backend = ? AND thread_id = ?`);
+    const readPin = (owner: string, backend: AppServerBackendKind, id: string) =>
+      selectPin.get(owner, backend, id) as { payload: string; revoked_at: number | null } | undefined;
+    const livePinPayload = (row: ReturnType<typeof readPin>) => row?.revoked_at === null
+      ? JSON.parse(row.payload) as { summary?: NavigationThreadSummary; instanceLabel: string; pinnedVia?: RemoteThreadPin["pinnedVia"] }
+      : undefined;
+    const pinPayload = (owner: string, backend: AppServerBackendKind, id: string) => livePinPayload(readPin(owner, backend, id));
     const matches = (state: { parentThreadId?: string; parentThreadBackend?: AppServerBackendKind; parentThreadInstanceId?: string },
       owner: string, destination: typeof parent): boolean => destination === null ? !state.parentThreadId
       : state.parentThreadId === destination.threadId
@@ -11344,7 +11390,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
             : pinPayload(owner, ref.backend, ref.threadId)?.summary;
           return ownParent.subthreadOrder!.includes(ref.threadId) && state && matches(state, owner, parent);
         });
-      if (promotion.dryRun) return ownParent?.subthreadOrder ?? [];
+      if (promotion.dryRun) return { threadIds: ownParent?.subthreadOrder ?? [], remoteMountsChanged: false };
       for (const { ref } of localChildren) {
         const current = this.getThread(buildThreadIdentityKey(ref.backend, ref.threadId))!;
         if (matches(current, instanceId, parent)) continue;
@@ -11356,24 +11402,30 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       }
       const writePin = this.stateDb.raw.prepare(`INSERT INTO remote_thread_pins(instance_id, backend, thread_id, added_at, payload)
         VALUES (?, ?, ?, ?, ?) ON CONFLICT(instance_id, backend, thread_id) DO UPDATE SET payload = excluded.payload`);
+      let remoteMountsChanged = false;
       for (const entry of children) {
         const owner = remotePinInstanceId(entry.ref);
         if (owner === instanceId) continue;
-        const existing = pinPayload(owner, entry.ref.backend, entry.ref.threadId);
+        const row = readPin(owner, entry.ref.backend, entry.ref.threadId);
+        const existing = livePinPayload(row);
         if (!existing && !ownParent) continue;
         // Cached summaries retain the relationship as expressed on the child
         // owner, even when the viewer owns the destination parent.
         const next = { ...existing, instanceLabel: existing?.instanceLabel ?? entry.instanceLabel,
           pinnedVia: existing?.pinnedVia ?? "child", summary: patch(entry.summary, owner) };
         if (JSON.stringify(existing) !== JSON.stringify(next)) {
-          writePin.run(owner, entry.ref.backend, entry.ref.threadId, Date.now(), JSON.stringify(next));
+          const result = writePin.run(owner, entry.ref.backend, entry.ref.threadId, Date.now(), JSON.stringify(next));
+          remoteMountsChanged ||= !row && result.changes > 0;
         }
       }
       if (parent && parent.instanceId !== instanceId && promotion.parentSummary && localChildren.length) {
-        const existing = pinPayload(parent.instanceId, parent.backend, parent.threadId);
-        if (!existing) writePin.run(parent.instanceId, parent.backend, parent.threadId, Date.now(), JSON.stringify({
-          instanceLabel: promotion.parentInstanceLabel ?? parent.instanceId, pinnedVia: "companion", summary: promotion.parentSummary,
-        }));
+        const row = readPin(parent.instanceId, parent.backend, parent.threadId);
+        if (!row || row.revoked_at !== null) {
+          const result = writePin.run(parent.instanceId, parent.backend, parent.threadId, Date.now(), JSON.stringify({
+            instanceLabel: promotion.parentInstanceLabel ?? parent.instanceId, pinnedVia: "companion", summary: promotion.parentSummary,
+          }));
+          remoteMountsChanged ||= !row && result.changes > 0;
+        }
       }
       if (archived.instanceId === instanceId) {
         const key = buildThreadIdentityKey(archived.backend, archived.threadId);
@@ -11384,8 +11436,8 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
           this.putThread(key, { ...current, subthreadOrder: order });
         }
       }
-      if (!ownParent) return [];
-      if (preserveParentOrder) return ownParent.subthreadOrder!;
+      if (!ownParent) return { threadIds: [], remoteMountsChanged };
+      if (preserveParentOrder) return { threadIds: ownParent.subthreadOrder!, remoteMountsChanged };
       // Materialize the owner's current order, preserving unloaded remote slots.
       const saved = new Set(ownParent.subthreadOrder ?? []);
       const remoteRows = this.stateDb.raw.prepare(`SELECT payload FROM remote_thread_pins
@@ -11406,7 +11458,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       if (JSON.stringify(order) !== JSON.stringify(ownParent.subthreadOrder)) {
         this.putThread(parentKey!, { ...ownParent, subthreadOrder: order });
       }
-      return order;
+      return { threadIds: order, remoteMountsChanged };
     })();
   }
 
@@ -13381,6 +13433,7 @@ export type OverlayStoreLike = Pick<
   | "appendTurnFailure"
   | "setTurnFailureCodexInvalidIdRecovery"
   | "appendQuestionnaireActivity"
+  | "appendLaunchedThread"
   | "appendThreadRewind"
   | "markThreadRewindUndone"
   | "getLaunchpadDefaults"

@@ -56,6 +56,7 @@ export function fixReviewFindingsPrompt(
     ...findingLines(items, context),
     "",
     "Use PwrAgent's `list_reviews` tool for their details and how to record each fix.",
+    "Do not schedule another review (`start_review`) when finished; report each finding's outcome and let the operator decide whether to review again.",
   ].join("\n");
 }
 
@@ -90,6 +91,27 @@ export function autoFixReviewFindingsPrompt(
       + " Do not decline a correctness bug to avoid a push.",
     "",
     "Make all the fixes and run the relevant checks. If this thread has a pull request, commit and push them once.",
+    "Do not schedule another review (`start_review`) when finished; report each finding's outcome and let the operator decide whether to review again.",
     "End with one line per finding: its outcome and why.",
   ].join("\n");
+}
+
+const AUTO_FIX_PROMPT_HEADER =
+  /^Auto-fix the (?:finding from [^\n]+\. Decide whether to fix it|\d+ findings from [^\n]+\. Decide which ones to fix)\.\n\n1\. /;
+const AUTO_FIX_PROMPT_MARKER =
+  "Use PwrAgent's `list_reviews` tool for each finding's details. Settle every finding with `update_review_item`:";
+const FIX_PROMPT_HEADER =
+  /^Fix (?:this finding|these \d+ findings) from [^\n]+:\n\n1\. /;
+const FIX_PROMPT_MARKER =
+  "Use PwrAgent's `list_reviews` tool for their details and how to record each fix.";
+
+/**
+ * Recognizes the canonical PwrAgent review-fix prompts so an owner still treats
+ * card-triggered review-fix turns from older Federation viewers as review-fix
+ * turns even without the explicit `reviewFix` request flag.
+ */
+export function isReviewFixPromptText(text: string): boolean {
+  const trimmed = text.trimStart();
+  return (AUTO_FIX_PROMPT_HEADER.test(trimmed) && trimmed.includes(AUTO_FIX_PROMPT_MARKER))
+    || (FIX_PROMPT_HEADER.test(trimmed) && trimmed.includes(FIX_PROMPT_MARKER));
 }

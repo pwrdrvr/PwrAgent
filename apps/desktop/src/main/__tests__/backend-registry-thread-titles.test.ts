@@ -46,7 +46,7 @@ describe("DesktopBackendRegistry", () => {
   it("leaves ACP Claude naming to the provider without launching a redundant title helper", async () => {
     const backend = "acp:claude" as const;
     const titleService = { generateTitle: vi.fn(async () => ({ status: "generated" as const, title: "Redundant helper title" })) };
-    const sessions: AcpSessionMetadata[] = [{ backendId: backend, sessionId: "claude-title-session", title: "ACP session", titleSource: "fallback",
+    const sessions: AcpSessionMetadata[] = [{ backendId: backend, sessionId: "claude-title-session", title: "Untitled thread", titleSource: "fallback",
       cwd: "/tmp/claude-title-workspace", createdAt: 1000, updatedAt: 1000, executionMode: "default", status: "idle" }];
     const { registry, acpClient } = createKimiAcpRegistry({
       acpBackendId: backend,
@@ -58,7 +58,7 @@ describe("DesktopBackendRegistry", () => {
       await registry.startTurn({ backend, threadId: "claude-title-session", input: [{ type: "text", text: "Investigate Claude titles" }] });
       await registry.whenThreadTitleGenerationSettledForTests();
       expect(titleService.generateTitle).not.toHaveBeenCalled();
-      expect(sessions[0]).toMatchObject({ title: "Investigate Claude titles", titleSource: "fallback" });
+      expect(sessions[0]).toMatchObject({ title: "Investigate Claude titles", titleSource: "derived", promptPlaceholderTitle: true });
       // The real ACP client stores accepted session_info_update titles before
       // publishing the corresponding notification.
       Object.assign(sessions[0], { title: "Provider generated Claude title", titleSource: "derived" });
@@ -84,7 +84,7 @@ describe("DesktopBackendRegistry", () => {
         {
           backendId: acpBackendId,
           sessionId: "session-1",
-          title: "ACP session",
+          title: "Untitled thread",
           titleSource: "fallback",
           cwd: "/repo/project",
           createdAt: 1000,
@@ -188,7 +188,7 @@ describe("DesktopBackendRegistry", () => {
         {
           backendId: acpBackendId,
           sessionId: "session-1",
-          title: "ACP session",
+          title: "Untitled thread",
           titleSource: "fallback",
           cwd: "/repo/project",
           createdAt: 1000,
@@ -1669,7 +1669,7 @@ describe("DesktopBackendRegistry", () => {
       {
         backendId: acpBackendId,
         sessionId: "qwen-session-1",
-        title: "ACP session",
+        title: "Untitled thread",
         titleSource: "fallback",
         cwd: "/repo/project",
         createdAt: 1000,
@@ -1736,7 +1736,8 @@ describe("DesktopBackendRegistry", () => {
     });
     expect(sessions[0]).toMatchObject({
       title: "Does this project build?",
-      titleSource: "fallback",
+      titleSource: "derived",
+      promptPlaceholderTitle: true,
     });
 
     await registry.close();
@@ -2430,5 +2431,193 @@ describe("DesktopBackendRegistry", () => {
     expect(codexClient.lastRenameThreadParams).toBeUndefined();
 
     await registry.close();
+  });
+
+  it("sets the prompt-derived placeholder title immediately on Antigravity turns before the naming helper finishes", async () => {
+    const acpBackendId = "acp:antigravity" as AcpBackendId;
+    const prompt = "Please investigate why the authentication retry queue stalls after token expiry in production";
+    const expectedPlaceholder = "Investigate why the authentication retry queue stalls after token expiry...";
+    const helperStarted = createDeferred<void>();
+    const helperResult = createDeferred<{ status: "generated"; title: string }>();
+    const titleService = {
+      generateTitle: vi.fn(async () => {
+        helperStarted.resolve();
+        return await helperResult.promise;
+      }),
+    };
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "ag-session-1",
+        title: "Untitled thread",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const events: AgentEvent[] = [];
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "ag-session-1",
+      sessions,
+      threadTitleGenerationService: titleService,
+    });
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    onTestFinished(async () => {
+      helperResult.resolve({ status: "generated", title: "Fix Auth Retry Queue" });
+      await registry.close();
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "ag-session-1",
+      input: [{ type: "text", text: prompt }],
+    });
+    await helperStarted.promise;
+
+    // Before the naming helper resolves, the session and thread listing
+    // already display the shortened prompt placeholder as a derived title.
+    expect(sessions[0]).toMatchObject({
+      title: expectedPlaceholder,
+      titleSource: "derived",
+      promptPlaceholderTitle: true,
+    });
+    await expect(registry.listThreads({ backend: acpBackendId, forceRefresh: true })).resolves.toEqual([
+      expect.objectContaining({
+        id: "ag-session-1",
+        title: expectedPlaceholder,
+        titleSource: "derived",
+      }),
+    ]);
+
+    helperResult.resolve({ status: "generated", title: "Fix Auth Retry Queue" });
+    await registry.whenThreadTitleGenerationSettledForTests();
+    await emitCompletedTurn(registry, acpBackendId, "ag-session-1");
+
+    expect(sessions[0]).toMatchObject({
+      title: "Fix Auth Retry Queue",
+      titleSource: "derived",
+    });
+    expect(sessions[0]?.promptPlaceholderTitle).toBeUndefined();
+    const nameEvents = events
+      .filter((event) => event.notification.method === "thread/name/updated")
+      .map((event) => event.notification.params);
+    expect(nameEvents).toEqual([
+      { threadId: "ag-session-1", threadName: expectedPlaceholder, titleSource: "derived" },
+      { threadId: "ag-session-1", threadName: "Fix Auth Retry Queue", titleSource: "derived" },
+    ]);
+  });
+
+  it("keeps the prompt-derived placeholder when the Antigravity naming helper throws", async () => {
+    const acpBackendId = "acp:antigravity" as AcpBackendId;
+    const prompt = "Refactor the ACP startup sequence";
+    const titleService = {
+      generateTitle: vi.fn(async () => {
+        throw new Error("helper crashed");
+      }),
+    };
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: "ag-session-throw",
+        title: "Untitled thread",
+        titleSource: "fallback",
+        cwd: "/repo/project",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "ag-session-throw",
+      sessions,
+      threadTitleGenerationService: titleService,
+    });
+    onTestFinished(async () => {
+      await registry.close();
+    });
+
+    await registry.startTurn({
+      backend: acpBackendId,
+      threadId: "ag-session-throw",
+      input: [{ type: "text", text: prompt }],
+    });
+    await registry.whenThreadTitleGenerationSettledForTests();
+    await emitCompletedTurn(registry, acpBackendId, "ag-session-throw");
+
+    expect(sessions[0]).toMatchObject({
+      title: "Refactor the ACP startup sequence",
+      titleSource: "derived",
+      promptPlaceholderTitle: true,
+    });
+  });
+
+  it("seeds the prompt-derived placeholder on Antigravity launchpad creation before the first turn settles", async () => {
+    const acpBackendId = "acp:antigravity" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [];
+    const promptDeferred = createDeferred<{ sessionId: string; turnId: string }>();
+    const titleService = {
+      generateTitle: vi.fn(async () => ({
+        status: "generated" as const,
+        title: "Short Launchpad Title",
+      })),
+    };
+    const overlayStore = createOverlayStoreMock();
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessionId: "ag-launchpad-1",
+      sessions,
+      overlayStore,
+      startPrompt: vi.fn(() => promptDeferred.promise),
+      threadTitleGenerationService: titleService,
+    });
+    onTestFinished(async () => {
+      promptDeferred.resolve({ sessionId: "ag-launchpad-1", turnId: "turn-1" });
+      await registry.close();
+    });
+
+    await overlayStore.upsertDirectoryLaunchpad({
+      directoryKey: "directory:/repo/project",
+      directoryKind: "directory",
+      directoryPath: "/repo/project",
+      directoryLabel: "project",
+      backend: acpBackendId,
+      executionMode: "default",
+      workMode: "local",
+      prompt: "Explain how the scheduler orders queued turns",
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    const materializePromise = registry.materializeDirectoryLaunchpad({
+      directoryKey: "directory:/repo/project",
+    });
+
+    await waitForCondition(() => sessions.length === 1);
+    // Even while startPrompt is still in flight, the session already has the
+    // shortened prompt placeholder instead of "ACP session" or "Untitled thread".
+    expect(sessions[0]).toMatchObject({
+      title: "Explain how the scheduler orders queued turns",
+      titleSource: "derived",
+      promptPlaceholderTitle: true,
+    });
+
+    promptDeferred.resolve({ sessionId: "ag-launchpad-1", turnId: "turn-1" });
+    await materializePromise;
+    await registry.whenThreadTitleGenerationSettledForTests();
+    await emitCompletedTurn(registry, acpBackendId, "ag-launchpad-1");
+
+    expect(sessions[0]).toMatchObject({
+      title: "Short Launchpad Title",
+      titleSource: "derived",
+    });
+    expect(sessions[0]?.promptPlaceholderTitle).toBeUndefined();
   });
 });

@@ -1,4 +1,4 @@
-import { buildAgentMemoryStdioServer } from "../agent-tools/agent-memory-mcp-stdio";
+import { buildAgentToolStdioServer } from "../agent-tools/agent-tool-mcp-stdio";
 import { applicationHost as app } from "../owner-host";
 import { ACP_LIVE_HANDOFF_UNSUPPORTED_ERROR, acpSessionHasConversationHistory, projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
 import {
@@ -18,6 +18,8 @@ import {
   type AppServerBackendKind,
   type AppServerNotification,
   type AppServerPendingRequestNotification,
+  type AppServerThreadImagePart,
+  type AppServerThreadMessageEntry,
   type AppServerThreadMessagePart,
   type AppServerThreadReplay,
   type AppServerThreadStatus,
@@ -71,6 +73,7 @@ import type {
   AgentToolMcpServerLike,
 } from "../agent-tools/agent-tool-mcp-server.js";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
+import { resolveE2eAcpDiscoveryOptions } from "../acp/acp-e2e-discovery";
 import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
 import { isManagedAntigravityCommand, MANAGED_ANTIGRAVITY_ENV } from "../acp/antigravity-managed-runtime";
 import { resolveAntigravityCommandPath } from "../acp/antigravity-runtime-retention";
@@ -284,7 +287,9 @@ export function createLocalAcpAgentDiscovery(params: {
         preferences[registryId] = { overridePath: override };
       }
     }
-    const env = await params.resolveEnv?.();
+    const isPackaged = app?.isPackaged;
+    const fixtureDiscovery = resolveE2eAcpDiscoveryOptions(isPackaged);
+    const env = fixtureDiscovery?.env ?? await params.resolveEnv?.();
     const records = await discoverLocalAcpAgentRecords({
       enabledRegistryIds,
       useManagedAntigravity: true,
@@ -297,13 +302,13 @@ export function createLocalAcpAgentDiscovery(params: {
           managedGrokBuildsEnabledFromSnapshot(
             providers,
             env ?? process.env,
-            app?.isPackaged === true,
+            isPackaged === true,
           ),
-        checkMode: app?.isPackaged === true ? "ttl" : "once-per-process",
-        requirePlatformSignature: app?.isPackaged === true,
+        checkMode: isPackaged ? "ttl" : "once-per-process",
+        requirePlatformSignature: isPackaged === true,
       },
       ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
-      ...(env ? { env } : {}),
+      ...(fixtureDiscovery ?? (env ? { env } : {})),
     });
     return records.map((record) => {
       const configDependencyFingerprint = providerProjectionForRegistryId(
@@ -508,6 +513,33 @@ function liveToolNotificationKey(
     : undefined;
 }
 
+const cachedToolImageFingerprints = new WeakMap<
+  object,
+  { url: string | undefined; alt: string | undefined; summary: { urlHash?: string; urlLength?: number; alt?: string } }
+>();
+
+function liveToolImageFingerprintSummary(
+  image: unknown,
+): { urlHash?: string; urlLength?: number; alt?: string } | undefined {
+  const record = asPlainRecord(image);
+  if (!record) {
+    return undefined;
+  }
+  const url = typeof record.url === "string" ? record.url : undefined;
+  const alt = typeof record.alt === "string" ? record.alt : undefined;
+  const cached = cachedToolImageFingerprints.get(record);
+  if (cached && cached.url === url && cached.alt === alt) {
+    return cached.summary;
+  }
+  const summary = {
+    urlHash: url ? hashString(url) : undefined,
+    urlLength: url?.length,
+    alt,
+  };
+  cachedToolImageFingerprints.set(record, { url, alt, summary });
+  return summary;
+}
+
 function liveToolNotificationFingerprint(
   notification: AppServerNotification,
 ): string | undefined {
@@ -520,6 +552,9 @@ function liveToolNotificationFingerprint(
   const output = readNonEmptyString(data, "output") ?? "";
   const fileDiff = asPlainRecord(item.fileDiff);
   const diff = typeof fileDiff?.diff === "string" ? fileDiff.diff : undefined;
+  const images = Array.isArray(item.images)
+    ? item.images.map(liveToolImageFingerprintSummary)
+    : undefined;
   return JSON.stringify({
     method: notification.method,
     type: item.type,
@@ -532,7 +567,18 @@ function liveToolNotificationFingerprint(
     title: item.title,
     path: item.path,
     fileDiff: fileDiff && { ...fileDiff, diff: diff && hashString(diff), diffLength: diff?.length },
+    ...(images?.length ? { images } : {}),
   });
+}
+
+function acpCompletedAssistantMessagePhase(
+  phase: AppServerThreadMessageEntry["phase"] | undefined,
+  isTerminalSuccess: boolean,
+): AppServerThreadMessageEntry["phase"] | undefined {
+  if (phase === "commentary") {
+    return "commentary";
+  }
+  return isTerminalSuccess ? phase : "partial";
 }
 
 function asPlainRecord(value: unknown): Record<string, unknown> | undefined {
@@ -688,6 +734,19 @@ function verifiedJobMonitorCatalogBuild(agent: AcpInstalledAgentRecord): boolean
   return (agent.backendId === "acp:antigravity" && agent.version === "1.5.14")
     || (agent.backendId === "acp:grok"
       && (agent.version === "1.0.45-pwragent.2" || agent.version === "1.0.77"));
+}
+
+function hasConfirmedAntigravityAccess(
+  agent: Pick<
+    AcpInstalledAgentRecord,
+    "lastDiscoveredAt" | "lastDiscoveryError" | "runtimeCapabilities"
+  >,
+): boolean {
+  if (agent.lastDiscoveryError !== undefined) {
+    return false;
+  }
+  return agent.lastDiscoveredAt !== undefined
+    || agent.runtimeCapabilities?.status === "discovered";
 }
 
 function normalizeInstalledAcpAgent(
@@ -1054,37 +1113,51 @@ export async function inputToAcpPrompt(
 ): Promise<AcpPromptPayload | undefined> {
   const promptContent: AcpPromptContentBlock[] = [];
   const parts: AppServerThreadMessagePart[] = [];
+  const hasPromptText = input.some(
+    (item) => (item.type === "text" && item.text.trim().length > 0) || item.type === "localFile",
+  );
 
+  let lastPromptContentWasUserText = false;
   for (const item of input) {
     if (item.type === "text") {
       const text = item.text.trim();
       if (text) {
-        promptContent.push({ type: "text", text });
+        const previousBlock = promptContent[promptContent.length - 1];
+        if (lastPromptContentWasUserText && previousBlock?.type === "text") {
+          previousBlock.text = `${previousBlock.text}\n${text}`;
+        } else {
+          promptContent.push({ type: "text", text });
+        }
+        lastPromptContentWasUserText = true;
         parts.push({ type: "text", text });
       }
       continue;
     }
+    lastPromptContentWasUserText = false;
 
     if (item.type === "image") {
-      const name = item.name?.trim();
-      if (name) {
-        promptContent.push({ type: "text", text: `Attached image filename: ${name}` });
-      }
+      const explicitName = item.name?.trim();
       const image = parseImageDataUrl(item.url);
       let replayUrl = item.url;
+      let stagedFileName: string | undefined;
       if (image && options?.owner) {
         const bytes = Buffer.from(image.data, "base64");
         if (bytes.byteLength > 0) {
           const staged = await stageTurnInputAttachment({
             type: "localImage",
             data: bytes,
-            ...(name ? { name } : {}),
+            ...(explicitName ? { name: explicitName } : {}),
             mimeType: image.mimeType,
           }, options.owner);
           replayUrl = toTranscriptImageProtocolUrl(pathToFileURL(staged.path).toString());
+          stagedFileName = path.basename(staged.path);
         }
       }
-      parts.push({ type: "image", ...(name ? { alt: name } : {}), url: replayUrl });
+      const annotationName = explicitName || (!hasPromptText ? stagedFileName ?? "image.png" : undefined);
+      if (annotationName) {
+        promptContent.push({ type: "text", text: `Attached image filename: ${annotationName}` });
+      }
+      parts.push({ type: "image", ...(annotationName ? { alt: annotationName } : {}), url: replayUrl });
       if (image) {
         promptContent.push({
           type: "image",
@@ -1125,14 +1198,14 @@ export async function inputToAcpPrompt(
           privateStorageRoots: options.privateStorageRoots,
         })).path
       : item.path;
-    if (explicitName || !alreadyOwnedAsset) {
+    if (explicitName || !alreadyOwnedAsset || !hasPromptText) {
       promptContent.push({ type: "text", text: `[Local image: ${fileName}]` });
     }
     // Record the image itself, as the inline-image branch does. A text
     // placeholder here was all a reopened thread could show.
     parts.push({
       type: "image",
-      ...(explicitName || !alreadyOwnedAsset ? { alt: fileName } : {}),
+      ...(explicitName || !alreadyOwnedAsset || !hasPromptText ? { alt: fileName } : {}),
       url: toTranscriptImageProtocolUrl(pathToFileURL(imagePath).toString()),
     });
     const fileInfo = await stat(imagePath);
@@ -1573,7 +1646,12 @@ export class AcpBackendAdapter {
     if (this.closed) return;
     const selected = recoverLegacyAntigravitySelection(agent);
     const launch = selected.launchDescriptor;
-    if (!available || !launch || !this.isRuntimeSelectionCurrent(agent)) {
+    if (
+      !available
+      || !launch
+      || !this.isRuntimeSelectionCurrent(agent)
+      || !hasConfirmedAntigravityAccess(agent)
+    ) {
       this.invalidateAntigravityQuota();
       return;
     }
@@ -1674,7 +1752,7 @@ export class AcpBackendAdapter {
       }
       this.planLimits.record(backend, {
         limits: providerStatus.rateLimits ?? [], since, precise: true, dated: true,
-        ...(antigravity ? { account } : {}),
+        ...(antigravity ? { account, complete: true } : {}),
       });
       await this.emit({
         backend,
@@ -3564,6 +3642,7 @@ export class AcpBackendAdapter {
         }),
       onSessionUpdate: async ({
         assistantMessageItemId,
+        completedAssistantMessage,
         fromSessionLoad,
         sessionId,
         replay,
@@ -3694,15 +3773,18 @@ export class AcpBackendAdapter {
           });
         }
         if (updateKind === "available_commands_update") {
+          const session = this.getSession(agent.backendId, sessionId);
+          const cwd = agent.backendId === "acp:antigravity" && !session?.requiresAgentSessionRebind
+            ? session?.antigravityPrimaryCwd ?? session?.cwd
+            : undefined;
           await this.emit({
             backend: agent.backendId,
             notification: {
               method: "thread/availableCommands/updated",
               params: {
                 threadId: sessionId,
-                commands:
-                  this.getSession(agent.backendId, sessionId)?.availableCommands ??
-                  [],
+                commands: session?.availableCommands ?? [],
+                ...(cwd ? { cwd: path.resolve(cwd) } : {}),
               },
             },
           });
@@ -3747,6 +3829,35 @@ export class AcpBackendAdapter {
                 params: {
                   threadId: sessionId,
                   executionMode: kimiYoloExecutionMode,
+                },
+              },
+            });
+          }
+        }
+        if (turnId && !fromSessionLoad && completedAssistantMessage) {
+          const completedImages = completedAssistantMessage.parts?.filter(
+            (part): part is AppServerThreadImagePart => part.type === "image",
+          ) ?? [];
+          if (completedAssistantMessage.text.trim() || completedImages.length > 0) {
+            const completedPhase = acpCompletedAssistantMessagePhase(
+              completedAssistantMessage.phase,
+              (promptSettledTurnFinished && update.stopReason !== "cancelled")
+                || updateKind === "pwragent_steered_user_prompt",
+            );
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "item/completed",
+                params: {
+                  threadId: sessionId,
+                  turnId,
+                  item: {
+                    id: completedAssistantMessage.id,
+                    type: "agentMessage",
+                    text: completedAssistantMessage.text,
+                    ...(completedPhase ? { phase: completedPhase } : {}),
+                    ...(completedImages.length > 0 ? { content: completedImages } : {}),
+                  },
                 },
               },
             });
@@ -3851,7 +3962,11 @@ export class AcpBackendAdapter {
             threadId: sessionId,
             turnId,
           });
-          const outputText = readAcpUpdateText(update);
+          const completedFinalText =
+            completedAssistantMessage?.phase === "final"
+              ? completedAssistantMessage.text.trim()
+              : "";
+          const outputText = completedFinalText || readAcpUpdateText(update);
           // session/cancel settles the prompt with stopReason cancelled: the
           // turn stopped, it did not complete. An operator stop has already
           // emitted turn/cancelled as it sent the cancel, so this repeats it;
@@ -3892,7 +4007,35 @@ export class AcpBackendAdapter {
         // that running turn. Live lifecycle is owned by turn/started and the
         // prompt-settled terminal events, not transcript replay snapshots.
       },
-      onPromptError: async ({ sessionId, turnId, error, usage }) => {
+      onPromptError: async ({ completedAssistantMessage, sessionId, turnId, error, usage }) => {
+        if (completedAssistantMessage) {
+          const completedImages = completedAssistantMessage.parts?.filter(
+            (part): part is AppServerThreadImagePart => part.type === "image",
+          ) ?? [];
+          if (completedAssistantMessage.text.trim() || completedImages.length > 0) {
+            const completedPhase = acpCompletedAssistantMessagePhase(
+              completedAssistantMessage.phase,
+              false,
+            );
+            await this.emit({
+              backend: agent.backendId,
+              notification: {
+                method: "item/completed",
+                params: {
+                  threadId: sessionId,
+                  turnId,
+                  item: {
+                    id: completedAssistantMessage.id,
+                    type: "agentMessage",
+                    text: completedAssistantMessage.text,
+                    ...(completedPhase ? { phase: completedPhase } : {}),
+                    ...(completedImages.length > 0 ? { content: completedImages } : {}),
+                  },
+                },
+              },
+            }).catch(() => undefined);
+          }
+        }
         this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
@@ -4092,12 +4235,12 @@ export class AcpBackendAdapter {
             const registration = await this.agentToolMcpServer.registerClient({
               backend: backendId,
               threadId: sessionId,
-              ...(!http ? { memoryOnly: true } : {}),
+              ...(!http ? { stdioFallback: true } : {}),
               ...(http && observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
             });
             const readTool = registration.readTool;
             baseRegistration = {
-              servers: [http ? registration.server : buildAgentMemoryStdioServer(registration.server)],
+              servers: [http ? registration.server : buildAgentToolStdioServer(registration.server)],
               bindThread: registration.bindThread,
               ...(readTool ? {
                 hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {

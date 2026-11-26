@@ -9,6 +9,7 @@ import {
 } from "@pwragent/shared/research-harness";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { Select } from "../../components/Select";
+import { researchErrorMessage } from "./research-error";
 
 type Operation = "import" | "discovery" | "execute";
 type Capability = keyof Extract<ResearchHarnessCheck, { ok: true }>["capabilities"];
@@ -37,8 +38,12 @@ export function harnessRequestIdentity(previous: { signature: string; id: string
 }
 
 /** Why an operation cannot run from this source, or undefined when it can. */
-function blocker(operation: Operation, status: ResearchHarnessStatus | undefined, check: ResearchHarnessCheck | undefined): string | undefined {
-  if (!status?.configured) return status?.source === "mathos" ? "The MathOS Platform is not set up." : "No bridge is configured.";
+function blocker(operation: Operation, status: ResearchHarnessStatus | undefined, check: ResearchHarnessCheck | undefined, ownerLabel?: string): string | undefined {
+  if (!status?.configured) {
+    return status?.source === "mathos"
+      ? (ownerLabel ? `The MathOS Platform is not set up on ${ownerLabel}.` : "The MathOS Platform is not set up.")
+      : (ownerLabel ? `No bridge is configured on ${ownerLabel}.` : "No bridge is configured.");
+  }
   if (status.source === "mathos") {
     // PwrAgent's own client only reads. Discovery counts only once a check found the runtime offers it.
     if (operation === "execute") return "The MathOS Platform does not offer running a swarm to PwrAgent.";
@@ -52,15 +57,26 @@ function blocker(operation: Operation, status: ResearchHarnessStatus | undefined
   if (missing.length) return `This bridge does not support ${missing.map((need) => CAPABILITY_LABELS[need].toLowerCase()).join(" or ")}.`;
   if (operation === "execute") {
     if (status.endpointError) return status.endpointError;
-    if (!status.model || !status.endpointOrigin) return "Set an execution model and endpoint in Settings › Experimental.";
-    if (status.credentialEnv && !status.credentialSet) return `${status.credentialEnv} is not set in PwrAgent’s environment.`;
+    if (!status.model || !status.endpointOrigin) {
+      return ownerLabel
+        ? `Set an execution model and endpoint in Settings › Experimental on ${ownerLabel}.`
+        : "Set an execution model and endpoint in Settings › Experimental.";
+    }
+    if (status.credentialEnv && !status.credentialSet) {
+      return ownerLabel
+        ? `${status.credentialEnv} is not set on ${ownerLabel}.`
+        : `${status.credentialEnv} is not set in PwrAgent’s environment.`;
+    }
   }
   return undefined;
 }
 
-export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSettings }: {
-  api: DesktopApi; thread: ResearchThread; onStarted: (runId: string) => void; onCancel?: () => void;
-  /** Settings › Experimental › Open Math Harness. Absent outside the main window. */
+export function ResearchHarnessForm({ api, thread, ownerLabel, onStarted, onCancel, onOpenSettings }: {
+  api: DesktopApi; thread: ResearchThread;
+  /** Set when viewing a remote thread: Harness settings and credentials stay on that owning instance. */
+  ownerLabel?: string;
+  onStarted: (runId: string) => void; onCancel?: () => void;
+  /** Settings › Experimental › Open Math Harness. Absent outside a local main window. */
   onOpenSettings?: () => void;
 }) {
   const id = useId();
@@ -113,7 +129,7 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
 
   const execute = operation === "execute";
   const discovery = operation === "discovery";
-  const blocked = blocker(operation, status, check);
+  const blocked = blocker(operation, status, check, ownerLabel);
   async function submit(event: FormEvent) {
     event.preventDefault();
     // Enter can submit a form whose button is disabled; the same rule applies.
@@ -153,21 +169,31 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
       </div>
       {!status && <p className="research-muted" role="status">Reading Harness settings…</p>}
       {status?.configError && <p className="research-error" role="alert">{status.configError}</p>}
-      {status && mathos && !status.configured && !status.configError && <p className="research-text">
-        Import swarm records straight from the MathOS Platform. {status.platformKeyStored ? "Choose a team" : "Store your MathOS Platform API key and choose a team"} in Settings › Experimental › Open Math Harness.
-      </p>}
-      {status && !mathos && !status.configured && !status.configError && <>
-        <p className="research-text">No Harness bridge is configured in this profile. A bridge is a program you install; PwrAgent starts it and talks to it over stdio.</p>
-        <pre className="research-snippet" aria-label="Example bridge configuration">{CONFIG_SNIPPET}</pre>
-        <p className="research-muted">Set it up in Settings › Experimental › Open Math Harness, or in this table. <code className="research-code">api_key_env</code> names the variable that holds the <strong>model</strong> API key, not your MathOS Platform key.</p>
-      </>}
+      {status && mathos && !status.configured && !status.configError && (ownerLabel
+        ? <p className="research-text">
+            Open Math Harness is not set up on {ownerLabel}. {status.platformKeyStored ? "Choose a team" : "Store a MathOS Platform API key and choose a team"} in Settings › Experimental › Open Math Harness on {ownerLabel}. Harness settings stay per instance and API keys never leave the owning machine.
+          </p>
+        : <p className="research-text">
+            Import swarm records straight from the MathOS Platform. {status.platformKeyStored ? "Choose a team" : "Store your MathOS Platform API key and choose a team"} in Settings › Experimental › Open Math Harness.
+          </p>)}
+      {status && !mathos && !status.configured && !status.configError && (ownerLabel
+        ? <p className="research-text">
+            No Harness bridge is configured on {ownerLabel}. Set it up in Settings › Experimental › Open Math Harness on {ownerLabel}. Harness settings stay per instance.
+          </p>
+        : <>
+            <p className="research-text">No Harness bridge is configured in this profile. A bridge is a program you install; PwrAgent starts it and talks to it over stdio.</p>
+            <pre className="research-snippet" aria-label="Example bridge configuration">{CONFIG_SNIPPET}</pre>
+            <p className="research-muted">Set it up in Settings › Experimental › Open Math Harness, or in this table. <code className="research-code">api_key_env</code> names the variable that holds the <strong>model</strong> API key, not your MathOS Platform key.</p>
+          </>)}
       {status?.configured && mathos && <dl className="research-dl">
         <dt>Platform</dt><dd>MathOS Platform{status.platformOrigin && <> at <code className="research-code">{status.platformOrigin.replace(/^https?:\/\//, "")}</code></>}{" "}
           {check ? check.ok ? <span className="research-ok">· responding</span> : <span className="research-bad">· {check.error}</span> : <span className="research-muted">· not checked</span>}</dd>
         {caps && <><dt>Supports</dt><dd><span className="research-caps">{(Object.keys(CAPABILITY_LABELS) as Capability[]).map((key) =>
           <span key={key} className={`research-chip${caps[key] ? " research-chip--done" : " research-chip--off"}`}>{CAPABILITY_LABELS[key]}<span className="research-sr-only">{caps[key] ? " supported" : " not supported"}</span></span>)}</span></dd></>}
         <dt>Team</dt><dd><code className="research-code">{status.platformTeam}</code></dd>
-        <dt>API key</dt><dd>{status.platformKeyStored === undefined ? "PwrAgent’s secret store could not be read" : "Stored in PwrAgent"}</dd>
+        <dt>API key</dt><dd>{status.platformKeyStored === undefined
+          ? (ownerLabel ? `Secret store on ${ownerLabel} could not be read` : "PwrAgent’s secret store could not be read")
+          : (ownerLabel ? `Stored on ${ownerLabel}` : "Stored in PwrAgent")}</dd>
       </dl>}
       {status?.configured && !mathos && <dl className="research-dl">
         <dt>Process</dt><dd><code className="research-code">{status.bridge}</code>{" "}
@@ -178,11 +204,11 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
         {status.credentialEnv && <><dt>Model key</dt><dd><code className="research-code">{status.credentialEnv}</code>{" "}
           {status.credentialSet ? <span className="research-ok">· set</span> : <span className="research-bad">· not set</span>}</dd></>}
       </dl>}
-      {status && !status.configured && (onOpenSettings || api.revealResearchHarnessConfig) && <span className="research-actions">
+      {!ownerLabel && status && !status.configured && (onOpenSettings || api.revealResearchHarnessConfig) && <span className="research-actions">
         {onOpenSettings && <button type="button" className="research-button research-button--primary" onClick={onOpenSettings}>Open Harness settings</button>}
         {!mathos && api.revealResearchHarnessConfig && <button type="button" className="research-button" onClick={() => { void api.revealResearchHarnessConfig?.().catch((failure: unknown) => setError(message(failure))); }}>Show config.toml</button>}
       </span>}
-      {status?.configured && onOpenSettings && <span className="research-actions">
+      {!ownerLabel && status?.configured && onOpenSettings && <span className="research-actions">
         <button type="button" className="research-button research-button--ghost" onClick={onOpenSettings}>Harness settings</button>
       </span>}
     </section>
@@ -190,7 +216,7 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
       <fieldset className="research-ops">
         <legend className="research-sr-only">Operation</legend>
         {OPERATIONS.map((entry) => {
-          const reason = blocker(entry.id, status, check);
+          const reason = blocker(entry.id, status, check, ownerLabel);
           return <label key={entry.id} className="research-op">
             <input type="radio" name={`${id}-operation`} value={entry.id} checked={operation === entry.id} onChange={() => setOperation(entry.id)} />
             <span className="research-op__title">{entry.title}</span>
@@ -245,8 +271,8 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
         <label>Deadline (minutes)<input type="number" min={1} max={RESEARCH_MAX_MINUTES} value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} /></label>
       </div>}
       <dl className="research-dl">
-        <dt>Evidence opens from</dt>
-        <dd>{status.workspace ? <code className="research-code">{status.workspace}</code> : <span className="research-bad">This thread has no directory. Link one first; evidence opens only from it.</span>}</dd>
+        <dt>{ownerLabel ? `Workspace on ${ownerLabel}` : "Evidence opens from"}</dt>
+        <dd>{status.workspace ? <code className="research-code">{status.workspace}</code> : <span className="research-bad">{ownerLabel ? `This thread has no directory on ${ownerLabel}. Link one first.` : "This thread has no directory. Link one first; evidence opens only from it."}</span>}</dd>
       </dl>
       {execute && <div className="research-budget" role="group" aria-label="Model budget">
         <span className="research-group">Spends model budget</span>
@@ -271,7 +297,5 @@ export function ResearchHarnessForm({ api, thread, onStarted, onCancel, onOpenSe
 }
 
 function message(error: unknown): string {
-  const text = error instanceof Error ? error.message : "The Harness request failed";
-  // Electron prefixes remote handler errors with the channel; the owner's sentence is the useful part.
-  return text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "");
+  return researchErrorMessage(error, "The Harness request failed");
 }

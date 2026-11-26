@@ -105,7 +105,16 @@ findings withdraws it too, even while CI is running or failing. A merge card who
 is left alone, and no other offer is raised beside it. The next event
 reconciles again. A review offer survives CI runs and
 failures, because the change still needs review. A covering review withdraws
-it, however that review was started.
+it, however that review was started. An accepted review with a snapshot of
+the same PR and exact head also suppresses new review offers and withdraws
+an open one. PwrAgent reads its owner's live review registry, including
+reviews from other threads and each frozen snapshot in a combined review.
+A failed or cancelled review releases the hold, so an eligible offer can
+return. Coverage and merge eligibility still come from recorded reviews.
+Before dispatch the owner reserves each frozen PR head until the provider
+accepts or refuses the start. Overlapping requests for a reserved head are
+refused, including requests from a stale card or another thread. A terminal
+received before acceptance is applied once the owner knows the child turn.
 
 ### Agents
 
@@ -145,6 +154,9 @@ separate poll or repository scan for merge offers.
   only for PRs attached to threads. The first observation after a restart
   emits none. One already-polled green attached PR per batch can rebuild the
   reverse dependency index after restart or retry an unavailable forge read.
+  That observation can also reopen a card withdrawn for a running review
+  when the current change still needs review and the owner has no live
+  review for that head. Recovery only reopens the exact existing offer.
   A tracked lower PR's lifecycle change reconciles only its indexed green
   children. If a held child has an unknown or unpolled lower layer, an
   unchanged child poll may recheck the hold at most once every five minutes.
@@ -218,8 +230,9 @@ separate poll or repository scan for merge offers.
     and refs are untouched (purpose `review-working-tree`).
   - The tree adds one field to the review row it is recorded with, so it
     adds no commit.
-- **Concurrency.** Evaluations for the same thread and PR coalesce. A burst
-  of events costs at most two evaluations.
+- **Concurrency.** Evaluations for the same thread and PR coalesce. An
+  evaluation whose review inputs change during an asynchronous read refreshes
+  its assessment before writing cards.
 - **SQLite.** These budgets are recorded in
   `apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json`:
 
@@ -227,6 +240,11 @@ separate poll or repository scan for merge offers.
 | --- | --- | --- |
 | Raise an offer (`pr-review-offer-raise`) | 1 | ~29 KB |
 | Swap review offer for merge offer (`pr-review-offer-swap-to-merge`) | 1 | ~29 KB |
+| Withdraw an offer at review acceptance (`pr-review-offer-active-withdrawal`) | 1 | ~12 KB |
+| Reopen an eligible offer after a review fails or is cancelled (`pr-review-offer-active-reopen`) | 1 | ~12 KB |
+| Reopen a suppressed offer after owner restart (`pr-review-offer-restart-reopen`) | 1 | ~12 KB |
+| Duplicate wakeup during a review (`pr-review-offer-active-repeat`) | 0 | 0 |
+| Mark the scheduled review's source offer done if already withdrawn (`pr-review-offer-active-consume`) | 1 | ~8 KB |
 | Evaluation with nothing to change (`pr-review-offer-unchanged`) | 0 | 0 |
 | Eligible stack child released by a base change or final lower-layer merge (`pr-review-stack-*-offer`) | 1 per child | ~29 KB |
 | Repeat of the same stack event (`pr-review-stack-*-repeat`) | 0 | 0 |
@@ -234,6 +252,12 @@ separate poll or repository scan for merge offers.
 | Recheck releases an eligible child (`pr-review-stack-uncovered-offer`) | 1 | ~29 KB |
 | Old-head card withdrawn during a failed stack check (`pr-review-stack-stale-offer-unavailable`) | 1 | ~12 KB |
 | Record the fixed-through commit (`pr-review-fixed-through`) | 1 | ~8 KB |
+
+An early terminal reuses the normal managed review writes. Failure or
+cancellation before the start acknowledgement uses two commits for the
+start entry and the terminal sub-agent card. A completion also writes the result entry, for
+three commits and about 62 KB of WAL. Redelivery adds no commits. At 100
+early completions a day that would be about 6.2 MB of WAL.
 
 At about 100 offers a day, this is about 3 MB of WAL a day. Each PR
 typically sees two or three offers, so 100 offers is a very busy day.

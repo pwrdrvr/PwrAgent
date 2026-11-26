@@ -8,19 +8,31 @@ export function formatToolActivityTitle(value: string): string {
 }
 
 /**
- * The agent sees a connection PwrAgent manages as `pwragent_<name>_<hash>`
- * (built in the backend registry), a name that appears nowhere in Settings.
+ * The agent sees a connection PwrAgent manages as `pwragent_<name>_<hash>`.
  */
 export const PWRAGENT_MCP_SERVER_PREFIX = "pwragent_";
 export const PWRAGENT_MCP_SERVER_HASH_LENGTH = 32;
+// Connection IDs start with a letter, so this marker cannot be a legacy ID.
+const ENCODED_CODEX_MCP_CONNECTION_PREFIX = "0_";
 const PWRAGENT_MCP_SERVER_NAME = new RegExp(
   `^${PWRAGENT_MCP_SERVER_PREFIX}(.+)_[0-9a-f]{${PWRAGENT_MCP_SERVER_HASH_LENGTH}}$`,
   "u",
 );
 
+/** Encode punctuation so Codex's tool namespace and resource key agree. */
+export function encodeCodexMcpConnectionId(id: string): string {
+  if (!/[-_]/u.test(id)) return id;
+  return ENCODED_CODEX_MCP_CONNECTION_PREFIX
+    + id.replace(/[-_]/gu, (separator) => separator === "-" ? "_h" : "_u");
+}
+
 /** A managed connection reads as its own name; any other server as itself. */
 export function formatMcpServerName(server: string): string {
   const name = PWRAGENT_MCP_SERVER_NAME.exec(server)?.[1];
+  if (name?.startsWith(ENCODED_CODEX_MCP_CONNECTION_PREFIX)) {
+    return name.slice(ENCODED_CODEX_MCP_CONNECTION_PREFIX.length)
+      .replace(/_[hu]/gu, (escape) => escape === "_h" ? "-" : "_");
+  }
   return name ? name.replace(/^builtin_/u, "") : server;
 }
 

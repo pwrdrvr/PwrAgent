@@ -1,0 +1,4 @@
+interface:
+  display_name: "Managed Review Eval"
+  short_description: "Evaluate PwrAgent managed code reviews against verified cohorts"
+  default_prompt: "Use $managed-review-eval to plan a development-cohort comparison and identify what is needed to run and score it."

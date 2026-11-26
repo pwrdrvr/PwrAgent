@@ -15,6 +15,7 @@ import {
   withSeenExecutionMode,
 } from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
+import { ipcErrorMessage } from "./lib/open-path-failure";
 import { classifyDirectory, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
 import { detectProviderResponseBlock } from "@pwragent/shared/provider-response-block";
 import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
@@ -2518,7 +2519,7 @@ function DesktopAppShell(props: {
     !readRendererFederationTarget() && selectedTodoThread && selectedTodoTarget?.scope === "remote"
       ? { backend: selectedTodoThread.source, threadId: selectedTodoThread.id, federationTarget: selectedTodoTarget }
       : undefined);
-  const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
+  const operatorRequests = useOperatorRequests(desktopApi);
   // Providers with threads, from the directory index that counts them all.
   // Keyed by the joined list so a refreshed page keeps one array identity.
   // Each row names a Codex model provider from its owner's catalog.
@@ -3455,7 +3456,7 @@ function DesktopAppShell(props: {
       showAppNotice({
         id: `merge-build-watch:${threadSummaryIdentityKey(thread)}:${pr.url}`,
         title: "Couldn't watch the merge build",
-        message: error instanceof Error ? error.message : String(error),
+        message: ipcErrorMessage(error),
       });
     }
   });
@@ -3466,7 +3467,7 @@ function DesktopAppShell(props: {
       showAppNotice({
         id: `merge-build-watch:${wait.id}`,
         title: "The merge build watch is still running",
-        message: error instanceof Error ? error.message : String(error),
+        message: ipcErrorMessage(error),
       });
     }
   });
@@ -4280,6 +4281,7 @@ function DesktopAppShell(props: {
         activeTurnStartedAt: session.activeTurnStartedAt,
         terminals,
         addOptimisticReviewEntry: session.addOptimisticReviewEntry,
+        bindOptimisticReviewEntryToTurn: session.bindOptimisticReviewEntryToTurn,
         beginReviewSubmission: session.beginReviewSubmission,
         addOptimisticUserMessage: session.addOptimisticUserMessage,
         bindOptimisticUserMessageToTurn: session.bindOptimisticUserMessageToTurn,
@@ -4325,6 +4327,7 @@ function DesktopAppShell(props: {
         loading: session.loading,
         loadingMore: session.loadingMore,
         messageCount: session.messages.length,
+        autoCompaction: session.autoCompaction,
         contextWindow: session.contextWindow,
         pricing: session.response?.pricing,
         tokenMiserAccounting: session.response?.toolAccounting?.tokenMiser,
@@ -4408,6 +4411,7 @@ function DesktopAppShell(props: {
         setExecutionModeError: navigation.setThreadExecutionModeError,
         setThreadModelSettingsError: navigation.setThreadModelSettingsError,
         skillError: skills.error,
+        skillCatalogTargetKey: skills.skillCatalogTargetKey,
         skillLoading: skills.loading,
         codexSkillProfiles: remoteSkillProfileOwner
           ? skills.response?.codexSkillProfiles

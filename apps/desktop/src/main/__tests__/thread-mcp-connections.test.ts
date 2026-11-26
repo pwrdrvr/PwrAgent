@@ -5,7 +5,6 @@ import type { ThreadExecutionMode } from "@pwragent/shared/contracts/normalized-
 import type { ThreadOverlayState } from "@pwragent/shared/contracts/navigation";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import type { TaskMonitorDelegationRecord } from "../app-server/backend-registry-types";
-import { buildCodexConnectionMcpServerName } from "../app-server/codex-thread-config";
 import type { ForgeToolBridge } from "../app-server/forge-tool-bridge";
 import type { RegistryContext } from "../app-server/registry-context";
 import { ThreadMcpConnections, type ThreadMcpConnectionsHost } from "../app-server/thread-mcp-connections";
@@ -158,10 +157,10 @@ describe("ThreadMcpConnections", () => {
     const peekThreadBridge = vi.fn((id: string) => (id === "pwrgit" ? bridge : undefined));
     const { connections } = createConnections({ host: { mcpConnectionService: { peekThreadBridge } as never } });
     expect(connections.threadMcpServerNameInAgent("pwrgit", { backend: "acp:fixture", threadId: "agent" })).toBe(bridge.name);
-    for (const backend of ["codex", "claude"] as const) {
-      expect(connections.threadMcpServerNameInAgent("pwrgit", { backend, threadId: "agent" }))
-        .toBe(buildCodexConnectionMcpServerName(bridge as never));
-    }
+    expect(connections.threadMcpServerNameInAgent("pwrgit", { backend: "codex", threadId: "agent" }))
+      .toMatch(/^pwragent_0_pwragent_hpwrgit_hbridge_[0-9a-f]{32}$/u);
+    expect(connections.threadMcpServerNameInAgent("pwrgit", { backend: "claude", threadId: "agent" }))
+      .toMatch(/^pwragent_pwragent-pwrgit-bridge_[0-9a-f]{32}$/u);
     expect(connections.threadMcpServerNameInAgent("linear", { backend: "codex", threadId: "agent" })).toBeUndefined();
     expect(peekThreadBridge).toHaveBeenCalledWith("linear", "agent");
   });

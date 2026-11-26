@@ -1,0 +1,162 @@
+{
+  "recall": {
+    "provider": "openai",
+    "prefix": "You are an expert code-review evaluator comparing a baseline review finding against a candidate code review's findings on the same pull request. Focus on semantic equivalence of the underlying software defect (root cause, broken invariant, or behavioral regression), NOT exact wording or exact line number.",
+    "questions": [
+      {
+        "name": "same_root_cause",
+        "type": "predicate",
+        "instructions": "Does at least one finding in candidate_findings identify the SAME underlying defect or root cause described in baseline (even if phrased differently, assigned a different priority, or pointing to an adjacent line/caller in the same bug)?"
+      },
+      {
+        "name": "match_grade",
+        "type": "choice",
+        "instructions": "Grade how well candidate_findings covers baseline.",
+        "choices": [
+          {
+            "value": "exact_match",
+            "description": "Clearly identifies the same underlying defect and root cause."
+          },
+          {
+            "value": "partial_match",
+            "description": "Touches the same mechanism/area or symptom, or catches only part of the issue, while missing the core defect."
+          },
+          {
+            "value": "missed",
+            "description": "Does not identify this defect (including when 0 findings were reported)."
+          }
+        ]
+      }
+    ]
+  },
+  "precision": {
+    "provider": "openai",
+    "prefix": "You are a strict senior software engineer auditing an automated code-review finding against the actual PR git diff excerpt and baseline findings. Distinguish genuine, code-grounded bugs/regressions/missing tests from false positives, code misreads, speculative edge cases, or pure style nitpicks.",
+    "questions": [
+      {
+        "name": "matches_baseline",
+        "type": "predicate",
+        "instructions": "Does finding describe the same underlying defect as one of the items in baseline_findings?"
+      },
+      {
+        "name": "concrete_defect",
+        "type": "predicate",
+        "instructions": "Grounded in diff and the explanation in finding, does this finding identify a REAL, concrete bug, behavioral/performance regression, contract violation, or meaningful missing test/property (as opposed to a false positive, misread of the diff, trivial style nitpick, or ungrounded speculation)?"
+      },
+      {
+        "name": "defect_value",
+        "type": "score",
+        "instructions": "Rate the engineering value and validity of finding for the author of this PR.",
+        "levels": [
+          {
+            "label": "noise",
+            "description": "False positive, misreads code, or trivial style nitpick with no real defect."
+          },
+          {
+            "label": "weak",
+            "description": "Speculative, marginal, or overly pedantic suggestion unlikely to merit a change."
+          },
+          {
+            "label": "valid_p3",
+            "description": "Real low-impact P3 issue, minor edge case, or worthwhile small test/clarity improvement."
+          },
+          {
+            "label": "solid_p2",
+            "description": "Concrete P2 bug, behavioral/performance regression, contract break, or important missing test/property."
+          },
+          {
+            "label": "critical_p1",
+            "description": "High-impact P0/P1 bug, crash, security vulnerability, or data-loss defect."
+          }
+        ]
+      }
+    ]
+  },
+  "holistic": {
+    "provider": "openai",
+    "prefix": "You are a principal engineer evaluating the overall quality of an anonymized list of code-review findings for a pull request. A review with no findings can be high-signal if the PR is clean. Evaluate each input independently.",
+    "questions": [
+      {
+        "name": "signal_to_noise",
+        "type": "score",
+        "instructions": "Rate the signal-to-noise ratio of this review.",
+        "levels": [
+          {
+            "label": "1_very_low",
+            "description": "Mostly noise, false positives, or unhelpful commentary."
+          },
+          {
+            "label": "2_low",
+            "description": "Noticeable fluff, redundancy, or questionable nitpicks mixed in."
+          },
+          {
+            "label": "3_mixed",
+            "description": "Reasonable mix of useful points and some weaker/verbose items."
+          },
+          {
+            "label": "4_high",
+            "description": "Focused, high-signal findings with minimal noise."
+          },
+          {
+            "label": "5_excellent",
+            "description": "Exceptionally crisp, high-signal, zero-fluff review."
+          }
+        ]
+      },
+      {
+        "name": "actionability",
+        "type": "score",
+        "instructions": "Rate how concrete, code-grounded, and actionable the findings and suggested fixes are.",
+        "levels": [
+          {
+            "label": "1_very_low",
+            "description": "Vague, ungrounded, or not actionable."
+          },
+          {
+            "label": "2_low",
+            "description": "Points at areas of concern without clear failure mechanism or fix."
+          },
+          {
+            "label": "3_moderate",
+            "description": "Understandable issues with adequate fix direction."
+          },
+          {
+            "label": "4_high",
+            "description": "Clear failure mechanisms, exact code locations, and concrete fixes."
+          },
+          {
+            "label": "5_excellent",
+            "description": "Pinpoint root causes, exact reproduction/failure mechanics, and minimal precise fixes."
+          }
+        ]
+      },
+      {
+        "name": "overall_quality",
+        "type": "score",
+        "instructions": "Rate the overall usefulness of this code review to a senior engineer about to merge the PR.",
+        "levels": [
+          {
+            "label": "1_poor",
+            "description": "Not helpful or actively misleading."
+          },
+          {
+            "label": "2_below_avg",
+            "description": "Limited value; weak coverage or poor precision."
+          },
+          {
+            "label": "3_good",
+            "description": "Solid, useful review."
+          },
+          {
+            "label": "4_very_good",
+            "description": "Strong review catching meaningful issues cleanly."
+          },
+          {
+            "label": "5_outstanding",
+            "description": "Top-tier senior engineering review."
+          }
+        ]
+      }
+    ]
+  }
+}

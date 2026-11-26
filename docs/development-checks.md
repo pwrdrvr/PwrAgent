@@ -37,6 +37,21 @@ Read this before source edits, dependency installation, test execution, lint/too
   [old Sandboxer procedure](../.agents/skills/sandboxer-verification/SKILL.md)
   is preserved as a historical reference.
 
+### Codex sandbox codesign failure
+
+On macOS, Codex Auto/Default access sandboxes can make the desktop test
+bootstrap fail in `packages/pwragent/scripts/stage-runtime.mjs` with `codesign`
+reporting `runtime/bin/git: invalid signature (code or signature have been
+modified)`. The same checkout and normal test command passed in
+operator-selected Full Access on 2026-11-15, including the Outpost build and
+signature check.
+
+- First rerun the exact command outside the Codex sandbox using
+  operator-authorized Full Access or native CI.
+- Do not re-sign binaries, weaken signature checks, omit the build hook as a
+  fix, or open another repair card for this known sandbox-only symptom.
+- Investigate a signing defect if it also reproduces outside the sandbox.
+
 ## Desktop test operations
 
 - Use the [desktop E2E fixture seeding skill](../.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) for live captured sessions.

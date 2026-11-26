@@ -533,7 +533,7 @@ describe("ThreadRow chip flow", () => {
     expect(onSelectThread).not.toHaveBeenCalled();
   });
 
-  it("includes the expanded first-row reaction presets", () => {
+  it("opens the searchable reaction picker with thumbs up and quick presets", () => {
     const { container } = renderRow();
     const addReaction = container.querySelector(
       ".thread-row__chip--add-reaction",
@@ -541,18 +541,23 @@ describe("ThreadRow chip flow", () => {
 
     fireEvent.click(addReaction);
 
-    const statusGroup = screen.getByRole("group", { name: "Status" });
-    const options = within(statusGroup).getAllByRole("menuitemradio");
+    const quickGroup = screen.getByRole("group", { name: "Quick" });
+    const options = within(quickGroup).getAllByRole("button");
     expect(options.map((option) => option.textContent)).toEqual([
+      "👍",
+      "👎",
       "👀",
-      "✋",
       "✅",
       "❌",
-      "😢",
       "🚀",
       "🎉",
-      "🙏",
+      "🔥",
+      "❤️",
       "🤔",
+      "⚠️",
+      "🐛",
+      "💡",
+      "🙏",
       "😱",
       "💩",
     ]);

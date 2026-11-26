@@ -125,6 +125,72 @@ describe("inputToAcpPrompt local image replay", () => {
       await rm(threadAssetRoot(owner), { recursive: true, force: true });
     }
   });
+
+  it("coalesces consecutive user text items into one promptContent block without merging across non-text items", async () => {
+    const payload = await inputToAcpPrompt([
+      { type: "text", text: "First line" },
+      { type: "text", text: "Second line" },
+      { type: "file", name: "notes.txt", mimeType: "text/plain", sizeBytes: 12, data: "aGVsbG8=" },
+      { type: "text", text: "Third line" },
+    ]);
+
+    expect(payload?.prompt).toBe("First line\nSecond line\nThird line");
+    expect(payload?.promptContent).toEqual([
+      { type: "text", text: "First line\nSecond line" },
+      { type: "text", text: "[File attachment: notes.txt]" },
+      { type: "text", text: "Third line" },
+    ]);
+  });
+
+  it("emits synthetic filename annotations and alt for unnamed images when there is no prompt text, including file+image turns", async () => {
+    const owner = { backend: "acp:antigravity" as const, threadId: "thread-unnamed-anchor" };
+    const imageBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4,
+    ]);
+    const dataUrl = `data:image/png;base64,${imageBytes.toString("base64")}`;
+    try {
+      // Image-only inline paste without explicit name.
+      const imageOnlyPayload = await inputToAcpPrompt(
+        [{ type: "image", url: dataUrl }],
+        { owner, privateStorageRoots: [] },
+      );
+      const imageOnlyPart = imageOnlyPayload?.parts.find((part) => part.type === "image");
+      expect(imageOnlyPart?.alt).toBeTruthy();
+      expect(imageOnlyPayload?.promptContent).toContainEqual({
+        type: "text",
+        text: `Attached image filename: ${imageOnlyPart?.alt}`,
+      });
+
+      // File attachment + unnamed inline image (file does not contribute to prompt text).
+      const fileAndImagePayload = await inputToAcpPrompt([
+        { type: "file", name: "report.pdf", mimeType: "application/pdf", sizeBytes: 128, data: "JVBERi0=" },
+        { type: "image", url: dataUrl },
+      ], { owner, privateStorageRoots: [] });
+      expect(fileAndImagePayload?.prompt).toBe("");
+      const fileImagePart = fileAndImagePayload?.parts.find((part) => part.type === "image");
+      expect(fileImagePart?.alt).toBeTruthy();
+      expect(fileAndImagePayload?.promptContent).toContainEqual({
+        type: "text",
+        text: `Attached image filename: ${fileImagePart?.alt}`,
+      });
+
+      // Thread-owned unnamed localImage with no prompt text also emits a wire anchor.
+      const ownedUrl = imageOnlyPart!.url;
+      const ownedPath = fileURLToPath(decodeURIComponent(ownedUrl.slice("pwragent-image://file/".length)));
+      const ownedLocalOnlyPayload = await inputToAcpPrompt(
+        [{ type: "localImage", path: ownedPath }],
+        { owner, privateStorageRoots: [] },
+      );
+      const ownedLocalPart = ownedLocalOnlyPayload?.parts.find((part) => part.type === "image");
+      expect(ownedLocalPart?.alt).toBe(path.basename(ownedPath));
+      expect(ownedLocalOnlyPayload?.promptContent).toContainEqual({
+        type: "text",
+        text: `[Local image: ${path.basename(ownedPath)}]`,
+      });
+    } finally {
+      await rm(threadAssetRoot(owner), { recursive: true, force: true });
+    }
+  });
 });
 
 describe("describeInstalledAcpBackend", () => {
@@ -1001,7 +1067,7 @@ describe("acpSessionToThreadSummary", () => {
   const session: AcpSessionMetadata = {
     backendId: "acp:kimi",
     sessionId: "kimi-1",
-    title: "ACP session",
+    title: "Untitled thread",
     createdAt: 1,
     updatedAt: 1,
     executionMode: "default",
@@ -2007,20 +2073,6 @@ describe("AcpBackendAdapter", () => {
       content: { type: "text", text: "Build succeeded" },
     });
 
-    const completedToolEvents = events.filter(
-      (event) => event.notification.method === "item/completed",
-    );
-    expect(completedToolEvents).toHaveLength(1);
-    expect(completedToolEvents[0]).toMatchObject({
-      notification: {
-        params: {
-          item: {
-            command: "pnpm build",
-          },
-        },
-      },
-    });
-
     transport.emitSessionUpdate(session.sessionId, {
       sessionUpdate: "turn_completed",
       outputText: "Build succeeded",
@@ -2040,6 +2092,19 @@ describe("AcpBackendAdapter", () => {
     });
 
     await vi.waitFor(() => {
+      const completedToolEvents = events.filter(
+        (event) => event.notification.method === "item/completed",
+      );
+      expect(completedToolEvents).toHaveLength(1);
+      expect(completedToolEvents[0]).toMatchObject({
+        notification: {
+          params: {
+            item: {
+              command: "pnpm build",
+            },
+          },
+        },
+      });
       expect(events).toContainEqual({
         backend: backendId,
         notification: {
@@ -2444,7 +2509,9 @@ describe("AcpBackendAdapter", () => {
     ).toHaveLength(1);
     expect(
       events.filter(
-        (event) => event.notification.method === "item/completed",
+        (event) =>
+          event.notification.method === "item/completed"
+          && (event.notification.params as { item?: { type?: string } }).item?.type !== "agentMessage",
       ),
     ).toHaveLength(1);
     expect(client.readReplay(session.sessionId).messages).toEqual([
@@ -4078,6 +4145,68 @@ describe("AcpBackendAdapter", () => {
     }), { numRuns: 12, examples: [["account-a", undefined], [undefined, "account-b"]] });
   });
 
+  it("clears a prior Antigravity 5h resetAt when a newer probe resets the bucket to idle before that timestamp passes", async () => {
+    const baseNow = 1_800_000_000_000;
+    const staleResetAt = baseNow + 15 * 60_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(baseNow);
+    const agent = buildAntigravityQuotaAgent("/fake/agy");
+    const active: BackendRateLimitSummary = {
+      name: "5h Gemini limit",
+      limitId: "gemini-5h",
+      usedPercent: 25,
+      windowMinutes: 300,
+      resetAt: staleResetAt,
+    };
+    const idle: BackendRateLimitSummary = {
+      name: "5h Gemini limit",
+      limitId: "gemini-5h",
+      usedPercent: 0,
+      windowMinutes: 300,
+    };
+    const readAntigravityUsage = vi.fn()
+      .mockResolvedValueOnce({ rateLimits: [active] })
+      .mockResolvedValueOnce({ rateLimits: [idle] });
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      readAntigravityUsage,
+      emit: async () => {},
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      await adapter.describeInstalledBackends(true);
+      await vi.waitFor(() => expect(adapter.limitObservation(agent.backendId)?.limits).toEqual([
+        expect.objectContaining({ limitId: "gemini-5h", usedPercent: 25, resetAt: staleResetAt }),
+      ]));
+
+      // Second probe arrives before the local clock reaches staleResetAt and omits resetAt.
+      clock.mockReturnValue(baseNow + 10 * 60_000);
+      await adapter.describeInstalledBackends(true);
+      await vi.waitFor(() => expect(adapter.limitObservation(agent.backendId)?.observedAt).toBe(baseNow + 10 * 60_000));
+
+      const describedAfterIdle = (await adapter.describeInstalledBackends())[0]?.rateLimits;
+      expect(describedAfterIdle).toEqual([idle]);
+      expect("resetAt" in describedAfterIdle![0]!).toBe(false);
+      expect(adapter.limitObservation(agent.backendId)?.limits).toEqual([
+        expect.objectContaining({ limitId: "gemini-5h", usedPercent: 0, resetAt: undefined }),
+      ]);
+
+      // Advancing past the old reset timestamp must keep the freshly-idle bucket live.
+      clock.mockReturnValue(staleResetAt + 60_000);
+      expect((await adapter.describeInstalledBackends())[0]?.rateLimits).toEqual([idle]);
+      expect(adapter.limitObservation(agent.backendId)?.limits).toEqual([
+        expect.objectContaining({ limitId: "gemini-5h", usedPercent: 0, resetAt: undefined }),
+      ]);
+    } finally {
+      await adapter.close();
+      clock.mockRestore();
+    }
+  });
+
   it.each([false, true] as const)("only shows quota from the selected Antigravity executable, including when a retired read finishes late [%#]", async (oldReadCompleted) => {
     const oldLimits = [{ name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 20 }];
     // The selected executable determines both quota visibility and eligibility
@@ -4156,6 +4285,78 @@ describe("AcpBackendAdapter", () => {
       await closing;
     }
     expect(settled).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not probe Antigravity quota after install before account access is verified", async () => {
+    const freshlyInstalled: AcpInstalledAgentRecord = {
+      ...buildAntigravityQuotaAgent("/fake/agy"),
+      lastDiscoveredAt: undefined,
+      lastDiscoveryError: undefined,
+      runtimeCapabilities: undefined,
+    };
+    const readAntigravityUsage = vi.fn(async () => ({ rateLimits: [] }));
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => freshlyInstalled,
+        listInstalledAgents: () => [freshlyInstalled],
+        upsertInstalledAgent: vi.fn(),
+      },
+      readAntigravityUsage,
+      emit: async () => undefined,
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      await adapter.describeInstalledBackends(true);
+      expect(readAntigravityUsage).not.toHaveBeenCalled();
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it.each(
+    [undefined, 1_800_000_000_000].flatMap((lastDiscoveredAt) =>
+      [undefined, "Authentication required", "ACP probe timed out"].flatMap((lastDiscoveryError) =>
+        ([undefined, "stale", "discovered"] as const).map((capabilityStatus) => ({
+          lastDiscoveredAt,
+          lastDiscoveryError,
+          capabilityStatus,
+        })),
+      ),
+    ),
+  )("only probes Antigravity quota when account access has been confirmed without discovery errors [%#]", async ({
+    lastDiscoveredAt,
+    lastDiscoveryError,
+    capabilityStatus,
+  }) => {
+    const agent: AcpInstalledAgentRecord = {
+      ...buildAntigravityQuotaAgent("/fake/agy"),
+      lastDiscoveredAt,
+      lastDiscoveryError,
+      runtimeCapabilities: capabilityStatus
+        ? { schemaVersion: 1, status: capabilityStatus }
+        : undefined,
+    };
+    const readAntigravityUsage = vi.fn(async () => ({ rateLimits: [] }));
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      readAntigravityUsage,
+      emit: async () => undefined,
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      await adapter.describeInstalledBackends(true);
+      const shouldProbe = lastDiscoveryError === undefined
+        && (lastDiscoveredAt !== undefined || capabilityStatus === "discovered");
+      expect(readAntigravityUsage).toHaveBeenCalledTimes(shouldProbe ? 1 : 0);
+    } finally {
+      await adapter.close();
+    }
   });
 
   it("does not block backend discovery while Grok billing is pending", async () => {
@@ -6585,6 +6786,7 @@ function buildAntigravityQuotaAgent(command: string): AcpInstalledAgentRecord {
     backendId: "acp:antigravity",
     registryId: "antigravity",
     name: "Antigravity",
+    lastDiscoveredAt: 1000,
     launchDescriptor: {
       backendId: "acp:antigravity",
       registryId: "antigravity",

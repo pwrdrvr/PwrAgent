@@ -106,7 +106,12 @@ function configureFileTransport(): void {
   transport.maxSize = MAIN_LOG_MAX_SIZE_BYTES;
 }
 
-export function initializeMainLogger(options?: { profileName?: string; logDirectory?: string; appName?: string }): void {
+export function initializeMainLogger(options?: {
+  profileName?: string;
+  logDirectory?: string;
+  appName?: string;
+  consoleEnabled?: boolean;
+}): void {
   if (initialized) {
     return;
   }
@@ -115,7 +120,8 @@ export function initializeMainLogger(options?: { profileName?: string; logDirect
   if (options?.appName) electronLog.transports.file.setAppName(options.appName);
   installStdioErrorHandlers();
   guardConsoleTransport();
-  configureConsoleTransport();
+  if (options?.consoleEnabled === false) disableConsoleTransport();
+  else configureConsoleTransport();
   if (options?.profileName) {
     electronLog.transports.file.fileName = resolveMainLogFileNameForProfile(
       options.profileName,

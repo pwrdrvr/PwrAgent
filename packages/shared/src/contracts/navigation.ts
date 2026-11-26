@@ -289,6 +289,12 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * shows as one marker row where its removed turns were.
    */
   rewindLog?: ThreadRewindRecord[];
+  /**
+   * Per-thread child-thread launch log. Persisted via the overlay store for
+   * agent tool launches (`handoff_task`, `create_instance_thread`) so a
+   * durable card with a live ThreadChip appears inline in the transcript.
+   */
+  launchedThreadLog?: ThreadLaunchedThread[];
   optimisticUserMessage?: {
     text: string;
     imageParts?: AppServerThreadImagePart[];
@@ -2906,7 +2912,7 @@ export type NavigationSelectedDetailRequest = {
 export const NAVIGATION_DETAIL_COLLECTION_NAMES = [
   "subAgents", "codexNativeSubAgents", "permissionTransitionLog",
   "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "rewindLog",
-  "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder",
+  "launchedThreadLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder",
 ] as const;
 export type NavigationDetailCollectionName = typeof NAVIGATION_DETAIL_COLLECTION_NAMES[number];
 export type NavigationDetailCollections = Pick<NavigationThreadSummary, NavigationDetailCollectionName>;
@@ -4043,6 +4049,49 @@ export type ThreadOverlayState = {
    * supplemental transcript history, including older rewind markers.
    */
   rewindLog?: ThreadRewindRecord[];
+  /**
+   * Per-thread child-thread launch audit log. Persisted to the overlay store,
+   * capped at `MAX_LAUNCHED_THREAD_LOG_ENTRIES` (oldest-first eviction).
+   * Records child threads created via agent tools (`handoff_task`,
+   * `create_instance_thread`) so a durable card with a live ThreadChip
+   * stays visible in the parent transcript.
+   */
+  launchedThreadLog?: ThreadLaunchedThread[];
+};
+
+export const MAX_LAUNCHED_THREAD_LOG_ENTRIES = 100;
+
+export type ThreadLaunchedThreadSource =
+  | "handoff_task"
+  | "create_instance_thread"
+  | "todo";
+
+export type ThreadLaunchedThread = {
+  /** Stable deduplication id (e.g. handoffId or create_instance_thread id). */
+  id: string;
+  source: ThreadLaunchedThreadSource;
+  /** Epoch ms when the child thread was launched. */
+  occurredAt: number;
+  /** Concise headline shown on the transcript card. */
+  title: string;
+  /** Optional summary text. */
+  detail?: string;
+  /** Optional target project display label. */
+  projectLabel?: string;
+  /** Optional plan/checklist step labels. */
+  steps?: string[];
+  startedThread: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    instanceId?: string;
+    instanceLabel?: string;
+    setupFailure?: string;
+  };
+  seedMode?: "clean" | "fork";
+  groupingMode?: "subthread" | "none";
+  workspaceMode?: string;
+  turnStartFailure?: string;
+  todoId?: string;
 };
 
 /**

@@ -4953,6 +4953,57 @@ function buildUnpricedGrokUsageLine(index: number): ThreadUsageLineRecord {
     });
   });
 
+it("budgets appendLaunchedThread writes and verifies compact metadata WAL cost", async () => {
+  const parent = { backend: "codex" as const, threadId: "launched-parent" };
+  const firstLaunch = {
+    id: "handoff:codex:launched-parent:turn-1:call-1",
+    source: "handoff_task" as const,
+    occurredAt: 10_000,
+    title: "Benchmark retry queue bounds",
+    projectLabel: "atlas",
+    startedThread: {
+      backend: "codex" as const,
+      threadId: "launched-child-1",
+    },
+    seedMode: "clean" as const,
+    groupingMode: "subthread" as const,
+    workspaceMode: "new_worktree",
+  };
+  const first = await measureSqliteWrites(() =>
+    store.appendLaunchedThread({ ...parent, launch: firstLaunch }),
+  );
+  expectSqliteWriteBudget({
+    scenario: "thread-launched-child-record",
+    writes: first.writes,
+    note: "One commit records compact launched child-thread metadata on explicit handoff_task or create_instance_thread launch (16,512 WAL bytes/launch; ~1.65 MB/day at 100 launches/day; zero idle or per-turn writes).",
+  });
+
+  // Seed 20 compact launched-thread entries, then measure an unrelated overlay update.
+  for (let index = 2; index <= 20; index += 1) {
+    await store.appendLaunchedThread({
+      ...parent,
+      launch: {
+        ...firstLaunch,
+        id: `handoff:codex:launched-parent:turn-${index}:call-${index}`,
+        occurredAt: 10_000 + index * 100,
+        title: `Launched child ${index}`,
+        startedThread: {
+          backend: "codex",
+          threadId: `launched-child-${index}`,
+        },
+      },
+    });
+  }
+  const unrelatedWrite = await measureSqliteWrites(() =>
+    store.updateThreadMetadata(parent, { seenUpdatedAt: 99_999 }),
+  );
+  expectSqliteWriteBudget({
+    scenario: "thread-launched-child-overlay-rewrite",
+    writes: unrelatedWrite.writes,
+    note: "Unrelated overlay update on a thread with 20 compact launchedThreadLog entries stays one commit (28,840 WAL bytes; no prompt text in threads.payload).",
+  });
+});
+
 function createStubBackendClient(options?: {
   nativeSubAgentThreads?: AppServerThreadSummary[];
   replay?: AppServerThreadReplay;

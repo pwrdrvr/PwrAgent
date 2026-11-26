@@ -1,7 +1,10 @@
 import { filePreviewKind, isFilePreviewPath } from "@pwragent/shared/file-preview";
 import { findSharedSkillNames, isSharedSkillName } from "@pwragent/shared/skill-origin";
 import { isThreadUrl, PWRAGENT_URL_SCHEME } from "@pwragent/shared/contracts/thread-link";
-import { isWindowsFilesystemPath } from "@pwragent/shared/path-display";
+import {
+  extractInlineMarkdownDestination,
+  isWindowsFilesystemPath,
+} from "@pwragent/shared/path-display";
 import {
   type AppServerSkillSummary,
   type AppServerThreadImagePart,
@@ -19,6 +22,7 @@ import {
   useMemo,
   useState,
   type ClipboardEvent,
+  type CSSProperties,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -62,8 +66,11 @@ import {
   parsePullRequestNumberHref,
   remarkPullRequestReferences,
 } from "./remark-pull-request-references";
+import { remarkEmojiShortcodes, type RemarkEmojiShortcodesOptions } from "./remark-emoji-shortcodes";
 import { remarkTableProfile } from "./remark-table-profile";
+import { useDeferredEmojiShortcodeCatalog } from "../../lib/useEmojiShortcodeCatalog";
 import { buildSelectionClipboard } from "./selection-clipboard";
+import { TableScrollContainer } from "./TableScrollContainer";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
@@ -419,6 +426,7 @@ type MarkdownRenderState = {
   markdownText: string;
   sourceMarkdownText: string;
   editorApplication?: EditorApplication;
+  imagePartsByPath?: ReadonlyMap<string, AppServerThreadImagePart>;
   skillsByPath: Map<string, AppServerSkillSummary & { path: string }>;
   skillsByToken: Map<string, AppServerSkillSummary & { path: string }>;
   sharedSkillNames: ReturnType<typeof findSharedSkillNames>;
@@ -440,6 +448,7 @@ const markdownComponents: Components = {
       props,
       markdownText,
       editorApplication,
+      imagePartsByPath,
       skillsByPath,
       sharedSkillNames,
       openSkillMarkdownInEditor,
@@ -460,7 +469,7 @@ const markdownComponents: Components = {
     const label = extractTextContent(anchorProps.children).trim();
     const source = sourceForNode(markdownText, anchorProps.node);
     const linkedImage = findMarkdownLinkedImagePart(
-      props.imageParts,
+      imagePartsByPath,
       windowsMarkdownDestinationFromSource(source) ?? href,
     );
     const linkedChildren = (
@@ -709,18 +718,19 @@ const markdownComponents: Components = {
     return <hr className="transcript-message__rule" />;
   },
   img: function MarkdownImage(imageProps) {
-    const { props, markdownText } = useContext(MarkdownRenderContext)!;
+    const { markdownText, imagePartsByPath } = useContext(MarkdownRenderContext)!;
     const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
     const href = windowsMarkdownDestinationFromSource(sourceForNode(markdownText, imageProps.node))
       ?? (typeof imageProps.src === "string" ? imageProps.src : "");
-    const src = denormalizeMarkdownUrl(href);
-    const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
 
     // The message's image strip owns previews and gallery navigation. Hide
     // markup only for a reference that main successfully materialized.
-    if (findMarkdownLinkedImagePart(props.imageParts, href)) {
+    if (findMarkdownLinkedImagePart(imagePartsByPath, href)) {
       return null;
     }
+
+    const src = denormalizeMarkdownUrl(href);
+    const title = typeof imageProps.title === "string" ? ` "${imageProps.title}"` : "";
 
     return (
       <span className="thread-markdown__image-literal">
@@ -741,9 +751,9 @@ const markdownComponents: Components = {
   pre: MarkdownPre,
   table(tableProps) {
     return (
-      <div className="thread-markdown__table-scroll" tabIndex={0}>
+      <TableScrollContainer>
         <table className="thread-markdown__table">{tableProps.children}</table>
-      </div>
+      </TableScrollContainer>
     );
   },
   tbody(tableBodyProps) {
@@ -753,7 +763,9 @@ const markdownComponents: Components = {
     return (
       <td
         className="thread-markdown__td"
+        style={tableCellAlignStyle(tableCellProps.style)}
         data-col-kind={dataColKind(tableCellProps.node)}
+        data-cell-math={dataCellMath(tableCellProps.node)}
       >
         {tableCellProps.children}
       </td>
@@ -763,7 +775,9 @@ const markdownComponents: Components = {
     return (
       <th
         className="thread-markdown__th"
+        style={tableCellAlignStyle(tableHeaderCellProps.style)}
         data-col-kind={dataColKind(tableHeaderCellProps.node)}
+        data-cell-math={dataCellMath(tableHeaderCellProps.node)}
       >
         {tableHeaderCellProps.children}
       </th>
@@ -808,13 +822,22 @@ const MarkdownDocumentContent = memo(function MarkdownDocumentContent(props: {
   IncrementalRenderer: ReturnType<typeof useIncrementalMarkdownRenderer>;
 }) {
   const { IncrementalRenderer } = props;
+  const { catalog: emojiCatalog, requestCatalog: requestEmojiCatalog } =
+    useDeferredEmojiShortcodeCatalog();
   const remarkPlugins = useMemo<Options["remarkPlugins"]>(() => [
     ...(props.mathRuntime?.remarkPlugins ?? []),
     remarkBreaks,
     [remarkGfm, { singleTilde: false }],
     remarkPullRequestReferences,
+    [
+      remarkEmojiShortcodes,
+      {
+        catalog: emojiCatalog,
+        onMissingCatalog: requestEmojiCatalog,
+      } satisfies RemarkEmojiShortcodesOptions,
+    ],
     remarkTableProfile,
-  ], [props.mathRuntime]);
+  ], [emojiCatalog, props.mathRuntime, requestEmojiCatalog]);
   const components = useMemo(() => ({
     ...markdownComponents, ...props.mathRuntime?.components,
   }), [props.mathRuntime]);
@@ -969,11 +992,17 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     [openLocalFileInEditor]
   );
 
+  const imagePartsByPath = useMemo(
+    () => indexMarkdownImagePartsByPath(props.imageParts),
+    [props.imageParts],
+  );
+
   const renderState = useMemo<MarkdownRenderState>(() => ({
     props,
     markdownText,
     sourceMarkdownText,
     editorApplication,
+    imagePartsByPath,
     skillsByPath,
     skillsByToken,
     sharedSkillNames,
@@ -988,6 +1017,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     markdownText,
     sourceMarkdownText,
     editorApplication,
+    imagePartsByPath,
     skillsByPath,
     skillsByToken,
     sharedSkillNames,
@@ -1014,7 +1044,10 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         <TranscriptFileRegistrationContext.Provider value={registerInlineFile}>
           <MarkdownCodeApiContext.Provider value={props.desktopApi}>
             <MathClipboardApiContext.Provider value={props.desktopApi}>
-              <MarkdownDocument text={markdownText} mathRuntime={mathRuntime} />
+              <MarkdownDocument
+                text={markdownText}
+                mathRuntime={mathRuntime}
+              />
             </MathClipboardApiContext.Provider>
           </MarkdownCodeApiContext.Provider>
         </TranscriptFileRegistrationContext.Provider>
@@ -1223,9 +1256,60 @@ function MarkdownDocumentModal(props: {
   );
 }
 
+function encodePosixPathForFileUrl(filePath: string): string {
+  return filePath
+    .replace(/%(?![0-9a-fA-F]{2})/g, "%25")
+    .replace(/#/g, "%23")
+    .replace(/\?/g, "%3F");
+}
+
+function normalizePathSegments(segments: readonly string[]): string[] {
+  const normalized: string[] = [];
+  for (const segment of segments) {
+    if (!segment || segment === ".") {
+      continue;
+    }
+    if (segment === "..") {
+      normalized.pop();
+      continue;
+    }
+    normalized.push(segment);
+  }
+  return normalized;
+}
+
+function normalizePosixPath(filePath: string): string {
+  return `/${normalizePathSegments(filePath.split("/")).join("/")}`;
+}
+
+function normalizeWindowsDrivePath(filePath: string): string {
+  const slashPath = filePath.replace(/\\/g, "/");
+  const drive = slashPath.slice(0, 2).toUpperCase();
+  const normalized = normalizePathSegments(slashPath.slice(2).split("/"));
+  return `${drive}/${normalized.join("/")}`;
+}
+
+function normalizeWindowsUncPath(filePath: string): string {
+  const parts = filePath.replace(/\\/g, "/").replace(/^\/+/, "").split("/").filter(Boolean);
+  const [host, share, ...rest] = parts;
+  if (!host) {
+    return "/";
+  }
+  if (!share) {
+    return `//${host}`;
+  }
+  const normalized = normalizePathSegments(rest);
+  return normalized.length > 0
+    ? `//${host}/${share}/${normalized.join("/")}`
+    : `//${host}/${share}`;
+}
+
 const normalizeMarkdownUrl: UrlTransform = (url) => {
   const trimmed = url.trim();
-  if (trimmed.startsWith("/") || isWindowsFilesystemPath(decodeMarkdownDestination(trimmed))) {
+  if (trimmed.startsWith("/")) {
+    return `file://${encodePosixPathForFileUrl(trimmed)}`;
+  }
+  if (isWindowsFilesystemPath(decodeMarkdownDestination(trimmed))) {
     // Directory chips serialize Windows separators as %5C. Classify the
     // decoded path, but retain its encoding here so localFileTargetFromHref
     // decodes exactly once (a filename containing literal %5C stays literal).
@@ -1236,7 +1320,8 @@ const normalizeMarkdownUrl: UrlTransform = (url) => {
     // tilde-form local paths — expand to the same file:// form as
     // absolute paths so the local-file machinery (and the directory
     // chip) can resolve them.
-    return `file://${expandTildePath(trimmed)}`;
+    const expanded = expandTildePath(trimmed);
+    return `file://${expanded.startsWith("/") ? encodePosixPathForFileUrl(expanded) : expanded}`;
   }
 
   return isSafeMarkdownUrl(trimmed) ? trimmed : "";
@@ -1289,6 +1374,21 @@ function dataColKind(node: unknown): string | undefined {
   const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
   const value = properties?.["dataColKind"] ?? properties?.["data-col-kind"];
   return typeof value === "string" ? value : undefined;
+}
+
+function dataCellMath(node: unknown): string | undefined {
+  const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
+  const value = properties?.["dataCellMath"] ?? properties?.["data-cell-math"];
+  return value === "only" ? value : undefined;
+}
+
+function tableCellAlignStyle(
+  style: CSSProperties | undefined,
+): CSSProperties | undefined {
+  const textAlign = style?.textAlign;
+  return textAlign === "left" || textAlign === "center" || textAlign === "right"
+    ? { textAlign }
+    : undefined;
 }
 
 function sourceForNode(
@@ -1370,8 +1470,8 @@ function isKnownTextFile(filePath: string): boolean {
 function localFileTargetFromHref(
   href: string
 ): LocalFileTarget | undefined {
-  if (href.startsWith("file://")) {
-    return splitFileLineSuffix(decodeURIComponent(href.replace(/^file:\/\//, "")));
+  if (/^file:\/\//i.test(href)) {
+    return splitFileLineSuffix(decodeMarkdownDestination(href.replace(/^file:\/\//i, "")));
   }
 
   if (href.startsWith("/")) {
@@ -1385,56 +1485,83 @@ function windowsMarkdownDestinationFromSource(source: string | undefined): strin
   // CommonMark treats '\\.' and '\\_' as escapes, even inside Windows paths.
   // Match the original destination used by main's image materializer, before
   // Markdown removes those filesystem separators.
-  const match = /^!?\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)]+))/.exec(source ?? "");
-  const destination = match?.[2] ?? match?.[3];
-  return destination && isWindowsFilesystemPath(decodeMarkdownDestination(destination))
+  const destination = extractInlineMarkdownDestination(source);
+  return destination
+    && destination.includes("\\")
+    && isWindowsFilesystemPath(decodeMarkdownDestination(destination))
     ? `file://${destination}`
     : undefined;
 }
 
 function markdownImagePathFromHref(href: string): string | undefined {
   let imagePath = href;
-  if (href.startsWith("file://")) {
+  let isUnc = false;
+  if (/^file:\/\//i.test(href)) {
     // Markdown encodes backslashes. The renderer's file:// wrapper can
-    // therefore contain a drive path rather than a standard file URL.
+    // therefore contain a drive or UNC path rather than a standard file URL.
     const localPath = decodeMarkdownDestination(href.slice("file://".length));
-    if (isWindowsFilesystemPath(localPath)) {
+    if (/^[a-z]:[\\/]/i.test(localPath)) {
       imagePath = localPath;
+    } else if (localPath.startsWith("\\\\")) {
+      imagePath = localPath;
+      isUnc = true;
     } else {
       try {
         const url = new URL(href);
-        const host = url.hostname && url.hostname !== "localhost" ? `//${url.hostname}` : "";
-        imagePath = decodeURIComponent(`${host}${url.pathname}`);
+        const hasUncHost = Boolean(url.hostname && url.hostname.toLowerCase() !== "localhost");
+        isUnc = hasUncHost;
+        imagePath = decodeMarkdownDestination(
+          hasUncHost ? `//${url.hostname}${url.pathname}` : url.pathname,
+        );
       } catch {
         return undefined;
       }
     }
+  } else if (href.startsWith("\\\\")) {
+    isUnc = true;
   }
   // File URLs prefix drive paths with '/', and Windows uses either separator.
   // Infer the owning platform from the path, including for federated images.
-  if (/^\/[a-z]:[\\/]/i.test(imagePath)) imagePath = imagePath.slice(1);
-  if (isWindowsFilesystemPath(imagePath)) {
-    return splitFileLineSuffix(imagePath.replace(/\\/g, "/")).path;
+  if (!isUnc && /^\/[a-z]:[\\/]/i.test(imagePath)) imagePath = imagePath.slice(1);
+  if (/^[a-z]:[\\/]/i.test(imagePath)) {
+    return normalizeWindowsDrivePath(splitFileLineSuffix(imagePath.replace(/\\/g, "/")).path);
   }
-  return imagePath.startsWith("/") ? splitFileLineSuffix(imagePath).path : undefined;
+  if (isUnc) {
+    return normalizeWindowsUncPath(splitFileLineSuffix(imagePath.replace(/\\/g, "/")).path);
+  }
+  return imagePath.startsWith("/")
+    ? normalizePosixPath(splitFileLineSuffix(imagePath).path)
+    : undefined;
+}
+
+function indexMarkdownImagePartsByPath(
+  imageParts: AppServerThreadImagePart[] | undefined,
+): ReadonlyMap<string, AppServerThreadImagePart> | undefined {
+  if (!imageParts?.length) {
+    return undefined;
+  }
+  const byPath = new Map<string, AppServerThreadImagePart>();
+  for (const imagePart of imageParts) {
+    if (!imagePart.sourceUrl) {
+      continue;
+    }
+    const normalized = markdownImagePathFromHref(imagePart.sourceUrl);
+    if (normalized && !byPath.has(normalized)) {
+      byPath.set(normalized, imagePart);
+    }
+  }
+  return byPath.size > 0 ? byPath : undefined;
 }
 
 function findMarkdownLinkedImagePart(
-  imageParts: AppServerThreadImagePart[] | undefined,
+  imagePartsByPath: ReadonlyMap<string, AppServerThreadImagePart> | undefined,
   href: string,
 ): AppServerThreadImagePart | undefined {
-  const targetPath = markdownImagePathFromHref(href);
-  if (!targetPath) {
+  if (!imagePartsByPath) {
     return undefined;
   }
-
-  return imageParts?.find((imagePart) => {
-    if (!imagePart.sourceUrl) {
-      return false;
-    }
-
-    return markdownImagePathFromHref(imagePart.sourceUrl) === targetPath;
-  });
+  const targetPath = markdownImagePathFromHref(href);
+  return targetPath ? imagePartsByPath.get(targetPath) : undefined;
 }
 
 function fileNameFromPath(filePath: string): string {
@@ -1459,8 +1586,8 @@ function fallbackFileViewerContext(filePath: string): MarkdownFileViewerContext 
 }
 
 function denormalizeMarkdownUrl(url: string): string {
-  if (url.startsWith("file://")) {
-    return decodeURIComponent(url.replace(/^file:\/\//, ""));
+  if (/^file:\/\//i.test(url)) {
+    return decodeMarkdownDestination(url.replace(/^file:\/\//i, ""));
   }
 
   return url;

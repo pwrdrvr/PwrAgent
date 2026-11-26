@@ -1,3 +1,4 @@
+import { discoverAntigravitySkillCatalog } from "../acp/antigravity-skills";
 import { snapshotCodexSkillProfile } from "@pwragent/shared/contracts/codex-skill-profiles";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import { isResourceCheckoutCleanupCall, type CheckoutToolHandler, type CheckoutToolMode } from "../agent-tools/pwragent-resource-checkout-agent-tools";
@@ -23,6 +24,7 @@ import type { ForgeToolBridge } from "./forge-tool-bridge";
 import type { ThreadInspectionTools } from "./thread-inspection-tools";
 import type { ThreadMcpConnections } from "./thread-mcp-connections";
 import type { ManagedReviewService } from "./managed-review-service";
+import { resolveLocalReviewWorktreeRoot } from "./review-workspace-guard";
 import type { AgentToolMcpCatalogId } from "../agent-tools/agent-tool-mcp-server";
 import { buildManagedReviewLedgerToolRouter } from "../agent-tools/pwragent-managed-review-ledger-tools";
 import { isOnlyTaskMonitorWake, type SubAgentMonitorService } from "./subagent-monitor-service";
@@ -74,6 +76,7 @@ import { checkAgentAccessRequest, isAgentAccessRefusalMessage } from "../agent-t
 
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
 import { getReviewAutoFixRuns } from "../thread-reviews/review-auto-fix";
+import { isReviewFixTurnInput } from "./agent-review-submission";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
 import type { ForgeReadRequest } from "../pr-status/forge-tool-contract";
@@ -209,14 +212,15 @@ import type {
   ArchivedThreadAutomationRetirement,
   WorktreeGitWorkingStateCacheEntry,
 } from "../storage/desktop-overlay-store";
-import { materializeTranscriptImageEventForRenderer, toTranscriptImageProtocolUrl } from "../transcript-images";
+import {
+  antigravityThreadBrainRoots,
+  materializeTranscriptImageEventForRenderer,
+  toTranscriptImageProtocolUrl,
+} from "../transcript-images";
 import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { isGoalActivationEntry, ThreadGoalControl, type ThreadGoalGate } from "./thread-goal-control";
 import type { ThreadGoalRequest, ThreadGoalState } from "@pwragent/shared/contracts/thread-goal";
 import type { AcpMcpRegistrationSource, AcpMcpServerRegistration } from "../acp/acp-client";
-import {
-  buildManagedReviewContextInput,
-} from "./managed-review";
 import {
   buildCodexAgentInstructionUpdate,
   providerDeliveredAgentInstructions,
@@ -231,6 +235,7 @@ import {
   type ArchiveWorktreeResponse,
   type ArchiveThreadRequest,
   type ArchiveThreadResponse,
+  type AppServerListSkillsRequest,
   type AppServerListSkillsResponse,
   type AppServerNotification,
   type AppServerPendingThreadStart,
@@ -239,6 +244,7 @@ import {
   type AppServerPendingRequestNotification,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
+  type AppServerThreadAutoCompactionStatus,
   type AppServerThreadImagePart,
   type AppServerThreadMessageOrigin,
   type AppServerThreadReviewEntry,
@@ -854,6 +860,7 @@ import {
   buildTurnStartReservationKey,
   executionModeQueueKey,
   formatQuitThreadKey,
+  isAcpPromptTurnId,
   parseActiveTurnKey,
   parseReservedAcpStartThreadKey,
   parseThreadIdFromThreadTurnKeyBody,
@@ -888,8 +895,8 @@ import {
 } from "./backend-registry-notification-values";
 import {
   TOKEN_MISER_MANAGED_CAPABILITY_REASON,
+  buildClaudeConnectionMcpServerName,
   buildCodexConnectionMcpConfig,
-  buildCodexConnectionMcpServerName,
   buildCodexParentDynamicToolSpecs,
   buildCodexPdfMcpConfig,
   buildCodexPdfMcpDisabledConfig,
@@ -1543,6 +1550,25 @@ export class DesktopBackendRegistry {
     return starting?.turnInputSource ?? "unknown";
   };
 
+  private readonly isReviewFixTurn = (context: {
+    backend: AppServerBackendKind; threadId: string; turnId?: string;
+  }): boolean => {
+    if (!context.turnId) return false;
+    const turn = { ...context, turnId: context.turnId };
+    const exact = this.context.turnState.readTurnReviewFix(turn);
+    if (exact !== undefined) return exact;
+    const observedSequence = turn.backend === "codex"
+      ? this.codexMessageContextTurnObservations.get(turn.threadId)?.get(turn.turnId) : undefined;
+    if (turn.backend === "codex" && this.context.turnState.pendingStartedTurnId(turn.threadId) === turn.turnId) {
+      const pending = this.context.turnState.readPendingCodexTurnReviewFix(turn.threadId, observedSequence);
+      if (pending !== undefined) return pending;
+    }
+    const starting = this.findStartingTurnOrigin(turn);
+    if (starting?.turnId === undefined && observedSequence !== undefined
+      && observedSequence <= (starting?.admittedCodexTurnSequence ?? -1)) return false;
+    return starting?.reviewFix === true;
+  };
+
   /**
    * Call before the provider starts the turn. Every path must end in
    * `persistStartingTurnOrigin` or `dropStartingTurnOrigin`.
@@ -1552,12 +1578,20 @@ export class DesktopBackendRegistry {
     threadId: string;
     origin?: AppServerThreadMessageOrigin;
     turnInputSource?: TurnInputSource;
+    reviewFix?: boolean;
+    input?: readonly AppServerTurnInputItem[];
   }): StartingTurnOrigin | undefined {
-    if (!params.origin && params.turnInputSource === undefined) return undefined;
+    const reviewFix = isReviewFixTurnInput({
+      reviewFix: params.reviewFix,
+      messageOrigin: params.origin,
+      input: params.input,
+    });
+    if (!params.origin && params.turnInputSource === undefined && !reviewFix) return undefined;
     const entry: StartingTurnOrigin = {
       backend: params.backend, threadId: params.threadId, origin: params.origin,
       ...(params.backend === "codex" ? { admittedCodexTurnSequence: this.codexMessageContextTurnSequence } : {}),
       turnInputSource: resolveTurnInputSource({ turnInputSource: params.turnInputSource, messageOrigin: params.origin }),
+      ...(reviewFix ? { reviewFix: true } : {}),
     };
     this.context.turnState.addStartingOrigin(entry);
     return entry;
@@ -1572,10 +1606,18 @@ export class DesktopBackendRegistry {
     if (!entry) return;
     this.context.turnState.bindStartingOrigin(entry, turn);
     const identity = { ...turn, backend: entry.backend };
-    this.managedReviewService.observeOperatorReviewInput(identity, entry.turnInputSource);
-    if (entry.turnInputSource !== undefined && !terminalObserved
+    const isPendingCodexTurn = entry.backend === "codex" && isPendingTurnId(turn.threadId, turn.turnId);
+    if (!entry.reviewFix && !isPendingCodexTurn) {
+      this.managedReviewService.observeOperatorReviewInput(identity, entry.turnInputSource);
+    }
+    if ((entry.turnInputSource !== undefined || entry.reviewFix) && !terminalObserved
       && (entry.backend === "codex" || this.context.turnState.hasRegisteredTurn(identity))) {
-      this.context.turnState.rememberTurnInputSource(identity, entry.turnInputSource, entry.admittedCodexTurnSequence);
+      this.context.turnState.rememberTurnInputSource(
+        identity,
+        entry.turnInputSource ?? "unknown",
+        entry.admittedCodexTurnSequence,
+        entry.reviewFix,
+      );
     }
   }
 
@@ -1655,6 +1697,12 @@ export class DesktopBackendRegistry {
     reader: ((backend: AppServerBackendKind, threadId: string) => string | undefined) | undefined,
   ): void {
     this.forgeToolBridge.setThreadPrimaryGitRepositoryReader(reader);
+  }
+
+  private readThreadAutoCompaction?: (backend: AppServerBackendKind, threadId: string) => AppServerThreadAutoCompactionStatus | undefined;
+
+  setThreadAutoCompactionReader(reader: typeof this.readThreadAutoCompaction): void {
+    this.readThreadAutoCompaction = reader;
   }
 
   setLocalPullRequestAuthorityResolver(resolver: LocalPullRequestAuthorityResolver | null | undefined): void {
@@ -2124,6 +2172,7 @@ export class DesktopBackendRegistry {
       get agentThreadActions() { return current().agentThreadActions; },
       get appManagementHandler() { return current().appManagementHandler; },
       get currentTurnInputSource() { return current().currentTurnInputSource; },
+      get isReviewFixTurn() { return current().isReviewFixTurn; },
       get messagingWorkingUpdatesHandler() { return current().messagingWorkingUpdatesHandler; },
       applyAcpRuntimeSelection: (...args: Parameters<typeof this.applyAcpRuntimeSelection>) => this.applyAcpRuntimeSelection(...args),
       applyQueuedMessageTitle: (...args: Parameters<typeof this.applyQueuedMessageTitle>) => this.applyQueuedMessageTitle(...args),
@@ -3720,15 +3769,17 @@ export class DesktopBackendRegistry {
 
   async stackRepairActive(thread: StackThreadRef): Promise<boolean> {
     const active = this.getActiveTurnForThread(thread);
-    const starting = this.findStartingTurnOrigin(active ?? thread)?.origin;
-    const isRepair = (origin?: AppServerThreadMessageOrigin) =>
-      origin?.prAutomation?.kind === "auto-fix"
+    const starting = this.findStartingTurnOrigin(active ?? thread);
+    const isRepair = (origin?: AppServerThreadMessageOrigin, reviewFix?: boolean) =>
+      reviewFix === true
+      || origin?.prAutomation?.kind === "auto-fix"
       || (origin?.prAutomation?.kind === "watch" && origin.prAutomation.outcome === "failure")
       || origin?.reviewAutoFix !== undefined;
-    if (isRepair(starting)) return true;
+    if (isRepair(starting?.origin, starting?.reviewFix)) return true;
+    if (active && this.isReviewFixTurn({ ...thread, turnId: active.turnId })) return true;
     if (Object.values(getReviewAutoFixRuns().of(thread)).some(({ phase }) => phase === "queued")) return true;
     for (const entry of this.threadTurnQueue.iterateQueuedEntries(thread)) {
-      if (isRepair(entry.messageOrigin)) return true;
+      if (isRepair(entry.messageOrigin, entry.reviewFix)) return true;
     }
     if (!active) return false;
     const messageId = buildTurnUserMessageOriginId(active.turnId);
@@ -5559,6 +5610,14 @@ export class DesktopBackendRegistry {
     return resolved;
   }
 
+  private async resolveAcpAvailableCommands(params: {
+    backend: AcpBackendId;
+    cwds: Array<string | undefined>;
+    allowProbe?: boolean;
+  }): Promise<AppServerAvailableCommandSummary[]> {
+    return (await this.resolveAcpAvailableCommandCatalog(params)).commands;
+  }
+
   /**
    * Serve an ACP agent's slash commands for a request with no session behind
    * it. Cache first (free, and kept fresh by every real session's
@@ -5572,11 +5631,11 @@ export class DesktopBackendRegistry {
    * any more, and ignoring the ones already on disk lets an affected profile
    * heal on the next request.
    */
-  private async resolveAcpAvailableCommands(params: {
+  private async resolveAcpAvailableCommandCatalog(params: {
     backend: AcpBackendId;
     cwds: Array<string | undefined>;
     allowProbe?: boolean;
-  }): Promise<AppServerAvailableCommandSummary[]> {
+  }): Promise<{ commands: AppServerAvailableCommandSummary[]; cwd?: string }> {
     const repositoryPaths = await this.resolveAcpCommandRepositoryPaths(
       params.cwds,
     );
@@ -5586,22 +5645,25 @@ export class DesktopBackendRegistry {
         repositoryPath,
       );
       if (cached && cached.commands.length > 0) {
-        return cached.commands;
+        return {
+          commands: cached.commands,
+          ...(params.backend === "acp:antigravity" && cached.workspaceCwd ? { cwd: cached.workspaceCwd } : {}),
+        };
       }
     }
 
-    if (params.allowProbe === false) {
-      return [];
-    }
-
     const probeTarget = repositoryPaths[0];
-    if (!probeTarget) {
-      return [];
+    if (params.allowProbe === false || !probeTarget) {
+      return { commands: [] };
     }
-    return await this.probeAcpAvailableCommands({
+    const commands = await this.probeAcpAvailableCommands({
       backend: params.backend,
       repositoryPath: probeTarget,
     });
+    return {
+      commands,
+      ...(params.backend === "acp:antigravity" ? { cwd: path.resolve(probeTarget) } : {}),
+    };
   }
 
   /**
@@ -5763,6 +5825,7 @@ export class DesktopBackendRegistry {
           backendId: params.backend,
           repositoryPath: params.repositoryPath,
           commands,
+          ...(params.backend === "acp:antigravity" ? { workspaceCwd: path.resolve(params.repositoryPath) } : {}),
           observedAt: Date.now(),
         });
         return commands;
@@ -5845,7 +5908,7 @@ export class DesktopBackendRegistry {
     }
 
     const backend = event.backend;
-    const { commands, threadId } = event.notification.params;
+    const { commands, threadId, cwd: workspaceCwd } = event.notification.params;
     // An empty update is treated as "no news", not as "this repo has no
     // commands": agents emit one during session setup before their command
     // registry is populated, and letting that clobber a good cache would empty
@@ -5875,6 +5938,9 @@ export class DesktopBackendRegistry {
           backendId: backend,
           repositoryPath,
           commands,
+          ...(backend === "acp:antigravity" && typeof workspaceCwd === "string" && path.isAbsolute(workspaceCwd)
+            ? { workspaceCwd }
+            : {}),
           observedAt: Date.now(),
         });
       })
@@ -5889,29 +5955,71 @@ export class DesktopBackendRegistry {
 
   async listSkills(params: {
     backend?: AppServerBackendKind;
+    catalog?: AppServerListSkillsRequest["catalog"];
     cwd?: string;
     cwds?: string[];
     threadId?: string;
+    antigravityWorkspace?: {
+      cwds: string[];
+      resolvePath?: (file: string) => Promise<string | undefined>;
+    };
   } = {}): Promise<Pick<AppServerListSkillsResponse, "data">> {
     const backend = params.backend ?? "codex";
     if (isAcpBackendId(backend)) {
       const session = params.threadId
         ? this.acpBackend.getSession(backend, params.threadId)
         : undefined;
-      const sessionCommands = session?.availableCommands ?? [];
-      if (sessionCommands.length > 0) {
-        return { data: [{ commands: sessionCommands, skills: [] }] };
+      const authorized = backend === "acp:antigravity" ? params.antigravityWorkspace : undefined;
+      let cwds: Array<string | undefined> = authorized?.cwds ?? [session?.cwd, params.cwd, ...(params.cwds ?? [])];
+      let commandSession = session;
+      if (backend === "acp:antigravity" && params.threadId) {
+        const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: params.threadId });
+        const directories = overlay?.extraLinkedDirectories;
+        const workspaceCwd = resolveThreadWorkspaceCwd(session && acpSessionToThreadSummary(session), directories);
+        if (directories?.some(isHandoffDirectory)) {
+          // The owner’s handoff supersedes both a stale provider session and
+          // any pre-handoff paths sent by a viewer.
+          if (!authorized) {
+            cwds = [workspaceCwd, ...directories.filter((directory) => !isHandoffDirectory(directory))
+              .map(({ worktreePath, path }) => worktreePath ?? path)];
+          }
+          const providerCwd = session?.antigravityPrimaryCwd ?? session?.cwd;
+          if (session?.requiresAgentSessionRebind || !providerCwd || !workspaceCwd
+            || path.resolve(providerCwd) !== path.resolve(workspaceCwd)) {
+            commandSession = undefined;
+          }
+        } else if (!authorized) {
+          cwds[0] = workspaceCwd ?? session?.cwd;
+        }
+      }
+      const readCommands = async (): Promise<AppServerListSkillsResponse["data"][number]> => {
+        if (!commandSession?.availableCommands?.length) {
+          // The provider's own loader cannot honor a directory-limited file
+          // pull. A remote restricted request may only use live commands.
+          if (authorized?.resolvePath) return { commands: [], skills: [] };
+          if (backend === "acp:antigravity") {
+            return { ...await this.resolveAcpAvailableCommandCatalog({ backend, cwds }), skills: [] };
+          }
+          return { commands: await this.resolveAcpAvailableCommands({ backend, cwds }), skills: [] };
+        }
+        const cwd = backend === "acp:antigravity" && !commandSession.requiresAgentSessionRebind
+          ? commandSession.antigravityPrimaryCwd ?? commandSession.cwd
+          : undefined;
+        if (cwd && authorized?.resolvePath && !await authorized.resolvePath(cwd)) {
+          return { commands: [], skills: [] };
+        }
+        return { commands: commandSession.availableCommands, skills: [], ...(cwd ? { cwd: path.resolve(cwd) } : {}) };
+      };
+
+      if (backend !== "acp:antigravity" || params.catalog === "commands") {
+        return { data: [await readCommands()] };
       }
 
-      // No live session has reported commands for this request — either it is a
-      // launchpad draft (no thread id at all) or a session that has not yet
-      // advertised. Fall back to what the repo last told us, and probe for it
-      // when we have never seen this repo/agent pair.
-      const commands = await this.resolveAcpAvailableCommands({
-        backend,
-        cwds: [session?.cwd, params.cwd, ...(params.cwds ?? [])],
-      });
-      return { data: [{ commands, skills: [] }] };
+      // Use the worktree itself for skills. The slash-command cache uses the
+      // common repository and can cost an ACP startup on a miss.
+      const data = await discoverAntigravitySkillCatalog(cwds, authorized?.resolvePath);
+      const commands = params.catalog === "skills" ? undefined : await readCommands();
+      return { data: commands ? [commands, ...data] : data };
     }
 
     if (backend === "claude") {
@@ -6303,6 +6411,9 @@ export class DesktopBackendRegistry {
     backend: AcpBackendId;
     cwd?: string;
     executionMode: ThreadExecutionMode;
+    title?: string;
+    titleSource?: AcpSessionMetadata["titleSource"];
+    promptPlaceholderTitle?: true;
     acpRuntime?: BackendAcpSessionRuntimeState;
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpRegistrationSource;
@@ -6330,6 +6441,9 @@ export class DesktopBackendRegistry {
     const session = await this.withArchiveWorkspaceWrite(params.cwd ? [params.cwd] : [], async () => await client.startSession({
       cwd: params.cwd,
       executionMode: initialExecutionMode,
+      ...(params.title !== undefined ? { title: params.title } : {}),
+      ...(params.titleSource !== undefined ? { titleSource: params.titleSource } : {}),
+      ...(params.promptPlaceholderTitle ? { promptPlaceholderTitle: true } : {}),
       acpRuntime: effectiveAcpRuntime,
       additionalMcpRegistration: params.mcpRegistration,
       ...(params.hidden ? { hidden: true } : {}),
@@ -6528,9 +6642,15 @@ export class DesktopBackendRegistry {
         throw new Error("The Antigravity reviewer could not preserve the caller's session mode.");
       }
     }
+    const worktreeRoot = params.managedReviewLedger
+      ? await resolveLocalReviewWorktreeRoot(sessionForTurn.cwd)
+      : undefined;
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     if (params.managedReviewLedger) {
-      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId);
+      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId, {
+        cwd: sessionForTurn.cwd,
+        worktreeRoot,
+      });
     }
     await this.emit({
       backend: params.backend,
@@ -6922,17 +7042,25 @@ export class DesktopBackendRegistry {
         })
       : (await this.threadInspectionTools.readThreadInspectionSummaryForMutation({ backend, threadId, fresh: true }))?.title,
     readTitle: async (identity) => await this.findThreadForTitleGeneration(identity),
-    renameProvider: async (request, titleSource) => {
+    renameProvider: async (request, titleSource, options) => {
       const backend = request.backend ?? "codex";
       if (isAcpBackendId(backend)) {
         const nextName = request.name.trim();
         if (!nextName) throw new Error("Thread name cannot be blank.");
         const session = this.acpBackend.getSession(backend, request.threadId);
         if (!session) throw new Error("Selected ACP thread was not found.");
+        if (options?.guard) {
+          const current = acpSessionToThreadSummary(session);
+          if (!options.guard(current)) {
+            return { threadId: request.threadId, skipped: true, thread: current };
+          }
+        }
+        const { promptPlaceholderTitle: _previousPlaceholder, ...restSession } = session;
         this.acpBackend.upsertSession({
-          ...session,
+          ...restSession,
           title: nextName,
           titleSource,
+          ...(options?.promptPlaceholder ? { promptPlaceholderTitle: true } : {}),
           updatedAt: Math.max(session.updatedAt, Date.now()),
         });
         return { threadId: request.threadId };
@@ -7698,11 +7826,14 @@ export class DesktopBackendRegistry {
     const overlay = await this.overlayStore.getThreadOverlayState({ backend, threadId: request.threadId });
     if (request.display.resource === "transcript") {
       const data = await this.readThreadData(request);
-      return projectThreadDisplay(data, request, {
+      const display = projectThreadDisplay(data, request, {
         ...overlay,
         ...await this.threadUsageLedger.readPricingSubAgents({ backend, threadId: request.threadId, pricing: data.pricing }),
         activeTurnId: this.getActiveTurnForThread({ backend, threadId: request.threadId })?.turnId,
       });
+      return this.readThreadAutoCompaction
+        ? { ...display, autoCompaction: this.readThreadAutoCompaction(backend, request.threadId) ?? null }
+        : display;
     }
     this.assertNotBootstrap("readThread");
     const pricing = await this.threadUsageLedger.readThreadPricingWithLiveTokenMiser({ backend, threadId: request.threadId });
@@ -8460,6 +8591,17 @@ export class DesktopBackendRegistry {
       }
     }
 
+    if (params.backend === "acp:antigravity") {
+      const session = this.acpBackend.getSession("acp:antigravity", params.threadId);
+      for (const brainRoot of antigravityThreadBrainRoots({
+        backend: params.backend,
+        threadId: params.threadId,
+        agentSessionId: session?.agentSessionId,
+      })) {
+        roots.add(brainRoot);
+      }
+    }
+
     return [...roots];
   }
 
@@ -8782,6 +8924,11 @@ export class DesktopBackendRegistry {
      */
     rerunCodexEnvironmentSetup?: boolean;
     linkedDirectories?: LinkedDirectorySummary[];
+    /**
+     * Initial prompt-derived placeholder title for a newly created ACP thread
+     * started with an immediate prompt (for example from a launchpad).
+     */
+    initialPromptTitle?: string;
     /**
      * Report the start to every list while its workspace is prepared, as a
      * starting row (`thread/start/pending`). For callers with no row of
@@ -9204,6 +9351,9 @@ export class DesktopBackendRegistry {
     });
 
     const agentName = request.agent?.name?.trim();
+    const initialPromptTitle = !agentName && isAcpBackendId(backend)
+      ? request.initialPromptTitle?.trim() || undefined
+      : undefined;
     let gitBranch: string | undefined;
     let currentMigration: DesktopProviderThreadModelMigration | undefined;
     const metadata: Omit<StartThreadResponse, "backend" | "threadId" | "pinnedRank" | "autoPinFailure"> = {
@@ -9228,6 +9378,13 @@ export class DesktopBackendRegistry {
             backend: backend as AcpBackendId,
             cwd,
             executionMode: effectiveExecutionMode,
+            ...(initialPromptTitle
+              ? {
+                  title: initialPromptTitle,
+                  titleSource: "derived" as const,
+                  promptPlaceholderTitle: true as const,
+                }
+              : {}),
             acpRuntime,
             reasoningEffort: modelSettings.reasoningEffort,
             mcpRegistration: acpMcpRegistration,
@@ -9280,8 +9437,8 @@ export class DesktopBackendRegistry {
           {
             id: threadId,
             source: backend,
-            title: agentName || "Untitled thread",
-            titleSource: "fallback",
+            title: agentName || initialPromptTitle || "Untitled thread",
+            titleSource: initialPromptTitle ? "derived" : "fallback",
             projectKey: cwd,
             createdAt: startedAt,
             updatedAt: startedAt,
@@ -9951,6 +10108,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";
@@ -10970,8 +11128,28 @@ export class DesktopBackendRegistry {
     return { results };
   }
 
-  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn: true }): Promise<JoinedSubmissionResult>;
-  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn?: false }): Promise<ThreadTurnQueueImmediateSubmissionResult>;
+  /** Pause queued turn dispatch on a thread until the returned release runs. */
+  suspendTurnQueueDispatch(thread: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): () => void {
+    return this.threadTurnQueue.suspendDispatch(thread);
+  }
+
+  /**
+   * Resolve the owner's review turn ID for an active review when Codex emits
+   * a review item with a mismatched inner turn ID.
+   */
+  resolveReviewTurnId(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): string | undefined {
+    return this.managedReviewService.resolveReviewTurnId(params);
+  }
+
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn: true; reviewAutoFixHandoff?: boolean }): Promise<JoinedSubmissionResult>;
+  submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn?: false; reviewAutoFixHandoff?: boolean }): Promise<ThreadTurnQueueImmediateSubmissionResult>;
   async submitTurnIfIdle(params: IdleSubmission & {
     /**
      * A PwrAgent wake (Continue After, a PR watch) joins a running turn, or
@@ -10980,10 +11158,17 @@ export class DesktopBackendRegistry {
      * archive, a handoff, a workspace move or a checkout restore still does.
      */
     joinRunningTurn?: boolean;
+    /**
+     * True while the review Auto-fix runtime holds a boundary dispatch
+     * suspension so the fix can start ahead of waiting FIFO entries once the
+     * review turn ends.
+     */
+    reviewAutoFixHandoff?: boolean;
   }): Promise<JoinedSubmissionResult> {
     this.assertThreadNotHandingOff(params.backend, params.threadId);
-    const { origin = "manual", joinRunningTurn = false, canAdmit, ...entry } = params;
+    const { origin = "manual", joinRunningTurn = false, reviewAutoFixHandoff = false, canAdmit, ...entry } = params;
     const join = joinRunningTurn && isSteerableAgentTraffic(entry.messageOrigin);
+    const handoff = reviewAutoFixHandoff && Boolean(entry.messageOrigin?.reviewAutoFix);
     const overlay = await this.overlayStore.getThreadOverlayState({ backend: params.backend, threadId: params.threadId });
     // The durable archive observation also covers watches restored at startup,
     // before provider listings have populated this process's information store.
@@ -11012,7 +11197,10 @@ export class DesktopBackendRegistry {
             ...entry,
             input,
             origin,
-          }, { onAdmission });
+          }, {
+            onAdmission,
+            ...(handoff ? { bypassWaitingQueue: true, ignoreDispatchSuspensionCount: 1 } : {}),
+          });
       });
     } catch (error) {
       // Turn preparation yields after the queue's idle check. If a backend
@@ -11889,6 +12077,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }, turnInputSource?: TurnInputSource): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
     this.assertThreadOwnership();
@@ -11937,6 +12126,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
     agentMessageOrigins?: AppServerThreadMessageOrigin[];
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
@@ -12002,6 +12192,7 @@ export class DesktopBackendRegistry {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
     agentMessageOrigins?: AppServerThreadMessageOrigin[];
     agentMessages?: ThreadTurnQueueEntry["agentMessages"];
@@ -12051,7 +12242,7 @@ export class DesktopBackendRegistry {
               return undefined;
             });
           const servers = [...registrations.map((registration) => ({
-            ...registration.server, name: buildCodexConnectionMcpServerName(registration.server),
+            ...registration.server, name: buildClaudeConnectionMcpServerName(registration.server),
           })), ...(owned ? [owned.server] : [])];
           const mcpServers = Object.fromEntries(servers.map((server) => [server.name, "url" in server
             ? { type: "http" as const, url: server.url, headers: Object.fromEntries(server.headers.map(({ name, value }) => [name, value])) }
@@ -12083,6 +12274,7 @@ export class DesktopBackendRegistry {
         beginOrigin: () => this.beginStartingTurnOrigin({
           backend: params.backend, threadId: params.threadId,
           origin: prepared.messageOrigin, turnInputSource: resolveTurnInputSource(params),
+          reviewFix: params.reviewFix, input: params.input,
         }),
         submit: async (onSessionClosed) => {
           try { return await this.claudeBackend.startTurn({ ...prepared, onSessionClosed }); }
@@ -12123,23 +12315,11 @@ export class DesktopBackendRegistry {
           params.input,
           this.acpBackend.getSession(params.backend, params.threadId)?.availableCommands,
         );
-      // Leave pending review contexts for the next normal turn so they neither
-      // get prepended before `/compact` (breaking slash-command detection) nor
-      // get consumed without reaching the agent.
-      const pendingManagedReviewContextEntryIds = acpCompactTurn
+      // Clean up pending IDs from older profiles after a normal turn accepts.
+      // Review details are available through list_reviews.
+      const legacyReviewContextEntryIds = acpCompactTurn
         ? []
         : overlay?.pendingManagedReviewContextEntryIds ?? [];
-      const managedReviewEntriesById = new Map(
-        (overlay?.managedReviewEntries ?? []).map((entry) => [entry.id, entry]),
-      );
-      const pendingManagedReviewContexts =
-        pendingManagedReviewContextEntryIds.flatMap((entryId) => {
-          const entry = managedReviewEntriesById.get(entryId);
-          if (!entry) {
-            return [];
-          }
-          return [entry.output ? JSON.stringify(entry.output) : entry.review];
-        });
       const modelSettings = await this.resolveModelSettings(params.backend, {
         model: migrationApplied
           ? overlay?.model
@@ -12152,7 +12332,6 @@ export class DesktopBackendRegistry {
       const identity = { backend: params.backend, threadId: params.threadId };
       const reservationKey = buildTurnStartReservationKey(params.backend, params.threadId);
       let preparedPdfInput!: Awaited<ReturnType<typeof preparePdfTurnInput>>;
-      let userInput!: AppServerTurnInputItem[];
       let input!: AppServerTurnInputItem[];
       let promptContext: string | undefined;
       return await this.threadStarts.startAcp({
@@ -12172,24 +12351,13 @@ export class DesktopBackendRegistry {
           });
           // ACP adapters already accept data-URL image parts. Keeping those
           // intact avoids changing their established image payload contract.
-          userInput = await ownThreadInputAttachments(
+          input = await ownThreadInputAttachments(
             await enrichLocalFileInputs(preparedPdfInput.input, {
               privateStorageRoots: this.localFilePrivateStorageRoots,
             }),
             params,
             this.localFilePrivateStorageRoots,
           );
-          input = pendingManagedReviewContexts.length > 0
-            ? [
-                {
-                  type: "text" as const,
-                  text: buildManagedReviewContextInput(
-                    pendingManagedReviewContexts,
-                  ),
-                },
-                ...userInput,
-              ]
-            : userInput;
           if (this.usesSlashControlledAcpExecutionModes(params.backend)) {
             await this.flushQueuedExecutionModeIfPresent(
               params.threadId,
@@ -12212,6 +12380,7 @@ export class DesktopBackendRegistry {
         }),
         beginOrigin: () => this.beginStartingTurnOrigin({
           ...identity, origin: resolveThreadMessageOrigin(params), turnInputSource: resolveTurnInputSource(params),
+          reviewFix: params.reviewFix, input: params.input,
         }),
         submit: () => this.startAcpTurn({
           ...identity, input,
@@ -12221,7 +12390,7 @@ export class DesktopBackendRegistry {
         }, { executionMode: params.executionMode }),
         bindOrigin: (origin, result) => this.bindStartingTurnOrigin(origin, result),
         consumeReviewContexts: () => this.overlayStore.consumeManagedReviewContexts({
-          ...identity, entryIds: pendingManagedReviewContextEntryIds,
+          ...identity, entryIds: legacyReviewContextEntryIds,
         }),
         bindPdf: (result) => this.pdfAttachmentStore.bindTurn(
           { backend: params.backend, threadId: result.threadId, turnId: result.turnId },
@@ -12230,7 +12399,7 @@ export class DesktopBackendRegistry {
         scheduleTitle: (result) => this.scheduleThreadTitleGeneration({
           backend: params.backend,
           threadId: result.threadId,
-          input: userInput,
+          input,
         }),
         bindContext: (context, result) => {
           this.bindPendingThreadMessageContext(context, result.turnId);
@@ -12241,7 +12410,7 @@ export class DesktopBackendRegistry {
           backend: params.backend,
           threadId: result.threadId,
           turnId: result.turnId,
-          input: userInput,
+          input,
         }),
         // An accepted turn's prompt item claims its bound context, as every
         // other user item does. That item can reach the message-context stage
@@ -12405,6 +12574,7 @@ export class DesktopBackendRegistry {
               input: params.input,
               origin: params.origin,
               turnInputSource: params.turnInputSource,
+              reviewFix: params.reviewFix,
               executionMode: params.executionMode,
               approvalPolicy: params.approvalPolicy,
               sandbox: params.sandbox,
@@ -12430,6 +12600,8 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
       origin: resolveThreadMessageOrigin(params),
       turnInputSource: resolveTurnInputSource(params),
+      reviewFix: params.reviewFix,
+      input: params.input,
     });
     const submitted = await this.threadStarts.submitCodex({
       identity: params,
@@ -12984,14 +13156,25 @@ export class DesktopBackendRegistry {
     return this.managedReviewService.prepareReviewRequest(params, trustedSnapshot);
   }
 
+  reviewsInProgress(): ReturnType<ManagedReviewService["reviewsInProgress"]> {
+    return this.managedReviewService.reviewsInProgress();
+  }
+
+  onLiveReviewChanged(listener: Parameters<ManagedReviewService["onLiveReviewChanged"]>[0]): () => void {
+    return this.managedReviewService.onLiveReviewChanged(listener);
+  }
+
   startReview(
     params: StartReviewRequest,
     trustedSnapshot = false,
     turnAttribution?: ReturnType<typeof delegatedTurnAttribution>,
+    antigravityAccess?: Parameters<ManagedReviewService["startReview"]>[3],
   ): Promise<StartReviewResponse> {
-    if (this.codexOpenAiProviderEnabled) return this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution);
+    if (this.codexOpenAiProviderEnabled) {
+      return this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution, antigravityAccess);
+    }
     return this.assertThreadCodexInferenceAvailable(params)
-      .then(() => this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution));
+      .then(() => this.managedReviewService.startReview(params, trustedSnapshot, turnAttribution, antigravityAccess));
   }
 
   submitReview(
@@ -13678,10 +13861,13 @@ export class DesktopBackendRegistry {
     if (!findAdvertisedAcpCompactCommand(commands)) {
       return { canSteer: false, canStart: "unsupported" };
     }
+    const restartBlocked = this.isRestartGateClosed();
     return {
       canSteer: params.backend === "acp:antigravity"
+        && !restartBlocked
+        && !this.threadTurnQueue.hasActiveReviewAutoFix(params)
         && this.acpBackend.supportsActiveAntigravitySteering(params.threadId),
-      canStart: this.isRestartGateClosed() ? "blocked" : "yes",
+      canStart: restartBlocked ? "blocked" : "yes",
       ...(params.backend === "acp:antigravity" ? { reportsFillOnNextTurn: true } : {}),
     };
   }
@@ -13705,7 +13891,7 @@ export class DesktopBackendRegistry {
     expectedTurnId: string;
     requestId: string;
     messageOrigin: AppServerThreadMessageOrigin;
-  }): Promise<unknown> {
+  }): Promise<SteerTurnResponse> {
     let promptText = "/compact";
     if (isAcpBackendId(params.backend)) {
       const commands = await this.resolveAcpThreadAvailableCommands({
@@ -14372,7 +14558,12 @@ export class DesktopBackendRegistry {
                   prompt: promptPayload.prompt,
                   ...(promptPayload.parts.length > 0 ? { parts: promptPayload.parts } : {}),
                 }
-              : {}),
+              : promptPayload.parts.some((part) => part.type !== "text")
+                ? {
+                    prompt: promptPayload.prompt,
+                    parts: promptPayload.parts,
+                  }
+                : {}),
             sessionId: params.threadId,
             text,
           });
@@ -19939,8 +20130,8 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind;
     threadId: string;
     input: AppServerTurnInputItem[];
-  }): void {
-    this.threadTitles.schedule(params);
+  }): Promise<void> {
+    return this.threadTitles.schedule(params);
   }
 
   private schedulePendingThreadTitleGenerationFromLifecycle(params: {
@@ -20252,6 +20443,13 @@ export class DesktopBackendRegistry {
         const metadata = await this.overlayStore.getThreadMetadata?.({ backend: "codex", threadId: params.threadId });
         return thread.archivedAt === undefined ? this.withObservedThreadName({ ...thread, ...projectOwnerThreadTitle(thread, metadata) }) : undefined;
       }).catch(() => undefined);
+    }
+    if (isAcpBackendId(params.backend)) {
+      const session = this.acpBackend.getSession(params.backend, params.threadId);
+      if (!session || session.archivedAt !== undefined || session.hidden) {
+        return undefined;
+      }
+      return acpSessionToThreadSummary(session);
     }
     const activeThreads = await this.listThreads({
       backend: params.backend,
@@ -22825,7 +23023,8 @@ export class DesktopBackendRegistry {
     const previous = this.transcriptImageWork.get(key);
     const item = notification.method === "item/completed" ? readRecord(notification.params.item) : undefined;
     const materializeImages = item?.type === "agentMessage" || item?.type === "imageView"
-      || item?.type === "mcpToolCall" || item?.type === "dynamicToolCall";
+      || item?.type === "mcpToolCall" || item?.type === "dynamicToolCall"
+      || (item?.type === "commandExecution" && Array.isArray(item.images) && item.images.length > 0);
     // Keep lifecycle bookkeeping (including queue release) and subsequent
     // transcript events behind image work, in arrival order. Extend the chain
     // through delivery, so idle or the next turn cannot overtake a held terminal.
@@ -23200,9 +23399,20 @@ export class DesktopBackendRegistry {
         const pendingTurnId = buildPendingTurnId(threadId);
         const pendingActiveKey = buildActiveTurnKey("codex", threadId, pendingTurnId);
         const pendingModeKey = buildActiveTurnModeKey(threadId, pendingTurnId);
-        const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId,
-          this.codexMessageContextTurnObservations.get(threadId)?.get(turnId));
-        if (canTransferPending) this.bindDeferredJobMonitorCreation(threadId, turnId);
+        const observedTurnSequence = this.codexMessageContextTurnObservations.get(threadId)?.get(turnId);
+        const pendingSource = !isPendingTurnId(threadId, turnId)
+          ? this.context.turnState.readPendingCodexTurnInputSource(threadId, observedTurnSequence)
+          : undefined;
+        const pendingReviewFix = pendingSource !== undefined
+          ? this.context.turnState.readPendingCodexTurnReviewFix(threadId, observedTurnSequence)
+          : undefined;
+        const canTransferPending = this.context.turnState.transferPendingCodexTurnInputSource(threadId, turnId, observedTurnSequence);
+        if (canTransferPending) {
+          if (pendingSource !== undefined && !pendingReviewFix) {
+            this.managedReviewService.observeOperatorReviewInput({ backend: "codex", threadId, turnId }, pendingSource);
+          }
+          this.bindDeferredJobMonitorCreation(threadId, turnId);
+        }
         const collaborationMode = canTransferPending ? this.context.turnState.collaborationMode(pendingActiveKey) : undefined;
         const pendingMode = collaborationMode ? this.context.turnState.executionMode(pendingModeKey) : undefined;
         if (collaborationMode) {
@@ -23313,29 +23523,30 @@ export class DesktopBackendRegistry {
     const turnId = turnIdFromTerminalNotification(event.notification);
     const notification = event.notification;
     const { managedReview } = delivery;
-    const genericActiveTurnKeyPrefix =
-      `${event.backend}:${notification.params.threadId}:`;
-    const hadGenericActiveTurn = Array.from(this.context.turnState.registeredTurnKeys()).some((key) =>
-      key.startsWith(genericActiveTurnKeyPrefix),
-    );
+    const thread = { backend: event.backend, threadId: notification.params.threadId };
     const hadMatchingGenericActiveTurn = turnId !== undefined
-      && this.context.turnState.hasRegisteredTurn({ backend: event.backend, threadId: notification.params.threadId, turnId: turnId });
+      && this.context.turnState.hasRegisteredTurn({ ...thread, turnId });
+    let retiredAcpTurn = false;
     if (turnId) {
       if (isAcpBackendId(event.backend)) {
-        for (const key of Array.from(this.context.turnState.registeredTurnKeys())) {
-          if (key.startsWith(genericActiveTurnKeyPrefix)) {
-            this.context.turnState.unregisterTurn(key);
-            const parsed = parseActiveTurnKey(key);
-            backendRegistryLog.info("ACP active turn removed", {
-              backend: event.backend,
-              threadId: notification.params.threadId,
-              turnId: parsed?.turnId ?? null,
-              method: event.notification.method,
-              completedTurnId: turnId,
-            });
-            if (parsed) {
-              this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
-            }
+        const terminalTurn = { ...thread, turnId };
+        // A stopped prompt can report its own terminal again after a new
+        // prompt starts. A prompt ID issued for this thread can only retire
+        // that prompt. Keep the fallback for terminals with a drifted ID.
+        const recoverDriftedId = !hadMatchingGenericActiveTurn && !isAcpPromptTurnId(thread.threadId, turnId);
+        const turns = recoverDriftedId
+          ? this.context.turnState.registeredOtherProviderTurnsForThread(thread)
+          : [terminalTurn];
+        for (const turn of turns) {
+          if (!this.context.turnState.unregisterTurn(turn)) continue;
+          retiredAcpTurn = true;
+          backendRegistryLog.info("ACP active turn removed", {
+            ...turn,
+            method: event.notification.method,
+            completedTurnId: turnId,
+          });
+          if (turn.turnId !== turnId) {
+            this.clearAcceptedToolCallsForEndedTurn(turn.backend, turn.threadId, turn.turnId);
           }
         }
       } else {
@@ -23350,8 +23561,7 @@ export class DesktopBackendRegistry {
         turnId,
       });
     }
-    if ((event.backend === "claude" && hadMatchingGenericActiveTurn)
-      || (isAcpBackendId(event.backend) && hadGenericActiveTurn)) {
+    if ((event.backend === "claude" && hadMatchingGenericActiveTurn) || retiredAcpTurn) {
       await this.adoptThreadBranchChangeFromActiveTurn({
         backend: event.backend,
         threadId: notification.params.threadId,

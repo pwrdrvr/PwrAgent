@@ -1759,7 +1759,7 @@ describe("AcpSessionReplayNormalizer", () => {
       }),
     ).toBe("Refactor toolchain config");
     // Empty/whitespace summary still bails to undefined so the existing
-    // fallback path keeps the seed title (e.g. "ACP session").
+    // fallback path keeps the seed title (e.g. "Untitled thread").
     expect(
       readAcpTopicTitle({
         sessionUpdate: "session_summary_generated",
@@ -1805,6 +1805,33 @@ describe("AcpSessionReplayNormalizer", () => {
         text: "Can you summarize the review results for me?",
       }),
     ]);
+  });
+
+  it.each(["Keep the README current", "Quote [End PwrAgent review sub-agent results] inside a finding"])("restores the old recorded ACP prompt without the review JSON (%j)", (title) => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    const context = [
+      "[PwrAgent review sub-agent results — context for this turn]",
+      JSON.stringify({ findings: [{ title }] }),
+      "[End PwrAgent review sub-agent results]",
+    ].join("\n\n");
+    const reply = "Continue after the review";
+    const attachment = { type: "file", name: "notes.txt", mimeType: "text/plain", sizeBytes: 8 };
+    const replay = normalizer.apply({
+      sessionId: "session-1",
+      receivedAt: 1000,
+      update: {
+        kind: "pwragent_user_prompt",
+        turnId: "turn-1",
+        prompt: `${context}\n${reply}`,
+        parts: [{ type: "text", text: context }, { type: "text", text: reply }, attachment],
+      },
+    });
+
+    expect(replay.entries).toEqual([expect.objectContaining({
+      type: "message", role: "user", text: reply,
+      parts: [{ type: "text", text: reply }, attachment],
+    })]);
+    expect(replay.lastUserMessage).toBe(reply);
   });
 
   it("keeps user text that shares a chunk with the review context block", () => {

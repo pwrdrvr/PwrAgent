@@ -7,6 +7,7 @@ import { MessagingBackendEventRouter } from "../messaging/core/messaging-backend
 import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
 import { messagingModules } from "./fixtures/messaging-controller-modules";
 import { messagingCanonicalQueueHarness } from "./fixtures/messaging-canonical-queue-harness";
+import { messagingInboundHarness } from "./fixtures/messaging-inbound-harness";
 
 function gate() {
   let resolve!: () => void;
@@ -149,6 +150,123 @@ describe("MessagingBackendEventRouter", () => {
       expect(read).not.toHaveBeenCalled();
     } finally {
       await f.close();
+    }
+  });
+
+  it("delivers only the final reply for multi-bubble ACP turns and suppresses partial text on failed turns", async () => {
+    const harness = await messagingInboundHarness();
+    const acpBinding: MessagingBindingRecord = {
+      ...binding,
+      id: "acp-binding",
+      backend: "acp:antigravity",
+      threadId: "acp-thread-1",
+      preferences: { toolUpdateMode: "show_none", updatedAt: 1_000 },
+    };
+    try {
+      await harness.store.upsertBinding(acpBinding);
+
+      // Multi-bubble ACP turn: mid-turn progress bubble -> tool call -> final bubble -> turn/completed.
+      await harness.controller.handleBackendEvent({
+        backend: "acp:antigravity",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "acp-thread-1", turn: { id: "turn-1", status: "in_progress" } },
+        },
+      });
+      await harness.controller.handleBackendEvent({
+        backend: "acp:antigravity",
+        notification: {
+          method: "item/agentMessage/delta",
+          params: { threadId: "acp-thread-1", turnId: "turn-1", itemId: "b1", phase: "final", delta: "Checking files..." },
+        },
+      });
+      await harness.controller.handleBackendEvent({
+        backend: "acp:antigravity",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "acp-thread-1",
+            turnId: "turn-1",
+            item: { id: "b1", type: "agentMessage", phase: "partial", text: "Checking files..." },
+          },
+        },
+      });
+      await harness.controller.handleBackendEvent({
+        backend: "acp:antigravity",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "acp-thread-1",
+            turnId: "turn-1",
+            item: { id: "tool-1", type: "commandExecution", command: "ls", status: "in_progress" },
+          },
+        },
+      });
+      await harness.controller.handleBackendEvent({
+        backend: "acp:antigravity",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "acp-thread-1",
+            turnId: "turn-1",
+            item: { id: "b2", type: "agentMessage", phase: "final", text: "All checks passed." },
+          },
+        },
+      });
+      await harness.controller.handleBackendEvent({
+        backend: "acp:antigravity",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "acp-thread-1",
+            turnId: "turn-1",
+            turn: { id: "turn-1", status: "completed", output: [{ type: "text", text: "All checks passed." }] },
+          },
+        },
+      });
+
+      const deliveredMessages = harness.deliveries
+        .filter((intent) => intent.kind === "message")
+        .map((intent) => intent.parts?.map((part) => ("text" in part ? part.text : "")).join("") ?? "");
+      expect(deliveredMessages).toEqual(["All checks passed."]);
+
+      // Failed ACP turn: partial interrupted bubble -> turn/failed must not post partial text as a reply.
+      harness.deliveries.length = 0;
+      await harness.controller.handleBackendEvent({
+        backend: "acp:antigravity",
+        notification: {
+          method: "turn/started",
+          params: { threadId: "acp-thread-1", turn: { id: "turn-2", status: "in_progress" } },
+        },
+      });
+      await harness.controller.handleBackendEvent({
+        backend: "acp:antigravity",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "acp-thread-1",
+            turnId: "turn-2",
+            item: { id: "b-err", type: "agentMessage", phase: "partial", text: "Halfway through..." },
+          },
+        },
+      });
+      await harness.controller.handleBackendEvent({
+        backend: "acp:antigravity",
+        notification: {
+          method: "turn/failed",
+          params: {
+            threadId: "acp-thread-1",
+            turnId: "turn-2",
+            turn: { id: "turn-2", status: "failed", error: { message: "Stream dropped" } },
+          },
+        },
+      });
+
+      const failedTurnTexts = harness.deliveries.map((intent) => JSON.stringify(intent));
+      expect(failedTurnTexts.some((entry) => entry.includes("Halfway through..."))).toBe(false);
+      expect(failedTurnTexts.some((entry) => entry.includes("Stream dropped"))).toBe(true);
+    } finally {
+      await harness.close();
     }
   });
 });

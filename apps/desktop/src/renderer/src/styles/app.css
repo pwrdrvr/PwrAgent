@@ -8241,17 +8241,156 @@ button.stack-display__thread,
   position: fixed;
   z-index: 50;
   flex-direction: column;
-  gap: 4px;
-  padding: 8px;
+  width: 316px;
+  max-height: min(404px, calc(100vh - 16px));
+  overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--popover-bg);
   box-shadow: var(--shadow-popover);
 }
 
-.reaction-picker__row {
+.reaction-picker__search {
   display: flex;
-  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 8px 0 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reaction-picker__search:has(.reaction-picker__search-input:focus-visible) {
+  border-radius: 7px 7px 0 0;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.reaction-picker__search-icon {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.reaction-picker__search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1;
+  font-family: var(--font-sans);
+  outline: none;
+}
+
+.reaction-picker__search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.reaction-picker__search-input::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.reaction-picker__search-clear {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.reaction-picker__search-clear:hover,
+.reaction-picker__search-clear:focus-visible {
+  border-color: var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.reaction-picker__search-clear:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.reaction-picker__tabs {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 2px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.reaction-picker__tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease,
+    color 100ms ease;
+}
+
+.reaction-picker__tab:hover,
+.reaction-picker__tab:focus-visible {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.reaction-picker__tab:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.reaction-picker__tab.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.reaction-picker__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 112px;
+  max-height: 268px;
+  padding: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.reaction-picker__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reaction-picker__section-label {
+  padding: 0 2px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.reaction-picker__grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 4px;
 }
 
@@ -8259,8 +8398,8 @@ button.stack-display__thread,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 100%;
+  height: 32px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -8278,7 +8417,8 @@ button.stack-display__thread,
 }
 
 .reaction-picker__option:hover,
-.reaction-picker__option:focus-visible {
+.reaction-picker__option:focus-visible,
+.reaction-picker__option.is-match {
   border-color: var(--accent-border);
   background: var(--bg-row-active);
 }
@@ -8294,71 +8434,57 @@ button.stack-display__thread,
   background: var(--accent-soft);
 }
 
-.reaction-picker__custom {
+.reaction-picker__empty {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 4px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border-subtle);
+  justify-content: center;
+  min-height: 96px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
-.reaction-picker__custom-input {
+.reaction-picker__footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
+.reaction-picker__preview-emoji {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+  font-variant-emoji: emoji;
+}
+
+.reaction-picker__preview-name {
   flex: 1 1 auto;
   min-width: 0;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-input);
+  overflow: hidden;
   color: var(--text-primary);
-  font-size: 13px;
-  line-height: 1;
-  font-family: inherit;
-}
-
-.reaction-picker__custom-input::placeholder {
-  color: var(--text-muted);
-}
-
-.reaction-picker__custom-input:focus-visible {
-  border-color: var(--accent-border);
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 1px;
-}
-
-.reaction-picker__custom-submit {
-  flex: 0 0 auto;
-  appearance: none;
-  cursor: pointer;
-  height: 24px;
-  padding: 0 10px;
-  border: 1px solid var(--accent-border);
-  border-radius: 6px;
-  background: var(--accent-soft);
-  color: var(--accent-bright);
   font-size: 12px;
-  font-weight: 600;
-  line-height: 1;
-  transition:
-    background 100ms ease,
-    border-color 100ms ease;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.reaction-picker__custom-submit:hover:not(:disabled),
-.reaction-picker__custom-submit:focus-visible {
-  background: var(--accent-fill);
-  color: var(--button-text);
+.reaction-picker__preview-meta {
+  flex: 0 0 auto;
+  max-width: 112px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.reaction-picker__custom-submit:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.reaction-picker__custom-submit:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
+.reaction-picker__footer-hint {
+  color: var(--text-secondary);
+  font-size: 11px;
 }
 
 /* Title line — a sibling of the open-thread overlay since the
@@ -27017,6 +27143,29 @@ button.stack-display__thread,
   color: var(--text-secondary);
 }
 
+.compact-composer__mention-option--emoji {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.compact-composer__mention-emoji {
+  flex: none;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.compact-composer__mention-option--emoji .compact-composer__mention-title {
+  flex: 0 1 auto;
+  font-family: var(--font-mono);
+}
+
+.compact-composer__mention-option--emoji .compact-composer__mention-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  text-align: right;
+}
+
 /* Chip + menu wrapper: the chip must be able to shrink and truncate, and
    the menu anchors to it. */
 .compact-composer__menu {
@@ -29395,6 +29544,45 @@ button.stack-display__thread,
   font-family: var(--font-mono);
   font-size: 11px;
   text-align: right;
+}
+
+.thread-todo-continue-after {
+  margin-top: 6px;
+}
+
+.thread-todo-continue-after__conditions {
+  margin: 2px 0 0;
+  padding-left: 14px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.thread-todo-continue-after__conditions li {
+  overflow-wrap: anywhere;
+}
+
+.thread-todo-continue-after__continuation {
+  margin: 3px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 17px;
+  overflow-wrap: anywhere;
+}
+
+.thread-todo-continue-after__continuation.is-clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.thread-todo-continue-after__note {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 16px;
 }
 
 .thread-todo-card__facts {
@@ -32704,6 +32892,58 @@ a.transcript-message__messaging-origin:focus-visible {
   height: 11px;
 }
 
+.thread-markdown__table-wrap {
+  position: relative;
+  max-width: 100%;
+  isolation: isolate;
+}
+
+/* Subtle horizontal scroll-edge fades signal off-screen columns when macOS
+   hides overlay scrollbars at rest. Driven by data-scroll-left /
+   data-scroll-right on the wrapper so the scroller's outset focus ring stays
+   unclipped and no React re-renders happen during scrolling. */
+.thread-markdown__table-wrap::before,
+.thread-markdown__table-wrap::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 24px;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.thread-markdown__table-wrap::before {
+  left: 1px;
+  border-radius: 7px 0 0 7px;
+  background: linear-gradient(
+    to right,
+    var(--bg-app) 0%,
+    color-mix(in srgb, var(--bg-app) 72%, transparent) 36%,
+    transparent 100%
+  );
+  box-shadow: inset 1px 0 0 var(--border-strong);
+}
+
+.thread-markdown__table-wrap::after {
+  right: 1px;
+  border-radius: 0 7px 7px 0;
+  background: linear-gradient(
+    to left,
+    var(--bg-app) 0%,
+    color-mix(in srgb, var(--bg-app) 72%, transparent) 36%,
+    transparent 100%
+  );
+  box-shadow: inset -1px 0 0 var(--border-strong);
+}
+
+.thread-markdown__table-wrap[data-scroll-left="true"]::before,
+.thread-markdown__table-wrap[data-scroll-right="true"]::after {
+  opacity: 1;
+}
+
 .thread-markdown__table-scroll {
   max-width: 100%;
   overflow-x: auto;
@@ -32717,12 +32957,17 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: 2px;
 }
 
+.thread-markdown__table-scroll :where(:focus-visible) {
+  scroll-margin-inline: 32px;
+}
+
 .thread-markdown__table {
   width: max-content;
   min-width: 100%;
   border-collapse: collapse;
   font-size: 13px;
   line-height: 1.45;
+  font-variant-numeric: tabular-nums;
 }
 
 .thread-markdown__thead {
@@ -32736,6 +32981,8 @@ a.transcript-message__messaging-origin:focus-visible {
   border-left: 1px solid var(--border-subtle);
   text-align: left;
   vertical-align: top;
+  overflow-wrap: break-word;
+  text-wrap: pretty;
 }
 
 .thread-markdown__th:first-child,
@@ -32758,11 +33005,13 @@ a.transcript-message__messaging-origin:focus-visible {
 
 /* Content-aware column sizing.
    The remark-table-profile plugin stamps each <th>/<td> with a
-   data-col-kind attribute based on the column's content shape:
-     - tag:   every cell is <=4 chars (e.g. "#", "Sev", "P1", "✓")
-     - label: longest cell is <=40 chars and <=4 words (e.g. file paths,
-              short identifiers, key names) — should not wrap when possible
-     - prose: longer or multi-sentence content — wraps and shares space */
+   data-col-kind attribute based on the column's header and body shape:
+     - tag:   every body cell is <=4 visual cols and header is compact
+              (<=12 cols, 1 word) — e.g. "#", "Sev", "Severity", "P1", "✓"
+     - label: body and header fit <=40 visual cols and <=4 words (e.g. file
+              paths, short identifiers, key names) — stays single-line up to
+              36ch under table width: max-content and wraps if wider
+     - prose: longer or multi-word content — wraps within 24ch..48ch */
 .thread-markdown__th[data-col-kind="tag"],
 .thread-markdown__td[data-col-kind="tag"] {
   width: 1%;
@@ -32773,9 +33022,7 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .thread-markdown__th[data-col-kind="label"],
 .thread-markdown__td[data-col-kind="label"] {
-  min-width: max-content;
   max-width: 36ch;
-  white-space: nowrap;
 }
 
 .thread-markdown__th[data-col-kind="prose"],
@@ -32784,11 +33031,23 @@ a.transcript-message__messaging-origin:focus-visible {
   max-width: 48ch;
 }
 
-/* Headers are typically short enough to stay on one line regardless of kind */
-.thread-markdown__th {
+/* Exempt formula-only cells and display equations from max-width clipping so
+   standalone equations keep their natural width and scroll horizontally with
+   the table, while mixed prose + inline math cells still wrap at their column
+   cap. Keep individual inline KaTeX formulas unbroken inside cells. */
+.thread-markdown__th[data-cell-math="only"]:has(.katex),
+.thread-markdown__td[data-cell-math="only"]:has(.katex),
+.thread-markdown__th:has(.katex-display),
+.thread-markdown__td:has(.katex-display) {
+  max-width: none;
+}
+
+.thread-markdown__th .katex,
+.thread-markdown__td .katex {
   white-space: nowrap;
 }
 
+.thread-markdown__th .transcript-message__code,
 .thread-markdown__td .transcript-message__code {
   display: inline;
   white-space: normal;
@@ -32796,17 +33055,21 @@ a.transcript-message__messaging-origin:focus-visible {
   word-break: break-word;
 }
 
+.thread-markdown__th .transcript-message__link,
 .thread-markdown__td .transcript-message__link {
   overflow-wrap: anywhere;
   word-break: normal;
 }
 
-/* Label cells: links and code chips are allowed to break if the cell
-   still overflows after honoring max-width — prevents a long path from
-   pushing the table beyond the scroll wrapper without a break opportunity */
-.thread-markdown__td[data-col-kind="label"] .transcript-message__link,
-.thread-markdown__td[data-col-kind="label"] .transcript-message__code {
-  white-space: normal;
+/* Tag columns use width: 1% and rely on white-space: nowrap so min-content
+   keeps the full tag/header width instead of collapsing to a single char. */
+.thread-markdown__th[data-col-kind="tag"] .transcript-message__code,
+.thread-markdown__td[data-col-kind="tag"] .transcript-message__code,
+.thread-markdown__th[data-col-kind="tag"] .transcript-message__link,
+.thread-markdown__td[data-col-kind="tag"] .transcript-message__link {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .markdown-document-modal {
@@ -37448,6 +37711,184 @@ div.composer-error-row__toggle {
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.45;
+}
+
+/* Durable transcript card left when a handoff to-do launches a thread. */
+.transcript-launched-todo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.transcript-launched-todo[data-setup-failed="true"] {
+  border-color: var(--danger-border);
+}
+
+.transcript-launched-todo__header {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.transcript-launched-todo__toggle,
+.transcript-launched-todo__label {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+}
+
+.transcript-launched-todo__toggle {
+  padding: 2px 4px 2px 2px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.transcript-launched-todo__toggle:hover {
+  color: var(--text-primary);
+}
+
+.transcript-launched-todo__toggle[aria-expanded="true"] .transcript-activity__chevron {
+  transform: rotate(45deg);
+}
+
+.transcript-launched-todo__toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.transcript-launched-todo__icon {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-muted);
+}
+
+.transcript-launched-todo__verb {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.transcript-launched-todo__meta {
+  display: inline-flex;
+  min-width: 0;
+  margin-left: auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.transcript-launched-todo__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.transcript-launched-todo__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.transcript-launched-todo__detail {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.transcript-launched-todo[data-expanded="true"] .transcript-launched-todo__detail {
+  display: block;
+  overflow: visible;
+}
+
+.transcript-launched-todo__facts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.transcript-launched-todo__fact-sep {
+  opacity: 0.6;
+}
+
+.transcript-launched-todo__notice {
+  margin: 2px 0 0;
+  color: var(--status-warning-text);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.transcript-launched-todo__error-preview,
+.transcript-launched-todo__error-text {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.transcript-launched-todo__error-preview {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.transcript-launched-todo__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.transcript-launched-todo__section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.transcript-launched-todo__section > :last-child {
+  margin-bottom: 0;
+}
+
+.transcript-launched-todo__section-label {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.transcript-launched-todo__steps {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 /* Inside the accent-framed card the toggle must sit ON the card's text
@@ -48274,7 +48715,7 @@ button.composer__subthread-source-parent:hover {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 8px 6px;
 }
 
 .composer__pending-controls {
@@ -48335,13 +48776,10 @@ button.composer__subthread-source-parent:hover {
 .composer__application-actions {
   display: inline-flex;
   min-width: 0;
+  max-width: 100%;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.composer__footer-spacer {
-  min-width: 0;
 }
 
 .composer__application-button {
@@ -51899,6 +52337,52 @@ button.composer__subthread-source-parent:hover {
   width: min(100%, 440px);
 }
 
+.composer__autocomplete--emoji {
+  right: auto;
+  width: min(100%, 340px);
+  gap: 2px;
+  padding: 6px;
+  border-color: var(--border-subtle);
+  box-shadow: var(--shadow-popover);
+}
+
+.composer__autocomplete--emoji .composer__autocomplete-option {
+  display: grid;
+  grid-template-columns: 22px auto minmax(0, 1fr);
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+}
+
+.composer__autocomplete-emoji {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.composer__autocomplete-emoji-shortcode {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer__autocomplete-emoji-name {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* The kind badge is the row's only classifier, so it never shrinks — the
    title label absorbs the width instead. The auto margin pins it to the
    row's right edge: the label shrink-wraps, so without it a short title
@@ -53114,12 +53598,21 @@ button.composer__subthread-source-parent:hover {
   opacity: 1;
 }
 
+/* Right-aligned trailing controls (`margin-left: auto`) share the wrapped
+   overflow line of `.composer__setup` whenever they fit, and drop flush-right
+   onto the next line otherwise. Left padding adds a subtle gutter so they
+   stay visually distinct from left-hand controls right at the wrap edge. */
 .composer__actions {
   display: flex;
   align-items: center;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 6px;
   justify-content: flex-end;
+  margin-left: auto;
+  max-width: 100%;
+  padding-left: 6px;
+  box-sizing: border-box;
 }
 
 /* Send / Queue / Stop / Cancel ride the footer as chips so they sit flush
@@ -53433,7 +53926,11 @@ button.composer__subthread-source-parent:hover {
 .context-window-moon {
   display: inline-flex;
   min-height: 26px;
-  min-width: 0;
+  /* Reserve the sprite, gap and up to four percentage characters for every phase. */
+  inline-size: calc(26px + 7px + 4ch);
+  box-sizing: content-box;
+  flex-shrink: 0;
+  justify-content: flex-end;
   align-items: center;
   align-self: center;
   gap: 7px;

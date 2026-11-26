@@ -1,11 +1,35 @@
 import { createHash } from "node:crypto";
 import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
 import type { StartReviewRequest } from "@pwragent/shared/contracts/agent";
-import type { AppServerReviewPullRequestSnapshot } from "@pwragent/shared/contracts/normalized-app-server";
+import type {
+  AppServerReviewPullRequestSnapshot,
+  AppServerThreadMessageOrigin,
+  AppServerTurnInputItem,
+} from "@pwragent/shared/contracts/normalized-app-server";
+import { isReviewFixPromptText } from "../../shared/review-fix-prompts";
 import { normalizeWorkspacePath } from "./review-workspace-guard";
 
 export function isOperatorReviewInput(source?: TurnInputSource): boolean {
   return source === "desktop" || source === "federation" || source === "messaging";
+}
+
+/**
+ * True when a turn was started to settle findings from an existing review:
+ * automatic review Auto-fix, a review card's Auto-fix / Fix / Fix now control,
+ * or an older Federation viewer sending the canonical review-fix prompt.
+ * Review-fix turns must never reset the agent review allowance or schedule
+ * another review via `start_review`.
+ */
+export function isReviewFixTurnInput(params: {
+  reviewFix?: boolean;
+  messageOrigin?: AppServerThreadMessageOrigin;
+  input?: readonly AppServerTurnInputItem[];
+}): boolean {
+  if (params.reviewFix === true || params.messageOrigin?.reviewAutoFix !== undefined) return true;
+  if (!params.input) return false;
+  return params.input.some(
+    (item) => item.type === "text" && typeof item.text === "string" && isReviewFixPromptText(item.text),
+  );
 }
 
 function pullRequestDiff(snapshot: AppServerReviewPullRequestSnapshot): string {

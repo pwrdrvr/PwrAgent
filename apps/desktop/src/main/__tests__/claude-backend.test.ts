@@ -4047,7 +4047,9 @@ describe("Claude permission bridge", () => {
     const input = { query: "x", __meta: { scope: "all" } };
     await handler("mcp__crm__search", input, { signal: new AbortController().signal, toolUseID: "tool", requestId: "sdk-request" });
     expect(request.mock.calls[0]?.[0].params).toMatchObject({
-      arguments: input, command: `mcp__crm__search: ${JSON.stringify(input)}`,
+      arguments: input,
+      acpMcpToolName: "crm / search",
+      acpMcpToolDetail: JSON.stringify(input, null, 2),
     });
   });
 

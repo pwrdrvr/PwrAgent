@@ -2813,7 +2813,7 @@ export type KimiStartPrompt = (params: {
   promptContent?: unknown[];
   parts?: unknown[];
   turnId?: string;
-}) => { sessionId: string; turnId: string };
+}) => { sessionId: string; turnId: string } | Promise<{ sessionId: string; turnId: string }>;
 
 type AcpSteerSession = (params: {
   sessionId: string;
@@ -2929,6 +2929,8 @@ export function createKimiAcpRegistry(options?: {
       executionMode: "default" | "auto" | "full-access";
       hidden?: boolean;
       title?: string;
+      titleSource?: AcpSessionMetadata["titleSource"];
+      promptPlaceholderTitle?: true;
     }) => {
       if (options?.startSession) {
         return await options.startSession(params);
@@ -2939,7 +2941,9 @@ export function createKimiAcpRegistry(options?: {
       const metadata: AcpSessionMetadata = {
         backendId: acpBackendId,
         sessionId: resolvedSessionId,
-        title: params.title ?? "ACP session",
+        title: params.title ?? "Untitled thread",
+        titleSource: params.titleSource ?? (params.title ? "explicit" : "fallback"),
+        ...(params.promptPlaceholderTitle ? { promptPlaceholderTitle: true as const } : {}),
         cwd: params.cwd,
         createdAt: 1000,
         updatedAt: 1000,

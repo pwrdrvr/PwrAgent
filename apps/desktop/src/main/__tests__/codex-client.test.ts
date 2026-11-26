@@ -9308,6 +9308,50 @@ describe("CodexAppServerClient", () => {
     });
   });
 
+  it.each([
+    ["pullRequest", true],
+    ["pullRequest", false],
+    ["branch", true],
+    ["branch", false],
+  ] as const)("suppresses split-turn native review prompts on replay (%s, inner first: %s)", async (target, innerFirst) => {
+    const { extractThreadReplayFromReadResult } = await import("../codex-app-server/desktop-client");
+    const text = target === "pullRequest" ? pullRequestReviewPrompt
+      : "Review the code changes against the base branch 'origin/main'. The merge base commit for this comparison is abc123. Run git diff abc123 to inspect the changes relative to origin/main. Provide prioritized, actionable findings.";
+    const innerTurn = {
+      id: "inner-review-turn",
+      rootTurnId: "outer-review-turn",
+      status: "interrupted",
+      items: [
+        { type: "userMessage", id: "generated", content: [{ type: "text", text }] },
+        { type: "userMessage", id: "sourced", origin: { kind: "messaging" }, content: [{ type: "text", text }] },
+        { type: "userMessage", id: "steer", content: [{ type: "text", text: "Review these code changes for security and provide prioritized findings." }] },
+        { type: "commandExecution", id: "cmd-1", command: "git diff", status: "completed" },
+      ],
+    };
+    const outerTurn = {
+      id: "outer-review-turn",
+      rootTurnId: "outer-review-turn",
+      status: "completed",
+      items: [
+        { type: "enteredReviewMode", id: "review-enter", review: target === "pullRequest" ? text : "changes against 'origin/main'" },
+        { type: "exitedReviewMode", id: "review-exit", review: "No findings." },
+        { type: "agentMessage", id: "review-echo", text: "No findings." },
+      ],
+    };
+    const turns = [
+      { id: "user-turn", rootTurnId: "user-turn", items: [{ type: "userMessage", id: "authored", content: [{ type: "text", text }] }] },
+      ...(innerFirst ? [innerTurn, outerTurn] : [outerTurn, innerTurn]),
+    ];
+    const replay = extractThreadReplayFromReadResult({ thread: { turns } });
+    expect(replay.entries.some((entry) => entry.id === "generated")).toBe(false);
+    expect(replay.messages.some((message) => message.id === "generated")).toBe(false);
+    expect(replay.entries.some((entry) => entry.id === "authored")).toBe(true);
+    expect(replay.entries.some((entry) => entry.id === "sourced")).toBe(true);
+    expect(replay.entries.some((entry) => entry.id === "steer")).toBe(true);
+    expect(replay.entries.some((entry) => entry.id === "review-enter")).toBe(true);
+    expect(replay.messages.map((message) => message.id)).toEqual(["authored", "sourced", "steer"]);
+  });
+
   it("retains user-authored review instructions without a native review marker", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/desktop-client");
     MockTransport.readThreadResultByThreadId.set("thread-review-prompt", {

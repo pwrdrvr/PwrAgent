@@ -14,13 +14,14 @@ import type {
   ResearchHarnessReconcileRequest,
   ResearchHarnessRequest,
   ResearchHarnessStatus,
+  ResearchMathosSwarmsRequest,
   MathosTeamsResult,
   MathosSwarmsResult,
 } from "@pwragent/shared/research-harness";
 import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared/research";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import type {
-  ResearchThread,
+  ResearchThreadRequest,
   ResearchUpdateRequest,
   ResearchSnapshot,
   ResearchSnapshotRequest,
@@ -1277,8 +1278,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   researchChanges?: (request: ResearchChangesRequest) => Promise<ResearchChanges>;
   /** One page of a run's journal, newest first. */
   readResearchEvents?: (request: ResearchEventsRequest) => Promise<ResearchEventPage>;
-  researchHarnessStatus?: (request: ResearchThread) => Promise<ResearchHarnessStatus>;
-  checkResearchHarness?: (request: ResearchThread) => Promise<ResearchHarnessCheck>;
+  researchHarnessStatus?: (request: ResearchThreadRequest) => Promise<ResearchHarnessStatus>;
+  checkResearchHarness?: (request: ResearchThreadRequest) => Promise<ResearchHarnessCheck>;
   reconcileResearchHarness?: (request: ResearchHarnessReconcileRequest) => Promise<ResearchUpdateReceipt>;
   revealResearchHarnessConfig?: () => Promise<void>;
   /** Settings: check the saved bridge with `hello` only. No thread, no model call, nothing written. */
@@ -1288,13 +1289,13 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   /** Settings: the MathOS teams the stored Platform key can open, on the saved origin. */
   listMathosTeams?: () => Promise<MathosTeamsResult>;
   /** New run: the saved MathOS team's swarms (each session's running or latest), read-only. */
-  listMathosSwarms?: () => Promise<MathosSwarmsResult>;
+  listMathosSwarms?: (request?: ResearchMathosSwarmsRequest) => Promise<MathosSwarmsResult>;
   researchProfileRuns?: (request?: ResearchProfileRunsQuery) => Promise<ResearchProfileRunsPage>;
   openResearchWindow?: (request?: { runId?: string }) => Promise<void>;
   onResearchWindowSelect?: (callback: (runId: string) => void) => () => void;
   startResearchHarness?: (request: ResearchHarnessRequest) => Promise<ResearchUpdateReceipt>;
   prepareResearch?: (request: PrepareResearchRequest) => Promise<{ intentId: string }>;
-  withdrawResearch?: (thread: ResearchThread) => Promise<void>;
+  withdrawResearch?: (thread: ResearchThreadRequest) => Promise<void>;
   updateResearch?: (request: ResearchUpdateRequest) => Promise<ResearchUpdateReceipt>;
   openResearchEvidence?: (request: ResearchEvidenceRequest) => Promise<OpenPathResponse>;
   onResearchChanged?: (callback: (change: ResearchChange) => void) => () => void;

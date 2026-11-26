@@ -42,7 +42,6 @@ import type {
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
-  AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
   AppServerThreadActivityEntry,
@@ -99,6 +98,7 @@ import {
 } from "@pwragent/shared/codex-environment-action-runs";
 import { resolveThreadTerminalCwd } from "@pwragent/shared/thread-terminal";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import {
   agentEventMatchesThread,
   federationTargetsEqual,
@@ -185,6 +185,7 @@ import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { TranscriptError } from "./TranscriptError";
 import { TranscriptList, transcriptItemBox } from "./TranscriptList";
+import { useThreadLaunchedTodos } from "./useThreadLaunchedTodos";
 import { TranscriptMessage } from "./TranscriptMessage";
 import { ThreadRewindConfirm, type ThreadRewindPreview } from "./ThreadRewindConfirm";
 import {
@@ -732,6 +733,7 @@ export type ThreadViewProps = {
    */
   terminals: IntegratedTerminalsController;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  bindOptimisticReviewEntryToTurn?: (id: string, turnId: string) => void;
   beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage: (
     text: string,
@@ -770,6 +772,7 @@ export type ThreadViewProps = {
   loading: boolean;
   loadingMore: boolean;
   messageCount: number;
+  autoCompaction?: ComposerProps["autoCompaction"];
   contextWindow?: ThreadContextWindowState;
   pricing?: {
     compactions?: ThreadCompactionRecord[];
@@ -852,7 +855,7 @@ export type ThreadViewProps = {
   worktreeArchiveError?: string;
   skillError?: string;
   skillLoading?: boolean;
-  providerCommands?: AppServerAvailableCommandSummary[];
+  providerCommands?: ThreadProviderCommand[];
   skills: AppServerSkillSummary[];
   transcriptEntries: AppServerThreadEntry[];
   transcriptError?: string;
@@ -863,7 +866,8 @@ export type ThreadViewProps = {
   transcriptPagination?: AppServerThreadReplayPagination;
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
-  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  skillCatalogTargetKey?: string;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void | Promise<void>;
   codexSkillProfiles?: readonly CodexSkillProfile[];
   onOpenCodexSkillProfiles?: () => void;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
@@ -1434,6 +1438,19 @@ export function ThreadView(props: ThreadViewProps) {
     transcriptThreadLinkTarget && isRemoteFederationTarget(transcriptThreadLinkTarget)
       ? transcriptThreadLinkTarget.instanceId
       : undefined;
+  const launchedTodos = useThreadLaunchedTodos({
+    desktopApi: props.desktopApi,
+    thread: selectedThread
+      ? {
+          backend: selectedThread.source,
+          threadId: selectedThread.id,
+          ...(transcriptThreadLinkTarget && isRemoteFederationTarget(transcriptThreadLinkTarget)
+            ? { federationTarget: transcriptThreadLinkTarget }
+            : {}),
+        }
+      : undefined,
+    threadKey: threadTodoKey,
+  });
   const transcriptThreadLinkBackend = selectedThread?.source;
   const transcriptThreadLinkSource = useMemo(
     () => transcriptThreadLinkBackend && transcriptThreadLinkInstanceId
@@ -3161,6 +3178,7 @@ export function ThreadView(props: ThreadViewProps) {
       : {
           activeTurnId: props.activeTurnId,
           addOptimisticReviewEntry: props.addOptimisticReviewEntry,
+          bindOptimisticReviewEntryToTurn: props.bindOptimisticReviewEntryToTurn,
           beginReviewSubmission: props.beginReviewSubmission,
           addOptimisticUserMessage: props.addOptimisticUserMessage,
           bindOptimisticUserMessageToTurn: props.bindOptimisticUserMessageToTurn,
@@ -3185,6 +3203,7 @@ export function ThreadView(props: ThreadViewProps) {
           onReviewStarted: handleReviewStarted,
           workspaceActionsBlocked: props.workspaceActionsBlocked,
           onEditEnvironments: props.onEditEnvironments,
+          autoCompaction: props.autoCompaction,
           contextWindow: props.contextWindow,
           onActiveTurnIdChange: props.onActiveTurnIdChange,
           onPendingStatusChange: props.onPendingStatusChange,
@@ -3338,6 +3357,7 @@ export function ThreadView(props: ThreadViewProps) {
         onDismissFullAccessRiskWarning={
           props.onDismissFullAccessRiskWarning
         }
+        skillCatalogTargetKey={props.skillCatalogTargetKey}
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
         codexSkillProfiles={props.codexSkillProfiles}
         onOpenCodexSkillProfiles={props.onOpenCodexSkillProfiles}
@@ -3551,6 +3571,9 @@ export function ThreadView(props: ThreadViewProps) {
               }
               turnFailures={selectedThread!.turnFailureLog}
               rewinds={selectedThread!.rewindLog}
+              launchedThreads={selectedThread!.launchedThreadLog}
+              launchedTodos={launchedTodos}
+              onOpenLaunchedTodoThread={props.threadTodos?.openStartedThread}
               rewindUndo={rewindUndo}
               activeTurnId={props.activeTurnId}
               activeTurnStartedAt={props.activeTurnStartedAt}
@@ -4791,6 +4814,7 @@ function useThreadQuestionReplies(
     federationTarget?: FederationRemoteTarget;
     text: string;
     busyBehavior?: "queue";
+    reviewFix?: boolean;
   }>();
   // Dismissing Codex's async questions only hides their controls, so it is
   // this window's choice for the session, as skipping is in Codex's own UI.
@@ -4847,7 +4871,11 @@ function useThreadQuestionReplies(
       setAsyncQuestionReply(undefined);
     };
   }, [asyncQuestionThreadKey]);
-  const handleAnswerAsyncQuestions = useEventCallback((text: string, busyBehavior?: "queue"): Promise<boolean> => {
+  const handleAnswerAsyncQuestions = useEventCallback((
+    text: string,
+    busyBehavior?: "queue",
+    reviewFix?: boolean,
+  ): Promise<boolean> => {
     // One answer at a time: the composer applies only the newest submission.
     if (
       props.composerDisabled
@@ -4872,6 +4900,7 @@ function useThreadQuestionReplies(
         federationTarget: questionFederationTarget,
         text,
         busyBehavior,
+        ...(reviewFix ? { reviewFix: true } : {}),
       });
     });
   });
@@ -4945,12 +4974,12 @@ function useThreadQuestionReplies(
     todo: ThreadTodo,
     options?: ThreadTodoDoHereOptions,
   ): Promise<boolean> => {
-    const { prompt, ...resolveOptions } = options ?? {};
+    const { prompt, reviewFix, ...resolveOptions } = options ?? {};
     const handoff = todo.action?.type === "start_thread" || todo.action?.type === "send_message" ? todo.action.prompt : undefined;
     const text = prompt ?? handoff;
     if (!text || !selectedThread || threadTodoThreadKey(todo) !== threadSummaryIdentityKey(selectedThread)) return false;
     try {
-      const accepted = await handleAnswerAsyncQuestions(text, "queue");
+      const accepted = await handleAnswerAsyncQuestions(text, "queue", reviewFix);
       if (accepted && prompt === undefined) {
         await props.threadTodos?.resolve(todo, "done", "sent_here", resolveOptions);
       }

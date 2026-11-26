@@ -72,7 +72,7 @@ export interface AcpTurnStartHost<Context, Origin, Turn extends StartedTurn> {
   bindOrigin(origin: Origin | undefined, turn: Turn): void;
   consumeReviewContexts(): Promise<unknown>;
   bindPdf(turn: Turn): void;
-  scheduleTitle(turn: Turn): void;
+  scheduleTitle(turn: Turn): Promise<unknown> | void;
   bindContext(context: Context | undefined, turn: Turn): void;
   persistOrigin(origin: Origin | undefined): Promise<void>;
   retainAttachments(turn: Turn): Promise<void>;
@@ -315,7 +315,7 @@ export class ThreadTurnStartLifecycle {
       effect("origin", () => host.bindOrigin(origin, accepted));
       await persist("review-contexts", () => host.consumeReviewContexts());
       effect("pdf", () => host.bindPdf(accepted));
-      effect("title", () => host.scheduleTitle(accepted));
+      await persist("title", () => Promise.resolve(host.scheduleTitle(accepted)));
       effect("context", () => host.bindContext(context, accepted));
       await persist("persist-origin", () => host.persistOrigin(origin));
       await persist("attachments", () => host.retainAttachments(accepted));

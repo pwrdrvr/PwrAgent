@@ -2521,6 +2521,130 @@ describe("Tangerine Terminal theme contract", () => {
     expect(listRule).toContain("overflow-wrap: anywhere;");
   });
 
+  it("wraps long markdown table headers, label cells, and unbroken cell text without cell-to-cell overflow", () => {
+    // Pairing `max-width` with `white-space: nowrap` on table cells causes
+    // Chromium's TablesNG to cap the cell box at `max-width` while painting
+    // non-wrapping inline content across the border onto the adjacent cell.
+    const cellRule = extractRuleBody(css, ".thread-markdown__th,\n.thread-markdown__td");
+    expect(cellRule).toContain("overflow-wrap: break-word;");
+
+    const headerBodies = [
+      ...css.matchAll(/(?:^|\n)\.thread-markdown__th\s*\{([^}]*)\}/g),
+    ].map((match) => match[1] ?? "");
+    expect(headerBodies.length).toBeGreaterThan(0);
+    for (const body of headerBodies) {
+      expect(body).not.toMatch(/white-space:\s*nowrap;/);
+    }
+
+    const labelRule = extractRuleBody(
+      css,
+      ".thread-markdown__th[data-col-kind=\"label\"],\n.thread-markdown__td[data-col-kind=\"label\"]",
+    );
+    expect(labelRule).toContain("max-width: 36ch;");
+    expect(labelRule).not.toMatch(/white-space:\s*nowrap;/);
+    expect(labelRule).not.toMatch(/min-width:\s*max-content;/);
+
+    const codeRule = extractRuleBody(
+      css,
+      ".thread-markdown__th .transcript-message__code,\n.thread-markdown__td .transcript-message__code",
+    );
+    expect(codeRule).toContain("display: inline;");
+    expect(codeRule).toContain("white-space: normal;");
+    expect(codeRule).toContain("overflow-wrap: anywhere;");
+
+    const linkRule = extractRuleBody(
+      css,
+      ".thread-markdown__th .transcript-message__link,\n.thread-markdown__td .transcript-message__link",
+    );
+    expect(linkRule).toContain("overflow-wrap: anywhere;");
+
+    // `tag` columns use `width: 1%` and rely on `white-space: nowrap` to keep
+    // min-content equal to the tag/header width; inline code or links inside
+    // them must not inherit `white-space: normal; overflow-wrap: anywhere` and
+    // collapse the column to a single character wide.
+    const tagInlineRule = extractRuleBody(
+      css,
+      ".thread-markdown__th[data-col-kind=\"tag\"] .transcript-message__code,\n.thread-markdown__td[data-col-kind=\"tag\"] .transcript-message__code,\n.thread-markdown__th[data-col-kind=\"tag\"] .transcript-message__link,\n.thread-markdown__td[data-col-kind=\"tag\"] .transcript-message__link",
+    );
+    expect(tagInlineRule).toContain("white-space: nowrap;");
+    expect(tagInlineRule).toContain("overflow-wrap: normal;");
+    expect(tagInlineRule).toContain("word-break: normal;");
+  });
+
+  it("uses tabular numerals, pretty wrapping, KaTeX max-width exemption, and tokenized horizontal scroll fades on markdown tables", () => {
+    const tableRule = extractRuleBody(css, ".thread-markdown__table");
+    expect(tableRule).toContain("font-variant-numeric: tabular-nums;");
+
+    const cellRule = extractRuleBody(css, ".thread-markdown__th,\n.thread-markdown__td");
+    expect(cellRule).toContain("text-wrap: pretty;");
+
+    const katexSelector =
+      ".thread-markdown__th[data-cell-math=\"only\"]:has(.katex),\n"
+      + ".thread-markdown__td[data-cell-math=\"only\"]:has(.katex),\n"
+      + ".thread-markdown__th:has(.katex-display),\n"
+      + ".thread-markdown__td:has(.katex-display)";
+    const katexRule = extractRuleBody(css, katexSelector);
+    expect(katexRule).toContain("max-width: none;");
+
+    // Mixed prose + inline math cells must keep their column max-width so
+    // prose still wraps instead of stretching onto one unwrapped line.
+    expect(css).not.toContain(".thread-markdown__th:has(.katex)");
+    expect(css).not.toContain(".thread-markdown__td:has(.katex)");
+
+    const inlineKatexRule = extractRuleBody(
+      css,
+      ".thread-markdown__th .katex,\n.thread-markdown__td .katex",
+    );
+    expect(inlineKatexRule).toContain("white-space: nowrap;");
+
+    const proseIndex = css.indexOf(
+      ".thread-markdown__th[data-col-kind=\"prose\"],\n.thread-markdown__td[data-col-kind=\"prose\"]",
+    );
+    const katexIndex = css.indexOf(katexSelector);
+    expect(proseIndex).toBeGreaterThan(-1);
+    expect(katexIndex).toBeGreaterThan(proseIndex);
+
+    const wrapRule = extractRuleBody(css, ".thread-markdown__table-wrap");
+    expect(wrapRule).toContain("position: relative;");
+    expect(wrapRule).toContain("max-width: 100%;");
+    expect(wrapRule).toContain("isolation: isolate;");
+    expect(wrapRule).not.toMatch(/overflow:\s*hidden;/);
+
+    const fadeSharedRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap::before,\n.thread-markdown__table-wrap::after",
+    );
+    expect(fadeSharedRule).toContain("pointer-events: none;");
+    expect(fadeSharedRule).toContain("opacity: 0;");
+
+    const fadeLeftRule = extractRuleBody(css, ".thread-markdown__table-wrap::before");
+    const fadeRightRule = [
+      ...css.matchAll(/(?:^|\n)\.thread-markdown__table-wrap::after\s*\{([^}]*)\}/g),
+    ]
+      .map((match) => match[1] ?? "")
+      .join("\n");
+    expect(fadeLeftRule).toContain("var(--bg-app)");
+    expect(fadeLeftRule).toContain("var(--border-strong)");
+    expect(fadeRightRule).toContain("var(--bg-app)");
+    expect(fadeRightRule).toContain("var(--border-strong)");
+
+    const fadeVisibleRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-wrap[data-scroll-left=\"true\"]::before,\n.thread-markdown__table-wrap[data-scroll-right=\"true\"]::after",
+    );
+    expect(fadeVisibleRule).toContain("opacity: 1;");
+
+    const scrollFocusRule = extractRuleBody(css, ".thread-markdown__table-scroll:focus-visible");
+    expect(scrollFocusRule).toContain("outline: 2px solid var(--focus-ring);");
+    expect(scrollFocusRule).toContain("outline-offset: 2px;");
+
+    const innerFocusRule = extractRuleBody(
+      css,
+      ".thread-markdown__table-scroll :where(:focus-visible)",
+    );
+    expect(innerFocusRule).toContain("scroll-margin-inline:");
+  });
+
   it("bounds long transcript code and quote blocks with their own vertical scroll", () => {
     const preRule = extractRuleBody(css, ".transcript-message__pre");
     expect(preRule).toContain("max-height:");

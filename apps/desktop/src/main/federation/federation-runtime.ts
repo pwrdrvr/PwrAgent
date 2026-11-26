@@ -27,6 +27,7 @@ import { FEDERATION_OPERATOR_QUESTION_CAPABILITIES, FEDERATION_OPERATOR_QUESTION
   registerFederationOperatorQuestionHandlers, type OperatorQuestionOperation,
   type OperatorQuestionOperationRequest, type OperatorQuestionOperationResponse } from "./federation-operator-questions";
 import { localThreadTodoOperations } from "../thread-todos/thread-todo-operations";
+import { localResearchOperations } from "../research/research-operations";
 import { desktopThreadPullRequestMergeDeps } from "../pr-status/desktop-thread-pull-request-merge";
 import {
   mergeThreadPullRequest,
@@ -36,6 +37,15 @@ import {
 import { mergeThreadPullRequestForPeer } from "../pr-status/thread-pull-request-merge-federation";
 import { FEDERATION_THREAD_TODO_CAPABILITIES, FEDERATION_THREAD_TODO_METHODS, registerFederationThreadTodoHandlers,
   type ThreadTodoOperation, type ThreadTodoOperationRequest, type ThreadTodoOperationResponse } from "./federation-thread-todos";
+import {
+  FEDERATION_RESEARCH_CAPABILITIES,
+  FEDERATION_RESEARCH_METHODS,
+  LONG_RUNNING_FEDERATION_RESEARCH_OPERATIONS,
+  registerFederationResearchHandlers,
+  type ResearchOperation,
+  type ResearchOperationRequest,
+  type ResearchOperationResponse,
+} from "./federation-research";
 import { createTerminalHistoryStore } from "../terminal/terminal-history";
 import type {
   ServiceThread,
@@ -62,7 +72,7 @@ import type {
   AnalyzeUsageActivityRequest,
   AnalyzeUsageActivityResponse,
 } from "@pwragent/shared/contracts/usage-activity";
-import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANSCRIPT_METHOD, resolveFilePullThread } from "./federation-file-pull";
+import { FederationFilePullReader, FILE_PULL_MARKDOWN_METHOD, FILE_RESOLVE_TRANSCRIPT_METHOD, readFederatedAntigravitySkills, resolveFilePullThread } from "./federation-file-pull";
 import type {
   HandoffInstanceThreadRequest,
   HandoffInstanceThreadResult,
@@ -802,6 +812,7 @@ export const DEFAULT_CAPABILITIES: FederationCapability[] = [
   "thread_pull_request_merge_v1",
   "thread_dependencies_v1",
   "thread_dependency_provenance_v1",
+  "thread_research",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -940,8 +951,9 @@ export function federationEventClassForMethod(
   if (method === "thread/scheduledAction/updated") {
     return "scheduled_actions";
   }
-  if (method === "thread/operatorQuestions/changed" || method === "thread/subAgentFailures/dismissed") {
-    // Dismissal state is readable with thread_detail access.
+  if (method === "thread/operatorQuestions/changed" || method === "thread/subAgentFailures/dismissed"
+    || method === "thread/research/changed") {
+    // Dismissal and Research state are readable with thread_detail access.
     return "transcript";
   }
   if (
@@ -1573,7 +1585,7 @@ export class DesktopFederationRuntime {
   private readonly remoteBackendEventListeners = new Set<
     (event: AgentEvent) => void | Promise<void>
   >();
-  private readonly peerStatusListeners = new Set<() => void>();
+  private readonly peerStatusListeners = new Set<(instanceId: FederationInstanceId) => void>();
   private readonly shortNameListeners = new Set<() => void>();
   private readonly desiredEventSubscriptions = new Map<
     string,
@@ -1875,7 +1887,7 @@ export class DesktopFederationRuntime {
    * Fires whenever any peer's connection status changes. Used by the
    * application menu to keep its Remote Instances listing current.
    */
-  onPeerStatusChanged(listener: () => void): () => void {
+  onPeerStatusChanged(listener: (instanceId: FederationInstanceId) => void): () => void {
     this.peerStatusListeners.add(listener);
     return () => {
       this.peerStatusListeners.delete(listener);
@@ -2915,6 +2927,23 @@ export class DesktopFederationRuntime {
     }
     return await this.rpcFor(target).request({
       method: FEDERATION_OPERATOR_QUESTION_METHODS[operation], params: request,
+    });
+  }
+
+  async requestResearchOperation<K extends ResearchOperation>(
+    target: FederationRemoteTarget,
+    operation: K,
+    request: ResearchOperationRequest<K>,
+  ): Promise<ResearchOperationResponse<K>> {
+    const unavailable = this.todoQueueUnavailableInstance(target, "thread_research");
+    if (unavailable) {
+      if (unavailable.reason === "disconnected") throw new Error(`${unavailable.label} is disconnected.`);
+      throw new Error("This Federation owner does not support Research runs. Update that PwrAgent instance.");
+    }
+    return await this.rpcFor(target).request({
+      method: FEDERATION_RESEARCH_METHODS[operation],
+      params: request,
+      ...(LONG_RUNNING_FEDERATION_RESEARCH_OPERATIONS.has(operation) ? { timeoutMs: null } : {}),
     });
   }
 
@@ -4046,6 +4075,18 @@ export class DesktopFederationRuntime {
             });
           });
       },
+      onArchivedMountRemoved: ({ backend, threadId, target }) => {
+        if (!isRemoteFederationTarget(target)) return;
+        void getDesktopBackendRegistry().publishLocalEvent({
+          backend,
+          notification: {
+            method: "navigation/remoteThreadPins/changed",
+            params: { instanceId: target.instanceId, threadId, pinned: false },
+          },
+        }).catch((error: unknown) => {
+          log.warn("archived mount removal publish failed", { error: String(error) });
+        });
+      },
     });
     return this.remoteThreadSummaryCache;
   }
@@ -4205,7 +4246,14 @@ export class DesktopFederationRuntime {
       }
     }
     const apply = async (instanceId: string, dryRun: boolean) => {
-      if (instanceId === localInstanceId) return store.applyArchiveSubthreadPromotion({ ...promotion, dryRun }, instanceId);
+      if (instanceId === localInstanceId) {
+        const { threadIds, remoteMountsChanged } = store.applyArchiveSubthreadPromotion({ ...promotion, dryRun }, instanceId);
+        if (remoteMountsChanged) await getDesktopBackendRegistry().publishLocalEvent({
+          backend: params.backend,
+          notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId, membershipChanged: true } },
+        });
+        return threadIds;
+      }
       const response = await this.remoteBackend({ scope: "remote", instanceId }).updateSubthreadOrder({
         backend: parent?.backend ?? params.backend, parentThreadId: parent?.threadId ?? params.parentThreadId,
         archivePromotion: { ...promotion, dryRun },
@@ -4363,6 +4411,7 @@ export class DesktopFederationRuntime {
         [MESSAGING_ORIGINALS_METHOD]: MESSAGING_ORIGINALS_CAPABILITY,
         ...FEDERATION_THREAD_TODO_CAPABILITIES,
         ...FEDERATION_OPERATOR_QUESTION_CAPABILITIES,
+        ...FEDERATION_RESEARCH_CAPABILITIES,
         ...FEDERATION_PTY_METHOD_CAPABILITIES,
         ...SERVICE_METHOD_CAPABILITIES,
         ...FILE_PUSH_METHOD_CAPABILITIES,
@@ -4429,6 +4478,7 @@ export class DesktopFederationRuntime {
     });
     registerFederationThreadTodoHandlers(router, localThreadTodoOperations);
     registerFederationOperatorQuestionHandlers(router);
+    registerFederationResearchHandlers(router, localResearchOperations);
     router.registerHandler(CHECKOUT_FEDERATION_METHOD, (envelope) => {
       if (!this.resourceCheckoutHandler || this.peerRole(envelope.sourceInstanceId) !== "full") {
         throw new Error("This Federation owner does not provide checkout access to the peer.");
@@ -4437,7 +4487,7 @@ export class DesktopFederationRuntime {
     });
     registerFederationBackendHandlers({
       router,
-      backend: localBackendOperations(),
+      backend: localBackendOperations(() => this.receiverPermissions()),
       durableTurnRequests: this.durableTurnRequestService(),
       resolveTurnInput: async (input, sourceInstanceId) =>
         await this.turnInputAttachmentReceiver.resolveInput(
@@ -7292,7 +7342,7 @@ export class DesktopFederationRuntime {
     }
     for (const listener of this.peerStatusListeners) {
       try {
-        listener();
+        listener(instanceId);
       } catch (error) {
         log.warn("federation peer status listener failed", {
           error: error instanceof Error ? error.message : String(error),
@@ -7759,6 +7809,7 @@ async function mountRemoteParentForLocalChild(
         instanceId: parentInstanceId,
         threadId: parentThreadId,
         pinned: true,
+        membershipChanged: !existingPin,
       },
     },
   });
@@ -7786,7 +7837,9 @@ async function withFederationNavigationConsumer<T>(
   }
 }
 
-function localBackendOperations(): FederationBackendOperations {
+function localBackendOperations(
+  peerFilePermissions?: () => { filePull: boolean; filePullOutsideThreadDirectories: boolean },
+): FederationBackendOperations {
   const messagingBridge = new DesktopMessagingBackendBridge();
   return {
     async getNavigationQueryPage(request, rpcOptions) {
@@ -7956,12 +8009,21 @@ function localBackendOperations(): FederationBackendOperations {
       request: AppServerListSkillsRequest = {},
     ): Promise<AppServerListSkillsResponse> {
       const backend = request.backend ?? "codex";
-      const response = await getDesktopBackendRegistry().listSkills({
-        backend,
-        cwd: request.cwd,
-        cwds: request.cwds,
-        threadId: request.threadId,
-      });
+      const registry = getDesktopBackendRegistry();
+      const response = backend === "acp:antigravity" && peerFilePermissions
+        ? await readFederatedAntigravitySkills(request, {
+          permissions: peerFilePermissions,
+          resolveThread: (backend, threadId) => resolveFilePullThread(registry, backend, threadId),
+          listLaunchpads: () => getDesktopOverlayStore().listDirectoryLaunchpads(),
+          listSkills: (params) => registry.listSkills(params),
+        })
+        : await registry.listSkills({
+          backend,
+          catalog: request.catalog,
+          cwd: request.cwd,
+          cwds: request.cwds,
+          threadId: request.threadId,
+        });
       return {
         backend,
         fetchedAt: Date.now(),
@@ -8279,7 +8341,7 @@ function localBackendOperations(): FederationBackendOperations {
       if (request.archivePromotion) {
         const instanceId = (await getDesktopFederationRuntime().health()).instanceId;
         if (!instanceId) throw new Error("Federation identity is unavailable.");
-        const threadIds = getDesktopOverlayStore().applyArchiveSubthreadPromotion(request.archivePromotion, instanceId);
+        const { threadIds, remoteMountsChanged } = getDesktopOverlayStore().applyArchiveSubthreadPromotion(request.archivePromotion, instanceId);
         if (!request.archivePromotion.dryRun) {
           const { parent, children } = request.archivePromotion;
           for (const { ref } of children) {
@@ -8296,7 +8358,7 @@ function localBackendOperations(): FederationBackendOperations {
               params: { parentThreadId: parent.threadId, threadIds } },
           });
           await getDesktopBackendRegistry().publishLocalEvent({ backend: request.backend ?? "codex",
-            notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId } },
+            notification: { method: "navigation/remoteThreadPins/changed", params: { instanceId, membershipChanged: remoteMountsChanged } },
           });
         }
         return { backend: request.backend ?? "codex", parentThreadId: request.parentThreadId, threadIds };

@@ -29,7 +29,7 @@ describe("ThreadRow right-click", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Add reaction to thread" }));
     // The picker is a portal on <body>, outside the row's DOM.
-    fireEvent.contextMenu(screen.getByRole("menu", { name: "Add reaction" }));
+    fireEvent.contextMenu(screen.getByRole("dialog", { name: "Add reaction" }));
     expect(onOpenContextMenu).not.toHaveBeenCalled();
 
     fireEvent.contextMenu(screen.getByText("Portal menus"));

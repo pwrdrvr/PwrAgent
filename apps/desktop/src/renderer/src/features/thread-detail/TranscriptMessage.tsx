@@ -49,6 +49,7 @@ import {
   type ResolvedThreadLink,
   type ThreadLinkSource,
 } from "../../lib/thread-links";
+import { inferPipeTables } from "../../lib/markdown-pipe-tables";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { AsyncQuestionCard } from "./AsyncQuestionCard";
@@ -57,7 +58,9 @@ import { ThreadChip } from "./ThreadChip";
 import { TranscriptImage } from "./TranscriptImage";
 import { renderMarkdownToClipboardHtml } from "./markdown-clipboard-html";
 import { ThreadMarkdown } from "./ThreadMarkdown";
+import { TranscriptActivity } from "./TranscriptActivity";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
+import { codexBrowserCompletionActivity } from "./codex-browser-completion";
 import { SubAgentDetailsModal } from "./context-panels/SubAgentDetailsModal";
 import { RailStatusChip, type RailChipTone } from "./context-panels/RailStatusChip";
 import { subAgentTone } from "./context-panels/subagent-format";
@@ -109,6 +112,13 @@ type MessageRewindControl = {
 const EMPTY_IMAGE_PARTS: AppServerThreadImagePart[] = [];
 
 export const TranscriptMessage = memo(function TranscriptMessage(props: TranscriptMessageProps) {
+  const browserCompletion = codexBrowserCompletionActivity(props.message, props.parentThreadBackend);
+  return browserCompletion
+    ? <TranscriptActivity entry={browserCompletion} desktopApi={props.desktopApi} />
+    : <TranscriptMessageContent {...props} />;
+});
+
+function TranscriptMessageContent(props: TranscriptMessageProps) {
   const threadLinks = useThreadLinks();
   const origin = props.message.origin;
   const sourceThread = origin?.sourceThread;
@@ -470,6 +480,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
                   applications: props.applications,
                   desktopApi: props.desktopApi,
                   fileViewerContext: props.fileViewerContext,
+                  imageParts,
                   onOpenImage: props.onOpenImage,
                   skills: props.skills,
                   threadLinkSource: props.threadLinkSource,
@@ -550,6 +561,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
                   applications: props.applications,
                   desktopApi: props.desktopApi,
                   fileViewerContext: props.fileViewerContext,
+                  imageParts,
                   onOpenImage: props.onOpenImage,
                   skills: props.skills,
                   threadLinkSource: props.threadLinkSource,
@@ -805,7 +817,7 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
       ))}
     </>
   );
-});
+}
 
 TranscriptMessage.displayName = "TranscriptMessage";
 
@@ -864,10 +876,15 @@ function splitMarkdownTableSegment(segment: MessagePartSegment): MessagePartSegm
     return [segment];
   }
 
-  const referenceDefinitions = extractMarkdownReferenceDefinitions(segment.part.text);
-  const blocks = splitMarkdownTableBlocks(segment.part.text);
+  // Messages only: the file viewer and Changelog render a document as GFM
+  // would, so a pipe table without a delimiter row stays text there.
+  const text = inferPipeTables(segment.part.text);
+  const referenceDefinitions = extractMarkdownReferenceDefinitions(text);
+  const blocks = splitMarkdownTableBlocks(text);
   if (blocks.length === 1 && blocks[0]?.type === "text") {
-    return [segment];
+    return text === segment.part.text
+      ? [segment]
+      : [{ type: "text", part: { ...segment.part, text } }];
   }
 
   const segments: MessagePartSegment[] = [];
@@ -927,9 +944,8 @@ function splitMarkdownTableBlocks(markdown: string): MarkdownBlock[] {
     }
 
     if (
-      !inFence &&
-      isMarkdownTableHeader(line) &&
-      isMarkdownTableDelimiter(lines[index + 1] ?? "")
+      !inFence
+      && isMarkdownTableHeaderWithDelimiter(line, lines[index + 1] ?? "")
     ) {
       const tableHeading = splitTrailingTableHeading(textBuffer);
       textBuffer = tableHeading.remainingLines;
@@ -989,42 +1005,76 @@ function isMarkdownThematicBreak(line: string): boolean {
   return /^\s{0,3}(?:(?:\*\s*){3,}|(?:_\s*){3,}|(?:-\s*){3,})$/.test(line);
 }
 
-function isMarkdownTableHeader(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.includes("|") && splitTableCells(trimmed).length >= 2;
-}
-
-function isMarkdownTableDelimiter(line: string): boolean {
-  const cells = splitTableCells(line.trim());
+function isMarkdownTableHeaderWithDelimiter(
+  headerLine: string,
+  delimiterLine: string,
+): boolean {
+  const headerTrimmed = headerLine.trim();
+  const delimiterTrimmed = delimiterLine.trim();
+  if (!headerTrimmed.includes("|") || !delimiterTrimmed.includes("|")) {
+    return false;
+  }
+  const headerCells = splitTableCells(headerTrimmed);
+  const delimiterCells = splitTableCells(delimiterTrimmed);
   return (
-    cells.length >= 2 &&
-    cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()))
+    headerCells.length >= 2
+    && delimiterCells.length === headerCells.length
+    && delimiterCells.every((cell) => /^:?-+:?$/.test(cell))
   );
 }
 
 function isMarkdownTableRow(line: string): boolean {
   const trimmed = line.trim();
   return (
-    trimmed !== "" &&
-    trimmed.includes("|") &&
-    splitTableCells(trimmed).length >= 2
+    trimmed !== ""
+    && trimmed.includes("|")
+    && splitTableCells(trimmed).length >= 2
   );
 }
 
 function splitTableCells(line: string): string[] {
-  return line
-    .replace(/^\|/, "")
-    .replace(/\|$/, "")
-    .split("|")
-    .map((cell) => cell.trim());
+  const trimmed = line.trim();
+  const cells: string[] = [];
+  let current = "";
+  let index = 0;
+  let leadingPipe = false;
+  let trailingPipe = false;
+
+  while (index < trimmed.length) {
+    const char = trimmed[index];
+    if (char === "\\" && index + 1 < trimmed.length) {
+      current += trimmed.slice(index, index + 2);
+      index += 2;
+      continue;
+    }
+    if (char === "|") {
+      if (index === 0) {
+        leadingPipe = true;
+      } else {
+        cells.push(current.trim());
+      }
+      current = "";
+      trailingPipe = index === trimmed.length - 1;
+      index += 1;
+      continue;
+    }
+    current += char;
+    trailingPipe = false;
+    index += 1;
+  }
+
+  if (!trailingPipe || (!leadingPipe && cells.length === 0)) {
+    cells.push(current.trim());
+  }
+
+  return cells;
 }
 
 function isWideMarkdownTable(table: string): boolean {
   const lines = table.split("\n");
   const headerIndex = lines.findIndex(
     (line, index) =>
-      isMarkdownTableHeader(line)
-      && isMarkdownTableDelimiter(lines[index + 1] ?? ""),
+      isMarkdownTableHeaderWithDelimiter(line, lines[index + 1] ?? ""),
   );
   const header = lines[headerIndex] ?? "";
   const rows = lines.slice(headerIndex + 2);

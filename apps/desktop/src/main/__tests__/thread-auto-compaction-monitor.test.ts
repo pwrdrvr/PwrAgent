@@ -48,7 +48,7 @@ function fakeRegistry(options: {
     })),
     resolveAutoCompactionModel: vi.fn(async () => options.model ?? "gemini-4-neon-high"),
     startAutoCompaction: vi.fn(async () => ({ status: "started" as const, turnId: "turn-compact" })),
-    steerTurn: vi.fn(async () => ({})),
+    steerTurn: vi.fn(async (): Promise<{ disposition: "steered" | "queued" | "held" }> => ({ disposition: "steered" })),
     submitTurnIfIdle: vi.fn(async () => ({ status: "started" })),
     publishLocalEvent: vi.fn(async (event: AgentEvent) => { published.push(event); }),
   } satisfies AutoCompactionRegistry;
@@ -136,7 +136,7 @@ describe("ThreadAutoCompactionMonitor", () => {
     const world = fakeRegistry();
     let answerSteer: (() => void) | undefined;
     world.registry.steerTurn.mockImplementationOnce(() => new Promise((resolve) => {
-      answerSteer = () => resolve({});
+      answerSteer = () => resolve({ disposition: "steered" });
     }));
     let saved: DesktopAutoCompactionRule[] = [];
     const monitor = createRegistryAutoCompactionMonitor({
@@ -243,16 +243,21 @@ describe("ThreadAutoCompactionMonitor", () => {
   it("continues immediately on Antigravity after steered /compact emits a higher summarization fill, then re-arms on the continuation turn", async () => {
     const world = fakeRegistry({ reportsFillOnNextTurn: true });
     const monitor = start(world);
-    world.turnStarted("turn-1");
+    const steeredTurnId = "pending:thread-1:1";
+    world.turnStarted(steeredTurnId);
     world.fill(412_000);
     await monitor.idle();
 
     expect(world.registry.steerTurn).toHaveBeenCalledTimes(1);
+    expect(world.registry.steerTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedTurnId: steeredTurnId }),
+      AUTO_COMPACTION_ORIGIN,
+    );
     expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("compacting");
 
     // Antigravity emits the summarization call's higher usage_update right before turn/completed.
     world.fill(425_000);
-    world.turnCompleted("turn-1");
+    world.turnCompleted(steeredTurnId);
     await monitor.idle();
 
     expect(world.registry.startAutoCompaction).not.toHaveBeenCalled();
@@ -264,13 +269,76 @@ describe("ThreadAutoCompactionMonitor", () => {
     expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("verifying");
 
     // The continuation turn's first usage_update reports the actual compacted fill.
-    world.turnStarted("turn-2");
+    world.turnStarted("pending:thread-1:2");
     world.fill(21_436);
     await monitor.idle();
     expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("armed");
     expect(world.published.map((event) => (event.notification.params as { phase: string }).phase))
       .toEqual(["steering", "compacting", "verifying", "armed"]);
     monitor.dispose();
+  });
+
+  it.each([
+    { nextFill: 21_436, phase: "armed" },
+    { nextFill: 430_000, phase: "held" },
+  ])("verifies idle ACP compaction against the next prompt's $nextFill-token report", async ({ nextFill, phase }) => {
+    const world = fakeRegistry({ canSteer: false, reportsFillOnNextTurn: true });
+    const originalTurnId = "pending:thread-1:1";
+    const compactTurnId = "pending:thread-1:2";
+    const nextTurnId = "pending:thread-1:3";
+    world.registry.startAutoCompaction.mockResolvedValueOnce({ status: "started", turnId: compactTurnId });
+    const monitor = start(world);
+    onTestFinished(() => monitor.dispose());
+
+    world.turnStarted(originalTurnId);
+    world.fill(452_345);
+    world.turnCompleted(originalTurnId);
+    await monitor.idle();
+    world.turnStarted(compactTurnId);
+    world.fill(457_959);
+    // A delayed terminal from the previous prompt cannot complete /compact.
+    world.emit({
+      method: "turn/completed",
+      params: { threadId: "thread-1", turnId: originalTurnId, turn: { id: originalTurnId, status: "completed", output: [] } },
+    });
+    await monitor.idle();
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("compacting");
+
+    world.turnCompleted(compactTurnId);
+    await monitor.idle();
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("verifying");
+    expect(world.registry.submitTurnIfIdle).not.toHaveBeenCalled();
+
+    // The next prompt may have settled by the time the monitor handles its fill.
+    world.turnStarted(nextTurnId);
+    world.fill(nextFill);
+    world.turnCompleted(nextTurnId);
+    await monitor.idle();
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe(phase);
+    expect(world.registry.startAutoCompaction).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["queued", "held"] as const)("does not accept a %s /compact as delivered to the active turn", async (disposition) => {
+    const world = fakeRegistry({ reportsFillOnNextTurn: true });
+    world.registry.steerTurn.mockResolvedValueOnce({ disposition });
+    const monitor = start(world);
+    onTestFinished(() => monitor.dispose());
+    const turnId = "pending:thread-1:1";
+
+    world.turnStarted(turnId);
+    world.fill(452_345);
+    await monitor.idle();
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("due");
+
+    // A queue hold lets the monitor try the idle path. An existing queued
+    // prompt makes that same path busy, so the monitor cannot add a duplicate.
+    if (disposition === "queued") world.registry.startAutoCompaction.mockResolvedValueOnce({ status: "busy" } as never);
+    world.turnCompleted(turnId);
+    await monitor.idle();
+    expect(world.registry.submitTurnIfIdle).not.toHaveBeenCalled();
+    expect(world.registry.startAutoCompaction).toHaveBeenCalledTimes(1);
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase)
+      .toBe(disposition === "held" ? "compacting" : "due");
   });
 
   it("clears compacting immediately without a continuation or delayed idle retry when a steered Antigravity /compact turn is cancelled", async () => {
@@ -766,6 +834,11 @@ describe("ACP registry cache fallback and shared /compact dispatch", () => {
       resolveSavedRules: () => [],
       log: { info: () => {}, warn: () => {} },
     });
+    const published: AgentEvent[] = [];
+    const unsubscribe = fixture.registry.onEvent((event) => {
+      if (event.notification.method === "thread/autoCompaction/updated") published.push(event);
+    });
+    fixture.registry.setThreadAutoCompactionReader((backend, threadId) => monitor.readStatus(backend, threadId));
     monitor.start();
     try {
       await fixture.registry.publishLocalEvent({
@@ -788,7 +861,14 @@ describe("ACP registry cache fallback and shared /compact dispatch", () => {
         phase: "compacting",
         via: "steer",
       });
+      const transcript = await fixture.registry.readThread({
+        backend: ANTIGRAVITY, threadId: SESSION_ID, display: { resource: "transcript" },
+      });
+      expect(transcript.autoCompaction).toEqual(published.at(-1)?.notification.params);
+      expect(transcript.autoCompaction).toMatchObject({ phase: "compacting", turnId: "active-turn-1" });
     } finally {
+      unsubscribe();
+      fixture.registry.setThreadAutoCompactionReader(undefined);
       monitor.dispose();
     }
   });

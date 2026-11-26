@@ -236,7 +236,12 @@ function renderCard(current: ThreadReview, onDoHere = vi.fn()) {
   return { api, handlers, todo, rerenderCard };
 }
 
-const prompt = (lines: string[]) => [...lines, "", "Use PwrAgent's `list_reviews` tool for their details and how to record each fix."].join("\n");
+const prompt = (lines: string[]) => [
+  ...lines,
+  "",
+  "Use PwrAgent's `list_reviews` tool for their details and how to record each fix.",
+  "Do not schedule another review (`start_review`) when finished; report each finding's outcome and let the operator decide whether to review again.",
+].join("\n");
 
 describe("review To-do card", () => {
   it("lists findings by priority with no mark at rest, and auto-fixes every open one by default", async () => {
@@ -267,20 +272,26 @@ describe("review To-do card", () => {
 
     // The thread's agent decides each open finding.
     fireEvent.click(screen.getByRole("button", { name: "Auto-fix" }));
-    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: expect.stringMatching(
-      /^Auto-fix the 2 findings from Code review\. Decide which ones to fix\.\n\n1\. \[P1\] Abort pending exports\n2\. \[P2\] Keep the selected output format\n/,
-    ) });
+    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, {
+      prompt: expect.stringMatching(
+        /^Auto-fix the 2 findings from Code review\. Decide which ones to fix\.\n\n1\. \[P1\] Abort pending exports\n2\. \[P2\] Keep the selected output format\n/,
+      ),
+      reviewFix: true,
+    });
     await waitFor(() => expect(screen.getByRole("button", { name: "Auto-fix" })).toBeEnabled());
 
     // Fix all, from the menu, asks for every one.
     fireEvent.click(screen.getByRole("button", { name: "Review fix options" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Fix all 2" }));
-    expect(handlers.onDoHere).toHaveBeenLastCalledWith(todo, { prompt: prompt([
-      "Fix these 2 findings from Code review:",
-      "",
-      "1. [P1] Abort pending exports",
-      "2. [P2] Keep the selected output format",
-    ]) });
+    expect(handlers.onDoHere).toHaveBeenLastCalledWith(todo, {
+      prompt: prompt([
+        "Fix these 2 findings from Code review:",
+        "",
+        "1. [P1] Abort pending exports",
+        "2. [P2] Keep the selected output format",
+      ]),
+      reviewFix: true,
+    });
     await waitFor(() => expect(screen.getByRole("button", { name: "Auto-fix" })).toBeEnabled());
 
     fireEvent.click(screen.getByRole("button", { name: "Dismiss review" }));
@@ -299,11 +310,14 @@ describe("review To-do card", () => {
     expect(select).toHaveAttribute("aria-pressed", "true");
     expect(within(select.closest("li")!).getAllByText("Selected")).toHaveLength(2);
     fireEvent.click(screen.getByRole("button", { name: "Fix 1 selected" }));
-    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: prompt([
-      "Fix this finding from Code review:",
-      "",
-      "1. [P2] Keep the selected output format",
-    ]) });
+    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, {
+      prompt: prompt([
+        "Fix this finding from Code review:",
+        "",
+        "1. [P2] Keep the selected output format",
+      ]),
+      reviewFix: true,
+    });
     await screen.findByRole("button", { name: "Auto-fix" });
     expect(select).toHaveAttribute("aria-pressed", "false");
   });
@@ -337,11 +351,14 @@ describe("review To-do card", () => {
     };
     const { handlers, todo } = renderCard(current);
     fireEvent.click(await screen.findByRole("button", { name: "Fix now: Keep the selected output format" }));
-    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, { prompt: prompt([
-      "Fix this finding from Code review:",
-      "",
-      "1. [P2] Keep the selected output format",
-    ]) });
+    expect(handlers.onDoHere).toHaveBeenCalledWith(todo, {
+      prompt: prompt([
+        "Fix this finding from Code review:",
+        "",
+        "1. [P2] Keep the selected output format",
+      ]),
+      reviewFix: true,
+    });
     await waitFor(() => expect(screen.getByRole("button", { name: "Auto-fix" })).toBeEnabled());
   });
 

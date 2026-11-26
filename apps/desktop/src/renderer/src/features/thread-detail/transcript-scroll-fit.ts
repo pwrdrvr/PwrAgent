@@ -17,6 +17,23 @@ export const TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY = "--transcript-scrollport-he
  * element of a long transcript. Outside a transcript nothing is written and
  * the rule's viewport-unit fallback applies.
  */
+type ScrollerHeightState = {
+  observer: ResizeObserver | undefined;
+  elements: Set<HTMLElement>;
+  height: number;
+  lastBorderBlockSize: number | undefined;
+};
+
+const scrollerHeightStates = new WeakMap<HTMLElement, ScrollerHeightState>();
+
+function applyScrollportHeight(element: HTMLElement, height: number): void {
+  if (height <= 0) return;
+  const value = `${height}px`;
+  if (element.style.getPropertyValue(TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY) !== value) {
+    element.style.setProperty(TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY, value);
+  }
+}
+
 export function useTranscriptScrollportHeight(
   ref: RefObject<HTMLElement | null>,
   /** Changes when the element `ref` names mounts later than its component. */
@@ -29,23 +46,59 @@ export function useTranscriptScrollportHeight(
       return undefined;
     }
 
-    const publish = () => {
-      const height = scroller.clientHeight;
-      if (height > 0) {
-        element.style.setProperty(
-          TRANSCRIPT_SCROLLPORT_HEIGHT_PROPERTY,
-          `${height}px`,
-        );
+    let state = scrollerHeightStates.get(scroller);
+    if (!state) {
+      const initialHeight = scroller.clientHeight;
+      const elements = new Set<HTMLElement>();
+      let observer: ResizeObserver | undefined;
+      state = {
+        observer: undefined,
+        elements,
+        height: initialHeight,
+        lastBorderBlockSize: undefined,
+      };
+      if (typeof ResizeObserver !== "undefined") {
+        const sharedState = state;
+        observer = new ResizeObserver((entries) => {
+          // Compare against border-box block size (which does not shift when
+          // `.transcript-list__items` toggles pending-item bottom padding) so
+          // width-only and padding-only deliveries skip layout reads and writes.
+          const borderBlockSize = entries?.[0]?.borderBoxSize?.[0]?.blockSize;
+          if (borderBlockSize !== undefined && borderBlockSize > 0) {
+            if (sharedState.lastBorderBlockSize === borderBlockSize) {
+              return;
+            }
+            sharedState.lastBorderBlockSize = borderBlockSize;
+          }
+          const next = scroller.clientHeight;
+          if (next <= 0 || next === sharedState.height) {
+            return;
+          }
+          sharedState.height = next;
+          for (const target of sharedState.elements) {
+            applyScrollportHeight(target, next);
+          }
+        });
+        observer.observe(scroller, { box: "border-box" });
+        state.observer = observer;
       }
-    };
-    publish();
-    if (typeof ResizeObserver === "undefined") {
-      return undefined;
+      scrollerHeightStates.set(scroller, state);
+    } else if (state.height <= 0) {
+      state.height = scroller.clientHeight;
     }
-    const observer = new ResizeObserver(publish);
-    observer.observe(scroller);
+
+    state.elements.add(element);
+    applyScrollportHeight(element, state.height);
+
+    const activeState = state;
     return () => {
-      observer.disconnect();
+      activeState.elements.delete(element);
+      if (activeState.elements.size === 0) {
+        activeState.observer?.disconnect();
+        if (scrollerHeightStates.get(scroller) === activeState) {
+          scrollerHeightStates.delete(scroller);
+        }
+      }
     };
   }, [mounted, ref]);
 }

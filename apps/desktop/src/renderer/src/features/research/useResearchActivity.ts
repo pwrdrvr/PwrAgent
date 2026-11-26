@@ -4,6 +4,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import {
   appendResearchActivityOlder, emptyResearchActivity, mergeResearchActivityHead, researchActivityHeadRange, type ResearchActivityWindow,
 } from "./research-view-model";
+import { researchErrorMessage } from "./research-error";
 
 export const RESEARCH_ACTIVITY_PAGE = 100;
 
@@ -51,7 +52,7 @@ export function useResearchActivity(api: DesktopApi | undefined, thread: Researc
         commit(mergeResearchActivityHead(current.current, page));
         if (live.current) setError("");
       } catch (failure) {
-        if (live.current) setError(failure instanceof Error ? failure.message : "Activity could not be read");
+        if (live.current) setError(researchErrorMessage(failure, "Activity could not be read"));
       }
     });
   }, [backend, threadId, runId, revision, read, enqueue, commit]);
@@ -66,7 +67,7 @@ export function useResearchActivity(api: DesktopApi | undefined, thread: Researc
         commit(appendResearchActivityOlder(current.current, page));
         if (live.current) setError("");
       } catch (failure) {
-        if (live.current) setError(failure instanceof Error ? failure.message : "Older activity could not be read");
+        if (live.current) setError(researchErrorMessage(failure, "Older activity could not be read"));
       } finally {
         if (live.current) setLoadingOlder(false);
       }

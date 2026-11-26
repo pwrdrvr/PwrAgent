@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -276,15 +277,17 @@ function measure(
 function observeDockLayout(
   region: HTMLElement,
   cardRef: RefObject<HTMLButtonElement | null>,
-  sync: (lane: HTMLElement | undefined, elements: DockElements | undefined, inFrame: boolean) => void,
-  cardMounted: () => void,
+  initialSync: (lane: HTMLElement | undefined, elements: DockElements | undefined, inFrame: boolean) => void,
+  cardMounted: (measuredHeight?: number) => void,
 ) {
+  let sync = initialSync;
   let elements: DockElements = {};
   let lane: HTMLElement | undefined;
   let observedCard: HTMLButtonElement | null;
   let initialized = false;
   let frame = 0;
   let layoutSample: "pending" | "sampled" | undefined;
+  const observedSizes = new WeakMap<Element, { inline: number; block: number }>();
   const containsMatch = (node: Element, selector: string): boolean =>
     node.matches(selector) || node.querySelector(selector) !== null;
   const forgetTargets = (): void => {
@@ -327,7 +330,7 @@ function observeDockLayout(
     }
     layoutSample = undefined;
   };
-  const refresh = (inFrame = false): void => {
+  const refresh = (inFrame = false, forceMeasure = false): void => {
     // Each lens renders one lane directly inside the region. Identify it
     // without probing the computed overflow of a newly mounted row's ancestors.
     const nextLane = Array.from(region.children).find((child): child is HTMLElement =>
@@ -336,22 +339,31 @@ function observeDockLayout(
     if (replaced) {
       cancelMeasure();
       mutation?.takeRecords();
-      if (lane) resize?.unobserve(lane);
+      if (lane) {
+        resize?.unobserve(lane);
+        observedSizes.delete(lane);
+      }
       lane = nextLane;
       elements = {};
       if (lane) resize?.observe(lane);
       initialized = true;
     }
-    if (replaced || !mutation || inFrame) {
-      if (inFrame && mutation) noteMutations(mutation.takeRecords());
+    if (replaced || forceMeasure || !mutation || inFrame) {
+      if ((inFrame || forceMeasure) && mutation) noteMutations(mutation.takeRecords());
       sync(lane, mutation ? elements : {}, inFrame);
     }
     if (observedCard !== cardRef.current) {
-      if (observedCard) resize?.unobserve(observedCard);
+      if (observedCard) {
+        resize?.unobserve(observedCard);
+        observedSizes.delete(observedCard);
+      }
       observedCard = cardRef.current;
       if (observedCard) {
         resize?.observe(observedCard, { box: "border-box" });
-        cardMounted();
+        // When ResizeObserver is present, avoid forcing a synchronous layout
+        // via offsetHeight right after flushSync; ResizeObserver delivers the
+        // card's border-box blockSize directly without a sync reflow.
+        if (!resize) cardMounted();
       }
     }
   };
@@ -378,8 +390,47 @@ function observeDockLayout(
       resize.observe(region);
     });
   };
-  const resize = typeof ResizeObserver === "function" ? new ResizeObserver(() => {
-    if (layoutSample === undefined) {
+  const resize = typeof ResizeObserver === "function" ? new ResizeObserver((entries) => {
+    if (entries && entries.length > 0) {
+      let cardHeightChanged: number | undefined;
+      let geometryChanged = false;
+      for (const entry of entries) {
+        const box = entry.borderBoxSize?.[0] ?? entry.contentBoxSize?.[0];
+        if (entry.target === observedCard) {
+          const block = box?.blockSize;
+          const prev = observedSizes.get(entry.target);
+          if (block !== undefined && block > 0) {
+            if (!prev || prev.block !== block) {
+              observedSizes.set(entry.target, { inline: box?.inlineSize ?? 0, block });
+              cardHeightChanged = block;
+            }
+          } else {
+            geometryChanged = true;
+          }
+          continue;
+        }
+        if (!box) {
+          geometryChanged = true;
+          continue;
+        }
+        const prev = observedSizes.get(entry.target);
+        if (!prev) {
+          observedSizes.set(entry.target, { inline: box.inlineSize, block: box.blockSize });
+          // The initial observation after refresh() already measured this box.
+          if (!initialized) geometryChanged = true;
+        } else if (prev.inline !== box.inlineSize || prev.block !== box.blockSize) {
+          observedSizes.set(entry.target, { inline: box.inlineSize, block: box.blockSize });
+          geometryChanged = true;
+        }
+      }
+      if (cardHeightChanged !== undefined) {
+        cardMounted(cardHeightChanged);
+      }
+      if (layoutSample === undefined) {
+        if (geometryChanged) schedule();
+        return;
+      }
+    } else if (layoutSample === undefined) {
       schedule();
       return;
     }
@@ -410,6 +461,10 @@ function observeDockLayout(
   region.addEventListener(THREAD_DOCK_DRAG_LIFT_EVENT, onDragLift);
   return {
     refresh,
+    setSync(nextSync: typeof initialSync) {
+      sync = nextSync;
+      forgetTargets();
+    },
     dispose() {
       cancelMeasure();
       region.removeEventListener("scroll", onScroll, { capture: true });
@@ -452,7 +507,7 @@ function sameDock(a: DockState | undefined, b: DockState | undefined): boolean {
  * detach a PR. It floats over the list so that nothing moves when it
  * appears. See `selected-thread-dock.ts` for when it shows.
  */
-export function SelectedThreadDock(props: SelectedThreadDockProps) {
+export const SelectedThreadDock = memo(function SelectedThreadDock(props: SelectedThreadDockProps) {
   const { regionRef, threadKey } = props;
   // By value: the lists are rebuilt on every render of the sidebar.
   const ancestorsKey = props.ancestorThreadKeys.join("\n");
@@ -461,6 +516,7 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   const dockRef = useRef<DockState | undefined>(undefined);
   const rowRef = useRef<HTMLElement | undefined>(undefined);
   const cardRef = useRef<HTMLButtonElement>(null);
+  const measuredCardHeightRef = useRef<number | undefined>(undefined);
   // The region that carries the reserve, to take it back from on unmount.
   // The property stays on it between top docks; only the class comes and goes.
   const reservedRegionRef = useRef<HTMLElement | undefined>(undefined);
@@ -468,7 +524,7 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   // to that row when it arrives, as it does for a row the dock scrolls to.
   const focusOnArrivalRef = useRef<string | undefined>(undefined);
 
-  const updateReserve = useCallback((edge: DockEdge | undefined): void => {
+  const updateReserve = useCallback((edge: DockEdge | undefined, measuredHeight?: number): void => {
     const region = regionRef.current;
     const reserved = reservedRegionRef.current;
     const reserveBefore = region ? topDockReserve(region) : 0;
@@ -477,8 +533,14 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
       reserved.style.removeProperty(RESERVE_PROPERTY);
       reservedRegionRef.current = undefined;
     }
+    if (measuredHeight !== undefined && measuredHeight > 0) {
+      measuredCardHeightRef.current = measuredHeight;
+    }
+    const cardHeight = measuredHeight
+      ?? measuredCardHeightRef.current
+      ?? (cardRef.current?.offsetHeight || DOCK_HEIGHT_GUESS_PX);
     const reserve = edge === "top"
-      ? (cardRef.current?.offsetHeight || DOCK_HEIGHT_GUESS_PX) + 2 * DOCK_PLATE_PX
+      ? cardHeight + 2 * DOCK_PLATE_PX
       : 0;
     if (region && reserve > 0) {
       const value = `${reserve}px`;
@@ -539,15 +601,23 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
   const refreshLayout = (): void => {
     const region = regionRef.current;
     const layout = layoutRef.current;
-    if (layout?.region !== region || layout?.sync !== sync) {
+    let targetChanged = false;
+    if (layout?.region !== region || Boolean(layout) !== Boolean(region && threadKey)) {
       layout?.dispose();
       layoutRef.current = region && threadKey
-        ? { region, sync, ...observeDockLayout(region, cardRef, sync, () => {
-          if (dockRef.current?.edge === "top") updateReserve("top");
+        ? { region, sync, ...observeDockLayout(region, cardRef, sync, (measuredHeight) => {
+          if (measuredHeight !== undefined && measuredHeight > 0) {
+            measuredCardHeightRef.current = measuredHeight;
+          }
+          if (dockRef.current?.edge === "top") updateReserve("top", measuredHeight);
         }) }
         : undefined;
+    } else if (layout && layout.sync !== sync) {
+      layout.sync = sync;
+      layout.setSync(sync);
+      targetChanged = true;
     }
-    if (layoutRef.current) layoutRef.current.refresh();
+    if (layoutRef.current) layoutRef.current.refresh(false, targetChanged);
     else sync();
   };
 
@@ -634,4 +704,4 @@ export function SelectedThreadDock(props: SelectedThreadDockProps) {
     </button>
     </>
   );
-}
+});

@@ -1018,7 +1018,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               checkoutMode: ports.resourceCheckoutToolMode(context),
             }, {
               taskMonitorRole: "all",
-              antigravityMcpContext: context.backend === "acp:antigravity" && !context.memoryOnly,
+              antigravityMcpContext: context.backend === "acp:antigravity" && !context.stdioFallback,
             }),
           authorizeToolCall: (params) =>
             ports.authorizeAgentToolMcpCall(params),
@@ -1476,6 +1476,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         // The workspace service tests for updateSubthreadOrder before calling
         // it, as the registry did; a getter keeps a missing method missing.
         get updateSubthreadOrder() { return overlayStore.updateSubthreadOrder?.bind(overlayStore); },
+        get appendLaunchedThread() { return overlayStore.appendLaunchedThread?.bind(overlayStore); },
         setThreadScheduledStart: (...args) => overlayStore.setThreadScheduledStart(...args),
         setTurnFailureCodexInvalidIdRecovery: (...args) => overlayStore.setTurnFailureCodexInvalidIdRecovery(...args),
       },

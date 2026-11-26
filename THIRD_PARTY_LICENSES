@@ -1110,6 +1110,7 @@ ISC
 - which@2.0.2 | https://github.com/isaacs/node-which
 - wrappy@1.0.2 | https://github.com/npm/wrappy
 - yallist@4.0.0 | https://github.com/isaacs/yallist
+- yaml@2.9.1 | github:eemeli/yaml
 - zod-to-json-schema@3.25.2 | https://github.com/StefanTerdell/zod-to-json-schema
 
 MIT
@@ -1334,6 +1335,7 @@ MIT
 - electron-log@5.4.4 | megahertz/electron-log
 - electron-updater@6.8.11 | https://github.com/electron-userland/electron-builder
 - emojilib@2.4.0 | https://github.com/muan/emojilib
+- emojilib@4.0.3 | https://github.com/muan/emojilib
 - emoticon@4.1.0 | wooorm/emoticon
 - encodeurl@2.0.0 | pillarjs/encodeurl
 - encoding@0.1.13 | https://github.com/andris9/encoding
@@ -1635,6 +1637,7 @@ MIT
 - undici@6.29.1 | https://github.com/nodejs/undici
 - undici@8.12.4 | https://github.com/nodejs/undici
 - undici-types@7.24.6 | https://github.com/nodejs/undici
+- unicode-emoji-json@0.9.0 | https://github.com/muan/unicode-emoji-json
 - unicode-emoji-modifier-base@1.0.0 | https://github.com/mathiasbynens/unicode-emoji-modifier-base
 - unified@11.0.5 | unifiedjs/unified
 - unist-builder@4.0.0 | syntax-tree/unist-builder
@@ -8043,6 +8046,7 @@ emojilib@2.4.0 (MIT)
 
 Applies to:
 - emojilib@2.4.0 (MIT)
+- emojilib@4.0.3 (MIT)
 
 Representative file: emojilib@2.4.0/LICENSE
 
@@ -13574,6 +13578,36 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+unicode-emoji-json@0.9.0 (MIT)
+------------------------------
+
+Applies to:
+- unicode-emoji-json@0.9.0 (MIT)
+
+Representative file: unicode-emoji-json@0.9.0/LICENSE
+
+The MIT License (MIT)
+
+Copyright (c) 2019 Mu-An Chiou
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
 unicode-emoji-modifier-base@1.0.0 (MIT)
 ---------------------------------------
 
@@ -13839,6 +13873,28 @@ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+yaml@2.9.1 (ISC)
+----------------
+
+Applies to:
+- yaml@2.9.1 (ISC)
+
+Representative file: yaml@2.9.1/LICENSE
+
+Copyright Eemeli Aro <eemeli@gmail.com>
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
 
 zod@4.6.7 (MIT)
 ---------------

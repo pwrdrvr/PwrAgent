@@ -178,6 +178,8 @@ describe("file preview", () => {
     const cells = [...table.querySelectorAll("tbody td")].map((cell) => cell.textContent);
     expect(cells).toEqual(["us-west-2", "41", "quoted, with comma", "eu-central-1", "1,057", "line one\nline two"]);
     expect(table.querySelectorAll('td[data-numeric="true"]')).toHaveLength(2);
+    expect(table).toHaveAttribute("tabindex", "0");
+    expect(table.parentElement).toHaveClass("thread-markdown__table-wrap", "file-preview__table");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 

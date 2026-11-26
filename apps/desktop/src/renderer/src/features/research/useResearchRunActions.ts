@@ -1,10 +1,9 @@
 import { useCallback, useState } from "react";
 import type { ResearchCommand, ResearchThread } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { researchErrorMessage } from "./research-error";
 
-export function researchErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Research operation failed";
-}
+export { researchErrorMessage };
 
 /**
  * What the operator can do to the run on screen, as its coordinating thread:

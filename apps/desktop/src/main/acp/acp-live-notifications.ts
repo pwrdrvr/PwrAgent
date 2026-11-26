@@ -1,5 +1,8 @@
 import { TOOL_DETAILS_UNAVAILABLE_LABEL } from "@pwragent/shared/tool-activity-burst";
-import { type AppServerNotification } from "@pwragent/shared/contracts/normalized-app-server";
+import {
+  type AppServerNotification,
+  type AppServerThreadImagePart,
+} from "@pwragent/shared/contracts/normalized-app-server";
 import {
   isAcpModelProgressUpdate,
   isAcpRetryStateUpdateKind,
@@ -21,6 +24,7 @@ import {
   readAcpWebSearch,
 } from "./acp-command-extraction.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
+import { extractAcpToolImageParts } from "./acp-tool-images.js";
 import { type ReadAcpFileEditOptions, readAcpFileEdit } from "./acp-file-edit.js";
 import { type AcpFileRead, fileBaseName, readAcpFileRead } from "./acp-file-read.js";
 import {
@@ -122,6 +126,7 @@ function readFiniteNumber(
  * follow-up updates the same way `AcpSessionReplayNormalizer` does.
  */
 const resolvedFileReads = new WeakMap<Record<string, unknown>, AcpFileRead>();
+const resolvedToolImages = new WeakMap<Record<string, unknown>, AppServerThreadImagePart[]>();
 
 export class AcpLiveToolUpdateResolver {
   private readonly activeUpdates = new Map<string, Record<string, unknown>>();
@@ -130,6 +135,8 @@ export class AcpLiveToolUpdateResolver {
   private readonly terminalUpdates = new Map<string, Record<string, unknown>>();
   private readonly providerTools = new Map<string, AcpProviderTool>();
   private readonly fileReads = new Map<string, AcpFileRead>();
+  private readonly toolImages = new Map<string, AppServerThreadImagePart[]>();
+  private readonly toolImageUrls = new Map<string, Set<string>>();
 
   resolve(params: {
     backendId: string;
@@ -196,6 +203,30 @@ export class AcpLiveToolUpdateResolver {
     if (fileRead) {
       this.fileReads.set(key, fileRead);
       resolvedFileReads.set(resolved, fileRead);
+    }
+    const incomingImages = extractAcpToolImageParts(params.update, readString(resolved, "title"));
+    let mergedImages = this.toolImages.get(key);
+    if (incomingImages.length > 0) {
+      let seen = this.toolImageUrls.get(key);
+      if (!seen) {
+        seen = new Set<string>();
+        this.toolImageUrls.set(key, seen);
+      }
+      const added: AppServerThreadImagePart[] = [];
+      for (const image of incomingImages) {
+        if (seen.has(image.url)) {
+          continue;
+        }
+        seen.add(image.url);
+        added.push(image);
+      }
+      if (added.length > 0) {
+        mergedImages = mergedImages ? [...mergedImages, ...added] : added;
+        this.toolImages.set(key, mergedImages);
+      }
+    }
+    if (mergedImages?.length) {
+      resolvedToolImages.set(resolved, mergedImages);
     }
     if (isTerminalToolStatus(resolved.status)) {
       this.activeUpdates.delete(key);
@@ -270,6 +301,12 @@ export class AcpLiveToolUpdateResolver {
         this.fileReads.delete(key);
       }
     }
+    for (const key of this.toolImages.keys()) {
+      if (key.startsWith(`${prefix}\0`)) {
+        this.toolImages.delete(key);
+        this.toolImageUrls.delete(key);
+      }
+    }
   }
 
   clear(): void {
@@ -278,6 +315,8 @@ export class AcpLiveToolUpdateResolver {
     this.terminalUpdates.clear();
     this.providerTools.clear();
     this.fileReads.clear();
+    this.toolImages.clear();
+    this.toolImageUrls.clear();
   }
 
   private rememberTerminalUpdate(key: string, update: Record<string, unknown>): void {
@@ -294,6 +333,8 @@ export class AcpLiveToolUpdateResolver {
       this.deferredTerminalUpdateKeys.delete(oldest);
       this.providerTools.delete(oldest);
       this.fileReads.delete(oldest);
+      this.toolImages.delete(oldest);
+      this.toolImageUrls.delete(oldest);
     }
   }
 }
@@ -545,6 +586,7 @@ function liveItemForAcpToolUpdate(
         ? command
         : title,
   });
+  const images = resolvedToolImages.get(update) ?? extractAcpToolImageParts(update, title);
   const item: Record<string, unknown> = {
     id: id ?? `${toolKind}:${title}`,
     type: "commandExecution",
@@ -555,6 +597,7 @@ function liveItemForAcpToolUpdate(
     ...(fileRead ? { path: fileRead.path } : {}),
     ...(!rawCommand && mcpToolName ? { commandToolName: mcpToolName } : {}),
     ...(commandActions.length ? { commandActions } : {}),
+    ...(images.length ? { images } : {}),
     ...(output ? { data: { output } } : {}),
   };
   return item;

@@ -14,6 +14,7 @@ import {
   type ResearchThread,
 } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { researchErrorMessage } from "./research-error";
 
 /** What the panel draws from: the thread's runs, its pending request, and the store of the run on screen. */
 export type ResearchSyncState = {
@@ -55,6 +56,17 @@ export class ResearchSync {
 
   start(): void { void this.pump(); }
   dispose(): void { this.disposed = true; }
+
+  /** Re-read the run list and selected run after a Federation reconnect or stream recovery. */
+  resync(): void {
+    if (this.disposed) return;
+    this.listDirty = true;
+    if (this.store) {
+      this.runDirty = true;
+      this.runAsked = Number.POSITIVE_INFINITY;
+    }
+    void this.pump();
+  }
 
   /** The run to show: the chosen one while the thread still lists it, else the newest. */
   select(runId: string | undefined): void {
@@ -113,7 +125,7 @@ export class ResearchSync {
       }
     } catch (error) {
       // Leave what was dirty as it is: the next change event retries it.
-      this.emit({ error: error instanceof Error ? error.message : "Research could not be read" });
+      this.emit({ error: researchErrorMessage(error, "Research could not be read") });
     } finally { this.pumping = false; }
   }
 

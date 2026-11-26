@@ -680,6 +680,13 @@ export function CompactComposer(props: CompactComposerProps) {
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (
+        (event as { isComposing?: boolean }).isComposing
+        || event.nativeEvent?.isComposing
+        || event.keyCode === 229
+      ) {
+        return;
+      }
+      if (
         event.key === "Enter"
         && !event.shiftKey
         && !event.altKey

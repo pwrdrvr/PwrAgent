@@ -41,6 +41,27 @@ import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
 
 describe("federation backend bridge", () => {
+  it("requires file-pull capability for Antigravity skill discovery on the owner", async () => {
+    const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+      additionalRequiredCapabilities: additionalFederationBackendCapabilities });
+    const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",
+      sendEnvelope: (envelope) => { void router.routeEnvelope({ envelope, sourcePeerId: "viewer" }); } });
+    const connect = (capabilities: FederationCapability[]) => router.registerConnection({ peerId: "viewer", capabilities,
+      sendEnvelope: (envelope) => { rpc.receiveEnvelope(envelope); } });
+    const listSkills = vi.fn(async () => ({ backend: "acp:antigravity", fetchedAt: 1, data: [] }));
+    registerFederationBackendHandlers({ router, backend: { listSkills } as unknown as FederationBackendOperations });
+    const client = new FederationRemoteBackendClient(rpc);
+    const request = { backend: "acp:antigravity", catalog: "skills" } as const;
+
+    connect(["thread_detail"]);
+    await expect(client.listSkills(request)).rejects.toMatchObject({ code: "capability_denied" });
+    expect(listSkills).not.toHaveBeenCalled();
+
+    connect(["thread_detail", "file_pull"]);
+    await expect(client.listSkills(request)).resolves.toMatchObject({ data: [] });
+    expect(listSkills).toHaveBeenCalledExactlyOnceWith(request);
+  });
+
   it("keeps a hover lookup off the legacy selected-detail route", async () => {
     const router = new FederationRouter({ localInstanceId: "owner", methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES });
     const rpc = new FederationRpcEndpoint({ localInstanceId: "viewer", remoteInstanceId: "owner",

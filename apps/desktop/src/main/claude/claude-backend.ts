@@ -1488,6 +1488,7 @@ export class ClaudeBackend {
         canUseTool: createClaudePermissionHandler({
           threadId, turnId: () => current.turn?.turnId ?? current.lastTurnId,
           planTurn: () => current.config.permissionMode === "plan",
+          mcpKey: () => current.config.mcpKey,
           request: this.options.request,
           cancelRequest: (requestId, turnId) => this.options.cancelRequest(threadId, turnId, requestId),
         }),

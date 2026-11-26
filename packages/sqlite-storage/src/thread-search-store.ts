@@ -39,9 +39,13 @@ type ThreadSearchFtsRow = ThreadSearchDocumentRow & {
   snippet_text?: string | null;
 };
 
+type ThreadSearchProjection = ReturnType<typeof buildThreadSearchProjection>;
+type ThreadSearchProjectionStatus = "current" | "repair" | "upsert";
+
 export class ThreadSearchStore implements ThreadSearchStorage {
   private readonly db: BetterSqlite3.Database;
   private readonly pruneCursors = new Map<string, string>();
+  private currentThreadStatement?: BetterSqlite3.Statement;
 
   constructor(stateDb: StateDb) {
     this.db = stateDb.raw;
@@ -49,60 +53,62 @@ export class ThreadSearchStore implements ThreadSearchStorage {
 
   /** Archive-inclusive global search must not commit once per listed thread. */
   upsertThreads(threads: readonly AppServerThreadSummary[]): void {
-    const changed = threads.filter((thread) => !this.hasCurrentThread(thread));
+    const changed = threads.flatMap((thread) => {
+      const projection = buildThreadSearchProjection(thread);
+      const status = this.getProjectionStatus(projection);
+      return status === "current" ? [] : [{ projection, repairOnly: status === "repair" }];
+    });
     if (changed.length === 0) return;
     this.db.transaction(() => {
-      for (const thread of changed) this.upsertThread(thread);
-    })();
+      for (const { projection, repairOnly } of changed) {
+        this.writeProjection(projection, Date.now(), repairOnly);
+      }
+    }).immediate();
   }
 
-  private hasCurrentThread(thread: AppServerThreadSummary): boolean {
-    return Boolean(this.db.prepare(`
-      SELECT 1 FROM thread_search_documents
-      WHERE identity_key = ? AND backend IS ? AND thread_id IS ?
-        AND title IS ? AND title_source IS ? AND summary IS ? AND project_key IS ?
-        AND created_at IS ? AND updated_at IS ? AND archived_at IS ?
-        AND git_branch IS ? AND git_origin_url IS ? AND model IS ?
-        AND linked_directories_json IS ? AND display_json IS ?
-        AND EXISTS (
-          SELECT 1 FROM thread_search_fts_rows k
-          JOIN thread_search_fts f ON f.rowid = k.fts_rowid
-          WHERE k.identity_key = thread_search_documents.identity_key
-            AND f.identity_key = k.identity_key
-        )
-    `).get(
-      buildLegacyEncodedThreadIdentityKey(thread.source, thread.id), thread.source, thread.id,
-      thread.title, thread.titleSource ?? null, thread.summary ?? null, thread.projectKey ?? null,
-      thread.createdAt ?? null, thread.updatedAt ?? null, thread.archivedAt ?? null,
-      thread.gitBranch ?? null, thread.gitOriginUrl ?? null, thread.model ?? null,
-      JSON.stringify(thread.linkedDirectories),
-      JSON.stringify({ source: thread.source, serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort }),
-    ));
+  private getProjectionStatus(projection: ThreadSearchProjection): ThreadSearchProjectionStatus {
+    const statement = this.currentThreadStatement ??= this.db.prepare(`
+      SELECT EXISTS (
+        SELECT 1 FROM thread_search_fts_rows k
+        JOIN thread_search_fts f ON f.rowid = k.fts_rowid
+        WHERE k.identity_key = d.identity_key
+          AND f.identity_key IS k.identity_key
+          AND f.title IS @title AND f.summary IS COALESCE(@summary, '')
+          AND f.project_key IS COALESCE(@projectKey, '')
+          AND f.directory_labels IS @directoryLabels AND f.directory_paths IS @directoryPaths
+          AND f.git_branch IS COALESCE(@gitBranch, '') AND f.git_origin_url IS COALESCE(@gitOriginUrl, '')
+          AND f.model IS COALESCE(@model, '') AND f.backend IS @backend AND f.thread_id IS @threadIdSearchText
+      ) AS fts_current
+      FROM thread_search_documents d
+      WHERE d.identity_key = @identityKey AND d.backend IS @backend AND d.thread_id IS @threadId
+        AND d.title IS @title AND d.title_source IS @titleSource AND d.summary IS @summary AND d.project_key IS @projectKey
+        AND d.created_at IS @createdAt AND d.updated_at IS @updatedAt AND d.archived_at IS @archivedAt
+        AND d.git_branch IS @gitBranch AND d.git_origin_url IS @gitOriginUrl AND d.model IS @model
+        AND d.linked_directories_json IS @linkedDirectoriesJson AND d.display_json IS @displayJson
+    `);
+    const row = statement.get(projection) as { fts_current: number } | undefined;
+    if (!row) return "upsert";
+    return row.fts_current ? "current" : "repair";
   }
 
   upsertThread(thread: AppServerThreadSummary, indexedAt = Date.now()): void {
-    if (this.hasCurrentThread(thread)) return;
-    const identityKey = buildLegacyEncodedThreadIdentityKey(
-      thread.source,
-      thread.id,
-    );
-    const directoryLabels = thread.linkedDirectories
-      .map((directory) => directory.label)
-      .join(" ");
-    const directoryPaths = thread.linkedDirectories
-      .flatMap((directory) => [directory.path, directory.worktreePath].filter(Boolean))
-      .join(" ");
-    const displayJson = JSON.stringify({
-      source: thread.source,
-      serviceTier: thread.serviceTier,
-      reasoningEffort: thread.reasoningEffort,
-    });
-    const linkedDirectoriesJson = JSON.stringify(thread.linkedDirectories);
+    const projection = buildThreadSearchProjection(thread);
+    const status = this.getProjectionStatus(projection);
+    if (status !== "current") this.writeProjection(projection, indexedAt, status === "repair");
+  }
 
-    const transaction = this.db.transaction(() => {
+  private writeProjection(projection: ThreadSearchProjection, indexedAt: number, repairOnly: boolean): void {
+    const { identityKey } = projection;
+    this.db.transaction(() => {
+      // A peer may have changed the document after the preflight read. Keep an
+      // FTS-only repair tied to the matching document. The outermost immediate
+      // transaction holds the WAL writer lock before this recheck reads.
+      const status = this.getProjectionStatus(projection);
+      if (status === "current" || (repairOnly && status !== "repair")) return;
+
       this.deleteFtsRows(identityKey);
-      this.db
-        .prepare(
+      if (status === "upsert") {
+        this.db.prepare(
           `INSERT INTO thread_search_documents (
              identity_key, backend, thread_id, title, title_source, summary,
              project_key, created_at, updated_at, archived_at, git_branch,
@@ -128,25 +134,8 @@ export class ThreadSearchStore implements ThreadSearchStorage {
              linked_directories_json = excluded.linked_directories_json,
              display_json = excluded.display_json,
              indexed_at = excluded.indexed_at`,
-        )
-        .run({
-          identityKey,
-          backend: thread.source,
-          threadId: thread.id,
-          title: thread.title,
-          titleSource: thread.titleSource,
-          summary: thread.summary ?? null,
-          projectKey: thread.projectKey ?? null,
-          createdAt: thread.createdAt ?? null,
-          updatedAt: thread.updatedAt ?? null,
-          archivedAt: thread.archivedAt ?? null,
-          gitBranch: thread.gitBranch ?? null,
-          gitOriginUrl: thread.gitOriginUrl ?? null,
-          model: thread.model ?? null,
-          linkedDirectoriesJson,
-          displayJson,
-          indexedAt,
-        });
+        ).run({ ...projection, indexedAt });
+      }
       // Allocate above both stores: an older process sharing this profile can
       // still insert FTS rows without knowing the mapping table exists.
       this.db.prepare(`INSERT INTO thread_search_fts_rows (identity_key, fts_rowid)
@@ -156,31 +145,16 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         ) + 1
         WHERE NOT EXISTS (SELECT 1 FROM thread_search_fts_rows WHERE identity_key = ?)
       `).run(identityKey, identityKey);
-      this.db
-        .prepare(
-          `INSERT INTO thread_search_fts (
-             rowid, identity_key, title, summary, project_key, directory_labels,
-             directory_paths, git_branch, git_origin_url, model, backend,
-             thread_id
-           ) VALUES ((SELECT fts_rowid FROM thread_search_fts_rows WHERE identity_key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          identityKey,
-          identityKey,
-          thread.title,
-          thread.summary ?? "",
-          thread.projectKey ?? "",
-          directoryLabels,
-          directoryPaths,
-          thread.gitBranch ?? "",
-          thread.gitOriginUrl ?? "",
-          thread.model ?? "",
-          thread.source,
-          buildThreadIdSearchText(thread.id),
-        );
-    });
-
-    transaction();
+      this.db.prepare(`INSERT INTO thread_search_fts (
+        rowid, identity_key, title, summary, project_key, directory_labels,
+        directory_paths, git_branch, git_origin_url, model, backend, thread_id
+      ) VALUES (
+        (SELECT fts_rowid FROM thread_search_fts_rows WHERE identity_key = @identityKey),
+        @identityKey, @title, COALESCE(@summary, ''), COALESCE(@projectKey, ''),
+        @directoryLabels, @directoryPaths, COALESCE(@gitBranch, ''), COALESCE(@gitOriginUrl, ''),
+        COALESCE(@model, ''), @backend, @threadIdSearchText
+      )`).run(projection);
+    }).immediate();
   }
 
   deleteThread(params: {
@@ -415,6 +389,35 @@ function queryMatchesIdentifier(query: string | undefined, identifier: string): 
   return needle !== undefined && needle.length > 0
     ? identifier.toLowerCase().includes(needle)
     : false;
+}
+
+function buildThreadSearchProjection(thread: AppServerThreadSummary) {
+  return {
+    identityKey: buildLegacyEncodedThreadIdentityKey(thread.source, thread.id),
+    backend: thread.source,
+    threadId: thread.id,
+    title: thread.title,
+    titleSource: thread.titleSource ?? null,
+    summary: thread.summary ?? null,
+    projectKey: thread.projectKey ?? null,
+    createdAt: thread.createdAt ?? null,
+    updatedAt: thread.updatedAt ?? null,
+    archivedAt: thread.archivedAt ?? null,
+    gitBranch: thread.gitBranch ?? null,
+    gitOriginUrl: thread.gitOriginUrl ?? null,
+    model: thread.model ?? null,
+    linkedDirectoriesJson: JSON.stringify(thread.linkedDirectories),
+    displayJson: JSON.stringify({
+      source: thread.source,
+      serviceTier: thread.serviceTier,
+      reasoningEffort: thread.reasoningEffort,
+    }),
+    directoryLabels: thread.linkedDirectories.map((directory) => directory.label).join(" "),
+    directoryPaths: thread.linkedDirectories
+      .flatMap((directory) => [directory.path, directory.worktreePath].filter(Boolean))
+      .join(" "),
+    threadIdSearchText: buildThreadIdSearchText(thread.id),
+  };
 }
 
 function buildThreadIdSearchText(threadId: string): string {

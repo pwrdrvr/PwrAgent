@@ -6,7 +6,11 @@ import {
   type AppServerThreadSummary,
   type AppServerTurnInputItem,
 } from "@pwragent/shared/contracts/normalized-app-server";
-import { ThreadNamingLifecycle, type ThreadNamingAttempt } from "./thread-naming-lifecycle";
+import {
+  ThreadNamingLifecycle,
+  type ThreadNamingAttempt,
+  type ThreadTitleApplication,
+} from "./thread-naming-lifecycle";
 import type { OwnerThreadIdentity } from "./thread-storage";
 import type { ThreadTitleGenerationResult } from "./thread-title-generation-service";
 
@@ -55,22 +59,36 @@ export class ThreadTitleLifecycle {
     const input = this.pendingInputs.get(this.key(identity));
     if (!input) return;
     this.forgetPendingInput(identity);
-    this.schedule({ ...identity, input });
+    void this.schedule({ ...identity, input });
   }
 
-  schedule(params: OwnerThreadIdentity & { input: AppServerTurnInputItem[] }): void {
-    if (!this.host.canGenerateTitle(params.backend)) return;
+  /**
+   * Schedules background title generation and resolves once any immediate ACP
+   * prompt-derived placeholder write has settled (before helper inference runs).
+   */
+  schedule(params: OwnerThreadIdentity & { input: AppServerTurnInputItem[] }): Promise<void> {
+    if (!this.host.canGenerateTitle(params.backend)) return Promise.resolve();
     const prompt = extractFirstMeaningfulTextInput(params.input);
-    if (!prompt) return;
+    if (!prompt) return Promise.resolve();
     const key = this.key(params);
-    if (this.attempted.has(key)) return;
+    if (this.attempted.has(key)) return Promise.resolve();
     this.attempted.add(key);
     const namingAttempt = this.naming.beginTitleGeneration(params);
-    const work = this.generateAndApply({ ...params, prompt, namingAttempt });
+    let resolvePlaceholder!: () => void;
+    const placeholderReady = new Promise<void>((resolve) => {
+      resolvePlaceholder = resolve;
+    });
+    const work = this.generateAndApply({
+      ...params,
+      prompt,
+      namingAttempt,
+      onPlaceholderSettled: resolvePlaceholder,
+    });
     this.work.add(work);
     // Register cleanup on both outcomes without creating an unobserved rejected
     // finally promise. whenSettled still observes the original work's outcome.
     void work.then(() => this.work.delete(work), () => this.work.delete(work));
+    return placeholderReady;
   }
 
   async whenSettled(): Promise<void> {
@@ -88,6 +106,7 @@ export class ThreadTitleLifecycle {
     backend: AppServerBackendKind;
     threadId: string;
     prompt: string;
+    onPlaceholderSettled: () => void;
   }): Promise<void> {
     let generatedResult: Extract<ThreadTitleGenerationResult, { status: "generated" }> | undefined;
     try {
@@ -109,13 +128,46 @@ export class ThreadTitleLifecycle {
         return;
       }
 
-      // Claude's adapter requests its own native title. Keep a local prompt
-      // fallback eligible for session_info_update, without another model call.
-      if (params.backend === "acp:claude") {
-        if (currentThread?.titleSource !== "explicit") await this.applyPromptDerivedTitle({
-          backend: params.backend, threadId: params.threadId, prompt: params.prompt, namingAttempt: params.namingAttempt,
-        });
-        return;
+      if (isAcpBackendId(params.backend)) {
+        // Apply the shortened prompt immediately so ACP threads never sit on a
+        // generic fallback while the naming helper runs or if it fails/throws.
+        // Keeping `promptPlaceholder: true` lets a provider topic update or
+        // the naming helper replace it once ready.
+        if (currentThread?.titleSource !== "explicit") {
+          const placeholder = await this.applyPromptDerivedTitle({
+            backend: params.backend,
+            threadId: params.threadId,
+            prompt: params.prompt,
+            namingAttempt: params.namingAttempt,
+            currentThread,
+          });
+          if (!placeholder.applied) {
+            this.host.log(
+              "skipped",
+              params,
+              placeholder.reason === "superseded" ? "stale_generation" : "latest_title_not_eligible",
+              { eligibility: true, thread: placeholder.thread },
+            );
+            await this.host.persistHelper({
+              existingOnly: true,
+              backend: params.backend,
+              threadId: params.threadId,
+              status: "cancelled",
+              reason: placeholder.thread
+                ? buildLateTitleCancellationReason(params.backend, placeholder.thread)
+                : "The thread was renamed before title application.",
+            });
+            return;
+          }
+        }
+        params.onPlaceholderSettled();
+        // Claude's adapter requests its own native title. Keep the local prompt
+        // placeholder eligible for session_info_update, without another model call.
+        if (params.backend === "acp:claude") {
+          return;
+        }
+      } else {
+        params.onPlaceholderSettled();
       }
 
       if (params.backend === "codex" || isAcpBackendId(params.backend)) {
@@ -143,14 +195,6 @@ export class ThreadTitleLifecycle {
           status: "failed",
           reason: result?.reason ?? "title_generation_unavailable",
         });
-        if (isAcpBackendId(params.backend)) {
-          await this.applyPromptDerivedTitle({
-            backend: params.backend,
-            threadId: params.threadId,
-            prompt: params.prompt,
-            namingAttempt: params.namingAttempt,
-          });
-        }
         return;
       }
       generatedResult = result;
@@ -214,6 +258,7 @@ export class ThreadTitleLifecycle {
         reason
       );
     } finally {
+      params.onPlaceholderSettled();
       this.naming.finishTitleGeneration(params.namingAttempt);
     }
   }
@@ -223,15 +268,27 @@ export class ThreadTitleLifecycle {
     threadId: string;
     prompt: string;
     namingAttempt: ThreadNamingAttempt;
-  }): Promise<void> {
+    currentThread?: AppServerThreadSummary;
+  }): Promise<ThreadTitleApplication> {
     const title = shortenDerivedThreadTitle(params.prompt);
-    if (!title) return;
+    if (!title) return { applied: true };
+    if (
+      params.currentThread?.title === title
+      && params.currentThread.titleSource === "derived"
+    ) {
+      return { applied: true };
+    }
     const applied = await this.naming.applyGeneratedTitle({
-      attempt: params.namingAttempt, prompt: params.prompt, title, titleSource: "fallback",
+      attempt: params.namingAttempt,
+      prompt: params.prompt,
+      title,
+      titleSource: "derived",
+      promptPlaceholder: true,
     });
     if (applied.applied) this.host.log("applied", params, "prompt_derived_fallback", {
       generatedTitle: title,
     });
+    return applied;
   }
 }
 

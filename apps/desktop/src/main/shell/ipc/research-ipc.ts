@@ -1,64 +1,134 @@
-import { BrowserWindow, dialog, ipcMain, shell } from "electron";
-import { getMainLogger } from "../../log";
-import { isAppServerBackendKind } from "@pwragent/shared/contracts/navigation";
-import {
-  type ResearchThread,
-  type ResearchSnapshotRequest,
-  type ResearchChangesRequest,
-  type ResearchUpdateReceipt,
-  type ResearchEventsRequest,
-  type ResearchUpdateRequest,
-  type ResearchEvidenceRequest,
-  type PrepareResearchRequest,
-  type ResearchSearchRequest,
-  type ResearchItemReadRequest,
-  type ResearchWorkRequest,
-} from "@pwragent/shared/research";
-import { RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL, RESEARCH_CHANGES_CHANNEL } from "../../../shared/ipc";
-import { getResearchService } from "../../research/research-runtime";
-import { researchToolsOffered, researchToolSurface } from "../../agent-tools/pwragent-research-agent-tools";
-import { resolveHarnessEvidencePath, resolveResearchEvidencePath } from "../../research/research-evidence-path";
-import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
-import { isLocalMainWindowWebContents, isLocalResearchWebContents } from "../window-channels";
 import { realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import {
+  RESEARCH_RUN_ATTENTION_ORDER,
+  type PrepareResearchRequest,
+  type ResearchChangesRequest,
+  type ResearchEventsRequest,
+  type ResearchEvidenceRequest,
+  type ResearchItemReadRequest,
+  type ResearchProfileRunsPage,
+  type ResearchProfileRunsQuery,
+  type ResearchSearchRequest,
+  type ResearchSnapshotRequest,
+  type ResearchThreadRequest,
+  type ResearchUpdateRequest,
+  type ResearchWorkRequest,
+} from "@pwragent/shared/research";
 import type {
   ResearchHarnessReconcileRequest,
   ResearchHarnessRequest,
+  ResearchMathosSwarmsRequest,
 } from "@pwragent/shared/research-harness";
-import type { ResearchProfileRunsPage, ResearchProfileRunsQuery } from "@pwragent/shared/research";
-import { RESEARCH_RUN_ATTENTION_ORDER } from "@pwragent/shared/research";
-import { RESEARCH_PROFILE_RUNS_CHANNEL, RESEARCH_OPEN_WINDOW_CHANNEL } from "../../../shared/ipc";
-import { researchWindowRunId, showResearchWindow } from "../research-window";
-import { RESEARCH_HARNESS_STATUS_CHANNEL, RESEARCH_HARNESS_START_CHANNEL, RESEARCH_HARNESS_CHECK_CHANNEL, RESEARCH_HARNESS_RECONCILE_CHANNEL, RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL, RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL, RESEARCH_MATHOS_TEAMS_CHANNEL, RESEARCH_MATHOS_SWARMS_CHANNEL } from "../../../shared/ipc";
+import {
+  RESEARCH_CHANGES_CHANNEL,
+  RESEARCH_EVENTS_CHANNEL,
+  RESEARCH_HARNESS_CHECK_CHANNEL,
+  RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL,
+  RESEARCH_HARNESS_RECONCILE_CHANNEL,
+  RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL,
+  RESEARCH_HARNESS_SETTINGS_CHECK_CHANNEL,
+  RESEARCH_HARNESS_START_CHANNEL,
+  RESEARCH_HARNESS_STATUS_CHANNEL,
+  RESEARCH_ITEM_CHANNEL,
+  RESEARCH_MATHOS_SWARMS_CHANNEL,
+  RESEARCH_MATHOS_TEAMS_CHANNEL,
+  RESEARCH_OPEN_EVIDENCE_CHANNEL,
+  RESEARCH_OPEN_WINDOW_CHANNEL,
+  RESEARCH_PREPARE_CHANNEL,
+  RESEARCH_PROFILE_RUNS_CHANNEL,
+  RESEARCH_SEARCH_CHANNEL,
+  RESEARCH_SNAPSHOT_CHANNEL,
+  RESEARCH_UPDATE_CHANNEL,
+  RESEARCH_WITHDRAW_CHANNEL,
+  RESEARCH_WORK_CHANNEL,
+} from "../../../shared/ipc";
+import { getDesktopBackendRegistry } from "../../app-server/backend-registry";
+import { FederatedResearchService, type ResearchOperation } from "../../federation/federation-research";
+import { getDesktopFederationRuntime } from "../../federation/federation-runtime";
+import { getMainLogger } from "../../log";
+import { resolveHarnessEvidencePath, resolveResearchEvidencePath } from "../../research/research-evidence-path";
+import { localResearchOperations, requireResearchEnabled, validateResearchThread } from "../../research/research-operations";
+import { getResearchHarnessService, getResearchService, listResearchMathosTeams } from "../../research/research-runtime";
 import { resolveDesktopConfigPath } from "../../settings/desktop-config";
-import { getResearchHarnessService, listResearchMathosSwarms, listResearchMathosTeams, researchHarnessPlatformKeyStored, researchHarnessStatus } from "../../research/research-runtime";
-import { getDesktopSettingsService } from "../../settings/desktop-settings-singleton";
+import { researchWindowRunId, showResearchWindow } from "../research-window";
+import {
+  federationTargetForChannelSubscriber,
+  isLocalMainWindowWebContents,
+  isLocalResearchWebContents,
+  isMainWindowWebContents,
+} from "../window-channels";
 
 const researchIpcLog = getMainLogger("pwragent:research");
 
-/** Native research is local-owner only. A federation viewer cannot read or mutate this profile. */
+const ROUTED_MAIN_CHANNELS = {
+  harnessStatus: RESEARCH_HARNESS_STATUS_CHANNEL,
+  harnessCheck: RESEARCH_HARNESS_CHECK_CHANNEL,
+  harnessStart: RESEARCH_HARNESS_START_CHANNEL,
+  prepare: RESEARCH_PREPARE_CHANNEL,
+  withdraw: RESEARCH_WITHDRAW_CHANNEL,
+  listMathosSwarms: RESEARCH_MATHOS_SWARMS_CHANNEL,
+} as const satisfies Partial<Record<ResearchOperation, string>>;
+
+const ROUTED_RESEARCH_CHANNELS = {
+  snapshot: RESEARCH_SNAPSHOT_CHANNEL,
+  changes: RESEARCH_CHANGES_CHANNEL,
+  events: RESEARCH_EVENTS_CHANNEL,
+  search: RESEARCH_SEARCH_CHANNEL,
+  readItem: RESEARCH_ITEM_CHANNEL,
+  work: RESEARCH_WORK_CHANNEL,
+  update: RESEARCH_UPDATE_CHANNEL,
+  harnessReconcile: RESEARCH_HARNESS_RECONCILE_CHANNEL,
+} as const satisfies Partial<Record<ResearchOperation, string>>;
+
+type RoutedRequest =
+  | ResearchSnapshotRequest
+  | ResearchChangesRequest
+  | ResearchEventsRequest
+  | ResearchSearchRequest
+  | ResearchItemReadRequest
+  | ResearchWorkRequest
+  | PrepareResearchRequest
+  | ResearchThreadRequest
+  | ResearchUpdateRequest
+  | ResearchHarnessRequest
+  | ResearchHarnessReconcileRequest
+  | ResearchMathosSwarmsRequest;
+
+/**
+ * Thread Research IPC. Thread-scoped reads and mutations route to the thread's
+ * owning instance (local or connected Federation peer); Settings, local shell
+ * evidence opens, and profile-wide Research window reads remain local-only.
+ */
 export function registerResearchIpcHandlers(): void {
   disposeResearchIpcHandlers();
-  ipcMain.handle(RESEARCH_HARNESS_STATUS_CHANNEL, async (event, request: ResearchThread) => {
-    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    return researchHarnessStatus(await harnessWorkspace(request), process.env, await researchHarnessPlatformKeyStored());
+  const service = new FederatedResearchService({
+    local: localResearchOperations,
+    remote: (target, operation, request) =>
+      getDesktopFederationRuntime().requestResearchOperation(target, operation, request),
   });
-  ipcMain.handle(RESEARCH_HARNESS_CHECK_CHANNEL, async (event, request: ResearchThread) => {
-    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    // A check binds no evidence, so a thread without a directory still runs the bridge somewhere neutral.
-    return await getResearchHarnessService().check(await harnessWorkspace(request) ?? await realpath(tmpdir()));
-  });
-  ipcMain.handle(RESEARCH_HARNESS_RECONCILE_CHANNEL, async (event, request: ResearchHarnessReconcileRequest) => {
-    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    if (typeof request.runId !== "string" || request.runId.length > 300) throw new Error("Invalid research run");
-    const run = await getResearchHarnessService().reconcile(request.runId, { backend: request.backend, threadId: request.threadId, kind: "operator" });
-    const receipt: ResearchUpdateReceipt = { runId: run.id, revision: run.revision, status: run.status };
-    return receipt;
-  });
+
+  for (const operation of Object.keys(ROUTED_MAIN_CHANNELS) as Array<keyof typeof ROUTED_MAIN_CHANNELS>) {
+    ipcMain.handle(ROUTED_MAIN_CHANNELS[operation], async (event, request?: RoutedRequest) => {
+      if (!isMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
+      return await service.request(operation, request as never, federationTargetForChannelSubscriber(event.sender));
+    });
+  }
+
+  for (const operation of Object.keys(ROUTED_RESEARCH_CHANNELS) as Array<keyof typeof ROUTED_RESEARCH_CHANNELS>) {
+    ipcMain.handle(ROUTED_RESEARCH_CHANNELS[operation], async (event, request?: RoutedRequest) => {
+      const mainWindow = isMainWindowWebContents(event.sender);
+      if (!mainWindow && !isLocalResearchWebContents(event.sender)) {
+        throw new Error("Open research on its owning instance");
+      }
+      if (!mainWindow && request && typeof request === "object" && "federationTarget" in request && request.federationTarget !== undefined) {
+        throw new Error("Open research on its owning instance");
+      }
+      return await service.request(operation, request as never, federationTargetForChannelSubscriber(event.sender));
+    });
+  }
+
   // Every run on this profile, for the Research window. It names runs across threads, so only this
   // instance's own windows may read it; each run's contents are still read as its coordinating thread.
   ipcMain.handle(RESEARCH_PROFILE_RUNS_CHANNEL, (event, request: ResearchProfileRunsQuery | undefined): ResearchProfileRunsPage => {
@@ -66,12 +136,15 @@ export function registerResearchIpcHandlers(): void {
     requireResearchEnabled();
     const page = getResearchService().profileRuns(profileRunsQuery(request));
     const registry = getDesktopBackendRegistry();
-    return { ...page, runs: page.runs.map((run) => {
-      // Last-observed listing state: a label for the row, never proof the thread still exists.
-      const thread = registry.getCachedThreadSummary({ backend: run.coordinator.backend, threadId: run.coordinator.threadId });
-      const project = thread?.linkedDirectories[0]?.label;
-      return thread?.title ? { ...run, thread: { title: thread.title, ...(project ? { project } : {}) } } : run;
-    }) };
+    return {
+      ...page,
+      runs: page.runs.map((run) => {
+        // Last-observed listing state: a label for the row, never proof the thread still exists.
+        const thread = registry.getCachedThreadSummary({ backend: run.coordinator.backend, threadId: run.coordinator.threadId });
+        const project = thread?.linkedDirectories[0]?.label;
+        return thread?.title ? { ...run, thread: { title: thread.title, ...(project ? { project } : {}) } } : run;
+      }),
+    };
   });
   ipcMain.handle(RESEARCH_OPEN_WINDOW_CHANNEL, (event, request: { runId?: string } | undefined) => {
     if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
@@ -99,97 +172,27 @@ export function registerResearchIpcHandlers(): void {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("List MathOS teams on the owning instance");
     return await listResearchMathosTeams();
   });
-  // The New run form lists the saved team's swarms to choose from. Read-only; the window supplies nothing.
-  ipcMain.handle(RESEARCH_MATHOS_SWARMS_CHANNEL, async (event) => {
-    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    requireResearchEnabled();
-    const result = await listResearchMathosSwarms();
-    if (!result.ok) researchIpcLog.warn("MathOS swarm listing failed", { error: result.error });
-    return result;
-  });
   // Reveals this profile's own config file. The window supplies no path.
   ipcMain.handle(RESEARCH_HARNESS_REVEAL_CONFIG_CHANNEL, (event) => {
     if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
     shell.showItemInFolder(resolveDesktopConfigPath());
   });
-  ipcMain.handle(RESEARCH_HARNESS_START_CHANNEL, async (event, request: ResearchHarnessRequest) => {
-    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    const workspace = await harnessWorkspace(request);
-    if (!workspace) throw new Error("Harness research requires this thread's originating workspace");
-    const run = await getResearchHarnessService().start(request, workspace);
-    const receipt: ResearchUpdateReceipt = { runId: run.id, revision: run.revision, status: run.status };
-    return receipt;
-  });
-  ipcMain.handle(RESEARCH_SEARCH_CHANNEL, (event, request: ResearchSearchRequest) => {
+  // Evidence paths are resolved on the owning machine's disk; never open a remote path locally.
+  ipcMain.handle(RESEARCH_OPEN_EVIDENCE_CHANNEL, async (event, request: ResearchEvidenceRequest & { federationTarget?: unknown }) => {
     if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    return getResearchService().search(request.runId, request.query, { backend: request.backend, threadId: request.threadId, kind: "operator" });
-  });
-  ipcMain.handle(RESEARCH_ITEM_CHANNEL, (event, request: ResearchItemReadRequest) => {
-    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    return getResearchService().readItem(request.runId, request.itemId, { backend: request.backend, threadId: request.threadId, kind: "operator" });
-  });
-  ipcMain.handle(RESEARCH_WORK_CHANNEL, async (event, request: ResearchWorkRequest) => {
-    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    if (!request.command || request.command.action !== "work") throw new Error("Supply an item work command");
-    const actor = { backend: request.backend, threadId: request.threadId, kind: "operator" } as const;
-    await getResearchService().work(request.runId, `operator:${request.requestId}`, request.command, actor);
-    return getResearchService().readItem(request.runId, request.command.itemId, actor);
-  });
-  ipcMain.handle(RESEARCH_PREPARE_CHANNEL, (event, request: PrepareResearchRequest) => {
-    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    // The coordinator must be offered research_start, or the request would only expire.
-    const settings = getDesktopSettingsService();
-    if (!researchToolsOffered(researchToolSurface(request.backend), { enabled: true, codexToolDiscovery: () => settings.resolveCodexToolDiscovery?.() !== false })) {
-      throw new Error("Codex threads need Codex Tool Discovery to start research. Turn it on in Settings → Experimental.");
+    if (request && typeof request === "object" && request.federationTarget !== undefined) {
+      throw new Error("Open evidence on the thread's owning instance");
     }
-    return getResearchService().prepare(request);
-  });
-  ipcMain.handle(RESEARCH_WITHDRAW_CHANNEL, (event, request: ResearchThread) => {
-    if (!isLocalMainWindowWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    getResearchService().withdraw(request);
-  });
-  ipcMain.handle(RESEARCH_SNAPSHOT_CHANNEL, (event, request: ResearchSnapshotRequest) => {
-    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    if (request.runId !== undefined && (typeof request.runId !== "string" || request.runId.length > 300)) throw new Error("Invalid research run");
-    return getResearchService().snapshot({ backend: request.backend, threadId: request.threadId, ...(request.runId ? { runId: request.runId } : {}) });
-  });
-  ipcMain.handle(RESEARCH_CHANGES_CHANNEL, (event, request: ResearchChangesRequest) => {
-    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    if (typeof request.runId !== "string" || request.runId.length > 300) throw new Error("Invalid research run");
-    return getResearchService().changes(request.runId, request.sinceRevision, request.after, { backend: request.backend, threadId: request.threadId, kind: "operator" });
-  });
-  ipcMain.handle(RESEARCH_EVENTS_CHANNEL, (event, request: ResearchEventsRequest) => {
-    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    if (typeof request.runId !== "string" || !request.range || typeof request.range !== "object") throw new Error("Invalid research activity range");
-    const { beforeSeq, afterSeq, limit } = request.range;
-    return getResearchService().readEvents(request.runId, { beforeSeq, afterSeq, limit }, { backend: request.backend, threadId: request.threadId, kind: "operator" });
-  });
-  ipcMain.handle(RESEARCH_UPDATE_CHANNEL, async (event, request: ResearchUpdateRequest) => {
-    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    if (typeof request.runId !== "string" || typeof request.requestId !== "string" || !request.command || typeof request.command !== "object") throw new Error("Invalid research update");
-    // A receipt only: the items the command changed reach the window by delta.
-    const key = `operator:${request.requestId}`;
-    const run = await getResearchService().update(request.runId, key, request.command, { backend: request.backend, threadId: request.threadId, kind: "operator" });
-    // Only a revision request has a delivery to report.
-    const delivery = request.command.action === "review" && request.command.decision === "revision_requested" ? getResearchService().revisionDelivery(run.id, key) : undefined;
-    const receipt: ResearchUpdateReceipt = { runId: run.id, revision: run.revision, status: run.status, ...(delivery ? { delivery } : {}) };
-    return receipt;
-  });
-  ipcMain.handle(RESEARCH_OPEN_EVIDENCE_CHANNEL, async (event, request: ResearchEvidenceRequest) => {
-    if (!isLocalResearchWebContents(event.sender)) throw new Error("Open research on its owning instance");
-    validateThread(request);
-    if (typeof request.runId !== "string" || typeof request.itemId !== "string" || !Number.isSafeInteger(request.pathIndex) || request.pathIndex < 0) throw new Error("Invalid evidence reference");
-    const { relativePath, source, harnessWorkspace } = getResearchService().readEvidence(request.runId, request.itemId, request.pathIndex, { backend: request.backend, threadId: request.threadId, kind: "operator" });
+    validateResearchThread(request);
+    if (typeof request.runId !== "string" || typeof request.itemId !== "string" || !Number.isSafeInteger(request.pathIndex) || request.pathIndex < 0) {
+      throw new Error("Invalid evidence reference");
+    }
+    const { relativePath, source, harnessWorkspace } = getResearchService().readEvidence(
+      request.runId,
+      request.itemId,
+      request.pathIndex,
+      { backend: request.backend, threadId: request.threadId, kind: "operator" },
+    );
     const cwd = harnessWorkspace ?? await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(source.backend, source.threadId);
     if (!cwd) throw new Error("The worker workspace is unavailable");
     const resolved = harnessWorkspace ? await resolveHarnessEvidencePath(cwd, relativePath) : await resolveResearchEvidencePath(cwd, relativePath);
@@ -197,6 +200,7 @@ export function registerResearchIpcHandlers(): void {
     return { opened: !error, ...(error ? { error } : {}) };
   });
 }
+
 export function disposeResearchIpcHandlers(): void {
   ipcMain.removeHandler(RESEARCH_HARNESS_STATUS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_HARNESS_START_CHANNEL);
@@ -209,12 +213,18 @@ export function disposeResearchIpcHandlers(): void {
   ipcMain.removeHandler(RESEARCH_MATHOS_SWARMS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_PROFILE_RUNS_CHANNEL);
   ipcMain.removeHandler(RESEARCH_OPEN_WINDOW_CHANNEL);
-  for (const channel of [RESEARCH_CHANGES_CHANNEL, RESEARCH_SNAPSHOT_CHANNEL, RESEARCH_UPDATE_CHANNEL, RESEARCH_OPEN_EVIDENCE_CHANNEL, RESEARCH_PREPARE_CHANNEL, RESEARCH_SEARCH_CHANNEL, RESEARCH_ITEM_CHANNEL, RESEARCH_WORK_CHANNEL, RESEARCH_WITHDRAW_CHANNEL, RESEARCH_EVENTS_CHANNEL]) ipcMain.removeHandler(channel);
-}
-/** The canonical workspace the owner binds for this thread's Harness evidence. */
-async function harnessWorkspace(request: ResearchThread): Promise<string | undefined> {
-  const cwd = await getDesktopBackendRegistry().resolveThreadWorkspaceCwd(request.backend, request.threadId);
-  return cwd ? await realpath(cwd) : undefined;
+  for (const channel of [
+    RESEARCH_CHANGES_CHANNEL,
+    RESEARCH_SNAPSHOT_CHANNEL,
+    RESEARCH_UPDATE_CHANNEL,
+    RESEARCH_OPEN_EVIDENCE_CHANNEL,
+    RESEARCH_PREPARE_CHANNEL,
+    RESEARCH_SEARCH_CHANNEL,
+    RESEARCH_ITEM_CHANNEL,
+    RESEARCH_WORK_CHANNEL,
+    RESEARCH_WITHDRAW_CHANNEL,
+    RESEARCH_EVENTS_CHANNEL,
+  ]) ipcMain.removeHandler(channel);
 }
 
 /** Bounded, typed filters only: the window's request is not trusted to be well formed. */
@@ -226,13 +236,4 @@ function profileRunsQuery(request: ResearchProfileRunsQuery | undefined): Resear
     ...(after && RESEARCH_RUN_ATTENTION_ORDER.includes(after.attention) && Number.isSafeInteger(after.createdAt) && typeof after.id === "string" && after.id.length <= 300
       ? { after: { attention: after.attention, createdAt: after.createdAt, id: after.id } } : {}),
   };
-}
-
-function requireResearchEnabled(): void {
-  if (getDesktopSettingsService().resolveResearchEnabled?.() !== true) throw new Error("Research runs are disabled. Enable Research runs in Settings → Experimental.");
-}
-
-function validateThread(request: ResearchThread): void {
-  requireResearchEnabled();
-  if (!request || typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) throw new Error("Choose a local thread");
 }

@@ -5,6 +5,7 @@ Pass 1 — Static inspection and immediate candidate capture:
 - Stay purely static and bounded: use read-only git/file inspection only (aim for ~10–18 read-only calls across the diff, changed files, direct callers/tests, and governing rules; batch related reads). Do not run lint, typecheck, build, or test suites, do not launch ad-hoc reproduction or runtime probe scripts, do not search the web to chase speculative framework internals, and do not audit unrelated modules. Only run a targeted read-only command if a concrete ambiguity in repository source cannot be resolved by reading files.
 - Mentally execute the changed paths across boundary inputs, error/cancellation/cleanup paths, concurrency/ordering interleavings, and process or lifecycle boundaries.
 - Whenever you notice a concrete defect, regression, contract or telemetry mismatch, hot-path performance regression, live/replay parity bug, non-falsifying regression test, or explicit repository-rule violation, call `record_review_candidate` IMMEDIATELY before moving to the next file — do not wait until the end of the review.
+- Use paths relative to the Git worktree root, or absolute paths. Use absolute paths when PwrAgent cannot discover the worktree root, such as in a remote workspace.
 - Once the diff, changed files, direct callers/tests, and governing rules have been inspected, stop exploring and move to Pass 2.
 
 What to check during Pass 1:
@@ -17,10 +18,11 @@ Pass 2 — Bucket, prioritize, and disposition every candidate:
 - Group related candidates by category and root cause so overlapping observations collapse cleanly without duplicate findings.
 - Call `dispose_review_candidate` on EVERY candidate before calling `submit_review_output`:
   - Mark `keep` with a calibrated `priority` (`0`–`3`) for every concrete defect backed by code evidence. Do NOT drop a concrete P2 or P3 defect simply because it feels minor, is a narrow edge case, or works in the common case.
+  - Refine a kept candidate by ID in the same call when its `summary` (title), `mechanism` (body), `file`, `start_line`, `end_line`, or `category` needs a correction. You can supply `confidence_score` when you can assess your certainty. Leave accurate details as recorded.
   - Mark `drop` only with a concrete, code-grounded justification (for example: a verified caller or guard already prevents the bug, the path is unreachable, the candidate is a pure style or formatting nitpick, it is a duplicate merged into another kept candidate, or it is unrelated pre-existing code untouched by the diff).
 
 Evidence and signal discipline:
 - Ground every finding in the reviewed code; check callers, guards, and surrounding context before claiming something is missing or wrong.
 - Lead each finding's body with the concrete observable consequence or failure scenario, explain the mechanism in the code, and propose a specific fix when clear.
 - Suppress noise: do not report style or formatting nitpicks, speculative hypotheticals without a reachable failure path, issues already handled elsewhere, or unrelated pre-existing issues in untouched code that the diff does not newly expose.
-- Call `submit_review_output` with one finding for every candidate marked `keep`, ordered by priority. Zero findings is valid when the change has no concrete defects (including when every Pass 1 candidate was legitimately dropped with code-grounded reasons).
+- If the ledger is full or rejects a path that exceeds its length limit, retain the evidence and the complete path. Apply the same verification and deduplication before including it as an explicit finding at submission. If a path correction exceeds the limit, drop the recorded entry and submit the verified finding explicitly with its complete path.

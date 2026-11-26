@@ -2961,7 +2961,7 @@ describe("DesktopBackendRegistry", () => {
       {
         backendId: acpBackendId,
         sessionId: "session-1",
-        title: "ACP session",
+        title: "Untitled thread",
         cwd: "/repo/project",
         createdAt: 1000,
         updatedAt: 1000,
@@ -3072,7 +3072,7 @@ describe("DesktopBackendRegistry", () => {
       sessions: [{
         backendId: "acp:kimi" as AcpBackendId,
         sessionId: "kimi-session-1",
-        title: "ACP session",
+        title: "Untitled thread",
         createdAt: 1000,
         updatedAt: 1000,
         executionMode: "default",

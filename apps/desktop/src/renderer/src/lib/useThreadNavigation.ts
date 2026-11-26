@@ -972,6 +972,57 @@ function rewindLogsEqual(
   return JSON.stringify(left ?? []) === JSON.stringify(right ?? []);
 }
 
+function launchedThreadLogsEqual(
+  left: NavigationThreadSummary["launchedThreadLog"],
+  right: NavigationThreadSummary["launchedThreadLog"]
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  const a = left ?? [];
+  const b = right ?? [];
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let index = 0; index < a.length; index += 1) {
+    const x = a[index]!;
+    const y = b[index]!;
+    if (
+      x.id !== y.id
+      || x.source !== y.source
+      || x.occurredAt !== y.occurredAt
+      || x.title !== y.title
+      || x.detail !== y.detail
+      || x.projectLabel !== y.projectLabel
+      || x.seedMode !== y.seedMode
+      || x.groupingMode !== y.groupingMode
+      || x.workspaceMode !== y.workspaceMode
+      || x.turnStartFailure !== y.turnStartFailure
+      || x.todoId !== y.todoId
+      || x.startedThread.backend !== y.startedThread.backend
+      || x.startedThread.threadId !== y.startedThread.threadId
+      || x.startedThread.instanceId !== y.startedThread.instanceId
+      || x.startedThread.instanceLabel !== y.startedThread.instanceLabel
+      || x.startedThread.setupFailure !== y.startedThread.setupFailure
+    ) {
+      return false;
+    }
+    const xSteps = x.steps;
+    const ySteps = y.steps;
+    if (xSteps !== ySteps) {
+      if (!xSteps || !ySteps || xSteps.length !== ySteps.length) {
+        return false;
+      }
+      for (let stepIndex = 0; stepIndex < xSteps.length; stepIndex += 1) {
+        if (xSteps[stepIndex] !== ySteps[stepIndex]) {
+          return false;
+        }
+      }
+    }
+  }
+  return true;
+}
+
 function threadSummariesEqual(
   left: NavigationPresentedThread,
   right: NavigationPresentedThread
@@ -1080,7 +1131,8 @@ function threadSummariesEqual(
       left.questionnaireActivityLog,
       right.questionnaireActivityLog
     ) &&
-    rewindLogsEqual(left.rewindLog, right.rewindLog)
+    rewindLogsEqual(left.rewindLog, right.rewindLog) &&
+    launchedThreadLogsEqual(left.launchedThreadLog, right.launchedThreadLog)
   );
 }
 
@@ -1091,7 +1143,7 @@ function hasPlaceholderThreadTitle(thread: NavigationThreadSummary): boolean {
   );
 }
 
-function reconcileLoadedNavigationRows(
+export function reconcileLoadedNavigationRows(
   previous: NavigationLoadedRows | undefined,
   next: NavigationLoadedRows
 ): NavigationLoadedRows {
@@ -1110,13 +1162,16 @@ function reconcileLoadedNavigationRows(
   );
   const reconciledDirectories = loadedDirectoryRows(next).map((directory) => {
     const previousDirectory = previousByDirectoryKey.get(directory.key);
-    return {
+    const merged = {
       ...directory,
       ...(previousDirectory?.gitStatus &&
       !Object.prototype.hasOwnProperty.call(directory, "gitStatus")
         ? { gitStatus: previousDirectory.gitStatus }
         : {}),
     };
+    return previousDirectory && JSON.stringify(previousDirectory) === JSON.stringify(merged)
+      ? previousDirectory
+      : merged;
   });
 
   const directories = sortNavigationDirectories(reconciledDirectories);
@@ -1135,7 +1190,7 @@ function reconcileLoadedNavigationRows(
   if (previousThreads.length === threads.length
     && previousThreads.every((thread, index) => thread === threads[index])
     && previousDirectories.length === directories.length
-    && previousDirectories.every((directory, index) => JSON.stringify(directory) === JSON.stringify(directories[index]))
+    && previousDirectories.every((directory, index) => directory === directories[index])
     && JSON.stringify(previous.launchpadDefaults) === JSON.stringify(next.launchpadDefaults)
     && JSON.stringify(previous.federationTarget) === JSON.stringify(next.federationTarget)) return previous;
   return {
@@ -3926,7 +3981,7 @@ export function useThreadNavigation(
     ? navigationIdentityFromThreadKey(selectedItemKey, rendererFederationTarget)
     : undefined, [selectedItemKey, rendererFederationTarget]);
   const selectedDetail = useNavigationSelectedDetail({
-    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "rewindLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
+    collections: ["codexNativeSubAgents", "permissionTransitionLog", "messagingBindingTransitionLog", "turnFailureLog", "questionnaireActivityLog", "rewindLog", "launchedThreadLog", "worktreeSnapshots", "retainedBranchDriftPairs", "subthreadOrder"],
     desktopApi, enabled: enabled && viewVisible,
     ref: selectedIdentity,
     federationTarget: selectedIdentity?.ownerInstanceId
