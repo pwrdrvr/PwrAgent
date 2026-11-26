@@ -2011,7 +2011,6 @@ export class ManagedReviewService {
         backend: params.record.parentBackend,
         threadId: params.record.parentThreadId,
         entry,
-        pendingContext: isAcpBackendId(params.record.parentBackend),
       });
       await this.context.emit({
         backend: params.record.parentBackend,

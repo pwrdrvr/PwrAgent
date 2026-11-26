@@ -1,11 +1,11 @@
 import type { AcpMcpServerConfig } from "../acp/acp-client";
 import type { AgentToolHttpMcpServerConfig } from "./agent-tool-mcp-server";
 
-// The child only forwards MCP frames. Its owner-bound credential grants
-// memory calls through the same authorization path as the HTTP transport.
+// The child only forwards MCP frames. Its owner-bound credential selects the
+// restricted stdio catalog through the same authorization path as HTTP.
 const bridge = String.raw`
 const readline = require("node:readline");
-const { PWRAGENT_MEMORY_MCP_URL: url, PWRAGENT_MEMORY_MCP_AUTH: authorization } = process.env;
+const { PWRAGENT_STDIO_MCP_URL: url, PWRAGENT_STDIO_MCP_AUTH: authorization } = process.env;
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 (async () => {
   let sessionId;
@@ -26,7 +26,7 @@ const input = readline.createInterface({ input: process.stdin, crlfDelay: Infini
         signal: AbortSignal.timeout(15000),
       });
       if (response.status === 202) continue;
-      if (!response.ok) throw new Error("Memory endpoint refused request");
+      if (!response.ok) throw new Error("PwrAgent endpoint refused request");
       const payload = await response.json();
       if (request?.method === "initialize") {
         sessionId = response.headers.get("mcp-session-id");
@@ -36,7 +36,7 @@ const input = readline.createInterface({ input: process.stdin, crlfDelay: Infini
     } catch {
       if (request && Object.hasOwn(request, "id")) {
         process.stdout.write(JSON.stringify({
-          jsonrpc: "2.0", id: request.id, error: { code: -32603, message: "PwrAgent Agent memory is unavailable." },
+          jsonrpc: "2.0", id: request.id, error: { code: -32603, message: "PwrAgent tools are unavailable over stdio." },
         }) + "\n");
       }
     }
@@ -44,17 +44,17 @@ const input = readline.createInterface({ input: process.stdin, crlfDelay: Infini
 })().catch(() => { process.exitCode = 1; });
 `;
 
-export function buildAgentMemoryStdioServer(server: AgentToolHttpMcpServerConfig) {
+export function buildAgentToolStdioServer(server: AgentToolHttpMcpServerConfig) {
   const authorization = server.headers.find(({ name }) => name.toLowerCase() === "authorization")?.value;
-  if (!authorization) throw new Error("The Agent memory MCP registration has no credential.");
+  if (!authorization) throw new Error("The PwrAgent stdio MCP registration has no credential.");
   return {
     name: server.name,
     command: process.execPath,
     args: ["-e", bridge],
     env: {
       ELECTRON_RUN_AS_NODE: "1",
-      PWRAGENT_MEMORY_MCP_URL: server.url,
-      PWRAGENT_MEMORY_MCP_AUTH: authorization,
+      PWRAGENT_STDIO_MCP_URL: server.url,
+      PWRAGENT_STDIO_MCP_AUTH: authorization,
     },
   } satisfies AcpMcpServerConfig;
 }
