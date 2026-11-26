@@ -1,7 +1,7 @@
 import fc from "fast-check";
 import { expect, it } from "vitest";
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
-import { prSummariesEqual, stabilizePolledPrMergeState } from "../app-server/thread-pull-request-summaries";
+import { prSummariesEqual, stabilizeGithubPrMergeState } from "../app-server/thread-pull-request-summaries";
 import { computePrStatusTransition } from "../pr-status/pr-transitions";
 
 const pr = {
@@ -34,7 +34,7 @@ it("inserting pending GitHub calculations between the same tips leaves the defin
     let previous: PrSummary = { ...pr, mergeState: initial };
     for (const { mergeState, pendingReads } of observations) {
       for (const state of [...Array.from({ length: pendingReads }, () => "unknown" as const), mergeState]) {
-        const next = stabilizePolledPrMergeState(previous, { ...pr, mergeState: state });
+        const next = stabilizeGithubPrMergeState(previous, { ...pr, mergeState: state });
         if (!prSummariesEqual([previous], [next])) {
           actual.push(computePrStatusTransition(previous, next)?.changed.mergeState);
         }
@@ -64,5 +64,5 @@ it.each<[string, PrSummary | undefined, PrSummary]>([
   ["GitLab merge status", { ...conflicting, provider: "gitlab.com", url: "https://gitlab.com/fixture/stack/-/merge_requests/1" },
     { ...pending, provider: "gitlab.com", url: "https://gitlab.com/fixture/stack/-/merge_requests/1" }],
 ])("keeps the observed unknown result for %s", (_reason, previous, next) => {
-  expect(stabilizePolledPrMergeState(previous, next)).toBe(next);
+  expect(stabilizeGithubPrMergeState(previous, next)).toBe(next);
 });

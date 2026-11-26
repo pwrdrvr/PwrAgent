@@ -57,15 +57,27 @@ export function normalizePrSummary(pr: PrSummary): PrSummary {
   return normalized;
 }
 
+export type PrStatusObservations = {
+  accepted: PrSummary[];
+  changed: PrSummary[];
+  cacheChanged: PrSummary[];
+};
+
+export function confirmedGithubPrMergeState(pr: PrSummary): "mergeable" | "conflicting" | undefined {
+  if (pr.provider === "github.com" && pr.lifecycleState === "open" && pr.headSha && pr.baseSha
+    && (pr.mergeState === "mergeable" || pr.mergeState === "conflicting")) {
+    return pr.mergeState;
+  }
+  return undefined;
+}
+
 /** Keep GitHub's last computed result while it recalculates for the same tips. */
-export function stabilizePolledPrMergeState(previous: PrSummary | undefined, next: PrSummary): PrSummary {
-  if (next.provider === "github.com" && next.lifecycleState === "open" && next.mergeState === "unknown"
-    && previous?.lifecycleState === "open"
-    && (previous.mergeState === "mergeable" || previous.mergeState === "conflicting")
-    && next.headSha && next.headSha === previous.headSha
-    && next.baseSha && next.baseSha === previous.baseSha
+export function stabilizeGithubPrMergeState(previous: PrSummary | undefined, next: PrSummary): PrSummary {
+  if (previous && next.provider === "github.com" && next.lifecycleState === "open" && next.mergeState === "unknown"
+    && next.headSha === previous.headSha && next.baseSha === previous.baseSha
     && next.headRefName === previous.headRefName && next.baseRefName === previous.baseRefName) {
-    return { ...next, mergeState: previous.mergeState };
+    const mergeState = confirmedGithubPrMergeState(previous);
+    if (mergeState) return { ...next, mergeState };
   }
   return next;
 }

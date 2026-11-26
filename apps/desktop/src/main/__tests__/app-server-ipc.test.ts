@@ -49,6 +49,7 @@ import type {
 import type { ThreadPrWatchesResponse } from "@pwragent/shared/contracts/thread-pr-watches";
 import type { ThreadSearchResponse } from "@pwragent/shared/contracts/thread-search";
 import { buildPullRequestStatusKey } from "@pwragent/shared/contracts/navigation";
+import type { PrStatusObservations } from "../app-server/thread-pull-request-summaries";
 import { DEFAULT_PROJECT_FORGE_AUTOMATION } from "@pwragent/shared/project-forge-automation";
 import { expandNavigationRemoteOwner } from "@pwragent/shared/navigation-remote-owner";
 import {
@@ -3388,7 +3389,7 @@ describe("app server ipc", () => {
     const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
-      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
       backgroundPrPollingEnabled: boolean;
       prAutoDispatchAllowed: boolean;
     };
@@ -5482,7 +5483,7 @@ describe("app server ipc", () => {
     const { appServerService } = await import("../shell/ipc/app-server");
     const service = appServerService as unknown as {
       setThreadPrAttachment: (key: string, attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }) => void;
-      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
       collectPrPollTargets: () => { prKey: string; threadKeys: string[] }[];
     };
     const automatic = { ...attached, explicitlyAttached: undefined };
@@ -5732,7 +5733,7 @@ describe("app server ipc", () => {
       const cleanupThread = vi.fn(async () => ({}));
       const internals = service as unknown as {
         getSandboxerPrCleanup: () => unknown;
-        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
         cleanupThreadSandboxesIfDone: (backend: "codex", threadId: string) => Promise<unknown>;
       };
       vi.spyOn(internals, "getSandboxerPrCleanup").mockReturnValue({ cleanupThread });
@@ -11322,7 +11323,7 @@ describe("app server ipc", () => {
         attachment: { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] } | undefined,
       ) => void;
       fetchForgePullRequests: (refs: Array<Record<string, unknown>>) => Promise<PrSummary[]>;
-      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
       publishPullRequestStatusUpdates: (params: { backend: "codex"; prs: PrSummary[] }) => Promise<void>;
     };
     const oldUrl = "https://gitlab.com/team/legacy/tools/api/-/merge_requests/41";
@@ -11354,7 +11355,7 @@ describe("app server ipc", () => {
       expect(service.prRepositoryAliases.canonicalizeUrl(oldUrl)).toBe(newUrl);
       expect(service.prRepositoryAliases.canonicalizeUrl(otherUrl)).toBe(otherUrl);
       expect(service.primaryPrThreadsByKey.has("gitlab.com/platform/api#41")).toBe(true);
-      const changed = service.rememberPrStatuses(prs, Date.now(), "background-poll");
+      const { changed } = service.rememberPrStatuses(prs, Date.now(), "background-poll");
       await service.publishPullRequestStatusUpdates({ backend: "codex", prs: changed });
       expect(publishLocalEvent).toHaveBeenCalledWith({ backend: "codex",
         navigationPullRequestKeyAliases: ["gitlab.com/team/legacy/tools/api#41"],
@@ -12097,7 +12098,7 @@ describe("app server ipc", () => {
     const { appServerService } = await import("../shell/ipc/app-server");
     await withRenamedRepositoryStore("outstanding-pr-status-", async ({ store }) => {
       const service = appServerService as unknown as {
-        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
         applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
         nextPrObservationTimestamp: () => number;
         handlePrAutoDispatchSnapshots: () => Promise<void>;
@@ -12163,7 +12164,7 @@ describe("app server ipc", () => {
     const { getDesktopBackendRegistry } = await import("../app-server/backend-registry");
     const { getDesktopOverlayStore } = await import("../storage/desktop-overlay-store");
     const service = appServerService as unknown as {
-      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+      rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
       applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
       nextPrObservationTimestamp: () => number;
       handlePrAutoDispatchSnapshots: () => Promise<void>;
@@ -12246,6 +12247,140 @@ describe("app server ipc", () => {
     });
   });
 
+  it("keeps same-tip mergeability across scheduled discovery and by-number polls", async () => {
+    const { appServerService: service } = await import("../shell/ipc/app-server");
+    await withRenamedRepositoryStore("mergeability-scheduled-discovery-", async ({ store, refresh }) => {
+      const request = {
+        backend: "codex", threadId: "mergeability-discovery", branch: "topic",
+        directoryPaths: ["/repo/mergeability-discovery"], trigger: "scheduled",
+      } satisfies RefreshThreadPullRequestsRequest;
+      const pr = githubPr({
+        org: "fixture", repo: "mergeability-discovery", number: 1, state: "passing", mergeState: "mergeable",
+        url: "https://github.com/fixture/mergeability-discovery/pull/1",
+        headRefName: "topic", baseRefName: "main", headSha: "a".repeat(40), baseSha: "b".repeat(40),
+        linkedDirectoryPaths: request.directoryPaths,
+      });
+      const key = buildPullRequestStatusKey(pr);
+      const initial = service["nextPrObservationTimestamp"]();
+      await store.setThreadPullRequests({
+        ...request, prs: [pr], fetchedAt: Date.now() - 120_000, refreshKey: buildThreadPrRequestKey(request),
+      });
+      await store.writePrStatusCacheEntries([{ provider: pr.provider, prKey: key, fetchedAt: initial, pr }]);
+      service["rememberPrStatuses"]([pr], initial, "seed");
+      const automation = vi.spyOn(service as unknown as { handlePrAutoDispatchSnapshots: () => Promise<void> },
+        "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+      try {
+        detectPullRequestsForThread.mockResolvedValueOnce([{ ...pr, mergeState: "unknown" }]);
+        await refresh(request);
+        expect(detectPullRequestsForThread).toHaveBeenCalledTimes(1);
+        await expect(service["applyPolledPrStatuses"]([pr], service["nextPrObservationTimestamp"]())).resolves.toEqual([]);
+        // A scheduled lookup and the following definitive poll must preserve
+        // the published projection and the attachment row for identical tips.
+        expect(publishLocalEvent.mock.calls.map(([event]) => (event as AgentEvent).notification.method))
+          .not.toContain("pullRequest/status/updated");
+        expect(publishLocalEvent.mock.calls.map(([event]) => (event as AgentEvent).notification.method))
+          .not.toContain("thread/pullRequests/updated");
+        expect((await store.readPrStatusCache())[key]?.pr.mergeState).toBe("mergeable");
+        expect((await store.getThreadOverlayState(request))?.prs?.[0]?.mergeState).toBe("mergeable");
+      } finally {
+        service["prStatusRegistry"].delete(key);
+        automation.mockRestore();
+      }
+    });
+  });
+
+  it("publishes one transcript batch per window for attached and mentioned PRs in a poll", async () => {
+    const { appServerService: service } = await import("../shell/ipc/app-server");
+    const batch = [1, 2, 3].map((number) => githubPr({
+      org: "fixture", repo: "mergeability-transcript", number, state: "passing", mergeState: "mergeable",
+      url: `https://github.com/fixture/mergeability-transcript/pull/${number}`,
+      headSha: "a".repeat(40), baseSha: "b".repeat(40),
+    }));
+    const attached = batch.slice(0, 2);
+    const threadKey = "codex:mergeability-transcript";
+    const sender = 42;
+    const publish = vi.fn();
+    const previous = { scheduler: service["prPollingScheduler"], polling: service["backgroundPrPollingEnabled"] };
+    const automation = vi.spyOn(service as unknown as { handlePrAutoDispatchSnapshots: () => Promise<void> },
+      "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+    const subscriptions = service["transcriptPrSubscriptions"];
+    try {
+      service["backgroundPrPollingEnabled"] = false;
+      service["prPollingScheduler"] = undefined;
+      await service["loadPrStatusRegistry"]();
+      await service.threadPullRequestLookup.loadPrLookupRegistry();
+      service["ensurePrPollingSchedulerStarted"]();
+      service["setThreadPrAttachment"](threadKey, { backend: "codex", primaryRepoKey: "github.com/fixture/mergeability-transcript", prs: attached });
+      service["rememberPrStatuses"](attached, service["nextPrObservationTimestamp"](), "seed");
+      subscriptions.set(sender, { updates: batch.map(({ url }) => ({ url, visible: true })), removedUrls: [] }, publish);
+      const byKey = new Map(batch.map((pr) => [buildPullRequestStatusKey(pr), service["nextPrObservationTimestamp"]()]));
+      const pending = batch.map((pr) => ({ ...pr, mergeState: "unknown" as const }));
+      await service["prPollingScheduler"]!["deps"].applyResults(pending, service["nextPrObservationTimestamp"](), byKey);
+      expect(publish).toHaveBeenCalledTimes(1);
+      // Each PR retains its acquisition time. Mention-only results never enter the registry.
+      expect(publish.mock.calls[0]?.[0].statuses).toEqual(batch.map((pr) => ({
+        pr: expect.objectContaining({ url: pr.url, mergeState: pr.number === 3 ? "unknown" : "mergeable" }),
+        fetchedAt: byKey.get(buildPullRequestStatusKey(pr)),
+      })));
+      expect(service["prStatusRegistry"].has(buildPullRequestStatusKey(batch[2]!))).toBe(false);
+    } finally {
+      subscriptions.clearSender(sender);
+      service["setThreadPrAttachment"](threadKey, undefined);
+      for (const pr of batch) service["prStatusRegistry"].delete(buildPullRequestStatusKey(pr));
+      service["prPollingScheduler"] = previous.scheduler;
+      service["backgroundPrPollingEnabled"] = previous.polling;
+      automation.mockRestore();
+    }
+  });
+
+  it("reloads confirmed base-only mergeability from one SQLite commit without status churn", async () => {
+    const { appServerService: service } = await import("../shell/ipc/app-server");
+    const { measureSqliteWrites } = await import("../state/sqlite-write-metrics");
+    const { expectSqliteWriteBudget } = await import("./fixtures/sqlite-write-budget");
+    await withRenamedRepositoryStore("mergeability-base-tip-", async ({ store }) => {
+      const prs = [1, 2].map((number) => githubPr({
+        org: "fixture", repo: "mergeability-base-tip", number, state: "passing", mergeState: "mergeable",
+        url: `https://github.com/fixture/mergeability-base-tip/pull/${number}`,
+        headRefName: `topic-${number}`, headSha: String(number).repeat(40), baseRefName: "main", baseSha: "b".repeat(40),
+      }));
+      const keys = prs.map(buildPullRequestStatusKey);
+      const initial = service["nextPrObservationTimestamp"]();
+      const wasLoaded = service["prStatusRegistryLoaded"];
+      const automation = vi.spyOn(service as unknown as { handlePrAutoDispatchSnapshots: () => Promise<void> },
+        "handlePrAutoDispatchSnapshots").mockResolvedValue(undefined);
+      const poll = (observed: PrSummary[]) => service["applyPolledPrStatuses"](observed, service["nextPrObservationTimestamp"]());
+      try {
+        await store.writePrStatusCacheEntries(prs.map((pr) => ({
+          provider: pr.provider, prKey: buildPullRequestStatusKey(pr), fetchedAt: initial, pr,
+        })));
+        service["rememberPrStatuses"](prs, initial, "seed");
+        const advanced = prs.map((pr) => ({ ...pr, baseSha: "c".repeat(40) }));
+        const navigationVersion = store.readNavigationSourceVersion();
+        const { writes } = await measureSqliteWrites(() => expect(poll(advanced)).resolves.toEqual([]));
+        expect(store.readNavigationSourceVersion()).toBe(navigationVersion);
+        for (const key of keys) service["prStatusRegistry"].delete(key);
+        service["prStatusRegistryLoaded"] = false;
+        await service["loadPrStatusRegistry"]();
+        expect(keys.map((key) => service["prStatusRegistry"].get(key)?.pr.baseSha)).toEqual(advanced.map((pr) => pr.baseSha));
+        const repeated = await measureSqliteWrites(async () => {
+          await expect(poll(advanced.map((pr) => ({ ...pr, mergeState: "unknown" })))).resolves.toEqual([]);
+          await expect(poll(advanced)).resolves.toEqual([]);
+        });
+        expect(repeated.writes.commits).toBe(0);
+        expect(publishLocalEvent.mock.calls.map(([event]) => (event as AgentEvent).notification.method))
+          .not.toContain("pullRequest/status/updated");
+        expectSqliteWriteBudget({
+          scenario: "github-pr-mergeability-base-tip-poll", writes,
+          note: "One commit for two confirmed base-tip advances in a poll (~4 MB WAL/day at one advancing batch/minute over eight hours). Repeated observations of the same tips make zero writes.",
+        });
+      } finally {
+        for (const key of keys) service["prStatusRegistry"].delete(key);
+        service["prStatusRegistryLoaded"] = wasLoaded;
+        automation.mockRestore();
+      }
+    });
+  });
+
   it.each((["in-app-merge", "identical-poll"] as const).flatMap(laterObservation =>
     (["pending", "failing"] as const).map(headCheck => ({ laterObservation, headCheck }))))(
     "preserves terminal PR status across $laterObservation with a $headCheck check",
@@ -12271,7 +12406,7 @@ describe("app server ipc", () => {
     await withRenamedRepositoryStore("shared-pr-merge-", async ({ store, db }) => {
       const { appServerService, service, restore } = await renamedRepositoryService();
       const internal = service as unknown as {
-        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrSummary[];
+        rememberPrStatuses: (prs: PrSummary[], fetchedAt: number, source: string) => PrStatusObservations;
         applyPolledPrStatuses: (prs: PrSummary[], fetchedAt: number) => Promise<string[]>;
         writePrStatusesToCache: (prs: PrSummary[], fetchedAt: number) => Promise<void>;
         nextPrObservationTimestamp: () => number;
@@ -12374,7 +12509,7 @@ describe("app server ipc", () => {
             // A provider read that started after the mutation can still see
             // old data. Neither the live registry nor its cache may reopen it.
             const late = internal.nextPrObservationTimestamp();
-            expect(internal.rememberPrStatuses([pr], late, "thread-lookup:user")).toEqual([]);
+            expect(internal.rememberPrStatuses([pr], late, "thread-lookup:user").changed).toEqual([]);
             await internal.writePrStatusesToCache([pr], late);
             expect((await store.readPrStatusCache())[key]?.pr.lifecycleState).toBe("merged");
           }
