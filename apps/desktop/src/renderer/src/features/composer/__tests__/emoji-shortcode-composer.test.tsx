@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { useState } from "react";
+import { createRef, useState } from "react";
 import type { Editor } from "@tiptap/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadEmojiCatalog } from "../../../lib/emoji-shortcodes";
@@ -9,7 +9,7 @@ import { CompactComposer } from "../CompactComposer";
 import { Composer } from "../Composer";
 import { navigationQueryFixture } from "../../../test/navigation-query-fixture";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import type { ComposerSkillToken } from "../ComposerInputTypes";
+import type { ComposerInputHandle, ComposerSkillToken } from "../ComposerInputTypes";
 
 afterEach(() => {
   cleanup();
@@ -31,14 +31,20 @@ function typeTextIntoEditor(editor: Editor, text: string): void {
   }
 }
 
-function renderControlledTiptap(options?: { markdownConversion?: boolean; value?: string }) {
+function renderControlledTiptap(options?: {
+  markdownConversion?: boolean;
+  onReferenceSelectionChange?: () => void;
+  value?: string;
+}) {
   const onChange = vi.fn();
+  const inputRef = createRef<ComposerInputHandle>();
 
   function Harness() {
     const [value, setValue] = useState(options?.value ?? "");
     const [skillTokens, setSkillTokens] = useState<ComposerSkillToken[]>([]);
     return (
       <ComposerTiptapInput
+        ref={inputRef}
         id="emoji-composer"
         label="Reply"
         markdownConversion={options?.markdownConversion ?? true}
@@ -47,6 +53,7 @@ function renderControlledTiptap(options?: { markdownConversion?: boolean; value?
           setValue(nextValue);
           setSkillTokens(nextTokens);
         }}
+        onReferenceSelectionChange={options?.onReferenceSelectionChange}
         placeholder="Reply"
         skillTokens={skillTokens}
         value={value}
@@ -56,7 +63,7 @@ function renderControlledTiptap(options?: { markdownConversion?: boolean; value?
 
   const view = render(<Harness />);
   const textbox = screen.getByRole("textbox", { name: "Reply" });
-  return { ...view, textbox, editor: getEditor(textbox), onChange };
+  return { ...view, textbox, editor: getEditor(textbox), inputRef, onChange };
 }
 
 describe("ComposerTiptapInput :shortcode: auto-expansion", () => {
@@ -154,19 +161,43 @@ describe("ComposerTiptapInput :shortcode: auto-expansion", () => {
 
   it("skips full-document traversal on caret moves when no emoji trigger exists", async () => {
     await loadEmojiCatalog();
-    const { editor } = renderControlledTiptap({
+    const onReferenceSelectionChange = vi.fn();
+    const { editor, inputRef } = renderControlledTiptap({
+      onReferenceSelectionChange,
       value: "First paragraph\n\nSecond paragraph\n\nThird paragraph",
     });
 
+    const end = editor.state.doc.content.size - 1;
+    const $end = editor.state.doc.resolve(end);
+    const blockStart = $end.before($end.depth);
+    expect(blockStart).toBeGreaterThan(0);
+    expect(blockStart).toBeLessThan(editor.state.doc.content.size);
+
     const nodesBetweenSpy = vi.spyOn(editor.state.doc, "nodesBetween");
     act(() => {
-      const end = editor.state.doc.content.size - 1;
       editor.commands.setTextSelection(end - 5);
       editor.commands.setTextSelection(end - 2);
       editor.commands.setTextSelection(end);
     });
-    expect(nodesBetweenSpy).not.toHaveBeenCalled();
+    expect(inputRef.current?.getEmojiTrigger()).toBeUndefined();
+    const priorBlockCallsWithoutTrigger = nodesBetweenSpy.mock.calls.filter(
+      ([from, to]) => from === 0 && to === blockStart,
+    );
+    expect(priorBlockCallsWithoutTrigger).toEqual([]);
     nodesBetweenSpy.mockRestore();
+
+    // Once a boundary-safe :shortcode candidate exists, prior blocks are inspected lazily.
+    act(() => {
+      typeTextIntoEditor(editor, " :thumbs");
+    });
+    const activeNodesBetweenSpy = vi.spyOn(editor.state.doc, "nodesBetween");
+    const trigger = inputRef.current?.getEmojiTrigger();
+    expect(trigger?.query).toBe("thumbs");
+    const priorBlockCallsWithTrigger = activeNodesBetweenSpy.mock.calls.filter(
+      ([from, to]) => from === 0 && to === blockStart,
+    );
+    expect(priorBlockCallsWithTrigger).toHaveLength(1);
+    activeNodesBetweenSpy.mockRestore();
   });
 
   it("respects active IME composition (isComposing, keyCode 229, compositionstart)", () => {
