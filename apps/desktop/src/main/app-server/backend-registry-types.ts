@@ -124,7 +124,7 @@ import {
 import {
   type PwrAgentThreadOrchestrationResponse,
 } from "@pwragent/shared/contracts/thread-orchestration-tools";
-import { type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { type AcpUsageTurnCompletion, type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import { type HelperModelId, type HelperModelResolution } from "@pwragent/shared/helper-models";
 import {
   type TaskMonitorResponse,
@@ -1393,6 +1393,7 @@ export type PendingLiveThreadUsageLine = {
   backend: AppServerBackendKind;
   line: ThreadUsageLineRecord;
   observationSequence: number;
+  acpCompletion?: AcpUsageTurnCompletion;
 };
 
 export type LiveThreadUsageBatch = {

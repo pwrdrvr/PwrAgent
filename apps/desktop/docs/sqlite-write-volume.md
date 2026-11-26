@@ -105,6 +105,26 @@ decimal MB. The priced root row is outside all three partial indexes. Its
 three-frame difference reflects SQLite page layout in this sample. An
 unpriced child turn row can enter all three indexes.
 
+### Antigravity compaction accounting
+
+The [ACP compaction budget](../src/main/__tests__/thread-acp-compaction-write-budget.test.ts)
+compares three completed turns with the same billed usage and cost. The
+measured scenarios add ordinary fill and one compact request. The no-shrink
+scenario flushes billing before completion, as does its control.
+
+| Scenario | Control commits | Measured commits | Control WAL bytes | Measured WAL bytes |
+| --- | ---: | ---: | ---: | ---: |
+| Steered, shrink verified | 3 | 3 | 218,360 | 230,720 |
+| Idle, no shrink on first fill | 6 | 6 | 230,720 | 230,720 |
+| Idle, shrink verified by a fresh owner | 3 | 3 | 218,360 | 144,200 |
+
+Streamed fill, cached replays, duplicate terminal events, and time spent
+waiting add zero commits. Confirmation and its marker share the next ordinary
+turn's completion transaction. WAL bytes depend on page layout and the
+checkpoint at reopen. Using the largest observed increase, 12,360 bytes per
+compaction at ten compactions per day projects about 0.124 MB of additional
+WAL per day.
+
 ### Write budgets
 
 [`src/main/__tests__/fixtures/sqlite-write-budgets.json`](../src/main/__tests__/fixtures/sqlite-write-budgets.json)

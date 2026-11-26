@@ -61,7 +61,7 @@ import {
   buildThreadIdentityKey,
   isAcpBackendId,
 } from "@pwragent/shared/contracts/navigation";
-import { type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
+import { type AcpUsageTurnCompletion, type ThreadUsageLineRecord } from "@pwragent/shared/token-usage-pricing";
 import {
   TOOL_OUTPUT_CAP_CHARS,
   toolOutputWarningChars,
@@ -236,6 +236,10 @@ export class ThreadUsageLedger {
   private async observeUsageTerminal(delivery: TurnEventDelivery): Promise<void> {
     const event = delivery.event as AgentEvent & { notification: Extract<AppServerNotification, { method: "turn/completed" | "turn/failed" | "turn/cancelled" }> };
     const completedTurnId = turnIdFromTerminalNotification(event.notification);
+    const completedAt = completedAtFromTerminalNotification(event.notification) ?? Date.now();
+    let acpCompletion = completedTurnId && isAcpBackendId(event.backend)
+      ? this.takeAcpUsageCompletion(event, event.backend, completedTurnId, completedAt)
+      : undefined;
     if (completedTurnId) {
       const usageKey = [
         event.backend,
@@ -247,11 +251,14 @@ export class ThreadUsageLedger {
       if (pending) {
         this.setPendingLiveThreadUsageLine(usageKey, {
           ...pending,
+          ...(acpCompletion ? { acpCompletion } : {}),
           line: {
             ...pending.line,
-            completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
+            completedAt,
           },
         });
+        // The pending line and ACP context share the existing flush.
+        acpCompletion = undefined;
       }
     }
     // The final usage line, the turn's end time, and the turn's Token Miser
@@ -289,8 +296,9 @@ export class ThreadUsageLedger {
           backend: event.backend,
           threadId: notification.params.threadId,
           turnId,
-          completedAt: completedAtFromTerminalNotification(event.notification) ?? Date.now(),
+          completedAt,
           limitObservation: accountKey && limits?.accountKey === accountKey ? limits : undefined,
+          ...(acpCompletion ? { acpCompletion } : {}),
         });
         terminalPricingChanged ||= completed;
       }
@@ -324,6 +332,7 @@ export class ThreadUsageLedger {
 
   private async observeUsageAccounting(delivery: TurnEventDelivery): Promise<void> {
     const { event, liveThreadUsageWork } = delivery;
+    this.observeAcpContextWindow(event);
     const pricingAt = await this.recordLiveThreadUsage(event, liveThreadUsageWork);
     if (liveThreadUsageWork) {
       delivery.event = { ...event, usagePricingAt: pricingAt ?? liveThreadUsageWork.observedAt };
@@ -389,6 +398,49 @@ export class ThreadUsageLedger {
 
   /** Turn start times reported on turn/started, keyed like usageTurnAccounts. */
   private readonly usageTurnStartTimes = new Map<string, number>();
+  private readonly acpTurnContexts = new Map<string, NonNullable<AcpUsageTurnCompletion["context"]>>();
+
+  private observeAcpContextWindow(event: AgentEvent): void {
+    const { notification, backend } = event;
+    if (notification.method !== "thread/contextWindow/updated" || !isAcpBackendId(backend)
+      || event.federationTarget?.scope === "remote") return;
+    const { source, turnId, threadId, usedTokens, modelContextWindow } = notification.params;
+    if (source || typeof turnId !== "string" || !turnId
+      || typeof usedTokens !== "number" || !Number.isFinite(usedTokens) || usedTokens < 0
+      || typeof modelContextWindow !== "number" || !Number.isFinite(modelContextWindow) || modelContextWindow <= 0) return;
+    if (this.recentlyCompletedThreadUsageTurns.get([backend, threadId].join(":"))?.turnId === turnId) return;
+    const key = JSON.stringify([backend, threadId, turnId]);
+    const previous = this.acpTurnContexts.get(key);
+    this.acpTurnContexts.set(key, {
+      firstContextTokens: previous?.firstContextTokens ?? usedTokens,
+      firstObservedAt: previous?.firstObservedAt ?? Date.now(),
+      finalContextTokens: usedTokens,
+      peakContextTokens: Math.max(previous?.peakContextTokens ?? 0, usedTokens),
+      modelContextWindow,
+    });
+    if (this.acpTurnContexts.size > 1_000) {
+      this.acpTurnContexts.delete(this.acpTurnContexts.keys().next().value!);
+    }
+  }
+
+  private takeAcpUsageCompletion(
+    event: AgentEvent,
+    backend: AcpUsageTurnCompletion["backend"],
+    turnId: string,
+    completedAt: number,
+  ): AcpUsageTurnCompletion | undefined {
+    if (event.federationTarget?.scope === "remote") return;
+    const threadId = readRecord(event.notification.params)?.threadId;
+    if (typeof threadId !== "string") return;
+    const key = JSON.stringify([backend, threadId, turnId]);
+    const context = this.acpTurnContexts.get(key);
+    this.acpTurnContexts.delete(key);
+    const compacted = event.notification.method === "turn/completed"
+      && event.notification.params.completedAcpCompactionRequest === true;
+    return context || compacted
+      ? { backend, threadId, turnId, completedAt, context, ...(compacted ? { compacted: true } : {}) }
+      : undefined;
+  }
 
   private readonly liveThreadUsageBaselines = new Map<
     string,
@@ -1646,12 +1698,14 @@ export class ThreadUsageLedger {
         tokenUsage,
         turnId,
       });
-      contextWindow = this.observeLiveThreadContextWindow({
-        backend: event.backend,
-        threadId,
-        tokenUsage,
-        turnId,
-      });
+      if (!isAcpBackendId(event.backend)) {
+        contextWindow = this.observeLiveThreadContextWindow({
+          backend: event.backend,
+          threadId,
+          tokenUsage,
+          turnId,
+        });
+      }
     } finally {
       // Publish the cumulative cursor before any overlay or sqlite await lets
       // a later arrival overtake this derivation.
@@ -1899,8 +1953,10 @@ export class ThreadUsageLedger {
     const pending = [...this.pendingLiveThreadUsageLines.values()];
     this.pendingLiveThreadUsageLines.clear();
     try {
+      const acpCompletions = pending.flatMap(({ acpCompletion }) => acpCompletion ? [acpCompletion] : []);
       await this.context.stores.usage.upsertThreadUsageLines({
         lines: pending.map((entry) => entry.line),
+        ...(acpCompletions.length > 0 ? { acpCompletions } : {}),
       });
     } catch (error) {
       for (const entry of pending) {

@@ -2499,6 +2499,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId: string;
+        /** An ACP compaction request finished. Ordinary fill must still verify shrink. */
+        completedAcpCompactionRequest?: true;
         turn: {
           id: string;
           /** Attribution only; never a permission or consent source. */
@@ -2812,6 +2814,8 @@ export type AppServerNotification =
         turnId?: string;
         usedTokens: number;
         modelContextWindow: number;
+        /** Ordinary live model calls omit this. Session readings may be cached. */
+        source?: "compaction" | "session";
       };
     }
   | {

@@ -47,7 +47,9 @@ function fakeRegistry(options: {
       ...(options.reportsFillOnNextTurn ? { reportsFillOnNextTurn: true } : {}),
     })),
     resolveAutoCompactionModel: vi.fn(async () => options.model ?? "gemini-4-neon-high"),
-    startAutoCompaction: vi.fn(async () => ({ status: "started" as const, turnId: "turn-compact" })),
+    startAutoCompaction: vi.fn<AutoCompactionRegistry["startAutoCompaction"]>(
+      async () => ({ status: "started", turnId: "turn-compact" }),
+    ),
     steerTurn: vi.fn(async (): Promise<{ disposition: "steered" | "queued" | "held" }> => ({ disposition: "steered" })),
     submitTurnIfIdle: vi.fn(async () => ({ status: "started" })),
     publishLocalEvent: vi.fn(async (event: AgentEvent) => { published.push(event); }),
@@ -202,6 +204,32 @@ describe("ThreadAutoCompactionMonitor", () => {
     monitor.dispose();
   });
 
+  it("does not request another idle compact until the ACP transfer is ready", async () => {
+    const world = fakeRegistry({ canSteer: false });
+    const blocked = Promise.withResolvers<void>();
+    const busy = { status: "busy", ready: blocked.promise } as const;
+    world.registry.startAutoCompaction.mockResolvedValueOnce(busy).mockResolvedValueOnce(busy);
+    const monitor = start(world);
+    onTestFinished(() => monitor.dispose());
+    world.fill(435_964);
+    await monitor.idle();
+    expect(world.registry.startAutoCompaction).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 100; index += 1) {
+      world.fill(435_964 + index % 2);
+    }
+    await monitor.idle();
+    expect(world.registry.startAutoCompaction).toHaveBeenCalledTimes(1);
+    expect(monitor.stateFor(world.backend, "thread-1")?.refusals).toBeUndefined();
+
+    world.registry.startAutoCompaction.mockReset()
+      .mockResolvedValue({ status: "started", turnId: "turn-compact" });
+    blocked.resolve();
+    await Promise.resolve();
+    await monitor.idle();
+    expect(world.registry.startAutoCompaction).toHaveBeenCalledTimes(1);
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("compacting");
+  });
+
   it("leaves models no rule covers alone, and honors a saved rule that turns the Gemini default off", async () => {
     const claude = fakeRegistry({ model: "claude-sonnet-5-5" });
     const first = start(claude);
@@ -308,6 +336,14 @@ describe("ThreadAutoCompactionMonitor", () => {
     await monitor.idle();
     expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("verifying");
     expect(world.registry.submitTurnIfIdle).not.toHaveBeenCalled();
+
+    for (const source of ["compaction", "session"] as const) {
+      world.emit({ method: "thread/contextWindow/updated", params: {
+        threadId: "thread-1", turnId: nextTurnId, usedTokens: 1_000, modelContextWindow: 512_000, source,
+      } });
+    }
+    await monitor.idle();
+    expect(monitor.stateFor(world.backend, "thread-1")?.phase).toBe("verifying");
 
     // The next prompt may have settled by the time the monitor handles its fill.
     world.turnStarted(nextTurnId);

@@ -466,6 +466,7 @@ export function acpContextWindowFill(
 export function acpContextWindowNotification(params: {
   threadId: string;
   turnId?: string;
+  source?: "compaction" | "session";
   fill: AcpContextWindowFill;
 }): AppServerNotification {
   return {
@@ -473,6 +474,7 @@ export function acpContextWindowNotification(params: {
     params: {
       threadId: params.threadId,
       ...(params.turnId ? { turnId: params.turnId } : {}),
+      ...(params.source ? { source: params.source } : {}),
       usedTokens: params.fill.usedTokens,
       modelContextWindow: params.fill.modelContextWindow,
     },

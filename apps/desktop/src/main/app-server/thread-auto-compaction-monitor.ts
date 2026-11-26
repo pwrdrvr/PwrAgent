@@ -42,6 +42,8 @@ export const AUTO_COMPACTION_CONTINUATION_TEXT = [
  */
 export const AUTO_COMPACTION_SETTLE_MS = 15_000;
 
+type CompactStartResult = { status: "started"; turnId?: string } | { status: "busy"; ready?: Promise<void> };
+
 export type ThreadAutoCompactionHost = {
   onEvent(listener: (event: AgentEvent) => void | Promise<void>): () => void;
   /** Saved rules; the monitor merges the built-in defaults. */
@@ -61,7 +63,7 @@ export type ThreadAutoCompactionHost = {
   startCompact(params: {
     backend: AppServerBackendKind;
     threadId: string;
-  }): Promise<{ status: "started"; turnId?: string } | { status: "busy" }>;
+  }): Promise<CompactStartResult>;
   startContinuation(params: { backend: AppServerBackendKind; threadId: string }): Promise<void>;
   publish(event: AgentEvent): Promise<void>;
   log: {
@@ -83,6 +85,8 @@ type ThreadEntry = {
   /** Serializes this thread's inputs across awaits. */
   chain: Promise<void>;
   settleTimer?: unknown;
+  startReadiness?: Promise<void>;
+  lastFill?: ContextFill;
   published?: string;
 };
 
@@ -187,6 +191,7 @@ export class ThreadAutoCompactionMonitor {
     switch (notification.method) {
       case "thread/contextWindow/updated": {
         const fill = (notification as Notification<"thread/contextWindow/updated">).params;
+        if (fill.source) return;
         this.enqueue(event.backend, threadId, (entry) => this.onFill(entry, {
           usedTokens: fill.usedTokens,
           reportedContextWindow: fill.modelContextWindow,
@@ -338,14 +343,15 @@ export class ThreadAutoCompactionMonitor {
     return {
       turnRunning: running,
       ...(turnId ? { turnId } : {}),
-      canSteer: support.canSteer,
-      canStart: support.canStart,
+      canSteer: support.canSteer && !entry.startReadiness,
+      canStart: entry.startReadiness ? "blocked" : support.canStart,
       ...(support.reportsFillOnNextTurn ? { reportsFillOnNextTurn: true } : {}),
     };
   }
 
   private async onFill(entry: ThreadEntry, fill: ContextFill): Promise<void> {
     if (!Number.isFinite(fill.usedTokens) || fill.usedTokens < 0) return;
+    entry.lastFill = fill;
     const rules = this.resolveRules();
     const model = fill.model ?? await this.host.resolveThreadModel(entry);
     entry.threshold = resolveAutoCompactionThreshold({
@@ -355,7 +361,8 @@ export class ThreadAutoCompactionMonitor {
       reportedContextWindow: fill.reportedContextWindow,
     });
     const canDispatchOnFill =
-      entry.threshold !== undefined
+      !entry.startReadiness
+      && entry.threshold !== undefined
       && fill.usedTokens >= entry.threshold.triggerTokens
       && (
         entry.state.phase === "armed"
@@ -429,7 +436,7 @@ export class ThreadAutoCompactionMonitor {
         this.host.log.info("auto-compaction starting /compact", {
           ...identity, usedTokens: command.usedTokens, triggerTokens: command.triggerTokens,
         });
-        let result: { status: "started"; turnId?: string } | { status: "busy" } | undefined;
+        let result: CompactStartResult | undefined;
         try {
           result = await this.host.startCompact(identity);
         } catch (error) {
@@ -445,6 +452,7 @@ export class ThreadAutoCompactionMonitor {
           return;
         }
         if (result.status === "busy") {
+          if (result.ready) this.waitForStartReadiness(entry, result.ready);
           await this.apply(entry, { kind: "dispatch-deferred" });
           return;
         }
@@ -466,6 +474,18 @@ export class ThreadAutoCompactionMonitor {
           });
         }
     }
+  }
+
+  private waitForStartReadiness(entry: ThreadEntry, ready: Promise<void>): void {
+    entry.startReadiness = ready;
+    void ready.then(() => {
+      if (this.threads.get(this.key(entry.backend, entry.threadId)) !== entry) return;
+      this.enqueueKnown(entry.backend, entry.threadId, async (current) => {
+        if (current.startReadiness !== ready) return;
+        current.startReadiness = undefined;
+        if (current.state.phase === "due" && current.lastFill) await this.onFill(current, current.lastFill);
+      });
+    });
   }
 
   private syncSettleTimer(entry: ThreadEntry): void {
@@ -555,7 +575,7 @@ export type AutoCompactionRegistry = {
     backend: AppServerBackendKind;
     threadId: string;
     messageOrigin: AppServerThreadMessageOrigin;
-  }): Promise<{ status: "started"; turnId?: string } | { status: "busy" }>;
+  }): Promise<CompactStartResult>;
   steerAutoCompaction?(params: {
     backend: AppServerBackendKind;
     threadId: string;

@@ -1194,6 +1194,7 @@ CREATE TABLE IF NOT EXISTS thread_usage_turns (
   final_context_tokens         INTEGER,
   peak_context_tokens          INTEGER,
   model_context_window         INTEGER,
+  acp_compaction_before_tokens INTEGER,
   rate_limit_snapshot          TEXT,
   completed_at_inferred        INTEGER,
   updated_at          INTEGER NOT NULL
@@ -2369,6 +2370,18 @@ export class StateDb {
       ensureThreadSubAgentSchema(db);
       ensureThreadManagedMembershipSchema(db);
       ensureThreadUsageActivitySchema(db);
+      if (!tableColumnExists(db, "thread_usage_turns", "acp_compaction_before_tokens")) {
+        db.transaction(() => {
+          if (!tableColumnExists(db, "thread_usage_turns", "acp_compaction_before_tokens")) {
+            db.exec("ALTER TABLE thread_usage_turns ADD COLUMN acp_compaction_before_tokens INTEGER");
+          }
+        }).immediate();
+      }
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_pending_acp_compaction
+          ON thread_usage_turns(provider, backend, thread_id, completed_at DESC, observed_at DESC)
+          WHERE parent_thread_id IS NULL AND acp_compaction_before_tokens > 0
+      `);
       removeUsageActivityIndex(db);
       db.exec(THREAD_TODO_THREAD_PREFS_SCHEMA);
       // Additive columns on the card tables, with no version of their own so

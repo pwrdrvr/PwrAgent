@@ -7131,6 +7131,7 @@ export function useThreadSessionState(params: {
         || openedTranscriptsRef.current.has(targetThreadKey);
       const isTranscriptUpdate = isThreadLocalTranscriptNotification(event.notification);
       const liveContextWindow = event.notification.method === "thread/contextWindow/updated"
+        && event.notification.params.source !== "compaction"
         ? readContextWindowFill(event.notification.params)
         : undefined;
       if (retainTranscript && liveContextWindow) {
@@ -8501,7 +8502,7 @@ export function useThreadSessionState(params: {
           // A fill-only report from Claude or ACP. Replace the indicator
           // without touching turn usage: leaving the cumulative fields unset
           // keeps deriveTurnUsageBaseline on its total - last path.
-          if (!liveContextWindow) return current;
+          if (!liveContextWindow || (event.notification.params.source === "session" && current.contextWindow)) return current;
           return {
             ...current,
             contextWindow: liveContextWindow,

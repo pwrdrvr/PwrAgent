@@ -326,6 +326,7 @@ type AcpRolloutStoreLike = {
 
 type AcpPromptSteerHandoff = {
   nextGeneration: number;
+  isCompactCommand: boolean;
   replacementReady: Promise<boolean>;
   confirm?: () => void;
   accept: () => void;
@@ -339,6 +340,8 @@ type AcpActiveTurn = {
   compacted?: boolean;
   /** The prompt itself is a leading `/compact` slash command. */
   isCompactCommand?: boolean;
+  startedWithCompactCommand?: boolean;
+  pendingCompactUsage?: AcpSessionUpdateEvent;
   sentAgentMemory?: boolean;
   sentWorkspaceContext?: boolean;
   cancelBeforePrompt?: () => void;
@@ -379,6 +382,25 @@ type AcpHydratedSessionHistory = {
   antigravityReplayPrompts?: AcpReplayPromptIdentity[];
 };
 
+type AcpSessionUpdateEvent = {
+  assistantMessageItemId?: string;
+  completedAssistantMessage?: AppServerThreadMessageEntry;
+  fromSessionLoad?: boolean;
+  contextUsageSource?: "compaction" | "session";
+  completedAcpCompactionRequest?: true;
+  sessionId: string;
+  replay: AppServerThreadReplay;
+  title?: string;
+  turnId?: string;
+  update: Record<string, unknown>;
+};
+
+export class AcpSessionTransferBusyError extends Error {
+  constructor(readonly ready: Promise<void>) {
+    super("Wait for Antigravity's active work to finish before moving the session.");
+  }
+}
+
 export type AcpAgentClientOptions = {
   backendId: AcpBackendId;
   agentDisplayName?: string;
@@ -392,16 +414,7 @@ export type AcpAgentClientOptions = {
   transport: AcpJsonRpcTransport;
   now?: () => number;
   onSessionStartError?: (error: unknown) => Promise<void>;
-  onSessionUpdate?: (event: {
-    assistantMessageItemId?: string;
-    completedAssistantMessage?: AppServerThreadMessageEntry;
-    fromSessionLoad?: boolean;
-    sessionId: string;
-    replay: AppServerThreadReplay;
-    title?: string;
-    turnId?: string;
-    update: Record<string, unknown>;
-  }) => Promise<void> | void;
+  onSessionUpdate?: (event: AcpSessionUpdateEvent) => Promise<void> | void;
   onPromptError?: (event: {
     completedAssistantMessage?: AppServerThreadMessageEntry;
     sessionId: string;
@@ -531,6 +544,7 @@ export class AcpAgentClient {
   private readonly normalizerOptions: AcpSessionReplayNormalizerOptions;
   private replayKit?: AcpReplayKit;
   private activeOperations = 0;
+  private readonly transferWaiters = new Map<string, PromiseWithResolvers<void>>();
 
   constructor(private readonly options: AcpAgentClientOptions) {
     // Initialization and loaded sessions belong to one child. The client
@@ -660,13 +674,28 @@ export class AcpAgentClient {
   }
 
   async closeSessionForTransfer(sessionId: string): Promise<void> {
-    if (this.activeTurns.has(sessionId) || this.hasActiveOperations() || this.hasNativeBackgroundWork(sessionId)) {
-      throw new Error("Wait for Antigravity's active work to finish before moving the session.");
+    if (this.sessionTransferBusy(sessionId)) {
+      const waiter = this.transferWaiters.get(sessionId) ?? Promise.withResolvers<void>();
+      this.transferWaiters.set(sessionId, waiter);
+      throw new AcpSessionTransferBusyError(waiter.promise);
     }
     if (!await this.closeOwnedSession(sessionId, true)) {
       throw new Error("This Antigravity runtime cannot close the session for transfer.");
     }
     this.normalizers.delete(sessionId);
+  }
+
+  private sessionTransferBusy(sessionId: string): boolean {
+    return this.activeTurns.has(sessionId) || this.hasActiveOperations() || this.hasNativeBackgroundWork(sessionId);
+  }
+
+  private resolveReadyTransfers(): void {
+    if (this.hasActiveOperations()) return;
+    for (const [sessionId, waiter] of this.transferWaiters) {
+      if (this.sessionTransferBusy(sessionId)) continue;
+      this.transferWaiters.delete(sessionId);
+      waiter.resolve();
+    }
   }
 
   private async closeOwnedSession(sessionId: string, retainMcpGrants = false): Promise<boolean> {
@@ -968,6 +997,7 @@ export class AcpAgentClient {
       return await operation();
     } finally {
       this.activeOperations -= 1;
+      this.resolveReadyTransfers();
     }
   }
 
@@ -999,6 +1029,8 @@ export class AcpAgentClient {
     this.sessionMcpServers.clear();
     this.sessionMcpToolGrants.clear();
     this.sessionNotificationQueues.clear();
+    for (const waiter of this.transferWaiters.values()) waiter.resolve();
+    this.transferWaiters.clear();
     await this.options.transport.close?.();
   }
 
@@ -1266,6 +1298,7 @@ export class AcpAgentClient {
 
     activeTurn.pendingSteerHandoff = {
       nextGeneration,
+      isCompactCommand,
       replacementReady: replacementReady.promise,
       accept: () => {
         replacementReady.resolve(true);
@@ -1879,6 +1912,7 @@ export class AcpAgentClient {
     const turnId = params.turnId ?? `pending:${params.sessionId}:${this.now()}`;
     const activeTurn = this.startTrackedTurn(params.sessionId, turnId);
     activeTurn.isCompactCommand = isCompactCommand;
+    activeTurn.startedWithCompactCommand = isCompactCommand;
     activeTurn.sentWorkspaceContext = needsWorkspaceContext;
     const acceptance = Promise.withResolvers<{ sessionId: string; turnId: string }>();
     let dispatched = false;
@@ -1994,6 +2028,13 @@ export class AcpAgentClient {
         // Cancelled compactions leave history intact. Fold clearing the digest
         // into finishTrackedTurn's idle write so no extra SQLite commit occurs.
         const clearAgentInstructionsDigest = !cancelled && Boolean(activeTurn.isCompactCommand);
+        const compactUsage = activeTurn.pendingCompactUsage;
+        if (compactUsage) {
+          void this.notifySessionUpdate({
+            ...compactUsage,
+            ...(activeTurn.isCompactCommand ? { contextUsageSource: "compaction" } : {}),
+          });
+        }
         if (clearAgentInstructionsDigest) {
           activeTurn.compacted = true;
         }
@@ -2019,6 +2060,7 @@ export class AcpAgentClient {
             ? { completedAssistantMessage: finished.completedAssistantMessage }
             : {}),
           sessionId,
+          ...(clearAgentInstructionsDigest && compactUsage ? { completedAcpCompactionRequest: true } : {}),
           replay: finished.replay,
           turnId: finished.turnId,
           update: {
@@ -2032,6 +2074,7 @@ export class AcpAgentClient {
       .catch(async (error) => {
         if (params.isDispatched && !params.isDispatched()) {
           this.activeTurns.delete(sessionId);
+          this.resolveReadyTransfers();
           this.touchSession(sessionId);
           this.updateSessionStatus(sessionId, "idle");
           params.rejectPreDispatch?.(error);
@@ -2789,7 +2832,7 @@ export class AcpAgentClient {
       // response before the session/prompt result is checked for silence.
       activeTurn.assistantText = text;
     }
-    void this.notifySessionUpdate({
+    const event: AcpSessionUpdateEvent = {
       assistantMessageItemId,
       ...(completedAssistantMessage ? { completedAssistantMessage } : {}),
       ...(fromSessionLoad ? { fromSessionLoad: true } : {}),
@@ -2798,7 +2841,24 @@ export class AcpAgentClient {
       title,
       turnId: activeTurn?.turnId,
       update,
-    });
+    };
+    if (this.options.backendId === "acp:antigravity" && updateKind === "usage_update") {
+      if (fromSessionLoad || !activeTurn?.promptDispatched) {
+        event.contextUsageSource = "session";
+      } else if (typeof update.used === "number" && Number.isFinite(update.used)
+        && (activeTurn.isCompactCommand || activeTurn.pendingSteerHandoff?.isCompactCommand)) {
+        // In a steered /compact, the interrupted generation can still report
+        // its ordinary fill. Only the last distinct report is the summary call.
+        const previous = activeTurn.pendingCompactUsage;
+        if (previous && !activeTurn.startedWithCompactCommand
+          && (previous.update.used !== update.used || previous.update.size !== update.size)) {
+          void this.notifySessionUpdate(previous);
+        }
+        activeTurn.pendingCompactUsage = event;
+        return;
+      }
+    }
+    void this.notifySessionUpdate(event);
   }
 
   private async handleAcpRequest(
@@ -3570,6 +3630,7 @@ export class AcpAgentClient {
     } else if (update.status === "completed" || update.status === "failed" || update.status === "cancelled") {
       active?.delete(update.toolCallId);
       if (active?.size === 0) this.antigravityBackgroundCommands.delete(sessionId);
+      this.resolveReadyTransfers();
     }
   }
 
@@ -3789,6 +3850,7 @@ export class AcpAgentClient {
   } {
     const activeTurn = this.activeTurns.get(sessionId);
     this.activeTurns.delete(sessionId);
+    this.resolveReadyTransfers();
     this.retireManagedReviewSession(sessionId);
     // The idle clock starts when the turn ends, not when it began.
     this.touchSession(sessionId);
