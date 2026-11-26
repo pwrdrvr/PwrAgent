@@ -56,13 +56,23 @@ export class ThreadSearchStore implements ThreadSearchStorage {
   /** Archive-inclusive global search must not commit once per listed thread. */
   upsertThreads(threads: readonly AppServerThreadSummary[]): void {
     if (threads.length === 0) return;
+    const dataVersion = this.db.pragma("data_version", { simple: true });
     // Use one read snapshot so a peer commit during preflight cannot turn a
     // later healthy row into an apparent update from the older listing.
-    const changed = this.db.transaction(() => threads.flatMap((thread) => {
+    const checked = this.db.transaction(() => threads.map((thread) => {
       const projection = buildThreadSearchProjection(thread);
-      const preflight = this.getProjectionCheck(projection);
-      return preflight === 1 ? [] : [{ projection, preflight }];
+      return { projection, preflight: this.getProjectionCheck(projection) };
     })).deferred();
+    const peerCommitted = dataVersion !== this.db.pragma("data_version", { simple: true });
+    const changed = checked.flatMap(({ projection, preflight }) => {
+      if (preflight !== 1) return [{ projection, preflight }];
+      // A commit hidden by the snapshot may have changed only the FTS payload.
+      // The fresh check proposes a repair only while the document still agrees.
+      if (peerCommitted && this.getProjectionCheck(projection) === 0) {
+        return [{ projection, preflight: 0 as const }];
+      }
+      return [];
+    });
     if (changed.length === 0) return;
     this.db.transaction(() => {
       const updatedDocuments = new Set<string>();
@@ -258,22 +268,30 @@ export class ThreadSearchStore implements ThreadSearchStorage {
     const retained = new Set(params.retainedIdentityKeys.map((key) => encodeLegacyThreadIdentityKey(key) ?? key));
     const scope = JSON.stringify([params.backend ?? null, params.includeArchived]);
     const cursor = this.pruneCursors.get(scope) ?? "";
-    const next = this.db.transaction(() => {
-      // Page the identity index, then apply inventory/partition rules. A slice
-      // examines at most 64 documents even when none are eligible for deletion.
-      const rows = this.db.prepare(`
-        SELECT identity_key, backend, thread_id, archived_at FROM thread_search_documents
-        WHERE identity_key > ? ORDER BY identity_key LIMIT 64
-      `).all(cursor) as Array<{
+    // Read the bounded window before attempting the writer lock. A slice with
+    // candidates repeats the same seek under the lock to account for peer writes.
+    const select = this.db.prepare(`
+      SELECT identity_key, backend, thread_id, archived_at FROM thread_search_documents
+      WHERE identity_key > ? ORDER BY identity_key LIMIT 64
+    `);
+    const readSlice = () => {
+      const rows = select.all(cursor) as Array<{
         identity_key: string; backend: AppServerBackendKind; thread_id: string; archived_at: number | null;
       }>;
-      for (const row of rows) {
-        if (retained.has(row.identity_key)
-          || (params.backend && row.backend !== params.backend)
-          || (!params.includeArchived && row.archived_at !== null)) continue;
+      return {
+        deletions: rows.filter((row) => !retained.has(row.identity_key)
+          && (!params.backend || row.backend === params.backend)
+          && (params.includeArchived || row.archived_at === null)),
+        nextCursor: rows.length === 64 ? rows[rows.length - 1].identity_key : "",
+      };
+    };
+    const preflight = readSlice();
+    const next = preflight.deletions.length === 0 ? preflight.nextCursor : this.db.transaction(() => {
+      const { deletions, nextCursor } = readSlice();
+      for (const row of deletions) {
         this.deleteThreadRows(row.identity_key, row.backend, row.thread_id);
       }
-      return rows.length === 64 ? rows[rows.length - 1].identity_key : "";
+      return nextCursor;
     }).immediate();
     this.pruneCursors.set(scope, next);
   }

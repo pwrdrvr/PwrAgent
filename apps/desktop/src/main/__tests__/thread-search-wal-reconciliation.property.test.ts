@@ -79,7 +79,7 @@ it("explores two-connection search reconciliation against a document and visibil
       const prepare = reader.raw.prepare;
       reader.raw.prepare = ((sql: string) => {
         const statement = prepare.call(reader.raw, sql);
-        if (entry !== "prune" && sql.includes("AS projection_check")) {
+        if (entry !== "prune" && sql.includes("FROM thread_search_documents d") && sql.includes("JOIN thread_search_fts f ON f.rowid = k.fts_rowid")) {
           const get = statement.get.bind(statement);
           statement.get = (projection: { identityKey?: string }) => {
             const result = get(projection);
@@ -106,6 +106,8 @@ it("explores two-connection search reconciliation against a document and visibil
       } finally {
         reader.raw.prepare = prepare;
       }
+      const reachable = entry === "prune" || boundary === "preflight" || listing !== "matching" || damage !== "none";
+      if (attempted !== (peer !== "none" && reachable)) return `${entry}:peer-attempt:${boundary}`;
       if (entry === "prune") {
         if (listing !== "new") model.delete(key(initial));
       } else if (!committedTargetChange) model.set(key(input), input);

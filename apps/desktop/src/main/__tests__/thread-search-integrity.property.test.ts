@@ -279,22 +279,81 @@ it("gives all projection checks in a refresh slice one WAL snapshot", () => {
   }
 });
 
-it("holds the writer lock while pruning the selected projection slice", () => {
+it("repairs FTS-only damage committed to a later thread during preflight", async () => {
+  const { dbPath, tempDir } = createTempStateDb("search-wal-late-fts-");
+  const reader = StateDb.open(dbPath);
+  const writer = StateDb.open(dbPath);
+  try {
+    const inventory = [listed, peer];
+    new ThreadSearchStore(writer).upsertThreads(inventory);
+    let committed = false;
+    const spy = afterProjectionCheck(reader, () => {
+      if (committed) return;
+      writer.raw.prepare("UPDATE thread_search_fts SET title = ? WHERE identity_key = ?").run("Nightshade", "claude:peer");
+      committed = true;
+    });
+    const store = new ThreadSearchStore(reader);
+    const service = new ThreadSearchService(store, async () => inventory);
+    const response = await service.search({ query: '"Juniper"', contentMode: "metadata" });
+    spy.mockRestore();
+
+    expect(committed).toBe(true);
+    expect(response.results.map(({ threadId }) => threadId)).toEqual([peer.id]);
+    expect(store.search({ query: '"Nightshade"', limit: 10 })).toEqual([]);
+  } finally {
+    writer.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
+});
+
+it("advances a fully retained prune window while a peer holds the WAL writer lock", () => {
+  const { dbPath, tempDir } = createTempStateDb("search-wal-retained-");
+  const reader = StateDb.open(dbPath);
+  const writer = StateDb.open(dbPath);
+  try {
+    const kept = Array.from({ length: 64 }, (_, i) => ({ ...listed, id: `keep-${i}` }));
+    const stale = { ...listed, id: "stale", title: "Marigold" };
+    new ThreadSearchStore(writer).upsertThreads([...kept, stale]);
+    reader.raw.pragma("busy_timeout = 0");
+    const store = new ThreadSearchStore(reader);
+    const request = { includeArchived: true, retainedIdentityKeys: kept.map(({ id }) => `codex:${id}`) };
+    writer.raw.transaction(() => store.pruneMissingThreads(request)).immediate();
+    expect(store.search({ query: '"Marigold"', limit: 10 })).toHaveLength(1);
+
+    store.pruneMissingThreads(request);
+    expect(store.search({ query: '"Marigold"', limit: 10 })).toEqual([]);
+    expect(store.search({ query: '"Sunflower"', limit: 100 })).toHaveLength(64);
+  } finally {
+    writer.close();
+    reader.close();
+    removeTempStateDbDir(tempDir);
+  }
+});
+
+it("reselects eligible prune candidates under the WAL writer lock", () => {
   const { dbPath, tempDir } = createTempStateDb("search-wal-prune-");
   const reader = StateDb.open(dbPath);
   const writer = StateDb.open(dbPath);
   try {
-    new ThreadSearchStore(writer).upsertThreads([listed, peer]);
+    const archivedDuringPreflight = { ...listed, id: "archive", title: "Marigold" };
+    const writerStore = new ThreadSearchStore(writer);
+    writerStore.upsertThreads([listed, peer, archivedDuringPreflight]);
     writer.raw.pragma("busy_timeout = 0");
     const touchPeer = writer.raw.prepare("UPDATE thread_search_documents SET indexed_at = ? WHERE identity_key = ?");
     const prepare = reader.raw.prepare.bind(reader.raw);
     let blocked = false;
+    let scans = 0;
     const spy = vi.spyOn(reader.raw, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       if (sql.includes("SELECT identity_key, backend, thread_id, archived_at")) {
         const all = statement.all.bind(statement);
         statement.all = (...args: unknown[]) => {
           const rows = all(...args);
+          if (++scans === 1) {
+            writerStore.upsertThread({ ...archivedDuringPreflight, archivedAt: 100 });
+            return rows;
+          }
           try {
             touchPeer.run(300, "claude:peer");
           } catch (error) {
@@ -307,11 +366,15 @@ it("holds the writer lock while pruning the selected projection slice", () => {
       return statement;
     });
     const store = new ThreadSearchStore(reader);
-    store.pruneMissingThreads({ backend: "codex", includeArchived: true, retainedIdentityKeys: [] });
+    store.pruneMissingThreads({ backend: "codex", includeArchived: false, retainedIdentityKeys: [] });
     spy.mockRestore();
 
+    expect(scans).toBe(2);
     expect(blocked).toBe(true);
     expect(store.search({ query: '"Sunflower"', limit: 10 })).toEqual([]);
+    expect(store.search({ query: '"Marigold"', includeArchived: true, limit: 10 })).toMatchObject([
+      { threadId: archivedDuringPreflight.id, archivedAt: 100 },
+    ]);
     expect(store.search({ query: '"Juniper"', limit: 10 })).toHaveLength(1);
     expect(touchPeer.run(300, "claude:peer").changes).toBe(1);
   } finally {
@@ -325,7 +388,7 @@ function afterProjectionCheck(db: StateDb, callback: () => void) {
   const prepare = db.raw.prepare.bind(db.raw);
   return vi.spyOn(db.raw, "prepare").mockImplementation((sql) => {
     const statement = prepare(sql);
-    if (sql.includes("AS projection_check")) {
+    if (sql.includes("FROM thread_search_documents d") && sql.includes("JOIN thread_search_fts f ON f.rowid = k.fts_rowid")) {
       const get = statement.get.bind(statement);
       statement.get = (...args: unknown[]) => {
         const result = get(...args);
