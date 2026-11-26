@@ -278,4 +278,89 @@ describe("ACP image storage and session/load replay integration", () => {
       }
     },
   );
+
+  it("does not duplicate user prompts or mutate fallbackNormalizer on incomplete non-Antigravity session/load", async () => {
+    const stateDb = openInMemoryStateDb();
+    const sessionStore = new AcpSessionStore(stateDb);
+    const rolloutStore = new AcpRolloutStore(path.join(testRoot, "rollouts-incomplete-grok"));
+    const backendId = "acp:grok" as const;
+    const sessionId = "grok-incomplete-image";
+    const imageUrl = "pwragent-image://file/%2Ftmp%2Finterrupted.png";
+
+    // Incomplete rollout: user sent a prompt with an image, turn never finished (threadStatus = "active").
+    rolloutStore.appendUpdate({
+      backendId,
+      sessionId,
+      receivedAt: 1_795_600_000_000,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "Inspect this interrupted turn",
+        parts: [
+          { type: "text", text: "Inspect this interrupted turn" },
+          { type: "image", alt: "interrupted.png", url: imageUrl },
+        ],
+        turnId: "turn-interrupted",
+        waitingForAgent: true,
+      },
+    });
+    sessionStore.upsertSession({
+      backendId,
+      sessionId,
+      title: "Interrupted Grok session",
+      cwd: testRoot,
+      executionMode: "default",
+      status: "idle",
+      hasConversationHistory: true,
+      createdAt: 1_795_600_000_000,
+      updatedAt: 1_795_600_000_000,
+    });
+
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true },
+      },
+    });
+    const baseRequest = transport.request.bind(transport);
+    transport.request = async (method, params, timeoutMs) => {
+      if (method === "session/load") {
+        // Provider replays without timestamps (reload-time receivedAt differs from local receivedAt).
+        transport.emitSessionUpdate(sessionId, {
+          sessionUpdate: "user_message_chunk",
+          content: { type: "text", text: "Inspect this interrupted turn" },
+        });
+        transport.emitSessionUpdate(sessionId, {
+          sessionUpdate: "user_message_chunk",
+          content: { type: "text", text: "Attached image filename: interrupted.png" },
+        });
+        transport.emitSessionUpdate(sessionId, {
+          sessionUpdate: "agent_message_chunk",
+          content: { type: "text", text: "Recovered response" },
+        });
+        return {};
+      }
+      return await baseRequest(method, params, timeoutMs);
+    };
+
+    const client = new AcpAgentClient({
+      backendId,
+      store: sessionStore,
+      rolloutStore,
+      transport,
+    });
+    try {
+      await client.initialize();
+      const replay = await client.loadSession(sessionStore.getSession(backendId, sessionId)!);
+      const userMessages = replay.messages.filter((m) => m.role === "user");
+      expect(userMessages).toHaveLength(1);
+      expect(userMessages[0]?.text).toBe("Inspect this interrupted turn");
+      expect(userMessages[0]?.parts).toEqual([
+        { type: "text", text: "Inspect this interrupted turn" },
+        { type: "image", alt: "interrupted.png", url: imageUrl },
+      ]);
+    } finally {
+      await client.dispose();
+      stateDb.close();
+    }
+  });
 });

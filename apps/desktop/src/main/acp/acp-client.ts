@@ -378,6 +378,7 @@ type AcpSuppressedControlPrompt = {
 
 type AcpHydratedSessionHistory = {
   isComplete: boolean;
+  hasReplay?: boolean;
   antigravityReplayPrompts?: AcpReplayPromptIdentity[];
 };
 
@@ -1570,12 +1571,21 @@ export class AcpAgentClient {
       const replayPrompts = localHistory.antigravityReplayPrompts;
       // Antigravity's prompt identities annotate a clean provider transcript.
       // Other incomplete fallbacks provide timestamps that agents such as
-      // Kimi omit, so those fallbacks merge with the incoming replay.
-      if (localHistory.isComplete || (this.options.backendId === "acp:antigravity" && replayPrompts)) {
+      // Kimi omit, so those fallbacks merge with the incoming replay without
+      // enabling provider-prompt-replay mode on the hydrated fallback.
+      const useFreshProviderNormalizer =
+        localHistory.isComplete
+        || !localHistory.hasReplay
+        || (this.options.backendId === "acp:antigravity" && Boolean(replayPrompts));
+      if (useFreshProviderNormalizer) {
         this.normalizers.delete(metadata.sessionId);
       }
-      const providerNormalizer = replayPrompts && this.normalizerFor(metadata.sessionId);
-      if (replayPrompts) providerNormalizer?.beginProviderPromptReplay(replayPrompts);
+      const providerNormalizer = useFreshProviderNormalizer && replayPrompts
+        ? this.normalizerFor(metadata.sessionId)
+        : undefined;
+      if (replayPrompts && providerNormalizer) {
+        providerNormalizer.beginProviderPromptReplay(replayPrompts);
+      }
       try {
         await this.ensureSession(hydratedMetadata, {
           suppressTranscriptReplay: false,
@@ -2981,6 +2991,7 @@ export class AcpAgentClient {
       || replayPrompts.some((prompt) => Boolean(prompt.steerMessageId || prompt.attachmentParts?.length));
     return {
       isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
+      hasReplay,
       antigravityReplayPrompts: needsPromptReplayOverlay ? replayPrompts : undefined,
     };
   }

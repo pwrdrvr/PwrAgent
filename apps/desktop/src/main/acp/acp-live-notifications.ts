@@ -629,11 +629,18 @@ function hasMeaningfulAcpToolMetadata(update: Record<string, unknown>): boolean 
     return true;
   }
   const command = item ? readString(item, "command") : undefined;
-  return Boolean(command && !isGenericAcpToolMetadata(command));
+  if (command && !isGenericAcpToolMetadata(command)) {
+    return true;
+  }
+  const actions = Array.isArray(item?.commandActions) ? item.commandActions : [];
+  return actions.some((action) => {
+    const name = readString(readRecord(action) ?? {}, "name");
+    return Boolean(name && !isGenericAcpToolMetadata(name));
+  });
 }
 
 function isGenericAcpToolMetadata(value: string): boolean {
-  return /^(?:tool|tool call|tool_call|tool call update|tool_call_update|unknown|other|tool details unavailable|(?:run\s+)?mcp_[a-z0-9_-]+)$/i.test(
+  return /^(?:tool|tool call|tool_call|tool call update|tool_call_update|unknown|other|tool details unavailable|run\s+mcp_[a-z0-9_-]+|mcp_pwragent_call_pwragent_tool|mcp_pwragent_call_mcp_tool)$/i.test(
     value.trim(),
   );
 }

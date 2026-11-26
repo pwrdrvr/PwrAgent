@@ -166,12 +166,15 @@ describe("Antigravity MCP tool reporting", () => {
           ];
 
           const label = expectedMcpLabel(targetTool, summary);
+          const expectedDisplayCommand = mode === "gateway"
+            ? `${targetTool}\n${JSON.stringify({ connectionId: "linear", arguments: args }, null, 2)}`
+            : `${targetTool}\n${JSON.stringify(args, null, 2)}`;
           const replayed = replaySingleActivity(frames);
           expect(replayed.summary).toBe(label);
           expect(replayed.details[0]?.label).toBe(label);
           expect(replayed.details[0]?.command?.rawCommand).toBe(targetTool);
           expect(replayed.details[0]?.command?.source).toBe("tool");
-          expect(replayed.details[0]?.command?.displayCommand).toContain(targetTool);
+          expect(replayed.details[0]?.command?.displayCommand).toBe(expectedDisplayCommand);
         },
       ),
     );
@@ -246,5 +249,64 @@ describe("Antigravity MCP tool reporting", () => {
     expect(replayed.summary).toBe("tool_search: Search PwrAgent review tools");
     expect(replayed.details[0]?.label).toBe("tool_search: Search PwrAgent review tools");
     expect(replayed.details[0]?.command?.rawCommand).toBe("tool_search");
+    expect(replayed.details[0]?.command?.displayCommand).toBe(
+      `tool_search\n${JSON.stringify({ query: "review" }, null, 2)}`,
+    );
+  });
+
+  it("preserves a non-PwrAgent MCP tool label across a sparse completion update", () => {
+    const replayed = replaySingleActivity([
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_github_1",
+        name: "mcp_github_list_issues",
+        kind: "other",
+        title: "Run mcp_github_list_issues",
+        status: "in_progress",
+        rawInput: { repo: "pwrdrvr/PwrAgent" },
+      },
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call_github_1",
+        status: "completed",
+      },
+    ]);
+
+    expect(replayed.summary).toBe("mcp_github_list_issues");
+    expect(replayed.details[0]?.label).toBe("mcp_github_list_issues");
+    expect(replayed.status).toBe("completed");
+  });
+
+  it("emits live item/completed immediately for zero-arg non-PwrAgent MCP tools", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const resolved = resolver.resolve({
+      backendId: "acp:antigravity",
+      threadId: sessionId,
+      turnId: "turn-zero-arg",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call_github_zero_arg",
+        name: "mcp_github_list_issues",
+        kind: "other",
+        title: "Run mcp_github_list_issues",
+        status: "completed",
+        rawInput: {},
+      },
+    });
+
+    expect(resolved).toBeDefined();
+    const notifications = acpToolUpdateNotifications({
+      backendId: "acp:antigravity",
+      threadId: sessionId,
+      turnId: "turn-zero-arg",
+      update: resolved!,
+    });
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]?.method).toBe("item/completed");
+    expect(resolver.drainDeferredTerminalUpdates({
+      backendId: "acp:antigravity",
+      threadId: sessionId,
+      turnId: "turn-zero-arg",
+    })).toEqual([]);
   });
 });

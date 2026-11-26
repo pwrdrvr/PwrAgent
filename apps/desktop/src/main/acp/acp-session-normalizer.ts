@@ -356,6 +356,8 @@ export class AcpSessionReplayNormalizer {
   private pendingUserImageAlt?: string;
   /** Message ID of a tentative synthetic filename-annotation bubble that an image chunk can fold. */
   private pendingSyntheticImageAnnotation?: { messageId: string; fileName: string };
+  /** Counts provider `data:` image chunks already satisfied by local protocol image parts on a message. */
+  private readonly absorbedProviderImages = new Map<string, number>();
 
   /** How this session's edits are read; the workspace can arrive later. */
   private fileEditOptions: ReadAcpFileEditOptions;
@@ -385,12 +387,14 @@ export class AcpSessionReplayNormalizer {
       nextIndex: 0,
       attachmentNextIndex: 0,
     };
+    this.absorbedProviderImages.clear();
   }
 
   endProviderPromptReplay(completedAt: number | undefined): void {
     this.providerPromptReplay = undefined;
     this.pendingUserImageAlt = undefined;
     this.pendingSyntheticImageAnnotation = undefined;
+    this.absorbedProviderImages.clear();
     if (this.currentTurnId && completedAt !== undefined) {
       this.recordTurnFinished(this.currentTurnId, completedAt);
     }
@@ -833,6 +837,9 @@ export class AcpSessionReplayNormalizer {
     const imagePart = readAcpUserImagePart(update.update.content, this.pendingUserImageAlt);
     if (imagePart) {
       this.pendingUserImageAlt = undefined;
+      if (this.isActiveLocalPromptEcho()) {
+        return;
+      }
       this.attachReplayedUserImagePart(update, createdAt, imagePart);
       return;
     }
@@ -855,6 +862,14 @@ export class AcpSessionReplayNormalizer {
     this.appendUserMessageText(update, createdAt, memory.text);
   }
 
+  private isActiveLocalPromptEcho(): boolean {
+    return (
+      !this.providerPromptReplay
+      && Boolean(this.currentTurnId)
+      && this.messageIndexes.has(`user:${this.currentTurnId}`)
+    );
+  }
+
   private appendUserMessageText(update: AcpSessionUpdate, createdAt: number, text: string): void {
     if (!text) {
       return;
@@ -864,6 +879,9 @@ export class AcpSessionReplayNormalizer {
       // workspace dir, directory tree) as a user_message_chunk on session/load.
       // ACP agents can also replay synthetic <system-reminder> prompts. These
       // are setup/control text the agent saw, not user-authored turns.
+      return;
+    }
+    if (this.isActiveLocalPromptEcho()) {
       return;
     }
     const syntheticImageFileName = parseAcpSyntheticImageAnnotation(text);
@@ -879,11 +897,6 @@ export class AcpSessionReplayNormalizer {
       if (this.applyProviderPromptIdentity(update, createdAt, text)) return;
       this.knownToolCallIds.clear();
       if (this.currentTurnId) this.recordTurnFinished(this.currentTurnId, createdAt);
-    } else if (this.currentTurnId) {
-      const localPromptId = `user:${this.currentTurnId}`;
-      if (this.messageIndexes.has(localPromptId)) {
-        return;
-      }
     }
     const lastUserMessage = this.lastUserMessageIndex === undefined
       ? undefined : this.messages[this.lastUserMessageIndex];
@@ -893,7 +906,7 @@ export class AcpSessionReplayNormalizer {
     }
     const attachmentParts = syntheticImageFileName
       ? undefined
-      : this.consumeAttachmentReplayPartsForText(text);
+      : this.consumeUnnamedAttachmentReplayPartsForText(text);
     const id =
       readString(update.update, "messageId") ??
       readString(update.update, "id") ??
@@ -926,6 +939,13 @@ export class AcpSessionReplayNormalizer {
         (part) => part.type === "image" && (!part.alt || part.alt === fileName),
       );
       if (hasMatchingImage) {
+        this.pendingUserImageAlt = fileName;
+        this.pendingSyntheticImageAnnotation = undefined;
+        return true;
+      }
+      const matchedParts = this.consumeAttachmentReplayPartsForUserMessage(lastEntry.text, fileName);
+      if (matchedParts?.length) {
+        this.attachPartsToUserMessage(lastEntry.id, matchedParts);
         this.pendingUserImageAlt = fileName;
         this.pendingSyntheticImageAnnotation = undefined;
         return true;
@@ -989,6 +1009,15 @@ export class AcpSessionReplayNormalizer {
     }
     const lastEntry = this.entries[this.entries.length - 1];
     if (lastEntry?.type === "message" && lastEntry.role === "user") {
+      if (imagePart.url.startsWith("data:")) {
+        const localOverlay = this.consumeAttachmentReplayPartsForUserMessage(
+          lastEntry.text,
+          imagePart.alt,
+        );
+        if (localOverlay?.length) {
+          this.attachPartsToUserMessage(lastEntry.id, localOverlay);
+        }
+      }
       this.appendImagePartToUserMessage(lastEntry.id, imagePart);
       return;
     }
@@ -1005,6 +1034,25 @@ export class AcpSessionReplayNormalizer {
     });
   }
 
+  private attachPartsToUserMessage(
+    messageId: string,
+    attachmentParts: readonly AppServerThreadMessagePart[],
+  ): void {
+    const messageIndex = this.messageIndexes.get(messageId);
+    const entryIndex = this.typedEntryIndexes.get(`message:${messageId}`);
+    const existingMessage = messageIndex !== undefined ? this.messages[messageIndex] : undefined;
+    const existingEntry = entryIndex !== undefined ? this.entries[entryIndex] : undefined;
+    if (!existingMessage || existingEntry?.type !== "message") {
+      return;
+    }
+    const baseParts: AppServerThreadMessagePart[] = existingMessage.parts?.length
+      ? [...existingMessage.parts]
+      : (existingMessage.text ? [{ type: "text", text: existingMessage.text }] : []);
+    const nextParts = [...baseParts, ...attachmentParts];
+    existingMessage.parts = nextParts;
+    existingEntry.parts = nextParts;
+  }
+
   private appendImagePartToUserMessage(
     messageId: string,
     imagePart: AppServerThreadImagePart,
@@ -1019,12 +1067,26 @@ export class AcpSessionReplayNormalizer {
     const baseParts: AppServerThreadMessagePart[] = existingMessage.parts?.length
       ? [...existingMessage.parts]
       : (existingMessage.text ? [{ type: "text", text: existingMessage.text }] : []);
-    const duplicate = baseParts.some(
-      (part) =>
-        part.type === "image"
-        && (part.url === imagePart.url || (Boolean(imagePart.alt) && part.alt === imagePart.alt)),
-    );
-    if (duplicate) {
+    if (imagePart.url.startsWith("data:")) {
+      // Absorb an incoming provider base64 image block only when this message
+      // still has an unconsumed local/protocol image part for the same filename
+      // (or unnamed slot). Distinct provider `data:` images that share a
+      // filename are both preserved.
+      const localMatchingCount = baseParts.filter(
+        (part) =>
+          part.type === "image"
+          && !part.url.startsWith("data:")
+          && (!imagePart.alt || !part.alt || part.alt === imagePart.alt),
+      ).length;
+      if (localMatchingCount > 0) {
+        const key = `${messageId}\0${imagePart.alt ?? ""}`;
+        const absorbed = this.absorbedProviderImages.get(key) ?? 0;
+        if (absorbed < localMatchingCount) {
+          this.absorbedProviderImages.set(key, absorbed + 1);
+          return;
+        }
+      }
+    } else if (baseParts.some((part) => part.type === "image" && part.url === imagePart.url)) {
       return;
     }
     const nextParts = [...baseParts, imagePart];
@@ -1039,8 +1101,43 @@ export class AcpSessionReplayNormalizer {
     this.rebuildMessageIndexes();
   }
 
-  private consumeAttachmentReplayPartsForText(
+  /**
+   * Advances past matching text-only prompt identities on providers that record
+   * every prompt (such as Antigravity), and eagerly attaches only unnamed image
+   * attachments that emit no filename-annotation chunk on the wire. Named
+   * attachments wait for their matching filename-annotation or image chunk so
+   * an earlier text-only turn with the same text cannot steal a later turn's
+   * images.
+   */
+  private consumeUnnamedAttachmentReplayPartsForText(
     text: string,
+  ): AppServerThreadMessagePart[] | undefined {
+    const replay = this.providerPromptReplay;
+    if (!replay || replay.attachmentNextIndex >= replay.prompts.length) {
+      return undefined;
+    }
+    const textDigest = acpReplayPromptTextDigest(text);
+    const current = replay.prompts[replay.attachmentNextIndex]!;
+    if (current.textDigest !== textDigest) {
+      return undefined;
+    }
+    if (!current.attachmentParts?.length) {
+      replay.attachmentNextIndex += 1;
+      return undefined;
+    }
+    const hasUnnamedImage = current.attachmentParts.some(
+      (part) => part.type === "image" && !part.alt,
+    );
+    if (!hasUnnamedImage) {
+      return undefined;
+    }
+    replay.attachmentNextIndex += 1;
+    return current.attachmentParts;
+  }
+
+  private consumeAttachmentReplayPartsForUserMessage(
+    text: string,
+    fileName?: string,
   ): AppServerThreadMessagePart[] | undefined {
     const replay = this.providerPromptReplay;
     if (!replay) {
@@ -1049,11 +1146,18 @@ export class AcpSessionReplayNormalizer {
     const textDigest = acpReplayPromptTextDigest(text);
     for (let index = replay.attachmentNextIndex; index < replay.prompts.length; index += 1) {
       const prompt = replay.prompts[index]!;
-      if (!prompt.attachmentParts?.length) {
+      if (!prompt.attachmentParts?.length || prompt.textDigest !== textDigest) {
         continue;
       }
-      if (prompt.textDigest !== textDigest) {
-        continue;
+      if (fileName) {
+        const matchesFile = prompt.attachmentParts.some(
+          (part) =>
+            (part.type === "image" && (!part.alt || part.alt === fileName))
+            || (part.type === "file" && part.name === fileName),
+        );
+        if (!matchesFile) {
+          continue;
+        }
       }
       replay.attachmentNextIndex = index + 1;
       return prompt.attachmentParts;
@@ -2464,6 +2568,7 @@ function mergeActivityEntryDetails(
     const existingCommand = existingDetail.command;
     const incomingCommand = incomingDetail.command;
     const updatedScript = readUpdatedAcpScript(existingCommand, incomingCommand);
+    const expandedToolInvocation = readExpandedToolInvocation(existingCommand, incomingCommand);
     merged[existingIndex] = {
       ...existingDetail,
       ...incomingDetail,
@@ -2481,6 +2586,7 @@ function mergeActivityEntryDetails(
           ? {
               displayCommand:
                 updatedScript?.displayCommand
+                ?? expandedToolInvocation
                 ?? preferSpecificCommand(
                   existingCommand?.displayCommand,
                   incomingCommand?.displayCommand,
@@ -2527,9 +2633,9 @@ function preferSpecificLabel(
   if (!isWeakLabel(existing, isPlaceholderLabel) || !incoming) {
     return existing || incoming;
   }
-  // A placeholder gives way to a descriptive title, not to another
-  // placeholder or to a generic word such as "tool call update".
-  return isPlaceholderLabel(existing) && isWeakLabel(incoming, isPlaceholderLabel)
+  // A weak label gives way to a descriptive title, never to another
+  // placeholder or generic word such as "tool call update".
+  return isWeakLabel(incoming, isPlaceholderLabel)
     ? existing
     : incoming;
 }
@@ -2543,7 +2649,11 @@ function isWeakLabel(
 
 function isGenericActivityLabel(value: string): boolean {
   const lower = value.toLowerCase();
-  if (/^(?:run\s+)?mcp_[a-z0-9_-]+$/u.test(lower)) {
+  if (
+    /^run\s+mcp_[a-z0-9_-]+$/u.test(lower)
+    || lower === "mcp_pwragent_call_pwragent_tool"
+    || lower === "mcp_pwragent_call_mcp_tool"
+  ) {
     return true;
   }
   return new Set([
@@ -2567,6 +2677,22 @@ function isGenericActivityLabel(value: string): boolean {
     "tool_call_update",
     "searching web",
   ]).has(lower);
+}
+
+function readExpandedToolInvocation(
+  existing: AppServerThreadCommandDetail | undefined,
+  incoming: AppServerThreadCommandDetail | undefined,
+): string | undefined {
+  if (
+    existing?.source === "tool"
+    && incoming?.source === "tool"
+    && existing.rawCommand
+    && existing.displayCommand === existing.rawCommand
+    && incoming.displayCommand.startsWith(`${existing.rawCommand}\n`)
+  ) {
+    return incoming.displayCommand;
+  }
+  return undefined;
 }
 
 function isTitleOnlyAcpScript(command: AppServerThreadCommandDetail | undefined): boolean {
