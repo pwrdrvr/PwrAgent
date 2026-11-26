@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
@@ -61,39 +61,49 @@ type PublishFixture = {
   nextTop: string;
 };
 
-async function withPublishRepos(testPublish: (fixture: PublishFixture) => Promise<void>) {
+async function withPublishRepos(
+  remoteTop: "nextBottom" | "racedTop" | "nextTop",
+  testPublish: (fixture: PublishFixture) => Promise<void>,
+) {
   const dir = await mkdtemp(join(tmpdir(), "pwragent-stack-publish-"));
   try {
     const cwd = join(dir, "local.git");
     const remote = join(dir, "remote.git");
     await git(dir, "init", "-q", "--bare", "-b", "bottom", cwd);
     const local = new StackGit(runner, cwd);
-    const tree = (await local.output(["mktree"], "")).trim();
-    const addCommit = async (message: string, ...parents: string[]) =>
-      (await local.output(["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
-        "commit-tree", tree, "-m", message, ...parents.flatMap(parent => ["-p", parent]),
-      ])).trim();
-    const bottom = await addCommit("bottom");
-    const top = await addCommit("top", bottom);
-    const nextBottom = await addCommit("next bottom", bottom);
-    const racedTop = await addCommit("collaborator", top);
-    const nextTop = await addCommit("next top", racedTop);
+    // Import the real commit graph and local branch tips in one Git process.
+    const commits = [
+      { branch: "bottom", message: "bottom" },
+      { branch: "top", message: "top", parent: 1 },
+      { branch: "bottom", message: "next bottom", parent: 1 },
+      { branch: "top", message: "collaborator", parent: 2 },
+      { branch: "top", message: "next top", parent: 4 },
+    ];
+    const commands = commits.flatMap(({ branch, message, parent }, index) => [
+      `commit refs/heads/${branch}`, `mark :${index + 1}`,
+      "committer Fixture <fixture@example.invalid> 1 +0000",
+      "data <<END", message, "END",
+      ...(parent === undefined ? [] : [`from :${parent}`]),
+      "",
+    ]);
+    commands.push(...commits.map((_, index) => `get-mark :${index + 1}`), "done", "");
+    const [bottom, top, nextBottom, racedTop, nextTop] =
+      (await local.output(["fast-import", "--quiet", "--done"], commands.join("\n"))).trim().split(/\r?\n/);
+    const tips = { bottom, top, nextBottom, racedTop, nextTop };
 
-    // Seed the Git objects once. Only publication under test uses the push transport.
-    await local.output(["update-ref", "--stdin"],
-      `create refs/heads/bottom ${nextBottom}\ncreate refs/heads/top ${nextTop}\n`);
-    await git(dir, "clone", "-q", "--bare", "--shared", cwd, remote);
+    // Give the remote independent refs and access to the fixture's objects.
+    await git(dir, "init", "-q", "--bare", "-b", "bottom", remote);
+    await writeFile(join(remote, "objects", "info", "alternates"), "../../local.git/objects\n");
     await new StackGit(runner, remote).output(["update-ref", "--stdin"],
-      `update refs/heads/bottom ${bottom}\nupdate refs/heads/top ${top}\n`);
-    await testPublish({ local, remote, bottom, nextBottom, top, racedTop, nextTop });
+      `create refs/heads/bottom ${bottom}\ncreate refs/heads/top ${tips[remoteTop]}\n`);
+    await testPublish({ local, remote, ...tips });
   } finally {
     await rm(dir, { force: true, recursive: true, maxRetries: 5 });
   }
 }
 
 test("publishes when the second ref is already at its intended tip", async () =>
-  withPublishRepos(async ({ local, remote, bottom, nextBottom, top, nextTop }) => {
-    await git(remote, "update-ref", "refs/heads/top", nextTop, top);
+  withPublishRepos("nextTop", async ({ local, remote, bottom, nextBottom, top, nextTop }) => {
     await pushStackLayers(local, remote, [
       { branch: "bottom", previous: bottom, expected: bottom, next: nextBottom },
       { branch: "top", previous: top, expected: top, next: nextTop },
@@ -103,8 +113,7 @@ test("publishes when the second ref is already at its intended tip", async () =>
   }));
 
 test("publishes an ahead layer and preserves a collaborator's divergent tip", async () =>
-  withPublishRepos(async ({ local, remote, bottom, nextBottom, top, nextTop }) => {
-    await git(remote, "update-ref", "refs/heads/top", nextBottom, top);
+  withPublishRepos("nextBottom", async ({ local, remote, bottom, nextBottom, nextTop }) => {
     await pushStackLayers(local, remote, [
       { branch: "bottom", previous: nextBottom, expected: bottom, next: nextBottom },
       { branch: "top", previous: nextTop, expected: nextTop, next: nextTop },
@@ -114,10 +123,9 @@ test("publishes an ahead layer and preserves a collaborator's divergent tip", as
   }));
 
 test("an exact lease makes a raced multi-ref push all-or-nothing", async () =>
-  withPublishRepos(async ({ local, remote, bottom, nextBottom, top, racedTop, nextTop }) => {
-    // The remote advances after the expected tip was recorded. An unleased
-    // push could fast-forward it again, so Git's fast-forward check alone passes.
-    await git(remote, "update-ref", "refs/heads/top", racedTop, top);
+  withPublishRepos("racedTop", async ({ local, remote, bottom, nextBottom, top, racedTop, nextTop }) => {
+    // The remote is at racedTop but the caller observed top. An unleased push
+    // could fast-forward it, so Git's fast-forward check alone passes.
     await expect(pushStackLayers(local, remote, [
       { branch: "bottom", previous: bottom, expected: bottom, next: nextBottom },
       { branch: "top", previous: top, expected: top, next: nextTop },
@@ -127,8 +135,7 @@ test("an exact lease makes a raced multi-ref push all-or-nothing", async () =>
   }));
 
 test("rejects rewriting a remote tip missing from the local input", async () =>
-  withPublishRepos(async ({ local, remote, top, nextBottom, nextTop }) => {
-    await git(remote, "update-ref", "refs/heads/top", nextBottom, top);
+  withPublishRepos("nextBottom", async ({ local, remote, top, nextBottom, nextTop }) => {
     await expect(pushStackLayers(local, remote, [
       { branch: "top", previous: top, expected: nextBottom, next: nextTop },
     ])).rejects.toThrow("history changed");
