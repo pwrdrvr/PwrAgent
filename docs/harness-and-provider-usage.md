@@ -20,7 +20,7 @@ When the vendor's binary makes the request, the vendor sees its own client, its 
 
 ## The Antigravity incident
 
-In November 2026 Google asked t3code to remove its Antigravity usage-limit reporting. t3code read the Antigravity CLI's OAuth token from the OS keyring or an `antigravity-oauth-token` file. It then called `v1internal:retrieveUserQuotaSummary` and `v1internal:fetchAvailableModels` on `https://cloudcode-pa.googleapis.com` and `https://daily-cloudcode-pa.googleapis.com`, sending a forged `antigravity/hub/...` User-Agent. t3code removed that code in [pingdotgg/t3code#43026](https://github.com/pingdotgg/t3code/pull/43026). Julius Marminge confirmed that the violation was calling the internal API instead of using ACP.
+t3code was asked to remove its Antigravity usage-limit reporting. t3code read the Antigravity CLI's OAuth token from the OS keyring or an `antigravity-oauth-token` file. It then called `v1internal:retrieveUserQuotaSummary` and `v1internal:fetchAvailableModels` on `https://cloudcode-pa.googleapis.com` and `https://daily-cloudcode-pa.googleapis.com`, sending a forged `antigravity/hub/...` User-Agent. t3code removed that code on 2026-11-25 in [pingdotgg/t3code#43026](https://github.com/pingdotgg/t3code/pull/43026). Julius Marminge confirmed that the violation was calling the internal API instead of using ACP.
 
 Two paths remain allowed:
 
