@@ -221,6 +221,7 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   recentlyCompletedTurnUsage?: RecentlyCompletedTurnUsage;
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  pendingReviewSubmissions?: ReadonlySet<symbol>;
   // A review may take focus before the parent turn's terminal event arrives.
   pendingUsageByTurn?: ReadonlyMap<string, PendingTurnUsage>;
   settledTransientMessages: AppServerTransientThreadMessageEntry[];
@@ -2934,9 +2935,12 @@ function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason
   }
 
   if (session.expectOwnUpdate) {
+    // A review card can survive its turn while replay catches up, and a
+    // local header may never match the owner's label. The review submission
+    // and the active turn own the busy state.
     reasons.push(
       ...session.optimisticEntries
-        .filter(isLiveOptimisticEntry)
+        .filter((entry) => entry.type !== "review" && isLiveOptimisticEntry(entry))
         .map(summarizeOptimisticEntryReason)
     );
   }
@@ -2945,7 +2949,7 @@ function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason
 }
 
 function hasThinkingState(session: ThreadSessionEntry): boolean {
-  return describeThinkingState(session).length > 0;
+  return Boolean(session.pendingReviewSubmissions) || describeThinkingState(session).length > 0;
 }
 
 function hasPendingApprovalRequest(session: ThreadSessionEntry): boolean {
@@ -5590,6 +5594,7 @@ export function useThreadSessionState(params: {
     turnId?: string,
   ) => string;
   addOptimisticReviewEntry: (displayText: string) => string;
+  beginReviewSubmission: () => (() => void) | undefined;
   /**
    * Names the turn a pending user message started, from the owner's
    * `startTurn` response. Call it only for a send that opened that turn.
@@ -6151,6 +6156,7 @@ export function useThreadSessionState(params: {
           const shouldClearStaleThinking =
             responseThreadInactive
             && thinkingReasons.length > 0
+            && !current.pendingReviewSubmissions
             && !hydratedPendingInteraction
             && !ownUpdateStillSettling
             && !reviewUpdateStillSettling
@@ -6407,7 +6413,9 @@ export function useThreadSessionState(params: {
             return current;
           }
           const shouldRecheckStaleThinking =
-            !backendReportedActive && hasThinkingState(current);
+            !backendReportedActive
+            && !current.pendingReviewSubmissions
+            && hasThinkingState(current);
           if (
             current.backendReportedActive === backendReportedActive
             && !shouldRecheckStaleThinking
@@ -8074,6 +8082,13 @@ export function useThreadSessionState(params: {
           }
 
           if (isInactiveThreadStatus(statusType)) {
+            if (current.pendingReviewSubmissions) {
+              return {
+                ...current,
+                backendReportedActive: false,
+                staleThinkingRecheckAt: undefined,
+              };
+            }
             const shouldRecheckStaleThinking =
               hasThinkingState(current) && !hasPendingInteraction(current);
             if (shouldRecheckStaleThinking) {
@@ -8648,6 +8663,31 @@ export function useThreadSessionState(params: {
     [thread, threadKey, updateSession]
   );
 
+  const beginReviewSubmission = useCallback(() => {
+    if (!threadKey) return undefined;
+    const submission = Symbol();
+    updateSession(threadKey, (current) => ({
+      ...current,
+      lastTouchedAt: Date.now(),
+      pendingReviewSubmissions: new Set(current.pendingReviewSubmissions).add(submission),
+      staleThinkingRecheckAt: undefined,
+    }));
+    // The promise can settle after selection changes. Release the original
+    // thread's reservation and keep any other pending submission busy.
+    return () => {
+      updateSession(threadKey, (current) => {
+        if (!current.pendingReviewSubmissions?.has(submission)) return current;
+        const remaining = new Set(current.pendingReviewSubmissions);
+        remaining.delete(submission);
+        return {
+          ...current,
+          lastTouchedAt: Date.now(),
+          pendingReviewSubmissions: remaining.size > 0 ? remaining : undefined,
+        };
+      });
+    };
+  }, [threadKey, updateSession]);
+
   const addOptimisticReviewEntry = useCallback(
     (displayText: string): string => {
       if (!thread || !threadKey) {
@@ -9215,9 +9255,11 @@ export function useThreadSessionState(params: {
       : selectedSession?.transientMessage
         ? undefined
         : selectedSession?.pendingStatusText ??
-          (selectedSession?.activeTurnId || selectedSession?.backendReportedActive
-            ? "Thinking"
-            : undefined);
+          (selectedSession?.pendingReviewSubmissions
+            ? "Reviewing"
+            : selectedSession?.activeTurnId || selectedSession?.backendReportedActive
+              ? "Thinking"
+              : undefined);
   const selectedThreadThinking = Boolean(
     selectedSession && hasThinkingState(selectedSession),
   );
@@ -9264,6 +9306,7 @@ export function useThreadSessionState(params: {
     activeTurnStartedAt: selectedSession?.activeTurnStartedAt,
     addOptimisticUserMessage,
     addOptimisticReviewEntry,
+    beginReviewSubmission,
     bindOptimisticUserMessageToTurn,
     clearPendingRequest,
     entries,

@@ -82,6 +82,7 @@ import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
 import { useComposerDraftStore } from "../useComposerDraftStore";
 import { useNavigationLaunchpadConfiguration } from "../../../lib/useNavigationLaunchpadConfiguration";
 import { useThreadSkills } from "../../../lib/useThreadSkills";
+import { useThreadSessionState } from "../../../lib/useThreadSessionState";
 import { ContextMoonPreferencesProvider } from "../../../lib/context-moon-preferences";
 import type { DictationEvent } from "../../../../../shared/audio-transcription";
 import { startDictationCapture } from "../dictation-capture";
@@ -17020,6 +17021,88 @@ describe("Composer", () => {
       });
     });
   });
+
+  it.each(["accepted", "rejected"] as const)(
+    "keeps a review reservation busy through idle until its start is %s",
+    async (outcome) => {
+      const listeners = new Set<Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]>();
+      const review = Promise.withResolvers<{
+        backend: "codex"; threadId: string; reviewThreadId: string; turnId: string;
+      }>();
+      const thread = {
+        id: "thread-1", title: "Review thread", titleSource: "explicit", source: "codex",
+        linkedDirectories: [], inbox: { inInbox: false },
+      } satisfies NavigationThreadSummary;
+      const startReview = vi.fn(() => review.promise);
+      const startTurn = vi.fn();
+      const desktopApi: DesktopApi = {
+        onAgentEvent: (listener) => {
+          listeners.add(listener);
+          return () => { listeners.delete(listener); };
+        },
+        readThread: async () => ({
+          backend: "codex", threadId: thread.id, threadStatus: "idle", fetchedAt: Date.now(),
+          replay: {
+            entries: [], messages: [],
+            pagination: { supportsPagination: false, hasPreviousPage: false },
+          },
+        }),
+        startReview,
+        startTurn,
+      };
+      let session!: ReturnType<typeof useThreadSessionState>;
+      function Harness() {
+        session = useThreadSessionState({ desktopApi, thread });
+        return <Composer
+          desktopApi={desktopApi}
+          thread={thread}
+          disabled={false}
+          skills={[]}
+          threadBusy={session.threadBusy}
+          activeTurnId={session.activeTurnId}
+          onActiveTurnIdChange={session.setActiveTurnId}
+          onPendingStatusChange={session.setPendingStatusText}
+          addOptimisticReviewEntry={session.addOptimisticReviewEntry}
+          beginReviewSubmission={session.beginReviewSubmission}
+          removeOptimisticMessage={session.removeOptimisticMessage}
+        />;
+      }
+      const emit = (notification: AgentEvent["notification"]) => {
+        for (const listener of listeners) listener({ backend: "codex", notification });
+      };
+      render(<Harness />);
+      await waitFor(() => expect(session.response?.threadStatus).toBe("idle"));
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "/review main" } });
+      await clickButton("Send");
+      expect(startReview).toHaveBeenCalledTimes(1);
+
+      // The owner still holds its start reservation over both idle signals.
+      // Only the start result can transfer that ownership to a turn or release it.
+      await act(async () => emit({ method: "thread/status/changed", params: {
+        threadId: thread.id, status: { type: "idle" },
+      } }));
+      await act(async () => { await session.reload(); });
+      expect(session.thinkingThreadKeys[`codex:${thread.id}`]).toBe(true);
+      fireEvent.change(screen.getByLabelText("Reply"), { target: { value: "Check the tests too" } });
+      expect(screen.getByRole("button", { name: "Queue" })).toBeInTheDocument();
+      expect(startTurn).not.toHaveBeenCalled();
+
+      if (outcome === "accepted") {
+        await act(async () => review.resolve({
+          backend: "codex", threadId: thread.id, reviewThreadId: thread.id, turnId: "review-turn",
+        }));
+        expect(session.activeTurnId).toBe("review-turn");
+        expect(session.threadBusy).toBe(true);
+        await act(async () => emit({ method: "turn/completed", params: {
+          threadId: thread.id, turnId: "review-turn", turn: { id: "review-turn", status: "completed", output: [] },
+        } }));
+      } else {
+        await act(async () => review.reject(new Error("Review start rejected")));
+      }
+      expect(session.threadBusy).toBe(false);
+      expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    },
+  );
 
   it("preserves newer reply edits when starting a review fails after clearing", async () => {
     const startReviewDeferred = createDeferred<{
