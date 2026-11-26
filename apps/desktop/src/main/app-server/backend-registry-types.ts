@@ -1,6 +1,7 @@
 import type { OwnerThreadRegistry } from "@pwragent/owner-core/thread-storage";
 import { delegatedTurnAttribution } from "./delegated-turn-attribution";
 import type { TurnInputSource } from "@pwragent/owner-core/turn-input-source";
+import type { ManagedReviewCandidateListResult } from "./managed-review-candidate-ledger";
 import type { MaintenanceDiscoveryProgress } from "./unreferenced-worktrees";
 import { ArchiveWorkspaceAdmission } from "./archive-cleanup-workspace-scope";
 import {
@@ -52,6 +53,7 @@ import {
   type AppServerThreadActivityEntry,
   type AppServerThreadActivityDetail,
   type AppServerReviewContext,
+  type AppServerReviewOutput,
   type AppServerThreadImagePart,
   type AppServerThreadMessageOrigin,
   type AppServerThreadReplay,
@@ -860,9 +862,12 @@ export type ReviewSubAgentRecord = {
 
 export type ReviewTerminal = {
   backend: AppServerBackendKind;
+  candidateLedgerSnapshot?: ManagedReviewCandidateListResult;
   completedAt?: number;
   errorMessage?: string;
   method: "turn/completed" | "turn/failed" | "turn/cancelled";
+  output?: Extract<AppServerNotification, { method: "turn/completed" }>["params"]["turn"]["output"];
+  submittedOutput?: AppServerReviewOutput;
   threadId: string;
   turnId: string;
 };

@@ -178,7 +178,7 @@ export type OpenPrOffer = {
   headSha?: string;
 };
 
-export type PrOfferRetireReason = "superseded" | "reviewed" | "stale" | "closed" | "never_merge" | "not_offered";
+export type PrOfferRetireReason = "superseded" | "reviewed" | "review_running" | "stale" | "closed" | "never_merge" | "not_offered";
 
 export type PrOfferPlan = {
   retire?: { cardId: string; reason: PrOfferRetireReason };
@@ -201,6 +201,7 @@ export function planPrOffer(params: {
    * open, so a review started some other way withdraws the offer at once.
    */
   headCovered?: boolean;
+  reviewInProgress?: boolean;
   /**
    * Where the reviews leave the head, when they were read while CI was not
    * green. A merge offer is withdrawn once it is anything but ready.
@@ -218,9 +219,11 @@ export function planPrOffer(params: {
   if (!open) return {};
   if (readiness === "closed") return { retire: { cardId: open.cardId, reason: "closed" } };
   if (open.kind === "review") {
-    return readiness === "findings_open" || params.headCovered
-      ? { retire: { cardId: open.cardId, reason: "reviewed" } }
-      : {};
+    if (readiness === "findings_open" || params.headCovered) {
+      return { retire: { cardId: open.cardId, reason: "reviewed" } };
+    }
+    if (params.reviewInProgress) return { retire: { cardId: open.cardId, reason: "review_running" } };
+    return {};
   }
   if (
     readiness === "needs_review"
@@ -261,6 +264,7 @@ export function parsePrOfferId(
 export const PR_OFFER_RETIRE_RESULTS: Record<PrOfferRetireReason, string> = {
   superseded: "Replaced by a newer offer",
   reviewed: "Reviewed",
+  review_running: "Withdrawn: a review is already running for this head",
   stale: "Withdrawn: the head changed since this was offered",
   closed: "The pull request closed",
   never_merge: "Withdrawn: this project never merges its pull requests",

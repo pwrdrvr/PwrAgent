@@ -8,6 +8,9 @@ import {
   normalizePrSummary,
   mergeLinkedDirectoryPaths,
   stripPrLinkedDirectoryPaths,
+  confirmedGithubPrMergeState,
+  stabilizeGithubPrMergeState,
+  type PrStatusObservations,
   dedupePrsByStatusKey,
   getPrStatusKey,
   prSummariesEqual,
@@ -5598,7 +5601,7 @@ class DesktopAppServerService {
     if (current?.lifecycleState === "merged") return;
     if (!current) this.rememberPrStatuses([{ ...previous, ...identity }], 0, "merge-card-attachment");
     const observedAt = this.nextPrObservationTimestamp();
-    const changed = this.rememberPrStatuses([{
+    const { changed } = this.rememberPrStatuses([{
       ...previous, ...identity, lifecycleState: "merged", mergeQueue: undefined,
       ...(!merge.alreadyMerged ? { mergedAt: Date.now() } : {}),
     }], observedAt, "in-app-merge", { skipMergeBuildWatch: merge.alreadyMerged });
@@ -5620,26 +5623,35 @@ class DesktopAppServerService {
     prs: PrSummary[],
     fetchedAt: number,
     source: string,
-    options: { skipMergeBuildWatch?: boolean; fetchedAtByKey?: ReadonlyMap<string, number> } = {},
-  ): PrSummary[] {
-    const changedPrs: PrSummary[] = [];
+    options: {
+      skipMergeBuildWatch?: boolean;
+      fetchedAtByKey?: ReadonlyMap<string, number>;
+      transcriptOnlyPrs?: PrSummary[];
+    } = {},
+  ): PrStatusObservations {
+    const accepted: PrSummary[] = [];
+    const changed: PrSummary[] = [];
+    const cacheChanged: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
     const staleKeys: string[] = [];
     const labelChangedKeys: string[] = [];
     const endedChanged = new Set<string>();
-    for (const pr of prs.map(stripPrLinkedDirectoryPaths)) {
-      const key = getPrStatusKey(pr);
+    for (const observed of prs) {
+      const normalized = stripPrLinkedDirectoryPaths(observed);
+      const key = getPrStatusKey(normalized);
       const prFetchedAt = options.fetchedAtByKey?.get(key) ?? fetchedAt;
       const current = this.prStatusRegistry.get(key);
       // A merge is irreversible. Reads started either side of the write can
       // briefly report the pre-merge state.
       if (current && (current.fetchedAt > prFetchedAt
-        || (current.pr.lifecycleState === "merged" && pr.lifecycleState !== "merged"))) {
+        || (current.pr.lifecycleState === "merged" && normalized.lifecycleState !== "merged"))) {
         staleKeys.push(key);
         continue;
       }
+      const pr = stabilizeGithubPrMergeState(current?.pr, normalized);
       if (!current || !prSummariesEqual([current.pr], [pr])) {
-        changedPrs.push(pr);
+        changed.push(pr);
+        cacheChanged.push(pr);
         // A meaningful field flip (CI, merge, conflict, draft, title) becomes a
         // typed transition. `current?.pr` undefined (first sight / cache load)
         // yields no transition, so boot does not emit a flood.
@@ -5656,6 +5668,10 @@ class DesktopAppServerService {
         if (current && isTerminalPullRequest(current.pr) !== isTerminalPullRequest(pr)) {
           endedChanged.add(key);
         }
+      } else if (pr.baseSha !== current.pr.baseSha && confirmedGithubPrMergeState(pr)) {
+        // A confirmed result applies to this base tip after a restart too.
+        // Advancing the baseline alone doesn't change the published status.
+        cacheChanged.push(pr);
       }
       this.prStatusRegistry.set(key, {
         ...current,
@@ -5663,8 +5679,10 @@ class DesktopAppServerService {
         fetchedAt: prFetchedAt,
       });
       this.applyPrStatusToAttachments(pr);
-      this.transcriptPrSubscriptions.observe([pr], prFetchedAt);
+      accepted.push(pr);
     }
+    const transcriptPrs = options.transcriptOnlyPrs ? [...accepted, ...options.transcriptOnlyPrs] : accepted;
+    this.transcriptPrSubscriptions.observe(transcriptPrs, fetchedAt, options.fetchedAtByKey);
     this.githubForgeStackDiscovery.observe(prs);
     if (staleKeys.length > 0) {
       // Losing to a newer registry entry is ordinary bookkeeping: cache loads
@@ -5684,7 +5702,7 @@ class DesktopAppServerService {
     }
     if (labelChangedKeys.length > 0) this.prReviewOfferCoordinator?.reevaluate(labelChangedKeys);
     this.publishPrAutoFixPrEndedChanges(endedChanged);
-    return changedPrs;
+    return { accepted, changed, cacheChanged };
   }
 
   /**
@@ -6659,12 +6677,17 @@ class DesktopAppServerService {
       onTargetsHandled: (keys) => this.transcriptPrSubscriptions.markHandled(keys),
       applyResults: async (prs, fetchedAt, fetchedAtByKey) => {
         // Mention-only results must never enter persistence, transitions, or
-        // automatic repair. Attached PRs keep their existing result path.
-        this.transcriptPrSubscriptions.observe(prs, fetchedAt, fetchedAtByKey);
-        const attached = prs.filter((pr) =>
-          this.primaryPrThreadsByKey.has(getPrStatusKey(pr))
-        );
-        return attached.length ? await this.applyPolledPrStatuses(attached, fetchedAt, fetchedAtByKey) : [];
+        // automatic repair. The registry supplies the status for attached PRs.
+        const attached: PrSummary[] = [];
+        const mentions: PrSummary[] = [];
+        for (const pr of prs) {
+          (this.primaryPrThreadsByKey.has(getPrStatusKey(pr)) ? attached : mentions).push(pr);
+        }
+        if (!attached.length) {
+          this.transcriptPrSubscriptions.observe(mentions, fetchedAt, fetchedAtByKey);
+          return [];
+        }
+        return await this.applyPolledPrStatuses(attached, fetchedAt, fetchedAtByKey, mentions);
       },
     });
     this.prPollingScheduler = scheduler;
@@ -7443,18 +7466,18 @@ class DesktopAppServerService {
       return;
     }
     const fetchedAt = this.nextPrObservationTimestamp();
-    const changed = this.rememberPrStatuses(
+    const { accepted, changed } = this.rememberPrStatuses(
       refreshed,
       fetchedAt,
       "auto-fix-enable",
     );
-    await this.writePrStatusesToCache(refreshed, fetchedAt);
+    await this.writePrStatusesToCache(accepted, fetchedAt);
     await this.publishPullRequestStatusUpdates({
       backend: enabledRequests[0]!.backend,
       prs: changed,
     });
     await this.handlePrAutoDispatchSnapshots(
-      refreshed,
+      accepted,
       fetchedAt,
       operatorInitiated,
     );
@@ -7535,6 +7558,7 @@ class DesktopAppServerService {
     prs: PrSummary[],
     fetchedAt: number,
     fetchedAtByKey?: ReadonlyMap<string, number>,
+    transcriptOnlyPrs?: PrSummary[],
   ): Promise<string[]> {
     // The GraphQL client fetches only the PR's head commit (see the cost note
     // in github-graphql-client). Union forward so a status poll does not
@@ -7545,7 +7569,7 @@ class DesktopAppServerService {
       return commitShas.length > 0 ? { ...pr, commitShas } : pr;
     });
 
-    const changed = this.rememberPrStatuses(merged, fetchedAt, "background-poll", { fetchedAtByKey });
+    const { changed, cacheChanged } = this.rememberPrStatuses(merged, fetchedAt, "background-poll", { fetchedAtByKey, transcriptOnlyPrs });
     const canonical = this.canonicalizePrs(merged);
     const changedKeys = new Set(changed.map(getPrStatusKey));
     const hasCurrentObservation = (pr: PrSummary) => {
@@ -7568,11 +7592,10 @@ class DesktopAppServerService {
       void this.threadDependencyCoordinator?.handlePrEvent(freshPrUrls)
         .catch((error) => appServerLog.warn("thread dependency evaluation failed", { error: String(error) }));
     }
+    if (cacheChanged.length > 0) await this.writePrStatusesToCache(cacheChanged, fetchedAt, fetchedAtByKey);
     if (changed.length === 0) {
       return [];
     }
-
-    await this.writePrStatusesToCache(changed, fetchedAt, fetchedAtByKey);
 
     // Publish on the backend that owns each PR's thread. Group so we emit one
     // batch per backend rather than one call per PR.
@@ -9411,7 +9434,9 @@ class DesktopAppServerService {
       });
       return;
     }
+    const registry = getDesktopBackendRegistry();
     const coordinator = new PrReviewOfferCoordinator({
+      liveReviews: () => registry.reviewsInProgress(),
       ownerThread: async (prKey) => await this.prReviewOfferOwner(prKey),
       ineligibleThreads: async (prKey) => ineligiblePrReviewOfferThreads(this.prReviewOfferCandidates(prKey)),
       threadPrKeys: (thread) => {
@@ -9450,11 +9475,13 @@ class DesktopAppServerService {
     const unsubscribeReviews = reviews.addChangeListener((review) => {
       coordinator.handleReviewChanged(review);
     });
+    const unsubscribeLiveReviews = registry.onLiveReviewChanged((context) => coordinator.handleLiveReviewChanged(context));
     setThreadTodoMergeOfferGate(async (thread, pullRequest) =>
       await this.prMergeOfferRefusal(thread, pullRequest)
     );
     this.prReviewOfferUnsubscribe = () => {
       unsubscribeReviews();
+      unsubscribeLiveReviews();
       setThreadTodoMergeOfferGate(undefined);
     };
     this.prReviewOfferCoordinator = coordinator;

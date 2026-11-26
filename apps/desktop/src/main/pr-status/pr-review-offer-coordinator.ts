@@ -1,7 +1,8 @@
 import { buildPullRequestStatusKey, type PrSummary } from "@pwragent/shared/contracts/navigation";
-import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
+import type { AppServerBackendKind, AppServerReviewContext } from "@pwragent/shared/contracts/normalized-app-server";
 import type { ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadTodo, ThreadTodoAction } from "@pwragent/shared/contracts/thread-todos";
+import { hasActivePrReview, reviewPullRequestSnapshots } from "./active-pr-review";
 import type { PrChangeIdentitySource } from "./pr-change-identity";
 import {
   deriveReviewStanding,
@@ -25,6 +26,7 @@ export type PrReviewOfferThread = { backend: AppServerBackendKind; threadId: str
 
 /** The to-do service surface the coordinator writes through. */
 export type PrOfferCardPort = {
+  findByDependency(dependencyId: string): ThreadTodo | undefined;
   findOpenByKey(params: PrReviewOfferThread & { key: string }): ThreadTodo | undefined;
   reconcileOffer(params: PrReviewOfferThread & {
     retire?: { id: string; result: string };
@@ -80,6 +82,7 @@ export type PrReviewOfferPorts = {
    * wherever it ran.
    */
   listReviews(thread: PrReviewOfferThread, pr: PrSummary): ThreadReview[];
+  liveReviews?(): Iterable<{ context?: AppServerReviewContext }>;
   recordFixedThrough(reviewId: string, commit: string, settledAt: number): void;
   cards: PrOfferCardPort;
   identity: PrChangeIdentitySource;
@@ -139,6 +142,7 @@ export type PrReviewOfferEvaluation = {
 export class PrReviewOfferCoordinator {
   private readonly inFlight = new Map<string, { again: boolean; recoveryOnly: boolean; done: Promise<void> }>();
   private readonly pending = new Set<Promise<void>>();
+  private readonly reviewReads = new Map<string, Set<{ changed: boolean }>>();
   private readonly lowerKeysByChild = new Map<string, string[]>();
   private readonly childKeysByLower = new Map<string, Set<string>>();
   private readonly lowerChanges = new Map<string, number>();
@@ -250,6 +254,19 @@ export class PrReviewOfferCoordinator {
     this.track(this.reconcile(new Set(prKeys)));
   }
 
+  /** Acceptance and terminal are wakeups. The evaluation reads the current owner state. */
+  handleLiveReviewChanged(context: AppServerReviewContext | undefined): void {
+    const keys = reviewPullRequestSnapshots(context).map(({ pullRequest }) => buildPullRequestStatusKey(pullRequest));
+    this.invalidateReviewReads(keys);
+    this.reevaluate(keys);
+  }
+
+  private invalidateReviewReads(keys: readonly string[]): void {
+    for (const key of keys) {
+      for (const read of this.reviewReads.get(key) ?? []) read.changed = true;
+    }
+  }
+
   /** A review on a thread was recorded, settled, or reopened. */
   handleReviewChanged(review: ThreadReview): void {
     if (this.closed) return;
@@ -259,6 +276,7 @@ export class PrReviewOfferCoordinator {
       return pr !== undefined && reviewMatchesPr(review, pr);
     });
     if (prKeys.length === 0) return;
+    this.invalidateReviewReads(prKeys);
     this.track((async () => {
       // The PR's owner may be another thread on the same PR, such as the
       // parent of the sub-thread the review ran in.
@@ -363,7 +381,21 @@ export class PrReviewOfferCoordinator {
     const withdrawable = open?.kind === "review"
       || (open?.kind === "merge" && open.headSha === pr.headSha);
     const lowerSequence = this.lowerChangeSequence;
-    const assessment = await this.assessPr(thread, pr, withdrawable, !recoveryOnly);
+    const read = { changed: false };
+    const reads = this.reviewReads.get(prKey) ?? new Set();
+    reads.add(read);
+    this.reviewReads.set(prKey, reads);
+    let assessment;
+    try {
+      do {
+        read.changed = false;
+        // Restart recovery also needs the change ID when the offer is closed.
+        assessment = await this.assessPr(thread, pr, withdrawable, !recoveryOnly || !open);
+      } while (read.changed && !this.closed);
+    } finally {
+      reads.delete(read);
+      if (!reads.size) this.reviewReads.delete(prKey);
+    }
     const latest = this.ports.getPr(prKey);
     if (this.closed || !latest || latest.headSha !== pr.headSha || latest.baseRefName !== pr.baseRefName
       || prGateReadiness(latest) !== prGateReadiness(pr)) return undefined;
@@ -386,7 +418,9 @@ export class PrReviewOfferCoordinator {
     } else if (assessment.readiness === "closed") {
       this.trackLowers(prKey, []);
     }
-    if (recoveryOnly && assessment.standing !== "ready_to_merge" && !withdrawMerge) return undefined;
+    // Read after the asynchronous coverage and stack checks so a review
+    // accepted during those checks cannot race a card write.
+    const reviewInProgress = hasActivePrReview(this.ports.liveReviews?.() ?? [], prKey, pr.headSha);
     // A transient transport failure defers a new offer. A previously
     // verified card stays put; executing it always rechecks live evidence.
     if (assessment.retryOnObservation && !assessment.stackHold && open?.kind === "merge" && open.headSha === pr.headSha
@@ -398,7 +432,16 @@ export class PrReviewOfferCoordinator {
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
       ...(headContentId ? { headContentId } : {}),
     });
-    const desired = neverMerge && offer?.kind === "merge" ? undefined : offer;
+    const desired = ((neverMerge && offer?.kind === "merge") || (reviewInProgress && offer?.kind === "review"))
+      ? undefined : offer;
+    if (recoveryOnly && standing !== "ready_to_merge" && !withdrawMerge
+      && !(reviewInProgress && open?.kind === "review")) {
+      // Recovery can reopen the exact suppressed card, but may not create a
+      // first review offer or recover one withdrawn for a different reason.
+      const earlier = desired?.kind === "review" ? this.ports.cards.findByDependency(desired.offerId) : undefined;
+      if (earlier?.status !== "dismissed" || earlier.result !== PR_OFFER_RETIRE_RESULTS.review_running
+        || earlier.backend !== thread.backend || earlier.threadId !== thread.threadId) return undefined;
+    }
     const plan = withdrawMerge && open
       ? { retire: { cardId: open.cardId, reason: "never_merge" as const }, raise: desired }
       : assessment.stackHold && open
@@ -407,6 +450,7 @@ export class PrReviewOfferCoordinator {
       desired,
       readiness,
       headCovered,
+      reviewInProgress,
       ...(standing ? { standing } : {}),
       ...(pr.headSha ? { headSha: pr.headSha } : {}),
     });
