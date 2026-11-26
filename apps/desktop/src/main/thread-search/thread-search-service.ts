@@ -18,7 +18,7 @@ import {
   normalizeThreadSearchLimit,
   normalizeThreadSearchSemanticMode,
 } from "@pwragent/shared/contracts/thread-search";
-import type { ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
+import { THREAD_SEARCH_SLICE_SIZE, type ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
 import { awaitThreadSearchRead } from "./thread-search-cancellation";
 import type {
   ThreadContentSearchResponse,
@@ -71,39 +71,40 @@ export class ThreadSearchService {
     // Listings can omit failed, unavailable or paged providers. They are a
     // visibility oracle for this request, never evidence of durable deletion.
     // Bound synchronous indexing work and let cancellation run between slices.
-    for (let offset = 0; offset < threads.length; offset += 64) {
+    let needsSnapshot = false;
+    for (let offset = 0; offset < threads.length; offset += THREAD_SEARCH_SLICE_SIZE) {
       if (offset > 0) await setImmediate();
       signal?.throwIfAborted();
-      this.store.upsertThreads(threads.slice(offset, offset + 64));
+      needsSnapshot = this.store.upsertThreads(threads.slice(offset, offset + THREAD_SEARCH_SLICE_SIZE)) || needsSnapshot;
     }
-    const identityKeys = threads
-      .filter((thread) => !projects.length || matchesThreadSearchProjects(thread, projects))
-      .map((thread) => buildThreadIdentityKey(thread.source, thread.id));
-    const metadataResults = this.store
-      .search({
-        backend: backend === "all" ? undefined : backend,
-        filters,
-        identityKeys,
-        includeArchived: filters.includeArchived,
-        limit,
-        query,
-      })
-      .filter((result) => matchesFilters(result, filters));
-    const contentResults =
-      contentMode === "metadata" || !this.contentAdapter
-        ? emptyContentSearchResponse()
-        : await this.contentAdapter.searchContent({
-            candidates: buildContentCandidates({
-              backend,
-              filters,
-              identityKeys,
-              metadataResults,
-              store: this.store,
-            }),
-            limit,
-            query,
-            signal,
-          });
+    const scopedThreads = projects.length ? threads.filter((thread) => matchesThreadSearchProjects(thread, projects)) : threads;
+    const metadataRequest = {
+      backend: listBackend,
+      filters,
+      identityKeys: scopedThreads.map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+      includeArchived: filters.includeArchived,
+      limit,
+      query,
+    };
+    const contentAdapter = contentMode === "metadata" ? undefined : this.contentAdapter;
+    const requests = contentAdapter
+      ? [metadataRequest, { ...metadataRequest, limit: CONTENT_SEARCH_CANDIDATE_LIMIT, query: undefined }]
+      : [metadataRequest];
+    const [metadata = [], recent = []] = needsSnapshot && scopedThreads.length > 0
+      ? await this.store.searchInVerifiedSnapshot(scopedThreads, requests, signal)
+      : requests.map((request) => this.store.search(request));
+    const metadataResults = metadata.filter((result) => matchesFilters(result, filters));
+    const contentResults = !contentAdapter
+      ? emptyContentSearchResponse()
+      : await contentAdapter.searchContent({
+          candidates: buildContentCandidates({
+            metadataResults,
+            recentResults: recent.filter((result) => matchesFilters(result, filters)),
+          }),
+          limit,
+          query,
+          signal,
+        });
     const results = mergeSearchResults(metadataResults, contentResults.results).slice(
       0,
       limit,
@@ -190,27 +191,15 @@ function buildUnavailableScopes(params: {
 }
 
 function buildContentCandidates(params: {
-  backend: AppServerBackendScope;
-  filters: ThreadSearchFilters;
-  identityKeys?: string[];
   metadataResults: ThreadSearchResponse["results"];
-  store: ThreadSearchStorage;
+  recentResults: ThreadSearchResponse["results"];
 }): ThreadSearchResponse["results"] {
-  const recentResults = params.store
-    .search({
-      backend: params.backend === "all" ? undefined : params.backend,
-      filters: params.filters,
-      identityKeys: params.identityKeys,
-      includeArchived: params.filters.includeArchived,
-      limit: CONTENT_SEARCH_CANDIDATE_LIMIT,
-    })
-    .filter((result) => matchesFilters(result, params.filters));
   // Preserve the original exact-then-recent window. Relaxed projections can
   // use spare slots, but cannot displace a transcript-only candidate.
   const exact = params.metadataResults.filter((result) => result.score >= 0);
   const relaxed = params.metadataResults.filter((result) => result.score < 0);
   const candidates = new Map<string, ThreadSearchResult>();
-  for (const result of [...exact, ...recentResults, ...relaxed]) {
+  for (const result of [...exact, ...params.recentResults, ...relaxed]) {
     if (!candidates.has(result.identityKey)) candidates.set(result.identityKey, result);
     if (candidates.size === CONTENT_SEARCH_CANDIDATE_LIMIT) break;
   }

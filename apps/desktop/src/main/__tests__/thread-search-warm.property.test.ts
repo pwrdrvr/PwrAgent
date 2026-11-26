@@ -290,10 +290,17 @@ it("returns the peer's repair after repeated snapshot invalidation while the pee
   }
 });
 
-it("bounds verification when every read snapshot is invalidated by a peer commit", async () => {
+it.each([
+  { scenario: "unrelated peer writes", damage: "none" },
+  { scenario: "an FTS row missing before snapshot verification", damage: "beforeSnapshot" },
+  { scenario: "an FTS row removed after snapshot verification", damage: "beforeMatch" },
+])("searches a verified snapshot with $scenario", async ({ damage }) => {
+  if (damage === "beforeSnapshot") vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const temp = createTempStateDb("search-fallback-budget-");
   const db = StateDb.open(temp.dbPath);
   const peer = StateDb.open(temp.dbPath);
+  const originalSearch = ThreadSearchStore.prototype.search;
+  const search = vi.spyOn(ThreadSearchStore.prototype, "search");
   try {
     const afterVersionRead = interceptProjectionVersion(db);
     const listed = summary("current");
@@ -303,14 +310,56 @@ it("bounds verification when every read snapshot is invalidated by a peer commit
     let peerWrites = 0;
     const commitPeerChange = vi.fn(() => {
       touchMetadata.run("contrived-search-peer", String(++peerWrites));
-      afterVersionRead(commitPeerChange);
+      if (peerWrites < 4) afterVersionRead(commitPeerChange);
     });
     afterVersionRead(commitPeerChange);
+    const deleteFtsRow = peer.raw.prepare("DELETE FROM thread_search_fts WHERE identity_key = ?");
+    if (damage === "beforeSnapshot") {
+      const read = store.searchInVerifiedSnapshot.bind(store);
+      vi.spyOn(store, "searchInVerifiedSnapshot").mockImplementation(async (...args) => {
+        deleteFtsRow.run("codex:current");
+        const { result, writes } = await measureSqliteWrites(() => read(...args));
+        expect(writes.commits).toBe(1);
+        expectSqliteWriteBudget({ scenario: "thread-search-verified-snapshot-repair", writes,
+          note: "One commit repairs one missing FTS projection on the snapshot fallback. At 10 repairs/day, 41,200 bytes × 10 gives 0.412 MB/day; 0 MB/day for unrelated peer writes alone." });
+        return result;
+      });
+    }
+    if (damage === "beforeMatch") {
+      search.mockImplementation(function (this: ThreadSearchStore, request) {
+        deleteFtsRow.run("codex:current");
+        return originalSearch.call(this, request);
+      });
+    }
 
     const service = new ThreadSearchService(store, async () => [listed]);
-    await expect(service.search({ query: "Asterism", contentMode: "metadata" })).rejects.toMatchObject({ code: "SQLITE_BUSY" });
+    const result = await service.search({ query: "Asterism", contentMode: "metadata" });
+    expect(result.results.map((row) => row.threadId)).toEqual([listed.id]);
     expect(commitPeerChange).toHaveBeenCalledTimes(4);
-  } finally { peer.close(); db.close(); removeTempStateDbDir(temp.tempDir); }
+    expect(search).toHaveBeenCalledOnce();
+  } finally { search.mockRestore(); peer.close(); db.close(); removeTempStateDbDir(temp.tempDir); vi.unstubAllEnvs(); }
+});
+
+it("cancels snapshot verification between slices before running MATCH", async () => {
+  const temp = createTempStateDb("search-fallback-cancel-");
+  const db = StateDb.open(temp.dbPath);
+  const search = vi.spyOn(ThreadSearchStore.prototype, "search");
+  try {
+    const store = new ThreadSearchStore(db);
+    const controller = new AbortController();
+    const inventory = Array.from({ length: 65 }, (_, index) => summary("row-" + index));
+    store.upsertThreads(inventory);
+    vi.spyOn(store, "upsertThreads").mockReturnValue(true);
+    const read = store.searchInVerifiedSnapshot.bind(store);
+    vi.spyOn(store, "searchInVerifiedSnapshot").mockImplementation((...args) => {
+      setImmediate(() => controller.abort());
+      return read(...args);
+    });
+    const service = new ThreadSearchService(store, async () => inventory);
+    await expect(service.search({ query: "Asterism", contentMode: "metadata" }, controller.signal))
+      .rejects.toMatchObject({ name: "AbortError" });
+    expect(search).not.toHaveBeenCalled();
+  } finally { search.mockRestore(); db.close(); removeTempStateDbDir(temp.tempDir); }
 });
 
 function interceptProjectionVersion(db: StateDb) {

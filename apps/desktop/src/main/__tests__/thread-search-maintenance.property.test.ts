@@ -100,8 +100,9 @@ it("yields and honors cancellation before indexing another 64-provider-row slice
     const batches: number[] = [];
     vi.spyOn(store, "upsertThreads").mockImplementation((threads) => {
       batches.push(threads.length);
-      upsert(threads);
+      const needsSnapshot = upsert(threads);
       setImmediate(() => controller.abort());
+      return needsSnapshot;
     });
     const service = new ThreadSearchService(store, async () => inventory);
     const prepare = vi.spyOn(db.raw, "prepare");

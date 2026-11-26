@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import BetterSqlite3 from "better-sqlite3";
 import {
@@ -11,7 +12,11 @@ import {
   type LinkedDirectorySummary,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { type ThreadSearchFilters, type ThreadSearchResult } from "@pwragent/shared/contracts/thread-search";
-import type { ThreadSearchProjectionSearchRequest, ThreadSearchStorage } from "@pwragent/owner-core/thread-search-storage";
+import {
+  THREAD_SEARCH_SLICE_SIZE,
+  type ThreadSearchProjectionSearchRequest,
+  type ThreadSearchStorage,
+} from "@pwragent/owner-core/thread-search-storage";
 import type { StateDb } from "./state-db";
 import {
   buildPartialThreadSearchFtsQuery,
@@ -61,7 +66,7 @@ export class ThreadSearchStore implements ThreadSearchStorage {
   private readonly readLocalChanges: BetterSqlite3.Statement<[], number>;
   private readonly hasCurrentProjection: BetterSqlite3.Statement<[SearchProjectionBindings]>;
 
-  constructor(stateDb: StateDb) {
+  constructor(stateDb: Pick<StateDb, "raw">) {
     this.db = stateDb.raw;
     const sharedCache = projectionCaches.get(this.db) ?? { rows: new Map() };
     projectionCaches.set(this.db, sharedCache);
@@ -90,20 +95,20 @@ export class ThreadSearchStore implements ThreadSearchStorage {
   }
 
   /** One write commit per changed slice, with no writer lock for a stable, current slice. */
-  upsertThreads(threads: readonly AppServerThreadSummary[]): void {
-    this.upsert(threads);
+  upsertThreads(threads: readonly AppServerThreadSummary[]): boolean {
+    return this.upsert(threads);
   }
 
   upsertThread(thread: AppServerThreadSummary, indexedAt = Date.now()): void {
     this.upsert([thread], indexedAt);
   }
 
-  private upsert(threads: readonly AppServerThreadSummary[], indexedAt?: number): void {
-    if (threads.length === 0) return;
+  private upsert(threads: readonly AppServerThreadSummary[], indexedAt?: number): boolean {
+    if (threads.length === 0) return false;
     if (this.db.inTransaction) {
       // A caller-owned transaction can see uncommitted state and roll it back.
       this.db.transaction(() => this.writeChangedProjections(this.findChanges(threads), indexedAt))();
-      return;
+      return false;
     }
 
     const cache = this.projectionCache;
@@ -138,12 +143,12 @@ export class ThreadSearchStore implements ThreadSearchStorage {
         // version from the snapshot and sample our own count after commit.
         cache.version = { external: checked.version.external, local: this.readLocalChanges.get()! };
         for (const projection of checked.written.values()) rememberProjection(cache, projection);
-        return;
+        return false;
       }
       // A read-only pass only proves currency if its generation still
       // matches after the transaction closes.
       if (this.refreshProjectionCache() === snapshot) {
-        if (checked?.current) return;
+        if (checked?.current) return false;
         break;
       }
     }
@@ -151,8 +156,74 @@ export class ThreadSearchStore implements ThreadSearchStorage {
     // A peer can finish a repair and keep the writer lock. Give the newest
     // snapshot one read-only check before reporting persistent contention.
     const finalCheck = reconcile.deferred(false);
-    if (finalCheck.current && this.refreshProjectionCache() === finalCheck.version) return;
+    if (finalCheck.current) return this.refreshProjectionCache() !== finalCheck.version;
     throw busyError ?? new BetterSqlite3.SqliteError("Thread search projection changed during verification", "SQLITE_BUSY");
+  }
+
+  async searchInVerifiedSnapshot(
+    threads: readonly AppServerThreadSummary[],
+    requests: readonly ThreadSearchProjectionSearchRequest[],
+    signal?: AbortSignal,
+  ): Promise<ThreadSearchResult[][]> {
+    signal?.throwIfAborted();
+    // This path requires commits from a second connection. Use a private
+    // reader on the same file so yielding never holds the owner's connection.
+    const raw = new BetterSqlite3(this.db.name, { readonly: true, fileMustExist: true, timeout: 0 });
+    try {
+      const reader = new ThreadSearchStore({ raw });
+      // Allow one repair pass if a peer actually changed a projection since
+      // indexing. Unrelated commits never invalidate the reader's snapshot.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        raw.exec("BEGIN");
+        let unverified: Set<string>;
+        try {
+          unverified = await reader.findUnverifiedIdentities(threads, signal);
+          if (unverified.size === 0) {
+            signal?.throwIfAborted();
+            return requests.map((request) => reader.search(request));
+          }
+        } finally {
+          if (raw.inTransaction) raw.exec("ROLLBACK");
+        }
+        if (attempt > 0) break;
+        for (let offset = 0; offset < threads.length; offset += THREAD_SEARCH_SLICE_SIZE) {
+          if (offset > 0) await yieldToEventLoop();
+          signal?.throwIfAborted();
+          const slice = threads.slice(offset, offset + THREAD_SEARCH_SLICE_SIZE);
+          const stale = slice.filter((thread) => unverified.has(buildLegacyEncodedThreadIdentityKey(thread.source, thread.id)));
+          this.upsertThreads(stale);
+        }
+      }
+      throw new BetterSqlite3.SqliteError("Thread search projection changed during snapshot verification", "SQLITE_BUSY");
+    } finally {
+      raw.close();
+    }
+  }
+
+  private async findUnverifiedIdentities(
+    threads: readonly AppServerThreadSummary[],
+    signal?: AbortSignal,
+  ): Promise<Set<string>> {
+    const verified = new Set<string>();
+    const unverified = new Set<string>();
+    for (let offset = 0; offset < threads.length; offset += THREAD_SEARCH_SLICE_SIZE) {
+      if (offset > 0) await yieldToEventLoop();
+      signal?.throwIfAborted();
+      for (const thread of threads.slice(offset, offset + THREAD_SEARCH_SLICE_SIZE)) {
+        const projection = projectThread(thread);
+        const key = projection.identityKey;
+        // A duplicate provider identity can have more than one listed
+        // revision. The index can hold only one of them.
+        if (verified.has(key)) continue;
+        if (this.hasCurrentProjection.get(bindThreadProjection(projection))) {
+          verified.add(key);
+          unverified.delete(key);
+        } else {
+          unverified.add(key);
+        }
+      }
+    }
+    return unverified;
   }
 
   private refreshProjectionCache(): ProjectionVersion {

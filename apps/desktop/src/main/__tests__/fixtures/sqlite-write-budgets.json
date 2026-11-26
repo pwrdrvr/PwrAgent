@@ -1,4 +1,5 @@
 {
+  "thread-search-verified-snapshot-repair": {"commits": 1, "note": "One commit repairs one missing FTS projection on the snapshot fallback. At 10 repairs/day, 41,200 bytes × 10 gives 0.412 MB/day; 0 MB/day for unrelated peer writes alone.", "observedWalBytes": 41200, "rowsChanged": 4, "statements": 5},
   "thread-search-repair-slice": {"commits": 1, "note": "One commit repairs a stale FTS payload and a missing FTS row in one slice. At 10 repairs/day, 41,200 bytes × 10 gives 0.412 MB/day; 0 MB/day when no damage is present.", "observedWalBytes": 41200, "rowsChanged": 7, "statements": 9},
   "github-pr-mergeability-base-tip-poll": {"commits": 1, "note": "One commit for two confirmed base-tip advances in a poll (~4 MB WAL/day at one advancing batch/minute over eight hours). Repeated observations of the same tips make zero writes.", "observedWalBytes": 8240, "rowsChanged": 2, "statements": 2},
   "token-miser-startup-repeat": {"commits": 0, "note": "Startup reconciliation of 65 unchanged gates after backfill. Zero recurring writes and 0 MB/day.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},

@@ -13,9 +13,12 @@ export type ThreadSearchProjectionSearchRequest = {
   limit: number;
 };
 
+export const THREAD_SEARCH_SLICE_SIZE = 64;
+
 /** Compact provider-owned thread projections for desktop search. */
 export interface ThreadSearchStorage {
-  upsertThreads(threads: readonly AppServerThreadSummary[]): void;
+  /** Returns true when the request needs searchInVerifiedSnapshot before querying. */
+  upsertThreads(threads: readonly AppServerThreadSummary[]): boolean;
   upsertThread(thread: AppServerThreadSummary, indexedAt?: number): void;
   deleteThread(params: {
     backend: AppServerBackendKind;
@@ -28,4 +31,10 @@ export interface ThreadSearchStorage {
     retainedIdentityKeys: string[];
   }): void;
   search(request: ThreadSearchProjectionSearchRequest): ThreadSearchResult[];
+  /** Verify the listed projections and read all requests from the same snapshot. */
+  searchInVerifiedSnapshot(
+    threads: readonly AppServerThreadSummary[],
+    requests: readonly ThreadSearchProjectionSearchRequest[],
+    signal?: AbortSignal,
+  ): Promise<ThreadSearchResult[][]>;
 }
