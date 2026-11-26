@@ -183,6 +183,9 @@ export class NavigationWindowQueries {
   // Released transport leases need not discard the view. Keep recently used
   // ranges window-local, sharing the same byte budget as active resources.
   private readonly retained = new Map<string, { state: NavigationPageState; anchor?: NavigationQueryAnchor; expandedRows?: number; bytes: number }>();
+  // Queries explicitly expanded via Load more during this window's lifetime.
+  // Distinguishes in-instance operator intent from cold-startup resume state.
+  private readonly sessionExpandedQueries = new Set<string>();
   private readonly listeners = new Set<() => void>();
   private visible = true;
   private disposed = false;
@@ -1016,17 +1019,23 @@ export class NavigationWindowQueries {
   }
 
   async loadMore(id: string): Promise<void> {
-    const resource = this.resources.get(id);
+    let resource = this.resources.get(id);
     if (!resource) return;
-    // A refresh can begin between the button's render and its click. Preserve
-    // that explicit continuation demand instead of treating the refresh as it.
-    while (this.isCurrent(resource) && resource.pending) await resource.pending;
+    // A refresh can begin between the button's render and its click, or a
+    // demand update can replace the resource while that refresh settles.
+    while (resource && resource.pending) {
+      await resource.pending;
+      resource = this.resources.get(id);
+    }
+    if (!resource || !this.isCurrent(resource)) return;
     await this.read(resource, true);
-    if (this.isCurrent(resource) && resource.value.state.page && !resource.value.state.error && resource.expandedRows) {
-      const key = this.resumeKey(resource);
+    const current = this.resources.get(id);
+    if (current && this.isCurrent(current) && current.value.state.page && !current.value.state.error && current.expandedRows) {
+      const key = this.resumeKey(current);
+      this.sessionExpandedQueries.add(key);
       // Asking for more never lowers the saved depth, even when a restore
       // stopped short of it and this click shows fewer rows.
-      const rows = Math.max(resource.expandedRows, this.resume.loadedRowsByQuery?.[key] ?? 0);
+      const rows = Math.max(current.expandedRows, this.resume.loadedRowsByQuery?.[key] ?? 0);
       this.resume.loadedRowsByQuery = { ...this.resume.loadedRowsByQuery, [key]: rows };
       this.resume.onLoadMore?.(key, rows);
     }
@@ -1066,13 +1075,26 @@ export class NavigationWindowQueries {
 
   private finishResume(resource: Resource): void {
     if (!resource.resumeExpansion) return;
-    // Each opening is a single attempt. Refresh only the range it actually
-    // delivered, rather than chasing saved demand on every later event. The
-    // saved depth itself stays: only the operator's Load more or reset
-    // changes it, so the next opening restores it again.
+    // Each cold-start opening is a single attempt when it stops short, so
+    // background events do not chase an unfulfilled saved target. Once a
+    // restore reaches the end of the list, or for a list the operator already
+    // expanded in this instance, preserve the expansion headroom so newly
+    // added rows or a transient error never re-collapse the list.
     resource.resumeExpansion = false;
     resource.resumeBudget = undefined;
-    resource.expandedRows = loadedRows(resource.value.state.page) || undefined;
+    const loaded = loadedRows(resource.value.state.page);
+    const key = this.resumeKey(resource);
+    if (resource.value.state.page?.complete) {
+      resource.expandedRows = Math.max(resource.expandedRows ?? 0, loaded) || undefined;
+    } else if (this.sessionExpandedQueries.has(key)) {
+      resource.expandedRows = Math.max(
+        resource.expandedRows ?? 0,
+        this.resume.loadedRowsByQuery?.[key] ?? 0,
+        loaded,
+      ) || undefined;
+    } else {
+      resource.expandedRows = loaded || undefined;
+    }
   }
 
   private async acquireReadSlot(resource: Resource): Promise<boolean> {
@@ -1100,6 +1122,9 @@ export class NavigationWindowQueries {
     if (resource.value.state.rebaselineRequired && !explicitAnchor && !fromStart) return Promise.resolve();
     let cursor = continuation ? resource.value.state.page?.nextCursor : undefined;
     if (continuation && !cursor) return Promise.resolve();
+    const queryKey = this.resumeKey(resource);
+    const wasSessionExpanded = this.sessionExpandedQueries.has(queryKey);
+    if (explicitLoadMore) this.sessionExpandedQueries.add(queryKey);
     const previousExpandedRows = resource.expandedRows;
     const restoringBeforeRead = explicitAnchor || fromStart ? 0 : loadedRows(resource.value.state.page);
     const read = ++this.nextDiagnosticRead;
@@ -1267,6 +1292,7 @@ export class NavigationWindowQueries {
         if (explicitAnchor || fromStart) {
           resource.expandedRows = undefined;
           const key = navigationResumeQueryKey(started.request);
+          this.sessionExpandedQueries.delete(key);
           if (this.resume.loadedRowsByQuery?.[key] !== undefined) {
             const loadedRows = { ...this.resume.loadedRowsByQuery };
             delete loadedRows[key];
@@ -1275,6 +1301,7 @@ export class NavigationWindowQueries {
           this.resume.onRangeReset?.(key);
         }
         if (continuation) resource.expandedRows = restoring + LOAD_MORE_ROWS;
+        const sessionExpanded = this.sessionExpandedQueries.has(queryKey);
         const wanted = Math.max(restoring, resource.expandedRows ?? 0);
         // A cursor read serves rows this window has already committed to: the
         // block an explicit click asked for, or the range a refresh must
@@ -1310,7 +1337,7 @@ export class NavigationWindowQueries {
         try {
           page = await readAround({ ...started.request, cursor, anchor,
             ...(cursor ? { pageSize: cursorPageSize(loadedRows(started.page)) }
-              : explicitLoadMore ? { pageSize: loadMoreRebuildPageSize } : {}),
+              : (explicitLoadMore || (resuming && sessionExpanded)) ? { pageSize: loadMoreRebuildPageSize } : {}),
             completeBaselineRevision: !fromStart && !anchor && !cursor && !started.stale && started.page?.complete && (started.page.rangeStart ?? 0) === 0 ? started.page.countsRevision : undefined,
             retainedRange: !fromStart && !explicitAnchor && !cursor && !explicitLoadMore
               && (anchor || !started.page?.complete || (started.page.rangeStart ?? 0) !== 0)
@@ -1344,7 +1371,7 @@ export class NavigationWindowQueries {
         // A complete-baseline acknowledgment reuses the previous page.
         // Only a response with fresh dependency proof can exclude this notice.
         if (this.needsSeenReplacement(resource, page.unchanged ? undefined : next)) return;
-        if (resuming && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
+        if (resuming && !sessionExpanded && next.state.page?.nextCursor && loadedRows(next.state.page) >= restoring
           && loadedRows(next.state.page) < wanted && this.canResumeExpansion(budget) && Date.now() < extendUntil) {
           // Saved expansion must not withhold the ordinary first page, nor
           // replace a longer cached range with it.
@@ -1358,7 +1385,7 @@ export class NavigationWindowQueries {
         // capacity from an earlier Load more admits new rows under those same
         // budgets; a short final page does not revoke the operator's demand.
         while (next.state.page?.nextCursor && loadedRows(next.state.page) < wanted
-          && (loadedRows(next.state.page) < restoring || ((!resuming || this.canResumeExpansion(budget))
+          && (loadedRows(next.state.page) < restoring || ((!resuming || sessionExpanded || this.canResumeExpansion(budget))
             && extensions < MAX_LOAD_MORE_READS && Date.now() < extendUntil))) {
           const nextCursor = next.state.page.nextCursor;
           const before = loadedRows(next.state.page);
@@ -1394,6 +1421,7 @@ export class NavigationWindowQueries {
       } catch (error) {
         if (explicitLoadMore && loadedRows(resource.value.state.page) <= restoringBeforeRead) {
           resource.expandedRows = previousExpandedRows;
+          if (!wasSessionExpanded) this.sessionExpandedQueries.delete(queryKey);
         }
         // An overtaken cursor cannot establish a new rebaseline requirement.
         if (this.isCurrent(resource) && !this.needsSeenReplacement(resource) && !this.needsWorkingStateReplacement(resource)) resource.value = { ...resource.value,

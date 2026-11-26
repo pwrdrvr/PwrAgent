@@ -183,3 +183,58 @@ it.each(["codex", "claude", "acp:grok", "acp:antigravity"] as const)(
     } finally { view.unmount(); }
   },
 );
+
+it("reveals Load more pinned threads even when the pointer moves inside the directory while the read is in flight", async () => {
+  const home = { key: "directory:/fixture/project", kind: "directory" as const, label: "Fixture project", path: "/fixture/project" };
+  const threads: NavigationRow[] = Array.from({ length: 15 }, (_, index) => ({
+    id: `pin-${index}`, source: "codex" as const, title: `Hover pin ${index}`, titleSource: "explicit" as const,
+    ref: { backend: "codex" as const, threadId: `pin-${index}` }, rowRevision: `pin-${index}`,
+    pinnedRank: String((index + 1) * 1024),
+    linkedDirectories: [{ id: home.path, path: home.path, label: home.label, kind: "local" as const }],
+    inbox: { inInbox: false }, ordinaryChildCount: 0, nativeSubAgentGroupPresent: false, queueCount: 0, queueState: "unknown" as const,
+  }));
+  let releaseContinuation: (() => void) | undefined;
+  const continuationGate = new Promise<void>((resolve) => { releaseContinuation = resolve; });
+  const read = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(async (request) => {
+    if (request.query.kind === "directory" && request.query.roots === "pinned" && request.cursor) {
+      await continuationGate;
+    }
+    return {
+      ...navigationQueryFixture(request, { directories: [home], threads }),
+      ...(request.query.kind === "exact" ? { selectionDirectory: { ...home,
+        counts: { total: threads.length, active: 0, unread: 0, review: 0 },
+        pinnedRootCount: threads.length, unpinnedRootCount: 0, launchpadPresent: false } } : {}),
+    };
+  });
+  const api: DesktopApi = { getNavigationQueryPage: read, releaseNavigationQuery: vi.fn(async () => undefined) };
+  let navigation!: ReturnType<typeof useBoundedNavigationWindow>;
+  function Window() {
+    const disclosure = useNavigationDirectoryDisclosure();
+    navigation = useBoundedNavigationWindow({ desktopApi: api, enabled: true, visible: true,
+      browseMode: "directories", attentionView: { id: "hover-load-more-window", promoteOnTurnEnd: true }, selectedRef: threads[0]!.ref,
+      expandedByKey: disclosure.expandedByKey, unpinnedExpandedByKey: disclosure.unpinnedExpandedByKey });
+    return <Sidebar backends={[]} browseMode="directories" directories={navigation.directories} threads={threads}
+      directoryDisclosure={disclosure} pagedNavigation={navigation} selectedItemKey={navigationThreadSelectionKey(threads[0]!.ref)}
+      selectedThreadDirectoryKeys={navigation.selectedDirectoryKeys} loading={false}
+      onBrowseModeChange={() => undefined} onSelectThread={() => undefined}
+      onCreateThread={async () => undefined} onOpenLaunchpad={async () => undefined} />;
+  }
+  const view = render(<Window />);
+  try {
+    const loadMoreButton = await view.findByRole("button", { name: "Load more pinned threads" });
+    const firstPin = view.getByRole("button", { name: /Hover pin 0, pinned/ });
+    // Freeze the directory under the pointer, click Load more, then move the
+    // pointer while the async continuation read is still in flight.
+    fireEvent.pointerOver(firstPin, { pointerType: "mouse" });
+    fireEvent.click(loadMoreButton);
+    fireEvent.pointerOver(firstPin, { pointerType: "mouse" });
+    expect(view.queryByRole("button", { name: /Hover pin 14, pinned/ })).toBeNull();
+
+    await act(async () => {
+      releaseContinuation?.();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.getByRole("button", { name: /Hover pin 14, pinned/ })).toBeTruthy());
+    expect(view.queryByRole("button", { name: "Load more pinned threads" })).toBeNull();
+  } finally { view.unmount(); }
+});

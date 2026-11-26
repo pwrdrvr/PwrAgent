@@ -1590,3 +1590,109 @@ it("rebuilds cleanly when loadMore runs on a stale baseline and does not persist
     queries.dispose();
   }
 });
+
+it("never re-collapses an expanded project's pins across eviction, visibility, transient failure, and new pins", async () => {
+  let count = 14;
+  let revision = 1;
+  let failNextPinRead = false;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (sent.query.kind === "directory" && sent.query.roots === "pinned") {
+      if (failNextPinRead) {
+        failNextPinRead = false;
+        throw new Error("[navigation_busy] Transient owner read failure.");
+      }
+      return owner(`rev-${revision}`, count)(sent);
+    }
+    // Large lens page to evict the 8 MB retained cache.
+    const result = await owner("evict", 10)(sent);
+    return { ...result, generation: `${result.generation}-${"x".repeat(250_000)}` };
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const project = new Map([["directory-pins:project", pins()]]);
+  try {
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(10);
+
+    await queries.loadMore("directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(14);
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.nextCursor).toBeUndefined();
+
+    // Observe every publication after Load more: once expanded, no intermediate
+    // or settled page may return with a collapsed nextCursor.
+    let collapsedCursorsSeen = 0;
+    const unsubscribe = queries.subscribe(() => {
+      const page = queries.getSnapshot().resources.get("directory-pins:project")?.state.page;
+      if (page?.nextCursor) collapsedCursorsSeen += 1;
+    });
+
+    // Evict retained cache completely by cycling through other lenses.
+    for (let index = 0; index < 40; index += 1) {
+      queries.setDemand(new Map([["lens", request(`other-${index}`)]]));
+      await settled(queries, "lens");
+    }
+
+    // Reopen with a transient failure on the first read, then recover.
+    failNextPinRead = true;
+    queries.setDemand(project);
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-pins:project")?.loading).toBe(false));
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.error).toContain("navigation_busy");
+
+    // Refresh after transient failure restores all 14 pins without collapsing.
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(14);
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.nextCursor).toBeUndefined();
+
+    // Pinning more threads (15, then up to the 110-row committed block) keeps
+    // all pins expanded across visibility toggles and refreshes.
+    count = 15;
+    revision += 1;
+    queries.invalidate();
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(15);
+
+    queries.setVisible(false);
+    queries.setVisible(true);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(15);
+
+    count = 110;
+    revision += 1;
+    queries.invalidate();
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(110);
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.nextCursor).toBeUndefined();
+    expect(collapsedCursorsSeen).toBe(0);
+    unsubscribe();
+  } finally {
+    queries.dispose();
+  }
+});
+
+it("keeps Load more alive when a demand update replaces the resource while a prior read is pending", async () => {
+  const firstRead = deferred<NavigationQueryPage>();
+  const serve = owner("fresh", 25);
+  let blockFirst = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (blockFirst && !sent.cursor) {
+      blockFirst = false;
+      return firstRead.promise;
+    }
+    return serve(sent);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["directory-pins:project", pins("a")]]));
+    // Click Load more while the initial read is still pending, then replace
+    // the resource's request key before the first read settles.
+    const clicking = queries.loadMore("directory-pins:project");
+    queries.setDemand(new Map([["directory-pins:project", pins("b")]]));
+    firstRead.resolve(await serve(pins("a")));
+    await clicking;
+    const state = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(state.page?.directories).toHaveLength(25);
+    expect(state.page?.nextCursor).toBeUndefined();
+  } finally {
+    queries.dispose();
+  }
+});
