@@ -98,7 +98,7 @@ describe("desktop build processes", () => {
         expect(options.env.ROLLDOWN_WORKER_THREADS).toBe("6");
         expect(options.env.TOKIO_WORKER_THREADS).toBe("6");
         expect(options.env.RAYON_NUM_THREADS).toBe("6");
-        expect(options.env.UV_THREADPOOL_SIZE).toBe("6");
+        expect(options.env.UV_THREADPOOL_SIZE).toBe("4");
         expect(options.env.GOMAXPROCS).toBe("6");
       }
     } finally {

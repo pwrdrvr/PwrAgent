@@ -152,9 +152,12 @@ describe("local CPU budget resolution", () => {
         ]);
 
         const baseEnv = { PWRAGENT_HOME: root };
-        // Without thread identity, deepest matching directory wins and overlap takes the minimum.
-        expect(resolveLocalCpuBudget({ cwd: childDir, env: baseEnv, now })?.units).toBe(
-          Math.min(childUnitsA, childUnitsB),
+        // Without thread identity, deepest matching directory wins, overlap takes the minimum,
+        // and allocationId comes from the limiting grant (tie-breaking by allocationId).
+        const resolvedOverlap = resolveLocalCpuBudget({ cwd: childDir, env: baseEnv, now });
+        expect(resolvedOverlap?.units).toBe(Math.min(childUnitsA, childUnitsB));
+        expect(resolvedOverlap?.allocationId).toBe(
+          childUnitsB < childUnitsA ? "alloc-child-b" : "alloc-child-a",
         );
         // With thread identity, the calling thread's own grant wins even on shared directories.
         expect(resolveLocalCpuBudget({
@@ -243,7 +246,7 @@ describe("local CPU budget resolution", () => {
       expect(overrides.ROLLDOWN_WORKER_THREADS).toBe(String(units));
       expect(overrides.TOKIO_WORKER_THREADS).toBe(String(units));
       expect(overrides.RAYON_NUM_THREADS).toBe(String(units));
-      expect(overrides.UV_THREADPOOL_SIZE).toBe(String(units));
+      expect(overrides.UV_THREADPOOL_SIZE).toBe(String(Math.min(4, units)));
     }));
   });
 

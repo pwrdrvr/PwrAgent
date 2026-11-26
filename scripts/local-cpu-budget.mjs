@@ -4,11 +4,11 @@ import path from "node:path";
 
 const BUDGET_DIR_SEGMENTS = ["runtime", "machine-cpu-budgets"];
 export const DEFAULT_LOCAL_CPU_BUDGET = 4;
+const LIBUV_DEFAULT_THREADPOOL_SIZE = 4;
 const THREAD_POOL_ENV_KEYS = [
   "ROLLDOWN_WORKER_THREADS",
   "TOKIO_WORKER_THREADS",
   "RAYON_NUM_THREADS",
-  "UV_THREADPOOL_SIZE",
   "GOMAXPROCS",
 ];
 
@@ -101,6 +101,14 @@ function readActiveBudgetGrants(budgetDir, now) {
   return active;
 }
 
+function selectLimitingGrant(grants) {
+  return [...grants].sort((left, right) =>
+    left.units - right.units
+    || left.deadlineAt - right.deadlineAt
+    || left.allocationId.localeCompare(right.allocationId),
+  )[0];
+}
+
 export function resolveLocalCpuBudget({
   cwd = process.cwd(),
   env = process.env,
@@ -127,10 +135,11 @@ export function resolveLocalCpuBudget({
         grant.threadId === threadId && (!backend || grant.backend === backend),
       );
       if (matched.length > 0) {
+        const limiting = selectLimitingGrant(matched);
         return {
-          units: Math.min(...matched.map((grant) => grant.units)),
+          units: limiting.units,
           source: "thread-checkout",
-          allocationId: matched[0].allocationId,
+          allocationId: limiting.allocationId,
           deadlineAt: Math.min(...matched.map((grant) => grant.deadlineAt)),
         };
       }
@@ -160,10 +169,11 @@ export function resolveLocalCpuBudget({
       }
 
       if (bestMatches.length > 0) {
+        const limiting = selectLimitingGrant(bestMatches);
         return {
-          units: Math.min(...bestMatches.map((grant) => grant.units)),
+          units: limiting.units,
           source: "directory-checkout",
-          allocationId: bestMatches[0].allocationId,
+          allocationId: limiting.allocationId,
           deadlineAt: Math.min(...bestMatches.map((grant) => grant.deadlineAt)),
         };
       }
@@ -201,6 +211,9 @@ export function buildBudgetThreadEnv(units, baseEnv = process.env) {
     if (!baseEnv[key]) {
       overrides[key] = value;
     }
+  }
+  if (!baseEnv.UV_THREADPOOL_SIZE) {
+    overrides.UV_THREADPOOL_SIZE = String(Math.min(LIBUV_DEFAULT_THREADPOOL_SIZE, validated));
   }
   return overrides;
 }

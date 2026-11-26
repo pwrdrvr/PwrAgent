@@ -71,7 +71,7 @@ describe("machine CPU budget file publication", () => {
       });
       const service = new DesktopResourceCheckoutService({
         viewer: { instanceId: "inst-default", instanceLabel: "Studio", profile: "default", machineId: "mach-1" },
-        machineStore: openResourceCheckoutStore(path.join(root, "resource-checkouts.db"), "mach-1"),
+        machineStore: openResourceCheckoutStore(":memory:", "mach-1"),
         machineCpuCount: 8,
         bindings: [],
         now: () => now,
@@ -326,6 +326,73 @@ describe("machine CPU budget file publication", () => {
         now,
         fallback: null,
       })).toBeUndefined();
+    } finally {
+      await service.close(0);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes a newly promoted queued grant immediately when status() observes promotion", async () => {
+    const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "pwragent-cpu-budget-promote-")));
+    const dirA = path.join(root, "worktrees", "thread-a");
+    const dirB = path.join(root, "worktrees", "thread-b");
+    const directories = new Map<string, string[]>([
+      ["thread-a", [dirA]],
+      ["thread-b", [dirB]],
+    ]);
+    let now = 10_000;
+    const publisher = createMachineCpuBudgetPublisher({
+      pwragentRoot: root,
+      profile: "default",
+      instanceId: "inst-default",
+      localThreadDirectories: ({ threadId }) => directories.get(threadId),
+    });
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "inst-default", instanceLabel: "Studio", profile: "default", machineId: "mach-1" },
+      machineStore: openResourceCheckoutStore(path.join(root, "resource-checkouts.db"), "mach-1"),
+      machineCpuCount: 8,
+      bindings: [],
+      now: () => now,
+      requestPeer: async () => { throw new Error("Offline"); },
+      machineCpuBudgetPublisher: publisher,
+      warn: () => {},
+    });
+
+    try {
+      const resourceId = service.read().resources[0]!.resourceId;
+      const actorA = service.threadActor("claude", "thread-a");
+      const actorB = service.threadActor("codex", "thread-b");
+
+      const grantA = await service.perform({
+        kind: "request",
+        idempotencyKey: "req-a",
+        resourceId,
+        purpose: "hold full pool",
+        expectedDurationMs: 5_000,
+        units: 8,
+      }, actorA);
+      expect(grantA.outcome).toBe("granted");
+
+      const queuedB = await service.perform({
+        kind: "request",
+        idempotencyKey: "req-b",
+        resourceId,
+        purpose: "wait for 4 slots",
+        expectedDurationMs: 10_000,
+        units: 4,
+      }, actorB);
+      expect(queuedB.outcome).toBe("queued");
+
+      // Advance past A's deadline without calling service.read(), then check B via status().
+      now = 16_000;
+      const statusB = await service.status(actorB, resourceId, "req-b");
+      expect(statusB?.state).toBe("granted");
+      expect(resolveLocalCpuBudget({
+        cwd: dirB,
+        env: { PWRAGENT_HOME: root },
+        now,
+        fallback: null,
+      })?.units).toBe(4);
     } finally {
       await service.close(0);
       rmSync(root, { recursive: true, force: true });
