@@ -12626,6 +12626,60 @@ describe("useThreadSessionState", () => {
     expect(result.current.pendingStatusText).not.toBe("Safety review in progress");
   });
 
+  it("shows the owner's compaction activity and keeps its latest phase across thread switches", async () => {
+    const agentEventListeners = new Set<Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]>();
+    const compactingThread: NavigationThreadSummary = {
+      ...buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      source: "acp:antigravity",
+    };
+    const otherThread = buildThread({ id: "thread-2", updatedAt: 1_000 });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventListeners.add(listener);
+        return () => { agentEventListeners.delete(listener); };
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      }),
+    };
+    const { result, rerender } = renderHook(
+      ({ thread }) => useThreadSessionState({ desktopApi, thread }),
+      { initialProps: { thread: compactingThread } },
+    );
+    await waitForThreadHydration(result);
+    const emit = (notification: AgentEvent["notification"]) => {
+      for (const listener of agentEventListeners) listener({ backend: "acp:antigravity", notification });
+    };
+    const turnId = "pending:thread-1:1";
+    await act(async () => {
+      emit({ method: "turn/started", params: { threadId: "thread-1", turnId, turn: { id: turnId } } });
+    });
+    expect(result.current.pendingStatusText).toBe("Thinking");
+    await act(async () => {
+      emit({ method: "thread/autoCompaction/updated", params: { threadId: "thread-1", phase: "compacting" } });
+    });
+    expect(result.current.pendingStatusText).toBe("Compacting context");
+
+    rerender({ thread: otherThread });
+    await act(async () => {
+      emit({ method: "turn/completed", params: { threadId: "thread-1", turnId, turn: { id: turnId, status: "completed", output: [] } } });
+      emit({ method: "thread/autoCompaction/updated", params: { threadId: "thread-1", phase: "verifying" } });
+    });
+    expect(result.current.pendingStatusText).toBeUndefined();
+
+    rerender({ thread: compactingThread });
+    await waitForThreadHydration(result);
+    expect(result.current.pendingStatusText).toBeUndefined();
+    expect(result.current.autoCompaction?.phase).toBe("verifying");
+  });
+
   it("shows a transcript status when context compaction starts", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

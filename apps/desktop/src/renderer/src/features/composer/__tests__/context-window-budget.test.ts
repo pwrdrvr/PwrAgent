@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   applyContextWindowBudget,
   autoCompactionStatusLine,
-  isAutoCompactionActive,
 } from "../context-window-budget";
+import { isAutoCompactionActive } from "../../../lib/thread-session-transitions";
 
 const neonAt400k = {
   modelContextWindow: 1_048_576,
@@ -68,7 +68,7 @@ describe("context window budget", () => {
     expect(autoCompactionStatusLine(
       { threadId: "t", phase: "verifying", via: "steer", dispatchedAtTokens: 412_000 },
       format,
-    )).toBe("Compacted. The context size updates on the next turn.");
+    )).toBe("Compacted. The context size updates on the next model call.");
     expect(isAutoCompactionActive({ threadId: "t", phase: "verifying" })).toBe(false);
     expect(autoCompactionStatusLine({ threadId: "t", phase: "armed" }, format)).toBeUndefined();
   });

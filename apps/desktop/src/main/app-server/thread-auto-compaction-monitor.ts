@@ -5,6 +5,7 @@ import {
   type DesktopAutoCompactionRule,
 } from "@pwragent/shared/auto-compaction";
 import type { AgentEvent } from "@pwragent/shared/contracts/agent";
+import { isAcpBackendId } from "@pwragent/shared/contracts/navigation";
 import type {
   AppServerBackendKind,
   AppServerNotification,
@@ -19,6 +20,7 @@ import {
   type AutoCompactionInput,
   type AutoCompactionState,
 } from "@pwragent/owner-core/auto-compaction-lifecycle";
+import { isAcpPromptTurnId } from "./thread-turn-keys";
 
 /** Auto-compaction messages carry this origin, so the transcript names them. */
 export const AUTO_COMPACTION_ORIGIN: AppServerThreadMessageOrigin = {
@@ -123,9 +125,12 @@ function isContextCompactionItem(notification: AppServerNotification): boolean {
   return typeof type === "string" && type.replace(/[-_\s]/gu, "").toLowerCase() === "contextcompaction";
 }
 
-/** A pending id is the registry's placeholder, never a provider turn. */
-function providerTurnId(turnId: string | undefined): string | undefined {
-  return turnId && !turnId.startsWith("pending:") ? turnId : undefined;
+/** ACP uses owner-issued prompt IDs for the lifetime of each turn. */
+function compactionTurnId(backend: AppServerBackendKind, threadId: string, turnId: string | undefined): string | undefined {
+  if (!turnId) return undefined;
+  return !turnId.startsWith("pending:") || (isAcpBackendId(backend) && isAcpPromptTurnId(threadId, turnId))
+    ? turnId
+    : undefined;
 }
 
 /**
@@ -195,7 +200,7 @@ export class ThreadAutoCompactionMonitor {
       }
       case "turn/started": {
         const started = (notification as Notification<"turn/started">).params;
-        const turnId = providerTurnId(started.turn?.id ?? started.turnId);
+        const turnId = compactionTurnId(event.backend, threadId, started.turn?.id ?? started.turnId);
         if (!turnId) return;
         this.enqueueKnown(event.backend, threadId, (entry) => this.apply(entry, { kind: "turn-started", turnId }));
         return;
@@ -204,7 +209,7 @@ export class ThreadAutoCompactionMonitor {
       case "turn/failed":
       case "turn/cancelled": {
         const ended = (notification as Notification<"turn/completed" | "turn/failed" | "turn/cancelled">).params;
-        const turnId = providerTurnId(ended.turnId ?? undefined);
+        const turnId = compactionTurnId(event.backend, threadId, ended.turnId ?? ended.turn?.id);
         const outcome = notification.method === "turn/completed"
           ? "completed"
           : notification.method === "turn/failed"
@@ -322,7 +327,7 @@ export class ThreadAutoCompactionMonitor {
       }
     }
     const activeTurnId = this.host.activeTurnId(entry);
-    const turnId = options.ended ? undefined : providerTurnId(activeTurnId);
+    const turnId = options.ended ? undefined : compactionTurnId(entry.backend, entry.threadId, activeTurnId);
     const running = !options.ended && activeTurnId !== undefined;
     return {
       turnRunning: running,
@@ -436,7 +441,7 @@ export class ThreadAutoCompactionMonitor {
           await this.apply(entry, { kind: "dispatch-deferred" });
           return;
         }
-        const turnId = providerTurnId(result.turnId);
+        const turnId = compactionTurnId(entry.backend, entry.threadId, result.turnId);
         await this.apply(entry, {
           kind: "dispatch-accepted",
           ...(turnId ? { turnId } : {}),

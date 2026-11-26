@@ -60,12 +60,10 @@ import { contextWindowMoonFace } from "./context-window-moon";
 import {
   applyContextWindowBudget,
   autoCompactionStatusLine,
-  isAutoCompactionActive,
   type ContextWindowBudget,
-  type ThreadAutoCompactionStatus,
 } from "./context-window-budget";
 import { useAutoCompactionRules, useContextMoonStyle } from "../../lib/context-moon-preferences";
-import { useThreadAutoCompaction } from "../../lib/useThreadAutoCompaction";
+import { isAutoCompactionActive, type ThreadAutoCompactionStatus } from "../../lib/thread-session-transitions";
 import {
   getShortTermRateLimitResetAt,
   getRateLimitResetSendAt,
@@ -508,6 +506,7 @@ export type ComposerProps = {
   /** Threads searchable from the inline `#` reference picker. */
   threads?: NavigationThreadSummary[];
   disabled?: boolean;
+  autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
   draftStore?: ComposerDraftStore;
@@ -16654,8 +16653,8 @@ function useComposerController(props: ComposerProps) {
             </span>
           ) : null}
           <ContextWindowMoon
+            autoCompaction={props.autoCompaction}
             contextWindow={props.contextWindow}
-            desktopApi={props.desktopApi}
             model={selectedModelOption?.id ?? currentSettings?.model}
             thread={props.thread}
             onOpenUsage={props.desktopApi?.openUsageActivity
@@ -17811,14 +17810,14 @@ function AttachmentTooltip({
 }
 
 function ContextWindowMoon({
+  autoCompaction,
   contextWindow: reportedContextWindow,
-  desktopApi,
   model,
   thread,
   onOpenUsage,
 }: {
+  autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
-  desktopApi?: DesktopApi;
   /** The thread's model, matched against auto-compaction rules. */
   model?: string;
   thread?: NavigationThreadSummary;
@@ -17832,7 +17831,6 @@ function ContextWindowMoon({
   const opensUsage = Boolean(onOpenUsage);
   const moonStyle = useContextMoonStyle();
   const savedRules = useAutoCompactionRules();
-  const autoCompaction = useThreadAutoCompaction(desktopApi, thread);
   const backend = thread?.source;
   const ownedElsewhere = Boolean(thread?.federation?.ref);
   // A rule's budget, when one matches, is the window the moon measures.
@@ -17842,15 +17840,27 @@ function ContextWindowMoon({
       : undefined,
     [backend, model, ownedElsewhere, reportedContextWindow, savedRules],
   );
-  const contextWindow = measured?.contextWindow;
+  const awaitingContextUsage = autoCompaction?.phase === "verifying";
+  const contextWindow = awaitingContextUsage ? undefined : measured?.contextWindow;
   const budget = measured?.budget;
+  const moonFace = contextWindow ? contextWindowMoonFace(contextWindow.usedPercent, moonStyle) : undefined;
+  const card = useMemo(() => contextWindow || awaitingContextUsage ? (
+    <ContextWindowUsageCard
+      autoCompaction={autoCompaction}
+      budget={budget}
+      contextWindow={contextWindow}
+      critical={moonFace?.critical ?? false}
+      opensUsage={opensUsage}
+      phaseLabel={moonFace?.phaseLabel}
+    />
+  ) : undefined, [awaitingContextUsage, autoCompaction, budget, contextWindow, moonFace?.critical, moonFace?.phaseLabel, opensUsage]);
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
   // hover-time values. If the context state disappears (thread switch),
   // drop the card so it can't reappear at stale coordinates.
   useEffect(() => {
-    if (!contextWindow) {
+    if (!card) {
       recordRendererUpdate(RendererUpdateEvent.contextCardClear, tooltipId);
       hide();
       return;
@@ -17858,63 +17868,45 @@ function ContextWindowMoon({
     if (!visible) {
       return;
     }
-    const moonFace = contextWindowMoonFace(contextWindow.usedPercent, moonStyle);
     recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
-    update(
-      <ContextWindowUsageCard
-        autoCompaction={autoCompaction}
-        budget={budget}
-        contextWindow={contextWindow}
-        critical={moonFace.critical}
-        opensUsage={opensUsage}
-        phaseLabel={moonFace.phaseLabel}
-      />,
-    );
-  }, [autoCompaction, budget, contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
+    update(card);
+  }, [card, hide, tooltipId, update, visible]);
 
-  if (!contextWindow) {
+  if (!card) {
     return null;
   }
 
-  const moonFace = contextWindowMoonFace(contextWindow.usedPercent, moonStyle);
-  const phaseLabel = moonFace.phaseLabel;
-  const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
-  const tokenLabel = `${formatCompactNumber(
-    contextWindow.totalTokens
-  )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
+  const percentLabel = contextWindow ? `${Math.round(contextWindow.usedPercent)}%` : undefined;
+  const tokenLabel = contextWindow
+    ? `${formatCompactNumber(contextWindow.totalTokens)}/${formatCompactNumber(contextWindow.modelContextWindow)}`
+    : undefined;
   const compacting = isAutoCompactionActive(autoCompaction);
-  const label = budget
-    ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : phaseLabel}`
-    : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const label = awaitingContextUsage
+    ? "Context usage pending"
+    : budget
+      ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : moonFace?.phaseLabel}`
+      : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${moonFace?.phaseLabel}`;
   const moonClassName = compacting ? " context-window-moon--compacting" : "";
-  const card = (
-    <ContextWindowUsageCard
-      autoCompaction={autoCompaction}
-      budget={budget}
-      contextWindow={contextWindow}
-      critical={moonFace.critical}
-      opensUsage={opensUsage}
-      phaseLabel={phaseLabel}
-    />
-  );
   const face = (
     <>
-      <span
-        aria-hidden="true"
-        className={`context-window-moon__sprite context-window-moon__sprite--${moonFace.phaseKind}`}
-      >
-        <span className="context-window-moon__disc">
-          <svg
-            className="context-window-moon__shadow"
-            focusable="false"
-            preserveAspectRatio="none"
-            viewBox="-1 -1 2 2"
-          >
-            <path d={moonFace.path} />
-          </svg>
+      {moonFace ? (
+        <span
+          aria-hidden="true"
+          className={`context-window-moon__sprite context-window-moon__sprite--${moonFace.phaseKind}`}
+        >
+          <span className="context-window-moon__disc">
+            <svg
+              className="context-window-moon__shadow"
+              focusable="false"
+              preserveAspectRatio="none"
+              viewBox="-1 -1 2 2"
+            >
+              <path d={moonFace.path} />
+            </svg>
+          </span>
         </span>
-      </span>
-      <span className="context-window-moon__label">{percentLabel}</span>
+      ) : null}
+      {percentLabel ? <span className="context-window-moon__label">{percentLabel}</span> : <span>Pending</span>}
       {tooltipNode}
     </>
   );
@@ -17963,12 +17955,23 @@ function ContextWindowUsageCard({
 }: {
   autoCompaction?: ThreadAutoCompactionStatus;
   budget?: ContextWindowBudget;
-  contextWindow: ThreadContextWindowState;
+  contextWindow?: ThreadContextWindowState;
   critical: boolean;
   opensUsage?: boolean;
-  phaseLabel: string;
+  phaseLabel?: string;
 }) {
-  const statusLine = budget ? autoCompactionStatusLine(autoCompaction, formatCompactNumber) : undefined;
+  const statusLine = autoCompactionStatusLine(autoCompaction, formatCompactNumber);
+  if (!contextWindow) {
+    return (
+      <>
+        <div className="context-usage-card__header">
+          <span className="context-usage-card__eyebrow">Context usage</span>
+          <span className="context-usage-card__phase">Pending</span>
+        </div>
+        <div className="context-usage-card__status">{statusLine}</div>
+      </>
+    );
+  }
   const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
   const hasBreakdown =
     typeof contextWindow.inputTokens === "number"

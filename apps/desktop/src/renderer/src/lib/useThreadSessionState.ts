@@ -1,10 +1,12 @@
 import {
   hydrationLifecycleChanged,
+  isAutoCompactionActive,
   isCurrentHydration,
   transitionHydratedActiveTurn,
   transitionHydratedInteractions,
   transitionThreadHydration,
   type ThreadActiveTurnState,
+  type ThreadAutoCompactionStatus,
   type ThreadHydrationState,
   type ThreadLiveLifecycleVersion,
   type ThreadPendingInteractionState,
@@ -175,6 +177,7 @@ type PendingTurnUsage = {
 };
 
 type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState & {
+  autoCompaction?: ThreadAutoCompactionStatus;
   completionHydrationRetries: number;
   contextWindow?: ThreadContextWindowState;
   error?: string;
@@ -5630,6 +5633,7 @@ export function useThreadSessionState(params: {
   loadOlder: () => Promise<void>;
   reload: () => Promise<void>;
   messages: AppServerThreadMessage[];
+  autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingMcpInteraction?: PendingMcpInteractionState;
@@ -6924,6 +6928,11 @@ export function useThreadSessionState(params: {
       // must not recreate this window's discarded transcript cache.
       if (managesRemoteRetentionRef.current && event.federationTarget?.scope === "remote"
         && isUnfocusedThread && !isRetainedRemoteThread) return;
+      if (event.notification.method === "thread/autoCompaction/updated") {
+        const autoCompaction = event.notification.params as ThreadAutoCompactionStatus;
+        updateSession(targetThreadKey, (current) => ({ ...current, autoCompaction, lastTouchedAt: Date.now() }));
+        return;
+      }
       // A local thread can run without any window opening it. Keep its
       // lifecycle live, and let the first owner read supply its history.
       const retainTranscript = !isUnfocusedThread || isRetainedRemoteThread
@@ -9329,12 +9338,17 @@ export function useThreadSessionState(params: {
   const safetyReviewStatus = selectedSession
     ? safetyReviewStatusText(selectedSession)
     : undefined;
+  const autoCompaction = selectedSession?.autoCompaction;
+  const compactingContext = isAutoCompactionActive(autoCompaction)
+    && (selectedSession?.activeTurnId || selectedSession?.backendReportedActive);
   const pendingStatusText =
     selectedSession?.pendingStatusText &&
     selectedSession.pendingStatusText !== "Thinking"
       ? selectedSession.pendingStatusText
       : safetyReviewStatus
         ? safetyReviewStatus
+      : compactingContext
+        ? "Compacting context"
       : selectedSession?.transientMessage
         ? undefined
         : selectedSession?.pendingStatusText ??
@@ -9401,6 +9415,7 @@ export function useThreadSessionState(params: {
     loadOlder,
     reload,
     messages,
+    autoCompaction,
     contextWindow: selectedSession?.contextWindow,
     pendingAssistantMessage: selectedSession?.pendingAssistantMessage,
     pendingMcpInteraction: selectedSession?.pendingMcpInteraction,
