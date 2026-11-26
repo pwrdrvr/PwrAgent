@@ -33,20 +33,33 @@ export function resolvePwragentRootFromEnv(env = process.env) {
   return explicit ? path.resolve(explicit) : path.join(os.homedir(), ".pwragent");
 }
 
+function pathApi(platform = process.platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
 function normalizeDirectory(directory, platform = process.platform) {
-  const resolved = path.resolve(directory);
+  const api = pathApi(platform);
+  const resolved = api.resolve(directory);
   let canonical = resolved;
-  try {
-    canonical = (realpathSync.native ?? realpathSync)(resolved);
-  } catch {
-    canonical = resolved;
+  if (platform === process.platform) {
+    try {
+      canonical = (realpathSync.native ?? realpathSync)(resolved);
+    } catch {
+      canonical = resolved;
+    }
   }
   return platform === "win32" ? canonical.toLowerCase() : canonical;
 }
 
-function directoryMatchDepth(cwdNormalized, grantDirNormalized) {
-  const relative = path.relative(grantDirNormalized, cwdNormalized);
-  if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+function directoryMatchDepth(cwdNormalized, grantDirNormalized, platform = process.platform) {
+  const api = pathApi(platform);
+  const relative = api.relative(grantDirNormalized, cwdNormalized);
+  if (
+    relative === ""
+    || (relative !== ".."
+      && !relative.startsWith(`..${api.sep}`)
+      && !api.isAbsolute(relative))
+  ) {
     return grantDirNormalized.length;
   }
   return undefined;
@@ -121,35 +134,39 @@ export function resolveLocalCpuBudget({
           deadlineAt: Math.min(...matched.map((grant) => grant.deadlineAt)),
         };
       }
-    }
-
-    const normalizedCwd = normalizeDirectory(cwd, platform);
-    let bestDepth = -1;
-    let bestMatches = [];
-    for (const grant of grants) {
-      let grantBest = -1;
-      for (const candidate of grant.directories) {
-        const depth = directoryMatchDepth(normalizedCwd, normalizeDirectory(candidate, platform));
-        if (depth !== undefined && depth > grantBest) {
-          grantBest = depth;
+    } else {
+      const normalizedCwd = normalizeDirectory(cwd, platform);
+      let bestDepth = -1;
+      let bestMatches = [];
+      for (const grant of grants) {
+        let grantBest = -1;
+        for (const candidate of grant.directories) {
+          const depth = directoryMatchDepth(
+            normalizedCwd,
+            normalizeDirectory(candidate, platform),
+            platform,
+          );
+          if (depth !== undefined && depth > grantBest) {
+            grantBest = depth;
+          }
+        }
+        if (grantBest < 0) continue;
+        if (grantBest > bestDepth) {
+          bestDepth = grantBest;
+          bestMatches = [grant];
+        } else if (grantBest === bestDepth) {
+          bestMatches.push(grant);
         }
       }
-      if (grantBest < 0) continue;
-      if (grantBest > bestDepth) {
-        bestDepth = grantBest;
-        bestMatches = [grant];
-      } else if (grantBest === bestDepth) {
-        bestMatches.push(grant);
-      }
-    }
 
-    if (bestMatches.length > 0) {
-      return {
-        units: Math.min(...bestMatches.map((grant) => grant.units)),
-        source: "directory-checkout",
-        allocationId: bestMatches[0].allocationId,
-        deadlineAt: Math.min(...bestMatches.map((grant) => grant.deadlineAt)),
-      };
+      if (bestMatches.length > 0) {
+        return {
+          units: Math.min(...bestMatches.map((grant) => grant.units)),
+          source: "directory-checkout",
+          allocationId: bestMatches[0].allocationId,
+          deadlineAt: Math.min(...bestMatches.map((grant) => grant.deadlineAt)),
+        };
+      }
     }
   }
 

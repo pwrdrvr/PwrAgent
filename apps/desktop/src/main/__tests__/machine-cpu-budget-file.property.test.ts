@@ -183,4 +183,152 @@ describe("machine CPU budget file publication", () => {
       }
     }), { numRuns: 25 });
   });
+
+  it("retries stale budget file deletion after a transient unlink failure", () => {
+    const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "pwragent-cpu-budget-retry-")));
+    const budgetPath = machineCpuBudgetFilePath(root, "default");
+    let remainingFailures = 1;
+    const warnings: unknown[] = [];
+    const publisher = createMachineCpuBudgetPublisher({
+      pwragentRoot: root,
+      profile: "default",
+      instanceId: "inst-default",
+      localThreadDirectories: () => [path.join(root, "wt")],
+      removeFile: (filePath) => {
+        if (remainingFailures > 0) {
+          remainingFailures -= 1;
+          throw new Error("EBUSY");
+        }
+        rmSync(filePath, { force: true });
+      },
+      warn: (error) => warnings.push(error),
+    });
+
+    try {
+      publisher.sync({
+        resourceId: "machine:m1:cpu",
+        canonicalKey: "machine:m1:cpu",
+        displayName: "This machine",
+        kindLabel: "Machine compute",
+        aliases: [],
+        conflictDomainIds: ["machine:m1:cpu"],
+        relatedResourceIds: [],
+        placement: "machine",
+        visibility: "machine",
+        allocationScope: "machine",
+        authorityId: "machine:m1:cpu",
+        condition: "available",
+        sharing: { mode: "counted", capacity: 18, inUse: 4, unitLabel: "CPU slots" },
+        enforcement: { coverage: "advisory", summary: "", gaps: [] },
+        allocations: [{
+          allocationId: "alloc-1",
+          state: "granted",
+          holder: { kind: "thread", thread: { backend: "claude", threadId: "t1", title: "T1", instanceId: "inst-default" } },
+          taskLabel: "tests",
+          executorLabel: "No managed job",
+          grantedAt: 1_000,
+          deadlineAt: 60_000,
+          renewalsUsed: 0,
+          renewalsAllowed: 1,
+          authorityEpoch: 1,
+          generation: 1,
+          units: 4,
+          lastKnown: false,
+          viewerOwns: false,
+        }],
+        queue: [],
+        readiness: [],
+        advertisements: [],
+        routes: [],
+        instructions: null,
+        policy: { useScope: "", manageScope: "", maxHoldMs: 1_000, renewalRule: "", queueOrder: "backfill", costCeilingLabel: "", finalEffect: "" },
+        cleanup: { state: "verified", detail: "" },
+        recovery: null,
+        recoveries: [],
+        ownershipConflict: null,
+        definition: { revision: 1, updatedAt: 1_000, publication: "published" },
+        actions: {},
+      }, 1_000);
+      expect(existsSync(budgetPath)).toBe(true);
+
+      // First cleanup hits transient EBUSY: file remains, so lastFingerprint must stay dirty.
+      publisher.sync(undefined, 2_000);
+      expect(warnings).toHaveLength(1);
+      expect(existsSync(budgetPath)).toBe(true);
+
+      // Next sync retries and deletes the stale file.
+      publisher.sync(undefined, 3_000);
+      expect(existsSync(budgetPath)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("publishes the delegated executor thread when a machine CPU grant is handed off", async () => {
+    const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "pwragent-cpu-budget-handoff-")));
+    const requesterDir = path.join(root, "worktrees", "requester");
+    const executorDir = path.join(root, "worktrees", "executor");
+    const directories = new Map<string, string[]>([
+      ["requester", [requesterDir]],
+      ["executor", [executorDir]],
+    ]);
+    const now = 10_000;
+    const publisher = createMachineCpuBudgetPublisher({
+      pwragentRoot: root,
+      profile: "default",
+      instanceId: "inst-default",
+      localThreadDirectories: ({ threadId }) => directories.get(threadId),
+    });
+    const service = new DesktopResourceCheckoutService({
+      viewer: { instanceId: "inst-default", instanceLabel: "Studio", profile: "default", machineId: "mach-1" },
+      machineStore: openResourceCheckoutStore(path.join(root, "resource-checkouts.db"), "mach-1"),
+      machineCpuCount: 12,
+      bindings: [],
+      now: () => now,
+      requestPeer: async () => { throw new Error("Offline"); },
+      machineCpuBudgetPublisher: publisher,
+      warn: () => {},
+    });
+
+    try {
+      const resourceId = service.read().resources[0]!.resourceId;
+      const grant = await service.perform({
+        kind: "request",
+        idempotencyKey: "req-handoff",
+        resourceId,
+        purpose: "delegated run",
+        expectedDurationMs: 60_000,
+        units: 6,
+      }, service.threadActor("claude", "requester"));
+      expect(grant.outcome).toBe("granted");
+      if (grant.outcome !== "granted") return;
+
+      const delegated = await service.perform({
+        kind: "delegate_execution",
+        idempotencyKey: "del-handoff",
+        resourceId,
+        allocationId: grant.allocationId,
+        generation: grant.generation,
+        authorityEpoch: 1,
+        executor: { backend: "codex", threadId: "executor", instanceId: "inst-default" },
+      }, service.threadActor("claude", "requester"), true);
+      expect(delegated.outcome).toBe("accepted");
+
+      expect(resolveLocalCpuBudget({
+        cwd: executorDir,
+        env: { PWRAGENT_HOME: root, PWRAGENT_BACKEND: "codex", PWRAGENT_THREAD_ID: "executor" },
+        now,
+        fallback: null,
+      })?.units).toBe(6);
+      expect(resolveLocalCpuBudget({
+        cwd: requesterDir,
+        env: { PWRAGENT_HOME: root, PWRAGENT_BACKEND: "claude", PWRAGENT_THREAD_ID: "requester" },
+        now,
+        fallback: null,
+      })).toBeUndefined();
+    } finally {
+      await service.close(0);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

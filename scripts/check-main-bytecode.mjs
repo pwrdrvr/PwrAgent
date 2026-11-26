@@ -56,13 +56,22 @@ async function check() {
     const localBudget = resolveLocalCpuBudget({ cwd: root });
     let node;
     let electron;
-    if (localBudget && localBudget.units < 4) {
-      node = await compileBytecode([...modules, ...production]);
-      electron = production.length ? await compileBytecode(production, { executable, env: { ELECTRON_RUN_AS_NODE: "1" } }) : undefined;
+    if (!production.length) {
+      node = await compileBytecode(modules, { cwd: root, ...(localBudget ? { maxProcesses: localBudget.units } : {}) });
+    } else if (localBudget && localBudget.units < 2) {
+      node = await compileBytecode([...modules, ...production], { cwd: root, maxProcesses: 1 });
+      electron = await compileBytecode(production, { cwd: root, executable, env: { ELECTRON_RUN_AS_NODE: "1" }, maxProcesses: 1 });
+    } else if (localBudget) {
+      const electronMax = Math.max(1, Math.floor(localBudget.units / 2));
+      const nodeMax = Math.max(1, localBudget.units - electronMax);
+      [node, electron] = await Promise.all([
+        compileBytecode([...modules, ...production], { cwd: root, maxProcesses: nodeMax }),
+        compileBytecode(production, { cwd: root, executable, env: { ELECTRON_RUN_AS_NODE: "1" }, maxProcesses: electronMax }),
+      ]);
     } else {
       [node, electron] = await Promise.all([
-        compileBytecode([...modules, ...production]),
-        production.length ? compileBytecode(production, { executable, env: { ELECTRON_RUN_AS_NODE: "1" } }) : undefined,
+        compileBytecode([...modules, ...production], { cwd: root }),
+        compileBytecode(production, { cwd: root, executable, env: { ELECTRON_RUN_AS_NODE: "1" } }),
       ]);
     }
     console.log(`Node compilation complete: ${node.records.length} records`);

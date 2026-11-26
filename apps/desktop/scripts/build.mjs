@@ -16,7 +16,11 @@ const cliPath = resolve(desktopRoot, "node_modules/electron-vite/bin/electron-vi
 export function buildDesktop(args = [], options = {}) {
   const run = options.spawnSync ?? spawnSync;
   const baseEnv = options.env ?? process.env;
-  const localBudget = resolveLocalCpuBudget({ cwd: resolve(desktopRoot, "../.."), env: baseEnv });
+  const budgetLookupEnv =
+    options.env && !("PWRAGENT_HOME" in options.env) && process.env.PWRAGENT_HOME
+      ? { ...baseEnv, PWRAGENT_HOME: process.env.PWRAGENT_HOME }
+      : baseEnv;
+  const localBudget = resolveLocalCpuBudget({ cwd: resolve(desktopRoot, "../.."), env: budgetLookupEnv });
   const budgetEnv = localBudget ? buildBudgetThreadEnv(localBudget.units, baseEnv) : {};
   for (const target of ["main", "preload", "renderer"]) {
     const result = run(options.node ?? process.execPath, [

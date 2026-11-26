@@ -1,5 +1,11 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { buildDesktop } from "./build.mjs";
+
+const REPOSITORY_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 describe("desktop build processes", () => {
   it("builds all targets in order with the caller's Node and heap options", () => {
@@ -54,6 +60,49 @@ describe("desktop build processes", () => {
       expect(error).toHaveBeenCalledWith("Desktop main build failed: spawn failed");
     } finally {
       error.mockRestore();
+    }
+  });
+
+  it("caps native thread-pool env vars from a disposable PWRAGENT_HOME checkout", () => {
+    const tempRoot = realpathSync(mkdtempSync(path.join(os.tmpdir(), "pwragent-build-budget-")));
+    try {
+      const budgetDir = path.join(tempRoot, "runtime", "machine-cpu-budgets");
+      mkdirSync(budgetDir, { recursive: true });
+      writeFileSync(
+        path.join(budgetDir, "default.json"),
+        JSON.stringify({
+          version: 1,
+          instanceId: "inst-test",
+          profile: "default",
+          capacity: 18,
+          updatedAt: Date.now(),
+          grants: [
+            {
+              allocationId: "alloc-build",
+              units: 6,
+              deadlineAt: Date.now() + 60_000,
+              backend: "codex",
+              threadId: "t-build",
+              directories: [REPOSITORY_ROOT],
+            },
+          ],
+        }),
+        "utf8",
+      );
+      const run = vi.fn(() => ({ status: 0 }));
+      expect(buildDesktop([], {
+        env: { PWRAGENT_HOME: tempRoot },
+        spawnSync: run,
+      })).toBe(0);
+      for (const [, , options] of run.mock.calls) {
+        expect(options.env.ROLLDOWN_WORKER_THREADS).toBe("6");
+        expect(options.env.TOKIO_WORKER_THREADS).toBe("6");
+        expect(options.env.RAYON_NUM_THREADS).toBe("6");
+        expect(options.env.UV_THREADPOOL_SIZE).toBe("6");
+        expect(options.env.GOMAXPROCS).toBe("6");
+      }
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
     }
   });
 });

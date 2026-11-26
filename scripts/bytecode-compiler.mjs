@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { availableParallelism, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { closeSync, createReadStream, mkdtempSync, openSync, rmSync, writeSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { setFlagsFromString } from "node:v8";
@@ -10,6 +10,7 @@ import { readJsonRpcLines } from "../apps/desktop/scripts/json-rpc-lines.mjs";
 import { resolveLocalCpuBudget } from "./local-cpu-budget.mjs";
 
 export const bytecodeBudget = 25 * 1024;
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // Vitest 5 module-evaluator context, including CJS globals. Do not substitute
 // a bare ESM compilation: the context layout changes function bytecode.
@@ -53,8 +54,9 @@ export async function compileBytecode(modules, options = {}) {
   const listing = options.listing ?? (process.platform === "linux" ? "file" : "pipe");
   // This one process reads every pipe, and beyond two it is the limit.
   const defaultProcesses = listing === "file" ? availableParallelism() : Math.min(2, availableParallelism());
-  const localBudget = resolveLocalCpuBudget();
-  const processes = options.processes ?? (localBudget ? Math.min(defaultProcesses, localBudget.units) : defaultProcesses);
+  const localBudget = resolveLocalCpuBudget({ cwd: options.cwd ?? repositoryRoot });
+  const budgetCap = options.maxProcesses ?? localBudget?.units;
+  const processes = options.processes ?? (budgetCap !== undefined ? Math.min(defaultProcesses, budgetCap) : defaultProcesses);
   const count = Math.max(1, Math.min(processes, modules.length));
   const shards = Array.from({ length: count }, () => ({ size: 0, modules: [] }));
   for (const module of [...modules].sort((a, b) => b.code.length - a.code.length)) {

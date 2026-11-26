@@ -170,8 +170,63 @@ describe("local CPU budget resolution", () => {
           env: { ...baseEnv, PWRAGENT_BACKEND: "claude", PWRAGENT_THREAD_ID: "t-b" },
           now,
         })?.units).toBe(childUnitsB);
+        // An explicitly identified thread without its own grant must never inherit
+        // another thread's directory checkout.
+        expect(resolveLocalCpuBudget({
+          cwd: childDir,
+          env: { ...baseEnv, PWRAGENT_BACKEND: "claude", PWRAGENT_THREAD_ID: "t-unreserved" },
+          now,
+          fallback: null,
+        })).toBeUndefined();
       },
     ), { numRuns: 40 });
+  });
+
+  it("matches subdirectories whose names begin with '..' and respects explicit platform paths", () => {
+    const root = makeTempDir("pwragent-budget-dotdot-");
+    const worktree = path.join(root, "wt");
+    const dotdotSubdir = path.join(worktree, "..cache", "nested");
+    const siblingDir = path.join(root, "wt-other");
+    mkdirSync(dotdotSubdir, { recursive: true });
+    mkdirSync(siblingDir, { recursive: true });
+    const now = 5_000;
+
+    writeBudgetSnapshot(root, "default", [
+      {
+        allocationId: "alloc-dotdot",
+        units: 6,
+        deadlineAt: now + 10_000,
+        backend: "codex",
+        threadId: "t-dotdot",
+        directories: [worktree],
+      },
+      {
+        allocationId: "alloc-win",
+        units: 5,
+        deadlineAt: now + 10_000,
+        backend: "codex",
+        threadId: "t-win",
+        directories: ["C:\\Users\\Dev\\Worktrees\\Repo"],
+      },
+    ]);
+
+    const env = { PWRAGENT_HOME: root };
+    expect(resolveLocalCpuBudget({ cwd: dotdotSubdir, env, now, fallback: null })?.units).toBe(6);
+    expect(resolveLocalCpuBudget({ cwd: siblingDir, env, now, fallback: null })).toBeUndefined();
+    expect(resolveLocalCpuBudget({
+      cwd: "c:\\users\\dev\\worktrees\\repo\\..cache\\sub",
+      env,
+      now,
+      platform: "win32",
+      fallback: null,
+    })?.units).toBe(5);
+    expect(resolveLocalCpuBudget({
+      cwd: "c:\\users\\dev\\worktrees\\other",
+      env,
+      now,
+      platform: "win32",
+      fallback: null,
+    })).toBeUndefined();
   });
 
   it("splits typed lint budgets without exceeding units >= 2 and preserves explicit thread env overrides", () => {
@@ -220,7 +275,12 @@ describe("local CPU budget resolution", () => {
       delete env.CI;
       delete env.VITEST_MAX_WORKERS;
       delete env.PWRAGENT_CPU_BUDGET;
+      delete env.PWRAGENT_THREAD_ID;
+      delete env.PWRAGENT_BACKEND;
       delete env.ROLLDOWN_WORKER_THREADS;
+      delete env.TOKIO_WORKER_THREADS;
+      delete env.RAYON_NUM_THREADS;
+      delete env.UV_THREADPOOL_SIZE;
       delete env.GOMAXPROCS;
       Object.assign(env, { PWRAGENT_HOME: pwragentRoot, ...extraEnv });
       const result = spawnSync(
@@ -250,6 +310,13 @@ describe("local CPU budget resolution", () => {
     // Regression case: `npx vitest run --config vitest.workspace.mts` without --maxWorkers
     // automatically honors the thread's 3-CPU checkout instead of defaulting to 17 workers.
     expect(probe([])).toEqual({ maxWorkers: 3, rolldown: "3", go: "3" });
+    // An explicitly identified thread without its own grant falls back to the local default
+    // rather than inheriting another thread's directory grant.
+    expect(probe([], { PWRAGENT_BACKEND: "claude", PWRAGENT_THREAD_ID: "unreserved-thread" })).toEqual({
+      maxWorkers: expectedDefault,
+      rolldown: String(expectedDefault),
+      go: String(expectedDefault),
+    });
     // Even without an active checkout file, local runs stay capped at the 4-CPU default
     // rather than spawning `availableParallelism() - 1` workers.
     expect(probe([], { PWRAGENT_HOME: emptyRoot })).toEqual({

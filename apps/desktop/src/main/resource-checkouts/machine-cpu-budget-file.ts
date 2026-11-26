@@ -60,8 +60,10 @@ export function collectLocalMachineCpuBudgetGrants(
   const grants: MachineCpuBudgetGrantEntry[] = [];
   for (const allocation of resource.allocations) {
     if (allocation.state !== "granted" && allocation.state !== "active") continue;
-    if (allocation.holder.kind !== "thread") continue;
-    const { backend, threadId, instanceId } = allocation.holder.thread;
+    const executionThread = allocation.delegatedExecutor
+      ?? (allocation.holder.kind === "thread" ? allocation.holder.thread : undefined);
+    if (!executionThread) continue;
+    const { backend, threadId, instanceId } = executionThread;
     if (instanceId !== undefined && instanceId !== viewerInstanceId) continue;
     const units = allocation.units;
     if (typeof units !== "number" || !Number.isInteger(units) || units < 1) continue;
@@ -83,17 +85,21 @@ export function createMachineCpuBudgetPublisher(options: {
   profile: string;
   instanceId: string;
   localThreadDirectories?: (thread: Pick<ResourceThreadRef, "backend" | "threadId">) => readonly string[] | undefined;
+  removeFile?: (targetPath: string) => void;
   warn?: (error: unknown) => void;
 }): MachineCpuBudgetPublisher {
   const directory = machineCpuBudgetsDirectory(options.pwragentRoot);
   const targetPath = machineCpuBudgetFilePath(options.pwragentRoot, options.profile);
+  const unlink = options.removeFile ?? ((filePath: string) => rmSync(filePath, { force: true }));
   let lastFingerprint: string | undefined;
 
-  const removeFile = (): void => {
+  const removeFile = (): boolean => {
     try {
-      rmSync(targetPath, { force: true });
+      unlink(targetPath);
+      return true;
     } catch (error) {
       options.warn?.(error);
+      return false;
     }
   };
 
@@ -105,8 +111,7 @@ export function createMachineCpuBudgetPublisher(options: {
         options.localThreadDirectories,
       );
       if (grants.length === 0) {
-        if (lastFingerprint !== "") {
-          removeFile();
+        if (lastFingerprint !== "" && removeFile()) {
           lastFingerprint = "";
         }
         return;
@@ -142,8 +147,9 @@ export function createMachineCpuBudgetPublisher(options: {
     },
     clear() {
       if (lastFingerprint === "") return;
-      removeFile();
-      lastFingerprint = "";
+      if (removeFile()) {
+        lastFingerprint = "";
+      }
     },
   };
 }
