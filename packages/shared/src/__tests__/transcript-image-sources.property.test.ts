@@ -57,6 +57,16 @@ it("agrees with WHATWG URL classification for transcript image fallbacks", () =>
   }));
 });
 
+it.each([
+  [2047, "PwrSnap image unavailable."],
+  [2048, "PwrSnap image unavailable."],
+  [2049, undefined],
+])("applies the fallback length limit to a %i-character PwrSnap resource URL", (length, reason) => {
+  const prefix = "pwrsnap://capture/";
+  const url = prefix + "a".repeat(length - prefix.length);
+  expect(transcriptImageUnavailableReason({ url })).toBe(reason);
+});
+
 it("keeps the older-peer fallback for normalized loopback URLs with long signatures", () => {
   const url = ` \u0000Ht\tTP:\\\\0x7f.1:051729\\tmp\\%2E%2e\\media?signature=${"a".repeat(2048)}#fragment `;
   expect(transcriptImageUnavailableReason({ url })).toBe("PwrSnap image unavailable.");
