@@ -1031,16 +1031,17 @@ function isMarkdownTableRow(line: string): boolean {
 }
 
 function splitTableCells(line: string): string[] {
+  const trimmed = line.trim();
   const cells: string[] = [];
   let current = "";
   let index = 0;
   let leadingPipe = false;
   let trailingPipe = false;
 
-  while (index < line.length) {
-    const char = line[index];
-    if (char === "\\" && index + 1 < line.length) {
-      current += line.slice(index, index + 2);
+  while (index < trimmed.length) {
+    const char = trimmed[index];
+    if (char === "\\" && index + 1 < trimmed.length) {
+      current += trimmed.slice(index, index + 2);
       index += 2;
       continue;
     }
@@ -1051,7 +1052,7 @@ function splitTableCells(line: string): string[] {
         cells.push(current.trim());
       }
       current = "";
-      trailingPipe = index === line.length - 1;
+      trailingPipe = index === trimmed.length - 1;
       index += 1;
       continue;
     }

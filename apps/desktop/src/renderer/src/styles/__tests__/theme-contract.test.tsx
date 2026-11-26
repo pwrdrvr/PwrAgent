@@ -2557,6 +2557,18 @@ describe("Tangerine Terminal theme contract", () => {
       ".thread-markdown__th .transcript-message__link,\n.thread-markdown__td .transcript-message__link",
     );
     expect(linkRule).toContain("overflow-wrap: anywhere;");
+
+    // `tag` columns use `width: 1%` and rely on `white-space: nowrap` to keep
+    // min-content equal to the tag/header width; inline code or links inside
+    // them must not inherit `white-space: normal; overflow-wrap: anywhere` and
+    // collapse the column to a single character wide.
+    const tagInlineRule = extractRuleBody(
+      css,
+      ".thread-markdown__th[data-col-kind=\"tag\"] .transcript-message__code,\n.thread-markdown__td[data-col-kind=\"tag\"] .transcript-message__code,\n.thread-markdown__th[data-col-kind=\"tag\"] .transcript-message__link,\n.thread-markdown__td[data-col-kind=\"tag\"] .transcript-message__link",
+    );
+    expect(tagInlineRule).toContain("white-space: nowrap;");
+    expect(tagInlineRule).toContain("overflow-wrap: normal;");
+    expect(tagInlineRule).toContain("word-break: normal;");
   });
 
   it("bounds long transcript code and quote blocks with their own vertical scroll", () => {

@@ -2397,6 +2397,36 @@ Implementation notes remain in a readable bubble.`;
     expect(tableArticle?.querySelector("table.thread-markdown__table")).toBeInTheDocument();
   });
 
+  it("keeps compact 3-column tables with CRLF endings or surrounding spaces out of wide-table breakout", () => {
+    const compactCrlfTable = [
+      "  | Key | Env | Mode |  ",
+      "  | --- | --- | --- |  ",
+      "  | API | Prod | On |  ",
+    ].join("\r\n");
+
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-compact-crlf-table",
+            role: "assistant",
+            text: `Summary:\r\n\r\n${compactCrlfTable}`,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    expect(articles).toHaveLength(1);
+    expect(articles[0]).not.toHaveClass("transcript-message--table");
+    expect(articles[0]).not.toHaveClass("transcript-message--table-wide");
+    expect(container.querySelector("table.thread-markdown__table")).toBeInTheDocument();
+  });
+
   it("opens transcript file links with the OS default and provides a separate editor action", async () => {
     const openApplication = vi.fn(async () => ({ opened: true as const }));
     const openPath = vi.fn(async () => ({ opened: true as const }));

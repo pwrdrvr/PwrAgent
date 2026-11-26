@@ -32925,6 +32925,17 @@ a.transcript-message__messaging-origin:focus-visible {
   word-break: normal;
 }
 
+/* Tag columns use width: 1% and rely on white-space: nowrap so min-content
+   keeps the full tag/header width instead of collapsing to a single char. */
+.thread-markdown__th[data-col-kind="tag"] .transcript-message__code,
+.thread-markdown__td[data-col-kind="tag"] .transcript-message__code,
+.thread-markdown__th[data-col-kind="tag"] .transcript-message__link,
+.thread-markdown__td[data-col-kind="tag"] .transcript-message__link {
+  white-space: nowrap;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 .markdown-document-modal {
   position: fixed;
   inset: 0;
