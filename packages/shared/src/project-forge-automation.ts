@@ -60,6 +60,15 @@ export type ProjectForgeAutomation = {
    * predates it drops it and merges none, so it never merges more.
    */
   mergeBranches?: string[];
+  /**
+   * Pull requests PwrAgent leaves to the destination repository's
+   * maintainers, such as an upstream PR a maintainer labeled
+   * `takeover:in-progress`. Auto-fix does not repair a matching PR and
+   * PwrAgent raises no Review or Merge card for it; the operator's own
+   * turns and an agent's PR watches are unaffected. Present only when it
+   * holds a rule; an older owner never stores it.
+   */
+  handsOff?: ProjectForgeHandsOffRule[];
   /** While paused, refuse agent messages from other threads. */
   refuseThreadMessages: boolean;
   /**
@@ -70,6 +79,26 @@ export type ProjectForgeAutomation = {
 };
 
 export type ProjectForgeAutomationWakeupPolicy = "hold" | "discard";
+
+/**
+ * One hands-off rule: a destination repository, and optionally a label
+ * pattern a PR into it must carry. Without a label, every PR into the
+ * repository is hands-off.
+ */
+export type ProjectForgeHandsOffRule = {
+  /** Destination `owner/name`, compared without case. */
+  repository: string;
+  /**
+   * Label name pattern, compared without case. `*` matches any run of
+   * characters, so `takeover:*` matches `takeover:in-progress`.
+   */
+  label?: string;
+};
+
+/** Longest repository or label pattern a rule keeps. */
+export const MAX_HANDS_OFF_RULE_TEXT = 200;
+/** Most hands-off rules a project keeps. */
+export const MAX_HANDS_OFF_RULES = 20;
 
 export type ProjectMergeBuildWatches = "default" | "on" | "off";
 
@@ -118,6 +147,7 @@ export function resolveProjectForgeAutomation(value: unknown): ProjectForgeAutom
     prOffers: flag("prOffers"),
     ...(record.neverMerge === true ? { neverMerge: true as const } : {}),
     ...(record.neverMerge === true ? resolveMergeBranchesField(record.mergeBranches) : {}),
+    ...withHandsOff(normalizeHandsOffRules(record.handsOff)),
     refuseThreadMessages: flag("refuseThreadMessages"),
     wakeupPolicy: record.wakeupPolicy === "discard" ? "discard" : "hold",
   };
@@ -132,6 +162,7 @@ export function isDefaultProjectForgeAutomation(value: ProjectForgeAutomation): 
     && (value.mergeBuildWatches ?? "default") === "default"
     && value.prOffers !== false
     && value.neverMerge !== true
+    && !value.handsOff?.length
     && value.refuseThreadMessages === DEFAULT_PROJECT_FORGE_AUTOMATION.refuseThreadMessages
     && value.wakeupPolicy === DEFAULT_PROJECT_FORGE_AUTOMATION.wakeupPolicy;
 }
@@ -259,6 +290,177 @@ export function resolveProjectNeverMergePolicy(
 export function formatProjectMergeBranches(branches: readonly string[]): string {
   if (branches.length <= 1) return branches[0] ?? "";
   return `${branches.slice(0, -1).join(", ")} or ${branches.at(-1)}`;
+}
+
+function withHandsOff(
+  rules: ProjectForgeHandsOffRule[],
+): { handsOff?: ProjectForgeHandsOffRule[] } {
+  return rules.length > 0 ? { handsOff: rules } : {};
+}
+
+/**
+ * Keeps the well-formed rules: a trimmed `owner/name` repository and an
+ * optional trimmed label pattern, each at most `MAX_HANDS_OFF_RULE_TEXT`
+ * long. Drops duplicates (ignoring case) and keeps the first
+ * `MAX_HANDS_OFF_RULES`. Never throws.
+ */
+export function normalizeHandsOffRules(value: unknown): ProjectForgeHandsOffRule[] {
+  if (!Array.isArray(value)) return [];
+  const rules: ProjectForgeHandsOffRule[] = [];
+  const seen = new Set<string>();
+  for (const entry of value) {
+    if (rules.length >= MAX_HANDS_OFF_RULES) break;
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Record<string, unknown>;
+    const repository = normalizeHandsOffRepository(record.repository);
+    if (!repository) continue;
+    const label = typeof record.label === "string" ? record.label.trim() : "";
+    if (label.length > MAX_HANDS_OFF_RULE_TEXT) continue;
+    const key = `${repository}\n${label}`.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    rules.push(label ? { repository, label } : { repository });
+  }
+  return rules;
+}
+
+/** What follows `owner/name` in a GitHub URL for something in the repository. */
+const GITHUB_RESOURCE_SEGMENTS = new Set([
+  "pull", "pulls", "issues", "tree", "blob", "commit", "commits", "compare", "actions", "releases", "tags", "wiki",
+]);
+
+/**
+ * `owner/name` from what the operator typed, or undefined. Accepts a pasted
+ * repository URL (`https://github.com/owner/name`) or a host-prefixed key
+ * (`github.com/owner/name`) and drops a trailing `.git` or slash. GitLab
+ * subgroups (`group/sub/name`) keep every segment.
+ */
+export function normalizeHandsOffRepository(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  let text = value.trim();
+  const url = /^https?:\/\/[^/]+\/(.+)$/i.exec(text);
+  if (url?.[1]) text = url[1];
+  text = text.replace(/\/+$/, "").replace(/\.git$/i, "");
+  if (text.length === 0 || text.length > MAX_HANDS_OFF_RULE_TEXT) return undefined;
+  const segments = text.split("/");
+  // `github.com/owner/name`, as the Forge Automation subtitle shows it: a
+  // first segment with a dot is a host, never an owner, when two remain.
+  if (segments.length >= 3 && segments[0]!.includes(".")) segments.shift();
+  // A pasted PR, issue or file URL names its repository first: GitLab ends
+  // the project path at `-`, and on GitHub a resource follows owner/name.
+  const projectEnd = segments.indexOf("-");
+  if (projectEnd >= 2) segments.length = projectEnd;
+  else if (segments.length > 2 && GITHUB_RESOURCE_SEGMENTS.has(segments[2]!.toLowerCase())) segments.length = 2;
+  if (segments.length < 2) return undefined;
+  if (segments.some((segment) => !/^[\w.-]+$/.test(segment))) return undefined;
+  return segments.join("/");
+}
+
+/**
+ * Whether a label pattern matches a label name, ignoring case. `*` matches
+ * any run of characters. A linear two-pointer match, never a RegExp: a
+ * backtracking `.*` per star made `*a*a*a…b` take seconds on one label.
+ */
+export function handsOffLabelMatches(pattern: string, label: string): boolean {
+  const p = pattern.toLowerCase();
+  const t = label.toLowerCase();
+  let i = 0;
+  let j = 0;
+  let star = -1;
+  let resume = 0;
+  while (j < t.length) {
+    if (i < p.length && p[i] === "*") {
+      star = i++;
+      resume = j;
+    } else if (i < p.length && p[i] === t[j]) {
+      i++;
+      j++;
+    } else if (star >= 0) {
+      i = star + 1;
+      j = ++resume;
+    } else {
+      return false;
+    }
+  }
+  while (i < p.length && p[i] === "*") i++;
+  return i === p.length;
+}
+
+/** The part of a PR a hands-off rule reads. */
+export type HandsOffPullRequest = {
+  /** Destination repository owner (`PrSummary.org`). */
+  org: string;
+  /** Destination repository name (`PrSummary.repo`). */
+  repo: string;
+  /** Label names, when the poll read them. */
+  labels?: readonly string[];
+};
+
+/** The rule a PR matched, and the label that matched it. */
+export type HandsOffMatch = {
+  rule: ProjectForgeHandsOffRule;
+  /** The PR's label that matched `rule.label`; absent for a repository rule. */
+  label?: string;
+};
+
+/**
+ * The first rule that makes a PR hands-off, or undefined. A label rule
+ * matches only labels the poll read: a PR whose labels are unknown is not
+ * hands-off by a label rule.
+ */
+export function findHandsOffMatch(
+  value: Pick<ProjectForgeAutomation, "handsOff"> | undefined,
+  pr: HandsOffPullRequest,
+): HandsOffMatch | undefined {
+  const rules = value?.handsOff;
+  if (!rules?.length) return undefined;
+  const repository = `${pr.org}/${pr.repo}`.toLowerCase();
+  for (const rule of rules) {
+    if (rule.repository.toLowerCase() !== repository) continue;
+    if (!rule.label) return { rule };
+    const label = pr.labels?.find((name) => handsOffLabelMatches(rule.label!, name));
+    if (label !== undefined) return { rule, label };
+  }
+  return undefined;
+}
+
+/**
+ * The repositories whose PRs must have their labels read, lowercased: those
+ * with a label rule in any of the given projects. A repository rule alone
+ * needs no labels.
+ */
+export function handsOffLabelRepositories(
+  values: Iterable<Pick<ProjectForgeAutomation, "handsOff"> | undefined>,
+): Set<string> {
+  const repositories = new Set<string>();
+  for (const value of values) {
+    for (const rule of value?.handsOff ?? []) {
+      if (rule.label) repositories.add(rule.repository.toLowerCase());
+    }
+  }
+  return repositories;
+}
+
+/**
+ * Why PwrAgent leaves a PR alone, as a phrase for the PR activity log
+ * ("Cancelled: hands-off, labeled takeover:in-progress") and the PR card.
+ */
+export function describeHandsOffMatch(match: HandsOffMatch): string {
+  return match.label !== undefined
+    ? `hands-off, labeled ${match.label}`
+    : `hands-off, PRs into ${match.rule.repository}`;
+}
+
+/** Thread status guidance for a hands-off PR. */
+export function buildHandsOffGuidance(params: {
+  projectLabel: string;
+  pullRequest: string;
+  match: HandsOffMatch;
+}): string {
+  const reason = params.match.label !== undefined
+    ? `it carries the ${params.match.label} label`
+    : `it targets ${params.match.rule.repository}`;
+  return `${params.pullRequest} is hands-off in ${params.projectLabel}'s Forge Automation because ${reason}: its maintainers own it now. Auto-fix will not repair it and no Review or Merge card is raised. Do not push fixes, rebase, or resolve conflicts on it unless the operator asks in this turn.`;
 }
 
 /**

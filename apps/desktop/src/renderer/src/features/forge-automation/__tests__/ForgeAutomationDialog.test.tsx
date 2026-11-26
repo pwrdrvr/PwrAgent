@@ -275,4 +275,72 @@ describe("ForgeAutomationDialog", () => {
     pressEscape();
     expect(props.onCancel).toHaveBeenCalledTimes(1);
   });
+
+  it("adds a hands-off label rule from a suggested repository and saves it", async () => {
+    const { props } = renderDialog({ repositorySuggestions: ["pwrdrvr/t3code", "pingdotgg/t3code"] });
+    const group = screen.getByRole("group", { name: "Hands-off pull requests" });
+    expect(within(group).queryByRole("list", { name: "Hands-off rules" })).not.toBeInTheDocument();
+
+    fireEvent.click(within(group).getByRole("button", { name: "pingdotgg/t3code" }));
+    expect(within(group).getByRole("textbox", { name: "Repository" })).toHaveValue("pingdotgg/t3code");
+    fireEvent.change(within(group).getByRole("textbox", { name: "Label" }), { target: { value: " takeover:* " } });
+    fireEvent.click(within(group).getByRole("button", { name: "Add rule" }));
+
+    const rules = within(group).getByRole("list", { name: "Hands-off rules" });
+    expect(within(rules).getByText("pingdotgg/t3code")).toBeInTheDocument();
+    expect(within(rules).getByText("labeled takeover:*")).toBeInTheDocument();
+    expect(within(group).getByRole("textbox", { name: "Repository" })).toHaveValue("");
+
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith({
+      ...DEFAULT_PROJECT_FORGE_AUTOMATION,
+      handsOff: [{ repository: "pingdotgg/t3code", label: "takeover:*" }],
+    }));
+  });
+
+  it("refuses a repository that is not owner/name and a duplicate rule", () => {
+    renderDialog({
+      automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, handsOff: [{ repository: "pingdotgg/t3code" }] },
+    });
+    const group = screen.getByRole("group", { name: "Hands-off pull requests" });
+    const repository = within(group).getByRole("textbox", { name: "Repository" });
+
+    fireEvent.change(repository, { target: { value: "t3code" } });
+    fireEvent.keyDown(repository, { key: "Enter" });
+    expect(within(group).getByRole("alert")).toHaveTextContent("Enter the repository as owner/name.");
+    expect(repository).toHaveAttribute("aria-invalid", "true");
+
+    fireEvent.change(repository, { target: { value: "https://github.com/PingDotGG/T3Code" } });
+    fireEvent.click(within(group).getByRole("button", { name: "Add rule" }));
+    expect(within(group).getByRole("alert")).toHaveTextContent("That rule is already in the list.");
+  });
+
+  it("will not save while the add row holds a rule that was never added", async () => {
+    const { props } = renderDialog();
+    const group = screen.getByRole("group", { name: "Hands-off pull requests" });
+    const repository = within(group).getByRole("textbox", { name: "Repository" });
+    fireEvent.change(repository, { target: { value: "canvas-org/canvas" } });
+
+    save();
+    expect(await screen.findByText("Add the hands-off rule you typed, or clear it, before saving."))
+      .toBeInTheDocument();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(repository, { target: { value: "" } });
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
+  });
+
+  it("removes a rule, and saves no list once the last one is gone", async () => {
+    const { props } = renderDialog({
+      automation: {
+        ...DEFAULT_PROJECT_FORGE_AUTOMATION,
+        handsOff: [{ repository: "pingdotgg/t3code", label: "takeover:*" }],
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Remove pingdotgg/t3code, labeled takeover:*" }));
+    expect(screen.queryByRole("list", { name: "Hands-off rules" })).not.toBeInTheDocument();
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
+  });
 });

@@ -173,6 +173,7 @@ import { ProjectIndex, type ProjectIndexEntry } from "./ProjectIndex";
 import { projectTurnMarks } from "./project-index";
 import { ForgeAutomationDialog } from "../forge-automation/ForgeAutomationDialog";
 import { ResumeForgeAutomationDialog } from "../forge-automation/ResumeForgeAutomationDialog";
+import { usePublishForgeAutomationOpener } from "../forge-automation/thread-hands-off";
 import {
   canEditProjectForgeAutomation,
   findThreadProjectDirectory,
@@ -940,7 +941,7 @@ function SidebarContent(props: SidebarProps) {
   const [projectCheckoutsDirectory, setProjectCheckoutsDirectory] = useState<NavigationDirectorySummary>();
   /** The project whose Forge Automation dialog is open. */
   const [forgeAutomationDialog, setForgeAutomationDialog] = useState<
-    { directory: NavigationDirectorySummary } | undefined
+    { directory: NavigationDirectorySummary; returnFocus?: RefObject<HTMLElement | null> } | undefined
   >();
   /** Projects whose menu pause toggle is still saving or reading held wake-ups. */
   const forgePauseInFlightRef = useRef(new Set<string>());
@@ -2260,6 +2261,28 @@ function SidebarContent(props: SidebarProps) {
   const peerAdvertisesForgeAutomation = useCallback(
     (instanceId: string): boolean => peerForgeAutomationInstanceIds?.has(instanceId) === true,
     [peerForgeAutomationInstanceIds],
+  );
+  // The composer's Auto-fix menu and this sidebar's PR card open this
+  // sidebar's dialog, for the projects its own menu offers it on.
+  const federationOwnerForgeAutomation = props.federationOwnerForgeAutomation === true;
+  const inFederationWindow = federationTarget !== undefined;
+  const canOpenForgeAutomation = useCallback(
+    (directory: NavigationDirectorySummary): boolean => canEditProjectForgeAutomation(
+      directory,
+      inFederationWindow,
+      federationOwnerForgeAutomation,
+      peerAdvertisesForgeAutomation,
+    ),
+    [inFederationWindow, federationOwnerForgeAutomation, peerAdvertisesForgeAutomation],
+  );
+  const openForgeAutomationForThread = useEventCallback((
+    directory: NavigationDirectorySummary,
+    returnFocus?: RefObject<HTMLElement | null>,
+  ) => setForgeAutomationDialog({ directory, ...(returnFocus ? { returnFocus } : {}) }));
+  usePublishForgeAutomationOpener(
+    props.directories,
+    props.onSetProjectForgeAutomation ? canOpenForgeAutomation : undefined,
+    openForgeAutomationForThread,
   );
   // A placeholder row opens the project menu only for its peer project's
   // Forge Automation items. DirectoriesList asks during render, so this is
@@ -5125,9 +5148,10 @@ function SidebarContent(props: SidebarProps) {
               listHeldWakeups={props.onListProjectHeldWakeups
                 ? () => props.onListProjectHeldWakeups!(directory)
                 : undefined}
+              repositorySuggestions={projectRemoteRepositories(directory)}
               projectDetail={directory.repositoryKey ?? directory.path}
               projectLabel={directory.label}
-              returnFocus={directoryContextMenuOpenerRef}
+              returnFocus={forgeAutomationDialog.returnFocus ?? directoryContextMenuOpenerRef}
               onCancel={() => setForgeAutomationDialog(undefined)}
               onSubmit={async (automation) => {
                 if (directory.forgeAutomation?.paused && !automation.paused) {
@@ -5691,4 +5715,22 @@ function RuntimeIdentityButton(props: {
       {tooltip.tooltipNode}
     </>
   );
+}
+
+/**
+ * The project's fetch remotes as `owner/name`, origin first: a fork lists
+ * its upstream too, for the Forge Automation hands-off picks. Keys read
+ * `host/owner/name`.
+ */
+function projectRemoteRepositories(
+  directory: Pick<NavigationDirectorySummary, "repositoryKey" | "repositoryKeys">,
+): string[] {
+  const repositories = new Map<string, string>();
+  for (const key of [directory.repositoryKey, ...(directory.repositoryKeys ?? [])]) {
+    const repository = key?.split("/").slice(1).join("/");
+    if (repository?.includes("/") && !repositories.has(repository.toLowerCase())) {
+      repositories.set(repository.toLowerCase(), repository);
+    }
+  }
+  return [...repositories.values()].slice(0, 6);
 }

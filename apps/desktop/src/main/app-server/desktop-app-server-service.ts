@@ -49,7 +49,11 @@ import { describeStackAutomationBlock, nextStackAdvance, stackDispatchBlock } fr
 import { readLocalHeadPastPrHead } from "../pr-status/local-pr-head";
 import { PrChangeIdentityReader } from "../pr-status/pr-change-identity";
 import { PrReviewOfferCoordinator, type PrReviewOfferThread } from "../pr-status/pr-review-offer-coordinator";
-import { selectPrReviewOfferOwner, type PrReviewOfferCandidate } from "../pr-status/pr-review-offer-owner";
+import {
+  ineligiblePrReviewOfferThreads,
+  selectPrReviewOfferOwner,
+  type PrReviewOfferCandidate,
+} from "../pr-status/pr-review-offer-owner";
 import { describePrReviewReadiness } from "../pr-status/pr-review-readiness";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
@@ -321,6 +325,7 @@ import {
   type WatchThreadPullRequestResult,
   type ThreadPullRequestWatchListResult,
   type ThreadPullRequestAutomationStatus,
+  type ThreadForgeAutomationGates,
   type ThreadPullRequestReviewReadiness,
   type ThreadPullRequestWatchEvent,
   type ThreadPullRequestWatchSummary,
@@ -354,14 +359,21 @@ import {
   type ListProjectHeldWakeupsResponse,
   type ResolveProjectHeldWakeupsRequest,
   type ResolveProjectHeldWakeupsResponse,
+  type HandsOffMatch,
   type ProjectForgeAutomation,
+  buildHandsOffGuidance,
   buildProjectNeverMergeRefusal,
+  describeHandsOffMatch,
+  findHandsOffMatch,
   buildProjectPrDependencyNotice,
   buildProjectPrWatchRefusal,
   isDefaultProjectForgeAutomation,
+  MAX_HANDS_OFF_RULES,
+  normalizeHandsOffRules,
   PROJECT_PAUSED_ERROR_CODE,
   projectAllowsAutoFixKind,
   projectAllowsForgePolling,
+  projectAllowsPrOffers,
   projectAllowsPrWatches,
   projectMergeBranches,
   projectMergesPullRequest,
@@ -382,6 +394,7 @@ import {
   buildThreadIdentityKey,
   isAppServerBackendKind,
   parseThreadIdentityKey,
+  pullRequestAttachmentIntent,
 } from "@pwragent/shared/contracts/navigation";
 import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import {
@@ -2905,7 +2918,7 @@ class DesktopAppServerService {
       candidates.push({
         backend: thread.source,
         threadId: thread.id,
-        prKeys: (thread.prs ?? []).filter((pr) => this.matchesPrimaryRepository(pr, primaryRepoKey)).map(getPrStatusKey),
+        prKeys: this.autoFixCandidatePrKeys(thread.prs ?? [], primaryRepoKey),
       });
     }
     if (options.replace) {
@@ -3043,6 +3056,16 @@ class DesktopAppServerService {
     return changed;
   }
 
+  /**
+   * The PRs a thread stands for in Auto-fix election: those of its primary
+   * repository, less any the operator switched off for this thread alone.
+   */
+  private autoFixCandidatePrKeys(prs: PrSummary[], primaryRepoKey: string | undefined): string[] {
+    return prs
+      .filter((pr) => pr.autoFixOff !== true && this.matchesPrimaryRepository(pr, primaryRepoKey))
+      .map(getPrStatusKey);
+  }
+
   private async syncThreadPrAutoDispatchCandidates(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -3051,11 +3074,7 @@ class DesktopAppServerService {
       buildThreadIdentityKey(params.backend, params.threadId),
     );
     const prKeys = attachment
-      ? attachment.prs
-          .filter((pr) =>
-            this.matchesPrimaryRepository(pr, attachment.primaryRepoKey),
-          )
-          .map(getPrStatusKey)
+      ? this.autoFixCandidatePrKeys(attachment.prs, attachment.primaryRepoKey)
       : [];
     const changes = await this.getOverlayStore().syncThreadPrAutoDispatchCandidates({
       ...params,
@@ -3210,7 +3229,7 @@ class DesktopAppServerService {
         return normalizePrSummary({
           ...pr,
           linkedDirectoryPaths: candidate.linkedDirectoryPaths,
-          ...(candidate.explicitlyAttached ? { explicitlyAttached: true } : {}),
+          ...pullRequestAttachmentIntent(candidate),
         });
       });
       if (changed) {
@@ -5265,7 +5284,30 @@ class DesktopAppServerService {
             : "Background PR polling is active, but automatic PR repair is disabled globally in Git settings. Use watch_thread_pull_request for a bounded one-shot success, failure, merge, or close notification instead of polling or creating a monitor thread."
           : "Background PR polling and Auto-fix PR are off. PwrAgent will not wake this thread for PR status changes.";
     const projectSkippedKind = projectSkipsMergeConflicts ? "merge conflicts" : "failing CI";
-    const reviewReadiness = await this.readPrReviewReadiness(params, primaryPrs);
+    const handsOffPrs = forgeProject?.automation.handsOff
+      ? primaryPrs.flatMap((pr) => {
+        const match = this.prHandsOff(params, pr);
+        return match ? [{ pr, match }] : [];
+      })
+      : [];
+    const handsOffGuidance = handsOffPrs.map(({ pr, match }) => buildHandsOffGuidance({
+      projectLabel: forgeProject!.label,
+      pullRequest: `${pr.org}/${pr.repo}#${pr.number}`,
+      match,
+    }));
+    // By URL: a fork and its upstream number their PRs independently.
+    const handsOffUrls = new Set(handsOffPrs.map(({ pr }) => pr.url));
+    // A PR switched off here left this thread's candidacy, so no election
+    // explains it; say so rather than blame an older thread.
+    const switchedOffPrs = autoFixEnabled
+      ? primaryPrs.filter((pr) => pr.autoFixOff === true && !handsOffUrls.has(pr.url))
+      : [];
+    const switchedOffGuidance = switchedOffPrs.map((pr) =>
+      `Auto-fix is switched off for ${pr.org}/${pr.repo}#${pr.number} in this thread, so PwrAgent will not start a repair turn for it here. Do not poll its CI or create a monitor in its place; the operator can switch it back on in the thread's Pull requests panel or the composer's Auto-fix menu.`);
+    const everyPrSwitchedOff = primaryPrs.length > 0
+      && primaryPrs.every((pr) => pr.autoFixOff === true || handsOffUrls.has(pr.url));
+    const reviewReadiness = (await this.readPrReviewReadiness(params, primaryPrs))
+      .filter((entry) => !handsOffUrls.has(entry.prUrl));
     const neverMerge = forgeProject && projectNeverMerges(forgeProject.automation) ? forgeProject.label : undefined;
     const mergeBranches = projectMergeBranches(forgeProject?.automation);
     const readinessGuidance = reviewReadiness
@@ -5302,8 +5344,15 @@ class DesktopAppServerService {
     const stackGuidance = await this.threadStackGuidance(primaryPrs);
     const stackLines = stackGuidance.map(({ text }) => text);
     const guidance = (stackGuidance.some(({ held }) => held)
-      ? [...stackLines, ...neverMergeGuidance]
-      : [...stackLines, automationGuidance, ...readinessGuidance, ...neverMergeGuidance]).join(" ");
+      ? [...stackLines, ...handsOffGuidance, ...switchedOffGuidance, ...neverMergeGuidance]
+      : [
+        ...stackLines,
+        ...handsOffGuidance,
+        ...switchedOffGuidance,
+        ...(everyPrSwitchedOff && !autoFixActive && switchedOffPrs.length > 0 ? [] : [automationGuidance]),
+        ...readinessGuidance,
+        ...neverMergeGuidance,
+      ]).join(" ");
     return {
       backgroundPollingEnabled: this.backgroundPrPollingEnabled,
       autoFixAllowed: this.prAutoDispatchAllowed,
@@ -5314,7 +5363,40 @@ class DesktopAppServerService {
         : {}),
       ...(watches.length > 0 ? { watches } : {}),
       ...(reviewReadiness.length > 0 ? { reviewReadiness } : {}),
+      ...this.readThreadForgeAutomationGates(params, primaryPrs),
       guidance,
+    };
+  }
+
+  /** `prAutomation.forgeAutomation`: the rules, and what they make of each PR. */
+  private readThreadForgeAutomationGates(
+    ref: { backend: AppServerBackendKind; threadId: string },
+    prs: PrSummary[],
+  ): { forgeAutomation?: ThreadForgeAutomationGates } {
+    const index = getProjectForgeAutomationIndex();
+    const directoryKey = this.threadForgeDirectoryKey(ref);
+    if (!directoryKey) return {};
+    const automation = resolveProjectForgeAutomation(index.get(directoryKey));
+    return {
+      forgeAutomation: {
+        project: index.label(directoryKey),
+        handsOff: (automation.handsOff ?? []).map((rule) => ({ ...rule })),
+        pullRequests: prs.map((pr) => {
+          const match = findHandsOffMatch(automation, pr);
+          return {
+            url: pr.url,
+            ...(pr.labels ? { labels: [...pr.labels] } : {}),
+            ...(match ? {
+              handsOff: {
+                repository: match.rule.repository,
+                ...(match.rule.label ? { label: match.rule.label } : {}),
+                ...(match.label !== undefined ? { matchedLabel: match.label } : {}),
+              },
+            } : {}),
+            ...(pr.autoFixOff ? { autoFixOff: true as const } : {}),
+          };
+        }),
+      },
     };
   }
 
@@ -5426,6 +5508,44 @@ class DesktopAppServerService {
     };
   }
 
+  /**
+   * Switch Auto-fix off, or back on, for one PR of a thread whose Auto-fix
+   * stays on. The PR leaves the thread's candidacy, so the election either
+   * hands it to another thread that holds it or leaves it unrepaired.
+   */
+  async setThreadPullRequestAutoFix(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    prKey: string;
+    enabled: boolean;
+  }): Promise<void> {
+    const prKey = this.prRepositoryAliases.canonicalizeKey(request.prKey);
+    const { state, changed } = await this.getOverlayStore().setThreadPullRequestAutoFixOff({
+      backend: request.backend,
+      threadId: request.threadId,
+      matchesPrKey: (storedKey) => this.prRepositoryAliases.canonicalizeKey(storedKey) === prKey,
+      off: !request.enabled,
+    });
+    if (!changed || !state) return;
+    await this.publishThreadPullRequestsUpdated({
+      backend: request.backend,
+      threadId: request.threadId,
+      prs: state.prs ?? [],
+      detachedPrs: state.detachedPrs ?? [],
+    });
+    if (!request.enabled) {
+      await this.getPrAutoDispatchCoordinator().cancelPendingForPr({
+        backend: request.backend,
+        threadId: request.threadId,
+        prKey,
+      });
+    }
+    const currentPr = this.prStatusRegistry.get(prKey)?.pr;
+    if (currentPr && this.backgroundPrPollingEnabled) {
+      await this.handlePrAutoDispatchSnapshots([currentPr], this.nextPrObservationTimestamp(), true);
+    }
+  }
+
   /** Hold watch election while a merge button's forge write is still in flight. */
   async runObservedThreadPullRequestMerge(
     thread: { backend: AppServerBackendKind; threadId: string },
@@ -5505,6 +5625,7 @@ class DesktopAppServerService {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
     const staleKeys: string[] = [];
+    const labelChangedKeys: string[] = [];
     const endedChanged = new Set<string>();
     for (const pr of prs.map(stripPrLinkedDirectoryPaths)) {
       const key = getPrStatusKey(pr);
@@ -5526,6 +5647,11 @@ class DesktopAppServerService {
         if (transition) {
           transition.threadKeys = this.findThreadKeysForPrKey(key);
           transitions.push(transition);
+        }
+        // Labels move no readiness field, but they can make a PR hands-off,
+        // which withdraws its offer cards or lets them return.
+        if (current && JSON.stringify(current.pr.labels ?? null) !== JSON.stringify(pr.labels ?? null)) {
+          labelChangedKeys.push(key);
         }
         if (current && isTerminalPullRequest(current.pr) !== isTerminalPullRequest(pr)) {
           endedChanged.add(key);
@@ -5556,6 +5682,7 @@ class DesktopAppServerService {
       this.emitPrStatusTransitions(transitions, { observedAt: fetchedAt, source }, options.fetchedAtByKey);
       if (!options.skipMergeBuildWatch) this.armMergeBuildWatches(transitions);
     }
+    if (labelChangedKeys.length > 0) this.prReviewOfferCoordinator?.reevaluate(labelChangedKeys);
     this.publishPrAutoFixPrEndedChanges(endedChanged);
     return changedPrs;
   }
@@ -5739,7 +5866,7 @@ class DesktopAppServerService {
         ? normalizePrSummary({
             ...status,
             linkedDirectoryPaths: normalized.linkedDirectoryPaths,
-            ...(normalized.explicitlyAttached ? { explicitlyAttached: true } : {}),
+            ...pullRequestAttachmentIntent(normalized),
           })
         : normalized;
       const existingIndex = indexes.get(key);
@@ -5760,7 +5887,7 @@ class DesktopAppServerService {
           existing.linkedDirectoryPaths,
           row.linkedDirectoryPaths,
         ),
-        ...((existing.explicitlyAttached || row.explicitlyAttached) ? { explicitlyAttached: true } : {}),
+        ...pullRequestAttachmentIntent(existing, row),
       });
     }
     return merged;
@@ -5978,7 +6105,7 @@ class DesktopAppServerService {
             existing?.linkedDirectoryPaths,
             pr.linkedDirectoryPaths,
           ),
-          ...((existing?.explicitlyAttached || pr.explicitlyAttached) ? { explicitlyAttached: true } : {}),
+          ...pullRequestAttachmentIntent(existing, pr),
         });
       }
     }
@@ -6840,6 +6967,19 @@ class DesktopAppServerService {
     );
   }
 
+  /**
+   * The hands-off rule in the thread's project that leaves this PR to its
+   * maintainers, read against the registry's latest status (its labels).
+   */
+  private prHandsOff(
+    ref: { backend: AppServerBackendKind; threadId: string },
+    pr: PrSummary,
+  ): HandsOffMatch | undefined {
+    const automation = this.threadForgeAutomation(ref);
+    if (!automation?.handsOff) return undefined;
+    return findHandsOffMatch(automation, this.prStatusRegistry.get(getPrStatusKey(pr))?.pr ?? pr);
+  }
+
   private threadKeyForgeAutomation(threadKey: string): ProjectForgeAutomation | undefined {
     if (!getProjectForgeAutomationIndex().hasAny()) return undefined;
     const identity = parseThreadIdentityKey(threadKey);
@@ -6864,6 +7004,18 @@ class DesktopAppServerService {
       ...(mergeBranches.length ? { mergeBranches } : {}),
       ...(pr && !pr.baseRefName?.trim() ? { baseUnknown: true } : {}),
     });
+  }
+
+  /**
+   * The Directories project a thread files under, whether or not it stores
+   * a Forge Automation setting (`resolveThreadForgeProject` needs one).
+   */
+  private threadForgeDirectoryKey(ref: { backend: AppServerBackendKind; threadId: string }): string | undefined {
+    const thread = { backend: ref.backend, threadId: ref.threadId };
+    return getProjectForgeAutomationIndex().directoryKeyForThread(
+      thread,
+      () => getDesktopBackendRegistry().getCachedThreadSummary(thread),
+    );
   }
 
   private resolveThreadForgeProject(ref: {
@@ -6913,9 +7065,12 @@ class DesktopAppServerService {
     if (eventKinds.length === 0 || (!validate && !hasProjectRules)) {
       return await store.getPrAutoDispatchCandidateWinner({ prKey });
     }
+    // A thread whose project leaves this PR hands-off cannot claim it ahead
+    // of a thread in a project that repairs it.
     const allowsRepair = (candidate: { backend: AppServerBackendKind; threadId: string }) => {
       const automation = this.threadForgeAutomation(candidate);
-      return eventKinds.some((kind) => projectAllowsAutoFixKind(automation, kind));
+      return eventKinds.some((kind) => projectAllowsAutoFixKind(automation, kind))
+        && !(automation?.handsOff && findHandsOffMatch(automation, pr));
     };
     const winner = await store.getPrAutoDispatchCandidateWinner({
       prKey,
@@ -8483,6 +8638,37 @@ class DesktopAppServerService {
   }
 
   /**
+   * Add one hands-off rule to the thread's project, as the operator's click
+   * on an agent's proposal card. A rule already there is a no-op; the list's
+   * cap is a refusal, not a silent drop.
+   */
+  async addThreadProjectHandsOffRule(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    repository: string;
+    label?: string;
+  }): Promise<{ summary: string }> {
+    const [rule] = normalizeHandsOffRules([{ repository: request.repository, label: request.label }]);
+    if (!rule) throw new Error("That hands-off rule needs a repository as owner/name.");
+    const index = getProjectForgeAutomationIndex();
+    const directoryKey = this.threadForgeDirectoryKey(request);
+    if (!directoryKey) throw new Error("This thread is in no Directories project, so it has no Forge Automation to add the rule to.");
+    const label = index.label(directoryKey);
+    const current = resolveProjectForgeAutomation(index.get(directoryKey));
+    const existing = current.handsOff ?? [];
+    const described = rule.label ? `PRs into ${rule.repository} labeled ${rule.label}` : `PRs into ${rule.repository}`;
+    const key = (entry: { repository: string; label?: string }) => `${entry.repository}\n${entry.label ?? ""}`.toLowerCase();
+    if (existing.some((entry) => key(entry) === key(rule))) {
+      return { summary: `${label} already leaves ${described} hands-off` };
+    }
+    if (existing.length >= MAX_HANDS_OFF_RULES) {
+      throw new Error(`${label} already has ${MAX_HANDS_OFF_RULES} hands-off rules. Remove one in Forge Automation first.`);
+    }
+    await this.setProjectForgeAutomation({ directoryKey, automation: { ...current, handsOff: [...existing, rule] } });
+    return { summary: `${label} now leaves ${described} hands-off` };
+  }
+
+  /**
    * Save a local Directories project's Forge Automation in one commit, then
    * apply it: repairs the project no longer allows are cancelled, and a
    * resume re-checks its PRs and PR prerequisites at once. Polling follows
@@ -8603,10 +8789,26 @@ class DesktopAppServerService {
         if (identity) await coordinator.cancelPendingDisallowedByProject(identity);
       }
     }
+    const handsOffChanged = JSON.stringify(previous?.handsOff ?? [])
+      !== JSON.stringify(next?.handsOff ?? []);
+    if (handsOffChanged && getAppStateMode()) {
+      // Poll now, so a new label rule's labels arrive before a pending
+      // repair dispatches; that repair is cancelled at dispatch.
+      this.prPollingScheduler?.noteThreadInteraction(threadKeys);
+      void this.prPollingScheduler?.tick().catch((error: unknown) => {
+        appServerLog.debug("hands-off PR poll failed", {
+          directoryKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
     if (projectNeverMerges(previous) !== projectNeverMerges(next)
-      || projectMergeBranches(previous).join("\n") !== projectMergeBranches(next).join("\n")) {
-      // Withdraw an open merge offer now, or offer it again: a reviewed,
-      // green PR may see no further transition to re-evaluate it.
+      || projectMergeBranches(previous).join("\n") !== projectMergeBranches(next).join("\n")
+      || projectAllowsPrOffers(previous) !== projectAllowsPrOffers(next)
+      || handsOffChanged) {
+      // Withdraw an open offer now (a merge offer in a never-merge project,
+      // any offer the project no longer allows), or offer it again: a
+      // reviewed, green PR may see no further transition to re-evaluate it.
       this.prReviewOfferCoordinator?.reevaluate(threadKeys.flatMap((threadKey) => {
         const attachment = this.attachedPrsByThreadKey.get(threadKey);
         return (attachment?.prs ?? [])
@@ -9165,6 +9367,10 @@ class DesktopAppServerService {
         getCurrentPr: (prKey) => this.prStatusRegistry.get(prKey)?.pr,
         allowsEventKind: (identity, kind) =>
           projectAllowsAutoFixKind(this.threadForgeAutomation(identity), kind),
+        handsOff: (identity, pr) => {
+          const match = this.prHandsOff(identity, pr);
+          return match ? describeHandsOffMatch(match) : undefined;
+        },
         refreshPendingPrs: async (pending) =>
           await this.refreshPendingPrAutoDispatches(pending),
         isPrAttached: ({ backend, threadId, prKey }) =>
@@ -9207,6 +9413,7 @@ class DesktopAppServerService {
     }
     const coordinator = new PrReviewOfferCoordinator({
       ownerThread: async (prKey) => await this.prReviewOfferOwner(prKey),
+      ineligibleThreads: async (prKey) => ineligiblePrReviewOfferThreads(this.prReviewOfferCandidates(prKey)),
       threadPrKeys: (thread) => {
         const attachment = this.attachedPrsByThreadKey.get(
           buildThreadIdentityKey(thread.backend, thread.threadId),
@@ -9335,6 +9542,15 @@ class DesktopAppServerService {
    */
   private async prReviewOfferOwner(prKey: string): Promise<PrReviewOfferThread | undefined> {
     if (!this.backgroundPrPollingEnabled) return undefined;
+    return await selectPrReviewOfferOwner({
+      candidates: this.prReviewOfferCandidates(prKey),
+      readWinner: async () => await this.getOverlayStore().getPrAutoDispatchCandidateWinner({ prKey }),
+    });
+  }
+
+  /** Every thread whose primary PR this is, with what decides its offers. */
+  private prReviewOfferCandidates(prKey: string): PrReviewOfferCandidate[] {
+    const current = this.prStatusRegistry.get(prKey)?.pr;
     const candidates: PrReviewOfferCandidate[] = [];
     for (const threadKey of this.primaryPrThreadsByKey.get(prKey) ?? []) {
       const identity = parseThreadIdentityKey(threadKey);
@@ -9344,12 +9560,10 @@ class DesktopAppServerService {
         threadId: identity.threadId,
         archived: getDesktopBackendRegistry().getThreadInfo(identity)?.archived === true,
         automation: this.threadKeyForgeAutomation(threadKey),
+        ...(current && this.prHandsOff(identity, current) ? { handsOff: true } : {}),
       });
     }
-    return await selectPrReviewOfferOwner({
-      candidates,
-      readWinner: async () => await this.getOverlayStore().getPrAutoDispatchCandidateWinner({ prKey }),
-    });
+    return candidates;
   }
 
   private prReviewOfferDirectories(thread: PrReviewOfferThread, pr: PrSummary): string[] {

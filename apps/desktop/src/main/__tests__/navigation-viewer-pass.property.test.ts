@@ -853,8 +853,10 @@ it("keeps watch and healthy PR status when a different PR's stack read fails", a
       primaryAttachedPrsForThread: () => PrSummary[];
       readPrReviewReadiness: () => Promise<[]>;
       resolveThreadForgeProject: () => undefined;
+      threadForgeDirectoryKey: () => string | undefined;
       readPrStacks: (pr: PrSummary) => Promise<StackSummary[]>;
     };
+    vi.spyOn(internals, "threadForgeDirectoryKey").mockReturnValue(undefined);
     vi.spyOn(internals, "primaryAttachedPrsForThread").mockReturnValue([unavailable, healthy]);
     vi.spyOn(internals, "readPrReviewReadiness").mockResolvedValue([]);
     vi.spyOn(internals, "resolveThreadForgeProject").mockReturnValue(undefined);
@@ -867,6 +869,133 @@ it("keeps watch and healthy PR status when a different PR's stack read fails", a
     expect(status.autoFixEnabled).toBe(false);
     expect(status.guidance).toContain("#1 is held while stack settlement is unavailable.");
     expect(status.guidance).toContain("#2 is layer 1 of 1");
+  } finally {
+    db.close();
+  }
+});
+
+it("switches Auto-fix off for one PR: it leaves the thread's candidacy and guidance, and comes back when switched on", async () => {
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    current.store = store;
+    current.registry = {
+      publishLocalEvent: vi.fn(async () => undefined),
+      getThreadInfo: () => undefined,
+      invalidateWorktreeWorkingState: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    const thread = { backend: "codex" as const, threadId: "fixture" };
+    const upstream: PrSummary = {
+      number: 7, provider: "github.com", org: "upstream", repo: "t3code", state: "failing",
+      lifecycleState: "open", url: "https://github.com/upstream/t3code/pull/7",
+      sourceRepository: { provider: "github.com", org: "fork", repo: "t3code" },
+    };
+    const fork: PrSummary = {
+      number: 3, provider: "github.com", org: "fork", repo: "t3code", state: "failing",
+      lifecycleState: "open", url: "https://github.com/fork/t3code/pull/3",
+    };
+    await store.setThreadPrAutoDispatchEnabled({ ...thread, enabled: true });
+    await store.setThreadPullRequests({ ...thread, prs: [upstream, fork], fetchedAt: 1 });
+    const internals = service as unknown as {
+      attachedPrsByThreadKey: Map<string, { backend: "codex"; primaryRepoKey: string; prs: PrSummary[] }>;
+      readPrReviewReadiness: () => Promise<[]>;
+      resolveThreadForgeProject: () => undefined;
+      threadForgeDirectoryKey: () => string | undefined;
+      readPrStacks: () => Promise<StackSummary[]>;
+    };
+    vi.spyOn(internals, "threadForgeDirectoryKey").mockReturnValue(undefined);
+    internals.attachedPrsByThreadKey.set("codex:fixture", {
+      backend: "codex", primaryRepoKey: "github.com/fork/t3code", prs: [upstream, fork],
+    });
+    vi.spyOn(internals, "readPrReviewReadiness").mockResolvedValue([]);
+    vi.spyOn(internals, "resolveThreadForgeProject").mockReturnValue(undefined);
+    vi.spyOn(internals, "readPrStacks").mockResolvedValue([]);
+    const candidates = async () => (await store.listPrAutoDispatchCandidates(thread)).map((row) => row.prKey).sort();
+
+    await service.setThreadPullRequestAutoFix({ ...thread, prKey: "github.com/upstream/t3code#7", enabled: false });
+    expect((await store.getThreadOverlayState(thread))?.prs?.map((pr) => [pr.number, pr.autoFixOff])).toEqual([
+      [7, true], [3, undefined],
+    ]);
+    expect(await candidates()).toEqual(["github.com/fork/t3code#3"]);
+    expect((await service.getThreadPullRequestAutomationStatus(thread)).guidance)
+      .toContain("Auto-fix is switched off for upstream/t3code#7 in this thread");
+
+    // A lookup reports provider status only; the switch survives it.
+    await store.setThreadPullRequests({ ...thread, prs: [{ ...upstream, title: "Refreshed" }, fork], fetchedAt: 2 });
+    expect((await store.getThreadOverlayState(thread))?.prs?.[0]).toMatchObject({ title: "Refreshed", autoFixOff: true });
+
+    await service.setThreadPullRequestAutoFix({ ...thread, prKey: "github.com/upstream/t3code#7", enabled: true });
+    expect(await candidates()).toEqual(["github.com/fork/t3code#3", "github.com/upstream/t3code#7"]);
+    expect((await service.getThreadPullRequestAutomationStatus(thread)).guidance).not.toContain("switched off");
+  } finally {
+    db.close();
+  }
+});
+
+it("saves a proposed hands-off rule to the thread's project once, and reports the gates to the agent", async () => {
+  const { getProjectForgeAutomationIndex } = await import("../app-server/project-forge-automation-index");
+  const db = openInMemoryStateDb();
+  try {
+    const store = new SqliteOverlayStore(db);
+    current.store = store;
+    current.registry = {
+      publishLocalEvent: vi.fn(async () => undefined),
+      getThreadInfo: () => undefined,
+      getCachedThreadSummary: () => undefined,
+      invalidateWorktreeWorkingState: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    resetAppServerServiceForTests();
+    const service = initializeDesktopAppServerService();
+    const thread = { backend: "codex" as const, threadId: "fixture" };
+    const index = getProjectForgeAutomationIndex();
+    let stored: ProjectForgeAutomation | undefined;
+    vi.spyOn(index, "directoryKeyForThread").mockReturnValue("directory:/work/t3code");
+    vi.spyOn(index, "label").mockReturnValue("t3code");
+    vi.spyOn(index, "get").mockImplementation(() => stored);
+    const save = vi.spyOn(service, "setProjectForgeAutomation").mockImplementation(async (request) => {
+      stored = request.automation;
+      return {} as Awaited<ReturnType<typeof service.setProjectForgeAutomation>>;
+    });
+
+    await expect(service.addThreadProjectHandsOffRule({ ...thread, repository: "github.com/Upstream/t3code", label: "takeover:*" }))
+      .resolves.toEqual({ summary: "t3code now leaves PRs into Upstream/t3code labeled takeover:* hands-off" });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(stored?.handsOff).toEqual([{ repository: "Upstream/t3code", label: "takeover:*" }]);
+    // The same rule again, in any case, changes nothing.
+    await expect(service.addThreadProjectHandsOffRule({ ...thread, repository: "upstream/T3CODE", label: "TAKEOVER:*" }))
+      .resolves.toMatchObject({ summary: expect.stringContaining("already leaves") });
+    expect(save).toHaveBeenCalledTimes(1);
+    await expect(service.addThreadProjectHandsOffRule({ ...thread, repository: "t3code" })).rejects.toThrow("owner/name");
+
+    const upstream: PrSummary = {
+      number: 7, provider: "github.com", org: "upstream", repo: "t3code", state: "failing", lifecycleState: "open",
+      url: "https://github.com/upstream/t3code/pull/7", labels: ["bug", "takeover:maintainer"],
+    };
+    const fork: PrSummary = {
+      number: 3, provider: "github.com", org: "fork", repo: "t3code", state: "failing", lifecycleState: "open",
+      url: "https://github.com/fork/t3code/pull/3", autoFixOff: true,
+    };
+    const internals = service as unknown as {
+      primaryAttachedPrsForThread: () => PrSummary[];
+      readPrReviewReadiness: () => Promise<[]>;
+      readPrStacks: () => Promise<StackSummary[]>;
+    };
+    vi.spyOn(internals, "primaryAttachedPrsForThread").mockReturnValue([upstream, fork]);
+    vi.spyOn(internals, "readPrReviewReadiness").mockResolvedValue([]);
+    vi.spyOn(internals, "readPrStacks").mockResolvedValue([]);
+    expect((await service.getThreadPullRequestAutomationStatus(thread)).forgeAutomation).toEqual({
+      project: "t3code",
+      handsOff: [{ repository: "Upstream/t3code", label: "takeover:*" }],
+      pullRequests: [
+        {
+          url: upstream.url, labels: ["bug", "takeover:maintainer"],
+          handsOff: { repository: "Upstream/t3code", label: "takeover:*", matchedLabel: "takeover:maintainer" },
+        },
+        { url: fork.url, autoFixOff: true },
+      ],
+    });
   } finally {
     db.close();
   }

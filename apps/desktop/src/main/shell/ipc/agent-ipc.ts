@@ -1375,6 +1375,16 @@ export function registerAgentIpcHandlers(): void {
         // Auto-fix preference and its dispatch coordinator live on the
         // owning instance; a local write would flip a phantom row while
         // the owner keeps dispatching (or not).
+        if (
+          request.prKey !== undefined
+          && !getDesktopFederationRuntime().remoteTargetSupportsCapability(
+            request.federationTarget,
+            "thread_pull_request_auto_fix_v1",
+          )
+        ) {
+          // An older owner ignores prKey and would toggle the whole thread.
+          throw new Error("That machine cannot switch Auto-fix for one pull request yet.");
+        }
         return await getDesktopFederationRuntime()
           .remoteBackend(request.federationTarget)
           .setThreadPrAutoDispatch(stripFederationTarget(request));

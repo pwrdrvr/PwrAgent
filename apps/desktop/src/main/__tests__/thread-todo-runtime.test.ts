@@ -431,18 +431,20 @@ describe("thread to-do project menu", () => {
     expect(fake.todos.update).not.toHaveBeenCalled();
   });
 
-  it("never moves a merge or review card, and moves every other card", async () => {
-    // Oracle: a merge runs gh pr merge in the card's project and a review
-    // starts on the card's own thread, so a pick must not change where either
-    // runs. Every other action, and a reminder with none, takes the pick.
+  it("never moves a merge, review or hands-off rule card, and moves every other card", async () => {
+    // Oracle: a merge runs gh pr merge in the card's project, a review starts
+    // on the card's own thread, and a hands-off rule goes to that thread's
+    // project, so a pick must not change where any of them runs. Every other
+    // action, and a reminder with none, takes the pick.
     const runsInOwnProject = (type: ThreadTodoActionType | undefined) =>
-      type === "merge_pull_request" || type === "start_review";
+      type === "merge_pull_request" || type === "start_review" || type === "add_forge_hands_off_rule";
     const actionFor = (type: ThreadTodoActionType): ThreadTodoAction => {
       switch (type) {
         case "merge_pull_request": return { type, pullRequest: "42" };
         case "start_review": return { type };
         case "start_thread": return { type, prompt: "Build it" };
         case "send_message": return { type, prompt: "Ship it", target: { backend: "codex", threadId: "other" } };
+        case "add_forge_hands_off_rule": return { type, repository: "upstream/canvas", label: "takeover:*" };
       }
     };
     await fc.assert(fc.asyncProperty(
@@ -458,7 +460,9 @@ describe("thread to-do project menu", () => {
         const fake = deps(current);
         const picked = setThreadTodoProject({ id: "todo-1", projectKey }, fake);
         if (runsInOwnProject(type)) {
-          await expect(picked).rejects.toThrow("A review or merge card runs in its own thread's project.");
+          await expect(picked).rejects.toThrow(type === "add_forge_hands_off_rule"
+            ? "A hands-off rule card adds the rule to its own thread's project."
+            : "A review or merge card runs in its own thread's project.");
           expect(fake.todos.update).not.toHaveBeenCalled();
         } else {
           await picked;

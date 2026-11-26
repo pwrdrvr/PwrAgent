@@ -9580,7 +9580,8 @@ button.stack-display__thread,
    `aria-hidden` because flex blockifies them into two separate a11y nodes, so
    the name would otherwise be announced split mid-word. Absolute positioning
    keeps this out of the flex flow entirely. */
-.pr-status-card__branch-full {
+.pr-status-card__branch-full,
+.pr-status-card__label-note {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -9995,6 +9996,60 @@ button.stack-display__thread,
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+/* The PR's labels, read only for a repository a hands-off label rule
+   names. The one a rule matched carries the accent edge, and its name says
+   "hands-off" to assistive tech. */
+.pr-status-card__labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pr-status-card__label {
+  max-width: 100%;
+  padding: 1px 6px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pr-status-card__label--hands-off {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+/* The sidebar card's way to the project's hands-off rules, under its
+   Auto-fix row. Inset by its own padding so the words line up with the
+   row's label. */
+.pr-status-card__link {
+  margin: 1px -6px 0;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.pr-status-card__link:hover,
+.pr-status-card__link:focus-visible {
+  background: var(--accent-soft);
+  color: var(--text-primary);
 }
 
 /* A thread chip's hover card: the PR card's container and rows, plus the
@@ -12636,6 +12691,135 @@ button.stack-display__thread,
   color: var(--danger-text);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.forge-automation-dialog__hint code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.forge-automation-dialog__rules {
+  display: grid;
+  margin: 2px 0 4px;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  list-style: none;
+}
+
+/* Repository, condition, Remove: a long repository or label wraps inside its
+   own track rather than pushing Remove out of the row. */
+.forge-automation-dialog__rule {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 10px;
+  font-size: 13px;
+}
+
+.forge-automation-dialog__rule + .forge-automation-dialog__rule {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.forge-automation-dialog__rule-repository {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-condition {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+
+.forge-automation-dialog__rule-remove {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.forge-automation-dialog__rule-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-field input {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-field input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.forge-automation-dialog__rule-field input[aria-invalid="true"] {
+  border-color: var(--danger-text);
+}
+
+.forge-automation-dialog__rule-submit {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.forge-automation-dialog__rule-picks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.forge-automation-dialog__rule-picks > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.forge-automation-dialog__rule-pick {
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.forge-automation-dialog__rule-pick:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.forge-automation-dialog__rule-pick:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .forge-automation-dialog__status {
@@ -43232,6 +43416,23 @@ div.composer-error-row__toggle {
   gap: 1px;
 }
 
+.pr-watch-list__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+/* Auto-fix's thread and PR switches sit under its text, past the icon. */
+.pr-watch-list__row--stacked {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.pr-watch-list__row--stacked .pr-watch-list__actions {
+  flex-basis: 100%;
+  padding-left: 24px;
+}
+
 .pr-watch-list__title {
   color: var(--text-primary);
   font-size: 12px;
@@ -59415,6 +59616,24 @@ button.usage-timeline__legend-item[aria-pressed="true"] { background: var(--bg-r
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A covered PR's name is an identifier; its state note keeps the room. */
+.composer-pr-menu .composer-pr-menu__pr-label {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* A covered PR's state goes under its name, past the check column. */
+.composer-pr-menu .composer-pr-menu__pr {
+  flex-wrap: wrap;
+  row-gap: 1px;
+}
+
+.composer-pr-menu .composer-pr-menu__pr .todo-model-picker__detail {
+  flex-basis: 100%;
+  margin-left: 0;
+  padding-left: 20px;
 }
 
 .todo-dispatch__pending {

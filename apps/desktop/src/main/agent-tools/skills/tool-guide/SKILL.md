@@ -60,6 +60,14 @@ layer health. Merge a stacked PR only after its lower layers have merged and
 its base is trunk. Follow the thread's `prAutomation.guidance` for its position
 and merge prerequisites.
 
+## Forge Automation gates
+
+`get_thread_status` returns `prAutomation.forgeAutomation`: the project's
+hands-off rules and which attached PRs they match. To leave a repository's
+PRs, or those with a label such as `takeover:*`, to their maintainers, raise
+add_todo with action.type=add_forge_hands_off_rule, a repository and an
+optional label. The operator's click saves it; never change rules yourself.
+
 When guidance names a lower blocker, let that layer settle before rebasing,
 repairing CI or pushing the held layer. PwrAgent advances one tracked layer
 at a time. Use `publish_stack_layer` for an operator-authorized retry of

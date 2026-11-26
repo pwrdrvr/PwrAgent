@@ -277,6 +277,18 @@ export type ThreadTodoAction =
       pullRequest: string;
     }
   | {
+      /**
+       * An agent's proposal to add one hands-off rule to the raising
+       * thread's project Forge Automation. Only the operator's click saves
+       * it; an agent never changes the rules itself.
+       */
+      type: "add_forge_hands_off_rule";
+      /** Destination repository, `owner/name`. */
+      repository: string;
+      /** Label pattern (`*` wildcard). Absent covers every PR into it. */
+      label?: string;
+    }
+  | {
       type: "start_thread";
       prompt: string;
       title?: string;
@@ -363,6 +375,7 @@ export const THREAD_TODO_ACTION_TYPES = [
   "merge_pull_request",
   "start_thread",
   "send_message",
+  "add_forge_hands_off_rule",
 ] as const satisfies readonly ThreadTodoActionType[];
 
 /**
@@ -1061,7 +1074,9 @@ export function threadTodoProjectIsChoosable(
   return todo.kind !== "review"
     && todo.action?.type !== "start_review"
     && todo.kind !== "merge"
-    && todo.action?.type !== "merge_pull_request";
+    && todo.action?.type !== "merge_pull_request"
+    // The rule belongs to the raising thread's project.
+    && todo.action?.type !== "add_forge_hands_off_rule";
 }
 
 export function threadTodoKindForAction(

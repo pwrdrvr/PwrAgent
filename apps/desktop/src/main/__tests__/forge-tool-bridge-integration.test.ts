@@ -762,6 +762,45 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("hands one PR's Auto-fix switch to its handler and leaves the thread's preference alone", async () => {
+    const preferenceChanged = vi.fn(async () => undefined);
+    const pullRequestChanged = vi.fn(async () => undefined);
+    const overlayStore = createOverlayStoreMock();
+    const registry = createDesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    const events: string[] = [];
+    registry.onEvent((event) => { events.push(event.notification.method); });
+    registry.setThreadPrAutoDispatchHandler({
+      preferenceChanged,
+      pullRequestChanged,
+      cancelPending: vi.fn(async () => true),
+      sendPendingNow: vi.fn(async () => true),
+    });
+    try {
+      const request = { backend: "codex" as const, threadId: "thread-1", enabled: false, prKey: "github.com/upstream/app#7" };
+      await expect(registry.setThreadPrAutoDispatch(request)).resolves.toEqual(request);
+      expect(pullRequestChanged).toHaveBeenCalledWith({
+        backend: "codex", threadId: "thread-1", prKey: "github.com/upstream/app#7", enabled: false,
+      });
+      expect(preferenceChanged).not.toHaveBeenCalled();
+      expect(events).not.toContain("thread/prAutoDispatch/updated");
+      expect((await overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }))?.prAutoDispatchEnabled)
+        .toBeUndefined();
+      // Without a handler for it, the request fails rather than toggling the thread.
+      registry.setThreadPrAutoDispatchHandler({
+        preferenceChanged,
+        cancelPending: vi.fn(async () => true),
+        sendPendingNow: vi.fn(async () => true),
+      });
+      await expect(registry.setThreadPrAutoDispatch(request)).rejects.toThrow("Auto-fix for one pull request");
+      expect(preferenceChanged).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("evaluates the current PR state when auto-fix is enabled", async () => {
     const preferenceChanged = vi.fn(async () => undefined);
     const sendPendingNow = vi.fn(async () => true);
