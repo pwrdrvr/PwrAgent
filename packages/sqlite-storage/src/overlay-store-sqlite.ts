@@ -57,6 +57,7 @@ import { relativePinRanks } from "./relative-pin-order";
 import { managedChildKeyFromParent, ThreadSubAgentTable } from "./thread-sub-agents";
 import { managedKeysFromLegacyProjection, prepareScopedManagedMembership } from "./thread-managed-membership";
 import { ThreadDependencyStore } from "./thread-dependency-store";
+import { readTokenMiserLegacyReplayCounts } from "./token-miser-legacy-replays";
 import { prepareSubthreadGroup } from "./subthread-group-sqlite";
 import { ThreadUsageActivityTable } from "./thread-usage-activities";
 import { CodexEnvironmentLiveOutput } from "./codex-environment-live-output";
@@ -4070,6 +4071,12 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       throw new Error("Tool invocation boundary transaction did not run");
     }
     return stored;
+  }
+
+  async readTokenMiserLegacyReplayCounts(
+    params: Parameters<typeof readTokenMiserLegacyReplayCounts>[1],
+  ): Promise<Map<string, Map<string, number>>> {
+    return readTokenMiserLegacyReplayCounts(this.stateDb.raw, params);
   }
 
   async readThreadToolAccounting(params: {
@@ -10859,8 +10866,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     const row = this.stateDb.raw
       .prepare(
         `SELECT payload
-         FROM pr_auto_dispatch_claims
-         WHERE backend = ? AND thread_id = ? AND status = 'pending'
+         FROM pr_auto_dispatch_claims INDEXED BY idx_pr_auto_dispatch_active_thread
+         WHERE backend = ? AND thread_id = ?
+           AND status IN ('pending', 'dispatching') AND status = 'pending'
          LIMIT 1`,
       )
       .get(params.backend, params.threadId) as { payload: string } | undefined;
@@ -11073,9 +11081,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
     now: number,
     options?: { promoteSubthreads: boolean },
   ): Promise<ArchivedThreadAutomationRetirement[]> {
+    if (records.length === 0) return [];
+    // Most of a provider's archived inventory already has a retention date.
+    // Keep those overlays and inactive automation payloads off the JS heap.
+    // Check inside the write transaction so peer changes are visible before
+    // deciding whether to run the existing retirement operations.
+    const needsObservation = options?.promoteSubthreads ? undefined : this.stateDb.raw.prepare(`
+      SELECT 1 WHERE NOT EXISTS (
+        SELECT 1 FROM threads WHERE thread_id = @key
+          AND json_type(payload, '$.archiveRetentionStartedAt') IS NOT NULL
+          AND json_type(payload, '$.prAutoDispatchEnabled') IS NOT 'true'
+      ) OR EXISTS (
+        SELECT 1 FROM pr_status_watches
+        WHERE backend = @backend AND thread_id = @threadId
+          AND status IN ('watching', 'dispatching', 'pending_terminal', 'notifying_terminal')
+      ) OR EXISTS (
+        SELECT 1 FROM thread_dependencies
+        WHERE backend = @backend AND thread_id = @threadId AND status IN ('waiting', 'ready', 'dispatching')
+      ) OR EXISTS (
+        SELECT 1 FROM pr_auto_dispatch_claims INDEXED BY idx_pr_auto_dispatch_active_thread
+        WHERE backend = @backend AND thread_id = @threadId
+          AND status IN ('pending', 'dispatching') AND status = 'pending'
+      ) OR EXISTS (
+        SELECT 1 FROM pr_auto_dispatch_candidates WHERE backend = @backend AND thread_id = @threadId
+      )
+    `);
     return this.stateDb.raw.transaction(() => {
       const retired: ArchivedThreadAutomationRetirement[] = [];
       for (const identity of records) {
+        if (needsObservation && !needsObservation.get({
+          ...identity, key: encodeThreadIdentityKeyForStorage(buildThreadIdentityKey(identity.backend, identity.threadId)),
+        })) continue;
         const retirement = this.observeArchivedThread(identity, now, options);
         if (retirement) retired.push(retirement);
       }
