@@ -1,8 +1,12 @@
+import { mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import electronLog from "electron-log/node.js";
 import {
   compactStructuredLogData,
   formatAppLogLine,
+  getMainLogger,
   isMainLogDebugCollectionEnabled,
   MAIN_LOG_MAX_SIZE_BYTES,
   resolveMainLogFileNameForProfile,
@@ -29,9 +33,33 @@ describe("main logger compact formatting", () => {
     setMainLogDebugCollectionEnabled(false);
   });
 
-  it("keeps persistent main logs bounded to 1 MiB rotation", () => {
-    expect(MAIN_LOG_MAX_SIZE_BYTES).toBe(1024 * 1024);
-    expect(electronLog.transports.file.maxSize).toBe(MAIN_LOG_MAX_SIZE_BYTES);
+  it.each([
+    { size: 3 * 1024 * 1024, rotates: false },
+    { size: 4 * 1024 * 1024 + 1, rotates: true },
+  ])("preserves the previous main log until the 4 MiB rotation threshold ($size bytes)", ({ size, rotates }) => {
+    const directory = mkdtempSync(path.join(tmpdir(), "pwragent-log-rotation-"));
+    const activePath = path.join(directory, resolveMainLogFileNameForProfile("test"));
+    const archivedPath = path.join(directory, "profile-test.main.old.log");
+    const transport = electronLog.transports.file;
+    const originalResolvePath = transport.resolvePathFn;
+    try {
+      writeFileSync(archivedPath, "earlier warning");
+      writeFileSync(activePath, "recent warning");
+      truncateSync(activePath, size);
+      transport.resolvePathFn = () => activePath;
+
+      getMainLogger("rotation-test").warn("new warning");
+
+      const archivedWarning = rotates ? "recent warning" : "earlier warning";
+      expect(readFileSync(archivedPath, "utf8").slice(0, archivedWarning.length)).toBe(archivedWarning);
+      const activeLog = readFileSync(activePath, "utf8");
+      expect(activeLog.startsWith("recent warning")).toBe(!rotates);
+      expect(activeLog).toContain("new warning");
+      expect(transport.maxSize).toBe(MAIN_LOG_MAX_SIZE_BYTES);
+    } finally {
+      transport.resolvePathFn = originalResolvePath;
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("omits undefined object fields from compact log output", () => {
