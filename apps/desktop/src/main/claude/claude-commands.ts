@@ -37,3 +37,27 @@ export function claudeCommandSummaries(
     source: "provider" as const,
   }));
 }
+
+function normalizeClaudeCommandName(name: string): string {
+  return (name.startsWith("/") ? name.slice(1) : name).toLowerCase();
+}
+
+/**
+ * Whether observed Claude slash commands allow `/compact`.
+ * Returns true when no command list has been observed yet so cold sessions
+ * can compact without spawning an extra probe process; returns false once
+ * `compact` is marked terminal-only or omitted from an observed list.
+ */
+export function isClaudeCompactCommandAvailable(
+  commands: readonly AppServerAvailableCommandSummary[] | undefined,
+  terminalCommands: ReadonlySet<string>,
+): boolean {
+  for (const terminal of terminalCommands) {
+    if (normalizeClaudeCommandName(terminal) === "compact") return false;
+  }
+  if (!commands) return true;
+  return commands.some((command) =>
+    normalizeClaudeCommandName(command.name) === "compact"
+    || (command.aliases?.some((alias) => normalizeClaudeCommandName(alias) === "compact") ?? false),
+  );
+}
