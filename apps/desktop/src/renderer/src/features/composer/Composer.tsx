@@ -286,7 +286,6 @@ import {
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
   hashReferenceAnchorKey,
-  hashReferenceThreadIdentity,
   HASH_ANCHOR_COLD_QUERY_LENGTH,
 } from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
@@ -6327,26 +6326,29 @@ function useComposerController(props: ComposerProps) {
       mentionNavigation.ownerRankedDirectoryQuery,
     );
   }, [mentionNavigation.directories, mentionNavigation.instances, mentionNavigation.ownerRankedDirectoryQuery, directoryRefTrigger]);
+  const hashReferenceQuery = hashReferenceTrigger?.query;
+  const hashReferenceViewerId = readRendererFederationTarget()?.instanceId;
   const filteredHashReferenceOptions = useMemo(() => {
-    if (!hashReferenceTrigger) {
+    if (hashReferenceQuery === undefined) {
       return [];
     }
     return buildHashReferenceOptions({
       currentThread: props.thread,
-      currentThreadKey: props.thread
-        ? hashReferenceThreadIdentity(props.thread)
-        : undefined,
+      loadedThreads: props.threads,
+      viewerInstanceId: hashReferenceViewerId,
       localThreads: mentionNavigation.threads,
-      localOwnerMatched: mentionNavigation.settledQuery === hashReferenceTrigger.query.trim().toLowerCase(),
-      query: hashReferenceTrigger.query,
+      localOwnerMatched: mentionNavigation.settledQuery === hashReferenceQuery.trim().toLowerCase(),
+      query: hashReferenceQuery,
       remoteThreads: federatedHashSearchResults,
-      remoteOwnerMatched: federatedHashSearchSettledQuery === hashReferenceTrigger.query.trim(),
+      remoteOwnerMatched: federatedHashSearchSettledQuery === hashReferenceQuery.trim(),
     });
   }, [
     federatedHashSearchResults,
     federatedHashSearchSettledQuery,
-    hashReferenceTrigger,
+    hashReferenceQuery,
+    hashReferenceViewerId,
     props.thread,
+    props.threads,
     mentionNavigation.threads,
     mentionNavigation.settledQuery,
   ]);

@@ -5664,6 +5664,47 @@ describe("Composer", () => {
     expect(within(textbox).getByText("#Local reference work").closest("[data-mention-kind]")).toHaveAttribute("data-mention-kind", "thread");
   });
 
+  it("offers a loaded local thread before the same Codex thread on a peer when owner search misses it", async () => {
+    const local: NavigationThreadSummary = {
+      id: "codex-thread", source: "codex", title: "Bound model-visible tool output", titleSource: "explicit",
+      linkedDirectories: [], inbox: { inInbox: false },
+    };
+    const otherMatch = { ...local, id: "other-match", title: "Bound execution with model feedback" };
+    const unrelated = { ...local, id: "unrelated", title: "Unrelated thread" };
+    const peer = {
+      ...local,
+      federation: {
+        instanceLabel: "Mac / dev",
+        ref: buildFederatedThreadRef({ backend: "codex", instanceId: "dev", threadId: local.id }),
+      },
+    };
+    const getNavigationQueryPage = vi.fn<NonNullable<DesktopApi["getNavigationQueryPage"]>>(
+      async (request) => navigationQueryFixture(request, { threads: [otherMatch] }),
+    );
+    const jumpSearchRemoteThreads = vi.fn(async () => ({ results: [peer] }));
+    render(<Composer
+      desktopApi={{ getNavigationQueryPage, jumpSearchRemoteThreads }}
+      skills={[]}
+      thread={{ ...local, id: "parent", title: "Parent thread" }}
+      threads={[local, unrelated, otherMatch]}
+    />);
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "See #bound model" } });
+    const listbox = await screen.findByRole("listbox", { name: "Threads and pull requests" });
+    await within(listbox).findByText("Other instances");
+    const matches = within(listbox).getAllByRole("option", { name: /Bound model-visible tool output/ });
+    expect(matches).toHaveLength(2);
+    expect(within(matches[1]!).getByLabelText("Runs on Mac / dev")).toBeInTheDocument();
+    expect(within(listbox).getAllByRole("option", { name: /Bound execution with model feedback/ })).toHaveLength(1);
+    expect(within(listbox).queryByRole("option", { name: /Unrelated thread/ })).toBeNull();
+    expect(getNavigationQueryPage).toHaveBeenCalledTimes(2);
+    expect(jumpSearchRemoteThreads).toHaveBeenCalledTimes(1);
+    fireEvent.click(matches[0]!);
+    expect(within(textbox).getByText("#Bound model-visible tool output").closest("[data-mention-kind]"))
+      .toHaveAttribute("data-skill-path", "pwragent://thread/codex-thread?backend=codex");
+  });
+
   it("offers matching threads and a precise PR link for a numeric hash query", async () => {
     const earlierPullRequest = {
       provider: "github.com" as const,
