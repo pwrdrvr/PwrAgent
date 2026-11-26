@@ -1,6 +1,6 @@
 import {
   ensureBootstrapProfileDir,
-  ensureProfileExists,
+  ensureActiveProfileDirectory,
   getProcessRuntimeIdentity,
   resolveActiveProfilePath,
   resolveBootstrapProfilePath,
@@ -10,6 +10,7 @@ import {
   updateLastUsed,
 } from "../profile";
 import fs from "node:fs";
+import { getMainLogger } from "../log";
 import { AppRuntimeInstanceStore } from "../storage/app-runtime-instance-store.js";
 import { getAutomationRunOwner } from "../automations/automation-run-owner.js";
 import { AutomationStore } from "../storage/automation-store.js";
@@ -18,6 +19,7 @@ import { SqliteMessagingStore } from "../storage/messaging-store-sqlite.js";
 import { SqliteOverlayStore } from "../storage/overlay-store-sqlite.js";
 import { type AutoVacuumConversion, StateDb } from "./state-db.js";
 
+const log = getMainLogger("pwragent:state");
 let stateDb: StateDb | null = null;
 let existingDatabase = false;
 export function hadExistingAppStateDatabase(): boolean { return existingDatabase; }
@@ -43,7 +45,7 @@ let currentBootDecision: ProfileBootDecision | null = null;
  * - `active-profile`: today's flow. The active profile (resolved via
  *   CLI flag / env var / registry / migration) gets its directory
  *   materialized, state.db opened, heartbeat started, last_used
- *   stamped in profiles.toml. Used when `resolveProfileBootDecision`
+ *   stamped in profiles.toml when available. Used when `resolveProfileBootDecision`
  *   returns `open`.
  *
  * - `bootstrap`: state lives under `.bootstrap/` (sibling to
@@ -107,13 +109,25 @@ export function initializeAppState(
     // profile is transient and must not appear in any user-facing
     // profile listing.
   } else {
-    const { profileName } = ensureProfileExists();
+    const { profileName } = ensureActiveProfileDirectory();
     const dbPath = resolveActiveProfilePath("state/state.db");
     existingDatabase = fs.existsSync(dbPath);
     stateDb = StateDb.open(dbPath, { profileName });
     stateDb.startDeferredGc();
 
-    updateLastUsed(profileName);
+    try {
+      // This also registers profiles missing from profiles.toml. Windows may
+      // reject replacing that shared file while a sibling profile reads it.
+      // The selected profile's own state is already open and can start.
+      updateLastUsed(profileName);
+    } catch (error) {
+      const { code, syscall } = error instanceof Error ? error as NodeJS.ErrnoException : {};
+      if (process.platform !== "win32" || syscall !== "rename"
+        || (code !== "EPERM" && code !== "EACCES" && code !== "EBUSY")) {
+        throw error;
+      }
+      log.warn("Could not record profile startup in the registry", { profileName, code });
+    }
     const processIdentity = getProcessRuntimeIdentity();
     profileRuntimeHeartbeat = startProfileRuntimeHeartbeat(profileName, {
       instanceId: processIdentity.instanceId,
