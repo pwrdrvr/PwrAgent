@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared/contracts/normalized-app-server";
 import { turnUsageEntryTurnId } from "@pwragent/shared/thread-usage-display";
 import { formatElapsedMs } from "../../lib/format-duration";
+import { projectCodexBrowserUseEntries } from "./codex-browser-completion";
 import { isAutoReviewActivityEntry } from "./protocol-activity-entries";
 import { isRewindMarkerEntry } from "./rewind-marker-entries";
 import { formatFileEditActivitySummary, hasTranscriptFileDiff } from "./live-transcript-activity";
@@ -43,7 +44,13 @@ export function buildTranscriptRenderItems(params: {
 }): TranscriptRenderItem[] {
   const entries = params.backend === "acp:antigravity"
     ? groupAntigravityEdits(params.entries, params.alwaysVisibleEntryIds)
-    : params.entries;
+    : params.backend === "codex"
+      ? projectCodexBrowserUseEntries(
+          params.entries,
+          params.backend,
+          params.alwaysVisibleEntryIds,
+        )
+      : params.entries;
   const activeTurnId =
     params.activeTurnId ??
     entries.find((entry) => entry.id === params.activeMessageId)?.turn?.id;

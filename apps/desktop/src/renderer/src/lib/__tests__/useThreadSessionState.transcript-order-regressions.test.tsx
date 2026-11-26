@@ -185,6 +185,212 @@ describe("useThreadSessionState transcript ordering regressions (MBT shrunk coun
     }
   });
 
+  it("associates live ::browser-complete with a browserUse MCP activity, keeps interleaved progress and subsequent work, and matches replay", async () => {
+    const screenshotUrl =
+      "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AVN//2Q==";
+    let replayedEntries: AppServerThreadEntry[] = [];
+    const session = await mountSession({
+      backend: "codex",
+      supportsPagination: false,
+      snapshot: () => replayedEntries,
+    });
+    const transcript = () => (
+      <TranscriptList
+        activeTurnId={session.result.current.activeTurnId}
+        entries={session.result.current.entries}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+        parentThreadBackend="codex"
+        pendingAssistantMessage={session.result.current.pendingAssistantMessage}
+      />
+    );
+    const view = render(transcript());
+    try {
+      act(() => {
+        session.emit("turn/started", {
+          turn: { id: "turn-browser", status: "in_progress", startedAt: BASE_NOW },
+        });
+        session.emit("item/started", {
+          turnId: "turn-browser",
+          item: {
+            id: "call-browser-1",
+            type: "mcpToolCall",
+            server: "node_repl",
+            tool: "js",
+            status: "inProgress",
+            arguments: { title: "Open checkout preview" },
+          },
+        });
+      });
+      view.rerender(transcript());
+      expect(view.getByText("Open checkout preview")).toBeTruthy();
+
+      act(() => {
+        session.emit("item/mcpToolCall/progress", {
+          turnId: "turn-browser",
+          itemId: "call-browser-1",
+          message: "Navigating to localhost:3000/checkout",
+        });
+      });
+      view.rerender(transcript());
+      expect(view.getByText("MCP Navigating to localhost:3000/checkout")).toBeTruthy();
+
+      act(() => {
+        session.emit("item/completed", {
+          turnId: "turn-browser",
+          item: {
+            id: "call-browser-1",
+            type: "mcpToolCall",
+            server: "node_repl",
+            tool: "js",
+            status: "completed",
+            arguments: { title: "Open checkout preview" },
+            result: {
+              content: [{ type: "text", text: "ok" }],
+              _meta: {
+                "codex/browserUse": true,
+                "codex/toolSurface": {
+                  kind: "browserUse",
+                  backend: "iab",
+                  browserId: "iab",
+                  screenshot: { url: screenshotUrl, tabId: "1", pageUrl: "http://localhost:3000/checkout" },
+                  history: { provider: "iab", browser_id: "iab", screenshot: true },
+                },
+                browser_use: { url: "http://localhost:3000/checkout" },
+              },
+            },
+          },
+        });
+        session.emit("item/agentMessage/delta", {
+          turnId: "turn-browser",
+          itemId: "bc-1",
+          delta: '::browser-complete{title="Verified checkout',
+          phase: "commentary",
+        });
+      });
+      view.rerender(transcript());
+      expect(view.getByText("In-app browser")).toBeTruthy();
+      expect(view.getByRole("link", { name: "localhost:3000/checkout" })).toBeTruthy();
+      expect(view.queryByText(/::browser-complete/)).toBeNull();
+
+      act(() => {
+        session.emit("item/completed", {
+          turnId: "turn-browser",
+          item: {
+            id: "bc-1",
+            type: "agentMessage",
+            text: '::browser-complete{title="Verified checkout preview"}',
+            phase: "commentary",
+          },
+        });
+        session.emit("item/started", {
+          turnId: "turn-browser",
+          item: {
+            id: "cmd-after",
+            type: "commandExecution",
+            command: "git status",
+            status: "inProgress",
+          },
+        });
+        session.emit("item/completed", {
+          turnId: "turn-browser",
+          item: {
+            id: "cmd-after",
+            type: "commandExecution",
+            command: "git status",
+            status: "completed",
+            exitCode: 0,
+          },
+        });
+      });
+      view.rerender(transcript());
+      const liveItems = view.getAllByRole("listitem");
+      expect(liveItems).toHaveLength(2);
+      expect(liveItems[0]!.textContent).toContain("Verified checkout preview");
+      expect(liveItems[0]!.textContent).toContain("In-app browser");
+      expect(liveItems[0]!.textContent).toContain("localhost:3000/checkout");
+      expect(liveItems[1]!.textContent).toContain("git status");
+      expect(view.queryByText(/::browser-complete/)).toBeNull();
+
+      // Replay produces the same enriched browser activity + subsequent work.
+      replayedEntries = [
+        {
+          type: "activity",
+          id: "activity-call-browser-1",
+          summary: "Open checkout preview",
+          status: "completed",
+          turn: { id: "turn-browser", status: "in_progress" },
+          details: [
+            {
+              id: "call-browser-1",
+              kind: "command",
+              label: "Open checkout preview",
+              status: "completed",
+              command: { displayCommand: "node_repl/js", rawCommand: "node_repl/js", source: "tool" },
+              browserUse: {
+                backend: "iab",
+                browserId: "iab",
+                url: "http://localhost:3000/checkout",
+                tabId: "1",
+                screenshotUrl,
+              },
+            },
+          ],
+        },
+        {
+          type: "message",
+          id: "bc-1",
+          role: "assistant",
+          phase: "commentary",
+          text: '::browser-complete{title="Verified checkout preview"}',
+          turn: { id: "turn-browser", status: "in_progress" },
+        },
+        {
+          type: "activity",
+          id: "activity-cmd-after",
+          summary: "Ran 1 command",
+          status: "completed",
+          turn: { id: "turn-browser", status: "in_progress" },
+          details: [
+            {
+              id: "cmd-after",
+              kind: "command",
+              label: "git status",
+              status: "completed",
+              command: { displayCommand: "git status", rawCommand: "git status" },
+            },
+          ],
+        },
+      ];
+      view.unmount();
+      const replayView = render(
+        <TranscriptList
+          activeTurnId="turn-browser"
+          entries={replayedEntries}
+          loading={false}
+          loadingMore={false}
+          onLoadOlder={async () => undefined}
+          parentThreadBackend="codex"
+        />,
+      );
+      try {
+        const replayItems = replayView.getAllByRole("listitem");
+        expect(replayItems).toHaveLength(2);
+        expect(replayItems[0]!.textContent).toContain("Verified checkout preview");
+        expect(replayItems[0]!.textContent).toContain("In-app browser");
+        expect(replayItems[0]!.textContent).toContain("localhost:3000/checkout");
+        expect(replayItems[1]!.textContent).toContain("Ran 1 command");
+        expect(replayView.queryByText(/::browser-complete/)).toBeNull();
+      } finally {
+        replayView.unmount();
+      }
+    } finally {
+      view.unmount();
+      session.close();
+    }
+  });
+
   it("keeps a managed review start card above its tool calls", async () => {
     const session = await mountSession({
       backend: "acp:antigravity",

@@ -1138,3 +1138,58 @@ it("renders Auto review decisions with their rationale and stable identity", () 
     status: "failed", markdown: "The action exceeds the authorized scope.",
   }]);
 });
+
+it("extracts and preserves Codex Browser Use metadata across live MCP tool updates", () => {
+  const started = buildLiveToolDetails({
+    type: "mcpToolCall",
+    id: "browser-live-1",
+    server: "node_repl",
+    tool: "js",
+    status: "inProgress",
+    arguments: { title: "Check pricing page" },
+  }, undefined, "item/started");
+
+  const completed = buildLiveToolDetails({
+    type: "mcpToolCall",
+    id: "browser-live-1",
+    server: "node_repl",
+    tool: "js",
+    status: "completed",
+    arguments: { title: "Check pricing page" },
+    result: {
+      content: [{ type: "text", text: "ok" }],
+      _meta: {
+        "codex/browserUse": true,
+        "codex/toolSurface": {
+          kind: "browserUse",
+          backend: "chrome",
+          browserFamily: "chrome",
+          browserId: "chrome-1",
+        },
+        browser_use: { url: "https://example.com/pricing" },
+      },
+    },
+  }, undefined, "item/completed");
+
+  const merged = mergeActivityDetails(started, completed);
+  expect(merged).toEqual([
+    expect.objectContaining({
+      id: "browser-live-1",
+      label: "Check pricing page",
+      status: "completed",
+      browserUse: {
+        backend: "chrome",
+        browserFamily: "chrome",
+        browserId: "chrome-1",
+        url: "https://example.com/pricing",
+      },
+    }),
+  ]);
+  expect(summarizeLiveActivity(merged)).toBe("Check pricing page");
+
+  // A late update without browserUse does not erase previously extracted metadata.
+  const afterLateUpdate = mergeActivityDetails(merged, [
+    { id: "browser-live-1", kind: "command", label: "Check pricing page", status: "completed" },
+  ]);
+  expect(afterLateUpdate[0]?.browserUse).toEqual(merged[0]?.browserUse);
+});

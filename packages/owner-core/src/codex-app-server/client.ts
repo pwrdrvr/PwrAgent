@@ -196,6 +196,11 @@ import {
   normalizeReviewOutputRecord,
 } from "@pwragent/shared/review-command";
 import {
+  extractCodexBrowserUseDetail,
+  formatCodexBrowserUseDetailLabel,
+  summarizeCodexBrowserUseDetails,
+} from "@pwragent/shared/codex-browser-use";
+import {
   formatDynamicToolOutput,
   formatMcpToolOutput,
   formatToolActivityTitle,
@@ -3600,7 +3605,13 @@ function pushActivityDetail(
   detailsByKey: Map<string, AppServerThreadActivityDetail>,
   detail: AppServerThreadActivityDetail
 ): void {
-  const key = JSON.stringify(detail.images?.length ? ["image", detail.id] : ["label", detail.label]);
+  const key = JSON.stringify(
+    detail.images?.length
+      ? ["image", detail.id]
+      : detail.browserUse
+        ? ["browserUse", detail.id]
+        : ["label", detail.label],
+  );
   const existing = detailsByKey.get(key);
   if (existing) {
     if (!existing.status || existing.status === "completed") {
@@ -5167,11 +5178,15 @@ function summarizeActivityItems(
       normalizedItemType === "imageview" ||
       normalizedItemType === "imagegeneration"
     ) {
+      const browserUse =
+        normalizedItemType === "mcptoolcall"
+          ? extractCodexBrowserUseDetail(item)
+          : undefined;
       // A web search explores, as its live row does: it counts as a search,
       // not a tool, so the header reads the same after the turn is read back.
       if (normalizedItemType === "websearch") {
         searches += 1;
-      } else {
+      } else if (!browserUse) {
         toolCalls += 1;
       }
       const toolName =
@@ -5204,6 +5219,8 @@ function summarizeActivityItems(
       const label =
         normalizedItemType === "websearch"
         ? formatWebSearchLabel(itemStatus === "in_progress")
+        : browserUse
+          ? formatCodexBrowserUseDetailLabel(browserUse, explicitTitle)
         : (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
         && explicitTitle
         ? formatToolActivityTitle(explicitTitle)
@@ -5224,6 +5241,7 @@ function summarizeActivityItems(
         ...(mcpCommandDetail || dynamicCommandDetail
           ? { command: mcpCommandDetail ?? dynamicCommandDetail }
           : {}),
+        ...(browserUse ? { browserUse } : {}),
         status: itemStatus
       });
     }
@@ -5253,6 +5271,10 @@ function summarizeActivityItems(
   }
   if (toolCalls > 0) {
     summaryParts.push(`Used ${toolCalls} tool${toolCalls === 1 ? "" : "s"}`);
+  }
+  const browserSummary = summarizeCodexBrowserUseDetails(details);
+  if (browserSummary) {
+    summaryParts.push(browserSummary);
   }
   if (spawnedAgents > 0) {
     summaryParts.push(`Spawned ${spawnedAgents} agent${spawnedAgents === 1 ? "" : "s"}`);

@@ -35,6 +35,11 @@ import {
   type AppServerThreadTurnMetadata,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import {
+  extractCodexBrowserUseDetail,
+  formatCodexBrowserUseDetailLabel,
+  summarizeCodexBrowserUseDetails,
+} from "@pwragent/shared/codex-browser-use";
+import {
   formatDynamicToolOutput,
   formatMcpToolOutput,
   formatToolActivityTitle,
@@ -799,6 +804,10 @@ export function buildLiveToolDetails(
           : itemType === "dynamictoolcall"
             ? buildLiveDynamicToolCommandDetail(item, toolName, elapsedMs)
         : undefined;
+  const browserUse =
+    itemType === "mcptoolcall"
+      ? extractCodexBrowserUseDetail(item)
+      : undefined;
   const commandUsesDedicatedRenderer =
     itemType === "commandexecution" || isExecFunctionCall;
   const details: AppServerThreadActivityDetail[] = [
@@ -813,7 +822,9 @@ export function buildLiveToolDetails(
             ? "read"
             : "command",
       label: [
-        buildLiveToolLabel(item, itemType, status, toolName),
+        browserUse
+          ? formatCodexBrowserUseDetailLabel(browserUse, title)
+          : buildLiveToolLabel(item, itemType, status, toolName),
         elapsedMs && !commandUsesDedicatedRenderer ? ` (${formatElapsedMs(elapsedMs)})` : "",
         query ? `: ${query}` : "",
         // A result one click away in the call's detail is not repeated in its label.
@@ -824,6 +835,7 @@ export function buildLiveToolDetails(
       ...(itemType === "commandexecution" && typeof item.path === "string" ? { path: item.path } : {}),
       ...(images.length > 0 ? { images } : {}),
       ...(commandDetail ? { command: commandDetail } : {}),
+      ...(browserUse ? { browserUse } : {}),
       status,
     },
   ];
@@ -935,12 +947,21 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
   if (details.length > 0 && details.every((detail) => detail.kind === "write" && detail.path)) {
     return directDetail?.label ?? formatFileEditActivitySummary(details);
   }
+  const browserSummary = summarizeCodexBrowserUseDetails(primaryDetails);
+  if (
+    browserSummary
+    && subAgentActivityParts.length === 0
+    && primaryDetails.every((detail) => Boolean(detail.browserUse))
+  ) {
+    return browserSummary;
+  }
   // A search tool's call is expandable, but it summarizes as exploration,
   // as it does once its sources arrive: its label already names the query.
   if (
     details.length === 1
     && subAgentActivityParts.length === 0
     && directDetail?.command
+    && !directDetail.browserUse
     && !(directDetail.kind === "read" && /(?:^|[/.])search_\w+$/.test(directDetail.command.rawCommand ?? ""))
     && (
       directDetail.kind === "read"
@@ -951,12 +972,12 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
     return directDetail.label;
   }
   const exploration = summarizeExploration(
-    primaryDetails.filter((detail) => detail.kind === "read"),
+    primaryDetails.filter((detail) => detail.kind === "read" && !detail.browserUse),
   );
   const commandLabels = [
     ...new Set(
       primaryDetails
-        .filter((detail) => detail.kind !== "read")
+        .filter((detail) => detail.kind !== "read" && !detail.browserUse)
         .map((detail) => commandSummaryName(detail.label))
         .filter(Boolean)
     ),
@@ -970,6 +991,9 @@ export function summarizeLiveActivity(details: AppServerThreadActivityDetail[]):
     parts.push(commandLabels[0]);
   } else if (commandLabels.length > 1) {
     parts.push(`Used ${commandLabels.length} tools`);
+  }
+  if (browserSummary) {
+    parts.push(browserSummary);
   }
   parts.push(...subAgentActivityParts);
 
@@ -1086,6 +1110,7 @@ export function mergeActivityDetails(
         continue;
       }
       const command = mergeCommandDetail(existing?.command, detail.command);
+      const browserUse = detail.browserUse ?? existing?.browserUse;
       merged[existingIndex] = {
         ...existing,
         ...detail,
@@ -1096,6 +1121,7 @@ export function mergeActivityDetails(
             : detail.kind,
         label: preferSpecificActivityDetailLabel(existing?.label, detail.label),
         ...(command ? { command } : {}),
+        ...(browserUse ? { browserUse } : {}),
       };
     } else {
       merged.push(detail);
