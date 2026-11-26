@@ -10162,6 +10162,8 @@ class DesktopAppServerService {
       // dialog as for an agent's tool call. Accept an operator/peer single
       // self merge_build watch without continuation for older viewers.
       const legacySelfMergeBuild = !actor.startsWith("agent:")
+        && request.continuation === undefined
+        && (request.deliver === undefined || request.deliver === "agent")
         && request.conditions?.length === 1
         && request.conditions[0]?.when === "merge_build"
         && request.conditions[0].backend === request.backend

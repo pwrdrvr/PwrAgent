@@ -893,14 +893,18 @@ export class ThreadDependencyCoordinator {
         const selector = pinned ? (resolvingPinned && await resolvingPinned) ?? this.canonicalPrCondition(pinned) : condition;
         // A merge build waits for the merge exactly as pr_merged does. An
         // unpinned self merge_build wait armed before a PR opens ignores old
-        // closed or already-merged PRs so it binds cleanly to the next open PR.
+        // closed PRs and PRs that merged before this wait was created, while
+        // still binding to a PR that opened and merged after arming.
         const prSelector = selector.when === "merge_build" ? { ...selector, when: "pr_merged" as const } : selector;
         const candidateSnapshot = condition.when === "merge_build" && !condition.prUrl && !previous?.prUrl
           && identity(condition) === identity(item)
           ? {
             ...snapshot,
-            prs: snapshot.prs.filter(({ pr }) => pr.lifecycleState !== "merged" && pr.state !== "merged"
-              && pr.lifecycleState !== "closed" && pr.state !== "closed"),
+            prs: snapshot.prs.filter(({ pr }) => {
+              if (pr.lifecycleState === "closed" || pr.state === "closed") return false;
+              const merged = pr.lifecycleState === "merged" || pr.state === "merged";
+              return !merged || (pr.mergedAt !== undefined && pr.mergedAt >= item.createdAt);
+            }),
           }
           : snapshot;
         const observed = { ...evaluateCondition(prSelector, candidateSnapshot, this.now(), turn, this.options.canonicalizePrUrl), condition };

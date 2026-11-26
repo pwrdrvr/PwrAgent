@@ -180,7 +180,6 @@ import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automa
 import { describeAutoFixCoverage } from "./auto-fix-coverage";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
-import { mergeBuildPullRequestUrl } from "../pr-watches/merge-build-watches";
 import type { ScheduledThreadAction, ScheduledThreadReviewPayload } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
@@ -16268,7 +16267,7 @@ function useComposerController(props: ComposerProps) {
               thread={props.thread}
               desktopApi={props.desktopApi}
               watchMergeBuildsDefault={prMergeBuildWatchDefault}
-              prUrl={mergeBuildPullRequestUrl(primaryWorkspacePullRequests(props.thread))}
+              primaryPrs={primaryWorkspacePullRequests(props.thread)}
               className={`composer__toggle${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""
               }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}${

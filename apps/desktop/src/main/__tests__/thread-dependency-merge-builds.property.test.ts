@@ -482,6 +482,28 @@ describe("Continue After a merge build", () => {
     expect(store.active()[0]!.evidence[0]).toMatchObject({ state: "waiting", reason: MERGE_BUILD_WAITING_FOR_MERGE_REASON, prUrl: fresh.url });
   });
 
+  it("binds an unpinned self merge_build wait to a PR that opened and merged after arming", async () => {
+    const earlierMerged: PrSummary = { ...openPr(), number: 39, url: "https://github.com/example/app/pull/39", state: "merged", lifecycleState: "merged", mergedAt: now - 300_000 };
+    let prs: PrSummary[] = [earlierMerged];
+    const agent = new ThreadDependencyCoordinator({
+      store,
+      readThread: async () => ({ turns: [], prs: prs.map((item) => ({ pr: item, fetchedAt: now })) }),
+      submit, changed: async () => undefined, now: () => now,
+      hasDeliveryReceipt: (item) => store.hasDeliveryReceipt(item),
+    });
+
+    await watch(agent);
+    expect(store.active()[0]!.evidence[0]).toMatchObject({ state: "waiting", reason: "Waiting for a primary-workspace PR" });
+
+    // A new PR opens and merges before PwrAgent ever observes it in the open state.
+    now += 30_000;
+    const fastMerged: PrSummary = { ...openPr(), number: 42, url: "https://github.com/example/app/pull/42", state: "merged", lifecycleState: "merged", mergedAt: now };
+    prs = [earlierMerged, fastMerged];
+    await agent.handleThreadEvent({ backend: "codex", threadId: "feature" });
+    expect(store.active()[0]!.evidence[0]).toMatchObject({ state: "waiting", reason: MERGE_BUILD_WAITING_REASON, prUrl: fastMerged.url });
+    expect(agent.mergeBuildUrls()).toEqual([fastMerged.url]);
+  });
+
   it("keeps describeMergeBuildWatch opt-out in agreement with armMergeBuild", async () => {
     let prs: PrSummary[] = [];
     const agent = new ThreadDependencyCoordinator({

@@ -62,25 +62,6 @@ export function mergeBuildPullRequestUrl(
   return candidate?.url;
 }
 
-/**
- * Drops an already-merged PR whose merge build watch already delivered so the
- * composer menu arms a watch for the thread's next PR instead of re-watching
- * the finished build.
- */
-export function resolveComposerMergeBuildPrUrl(
-  prUrl: string | undefined,
-  prs: readonly PrSummary[] | undefined,
-  waits: readonly ThreadDependency[],
-): string | undefined {
-  if (!prUrl) return undefined;
-  const matched = prs?.find((pr) => samePrUrl(pr.url, prUrl));
-  if (matched && (matched.lifecycleState === "merged" || matched.state === "merged")
-    && hasDeliveredMergeBuildWait(waits, prUrl)) {
-    return undefined;
-  }
-  return prUrl;
-}
-
 /** The PR a merge build wait is about: the one it names, else the one it found. */
 export function mergeBuildWaitPrUrl(dependency: ThreadDependency): string | undefined {
   const index = dependency.conditions.findIndex((condition) => condition.when === "merge_build");

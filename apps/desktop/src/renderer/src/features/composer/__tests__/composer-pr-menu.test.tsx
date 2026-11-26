@@ -86,8 +86,12 @@ describe("composer PR menu", () => {
     expect(alert).not.toHaveTextContent("Error invoking remote method");
   });
 
-  it("arms a watch for the next PR when the only merged PR already finished its merge build", async () => {
-    const merged: PrSummary = {
+  it("arms a watch for the next PR when the only merged PR already finished its merge build, and falls back to an earlier undelivered merged PR", async () => {
+    const olderMerged: PrSummary = {
+      provider: "github.com", org: "example", repo: "app", number: 40, url: "https://github.com/example/app/pull/40",
+      title: "PR 40", state: "merged", lifecycleState: "merged", mergedAt: 50,
+    };
+    const newerMerged: PrSummary = {
       provider: "github.com", org: "example", repo: "app", number: 41, url: PR_URL,
       title: "PR 41", state: "merged", lifecycleState: "merged", mergedAt: 100,
     };
@@ -96,12 +100,12 @@ describe("composer PR menu", () => {
       calls.push(request);
       return { dependencies: [wait({ status: "delivered", outcome: "success" })] };
     });
-    render(
+    const { rerender } = render(
       <ComposerPrMenu
-        thread={{ ...thread, prs: [merged] }}
+        thread={thread}
         desktopApi={{ manageThreadDependencies } as unknown as DesktopApi}
         watchMergeBuildsDefault
-        prUrl={PR_URL}
+        primaryPrs={[newerMerged]}
         className="composer__toggle"
         tooltip="Auto-fix PR"
         autoFix={{ checked: true, available: true, onToggle: vi.fn() }}
@@ -111,6 +115,80 @@ describe("composer PR menu", () => {
     fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: /Watch merge build/ }));
     await waitFor(() => expect(calls.some((call) => call.action === "create")).toBe(true));
     expect(calls.find((call) => call.action === "create")?.conditions?.[0]?.prUrl).toBeUndefined();
+
+    // When an earlier merged PR has not delivered yet, fall back to it instead of dropping prUrl.
+    calls.length = 0;
+    rerender(
+      <ComposerPrMenu
+        thread={thread}
+        desktopApi={{ manageThreadDependencies } as unknown as DesktopApi}
+        watchMergeBuildsDefault
+        primaryPrs={[olderMerged, newerMerged]}
+        className="composer__toggle"
+        tooltip="Auto-fix PR"
+        autoFix={{ checked: true, available: true, onToggle: vi.fn() }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Pull request automation" }));
+    fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: /Watch merge build/ }));
+    await waitFor(() => expect(calls.some((call) => call.action === "create")).toBe(true));
+    expect(calls.find((call) => call.action === "create")?.conditions?.[0]?.prUrl).toBe(olderMerged.url);
+  });
+
+  it("clears errors on trigger close, ignores stale in-flight completions, and labels pending state as Saving", async () => {
+    let settleCreate!: (action: "resolve" | "reject") => void;
+    let createAttempt = 0;
+    const manageThreadDependencies = vi.fn((request: ManageThreadDependenciesRequest): Promise<ManageThreadDependenciesResponse> => {
+      if (request.action === "list") return Promise.resolve({ dependencies: [] });
+      createAttempt += 1;
+      if (createAttempt === 1) return Promise.reject(new Error("Temporary failure"));
+      return new Promise((resolve, reject) => {
+        settleCreate = (action) => {
+          if (action === "resolve") resolve({ dependencies: [] });
+          else reject(new Error("Stale failure"));
+        };
+      });
+    });
+    render(
+      <ComposerPrMenu
+        thread={thread}
+        desktopApi={{ manageThreadDependencies } as unknown as DesktopApi}
+        watchMergeBuildsDefault
+        prUrl={PR_URL}
+        className="composer__toggle"
+        tooltip="Auto-fix PR"
+        autoFix={{ checked: true, available: true, onToggle: vi.fn() }}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Pull request automation" });
+
+    // Trigger-close clears the error so reopening starts clean.
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitemcheckbox", { name: /Watch merge build/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Temporary failure");
+    fireEvent.click(trigger);
+    fireEvent.click(trigger);
+    await screen.findByRole("menuitemcheckbox", { name: /Watch merge build\s*Auto: wakes if it fails/ });
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // Pending mutation shows "Saving…" and a rejection after closing does not leak onto reopen.
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Watch merge build/ }));
+    expect(await screen.findByRole("menuitemcheckbox", { name: /Watch merge build\s*Saving…/ })).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(trigger);
+    settleCreate("reject");
+    await waitFor(() => expect(createAttempt).toBe(2));
+    fireEvent.click(trigger);
+    await screen.findByRole("menuitemcheckbox", { name: /Watch merge build\s*Auto: wakes if it fails/ });
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // A stale resolution from a closed session does not close a newly reopened menu.
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Watch merge build/ }));
+    await screen.findByRole("menuitemcheckbox", { name: /Watch merge build\s*Saving…/ });
+    fireEvent.click(trigger);
+    fireEvent.click(trigger);
+    settleCreate("resolve");
+    await screen.findByRole("menuitemcheckbox", { name: /Watch merge build\s*Auto: wakes if it fails/ });
+    expect(screen.getByRole("menu", { name: "Pull request automation" })).toBeInTheDocument();
   });
 
   it("stops an active watch, including one PwrAgent armed on merge", async () => {
