@@ -44,6 +44,7 @@ import {
   threadTodoStartAccessChanged,
   threadTodoSteps,
 } from "@pwragent/shared/contracts/thread-todos";
+import { PR_OFFER_RETIRE_RESULTS } from "../pr-status/pr-review-readiness";
 import type { ThreadTodoStorage } from "@pwragent/owner-core/thread-todo-storage";
 import {
   THREAD_TODO_PLAN_DETAIL,
@@ -455,6 +456,11 @@ export class ThreadTodoService {
     }).todo;
   }
 
+  /** The card automation raised for this dependency, including withdrawn cards. */
+  findByDependency(dependencyId: string): ThreadTodo | undefined {
+    return this.store.findByDependency(dependencyId);
+  }
+
   /** The open card a thread holds under `key`, if any. */
   findOpenByKey(params: {
     backend: AppServerBackendKind;
@@ -724,7 +730,7 @@ export class ThreadTodoService {
     });
   }
 
-  /** A scheduled review can complete only its own open review card. */
+  /** A scheduled review completes its source card after provider acceptance. */
   resolveStartedReview(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -732,7 +738,8 @@ export class ThreadTodoService {
     allowOpenItems?: boolean;
   }): void {
     const todo = this.findForThread(params);
-    if (todo.status !== "open" || todo.action?.type !== "start_review") return;
+    const suppressed = todo.status === "dismissed" && todo.result === PR_OFFER_RETIRE_RESULTS.review_running;
+    if ((todo.status !== "open" && !suppressed) || todo.action?.type !== "start_review") return;
     this.resolve({ id: todo.id, status: "done", allowOpenItems: params.allowOpenItems });
   }
 

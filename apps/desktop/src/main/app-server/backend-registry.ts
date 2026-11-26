@@ -12984,6 +12984,14 @@ export class DesktopBackendRegistry {
     return this.managedReviewService.prepareReviewRequest(params, trustedSnapshot);
   }
 
+  reviewsInProgress(): ReturnType<ManagedReviewService["reviewsInProgress"]> {
+    return this.managedReviewService.reviewsInProgress();
+  }
+
+  onLiveReviewChanged(listener: Parameters<ManagedReviewService["onLiveReviewChanged"]>[0]): () => void {
+    return this.managedReviewService.onLiveReviewChanged(listener);
+  }
+
   startReview(
     params: StartReviewRequest,
     trustedSnapshot = false,

@@ -9434,7 +9434,9 @@ class DesktopAppServerService {
       });
       return;
     }
+    const registry = getDesktopBackendRegistry();
     const coordinator = new PrReviewOfferCoordinator({
+      liveReviews: () => registry.reviewsInProgress(),
       ownerThread: async (prKey) => await this.prReviewOfferOwner(prKey),
       ineligibleThreads: async (prKey) => ineligiblePrReviewOfferThreads(this.prReviewOfferCandidates(prKey)),
       threadPrKeys: (thread) => {
@@ -9473,11 +9475,13 @@ class DesktopAppServerService {
     const unsubscribeReviews = reviews.addChangeListener((review) => {
       coordinator.handleReviewChanged(review);
     });
+    const unsubscribeLiveReviews = registry.onLiveReviewChanged((context) => coordinator.handleLiveReviewChanged(context));
     setThreadTodoMergeOfferGate(async (thread, pullRequest) =>
       await this.prMergeOfferRefusal(thread, pullRequest)
     );
     this.prReviewOfferUnsubscribe = () => {
       unsubscribeReviews();
+      unsubscribeLiveReviews();
       setThreadTodoMergeOfferGate(undefined);
     };
     this.prReviewOfferCoordinator = coordinator;
