@@ -82,17 +82,42 @@ export function clampComposerPopover(
   };
 }
 
+function collectRowSiblings(settingsRow: HTMLElement, menu: HTMLElement): Element[] {
+  const siblings: Element[] = [];
+  const visit = (parent: Element): void => {
+    for (const child of Array.from(parent.children)) {
+      const transparentFieldset =
+        child.tagName === "FIELDSET"
+        && child.classList.contains("composer__pending-controls");
+      if (transparentFieldset) {
+        visit(child);
+        continue;
+      }
+      if (child === menu || child.contains(menu)) {
+        continue;
+      }
+      siblings.push(child);
+    }
+  };
+  visit(settingsRow);
+  return siblings;
+}
+
 /**
  * Clamps the right-anchored popover in `menuRef` while `open`, and returns
  * the inline style that applies the clamp (undefined when none is needed).
  *
  * The clamp runs in a layout effect, before paint, so the popover never
  * shows at its unclamped position, and it re-clamps while open whenever the
- * window or the settings row resizes. A popover that focuses a search input
- * on open must do so after this effect (in a `requestAnimationFrame`, not
- * with `autoFocus`) and with `preventScroll`: focusing an input that is
- * still outside the pane scrolls the pane's `overflow: hidden` ancestors
- * sideways to reveal it.
+ * window, the settings row, or any sibling chip inside the row resizes or
+ * mounts/unmounts. Watching sibling items is necessary because `.composer__setup`
+ * can already hold multiple wrapped rows (for example, workspace tools and
+ * send actions on row 2), so a trigger wrapping from row 1 to row 2 changes
+ * its horizontal position without changing `.composer__setup`'s outer width
+ * or height. A popover that focuses a search input on open must do so after
+ * this effect (in a `requestAnimationFrame`, not with `autoFocus`) and with
+ * `preventScroll`: focusing an input that is still outside the pane scrolls
+ * the pane's `overflow: hidden` ancestors sideways to reveal it.
  */
 export function useComposerPopoverClamp(
   open: boolean,
@@ -100,19 +125,28 @@ export function useComposerPopoverClamp(
 ): CSSProperties | undefined {
   const [shift, setShift] = useState(0);
   const [widthLimit, setWidthLimit] = useState<number>();
-  const shiftRef = useRef(0);
+  // `appliedShiftRef` tracks only the transform already committed to the DOM,
+  // while `requestedShiftRef` deduplicates pending state updates before commit.
+  const appliedShiftRef = useRef(0);
+  const requestedShiftRef = useRef(0);
   const widthLimitRef = useRef<number | undefined>(undefined);
   const naturalWidthRef = useRef(0);
 
   useLayoutEffect(() => {
+    appliedShiftRef.current = open ? shift : 0;
+  }, [open, shift]);
+
+  useLayoutEffect(() => {
     if (!open) {
-      shiftRef.current = 0;
+      appliedShiftRef.current = 0;
+      requestedShiftRef.current = 0;
       widthLimitRef.current = undefined;
       naturalWidthRef.current = 0;
       setShift(0);
       setWidthLimit(undefined);
       return;
     }
+    let disposed = false;
     const settingsRow =
       menuRef.current?.closest<HTMLElement>(".composer__setup") ?? null;
     const clamp = (): void => {
@@ -125,7 +159,7 @@ export function useComposerPopoverClamp(
         bounds: settingsRow?.getBoundingClientRect(),
         naturalWidth: naturalWidthRef.current,
         right: rect.right,
-        shift: shiftRef.current,
+        shift: appliedShiftRef.current,
         viewportWidth: window.innerWidth,
         width: rect.width,
       });
@@ -134,28 +168,69 @@ export function useComposerPopoverClamp(
         widthLimitRef.current = next.widthLimit;
         setWidthLimit(next.widthLimit);
       }
-      if (shiftRef.current !== next.shift) {
-        shiftRef.current = next.shift;
+      if (requestedShiftRef.current !== next.shift) {
+        requestedShiftRef.current = next.shift;
         setShift(next.shift);
       }
     };
     clamp();
     window.addEventListener("resize", clamp);
-    // A window resize is not the last word on the row's width: a pinned
-    // context rail's width depends on the viewport, and
-    // `.thread-view__layout` animates the padding that reserves it, so the
-    // row keeps resizing for 160ms after the last `resize` event. Watching
-    // the row catches every frame of that, and a rail or sidebar change
-    // while the popover is open. A move without a resize needs nothing: the
-    // popover is positioned from its trigger, so it moves with the row.
-    let observer: ResizeObserver | undefined;
+    // A window resize is not the last word on the row's width or on a
+    // trigger's wrapped line: a pinned context rail animates its width, and
+    // sibling chips can hydrate or widen and wrap the trigger onto an existing
+    // second row without changing `.composer__setup`'s outer box.
+    let resizeObserver: ResizeObserver | undefined;
+    const observedSiblings = new Set<Element>();
+    const syncSiblingObservers = (): void => {
+      if (!resizeObserver || !settingsRow || !menuRef.current) {
+        return;
+      }
+      const nextSiblings = new Set(collectRowSiblings(settingsRow, menuRef.current));
+      for (const existing of Array.from(observedSiblings)) {
+        if (!nextSiblings.has(existing)) {
+          resizeObserver.unobserve?.(existing);
+          observedSiblings.delete(existing);
+        }
+      }
+      for (const sibling of nextSiblings) {
+        if (!observedSiblings.has(sibling)) {
+          resizeObserver.observe(sibling);
+          observedSiblings.add(sibling);
+        }
+      }
+    };
     if (settingsRow && typeof ResizeObserver !== "undefined") {
-      observer = new ResizeObserver(clamp);
-      observer.observe(settingsRow);
+      resizeObserver = new ResizeObserver(clamp);
+      resizeObserver.observe(settingsRow);
+      syncSiblingObservers();
+    }
+    let mutationObserver: MutationObserver | undefined;
+    if (settingsRow && typeof MutationObserver !== "undefined") {
+      mutationObserver = new MutationObserver((records) => {
+        const menu = menuRef.current;
+        const externalMutation = records.some(
+          (record) => !menu || !menu.contains(record.target),
+        );
+        if (!externalMutation) {
+          return;
+        }
+        syncSiblingObservers();
+        clamp();
+      });
+      mutationObserver.observe(settingsRow, { childList: true, subtree: true });
+    }
+    if (typeof document !== "undefined" && document.fonts?.status === "loading") {
+      void document.fonts.ready.then(() => {
+        if (!disposed) {
+          clamp();
+        }
+      });
     }
     return () => {
+      disposed = true;
       window.removeEventListener("resize", clamp);
-      observer?.disconnect();
+      resizeObserver?.disconnect();
+      mutationObserver?.disconnect();
     };
   }, [menuRef, open]);
 
