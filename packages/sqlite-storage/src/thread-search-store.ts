@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type BetterSqlite3 from "better-sqlite3";
 import {
   buildLegacyEncodedThreadIdentityKey,
@@ -39,148 +40,185 @@ type ThreadSearchFtsRow = ThreadSearchDocumentRow & {
   snippet_text?: string | null;
 };
 
+type SearchProjection = ReturnType<typeof projectThread>;
+type SearchProjectionBindings = ReturnType<typeof bindThreadProjection>;
+type ProjectionVersion = { external: number; local: number };
+type ProjectionCache = {
+  rows: Map<string, SearchProjection>;
+  version?: ProjectionVersion;
+};
+type ChangedProjection = { projection: SearchProjection; bindings: SearchProjectionBindings };
+
+const MAX_VERIFIED_PROJECTIONS = 8192;
+const projectionCaches = new WeakMap<BetterSqlite3.Database, ProjectionCache>();
+
 export class ThreadSearchStore implements ThreadSearchStorage {
   private readonly db: BetterSqlite3.Database;
   private readonly pruneCursors = new Map<string, string>();
+  private readonly projectionCache: ProjectionCache;
+  private readonly readProjectionVersion: BetterSqlite3.Statement<[], ProjectionVersion>;
+  private readonly readLocalChanges: BetterSqlite3.Statement<[], number>;
+  private readonly hasCurrentProjection: BetterSqlite3.Statement<[SearchProjectionBindings]>;
 
   constructor(stateDb: StateDb) {
     this.db = stateDb.raw;
-  }
-
-  /** Archive-inclusive global search must not commit once per listed thread. */
-  upsertThreads(threads: readonly AppServerThreadSummary[]): void {
-    const changed = threads.filter((thread) => !this.hasCurrentThread(thread));
-    if (changed.length === 0) return;
-    this.db.transaction(() => {
-      for (const thread of changed) this.upsertThread(thread);
-    })();
-  }
-
-  private hasCurrentThread(thread: AppServerThreadSummary): boolean {
-    return Boolean(this.db.prepare(`
-      SELECT 1 FROM thread_search_documents
-      WHERE identity_key = ? AND backend IS ? AND thread_id IS ?
-        AND title IS ? AND title_source IS ? AND summary IS ? AND project_key IS ?
-        AND created_at IS ? AND updated_at IS ? AND archived_at IS ?
-        AND git_branch IS ? AND git_origin_url IS ? AND model IS ?
-        AND linked_directories_json IS ? AND display_json IS ?
+    const sharedCache = projectionCaches.get(this.db) ?? { rows: new Map() };
+    projectionCaches.set(this.db, sharedCache);
+    this.projectionCache = sharedCache;
+    this.readProjectionVersion = this.db.prepare(`
+      SELECT data_version AS external, total_changes() AS local FROM pragma_data_version
+    `);
+    this.readLocalChanges = this.db.prepare<[], number>("SELECT total_changes()").pluck();
+    this.hasCurrentProjection = this.db.prepare(`
+      SELECT 1 FROM thread_search_documents d
+      WHERE d.identity_key = @identityKey AND d.backend IS @backend AND d.thread_id IS @threadId
+        AND d.title IS @title AND d.title_source IS @titleSource AND d.summary IS @summary
+        AND d.project_key IS @projectKey AND d.created_at IS @createdAt AND d.updated_at IS @updatedAt
+        AND d.archived_at IS @archivedAt AND d.git_branch IS @gitBranch AND d.git_origin_url IS @gitOriginUrl
+        AND d.model IS @model AND d.linked_directories_json IS @linkedDirectoriesJson AND d.display_json IS @displayJson
         AND EXISTS (
           SELECT 1 FROM thread_search_fts_rows k
           JOIN thread_search_fts f ON f.rowid = k.fts_rowid
-          WHERE k.identity_key = thread_search_documents.identity_key
-            AND f.identity_key = k.identity_key
+          WHERE k.identity_key = d.identity_key AND f.identity_key = k.identity_key
+            AND f.title IS @title AND f.summary IS @ftsSummary AND f.project_key IS @ftsProjectKey
+            AND f.directory_labels IS @directoryLabels AND f.directory_paths IS @directoryPaths
+            AND f.git_branch IS @ftsGitBranch AND f.git_origin_url IS @ftsGitOriginUrl
+            AND f.model IS @ftsModel AND f.backend IS @backend AND f.thread_id IS @ftsThreadId
         )
-    `).get(
-      buildLegacyEncodedThreadIdentityKey(thread.source, thread.id), thread.source, thread.id,
-      thread.title, thread.titleSource ?? null, thread.summary ?? null, thread.projectKey ?? null,
-      thread.createdAt ?? null, thread.updatedAt ?? null, thread.archivedAt ?? null,
-      thread.gitBranch ?? null, thread.gitOriginUrl ?? null, thread.model ?? null,
-      JSON.stringify(thread.linkedDirectories),
-      JSON.stringify({ source: thread.source, serviceTier: thread.serviceTier, reasoningEffort: thread.reasoningEffort }),
-    ));
+    `);
+  }
+
+  /** One write commit per changed slice, with no writer lock for a warm slice. */
+  upsertThreads(threads: readonly AppServerThreadSummary[]): void {
+    this.upsert(threads);
   }
 
   upsertThread(thread: AppServerThreadSummary, indexedAt = Date.now()): void {
-    if (this.hasCurrentThread(thread)) return;
-    const identityKey = buildLegacyEncodedThreadIdentityKey(
-      thread.source,
-      thread.id,
-    );
-    const directoryLabels = thread.linkedDirectories
-      .map((directory) => directory.label)
-      .join(" ");
-    const directoryPaths = thread.linkedDirectories
-      .flatMap((directory) => [directory.path, directory.worktreePath].filter(Boolean))
-      .join(" ");
-    const displayJson = JSON.stringify({
-      source: thread.source,
-      serviceTier: thread.serviceTier,
-      reasoningEffort: thread.reasoningEffort,
-    });
-    const linkedDirectoriesJson = JSON.stringify(thread.linkedDirectories);
+    this.upsert([thread], indexedAt);
+  }
 
-    const transaction = this.db.transaction(() => {
-      this.deleteFtsRows(identityKey);
-      this.db
-        .prepare(
-          `INSERT INTO thread_search_documents (
-             identity_key, backend, thread_id, title, title_source, summary,
-             project_key, created_at, updated_at, archived_at, git_branch,
-             git_origin_url, model, linked_directories_json, display_json, indexed_at
-           ) VALUES (
-             @identityKey, @backend, @threadId, @title, @titleSource, @summary,
-             @projectKey, @createdAt, @updatedAt, @archivedAt, @gitBranch,
-             @gitOriginUrl, @model, @linkedDirectoriesJson, @displayJson, @indexedAt
-           )
-           ON CONFLICT(identity_key) DO UPDATE SET
-             backend = excluded.backend,
-             thread_id = excluded.thread_id,
-             title = excluded.title,
-             title_source = excluded.title_source,
-             summary = excluded.summary,
-             project_key = excluded.project_key,
-             created_at = excluded.created_at,
-             updated_at = excluded.updated_at,
-             archived_at = excluded.archived_at,
-             git_branch = excluded.git_branch,
-             git_origin_url = excluded.git_origin_url,
-             model = excluded.model,
-             linked_directories_json = excluded.linked_directories_json,
-             display_json = excluded.display_json,
-             indexed_at = excluded.indexed_at`,
-        )
-        .run({
-          identityKey,
-          backend: thread.source,
-          threadId: thread.id,
-          title: thread.title,
-          titleSource: thread.titleSource,
-          summary: thread.summary ?? null,
-          projectKey: thread.projectKey ?? null,
-          createdAt: thread.createdAt ?? null,
-          updatedAt: thread.updatedAt ?? null,
-          archivedAt: thread.archivedAt ?? null,
-          gitBranch: thread.gitBranch ?? null,
-          gitOriginUrl: thread.gitOriginUrl ?? null,
-          model: thread.model ?? null,
-          linkedDirectoriesJson,
-          displayJson,
-          indexedAt,
-        });
-      // Allocate above both stores: an older process sharing this profile can
-      // still insert FTS rows without knowing the mapping table exists.
-      this.db.prepare(`INSERT INTO thread_search_fts_rows (identity_key, fts_rowid)
-        SELECT ?, MAX(
-          COALESCE((SELECT MAX(fts_rowid) FROM thread_search_fts_rows), 0),
-          COALESCE((SELECT rowid FROM thread_search_fts ORDER BY rowid DESC LIMIT 1), 0)
-        ) + 1
-        WHERE NOT EXISTS (SELECT 1 FROM thread_search_fts_rows WHERE identity_key = ?)
-      `).run(identityKey, identityKey);
-      this.db
-        .prepare(
-          `INSERT INTO thread_search_fts (
-             rowid, identity_key, title, summary, project_key, directory_labels,
-             directory_paths, git_branch, git_origin_url, model, backend,
-             thread_id
-           ) VALUES ((SELECT fts_rowid FROM thread_search_fts_rows WHERE identity_key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        )
-        .run(
-          identityKey,
-          identityKey,
-          thread.title,
-          thread.summary ?? "",
-          thread.projectKey ?? "",
-          directoryLabels,
-          directoryPaths,
-          thread.gitBranch ?? "",
-          thread.gitOriginUrl ?? "",
-          thread.model ?? "",
-          thread.source,
-          buildThreadIdSearchText(thread.id),
-        );
-    });
+  private upsert(threads: readonly AppServerThreadSummary[], indexedAt?: number): void {
+    if (threads.length === 0) return;
+    if (this.db.inTransaction) {
+      // A caller-owned transaction can see uncommitted state and roll it back.
+      this.db.transaction(() => this.writeChangedProjections(this.findChanges(threads), indexedAt))();
+      return;
+    }
 
-    transaction();
+    const cache = this.projectionCache;
+    const preflight = this.db.transaction(() => {
+      const version = this.refreshProjectionCache();
+      return { version, changed: this.findChanges(threads, cache) };
+    })();
+    if (preflight.changed.length === 0) return;
+
+    const committed = this.db.transaction(() => {
+      // Take the writer lock before rechecking. If a peer committed after our
+      // read snapshot, it can have changed even a previously current row.
+      const version = this.refreshProjectionCache();
+      const changed = version === preflight.version ? preflight.changed : this.findChanges(threads, cache);
+      return {
+        written: this.writeChangedProjections(changed, indexedAt),
+        external: version.external,
+      };
+    }).immediate();
+    // Keep the external version from under the lock. FTS can flush shadow
+    // changes at commit, so sample our own change count after the commit.
+    cache.version = { external: committed.external, local: this.readLocalChanges.get()! };
+    for (const projection of committed.written.values()) rememberProjection(cache, projection);
+  }
+
+  private refreshProjectionCache(): ProjectionVersion {
+    // The read transaction pins data_version and the verified rows to the same
+    // snapshot. total_changes also detects writes through this connection,
+    // including repairs and rollback outside this store.
+    const version = this.readProjectionVersion.get()!;
+    const previous = this.projectionCache.version;
+    if (previous?.external === version.external && previous.local === version.local) return previous;
+    this.projectionCache.rows.clear();
+    this.projectionCache.version = version;
+    return version;
+  }
+
+  private findChanges(
+    threads: readonly AppServerThreadSummary[],
+    cache?: ProjectionCache,
+  ): ChangedProjection[] {
+    const changed: ChangedProjection[] = [];
+    for (const thread of threads) {
+      const projection = projectThread(thread);
+      const previous = cache?.rows.get(projection.identityKey);
+      if (previous && isDeepStrictEqual(previous, projection)) continue;
+      const bindings = bindThreadProjection(projection);
+      if (!this.hasCurrentProjection.get(bindings)) {
+        changed.push({ projection, bindings });
+      } else if (cache) {
+        rememberProjection(cache, projection);
+      }
+    }
+    return changed;
+  }
+
+  private writeChangedProjections(changed: ChangedProjection[], indexedAt?: number): Map<string, SearchProjection> {
+    const written = new Map<string, SearchProjection>();
+    for (const { projection, bindings } of changed) {
+      // A provider can repeat an identity within one slice. Recheck only if
+      // an earlier input in this slice wrote that identity.
+      if (written.has(projection.identityKey) && this.hasCurrentProjection.get(bindings)) continue;
+      this.writeProjection(bindings, indexedAt ?? Date.now());
+      written.set(projection.identityKey, projection);
+    }
+    return written;
+  }
+
+  private writeProjection(bindings: SearchProjectionBindings, indexedAt: number): void {
+    this.deleteFtsRows(bindings.identityKey);
+    this.db.prepare(`
+      INSERT INTO thread_search_documents (
+        identity_key, backend, thread_id, title, title_source, summary,
+        project_key, created_at, updated_at, archived_at, git_branch,
+        git_origin_url, model, linked_directories_json, display_json, indexed_at
+      ) VALUES (
+        @identityKey, @backend, @threadId, @title, @titleSource, @summary,
+        @projectKey, @createdAt, @updatedAt, @archivedAt, @gitBranch,
+        @gitOriginUrl, @model, @linkedDirectoriesJson, @displayJson, @indexedAt
+      )
+      ON CONFLICT(identity_key) DO UPDATE SET
+        backend = excluded.backend,
+        thread_id = excluded.thread_id,
+        title = excluded.title,
+        title_source = excluded.title_source,
+        summary = excluded.summary,
+        project_key = excluded.project_key,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        archived_at = excluded.archived_at,
+        git_branch = excluded.git_branch,
+        git_origin_url = excluded.git_origin_url,
+        model = excluded.model,
+        linked_directories_json = excluded.linked_directories_json,
+        display_json = excluded.display_json,
+        indexed_at = excluded.indexed_at
+    `).run({ ...bindings, indexedAt });
+    // Allocate above both stores: an older process sharing this profile can
+    // still insert FTS rows without knowing the mapping table exists.
+    this.db.prepare(`INSERT INTO thread_search_fts_rows (identity_key, fts_rowid)
+      SELECT ?, MAX(
+        COALESCE((SELECT MAX(fts_rowid) FROM thread_search_fts_rows), 0),
+        COALESCE((SELECT rowid FROM thread_search_fts ORDER BY rowid DESC LIMIT 1), 0)
+      ) + 1
+      WHERE NOT EXISTS (SELECT 1 FROM thread_search_fts_rows WHERE identity_key = ?)
+    `).run(bindings.identityKey, bindings.identityKey);
+    this.db.prepare(`
+      INSERT INTO thread_search_fts (
+        rowid, identity_key, title, summary, project_key, directory_labels,
+        directory_paths, git_branch, git_origin_url, model, backend, thread_id
+      ) VALUES (
+        (SELECT fts_rowid FROM thread_search_fts_rows WHERE identity_key = @identityKey),
+        @identityKey, @title, @ftsSummary, @ftsProjectKey, @directoryLabels, @directoryPaths,
+        @ftsGitBranch, @ftsGitOriginUrl, @ftsModel, @backend, @ftsThreadId
+      )
+    `).run(bindings);
   }
 
   deleteThread(params: {
@@ -415,6 +453,57 @@ function queryMatchesIdentifier(query: string | undefined, identifier: string): 
   return needle !== undefined && needle.length > 0
     ? identifier.toLowerCase().includes(needle)
     : false;
+}
+
+function projectThread(thread: AppServerThreadSummary) {
+  return {
+    identityKey: buildLegacyEncodedThreadIdentityKey(thread.source, thread.id),
+    backend: thread.source,
+    threadId: thread.id,
+    title: thread.title,
+    titleSource: thread.titleSource ?? null,
+    summary: thread.summary ?? null,
+    projectKey: thread.projectKey ?? null,
+    createdAt: thread.createdAt ?? null,
+    updatedAt: thread.updatedAt ?? null,
+    archivedAt: thread.archivedAt ?? null,
+    gitBranch: thread.gitBranch ?? null,
+    gitOriginUrl: thread.gitOriginUrl ?? null,
+    model: thread.model ?? null,
+    serviceTier: thread.serviceTier,
+    reasoningEffort: thread.reasoningEffort,
+    linkedDirectories: thread.linkedDirectories,
+  };
+}
+
+function bindThreadProjection(projection: SearchProjection) {
+  const { linkedDirectories, serviceTier, reasoningEffort, ...fields } = projection;
+  return {
+    ...fields,
+    linkedDirectoriesJson: JSON.stringify(linkedDirectories),
+    displayJson: JSON.stringify({ source: projection.backend, serviceTier, reasoningEffort }),
+    directoryLabels: linkedDirectories.map((directory) => directory.label).join(" "),
+    directoryPaths: linkedDirectories
+      .flatMap((directory) => [directory.path, directory.worktreePath].filter(Boolean))
+      .join(" "),
+    ftsSummary: projection.summary ?? "",
+    ftsProjectKey: projection.projectKey ?? "",
+    ftsGitBranch: projection.gitBranch ?? "",
+    ftsGitOriginUrl: projection.gitOriginUrl ?? "",
+    ftsModel: projection.model ?? "",
+    ftsThreadId: buildThreadIdSearchText(projection.threadId),
+  };
+}
+
+function rememberProjection(cache: ProjectionCache, projection: SearchProjection): void {
+  // Keep the verified subset when a fleet exceeds the bound, so a repeated
+  // traversal in provider order still gets cache hits.
+  if (cache.rows.size < MAX_VERIFIED_PROJECTIONS || cache.rows.has(projection.identityKey)) {
+    cache.rows.set(projection.identityKey, {
+      ...projection,
+      linkedDirectories: structuredClone(projection.linkedDirectories),
+    });
+  }
 }
 
 function buildThreadIdSearchText(threadId: string): string {
