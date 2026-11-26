@@ -201,7 +201,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
                 <button
                   type="button"
                   className="pr-watch-list__action"
-                  aria-label={`Turn off Auto-fix for #${props.pr.number} only`}
+                  aria-label={`Skip This PR, #${props.pr.number}: the thread's other PRs keep Auto-fix`}
                   onClick={() => props.onSetPrAutoFix!(false)}
                 >
                   Skip This PR
@@ -237,7 +237,7 @@ export function PullRequestWatchList(props: PullRequestWatchListProps) {
             <button
               type="button"
               className="pr-watch-list__action"
-              aria-label={`Turn Auto-fix back on for #${props.pr.number}`}
+              aria-label={`Turn On Auto-fix for #${props.pr.number}`}
               onClick={() => props.onSetPrAutoFix!(true)}
             >
               Turn On

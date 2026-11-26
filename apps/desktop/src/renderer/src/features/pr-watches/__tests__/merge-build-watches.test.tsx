@@ -245,7 +245,7 @@ describe("the hover card and the rail", () => {
     const { rerender } = render(
       <PullRequestWatchList pr={pr} watches={[]} autoFix onTurnOffAutoFix={onTurnOffAutoFix} onSetPrAutoFix={onSetPrAutoFix} now={NOW} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Turn off Auto-fix for #41 only" }));
+    fireEvent.click(screen.getByRole("button", { name: "Skip This PR, #41: the thread's other PRs keep Auto-fix" }));
     expect(onSetPrAutoFix).toHaveBeenLastCalledWith(false);
     expect(onTurnOffAutoFix).not.toHaveBeenCalled();
     rerender(
@@ -254,7 +254,7 @@ describe("the hover card and the rail", () => {
     );
     expect(screen.getByText("Auto-fix off for this PR")).toBeInTheDocument();
     expect(screen.queryByText(/handled by/)).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Turn Auto-fix back on for #41" }));
+    fireEvent.click(screen.getByRole("button", { name: "Turn On Auto-fix for #41" }));
     expect(onSetPrAutoFix).toHaveBeenLastCalledWith(true);
   });
 

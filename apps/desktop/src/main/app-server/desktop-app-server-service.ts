@@ -5303,7 +5303,7 @@ class DesktopAppServerService {
       ? primaryPrs.filter((pr) => pr.autoFixOff === true && !handsOffUrls.has(pr.url))
       : [];
     const switchedOffGuidance = switchedOffPrs.map((pr) =>
-      `Auto-fix is switched off for ${pr.org}/${pr.repo}#${pr.number} in this thread, so PwrAgent will not start a repair turn for it here. Do not poll its CI or create a monitor in its place; the operator can switch it back on from the PR card.`);
+      `Auto-fix is switched off for ${pr.org}/${pr.repo}#${pr.number} in this thread, so PwrAgent will not start a repair turn for it here. Do not poll its CI or create a monitor in its place; the operator can switch it back on in the thread's Pull requests panel or the composer's Auto-fix menu.`);
     const everyPrSwitchedOff = primaryPrs.length > 0
       && primaryPrs.every((pr) => pr.autoFixOff === true || handsOffUrls.has(pr.url));
     const reviewReadiness = (await this.readPrReviewReadiness(params, primaryPrs))

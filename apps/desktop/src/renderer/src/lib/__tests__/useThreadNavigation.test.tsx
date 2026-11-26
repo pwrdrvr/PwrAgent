@@ -14541,6 +14541,72 @@ describe("useThreadNavigation", () => {
     expect(result.current.directories[0]?.directoryThreadsCollapsed).toBe(true);
   });
 
+  it("applies a PR status update that changes only its labels, keeping the thread's own intent", async () => {
+    // A label can make a PR hands-off, so the card and panel must see it.
+    const buildPr = (overrides: Record<string, unknown>) => ({
+      number: 4127,
+      provider: "github" as const,
+      org: "canvas-org",
+      repo: "canvas",
+      title: "Fix the stroke cache",
+      url: "https://github.com/canvas-org/canvas/pull/4127",
+      state: "open" as const,
+      lifecycleState: "open" as const,
+      ...overrides,
+    });
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi = {
+      readPopulation: vi.fn(async () => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        directories: [],
+        launchpadDefaults: { backend: "codex" as const, executionMode: "default" as const },
+        threads: [{
+          id: "thread-labels",
+          title: "Stroke cache",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          prs: [buildPr({ labels: ["bug"], autoFixOff: true })],
+        }],
+      })),
+      onAgentEvent: (callback: Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]) => {
+        agentEventHandler = callback;
+        return () => {
+          agentEventHandler = undefined;
+        };
+      },
+    } as unknown as DesktopApi;
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(1);
+    });
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "pullRequest/status/updated",
+          params: {
+            prKey: "github/canvas-org/canvas#4127",
+            pr: buildPr({ labels: ["bug", "takeover:in-progress"] }),
+          },
+        },
+      } as never);
+    });
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.prs?.[0]?.labels).toEqual(["bug", "takeover:in-progress"]);
+    });
+    expect(result.current.threads[0]?.prs?.[0]?.autoFixOff).toBe(true);
+  });
+
   it("applies a peer's PR events to its pinned rows without touching local threads", async () => {
     // A pinned remote row is the only place a peer's PR chip is shown,
     // and the main window has no federation target, so these events do

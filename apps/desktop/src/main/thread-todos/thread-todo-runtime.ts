@@ -740,16 +740,6 @@ async function readThreadTodoDestinationCatalog(
   return catalog;
 }
 
-/**
- * The main-process actions behind a card's buttons: merging through gh, and
- * starting a thread here or, through the federation tools, on a peer.
- *
- * A started thread is a handoff, so whatever the card leaves unnamed comes
- * from the thread that raised it, as handoff_task does it: its access mode,
- * model, reasoning effort, and speed. Left to startThread, a card with no
- * model ran on the catalog's default model and in Default Access, whatever
- * the raising thread used.
- */
 /** Saves a hands-off rule card's rule; the owner's app-server service. */
 export type ThreadTodoHandsOffRuleWriter = (request: {
   backend: AppServerBackendKind;
@@ -765,6 +755,16 @@ export function setThreadTodoHandsOffRuleWriter(writer: ThreadTodoHandsOffRuleWr
   handsOffRuleWriter = writer;
 }
 
+/**
+ * The main-process actions behind a card's buttons: merging through gh, and
+ * starting a thread here or, through the federation tools, on a peer.
+ *
+ * A started thread is a handoff, so whatever the card leaves unnamed comes
+ * from the thread that raised it, as handoff_task does it: its access mode,
+ * model, reasoning effort, and speed. Left to startThread, a card with no
+ * model ran on the catalog's default model and in Default Access, whatever
+ * the raising thread used.
+ */
 export function createThreadTodoRunners(params: {
   registry: ThreadTodoRunnerRegistry;
   federation?: PwrAgentFederationHandler;

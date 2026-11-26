@@ -65,6 +65,8 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
     if (branchRemovals > 0) branchInputRef.current?.focus();
   }, [branchRemovals]);
   const mergeBranches = draft.mergeBranches ?? [];
+  /** The hands-off add row holds a rule not yet added to the list. */
+  const [handsOffPending, setHandsOffPending] = useState(false);
   const heldCount = useHeldWakeupCount(stored.paused ? props.listHeldWakeups : undefined);
   const dialogRef = useModalDialog<HTMLElement>({
     // A save in flight cannot be called back, so the dialog waits for it.
@@ -87,6 +89,11 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
 
   const submit = async () => {
     if (busy) return;
+    if (handsOffPending && !draft.paused) {
+      // Saving would silently drop the rule the operator typed.
+      setError("Add the hands-off rule you typed, or clear it, before saving.");
+      return;
+    }
     setBusy(true);
     setError(undefined);
     // A pause that continues keeps the time it began. The branch list is
@@ -273,6 +280,7 @@ export function ForgeAutomationDialog(props: ForgeAutomationDialogProps) {
             rules={draft.handsOff ?? []}
             suggestions={props.repositorySuggestions ?? []}
             onChange={setHandsOff}
+            onPendingChange={setHandsOffPending}
           />
         )}
         {draft.paused ? null : (
@@ -433,10 +441,19 @@ function HandsOffRules(props: {
   rules: readonly ProjectForgeHandsOffRule[];
   suggestions: readonly string[];
   onChange: (rules: ProjectForgeHandsOffRule[]) => void;
+  /** Whether the add row holds text; Save refuses to drop it. */
+  onPendingChange: (pending: boolean) => void;
 }) {
   const id = useId();
   const [repository, setRepository] = useState("");
   const [label, setLabel] = useState("");
+  const { onPendingChange } = props;
+  const pending = repository.trim().length > 0 || label.trim().length > 0;
+  useEffect(() => {
+    onPendingChange(pending);
+    // Hidden while paused, the row and its text are gone.
+    return () => onPendingChange(false);
+  }, [onPendingChange, pending]);
   const [addError, setAddError] = useState<string>();
   const repositoryRef = useRef<HTMLInputElement>(null);
   const full = props.rules.length >= MAX_HANDS_OFF_RULES;

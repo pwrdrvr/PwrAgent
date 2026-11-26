@@ -315,6 +315,22 @@ describe("ForgeAutomationDialog", () => {
     expect(within(group).getByRole("alert")).toHaveTextContent("That rule is already in the list.");
   });
 
+  it("will not save while the add row holds a rule that was never added", async () => {
+    const { props } = renderDialog();
+    const group = screen.getByRole("group", { name: "Hands-off pull requests" });
+    const repository = within(group).getByRole("textbox", { name: "Repository" });
+    fireEvent.change(repository, { target: { value: "canvas-org/canvas" } });
+
+    save();
+    expect(await screen.findByText("Add the hands-off rule you typed, or clear it, before saving."))
+      .toBeInTheDocument();
+    expect(props.onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(repository, { target: { value: "" } });
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
+  });
+
   it("removes a rule, and saves no list once the last one is gone", async () => {
     const { props } = renderDialog({
       automation: {

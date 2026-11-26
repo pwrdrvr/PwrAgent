@@ -324,6 +324,11 @@ export function normalizeHandsOffRules(value: unknown): ProjectForgeHandsOffRule
   return rules;
 }
 
+/** What follows `owner/name` in a GitHub URL for something in the repository. */
+const GITHUB_RESOURCE_SEGMENTS = new Set([
+  "pull", "pulls", "issues", "tree", "blob", "commit", "commits", "compare", "actions", "releases", "tags", "wiki",
+]);
+
 /**
  * `owner/name` from what the operator typed, or undefined. Accepts a pasted
  * repository URL (`https://github.com/owner/name`) or a host-prefixed key
@@ -341,6 +346,11 @@ export function normalizeHandsOffRepository(value: unknown): string | undefined 
   // `github.com/owner/name`, as the Forge Automation subtitle shows it: a
   // first segment with a dot is a host, never an owner, when two remain.
   if (segments.length >= 3 && segments[0]!.includes(".")) segments.shift();
+  // A pasted PR, issue or file URL names its repository first: GitLab ends
+  // the project path at `-`, and on GitHub a resource follows owner/name.
+  const projectEnd = segments.indexOf("-");
+  if (projectEnd >= 2) segments.length = projectEnd;
+  else if (segments.length > 2 && GITHUB_RESOURCE_SEGMENTS.has(segments[2]!.toLowerCase())) segments.length = 2;
   if (segments.length < 2) return undefined;
   if (segments.some((segment) => !/^[\w.-]+$/.test(segment))) return undefined;
   return segments.join("/");

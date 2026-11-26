@@ -857,6 +857,8 @@ function prSummariesEqual(
       candidate.sourceRepository?.repo === pr.sourceRepository?.repo &&
       candidate.explicitlyAttached === pr.explicitlyAttached &&
       candidate.autoFixOff === pr.autoFixOff &&
+      // A label can make a PR hands-off, so a label-only change is a change.
+      JSON.stringify(candidate.labels ?? null) === JSON.stringify(pr.labels ?? null) &&
       candidate.title === pr.title &&
       candidate.state === pr.state &&
       candidate.checkState === pr.checkState &&

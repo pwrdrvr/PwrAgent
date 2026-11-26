@@ -32,7 +32,7 @@ function pr(number: number, title: string): PrSummary {
 }
 
 type Op =
-  | { kind: "lookup"; numbers: number[]; title: string }
+  | { kind: "lookup"; numbers: number[]; title: string; staleOff: number[] }
   | { kind: "attach"; number: number }
   | { kind: "detach"; number: number }
   | { kind: "switch"; number: number; off: boolean };
@@ -43,6 +43,8 @@ const op: fc.Arbitrary<Op> = fc.oneof(
     kind: fc.constant("lookup" as const),
     numbers: fc.uniqueArray(number, { maxLength: 4 }),
     title: fc.constantFrom("Fix flaky CI", "Rebase onto main"),
+    // Rows a lookup read before its fetch can carry a switch since undone.
+    staleOff: fc.uniqueArray(number, { maxLength: 4 }),
   }),
   fc.record({ kind: fc.constant("attach" as const), number }),
   fc.record({ kind: fc.constant("detach" as const), number }),
@@ -66,7 +68,9 @@ describe("per-PR Auto-fix off on a thread's attachment list", () => {
             fetchedAt += 1;
             await store.setThreadPullRequests({
               ...thread,
-              prs: step.numbers.map((n) => pr(n, step.title)),
+              prs: step.numbers.map((n) => step.staleOff.includes(n)
+                ? { ...pr(n, step.title), autoFixOff: true as const }
+                : pr(n, step.title)),
               fetchedAt,
             });
             const stored = new Set(((await store.getThreadOverlayState(thread))?.prs ?? []).map((row) => row.number));
@@ -97,6 +101,20 @@ describe("per-PR Auto-fix off on a thread's attachment list", () => {
       }),
       { numRuns: 150 },
     );
+  });
+
+  it("keeps a PR switched back on when a lookup that read it earlier writes its rows", async () => {
+    await store.setThreadPullRequests({ ...thread, prs: [pr(2, "Fix flaky CI")], fetchedAt: 1 });
+    const key = buildPullRequestStatusKey(pr(2, ""));
+    await store.setThreadPullRequestAutoFixOff({ ...thread, matchesPrKey: (stored) => stored === key, off: true });
+    await store.setThreadPullRequestAutoFixOff({ ...thread, matchesPrKey: (stored) => stored === key, off: false });
+    // The lookup merged rows it read while the PR was still switched off.
+    await store.setThreadPullRequests({
+      ...thread,
+      prs: [{ ...pr(2, "Fix flaky CI"), autoFixOff: true }],
+      fetchedAt: 2,
+    });
+    expect((await store.getThreadOverlayState(thread))?.prs?.[0]?.autoFixOff).toBeUndefined();
   });
 
   it("reports no change for a PR the thread does not hold", async () => {

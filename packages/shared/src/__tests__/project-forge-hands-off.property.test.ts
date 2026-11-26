@@ -137,6 +137,11 @@ describe("hands-off rule storage", () => {
     // As the Forge Automation subtitle shows a repository.
     expect(normalizeHandsOffRepository("github.com/canvas-org/canvas")).toBe("canvas-org/canvas");
     expect(normalizeHandsOffRepository("gitlab.example.com/group/sub/project")).toBe("group/sub/project");
+    // A pasted PR, merge request or file URL keeps only its repository.
+    expect(normalizeHandsOffRepository("https://github.com/canvas-org/canvas/pull/4127")).toBe("canvas-org/canvas");
+    expect(normalizeHandsOffRepository("https://github.com/canvas-org/canvas/tree/main/src")).toBe("canvas-org/canvas");
+    expect(normalizeHandsOffRepository("https://gitlab.example.com/group/sub/project/-/merge_requests/3"))
+      .toBe("group/sub/project");
   });
 
   it("reads labels only for repositories with a label rule", () => {

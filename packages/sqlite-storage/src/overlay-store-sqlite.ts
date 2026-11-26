@@ -6752,10 +6752,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore, OwnerThreadR
       ...current,
       detachedPrKeys,
       detachedPrs,
-      prs: filterDetachedPrs(params.prs, detachedPrKeys).map((pr) => normalizePrSummary({
-        ...pr,
-        ...pullRequestAttachmentIntent(intentByKey.get(buildPullRequestStatusKey(pr))),
-      })),
+      prs: filterDetachedPrs(params.prs, detachedPrKeys).map((pr) => {
+        // Only the operator's switch sets autoFixOff, and it writes the
+        // stored row. A lookup's rows were read before its fetch, so the
+        // stored row decides, or a switch made meanwhile would be undone.
+        const { autoFixOff: _staleAutoFixOff, ...status } = pr;
+        return normalizePrSummary({
+          ...status,
+          ...pullRequestAttachmentIntent(intentByKey.get(canonicalizePrKey(buildPullRequestStatusKey(pr)))),
+        });
+      }),
       prsFetchedAt: fetchedAt,
       prsRefreshKey: params.refreshKey,
     };
