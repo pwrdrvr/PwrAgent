@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import fc from "fast-check";
@@ -14,6 +15,7 @@ import {
   RULE_HIGH_NUM_RUNS_COMMENT,
   analyzePropertyBudgetSource,
   evaluatePropertyBudgetBaseline,
+  listTestFiles,
   scanRepository,
   shrinkPropertyBudgetBaseline,
   validateBaselineObject,
@@ -398,13 +400,42 @@ describe("property budget baseline ratchet", () => {
     );
   });
 
-  it("matches the checked-in repository baseline with zero regressions", () => {
+  // The repository scan itself runs as `pnpm lint:property-budget` in the
+  // Lint job. It parses every fast-check test file, about 950 of them, and
+  // takes 5-10 s on CI runners, past the default 5 s unit test timeout.
+  it("keeps the checked-in baseline well formed", () => {
     const baseline = JSON.parse(readFileSync(resolve(REPO_ROOT, BASELINE_REL_PATH), "utf8"));
     expect(validateBaselineObject(baseline)).toEqual([]);
+  });
 
-    const { violationsByFile } = scanRepository(REPO_ROOT);
-    const evaluation = evaluatePropertyBudgetBaseline(violationsByFile, baseline);
-    expect(evaluation.ok).toBe(true);
-    expect(evaluation.regressions).toEqual([]);
+  it("scans a tree's test files into violations keyed by POSIX path, whatever their line endings", () => {
+    const root = mkdtempSync(join(tmpdir(), "pwragent-property-budget-scan-"));
+    try {
+      const testsDir = join(root, "apps", "desktop", "src", "__tests__");
+      mkdirSync(testsDir, { recursive: true });
+      writeFileSync(join(testsDir, "heavy.property.test.ts"), [
+        HEAVY_FIXTURE_SNIPPETS.stateDb,
+        'import fc from "fast-check";',
+        "",
+        "fc.assert(fc.property(fc.integer(), () => true), { numRuns: 6 });",
+        "",
+      ].join("\r\n"));
+      writeFileSync(join(testsDir, "pure.test.ts"), 'import { it } from "vitest";\n');
+
+      const { scannedFiles, violationsByFile } = scanRepository(root);
+      expect(scannedFiles).toBe(2);
+      expect([...violationsByFile.keys()]).toEqual(["apps/desktop/src/__tests__/heavy.property.test.ts"]);
+      expect(violationsByFile.get("apps/desktop/src/__tests__/heavy.property.test.ts")
+        .map((violation) => [violation.rule, violation.line, violation.numRuns]))
+        .toEqual([[RULE_HEAVY_FIXTURE, 4, 6]]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists repository test files by POSIX path, as baseline keys name them", () => {
+    const files = listTestFiles(REPO_ROOT);
+    expect(files).toContain("scripts/lint-property-budget.test.mjs");
+    expect(files.filter((file) => file.includes("\\"))).toEqual([]);
   });
 });
