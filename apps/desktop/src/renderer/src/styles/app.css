@@ -32853,6 +32853,58 @@ a.transcript-message__messaging-origin:focus-visible {
   height: 11px;
 }
 
+.thread-markdown__table-wrap {
+  position: relative;
+  max-width: 100%;
+  isolation: isolate;
+}
+
+/* Subtle horizontal scroll-edge fades signal off-screen columns when macOS
+   hides overlay scrollbars at rest. Driven by data-scroll-left /
+   data-scroll-right on the wrapper so the scroller's outset focus ring stays
+   unclipped and no React re-renders happen during scrolling. */
+.thread-markdown__table-wrap::before,
+.thread-markdown__table-wrap::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 24px;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+
+.thread-markdown__table-wrap::before {
+  left: 1px;
+  border-radius: 7px 0 0 7px;
+  background: linear-gradient(
+    to right,
+    var(--bg-app) 0%,
+    color-mix(in srgb, var(--bg-app) 72%, transparent) 36%,
+    transparent 100%
+  );
+  box-shadow: inset 1px 0 0 var(--border-strong);
+}
+
+.thread-markdown__table-wrap::after {
+  right: 1px;
+  border-radius: 0 7px 7px 0;
+  background: linear-gradient(
+    to left,
+    var(--bg-app) 0%,
+    color-mix(in srgb, var(--bg-app) 72%, transparent) 36%,
+    transparent 100%
+  );
+  box-shadow: inset -1px 0 0 var(--border-strong);
+}
+
+.thread-markdown__table-wrap[data-scroll-left="true"]::before,
+.thread-markdown__table-wrap[data-scroll-right="true"]::after {
+  opacity: 1;
+}
+
 .thread-markdown__table-scroll {
   max-width: 100%;
   overflow-x: auto;
@@ -32866,12 +32918,17 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: 2px;
 }
 
+.thread-markdown__table-scroll :where(:focus-visible) {
+  scroll-margin-inline: 32px;
+}
+
 .thread-markdown__table {
   width: max-content;
   min-width: 100%;
   border-collapse: collapse;
   font-size: 13px;
   line-height: 1.45;
+  font-variant-numeric: tabular-nums;
 }
 
 .thread-markdown__thead {
@@ -32886,6 +32943,7 @@ a.transcript-message__messaging-origin:focus-visible {
   text-align: left;
   vertical-align: top;
   overflow-wrap: break-word;
+  text-wrap: pretty;
 }
 
 .thread-markdown__th:first-child,
@@ -32932,6 +32990,22 @@ a.transcript-message__messaging-origin:focus-visible {
 .thread-markdown__td[data-col-kind="prose"] {
   min-width: 24ch;
   max-width: 48ch;
+}
+
+/* Exempt formula-only cells and display equations from max-width clipping so
+   standalone equations keep their natural width and scroll horizontally with
+   the table, while mixed prose + inline math cells still wrap at their column
+   cap. Keep individual inline KaTeX formulas unbroken inside cells. */
+.thread-markdown__th[data-cell-math="only"]:has(.katex),
+.thread-markdown__td[data-cell-math="only"]:has(.katex),
+.thread-markdown__th:has(.katex-display),
+.thread-markdown__td:has(.katex-display) {
+  max-width: none;
+}
+
+.thread-markdown__th .katex,
+.thread-markdown__td .katex {
+  white-space: nowrap;
 }
 
 .thread-markdown__th .transcript-message__code,

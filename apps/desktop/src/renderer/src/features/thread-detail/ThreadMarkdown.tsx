@@ -67,6 +67,7 @@ import { remarkEmojiShortcodes, type RemarkEmojiShortcodesOptions } from "./rema
 import { remarkTableProfile } from "./remark-table-profile";
 import { useDeferredEmojiShortcodeCatalog } from "../../lib/useEmojiShortcodeCatalog";
 import { buildSelectionClipboard } from "./selection-clipboard";
+import { TableScrollContainer } from "./TableScrollContainer";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
 import { MermaidDiagram } from "./MermaidDiagram";
 import { useMarkdownFileSource } from "./useMarkdownFileSource";
@@ -744,9 +745,9 @@ const markdownComponents: Components = {
   pre: MarkdownPre,
   table(tableProps) {
     return (
-      <div className="thread-markdown__table-scroll" tabIndex={0}>
+      <TableScrollContainer>
         <table className="thread-markdown__table">{tableProps.children}</table>
-      </div>
+      </TableScrollContainer>
     );
   },
   tbody(tableBodyProps) {
@@ -758,6 +759,7 @@ const markdownComponents: Components = {
         className="thread-markdown__td"
         style={tableCellAlignStyle(tableCellProps.style)}
         data-col-kind={dataColKind(tableCellProps.node)}
+        data-cell-math={dataCellMath(tableCellProps.node)}
       >
         {tableCellProps.children}
       </td>
@@ -769,6 +771,7 @@ const markdownComponents: Components = {
         className="thread-markdown__th"
         style={tableCellAlignStyle(tableHeaderCellProps.style)}
         data-col-kind={dataColKind(tableHeaderCellProps.node)}
+        data-cell-math={dataCellMath(tableHeaderCellProps.node)}
       >
         {tableHeaderCellProps.children}
       </th>
@@ -1306,6 +1309,12 @@ function dataColKind(node: unknown): string | undefined {
   const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
   const value = properties?.["dataColKind"] ?? properties?.["data-col-kind"];
   return typeof value === "string" ? value : undefined;
+}
+
+function dataCellMath(node: unknown): string | undefined {
+  const properties = (node as { properties?: Record<string, unknown> } | undefined)?.properties;
+  const value = properties?.["dataCellMath"] ?? properties?.["data-cell-math"];
+  return value === "only" ? value : undefined;
 }
 
 function tableCellAlignStyle(

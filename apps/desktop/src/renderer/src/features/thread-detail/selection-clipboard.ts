@@ -267,7 +267,9 @@ function appendRowCells(source: Element, clone: Element, range: Range): void {
   for (const child of Array.from(source.childNodes)) {
     const tag = tagOf(child);
     if ((tag === "td" || tag === "th") && !range.intersectsNode(child)) {
-      clone.append(document.createElement(tag));
+      const emptyCell = document.createElement(tag);
+      copyAllowedAttributes(child as Element, emptyCell);
+      clone.append(emptyCell);
       continue;
     }
     const childClone = cloneSelectedNode(child, range);
@@ -325,6 +327,29 @@ function appendListItems(source: Element, clone: Element, range: Range): void {
   }
 }
 
+type TableCellAlignment = "left" | "center" | "right";
+
+function tableCellAlignment(element: Element): TableCellAlignment | undefined {
+  if (!(element instanceof HTMLElement)) {
+    return undefined;
+  }
+  const align = element.style.textAlign.trim().toLowerCase();
+  return align === "left" || align === "center" || align === "right"
+    ? align
+    : undefined;
+}
+
+function tableAlignmentDelimiter(align: TableCellAlignment): string {
+  switch (align) {
+    case "left":
+      return ":---";
+    case "center":
+      return ":---:";
+    case "right":
+      return "---:";
+  }
+}
+
 // `ol[start]` is set by appendListItems from the items actually kept.
 function copyAllowedAttributes(source: Element, clone: Element): void {
   const tag = clone.tagName.toLowerCase();
@@ -338,6 +363,12 @@ function copyAllowedAttributes(source: Element, clone: Element): void {
     const language = codeLanguage(source);
     if (language) {
       clone.setAttribute("class", `language-${language}`);
+    }
+  }
+  if (tag === "th" || tag === "td") {
+    const align = tableCellAlignment(source);
+    if (align) {
+      clone.setAttribute("style", `text-align: ${align}`);
     }
   }
 }
@@ -480,33 +511,64 @@ function listToMarkdown(list: Element): string {
   return lines.join("\n");
 }
 
+function directTableRows(table: Element): Element[] {
+  const rows: Element[] = [];
+  for (const child of Array.from(table.children)) {
+    const tag = child.tagName.toLowerCase();
+    if (tag === "tr") {
+      rows.push(child);
+    } else if (tag === "thead" || tag === "tbody" || tag === "tfoot") {
+      for (const row of Array.from(child.children)) {
+        if (row.tagName.toLowerCase() === "tr") {
+          rows.push(row);
+        }
+      }
+    }
+  }
+  return rows;
+}
+
 function tableToMarkdown(table: Element): string {
-  const rows = Array.from(table.querySelectorAll("tr"))
+  const rowCells = directTableRows(table)
     .map((row) =>
-      Array.from(row.children)
-        .filter((cell) => {
-          const tag = cell.tagName.toLowerCase();
-          return tag === "td" || tag === "th";
-        })
-        .map((cell) =>
-          paragraphText(Array.from(cell.childNodes))
-            .replace(/\n+/g, " ")
-            .replace(/\|/g, "\\|"),
-        ),
+      Array.from(row.children).filter((cell) => {
+        const tag = cell.tagName.toLowerCase();
+        return tag === "td" || tag === "th";
+      }),
     )
     .filter((cells) => cells.length > 0);
-  if (rows.length === 0) {
+  if (rowCells.length === 0) {
     return "";
   }
 
+  const rows = rowCells.map((cells) =>
+    cells.map((cell) =>
+      paragraphText(Array.from(cell.childNodes))
+        .replace(/\n+/g, " ")
+        .replace(/\|/g, "\\|"),
+    ),
+  );
   const columns = Math.max(...rows.map((cells) => cells.length));
+  const delimiters = Array.from({ length: columns }, (_, column) => {
+    for (const cells of rowCells) {
+      const cell = cells[column];
+      if (!cell) {
+        continue;
+      }
+      const align = tableCellAlignment(cell);
+      if (align) {
+        return tableAlignmentDelimiter(align);
+      }
+    }
+    return "---";
+  });
   const formatRow = (cells: string[]) => {
     const padded = [...cells, ...Array<string>(columns - cells.length).fill("")];
     return `| ${padded.join(" | ")} |`;
   };
   return [
     formatRow(rows[0]),
-    formatRow(Array<string>(columns).fill("---")),
+    formatRow(delimiters),
     ...rows.slice(1).map(formatRow),
   ].join("\n");
 }

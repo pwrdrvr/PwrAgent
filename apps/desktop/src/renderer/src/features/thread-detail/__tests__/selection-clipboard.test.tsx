@@ -1,4 +1,5 @@
 import { fireEvent, render } from "@testing-library/react";
+import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ThreadMarkdown } from "../ThreadMarkdown";
 
@@ -228,5 +229,138 @@ describe("copying a transcript selection", () => {
     select(container, "Intro", "todo item", { endOffset: 0 });
 
     expect(copy(container).text).toBe("Intro paragraph");
+  });
+
+  it("preserves GFM column alignments in both text/plain and text/html table copies", () => {
+    const markdown = [
+      "| Metric | Left | Center | Cost |",
+      "| --- | :--- | :---: | ---: |",
+      "| Runs | alpha | pass | $1.22 |",
+      "| Tokens | beta | warn | 2.97M |",
+    ].join("\n");
+    const { container } = render(<ThreadMarkdown text={markdown} />);
+    select(container, "Metric", "2.97M");
+
+    const { html, text } = copy(container);
+
+    expect(text).toBe(markdown);
+    expect(html).toBeDefined();
+
+    const parsed = document.createElement("div");
+    parsed.innerHTML = html!;
+    const headerAligns = Array.from(parsed.querySelectorAll("thead th")).map(
+      (cell) => cell.getAttribute("style"),
+    );
+    const bodyAligns = Array.from(parsed.querySelectorAll("tbody tr:first-child td")).map(
+      (cell) => cell.getAttribute("style"),
+    );
+    expect(headerAligns).toEqual([
+      null,
+      "text-align: left",
+      "text-align: center",
+      "text-align: right",
+    ]);
+    expect(bodyAligns).toEqual([
+      null,
+      "text-align: left",
+      "text-align: center",
+      "text-align: right",
+    ]);
+  });
+
+  it("preserves GFM column alignments on mid-table selections including empty cells", () => {
+    const markdown = [
+      "| # | Status | Duration | Cost |",
+      "| ---: | :---: | :--- | --- |",
+      "| 1 | Pass | 6:09 | $1.22 |",
+      "| 2 | Fail | 2:14 | $0.44 |",
+    ].join("\n");
+    const { container } = render(<ThreadMarkdown text={markdown} />);
+    select(container, "6:09", "$0.44");
+
+    const { html, text } = copy(container);
+
+    expect(text).toBe([
+      "| # | Status | Duration | Cost |",
+      "| ---: | :---: | :--- | --- |",
+      "|  |  | 6:09 | $1.22 |",
+      "| 2 | Fail | 2:14 | $0.44 |",
+    ].join("\n"));
+
+    const parsed = document.createElement("div");
+    parsed.innerHTML = html!;
+    expect(
+      Array.from(parsed.querySelectorAll("tbody tr:first-child td")).map((cell) =>
+        cell.getAttribute("style"),
+      ),
+    ).toEqual([
+      "text-align: right",
+      "text-align: center",
+      "text-align: left",
+      null,
+    ]);
+  });
+
+  it("round-trips GFM table column alignments through render and selection copy", () => {
+    const alignmentArb = fc.constantFrom<"" | "left" | "center" | "right">(
+      "",
+      "left",
+      "center",
+      "right",
+    );
+    const delimiterFor = (align: "" | "left" | "center" | "right") => {
+      switch (align) {
+        case "left":
+          return ":---";
+        case "center":
+          return ":---:";
+        case "right":
+          return "---:";
+        default:
+          return "---";
+      }
+    };
+
+    fc.assert(
+      fc.property(
+        fc.array(alignmentArb, { minLength: 2, maxLength: 5 }),
+        (alignments) => {
+          const headers = alignments.map((_, index) => `Col${index + 1}`);
+          const delimiters = alignments.map(delimiterFor);
+          const row1 = alignments.map((_, index) => `ValA${index + 1}`);
+          const row2 = alignments.map((_, index) => `ValB${index + 1}`);
+          const markdown = [
+            `| ${headers.join(" | ")} |`,
+            `| ${delimiters.join(" | ")} |`,
+            `| ${row1.join(" | ")} |`,
+            `| ${row2.join(" | ")} |`,
+          ].join("\n");
+
+          const first = render(<ThreadMarkdown text={markdown} />);
+          try {
+            select(first.container, headers[0]!, row2[row2.length - 1]!);
+            const copied = copy(first.container);
+            expect(copied.text).toBe(markdown);
+
+            const second = render(<ThreadMarkdown text={copied.text!} />);
+            try {
+              const rerenderedHeaders = Array.from(
+                second.container.querySelectorAll<HTMLTableCellElement>("thead th"),
+              ).map((cell) => cell.style.textAlign);
+              const rerenderedBody = Array.from(
+                second.container.querySelectorAll<HTMLTableCellElement>("tbody tr:first-child td"),
+              ).map((cell) => cell.style.textAlign);
+              expect(rerenderedHeaders).toEqual(alignments);
+              expect(rerenderedBody).toEqual(alignments);
+            } finally {
+              second.unmount();
+            }
+          } finally {
+            first.unmount();
+          }
+        },
+      ),
+      { numRuns: 5 },
+    );
   });
 });
