@@ -225,7 +225,10 @@ it("keeps the clock and environment owned while a timed-out case drains", async 
     entered.resolve(root);
     await release.promise;
     controller.signal.throwIfAborted();
-  }).catch((error: unknown) => error);
+  }).catch((error: unknown) => {
+    entered.reject(error);
+    return error;
+  });
   onTestFinished(async () => {
     release.resolve();
     await join();
