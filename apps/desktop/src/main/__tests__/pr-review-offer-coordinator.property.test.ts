@@ -202,7 +202,7 @@ function createHarness(
     ...(ineligibleThreads
       ? { ineligibleThreads: async (key: string) => key === PR_KEY ? ineligibleThreads() : [] }
       : {}),
-    threadPrKeys: () => [PR_KEY],
+    threadPrKeys: () => [buildPullRequestStatusKey(world.pr())],
     neverMergeRefusal: () => neverMerge() ? "canvas never merges its pull requests." : undefined,
     getPr: () => world.pr(),
     stackHold: async () => world.heldBy ? { reason: world.heldBy, lowerKey: prKeyFor(1) } : undefined,
@@ -388,6 +388,71 @@ it("checks acceptance again before writing an offer when a review starts during 
   }
 });
 
+it("recovers a suppressed offer on the first unchanged green observation after owner restart", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const temp = createTempStateDb("pwragent-recover-review-offer-");
+  const harness = createHarness(StateDb.open(temp.dbPath));
+  const { world, todos } = harness;
+  try {
+    prepareIncident(world);
+    world.ci = "passing";
+    // An unchanged observation may recover an earlier offer, but never
+    // creates a first review offer.
+    harness.coordinator.handleObservations([world.pr()]);
+    await harness.coordinator.idle();
+    expect(todos.list(THREAD)).toEqual([]);
+
+    await transition(harness, CI_GREEN);
+    const [offer] = openOfferCards(todos);
+    const turn = acceptReview(harness);
+    await harness.coordinator.idle();
+    expect(openOfferCards(todos)).toEqual([]);
+
+    // The restart forgets live reviews and evaluation state. The dismissal
+    // lives in SQLite and no release event is delivered to the new owner.
+    world.turnState.finishReview(turn);
+    harness.restart();
+    const { writes } = await measureSqliteWrites(async () => {
+      harness.coordinator.handleObservations([world.pr()]);
+      await harness.coordinator.idle();
+    });
+    expectSqliteWriteBudget({ scenario: "pr-review-offer-restart-reopen", writes,
+      note: "Reopen one previously suppressed offer after owner restart. At 100 recoveries/day, about 1.24 MB/day." });
+    expect(openOfferCards(todos).map(({ id }) => id)).toEqual([offer!.id]);
+  } finally {
+    harness.close();
+    removeTempStateDbDir(temp.tempDir);
+  }
+});
+
+it("discards stale coverage when a result lands during Git lookup", async () => {
+  const harness = createHarness();
+  const { world, coordinator, todos } = harness;
+  try {
+    prepareIncident(world);
+    world.ci = "passing";
+    await transition(harness, CI_GREEN);
+    const turn = acceptReview(harness);
+    const context = world.turnState.liveReviewRecords().get(turn)!.context;
+    await coordinator.idle();
+
+    // After coverage is read, let the owner publish the result and release
+    // the live hold while the evaluation still awaits the patch ID.
+    const reconcile = vi.spyOn(todos, "reconcileOffer");
+    world.beforeChangeIdentity = () => {
+      world.beforeChangeIdentity = undefined;
+      coordinator.handleReviewChanged(recordReview(world, 1));
+      world.turnState.finishReview(turn);
+      coordinator.handleLiveReviewChanged(context);
+    };
+    await transition(harness, CI_GREEN);
+    expect(openOfferCards(todos)).toEqual([]);
+    expect(reconcile.mock.calls).toEqual([]);
+  } finally {
+    harness.close();
+  }
+});
+
 it("budgets active-review withdrawal, repeat wakeups, and reopening", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const temp = createTempStateDb("pwragent-active-review-offer-");
@@ -487,7 +552,7 @@ function recordReview(world: World, findings: number): ThreadReview {
       gitBranch: "feature",
       baseBranch: "main",
       headCommit: world.head,
-      pullRequest: { provider: "github.com", org: "example", repo: "project", number: 7, url: PR_URL },
+      pullRequest: world.prIdentity,
     },
     status: findings === 0 ? "handled" : "open",
     // As the service does: a clean review is settled when it lands.

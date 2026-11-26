@@ -456,6 +456,11 @@ export class ThreadTodoService {
     }).todo;
   }
 
+  /** The card automation raised for this dependency, including withdrawn cards. */
+  findByDependency(dependencyId: string): ThreadTodo | undefined {
+    return this.store.findByDependency(dependencyId);
+  }
+
   /** The open card a thread holds under `key`, if any. */
   findOpenByKey(params: {
     backend: AppServerBackendKind;

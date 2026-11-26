@@ -861,6 +861,7 @@ export type ReviewTerminal = {
   completedAt?: number;
   errorMessage?: string;
   method: "turn/completed" | "turn/failed" | "turn/cancelled";
+  output?: Extract<AppServerNotification, { method: "turn/completed" }>["params"]["turn"]["output"];
   threadId: string;
   turnId: string;
 };

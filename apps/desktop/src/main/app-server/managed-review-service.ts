@@ -186,6 +186,7 @@ export class ManagedReviewService {
   readonly candidateLedger: ManagedReviewCandidateLedger;
   private readonly operatorReviewInputs = new Map<string, OperatorReviewInput>();
   private readonly drainingReviewTerminals = new Set<string>();
+  private readonly pendingPrReviewStarts = new Map<string, object>();
   private readonly publishingReviewResults = new Set<ReviewSubAgentRecord>();
   private readonly liveReviewListeners = new Set<(context: AppServerReviewContext | undefined) => void>();
 
@@ -256,41 +257,47 @@ export class ManagedReviewService {
       }
     }
     if (!turnId) return;
-    const turn = { backend: event.backend, threadId: notification.params.threadId, turnId };
-    const ledgerSummary = managedReview?.mode === "managed" ? this.candidateLedger.snapshot(turn) : undefined;
+    await this.settleReviewTerminal({
+      backend: event.backend,
+      threadId: notification.params.threadId,
+      turnId,
+      completedAt: completedAtFromTerminalNotification(notification),
+      errorMessage: errorMessageFromTerminalNotification(notification),
+      method: notification.method,
+      ...(notification.method === "turn/completed" ? { output: notification.params.turn.output } : {}),
+    }, managedReview);
+  }
+
+  private async settleReviewTerminal(
+    terminal: ReviewTerminal,
+    record: ReviewSubAgentRecord | undefined,
+    arrivedBeforeStart = false,
+  ): Promise<void> {
+    const ledgerSummary = record?.mode === "managed" ? this.candidateLedger.snapshot(terminal) : undefined;
     // Once terminal ingress has fenced the tools, only the counts are needed.
-    // Dispose before any card write or duplicate terminal can intervene.
-    this.candidateLedger.clearTurn(turn);
-    // Successful managed reviews keep suppressing review offers until the
-    // result event has reached recorded coverage. The live turn itself is
-    // removed as usual so duplicate terminals cannot publish it again.
-    const publishing = notification.method === "turn/completed" && managedReview && ledgerSummary;
-    if (publishing) this.publishingReviewResults.add(managedReview);
+    this.candidateLedger.clearTurn(terminal);
+    // Keep suppression through publication. The live turn itself is removed
+    // synchronously by completeReviewSubAgent, so redelivery cannot settle it twice.
+    if (terminal.method === "turn/completed" && record && ledgerSummary) {
+      this.publishingReviewResults.add(record);
+    }
     try {
-      await this.completeReviewSubAgent({
-        ...turn,
-        completedAt: completedAtFromTerminalNotification(notification),
-        errorMessage: errorMessageFromTerminalNotification(notification),
-        method: notification.method,
-      }).catch((error) => {
-        if (managedReview?.mode !== "managed") throw error;
+      await this.completeReviewSubAgent(terminal).catch((error) => {
+        if (record?.mode !== "managed") throw error;
         // Card bookkeeping must not prevent publishing the managed review
         // result or delivering the terminal to its parent.
         backendRegistryLog.warn("could not persist managed review sub-agent terminal", {
-          ...turn, error: String(error),
+          backend: terminal.backend, threadId: terminal.threadId, turnId: terminal.turnId, error: String(error),
         });
       });
-      if (managedReview && ledgerSummary) {
-        await this.publishManagedReviewTerminal({
-          method: notification.method,
-          notification,
-          record: managedReview,
-        }, ledgerSummary);
+      if (record && ledgerSummary) {
+        if (arrivedBeforeStart) await this.emitManagedReviewStarted(record);
+        await this.publishManagedReviewTerminal({ ...terminal, record }, ledgerSummary);
       }
     } finally {
-      if (managedReview) {
-        this.publishingReviewResults.delete(managedReview);
-        this.notifyLiveReviewChanged(managedReview);
+      if (record) {
+        this.publishingReviewResults.delete(record);
+        this.notifyLiveReviewChanged(record);
       }
     }
   }
@@ -352,14 +359,28 @@ export class ManagedReviewService {
     for (const listener of this.liveReviewListeners) listener(record.context);
   }
 
-  private assertPullRequestReviewNotRunning(target: AppServerReviewTarget): void {
+  private reservePullRequestReviewStart(target: AppServerReviewTarget, owner: object): void {
     const snapshots = target.type === "pullRequest" && target.snapshot ? [target.snapshot]
       : target.type === "pullRequests" ? target.pullRequests.flatMap(({ snapshot }) => snapshot ? [snapshot] : [])
       : [];
-    for (const { pullRequest, headCommit } of snapshots) {
-      if (hasActivePrReview(this.activeReviewSubAgentRecords.values(), buildPullRequestStatusKey(pullRequest), headCommit)) {
+    const keys = snapshots.map(({ pullRequest, headCommit }) => {
+      const prKey = buildPullRequestStatusKey(pullRequest);
+      const key = JSON.stringify([prKey, headCommit]);
+      if (this.pendingPrReviewStarts.has(key)) {
+        throw new Error(`A review is already starting for PR #${pullRequest.number} at ${headCommit.slice(0, 7)}.`);
+      }
+      if (hasActivePrReview(this.activeReviewSubAgentRecords.values(), prKey, headCommit)) {
         throw new Error(`A review is already running for PR #${pullRequest.number} at ${headCommit.slice(0, 7)}.`);
       }
+      return key;
+    });
+    // All members of a combined review claim their heads together.
+    for (const key of keys) this.pendingPrReviewStarts.set(key, owner);
+  }
+
+  private releasePullRequestReviewStart(owner: object): void {
+    for (const [key, holder] of this.pendingPrReviewStarts) {
+      if (holder === owner) this.pendingPrReviewStarts.delete(key);
     }
   }
 
@@ -522,6 +543,7 @@ export class ManagedReviewService {
       autoFix.refused();
       throw error;
     } finally {
+      this.releasePullRequestReviewStart(terminals);
       this.context.turnState.endReviewStart(terminals);
     }
   }
@@ -584,7 +606,6 @@ export class ManagedReviewService {
     // A review reads the checkout, so a hibernated one comes back first.
     await this.host().ensureCheckoutAwake(params);
     params = await this.prepareReviewRequest(params, trustedSnapshot);
-    this.assertPullRequestReviewNotRunning(params.target);
     const acpManagedMode =
       isAcpBackendId(params.backend)
       && this.context.providers.acp.supportsManagedReview(params.backend);
@@ -616,6 +637,7 @@ export class ManagedReviewService {
     if (requiresManaged && params.runMode && params.runMode !== "pwragent-sub-agent") {
       throw new Error("PwrAgent Sub Agent is required for ACP or cross-provider reviews.");
     }
+    this.reservePullRequestReviewStart(params.target, terminals);
     let managedMode = requiresManaged || params.runMode === "pwragent-sub-agent";
     const reserveCodexReviewStart = params.backend === "codex";
     let reviewReservation: object | undefined;
@@ -785,7 +807,6 @@ export class ManagedReviewService {
             threadId: params.threadId,
             tokenMiserEnabled,
           });
-        this.assertPullRequestReviewNotRunning(params.target);
         return await client.startReview({
           threadId: params.threadId,
           target: params.target,
@@ -815,6 +836,7 @@ export class ManagedReviewService {
             parentBackend: params.backend,
             parentThreadId: params.threadId,
             target: params.target,
+            terminals,
             tokenMiserEnabled,
           })
         : params.backend === "codex"
@@ -906,22 +928,23 @@ export class ManagedReviewService {
       reviewSubAgentRecord.reviewThreadId,
       reviewSubAgentRecord.turnId,
     );
+    const earlyTerminal = this.context.turnState.reviewStartTerminal(terminals, reviewSubAgentKey);
     this.context.turnState.activateReview(reviewSubAgentRecord);
     this.reviewSubAgentsByReviewTurn.set(reviewSubAgentKey, reviewSubAgentRecord);
-    this.notifyLiveReviewChanged(reviewSubAgentRecord);
+    this.releasePullRequestReviewStart(terminals);
     if (reserveCodexReviewStart) {
       this.context.turnState.releaseStart(params.threadId, reviewReservation);
     }
-    const earlyTerminal = this.context.turnState.reviewStartTerminal(terminals, reviewSubAgentKey);
-    if (!managedMode && earlyTerminal) {
-      try {
-        await this.completeReviewSubAgent(earlyTerminal);
-      } finally {
-        this.notifyLiveReviewChanged(reviewSubAgentRecord);
+    if (earlyTerminal) {
+      // Retire the registered turn before yielding. Early managed terminals
+      // still publish the start and outcome to the parent in that order.
+      await this.settleReviewTerminal(earlyTerminal, reviewSubAgentRecord, true);
+      if (!managedMode) {
+        this.clearNativeReviewActiveTurns(reviewSubAgentRecord);
+        await this.releaseNativeReviewParent(reviewSubAgentRecord, earlyTerminal);
       }
-      this.clearNativeReviewActiveTurns(reviewSubAgentRecord);
-      await this.releaseNativeReviewParent(reviewSubAgentRecord, earlyTerminal);
     } else {
+      this.notifyLiveReviewChanged(reviewSubAgentRecord);
       if (inlineNativeCodexReview) {
         // Publish inline review ownership before the mode read can yield.
         // A terminal received during the read can then retire both IDs, and
@@ -948,7 +971,7 @@ export class ManagedReviewService {
       reviewThreadId: reviewSubAgentRecord.reviewThreadId,
       turnId: reviewSubAgentRecord.turnId,
     });
-    if (managedMode) {
+    if (managedMode && this.activeReviewSubAgentRecords.get(reviewSubAgentKey) === reviewSubAgentRecord) {
       await this.emitManagedReviewStarted(reviewSubAgentRecord);
     }
     // An explicitly picked reviewer applies to this review only. Persisting it
@@ -983,6 +1006,7 @@ export class ManagedReviewService {
     parentBackend: AppServerBackendKind;
     parentThreadId: string;
     target: StartReviewRequest["target"];
+    terminals: object;
     tokenMiserEnabled: boolean;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     // Only a same-provider review can inherit the parent's live session state;
@@ -1022,7 +1046,6 @@ export class ManagedReviewService {
       });
       const candidateLedger = thread.managedReviewLedgerAvailable === true;
       try {
-        this.assertPullRequestReviewNotRunning(params.target);
         const turn = await this.host().startAcpTurn({
           backend: params.backend,
           threadId: thread.threadId,
@@ -1111,7 +1134,6 @@ export class ManagedReviewService {
     }
     const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
     try {
-      this.assertPullRequestReviewNotRunning(params.target);
       const turn = await client.startTurn({
         ...params.turnAttribution,
         threadId: thread.threadId,
@@ -1150,16 +1172,15 @@ export class ManagedReviewService {
           );
         }
       }
-      if (!isPendingTurnId(turn.threadId, turn.turnId)) {
-        this.candidateLedger.confirmToolTurn({ backend: "codex", threadId: turn.threadId, turnId: turn.turnId });
+      const child = { backend: "codex" as const, threadId: turn.threadId, turnId: turn.turnId };
+      const childKey = buildReviewSubAgentKey(child.backend, child.threadId, child.turnId);
+      // Terminal ingress already cleared this child's activity if it finished
+      // before the provider acknowledged the start.
+      if (!this.context.turnState.reviewStartTerminal(params.terminals, childKey)) {
+        if (!isPendingTurnId(child.threadId, child.turnId)) this.candidateLedger.confirmToolTurn(child);
+        this.context.turnState.registerTurn(child);
+        this.context.turnState.acceptExecution(child, executionMode);
       }
-      this.context.turnState.registerTurn(
-        { backend: "codex", threadId: turn.threadId, turnId: turn.turnId },
-      );
-      this.context.turnState.acceptExecution(
-        { threadId: turn.threadId, turnId: turn.turnId },
-        executionMode,
-      );
       return {
         threadId: params.parentThreadId,
         reviewThreadId: turn.threadId,
@@ -1941,28 +1962,13 @@ export class ManagedReviewService {
   }
 
   private async publishManagedReviewTerminal(
-    params: {
-      method: "turn/completed" | "turn/failed" | "turn/cancelled";
-      notification: Extract<
-        AppServerNotification,
-        { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
-      >;
-      record: ReviewSubAgentRecord;
-    },
+    params: ReviewTerminal & { record: ReviewSubAgentRecord },
     ledgerSummary: { total: number; pending: number; keep: number; drop: number },
   ): Promise<void> {
-    const completedAt =
-      completedAtFromTerminalNotification(params.notification) ?? Date.now();
+    const completedAt = params.completedAt ?? Date.now();
     const completedItemOutput = this.takeManagedReviewOutput(params.record);
     if (params.method === "turn/completed") {
-      const output = await this.readManagedReviewOutput(
-        params.record,
-        params.notification as Extract<
-          AppServerNotification,
-          { method: "turn/completed" }
-        >,
-        completedItemOutput,
-      );
+      const output = await this.readManagedReviewOutput(params.record, params.output, completedItemOutput);
       const parsed = parseReviewOutputText(output);
       const review = parsed
         ? formatReviewOutputText(parsed)
@@ -2067,12 +2073,7 @@ export class ManagedReviewService {
       return;
     }
 
-    const failure = (
-      params.notification as Extract<
-        AppServerNotification,
-        { method: "turn/failed" }
-      >
-    ).params.turn?.error?.message;
+    const failure = params.errorMessage;
     await this.context.emit({
       backend: params.record.parentBackend,
       notification: {
@@ -2098,10 +2099,10 @@ export class ManagedReviewService {
 
   private async readManagedReviewOutput(
     record: ReviewSubAgentRecord,
-    notification: Extract<AppServerNotification, { method: "turn/completed" }>,
+    output: ReviewTerminal["output"],
     completedItemOutput?: string,
   ): Promise<string | undefined> {
-    const terminalOutput = notification.params.turn?.output
+    const terminalOutput = output
       ?.map((item) => item.text)
       .filter((text): text is string => typeof text === "string" && Boolean(text.trim()))
       .join("\n\n")

@@ -1,4 +1,8 @@
 {
+  "managed-review-early-completed": {"commits": 3, "note": "Early terminal uses the regular review storage writes, without a running sub-agent write. Duplicate terminal adds none.", "observedWalBytes": 61832, "rowsChanged": 3, "statements": 3},
+  "managed-review-early-failed": {"commits": 2, "note": "Early terminal uses the regular review storage writes, without a running sub-agent write. Duplicate terminal adds none.", "observedWalBytes": 53592, "rowsChanged": 2, "statements": 2},
+  "managed-review-early-cancelled": {"commits": 2, "note": "Early terminal uses the regular review storage writes, without a running sub-agent write. Duplicate terminal adds none.", "observedWalBytes": 49472, "rowsChanged": 2, "statements": 2},
+  "pr-review-offer-restart-reopen": {"commits": 1, "note": "Reopen one previously suppressed offer after owner restart. At 100 recoveries/day, about 1.24 MB/day.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "pr-review-offer-active-consume": {"commits": 1, "note": "One commit when the accepted scheduled review consumes its source card after the offer was withdrawn. At 100/day, about 0.82 MB/day.", "observedWalBytes": 8240, "rowsChanged": 1, "statements": 1},
   "pr-review-offer-active-reopen": {"commits": 1, "note": "One commit to reopen an eligible offer after cancellation or failure. At 100/day, about 1.24 MB/day.", "observedWalBytes": 12360, "rowsChanged": 2, "statements": 2},
   "pr-review-offer-active-repeat": {"commits": 0, "note": "Repeated acceptance and CI wakeups during an active review use no commits.", "observedWalBytes": 0, "rowsChanged": 0, "statements": 0},
