@@ -1,4 +1,5 @@
 import "@testing-library/jest-dom/vitest";
+import { Profiler } from "react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MarkdownRenderingOptionsProvider } from "../../../lib/markdown-rendering-options";
@@ -2273,5 +2274,409 @@ describe("ThreadMarkdown document viewer, keyboard", () => {
       );
     });
     expect(document.activeElement).toBe(close);
+  });
+});
+
+describe("ThreadMarkdown sticky headers, pinned first column, and table viewer modal", () => {
+  const comparisonMatrixMarkdown = [
+    "## 2. Part B: MCP Gateway Comparison Matrix",
+    "",
+    "| Capability | PwrAgent | t3code | orca | bb |",
+    "| --- | --- | --- | --- | --- |",
+    "| **Managed External MCP Gateway / Broker** | Full broker with multi-instance forwarding | None | Full host list + relay | None |",
+    "| **Transports Supported** | Streamable HTTP, Stdio, Native C IPC | Streamable HTTP | Streamable HTTP, Stdio | Streamable HTTP |",
+    "| **Stdio Process Lifecycle** | 1 process per thread x connection | Delegated to CLI | Shared bridge | Delegated |",
+    "| **OAuth & Secret Storage** | Encrypted McpCredentialVault | OAuth 2.1 Server | Local file | Env vars |",
+  ].join("\n");
+
+  it("auto-pins bold row-title column when overflowing horizontally and lets the operator unpin/repin", () => {
+    const { container } = render(<ThreadMarkdown text={comparisonMatrixMarkdown} />);
+    const wrap = container.querySelector<HTMLDivElement>(".thread-markdown__table-wrap")!;
+    const scroller = container.querySelector<HTMLDivElement>(".thread-markdown__table-scroll")!;
+    const table = container.querySelector<HTMLTableElement>(".thread-markdown__table")!;
+    const firstHeader = table.querySelector<HTMLTableCellElement>("thead th")!;
+
+    expect(table).toHaveAttribute("data-pin-first-col", "auto");
+
+    let scrollLeft = 0;
+    Object.defineProperties(scroller, {
+      clientWidth: { configurable: true, get: () => 520 },
+      scrollWidth: { configurable: true, get: () => 980 },
+      scrollLeft: {
+        configurable: true,
+        get: () => scrollLeft,
+        set: (next: number) => {
+          scrollLeft = next;
+        },
+      },
+    });
+    Object.defineProperty(firstHeader, "offsetWidth", {
+      configurable: true,
+      get: () => 180,
+    });
+
+    fireEvent.scroll(scroller);
+    expect(wrap).toHaveAttribute("data-can-scroll-x", "true");
+    expect(wrap).toHaveAttribute("data-pinned-col-active", "true");
+    expect(wrap).not.toHaveAttribute("data-pinned-col-scrolled");
+
+    scrollLeft = 140;
+    fireEvent.scroll(scroller);
+    expect(wrap).toHaveAttribute("data-pinned-col-active", "true");
+    expect(wrap).toHaveAttribute("data-pinned-col-scrolled", "true");
+
+    const pinButton = screen.getByRole("button", { name: "Unpin first column" });
+    expect(pinButton).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(pinButton);
+
+    expect(wrap).not.toHaveAttribute("data-pinned-col-active");
+    expect(wrap).not.toHaveAttribute("data-pinned-col-scrolled");
+    const repinButton = screen.getByRole("button", { name: "Pin first column" });
+    expect(repinButton).toHaveAttribute("aria-pressed", "false");
+
+    fireEvent.click(repinButton);
+    expect(wrap).toHaveAttribute("data-pinned-col-active", "true");
+    expect(wrap).toHaveAttribute("data-pinned-col-scrolled", "true");
+  });
+
+  it("sticks the table header to its vertical scroll ancestor and clears once scrolled past", () => {
+    let tableTop = 80;
+    const tableHeight = 520;
+    const headerHeight = 40;
+
+    const { container } = render(
+      <div
+        className="transcript-list__items"
+        style={{ overflowY: "auto", height: "400px" }}
+      >
+        <ThreadMarkdown text={comparisonMatrixMarkdown} />
+      </div>,
+    );
+
+    const ancestor = container.querySelector<HTMLDivElement>(".transcript-list__items")!;
+    const wrap = container.querySelector<HTMLDivElement>(".thread-markdown__table-wrap")!;
+    const table = container.querySelector<HTMLTableElement>(".thread-markdown__table")!;
+    const thead = table.querySelector("thead")!;
+
+    ancestor.getBoundingClientRect = () =>
+      ({ top: 100, bottom: 500, left: 0, right: 800, width: 800, height: 400, x: 0, y: 100, toJSON: () => ({}) }) as DOMRect;
+    table.getBoundingClientRect = () =>
+      ({ top: tableTop, bottom: tableTop + tableHeight, left: 0, right: 800, width: 800, height: tableHeight, x: 0, y: tableTop, toJSON: () => ({}) }) as DOMRect;
+    thead.getBoundingClientRect = () =>
+      ({ top: tableTop, bottom: tableTop + headerHeight, left: 0, right: 800, width: 800, height: headerHeight, x: 0, y: tableTop, toJSON: () => ({}) }) as DOMRect;
+
+    // Header scrolled 20px above viewport top -> sticks at +20px.
+    fireEvent.scroll(ancestor);
+    expect(wrap).toHaveAttribute("data-sticky-mode", "scroll-ancestor");
+    expect(wrap).toHaveAttribute("data-sticky-header", "true");
+    expect(wrap.style.getPropertyValue("--table-sticky-y")).toBe("20px");
+
+    // Table scrolled near bottom: clamps to tableHeight - headerHeight = 480px.
+    tableTop = -395;
+    fireEvent.scroll(ancestor);
+    expect(wrap).toHaveAttribute("data-sticky-header", "true");
+    expect(wrap.style.getPropertyValue("--table-sticky-y")).toBe("480px");
+
+    // Table scrolled completely above viewport -> clears sticky state.
+    tableTop = -600;
+    fireEvent.scroll(ancestor);
+    expect(wrap).not.toHaveAttribute("data-sticky-header");
+    expect(wrap.style.getPropertyValue("--table-sticky-y")).toBe("");
+
+    // Scrolled back down so table header is back below viewport top -> clears.
+    tableTop = 140;
+    fireEvent.scroll(ancestor);
+    expect(wrap).not.toHaveAttribute("data-sticky-header");
+    expect(wrap.style.getPropertyValue("--table-sticky-y")).toBe("");
+  });
+
+  it("opens the popout table viewer modal with title, row filtering, CSV/Markdown copy, and keyboard focus trap", async () => {
+    const copyTextApi = vi.fn(async () => undefined);
+    render(
+      <ThreadMarkdown
+        desktopApi={{ copyText: copyTextApi }}
+        text={comparisonMatrixMarkdown}
+      />,
+    );
+
+    const expandButton = screen.getByRole("button", { name: "Open table viewer" });
+    expandButton.focus();
+    fireEvent.click(expandButton);
+
+    const dialog = screen.getByRole("dialog", {
+      name: "Table viewer: 2. Part B: MCP Gateway Comparison Matrix",
+    });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText("5 cols · 4 rows")).toBeInTheDocument();
+
+    // Inner viewer table uses native 2D sticky mode and does not offer nested popout.
+    const innerWrap = dialog.querySelector<HTMLDivElement>(".thread-markdown__table-wrap");
+    expect(innerWrap).toHaveAttribute("data-sticky-mode", "native");
+    expect(within(dialog).queryByRole("button", { name: "Open table viewer" })).toBeNull();
+
+    // Live multi-token row filtering hides non-matching rows and updates visible row count.
+    const filterInput = within(dialog).getByRole("textbox", { name: "Filter table rows" });
+    fireEvent.change(filterInput, { target: { value: "stdio ipc" } });
+    await waitFor(() => {
+      expect(within(dialog).getByText("5 cols · 1 / 4 rows")).toBeInTheDocument();
+    });
+    const bodyRows = Array.from(dialog.querySelectorAll<HTMLTableRowElement>("tbody > tr"));
+    expect(bodyRows.filter((row) => !row.hidden)).toHaveLength(1);
+    expect(bodyRows.find((row) => !row.hidden)).toHaveTextContent("Transports Supported");
+
+    // Copy CSV copies header + currently visible filtered rows only.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy CSV" }));
+    await waitFor(() => {
+      expect(copyText).toHaveBeenCalledWith(
+        "Capability,PwrAgent,t3code,orca,bb\r\nTransports Supported,\"Streamable HTTP, Stdio, Native C IPC\",Streamable HTTP,\"Streamable HTTP, Stdio\",Streamable HTTP",
+        expect.anything(),
+      );
+    });
+
+    // Empty filter state with Show all rows button.
+    fireEvent.change(filterInput, { target: { value: "does-not-exist-xyz" } });
+    await waitFor(() => {
+      expect(within(dialog).getByText("5 cols · 0 / 4 rows")).toBeInTheDocument();
+      expect(within(dialog).getByRole("status")).toHaveTextContent("No rows match");
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Show all rows" }));
+    await waitFor(() => {
+      expect(within(dialog).getByText("5 cols · 4 rows")).toBeInTheDocument();
+    });
+
+    // Pin and Wide toggles update aria-pressed and wide-columns class.
+    const wideButton = within(dialog).getByRole("button", { name: "Widen columns" });
+    expect(wideButton).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(wideButton);
+    expect(dialog.querySelector(".table-viewer-modal__content--wide-columns")).not.toBeNull();
+
+    // Tab stays trapped inside the dialog, and Escape closes and returns focus to opener.
+    expect(walkTab(60).filter((el) => !dialog.contains(el))).toEqual([]);
+    pressEscape();
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", {
+          name: "Table viewer: 2. Part B: MCP Gateway Comparison Matrix",
+        }),
+      ).toBeNull();
+    });
+    expect(document.activeElement).toBe(expandButton);
+  });
+
+  it("causes zero React re-renders during vertical and horizontal table scrolling", () => {
+    let tableTop = 60;
+    let scrollLeft = 0;
+    let renderCount = 0;
+
+    const { container } = render(
+      <Profiler
+        id="table-scroll-test"
+        onRender={() => {
+          renderCount += 1;
+        }}
+      >
+        <div
+          className="transcript-list__items"
+          style={{ overflowY: "auto", height: "400px" }}
+        >
+          <ThreadMarkdown text={comparisonMatrixMarkdown} />
+        </div>
+      </Profiler>,
+    );
+
+    const ancestor = container.querySelector<HTMLDivElement>(".transcript-list__items")!;
+    const scroller = container.querySelector<HTMLDivElement>(".thread-markdown__table-scroll")!;
+    const table = container.querySelector<HTMLTableElement>(".thread-markdown__table")!;
+    const thead = table.querySelector("thead")!;
+    const firstHeader = table.querySelector<HTMLTableCellElement>("thead th")!;
+
+    ancestor.getBoundingClientRect = () =>
+      ({ top: 100, bottom: 500, left: 0, right: 800, width: 800, height: 400, x: 0, y: 100, toJSON: () => ({}) }) as DOMRect;
+    table.getBoundingClientRect = () =>
+      ({ top: tableTop, bottom: tableTop + 600, left: 0, right: 800, width: 800, height: 600, x: 0, y: tableTop, toJSON: () => ({}) }) as DOMRect;
+    thead.getBoundingClientRect = () =>
+      ({ top: tableTop, bottom: tableTop + 40, left: 0, right: 800, width: 800, height: 40, x: 0, y: tableTop, toJSON: () => ({}) }) as DOMRect;
+    Object.defineProperties(scroller, {
+      clientWidth: { configurable: true, get: () => 520 },
+      scrollWidth: { configurable: true, get: () => 980 },
+      scrollLeft: { configurable: true, get: () => scrollLeft },
+    });
+    Object.defineProperty(firstHeader, "offsetWidth", {
+      configurable: true,
+      get: () => 180,
+    });
+
+    const rendersAfterMount = renderCount;
+    for (let step = 0; step < 25; step += 1) {
+      tableTop = 100 - step * 20;
+      scrollLeft = step * 18;
+      fireEvent.scroll(ancestor);
+      fireEvent.scroll(scroller);
+    }
+
+    expect(renderCount).toBe(rendersAfterMount);
+  });
+
+  it("opens blockquote-nested tables in TableDocumentModal with stripped prefixes, title, filter, and CSV export", async () => {
+    const copyTextApi = vi.fn(async () => undefined);
+    const quotedTableMarkdown = [
+      "> ## Quoted Gateway Matrix",
+      ">",
+      "> | Capability | Atlas | Beacon |",
+      "> | --- | --- | --- |",
+      "> | **Managed Broker** | Full multi-instance router | Local proxy |",
+      "> | **Secret Vault** | Encrypted local vault | OS keychain |",
+    ].join("\n");
+
+    render(
+      <ThreadMarkdown
+        desktopApi={{ copyText: copyTextApi }}
+        text={quotedTableMarkdown}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open table viewer" }));
+    const dialog = screen.getByRole("dialog", {
+      name: "Table viewer: Quoted Gateway Matrix",
+    });
+    expect(dialog.querySelector("table")).not.toBeNull();
+    expect(within(dialog).getByText("3 cols · 2 rows")).toBeInTheDocument();
+
+    fireEvent.change(
+      within(dialog).getByRole("textbox", { name: "Filter table rows" }),
+      { target: { value: "keychain" } },
+    );
+    await waitFor(() => {
+      expect(within(dialog).getByText("3 cols · 1 / 2 rows")).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy CSV" }));
+    await waitFor(() => {
+      expect(copyTextApi).toHaveBeenCalledWith(
+        "Capability,Atlas,Beacon\r\nSecret Vault,Encrypted local vault,OS keychain",
+      );
+    });
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Copy Markdown table" }));
+    await waitFor(() => {
+      expect(copyTextWithHtml).toHaveBeenCalledTimes(1);
+    });
+    const firstRichCall = copyTextWithHtml.mock.calls[0] as unknown as [
+      string,
+      string,
+    ];
+    expect(firstRichCall[0]).toContain("| Capability | Atlas | Beacon |");
+    expect(firstRichCall[0]).not.toMatch(/^>/m);
+    expect(firstRichCall[1]).toContain("<table");
+  });
+
+  it("withholds data-can-pin-col when the narrow-viewport guard blocks column 0 pinning", () => {
+    const { container } = render(<ThreadMarkdown text={comparisonMatrixMarkdown} />);
+    const wrap = container.querySelector<HTMLDivElement>(".thread-markdown__table-wrap")!;
+    const scroller = container.querySelector<HTMLDivElement>(".thread-markdown__table-scroll")!;
+    const firstHeader = container.querySelector<HTMLTableCellElement>(".thread-markdown__th")!;
+
+    let clientWidth = 280;
+    Object.defineProperties(scroller, {
+      clientWidth: { configurable: true, get: () => clientWidth },
+      scrollWidth: { configurable: true, get: () => 960 },
+      scrollLeft: { configurable: true, get: () => 80 },
+    });
+    Object.defineProperty(firstHeader, "offsetWidth", {
+      configurable: true,
+      get: () => 220,
+    });
+
+    // Narrow pane: 280 - 220 = 60px < 120px floor -> overflows horizontally, but
+    // pin capability is blocked so the pin button stays hidden.
+    fireEvent.scroll(scroller);
+    expect(wrap).toHaveAttribute("data-can-scroll-x", "true");
+    expect(wrap).not.toHaveAttribute("data-can-pin-col");
+    expect(wrap).not.toHaveAttribute("data-pinned-col-active");
+
+    // Widening the pane unlocks pinning and exposes data-can-pin-col.
+    clientWidth = 560;
+    fireEvent.scroll(scroller);
+    expect(wrap).toHaveAttribute("data-can-pin-col", "true");
+    expect(wrap).toHaveAttribute("data-pinned-col-active", "true");
+  });
+
+  it("re-syncs sticky header offset when content layout shifts without a scroll event", () => {
+    const callbacks: Array<{ callback: ResizeObserverCallback; targets: Set<Element> }> = [];
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        private readonly record: { callback: ResizeObserverCallback; targets: Set<Element> };
+        constructor(callback: ResizeObserverCallback) {
+          this.record = { callback, targets: new Set<Element>() };
+          callbacks.push(this.record);
+        }
+        observe(target: Element) {
+          this.record.targets.add(target);
+        }
+        unobserve(target: Element) {
+          this.record.targets.delete(target);
+        }
+        disconnect() {
+          this.record.targets.clear();
+        }
+      },
+    );
+
+    try {
+      let tableTop = 40;
+      const { container } = render(
+        <div
+          className="transcript-list__items"
+          style={{ overflowY: "auto", height: "400px" }}
+        >
+          <div className="transcript-list__content">
+            <ThreadMarkdown text={comparisonMatrixMarkdown} />
+          </div>
+        </div>,
+      );
+
+      const ancestor = container.querySelector<HTMLDivElement>(".transcript-list__items")!;
+      const contentRoot = container.querySelector<HTMLDivElement>(".transcript-list__content")!;
+      const wrap = container.querySelector<HTMLDivElement>(".thread-markdown__table-wrap")!;
+      const table = container.querySelector<HTMLTableElement>(".thread-markdown__table")!;
+      const thead = table.querySelector("thead")!;
+
+      ancestor.getBoundingClientRect = () =>
+        ({ top: 100, bottom: 500, left: 0, right: 800, width: 800, height: 400, x: 0, y: 100, toJSON: () => ({}) }) as DOMRect;
+      table.getBoundingClientRect = () =>
+        ({ top: tableTop, bottom: tableTop + 520, left: 0, right: 800, width: 800, height: 520, x: 0, y: tableTop, toJSON: () => ({}) }) as DOMRect;
+      thead.getBoundingClientRect = () =>
+        ({ top: tableTop, bottom: tableTop + 40, left: 0, right: 800, width: 800, height: 40, x: 0, y: tableTop, toJSON: () => ({}) }) as DOMRect;
+
+      const stickyObserver = callbacks.find(
+        (entry) => entry.targets.has(contentRoot) && entry.targets.has(wrap),
+      );
+      expect(stickyObserver).toBeDefined();
+
+      // Simulate an expanded work-phase group shifting the table up without
+      // scrolling or resizing the viewport itself.
+      act(() => {
+        stickyObserver!.callback(
+          [{ target: contentRoot } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wrap).toHaveAttribute("data-sticky-header", "true");
+      expect(wrap.style.getPropertyValue("--table-sticky-y")).toBe("60px");
+
+      // Collapsing content above pushes the table back below the viewport top.
+      tableTop = 140;
+      act(() => {
+        stickyObserver!.callback(
+          [{ target: contentRoot } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wrap).not.toHaveAttribute("data-sticky-header");
+      expect(wrap.style.getPropertyValue("--table-sticky-y")).toBe("");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

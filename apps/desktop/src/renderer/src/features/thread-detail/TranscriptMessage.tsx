@@ -111,6 +111,13 @@ type MessageRewindControl = {
 // component map as new element types, which remounts selected text nodes.
 const EMPTY_IMAGE_PARTS: AppServerThreadImagePart[] = [];
 
+const MESSAGE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+});
+
 export const TranscriptMessage = memo(function TranscriptMessage(props: TranscriptMessageProps) {
   const browserCompletion = codexBrowserCompletionActivity(props.message, props.parentThreadBackend);
   return browserCompletion
@@ -879,8 +886,9 @@ function splitMarkdownTableSegment(segment: MessagePartSegment): MessagePartSegm
   // Messages only: the file viewer and Changelog render a document as GFM
   // would, so a pipe table without a delimiter row stays text there.
   const text = inferPipeTables(segment.part.text);
-  const referenceDefinitions = extractMarkdownReferenceDefinitions(text);
-  const blocks = splitMarkdownTableBlocks(text);
+  const lines = text.split("\n");
+  const referenceDefinitions = extractMarkdownReferenceDefinitionsFromLines(lines);
+  const blocks = splitMarkdownTableBlocksFromLines(lines);
   if (blocks.length === 1 && blocks[0]?.type === "text") {
     return text === segment.part.text
       ? [segment]
@@ -888,8 +896,21 @@ function splitMarkdownTableSegment(segment: MessagePartSegment): MessagePartSegm
   }
 
   const segments: MessagePartSegment[] = [];
+  let pendingTextBlocks: string[] = [];
+  const flushPendingText = (): void => {
+    if (pendingTextBlocks.length === 0) {
+      return;
+    }
+    segments.push({
+      type: "text",
+      part: { type: "text", text: pendingTextBlocks.join("\n\n") },
+    });
+    pendingTextBlocks = [];
+  };
+
   for (const block of blocks) {
-    if (block.type === "table" && isWideMarkdownTable(block.text)) {
+    if (block.type === "table" && block.wide) {
+      flushPendingText();
       segments.push({
         type: "table",
         text: withMarkdownReferenceDefinitions(block.text, referenceDefinitions),
@@ -898,20 +919,22 @@ function splitMarkdownTableSegment(segment: MessagePartSegment): MessagePartSegm
       continue;
     }
 
-    if (isOnlyMarkdownReferenceDefinitions(block.text)) {
+    if (block.onlyReferenceDefinitions) {
       continue;
     }
 
-    appendTextSegment(segments, block.text);
+    pendingTextBlocks.push(block.text);
   }
 
+  flushPendingText();
   return segments;
 }
 
-type MarkdownBlock = { type: "text" | "table"; text: string };
+type MarkdownBlock =
+  | { type: "text"; text: string; onlyReferenceDefinitions: boolean }
+  | { type: "table"; text: string; wide: boolean; onlyReferenceDefinitions: false };
 
-function splitMarkdownTableBlocks(markdown: string): MarkdownBlock[] {
-  const lines = markdown.split("\n");
+function splitMarkdownTableBlocksFromLines(lines: readonly string[]): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   let textBuffer: string[] = [];
   let inFence = false;
@@ -919,10 +942,14 @@ function splitMarkdownTableBlocks(markdown: string): MarkdownBlock[] {
   let index = 0;
 
   const flushText = (): void => {
-    const text = trimBlankMarkdownLines(textBuffer).join("\n");
+    const trimmed = trimBlankMarkdownLines(textBuffer);
     textBuffer = [];
-    if (text) {
-      blocks.push({ type: "text", text });
+    if (trimmed.length > 0) {
+      blocks.push({
+        type: "text",
+        text: trimmed.join("\n"),
+        onlyReferenceDefinitions: isOnlyMarkdownReferenceDefinitionLines(trimmed),
+      });
     }
   };
 
@@ -950,17 +977,29 @@ function splitMarkdownTableBlocks(markdown: string): MarkdownBlock[] {
       const tableHeading = splitTrailingTableHeading(textBuffer);
       textBuffer = tableHeading.remainingLines;
       flushText();
+      const headerCellsCount = splitTableCells(line).length;
+      const delimiterLine = lines[index + 1] ?? "";
       const tableLines = [
         ...tableHeading.headingLines,
         line,
-        lines[index + 1] ?? "",
+        delimiterLine,
       ];
+      let longestRowLength = line.length;
       index += 2;
       while (index < lines.length && isMarkdownTableRow(lines[index] ?? "")) {
-        tableLines.push(lines[index] ?? "");
+        const rowLine = lines[index] ?? "";
+        tableLines.push(rowLine);
+        if (rowLine.length > longestRowLength) {
+          longestRowLength = rowLine.length;
+        }
         index += 1;
       }
-      blocks.push({ type: "table", text: tableLines.join("\n") });
+      blocks.push({
+        type: "table",
+        text: tableLines.join("\n"),
+        wide: headerCellsCount >= 4 || longestRowLength > 140,
+        onlyReferenceDefinitions: false,
+      });
       continue;
     }
 
@@ -1070,23 +1109,7 @@ function splitTableCells(line: string): string[] {
   return cells;
 }
 
-function isWideMarkdownTable(table: string): boolean {
-  const lines = table.split("\n");
-  const headerIndex = lines.findIndex(
-    (line, index) =>
-      isMarkdownTableHeaderWithDelimiter(line, lines[index + 1] ?? ""),
-  );
-  const header = lines[headerIndex] ?? "";
-  const rows = lines.slice(headerIndex + 2);
-  const columnCount = splitTableCells(header).length;
-  const longestRowLength = rows.reduce(
-    (longest, row) => Math.max(longest, row.length),
-    header.length
-  );
-  return columnCount >= 4 || longestRowLength > 140;
-}
-
-function trimBlankMarkdownLines(lines: string[]): string[] {
+function trimBlankMarkdownLines(lines: readonly string[]): string[] {
   let start = 0;
   let end = lines.length;
   while (start < end && lines[start]?.trim() === "") {
@@ -1099,10 +1122,12 @@ function trimBlankMarkdownLines(lines: string[]): string[] {
   return lines.slice(start, end);
 }
 
-function extractMarkdownReferenceDefinitions(markdown: string): string[] {
-  return markdown
-    .split("\n")
-    .filter((line) => /^\s{0,3}\[[^\]]+\]:\s+\S/.test(line));
+const MARKDOWN_REF_DEF_PATTERN = /^\s{0,3}\[[^\]]+\]:\s+\S/;
+
+function extractMarkdownReferenceDefinitionsFromLines(
+  lines: readonly string[],
+): string[] {
+  return lines.filter((line) => MARKDOWN_REF_DEF_PATTERN.test(line));
 }
 
 function withMarkdownReferenceDefinitions(table: string, definitions: string[]): string {
@@ -1113,25 +1138,18 @@ function withMarkdownReferenceDefinitions(table: string, definitions: string[]):
   return `${table}\n\n${definitions.join("\n")}`;
 }
 
-function isOnlyMarkdownReferenceDefinitions(markdown: string): boolean {
-  const meaningfulLines = markdown
-    .split("\n")
-    .filter((line) => line.trim() !== "");
-
-  return (
-    meaningfulLines.length > 0 &&
-    meaningfulLines.every((line) => /^\s{0,3}\[[^\]]+\]:\s+\S/.test(line))
-  );
-}
-
-function appendTextSegment(segments: MessagePartSegment[], text: string): void {
-  const previous = segments[segments.length - 1];
-  if (previous?.type === "text") {
-    previous.part.text = `${previous.part.text}\n\n${text}`;
-    return;
+function isOnlyMarkdownReferenceDefinitionLines(lines: readonly string[]): boolean {
+  let sawMeaningful = false;
+  for (const line of lines) {
+    if (line.trim() === "") {
+      continue;
+    }
+    sawMeaningful = true;
+    if (!MARKDOWN_REF_DEF_PATTERN.test(line)) {
+      return false;
+    }
   }
-
-  segments.push({ type: "text", part: { type: "text", text } });
+  return sawMeaningful;
 }
 
 function renderMessageSegment(params: {
@@ -1473,12 +1491,7 @@ function renderMessageHeader(params: {
         ) : null}
         {params.message.createdAt ? (
           <time className="transcript-message__time tooltip-target" dateTime={new Date(params.message.createdAt).toISOString()} data-tooltip={new Date(params.message.createdAt).toISOString()}>
-            {new Intl.DateTimeFormat(undefined, {
-              month: "short",
-              day: "numeric",
-              hour: "numeric",
-              minute: "2-digit"
-            }).format(params.message.createdAt)}
+            {MESSAGE_TIME_FORMATTER.format(params.message.createdAt)}
           </time>
         ) : null}
       </span>

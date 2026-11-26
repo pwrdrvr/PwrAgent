@@ -364,17 +364,22 @@ describe("SqliteOverlayStore — thread pins", () => {
   });
 });
 
-it("appends pin intent after unloaded owner pins and preserves concurrent order", async () => {
+it("prepends pin intent at top of ordinary pins across backends without crossing kept pins", async () => {
+  const keptRank = String(-(2 ** 40));
+  await store.setThreadPin({ backend: "codex", threadId: "kept-top", pinnedRank: keptRank });
   for (let index = 1; index <= 100; index += 1) {
     await store.setThreadPin({ backend: "codex", threadId: `unloaded-${index}`, pinnedRank: String(index * 1024) });
   }
-  const [first, second] = await Promise.all([
-    store.setThreadPin({ backend: "codex", threadId: "first", pinned: true }),
-    store.setThreadPin({ backend: "codex", threadId: "second", pinned: true }),
-  ]);
-  expect(first.pinnedRank).toBe("103424");
-  expect(second.pinnedRank).toBe("104448");
-  expect((await store.setThreadPin({ backend: "codex", threadId: "first", pinned: true })).pinnedRank).toBe(first.pinnedRank);
-  expect((await store.setThreadPin({ backend: "codex", threadId: "first", pinned: false })).pinnedRank).toBeUndefined();
-  await expect(store.setThreadPin({ backend: "codex", threadId: "first", pinned: true, pinnedRank: "1" })).rejects.toThrow("either pin intent");
+  const backends = ["codex", "claude", "acp:grok", "acp:antigravity"] as const;
+  const pinned = await Promise.all(
+    backends.map((backend, index) => store.setThreadPin({ backend, threadId: `new-${index}`, pinned: true })),
+  );
+  // Each new pin lands strictly above the prior top ordinary pin (1024) and strictly below kept-at-top pins.
+  expect(pinned.map((entry) => entry.pinnedRank)).toEqual(["0", "-1024", "-2048", "-3072"]);
+  for (const entry of pinned) {
+    expect(Number(entry.pinnedRank)).toBeGreaterThan(Number(keptRank));
+  }
+  expect((await store.setThreadPin({ backend: "codex", threadId: "new-0", pinned: true })).pinnedRank).toBe(pinned[0]!.pinnedRank);
+  expect((await store.setThreadPin({ backend: "codex", threadId: "new-0", pinned: false })).pinnedRank).toBeUndefined();
+  await expect(store.setThreadPin({ backend: "codex", threadId: "new-0", pinned: true, pinnedRank: "1" })).rejects.toThrow("either pin intent");
 });

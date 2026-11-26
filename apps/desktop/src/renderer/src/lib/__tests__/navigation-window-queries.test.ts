@@ -962,8 +962,9 @@ it("preserves loaded rows through refresh and transparently rebuilds an evicted 
   expect(state.error).toBeUndefined();
   expect(Math.min(...sizes)).toBe(110);
   // Demand, one continuation, two to restore the range, then the expired
-  // cursor, its rebaseline and two more to rebuild the range with the block.
-  expect(read).toHaveBeenCalledTimes(8);
+  // cursor, its full-block rebaseline (100 rows) and one more continuation
+  // to finish the 130-row range.
+  expect(read).toHaveBeenCalledTimes(7);
   queries.dispose();
 });
 
@@ -1465,3 +1466,354 @@ it.each(["thread/started", "thread/parent/set"])(
     }
   },
 );
+
+it("recovers loadMore automatically when a continuation cursor mismatches its query or generation", async () => {
+  const serve = owner("fresh", 25);
+  let rejectFirstCursor = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (sent.cursor && rejectFirstCursor) {
+      rejectFirstCursor = false;
+      throw new Error("[navigation_invalid_request] Navigation cursor does not belong to this requester and query.");
+    }
+    return serve(sent);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["directory-pins:project", { protocol: 2, consumer: "main-sidebar", pageSize: 10,
+      query: { kind: "directory", directoryKey: "directory:/project", roots: "pinned" } }]]));
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(10);
+
+    await queries.loadMore("directory-pins:project");
+    const state = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(state.error).toBeUndefined();
+    expect(state.rebaselineRequired).toBeFalsy();
+    expect(state.page?.directories).toHaveLength(25);
+    expect(state.page?.nextCursor).toBeUndefined();
+  } finally {
+    queries.dispose();
+  }
+});
+
+it("recovers loadMore when continuation generation mismatches in applyNavigationPage", async () => {
+  const serve = owner("fresh", 25);
+  let mismatchOnce = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    const result = await serve(sent);
+    if (sent.cursor && mismatchOnce) {
+      mismatchOnce = false;
+      return { ...result, generation: "other-generation" };
+    }
+    return result;
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["directory-pins:project", { protocol: 2, consumer: "main-sidebar", pageSize: 10,
+      query: { kind: "directory", directoryKey: "directory:/project", roots: "pinned" } }]]));
+    await settled(queries, "directory-pins:project");
+
+    await queries.loadMore("directory-pins:project");
+    const state = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(state.error).toBeUndefined();
+    expect(state.rebaselineRequired).toBeFalsy();
+    expect(state.page?.directories).toHaveLength(25);
+    expect(state.page?.nextCursor).toBeUndefined();
+  } finally {
+    queries.dispose();
+  }
+});
+
+it("advances rows on a single slow recovery read after cursor expiry or invalidation", async () => {
+  let now = 1_000;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+  const serve = owner("fresh", 25);
+  let expireFirstCursor = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (sent.cursor && expireFirstCursor) {
+      expireFirstCursor = false;
+      throw new Error("[navigation_cursor_expired] Navigation cursor expired; rebaseline around the visible anchor.");
+    }
+    const result = serve(sent);
+    if (!sent.cursor && !expireFirstCursor) {
+      // Simulate a slow recovery read that exhausts MAX_LOAD_MORE_MS (10s).
+      now += 11_000;
+    }
+    return result;
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  try {
+    queries.setDemand(new Map([["directory-pins:project", { protocol: 2, consumer: "main-sidebar", pageSize: 10,
+      query: { kind: "directory", directoryKey: "directory:/project", roots: "pinned" } }]]));
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(10);
+
+    await queries.loadMore("directory-pins:project");
+    const state = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(state.error).toBeUndefined();
+    expect(state.page?.directories).toHaveLength(25);
+    expect(state.page?.nextCursor).toBeUndefined();
+  } finally {
+    clock.mockRestore();
+    queries.dispose();
+  }
+});
+
+it("rebuilds cleanly when loadMore runs on a stale baseline and does not persist failed expansion", async () => {
+  const onLoadMore = vi.fn();
+  const serve = owner("fresh", 25);
+  let failOnce = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (sent.cursor && failOnce) {
+      failOnce = false;
+      throw new Error("[navigation_busy] Navigation read cancelled or its deadline expired.");
+    }
+    return serve(sent);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, { onLoadMore });
+  try {
+    queries.setDemand(new Map([["directory-pins:project", { protocol: 2, consumer: "main-sidebar", pageSize: 10,
+      query: { kind: "directory", directoryKey: "directory:/project", roots: "pinned" } }]]));
+    await settled(queries, "directory-pins:project");
+
+    await queries.loadMore("directory-pins:project");
+    expect(onLoadMore).not.toHaveBeenCalled();
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.stale).toBe(true);
+
+    // Retry on the stale baseline rebuilds cleanly without sending the stale cursor.
+    await queries.loadMore("directory-pins:project");
+    const state = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(state.error).toBeUndefined();
+    expect(state.page?.directories).toHaveLength(25);
+    expect(read.mock.calls.at(-1)?.[0].cursor).toBeUndefined();
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  } finally {
+    queries.dispose();
+  }
+});
+
+it("never re-collapses an expanded project's pins across eviction, visibility, transient failure, and new pins", async () => {
+  let count = 14;
+  let revision = 1;
+  let failNextPinRead = false;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (sent.query.kind === "directory" && sent.query.roots === "pinned") {
+      if (failNextPinRead) {
+        failNextPinRead = false;
+        throw new Error("[navigation_busy] Transient owner read failure.");
+      }
+      return owner(`rev-${revision}`, count)(sent);
+    }
+    // Large lens page to evict the 8 MB retained cache.
+    const result = await owner("evict", 10)(sent);
+    return { ...result, generation: `${result.generation}-${"x".repeat(250_000)}` };
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read });
+  const project = new Map([["directory-pins:project", pins()]]);
+  try {
+    queries.setDemand(project);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(10);
+
+    await queries.loadMore("directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(14);
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.nextCursor).toBeUndefined();
+
+    // Observe every publication after Load more: once expanded, no intermediate
+    // or settled page may return with a collapsed nextCursor.
+    let collapsedCursorsSeen = 0;
+    const unsubscribe = queries.subscribe(() => {
+      const page = queries.getSnapshot().resources.get("directory-pins:project")?.state.page;
+      if (page?.nextCursor) collapsedCursorsSeen += 1;
+    });
+
+    // Evict retained cache completely by cycling through other lenses.
+    for (let index = 0; index < 40; index += 1) {
+      queries.setDemand(new Map([["lens", request(`other-${index}`)]]));
+      await settled(queries, "lens");
+    }
+
+    // Reopen with a transient failure on the first read, then recover.
+    failNextPinRead = true;
+    queries.setDemand(project);
+    await vi.waitFor(() => expect(queries.getSnapshot().resources.get("directory-pins:project")?.loading).toBe(false));
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.error).toContain("navigation_busy");
+
+    // Refresh after transient failure restores all 14 pins without collapsing.
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(14);
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.nextCursor).toBeUndefined();
+
+    // Pinning more threads (15, then up to the 110-row committed block) keeps
+    // all pins expanded across visibility toggles and refreshes.
+    count = 15;
+    revision += 1;
+    queries.invalidate();
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(15);
+
+    queries.setVisible(false);
+    queries.setVisible(true);
+    await settled(queries, "directory-pins:project");
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(15);
+
+    count = 110;
+    revision += 1;
+    queries.invalidate();
+    await queries.refresh();
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.directories).toHaveLength(110);
+    expect(queries.getSnapshot().resources.get("directory-pins:project")?.state.page?.nextCursor).toBeUndefined();
+    expect(collapsedCursorsSeen).toBe(0);
+    unsubscribe();
+  } finally {
+    queries.dispose();
+  }
+});
+
+it("keeps Load more alive for same-query replacement but aborts when replaced by a different query", async () => {
+  const firstRead = deferred<NavigationQueryPage>();
+  const serve = owner("fresh", 25);
+  let blockFirst = true;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (blockFirst && !sent.cursor) {
+      blockFirst = false;
+      return firstRead.promise;
+    }
+    return serve(sent);
+  });
+  const onLoadMore = vi.fn();
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, { onLoadMore });
+  try {
+    // Same collection (identical resumeKey, different requestKey via pageSize):
+    // Load more carries over to the replacement resource.
+    queries.setDemand(new Map([["directory-pins:project", pins("a")]]));
+    const clickingSame = queries.loadMore("directory-pins:project");
+    queries.setDemand(new Map([["directory-pins:project", { ...pins("a"), pageSize: 12 }]]));
+    firstRead.resolve(await serve(pins("a")));
+    await clickingSame;
+    const sameState = queries.getSnapshot().resources.get("directory-pins:project")!.state;
+    expect(sameState.page?.directories).toHaveLength(25);
+    expect(sameState.page?.nextCursor).toBeUndefined();
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+
+    // Different collection sharing slot ID "lens": switching from inbox to
+    // recents while a read is pending aborts the stale Load more click.
+    const inboxRead = deferred<NavigationQueryPage>();
+    blockFirst = true;
+    read.mockImplementation(async (sent: NavigationQueryRequest) => {
+      if (blockFirst && sent.query.kind === "lens" && sent.query.lens === "inbox" && !sent.cursor) {
+        blockFirst = false;
+        return inboxRead.promise;
+      }
+      return serve(sent);
+    });
+    queries.setDemand(new Map([["lens", request("inbox")]]));
+    const clickingDifferent = queries.loadMore("lens");
+    queries.setDemand(new Map([["lens", { ...request("inbox"), query: { kind: "lens", lens: "recents" } }]]));
+    inboxRead.resolve(await serve(request("inbox")));
+    await clickingDifferent;
+    await settled(queries, "lens");
+    expect(queries.getSnapshot().resources.get("lens")?.state.page?.directories).toHaveLength(10);
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
+  } finally {
+    queries.dispose();
+  }
+});
+
+it("bypasses the shared cold-start ResumeBudget in readPage for multi-page session-expanded restores", async () => {
+  const coldHuge = pins("cold-huge");
+  const sessionExpandedProject = pins("session-expanded");
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (sent.query.kind === "directory" && sent.query.directoryKey === "cold-huge") {
+      // Cold-start list clamped to 1 row per page quickly exhausts the 8-read shared budget.
+      return owner("cold", 1000)({ ...sent, pageSize: 1 });
+    }
+    if (sent.query.kind === "directory" && sent.query.directoryKey === "session-expanded") {
+      return owner("expanded", 210)(sent);
+    }
+    const result = await owner("evict", 10)(sent);
+    return { ...result, generation: `${result.generation}-${"x".repeat(250_000)}` };
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(coldHuge)]: 1000 },
+  });
+  try {
+    queries.setDemand(new Map([["directory-pins:session", sessionExpandedProject]]));
+    await settled(queries, "directory-pins:session");
+    await queries.loadMore("directory-pins:session");
+    await queries.loadMore("directory-pins:session");
+    expect(queries.getSnapshot().resources.get("directory-pins:session")?.state.page?.directories).toHaveLength(210);
+
+    // Evict retained cache completely.
+    for (let index = 0; index < 40; index += 1) {
+      queries.setDemand(new Map([["lens", request(`evict-${index}`)]]));
+      await settled(queries, "lens");
+    }
+
+    // Reopen both together so they share one ResumeBudget; coldHuge burns all
+    // 8 shared reads while sessionExpandedProject must still finish all 210 rows.
+    queries.setDemand(new Map([
+      ["directory-pins:cold", coldHuge],
+      ["directory-pins:session", sessionExpandedProject],
+    ]));
+    await vi.waitFor(() => expect(
+      [...queries.getSnapshot().resources.values()].every((resource) => !resource.loading),
+    ).toBe(true));
+    expect(queries.getSnapshot().resources.get("directory-pins:session")?.state.page?.directories).toHaveLength(210);
+    expect(queries.getSnapshot().resources.get("directory-pins:session")?.state.page?.nextCursor).toBeUndefined();
+    expect(queries.getSnapshot().resources.get("directory-pins:cold")?.state.page?.directories).toHaveLength(9);
+  } finally {
+    queries.dispose();
+  }
+});
+
+it("does not leak a cancelled Load more into sessionExpandedQueries", async () => {
+  const cancelledContinuation = deferred<NavigationQueryPage>();
+  const target = pins("cancelled");
+  let holdContinuation = true;
+  let clockNow = 10_000;
+  const clock = vi.spyOn(Date, "now").mockImplementation(() => clockNow);
+  let stallFirstResumePage = false;
+  const read = vi.fn(async (sent: NavigationQueryRequest) => {
+    if (holdContinuation && sent.cursor) {
+      holdContinuation = false;
+      return cancelledContinuation.promise;
+    }
+    if (stallFirstResumePage && !sent.cursor) {
+      stallFirstResumePage = false;
+      clockNow += 10_000;
+    }
+    return owner("fresh", 1000)(sent);
+  });
+  const queries = new NavigationWindowQueries({ getNavigationQueryPage: read }, undefined, {
+    loadedRowsByQuery: { [navigationResumeQueryKey(target)]: 110 },
+  });
+  try {
+    // Initial cold-start restore hits budget at 10 rows; user then starts Load
+    // more but collapses the directory before the continuation resolves.
+    stallFirstResumePage = true;
+    queries.setDemand(new Map([["directory-pins:cancelled", target]]));
+    await settled(queries, "directory-pins:cancelled");
+    expect(queries.getSnapshot().resources.get("directory-pins:cancelled")?.state.page?.directories).toHaveLength(10);
+
+    const clicking = queries.loadMore("directory-pins:cancelled");
+    await vi.waitFor(() => expect(read.mock.calls.some(([sent]) => Boolean(sent.cursor))).toBe(true));
+    queries.setDemand(new Map());
+    cancelledContinuation.resolve(await owner("fresh", 1000)({ ...target, cursor: "fresh:10", pageSize: 100 }));
+    await clicking;
+
+    // Reopening after eviction still treats the saved depth as cold-start
+    // (demand pageSize 10, honoring the restore budget) rather than an
+    // in-instance Load more.
+    for (let index = 0; index < 40; index += 1) {
+      queries.setDemand(new Map([["lens", request(`evict-${index}`)]]));
+      await settled(queries, "lens");
+    }
+    stallFirstResumePage = true;
+    queries.setDemand(new Map([["directory-pins:cancelled", target]]));
+    await settled(queries, "directory-pins:cancelled");
+    expect(queries.getSnapshot().resources.get("directory-pins:cancelled")?.state.page?.directories).toHaveLength(10);
+  } finally {
+    clock.mockRestore();
+    queries.dispose();
+  }
+});

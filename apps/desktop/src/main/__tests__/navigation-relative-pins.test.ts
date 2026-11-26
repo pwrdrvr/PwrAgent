@@ -163,19 +163,20 @@ it("keeps pins at top in their own tier across every move kind", () => {
   });
 });
 
-it("appends owner pin intent beyond unseen local and viewer pins with one commit", async () => {
+it("prepends owner and viewer pin intent above unseen ordinary pins with one commit", async () => {
   vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
   const db = openInMemoryStateDb();
   try {
     const store = new SqliteOverlayStore(db);
     const ref = buildFederatedThreadRef({ backend: "codex", instanceId: "peer", threadId: "same" });
+    await store.setThreadPin({ backend: "codex", threadId: "kept", pinnedRank: String(-(2 ** 40)) });
     await store.setThreadPin({ backend: "codex", threadId: "same", pinnedRank: "102400" });
     await store.addRemoteThreadPin({ ref, instanceLabel: "Peer" });
-    expect((await store.setRemoteThreadLocalPin({ ref, pinned: true })).pinnedRank).toBe("103424");
+    expect((await store.setRemoteThreadLocalPin({ ref, pinned: true })).pinnedRank).toBe("101376");
     const { result, writes } = await measureSqliteWrites(() => store.setThreadPin({
       backend: "codex", threadId: "new", pinned: true,
     }));
-    expect(result.pinnedRank).toBe("104448");
+    expect(result.pinnedRank).toBe("100352");
     expectSqliteWriteBudget({ scenario: "navigation-append-thread-pin", writes,
       note: "Owner pin intent reads compact complete ranks and writes one pin in one commit; at 100 pins/day and ~4 KiB/commit, ~0.4 MB/day; no idle writes" });
   } finally { db.close(); }

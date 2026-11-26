@@ -1,0 +1,19 @@
+{
+  "name": "@pwragent/evals",
+  "version": "1.0.0-alpha.0",
+  "private": true,
+  "type": "module",
+  "description": "In-repo evaluation framework for PwrAgent models, prompts, and review workflows",
+  "author": "PwrDrvr LLC",
+  "license": "MIT",
+  "scripts": {
+    "review": "node managed-review/run.mjs",
+    "review:score": "node managed-review/score.mjs",
+    "review:compare": "node managed-review/compare.mjs",
+    "review:verify-isolation": "node managed-review/drivers/isolated-controller.mjs --verify-isolation",
+    "typecheck": "node ../node_modules/typescript-native/bin/tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@pwragent/shared": "workspace:*"
+  }
+}

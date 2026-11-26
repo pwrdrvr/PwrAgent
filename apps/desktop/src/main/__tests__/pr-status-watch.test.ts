@@ -137,6 +137,32 @@ function createHarness(
   };
 }
 
+it("reads stack holds only when a matching CI watch exists after advancing the head", async () => {
+  const stackHold = vi.fn<() => Promise<string | undefined>>().mockResolvedValue("Held by a lower layer");
+  const submitTurnIfIdle = vi.fn(async () => ({ status: "started" as const, turnId: "watch-wake" }));
+  const coordinator = new PrStatusWatchCoordinator({
+    store, registry: { submitTurnIfIdle }, stackHold, now: () => now,
+  });
+  const passing = pr({ state: "passing", checkState: "passing" });
+  await coordinator.handleStatusSnapshot(passing, now);
+  await coordinator.handleStatusSnapshot(pr({ ...passing, lifecycleState: "merged" }), ++now);
+  await coordinator.handleStatusSnapshot(pr({ ...passing, lifecycleState: "closed" }), ++now);
+  await registerWatch(store, ["failure"]);
+  await coordinator.handleStatusSnapshot(passing, ++now);
+  expect(stackHold).not.toHaveBeenCalled();
+
+  const watch = await registerWatch(store, ["success"], "success-thread");
+  const nextHead = pr({ ...passing, headSha: "b".repeat(40) });
+  await coordinator.handleStatusSnapshot(nextHead, ++now);
+  expect(stackHold).toHaveBeenCalledOnce();
+  expect(submitTurnIfIdle).not.toHaveBeenCalled();
+  expect(await store.listActiveThreadPrStatusWatches(watch)).toMatchObject([{ headSha: nextHead.headSha }]);
+
+  stackHold.mockResolvedValue(undefined);
+  await coordinator.handleStatusSnapshot(nextHead, ++now);
+  expect(submitTurnIfIdle).toHaveBeenCalledOnce();
+});
+
 it("preserves a held failure watch until a fresh eligible check result", async () => {
   const watch = await registerWatch(store, ["failure"]);
   const observe = vi.fn<() => Promise<string | undefined>>().mockResolvedValue("Held by #1104: CI running");

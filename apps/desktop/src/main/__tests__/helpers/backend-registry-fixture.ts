@@ -22,7 +22,7 @@ import { applyNavigationLaunchpadDefaultsPatch, buildThreadIdentityKey } from "@
 import { claimAgentReviewBudget, rearmAgentReviewBudget, type AgentReviewAdmission, type AgentReviewBudget, type OperatorReviewInput } from "@pwragent/owner-core/agent-review-admission";
 import { buildFederatedThreadRef } from "@pwragent/shared/contracts/federation";
 import { buildNavigationSnapshot } from "@pwragent/shared/navigation-state";
-import { buildAppendPinRank, buildPrependPinRank } from "@pwragent/shared/thread-pins";
+import { buildPrependPinRank } from "@pwragent/shared/thread-pins";
 import { resolveHelperModel, type HelperModelId } from "@pwragent/shared/helper-models";
 import type {
   AcpBackendId,
@@ -1128,7 +1128,6 @@ export function createOverlayStoreMock(params?: {
       threadId,
       pinned,
       pinnedRank,
-      prepend,
     }: {
       backend: AppServerBackendKind;
       threadId: string;
@@ -1146,7 +1145,7 @@ export function createOverlayStoreMock(params?: {
       const next = {
         ...current,
         pinnedRank: pinned === undefined ? pinnedRank?.trim() || undefined
-          : pinned ? current.pinnedRank ?? (prepend ? buildPrependPinRank : buildAppendPinRank)([
+          : pinned ? current.pinnedRank ?? buildPrependPinRank([
             ...[...overlays.values()].map((overlay) => overlay.pinnedRank),
             ...(params?.remotePinnedRanks ?? []),
           ]) : undefined,

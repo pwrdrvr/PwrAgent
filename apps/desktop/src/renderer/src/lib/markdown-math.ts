@@ -52,28 +52,40 @@ export function normalizeLatexMathDelimiters(markdown: string): string {
       continue;
     }
 
-    if (
-      markdown[index] !== "\\"
-      || isEscapedBackslash(markdown, index)
-      || (markdown[index + 1] !== "(" && markdown[index + 1] !== "[")
-    ) {
+    if (markdown[index] !== "\\") {
       index += 1;
       continue;
     }
 
-    const inline = markdown[index + 1] === "(";
+    // Consume the entire contiguous backslash run in O(run length) so long
+    // runs like `\\\\...` stay linear instead of scanning backward on each `\`.
+    const runEnd = countRun(markdown, index, "\\") + index;
+    const runLength = runEnd - index;
+    if (runLength % 2 === 0 || runEnd >= markdown.length) {
+      index = runEnd;
+      continue;
+    }
+
+    const delimiterIndex = runEnd - 1;
+    const nextChar = markdown[runEnd];
+    if (nextChar !== "(" && nextChar !== "[") {
+      index = runEnd;
+      continue;
+    }
+
+    const inline = nextChar === "(";
     const openingCharacter = inline ? "(" : "[";
     const unmatchedUntil = inline
       ? unmatchedInlineUntil
       : unmatchedDisplayUntil;
-    if (index < unmatchedUntil) {
-      index += 2;
+    if (delimiterIndex < unmatchedUntil) {
+      index = runEnd + 1;
       continue;
     }
     const closingCharacter = inline ? ")" : "]";
     const search = findClosingDelimiter(
       markdown,
-      index + 2,
+      runEnd + 1,
       openingCharacter,
       closingCharacter,
       inline,
@@ -86,12 +98,12 @@ export function normalizeLatexMathDelimiters(markdown: string): string {
       } else {
         unmatchedDisplayUntil = search.unmatchedUntil;
       }
-      index += 2;
+      index = runEnd + 1;
       continue;
     }
 
-    characters[index] = "$";
-    characters[index + 1] = "$";
+    characters[delimiterIndex] = "$";
+    characters[runEnd] = "$";
     characters[search.closingIndex] = "$";
     characters[search.closingIndex + 1] = "$";
     changed = true;
@@ -109,7 +121,8 @@ function findClosingDelimiter(
   inline: boolean,
   protectedRanges: ProtectedRange[],
 ): ClosingDelimiterSearch {
-  for (let index = start; index < markdown.length - 1; index += 1) {
+  let index = start;
+  while (index < markdown.length - 1) {
     if (inline && markdown[index] === "\n") {
       return { closingIndex: -1, unmatchedUntil: index + 1 };
     }
@@ -119,28 +132,29 @@ function findClosingDelimiter(
       return { closingIndex: -1, unmatchedUntil: protectedRange.end };
     }
 
-    if (markdown[index] === "\\" && !isEscapedBackslash(markdown, index)) {
-      if (markdown[index + 1] === closingCharacter) {
-        return { closingIndex: index, unmatchedUntil: 0 };
-      }
-      if (markdown[index + 1] === openingCharacter) {
-        return { closingIndex: -1, unmatchedUntil: index };
-      }
+    if (markdown[index] !== "\\") {
+      index += 1;
+      continue;
     }
+
+    const runEnd = countRun(markdown, index, "\\") + index;
+    const runLength = runEnd - index;
+    if (runLength % 2 === 0 || runEnd >= markdown.length) {
+      index = runEnd;
+      continue;
+    }
+
+    const delimiterIndex = runEnd - 1;
+    if (markdown[runEnd] === closingCharacter) {
+      return { closingIndex: delimiterIndex, unmatchedUntil: 0 };
+    }
+    if (markdown[runEnd] === openingCharacter) {
+      return { closingIndex: -1, unmatchedUntil: delimiterIndex };
+    }
+    index = runEnd;
   }
 
   return { closingIndex: -1, unmatchedUntil: markdown.length };
-}
-
-function isEscapedBackslash(value: string, index: number): boolean {
-  let precedingBackslashes = 0;
-  for (let scanIndex = index - 1; scanIndex >= 0; scanIndex -= 1) {
-    if (value[scanIndex] !== "\\") {
-      break;
-    }
-    precedingBackslashes += 1;
-  }
-  return precedingBackslashes % 2 === 1;
 }
 
 function collectProtectedCodeRanges(markdown: string): ProtectedRange[] {
@@ -150,6 +164,7 @@ function collectProtectedCodeRanges(markdown: string): ProtectedRange[] {
 
   const blockRanges = collectProtectedBlockRanges(markdown);
   const codeSpanRanges: ProtectedRange[] = [];
+  let runsByLength: Map<number, number[]> | undefined;
   let index = 0;
 
   while (index < markdown.length) {
@@ -165,13 +180,12 @@ function collectProtectedCodeRanges(markdown: string): ProtectedRange[] {
     }
 
     const openingLength = countRun(markdown, index, "`");
-    const closingIndex = findClosingCodeSpan(
-      markdown,
+    runsByLength ??= collectUnprotectedBacktickRunsByLength(markdown, blockRanges);
+    const closingIndex = firstNumberAtOrAfter(
+      runsByLength.get(openingLength),
       index + openingLength,
-      openingLength,
-      blockRanges,
     );
-    if (closingIndex === -1) {
+    if (closingIndex === undefined) {
       index += openingLength;
       continue;
     }
@@ -291,13 +305,15 @@ function stripMarkdownContainerPrefix(
     : candidate;
 }
 
-function findClosingCodeSpan(
+// Pre-indexes every maximal backtick run outside fenced blocks once per
+// document so unmatched code-span openers resolve in O(log N) instead of
+// rescanning to EOF on every unmatched run.
+function collectUnprotectedBacktickRunsByLength(
   markdown: string,
-  start: number,
-  openingLength: number,
   blockRanges: ProtectedRange[],
-): number {
-  let index = start;
+): Map<number, number[]> {
+  const runs = new Map<number, number[]>();
+  let index = 0;
   while (index < markdown.length) {
     const blockRange = protectedRangeAt(blockRanges, index);
     if (blockRange) {
@@ -307,7 +323,7 @@ function findClosingCodeSpan(
 
     const candidate = markdown.indexOf("`", index);
     if (candidate === -1) {
-      return -1;
+      break;
     }
 
     const candidateBlockRange = protectedRangeAt(blockRanges, candidate);
@@ -316,14 +332,36 @@ function findClosingCodeSpan(
       continue;
     }
 
-    const candidateLength = countRun(markdown, candidate, "`");
-    if (candidateLength === openingLength) {
-      return candidate;
+    const runLength = countRun(markdown, candidate, "`");
+    const starts = runs.get(runLength);
+    if (starts) {
+      starts.push(candidate);
+    } else {
+      runs.set(runLength, [candidate]);
     }
-    index = candidate + candidateLength;
+    index = candidate + runLength;
   }
+  return runs;
+}
 
-  return -1;
+function firstNumberAtOrAfter(
+  starts: readonly number[] | undefined,
+  position: number,
+): number | undefined {
+  if (!starts || starts.length === 0) {
+    return undefined;
+  }
+  let low = 0;
+  let high = starts.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if ((starts[middle] ?? 0) < position) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return starts[low];
 }
 
 function countRun(value: string, start: number, character: string): number {

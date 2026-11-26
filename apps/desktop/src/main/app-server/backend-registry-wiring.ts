@@ -1494,6 +1494,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         get readThreadUsageActivityForTurn() { return overlayStore.readThreadUsageActivityForTurn?.bind(overlayStore); },
         get readThreadTurnUsageLines() { return overlayStore.readThreadTurnUsageLines?.bind(overlayStore); },
         get listThreadCompactions() { return overlayStore.listThreadCompactions?.bind(overlayStore); },
+        get readLatestThreadCompactionAt() { return overlayStore.readLatestThreadCompactionAt?.bind(overlayStore); },
         get recordThreadCompaction() { return overlayStore.recordThreadCompaction?.bind(overlayStore); },
         get readLatestThreadUsageModel() { return overlayStore.readLatestThreadUsageModel?.bind(overlayStore); },
         readThreadTokenMiserGateTotals: (...args) => overlayStore.readThreadTokenMiserGateTotals(...args),

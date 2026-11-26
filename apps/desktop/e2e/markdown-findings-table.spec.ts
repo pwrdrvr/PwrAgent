@@ -223,6 +223,89 @@ test("renders a wide assistant markdown findings table without crushing the colu
     await expect
       .poll(async () => await app.getClipboardSnapshot())
       .toMatchObject({ text: harnessMessage });
+
+    // Sticky headers + auto-pinned bold row-title column + popout table viewer
+    const gatewayCard = transcript
+      .locator(".transcript-message--table-wide")
+      .filter({ hasText: "Gateway Comparison Matrix" })
+      .first();
+    const gatewayWrap = gatewayCard.locator(".thread-markdown__table-wrap");
+    await expect(gatewayCard).toBeVisible();
+    await expect(gatewayCard.locator("table.thread-markdown__table")).toHaveAttribute(
+      "data-pin-first-col",
+      "auto",
+    );
+
+    // Scroll the transcript so the table header moves 160px above the viewport top
+    // while rows remain visible, and scroll horizontally right to exercise column 0 pinning.
+    const stickyMetrics = await app.window.evaluate(async () => {
+      const scroller = document.querySelector<HTMLElement>(".transcript-list__items");
+      const wrap = Array.from(document.querySelectorAll<HTMLElement>(".transcript-message--table-wide"))
+        .find((el) => el.textContent?.includes("Gateway Comparison Matrix"))
+        ?.querySelector<HTMLElement>(".thread-markdown__table-wrap");
+      const tableScroll = wrap?.querySelector<HTMLElement>(".thread-markdown__table-scroll");
+      const table = tableScroll?.querySelector<HTMLTableElement>("table");
+      if (!scroller || !wrap || !tableScroll || !table) {
+        return null;
+      }
+
+      const scrollerRect = scroller.getBoundingClientRect();
+      const tableRectBefore = table.getBoundingClientRect();
+      scroller.scrollTop += tableRectBefore.top - scrollerRect.top + 160;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      const maxScrollLeft = Math.max(0, tableScroll.scrollWidth - tableScroll.clientWidth);
+      if (maxScrollLeft > 40) {
+        tableScroll.scrollLeft = Math.min(260, maxScrollLeft);
+        tableScroll.dispatchEvent(new Event("scroll"));
+      }
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+      const firstTh = table.querySelector<HTMLElement>("thead th:first-child");
+      const secondTh = table.querySelector<HTMLElement>("thead th:nth-child(2)");
+      const scrollerTopNow = scroller.getBoundingClientRect().top;
+      const scrollLeftEdge = tableScroll.getBoundingClientRect().left;
+      const firstThRect = firstTh?.getBoundingClientRect();
+      const secondThRect = secondTh?.getBoundingClientRect();
+
+      return {
+        stickyActive: wrap.getAttribute("data-sticky-header"),
+        stickyY: wrap.style.getPropertyValue("--table-sticky-y"),
+        pinnedActive: wrap.getAttribute("data-pinned-col-active"),
+        pinnedScrolled: wrap.getAttribute("data-pinned-col-scrolled"),
+        canScrollX: maxScrollLeft > 40,
+        firstThTopDelta: firstThRect ? Math.abs(firstThRect.top - scrollerTopNow) : 999,
+        firstThLeftDelta: firstThRect ? Math.abs(firstThRect.left - scrollLeftEdge) : 999,
+        secondThTopDelta: secondThRect ? Math.abs(secondThRect.top - scrollerTopNow) : 999,
+      };
+    });
+
+    expect(stickyMetrics).not.toBeNull();
+    expect(stickyMetrics?.stickyActive).toBe("true");
+    expect(stickyMetrics?.firstThTopDelta).toBeLessThan(8);
+    expect(stickyMetrics?.secondThTopDelta).toBeLessThan(8);
+    if (stickyMetrics?.canScrollX) {
+      expect(stickyMetrics.pinnedActive).toBe("true");
+      expect(stickyMetrics.pinnedScrolled).toBe("true");
+      expect(stickyMetrics.firstThLeftDelta).toBeLessThan(6);
+    }
+
+    // Open the popout table document viewer modal, filter rows, and close with Escape.
+    await gatewayWrap.hover();
+    await gatewayWrap.getByRole("button", { name: "Open table viewer" }).click();
+    const viewerDialog = app.window.getByRole("dialog", {
+      name: "Table viewer: Gateway Comparison Matrix",
+    });
+    await expect(viewerDialog).toBeVisible();
+    await expect(viewerDialog.getByText("5 cols · 12 rows")).toBeVisible();
+
+    await viewerDialog
+      .getByRole("textbox", { name: "Filter table rows" })
+      .fill("keychain");
+    await expect(viewerDialog.getByText("5 cols · 1 / 12 rows")).toBeVisible();
+
+    await app.window.keyboard.press("Escape");
+    await expect(viewerDialog).toBeHidden();
   } finally {
     await app.close();
   }

@@ -191,6 +191,17 @@ export default defineConfig({
     projects: [
       {
         test: {
+          name: "evals",
+          env: SANDBOX_ENV,
+          pool: "threads",
+          globals: true,
+          testTimeout: Math.max(TEST_TIMEOUT_MS, 15_000),
+          environment: "node",
+          include: ["evals/**/__tests__/**/*.test.{ts,mjs}"],
+        },
+      },
+      {
+        test: {
           name: "messaging",
           env: SANDBOX_ENV,
           // Vitest 4 defaults to forks, which execs a fresh Node process for

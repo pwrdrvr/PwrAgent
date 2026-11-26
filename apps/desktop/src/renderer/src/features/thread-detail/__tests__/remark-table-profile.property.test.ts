@@ -1,6 +1,11 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { remarkTableProfile, type ColumnKind } from "../remark-table-profile";
+import {
+  classifyPlainFirstColumnPin,
+  remarkTableProfile,
+  type ColumnKind,
+  type PinFirstColumnRecommendation,
+} from "../remark-table-profile";
 
 type TestNode = {
   type: string;
@@ -52,6 +57,32 @@ function inlineMath(value: string): TestNode {
     type: "inlineMath",
     value,
   };
+}
+
+function strongCell(value: string): TestNode {
+  return {
+    type: "tableCell",
+    children: [{ type: "strong", children: [{ type: "text", value }] }],
+  };
+}
+
+function inlineCodeCell(value: string): TestNode {
+  return {
+    type: "tableCell",
+    children: [{ type: "inlineCode", value }],
+  };
+}
+
+function profileTableMeta(rows: TestNode[][]): Record<string, unknown> | undefined {
+  const tree = buildTable(rows);
+  remarkTableProfile()(tree);
+  const table = tree.children?.[0];
+  return table?.data?.hProperties;
+}
+
+function profilePinRecommendation(rows: TestNode[][]): PinFirstColumnRecommendation {
+  const value = profileTableMeta(rows)?.["data-pin-first-col"];
+  return value === "auto" || value === "eligible" ? value : "none";
 }
 
 function profileTableCells(rows: TestNode[][]): Array<Array<Record<string, unknown> | undefined>> {
@@ -293,5 +324,138 @@ describe("remarkTableProfile regression counterexamples", () => {
 
     expect(matrix[0]).toEqual(["prose"]);
     expect(matrix[1]).toEqual(["prose"]);
+  });
+});
+
+describe("first-column pin heuristic properties", () => {
+  it("never recommends pinning tables with fewer than 3 columns or fewer than 2 data rows", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 6 }),
+        fc.integer({ min: 0, max: 5 }),
+        (cols, dataRowCount) => {
+          fc.pre(cols < 3 || dataRowCount < 2);
+          const header = Array.from({ length: cols }, (_, index) => textCell(`Col ${index}`));
+          const body = Array.from({ length: dataRowCount }, (_, rowIndex) =>
+            Array.from({ length: cols }, (_, colIndex) =>
+              colIndex === 0 ? strongCell(`Row Title ${rowIndex}`) : textCell(`Value ${rowIndex}-${colIndex}`),
+            ),
+          );
+          expect(profilePinRecommendation([header, ...body])).toBe("none");
+        },
+      ),
+    );
+  });
+
+  it("auto-pins bold row-title first columns across 3+ column comparison matrices", () => {
+    const titleArb = fc
+      .array(fc.stringMatching(/^[A-Za-z][A-Za-z0-9/&-]{1,9}$/), {
+        minLength: 2,
+        maxLength: 7,
+      })
+      .map((words) => words.join(" "))
+      .filter((title) => title.length <= 60);
+
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 3, max: 6 }),
+        fc.uniqueArray(titleArb, {
+          minLength: 2,
+          maxLength: 8,
+          selector: (title) => title.toLowerCase(),
+        }),
+        (cols, titles) => {
+          const header = [
+            textCell("Capability"),
+            ...Array.from({ length: cols - 1 }, (_, index) => textCell(`System ${index}`)),
+          ];
+          const body = titles.map((title, rowIndex) => [
+            strongCell(title),
+            ...Array.from({ length: cols - 1 }, (_, colIndex) =>
+              textCell(`Detailed explanation for row ${rowIndex} col ${colIndex}`),
+            ),
+          ]);
+          expect(profilePinRecommendation([header, ...body])).toBe("auto");
+        },
+      ),
+    );
+  });
+
+  it("never auto-pins repetitive status columns or purely numeric index columns", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 3, max: 6 }),
+        fc.integer({ min: 4, max: 10 }),
+        (cols, rowCount) => {
+          const header = Array.from({ length: cols }, (_, index) => textCell(`Col ${index}`));
+          const repetitiveBody = Array.from({ length: rowCount }, (_, rowIndex) => [
+            strongCell(rowIndex % 2 === 0 ? "Yes" : "No"),
+            ...Array.from({ length: cols - 1 }, (_, colIndex) =>
+              textCell(`Value ${rowIndex}-${colIndex}`),
+            ),
+          ]);
+          expect(profilePinRecommendation([header, ...repetitiveBody])).toBe("eligible");
+
+          const numericBody = Array.from({ length: rowCount }, (_, rowIndex) => [
+            textCell(String(rowIndex + 1)),
+            ...Array.from({ length: cols - 1 }, (_, colIndex) =>
+              textCell(`Value ${rowIndex}-${colIndex}`),
+            ),
+          ]);
+          expect(profilePinRecommendation([header, ...numericBody])).toBe("eligible");
+        },
+      ),
+    );
+  });
+
+  it("auto-pins distinct inline-code key columns and never auto-pins multi-sentence prose columns", () => {
+    const codeKeyTable = [
+      [textCell("Setting"), textCell("Default"), textCell("Notes")],
+      [inlineCodeCell("general.theme"), textCell("tangerine"), textCell("Active theme token set")],
+      [inlineCodeCell("general.density"), textCell("compact"), textCell("Row height preset")],
+      [inlineCodeCell("general.motion"), textCell("standard"), textCell("Animation preference")],
+    ];
+    expect(profilePinRecommendation(codeKeyTable)).toBe("auto");
+
+    const proseFirstColTable = [
+      [textCell("Description"), textCell("Owner"), textCell("Status")],
+      [
+        textCell(
+          "This first sentence describes a complicated migration step in detail. This second sentence explains why rolling it back requires manual database recovery.",
+        ),
+        textCell("Platform"),
+        textCell("Open"),
+      ],
+      [
+        textCell(
+          "Another very long multi-sentence explanation that spans well past a reasonable row title width. It definitely should stay scrollable instead of pinning.",
+        ),
+        textCell("Desktop"),
+        textCell("Done"),
+      ],
+    ];
+    expect(profilePinRecommendation(proseFirstColTable)).toBe("eligible");
+  });
+
+  it("matches the MCP Gateway Comparison Matrix regression fixture with 45-char bold row titles", () => {
+    const matrix = [
+      [textCell("Capability"), textCell("PwrAgent"), textCell("t3code"), textCell("orca"), textCell("bb")],
+      [strongCell("Managed External MCP Gateway / Broker"), textCell("Full broker"), textCell("None"), textCell("Relay"), textCell("None")],
+      [strongCell("Transports Supported"), textCell("Streamable HTTP, Stdio"), textCell("HTTP"), textCell("Stdio"), textCell("HTTP")],
+      [strongCell("Dynamic / Lazy Tool Discovery & Schema Budget"), textCell("search_mcp_tools"), textCell("tool_search"), textCell("Full"), textCell("None")],
+      [strongCell("External \"Use App as MCP Server\""), textCell("Loopback"), textCell("Yes"), textCell("No"), textCell("No")],
+    ];
+    const meta = profileTableMeta(matrix);
+    expect(meta?.["data-pin-first-col"]).toBe("auto");
+    expect(meta?.["data-table-cols"]).toBe("5");
+    expect(meta?.["data-table-rows"]).toBe("4");
+  });
+
+  it("classifies plain CSV/TSV first columns consistently", () => {
+    expect(classifyPlainFirstColumnPin(["us-east-1", "us-west-2", "eu-west-1"], 4, false)).toBe("auto");
+    expect(classifyPlainFirstColumnPin(["1", "2", "3"], 4, true)).toBe("eligible");
+    expect(classifyPlainFirstColumnPin(["ok", "ok", "ok"], 4, false)).toBe("eligible");
+    expect(classifyPlainFirstColumnPin(["only-one"], 4, false)).toBe("none");
+    expect(classifyPlainFirstColumnPin(["a", "b"], 2, false)).toBe("none");
   });
 });
