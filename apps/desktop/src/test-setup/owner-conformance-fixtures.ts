@@ -1,19 +1,23 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TestProject, TestSpecification } from "vitest/node";
 import { createNativeHelperFixture } from "./native-helper-fixture";
 
 const consumer = fileURLToPath(new URL("../main/__tests__/owner-conformance.test.ts", import.meta.url));
-type OwnerFixtures = Record<"desktop" | "headless", { directory: string; preload: string }>;
+const builder = fileURLToPath(new URL("../main/__tests__/helpers/built-owner-fixture.ts", import.meta.url));
+type FixtureBuilder = typeof import("../main/__tests__/helpers/built-owner-fixture");
+export type OwnerFixtures = Record<"desktop" | "headless", { directory: string; preload: string }>;
+type FixturePreparation = { fixtures: OwnerFixtures } | { error: string };
 
 declare module "vitest" {
   export interface ProvidedContext {
-    ownerConformanceFixtures: OwnerFixtures;
+    ownerConformanceFixtures: FixturePreparation;
   }
 }
 
-async function buildFixtures(root: string): Promise<OwnerFixtures> {
-  const { buildOwnerFixture } = await import("../main/__tests__/helpers/built-owner-fixture");
+async function buildFixtures(root: string, buildOwnerFixture: FixtureBuilder["buildOwnerFixture"]): Promise<OwnerFixtures> {
   const build = async (kind: keyof OwnerFixtures) => {
     const directory = path.join(root, kind);
     const started = performance.now();
@@ -32,9 +36,35 @@ async function buildFixtures(root: string): Promise<OwnerFixtures> {
 }
 
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
-  let fixtures: ReturnType<typeof createNativeHelperFixture<OwnerFixtures>> | undefined;
-  const dispose = async (): Promise<void> => { await fixtures?.dispose(); };
+  const owned: Array<ReturnType<typeof createNativeHelperFixture<OwnerFixtures>>> = [];
+  let preparing = Promise.resolve();
+  const dispose = async (): Promise<void> => {
+    await preparing;
+    await Promise.all(owned.map((fixture) => fixture.dispose()));
+  };
   if (process.platform === "win32") return dispose; // The suite is skipped on Windows.
+
+  const buildAndPublish = async (): Promise<void> => {
+    let result: FixturePreparation;
+    try {
+      const fixture = createNativeHelperFixture(async (root) => {
+        // Vitest's global-setup runner can keep an evaluated builder across
+        // watch reruns. Key the import by the rewrite source to see edits.
+        const digest = createHash("sha256").update(await readFile(builder)).digest("hex");
+        const { buildOwnerFixture } = await project.import<FixtureBuilder>(`${builder}?ownerFixtureSource=${digest}`);
+        return await buildFixtures(root, buildOwnerFixture);
+      });
+      // Overlapping reruns can still be using any earlier context snapshot.
+      // Keep the directories for the lifetime of the Vitest project.
+      owned.push(fixture);
+      result = { fixtures: await fixture.ready };
+    } catch (error) {
+      // Throwing from onTestsRerun stops Vitest watch. Let the consumer
+      // report a suite failure so the next edit can trigger another build.
+      result = { error: error instanceof Error ? (error.stack ?? error.message) : String(error) };
+    }
+    project.provide("ownerConformanceFixtures", result);
+  };
 
   const prepare = async (specifications: TestSpecification[]): Promise<void> => {
     // Global setup precedes the pool's shard selection. Use its sequencer so
@@ -45,14 +75,10 @@ export default async function setup(project: TestProject): Promise<() => Promise
       : specifications;
     if (!selected.some((spec) => spec.project === project && spec.moduleId === consumer)) return;
 
-    await dispose();
-    fixtures = createNativeHelperFixture(buildFixtures);
-    try {
-      project.provide("ownerConformanceFixtures", await fixtures.ready);
-    } catch (error) {
-      await dispose();
-      throw error;
-    }
+    // Publish in rerun order so a slower older build cannot replace a newer
+    // result, including when either build fails.
+    preparing = preparing.then(buildAndPublish);
+    await preparing;
   };
 
   await prepare(project.vitest.state.getPaths().flatMap((file) => project.vitest.getModuleSpecifications(file)));
