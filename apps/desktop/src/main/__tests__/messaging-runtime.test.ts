@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, utimes, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
@@ -4486,6 +4486,101 @@ describe("DesktopMessagingRuntime", () => {
     } finally {
       first.close();
       second.close();
+    }
+  });
+
+  it("reuses parsed settings across offline Routes, Detach, and Archive and sees subsequent edits", async () => {
+    await prepareRuntimeStore();
+    const { initializeDesktopMessagingRuntime, resetDesktopMessagingRuntimeForTests } = await import("../messaging/messaging-runtime");
+    const { listDesktopMessagingRoutes } = await import("../messaging/messaging-routes-service");
+    const backendRegistry = await import("../app-server/backend-registry");
+    const { openMessagingConnectionStorage } = await import("../storage/desktop-messaging-storage");
+    const { resolveDesktopConfigPath } = await import("../settings/desktop-config");
+    const { DesktopConfigStore } = await import("../settings/config-store/desktop-config-store");
+    const configOwner = await import("../settings/config-store/desktop-config-store-singleton");
+    const toml = await import("../settings/toml-editor");
+    const configPath = resolveDesktopConfigPath();
+    const named = `mc_${"a".repeat(32)}`;
+    const legacy = `mc_${"b".repeat(32)}`;
+    const peer = `mc_${"c".repeat(32)}`;
+    const fixture = [
+      "[messaging]",
+      "enabled = false",
+      "[[messaging.telegram.connections]]",
+      `id = "${named}"`,
+      'display_name = "Offline"',
+      'bot_account_id = "100"',
+      "enabled = false",
+      "[[messaging.telegram.connections]]",
+      `id = "${legacy}"`,
+      'display_name = "Legacy"',
+      'bot_account_id = "200"',
+      "enabled = true",
+      "legacy = true",
+      "",
+    ].join("\n");
+    const timestamp = new Date("2026-01-01T00:00:00Z");
+    await writeFile(configPath, fixture);
+    await utimes(configPath, timestamp, timestamp);
+    for (const id of [named, legacy, peer]) {
+      const storage = openMessagingConnectionStorage(id);
+      try {
+        for (const [index, threadId] of ["detach", "archive", "keep"].entries()) {
+          await storage.bindings.upsertBinding({
+            id: threadId, backend: "codex", threadId,
+            channel: { channel: "telegram", connectionId: id, conversation: { kind: "dm", id: String(42 + index) } },
+            authorizedActorIds: ["42"], createdAt: 1, updatedAt: 1,
+          });
+        }
+      } finally {
+        storage.close();
+      }
+    }
+    const configStore = new DesktopConfigStore({ configPath });
+    const registry = vi.spyOn(backendRegistry, "getDesktopBackendRegistry").mockReturnValue({
+      listBackends: async () => ({ backends: [] }),
+      listThreads: async () => [],
+      getThreadAgentMetadata: async () => undefined,
+    } as never);
+    const existingStore = vi.spyOn(configOwner, "getExistingDesktopConfigStore").mockReturnValue(configStore);
+    const parse = vi.spyOn(toml, "parseTomlTables");
+    try {
+      const runtime = trackRuntime(initializeDesktopMessagingRuntime({}));
+      const listRoutes = () => listDesktopMessagingRoutes();
+      const initial = await listRoutes();
+      expect(initial.bindings.map((row) => row.connectionId)).toEqual([named, named, named]);
+      await expect(runtime.requestBindingRevoke({ bindingId: "detach", connectionId: named, origin: "ui" }))
+        .resolves.toEqual({ revoked: true, notifiedPlatform: false });
+      await expect(runtime.requestBindingRevokeAllForThread({ backend: "codex", threadId: "archive", origin: "thread-archive" }))
+        .resolves.toEqual({ revokedCount: 1, notifiedCount: 0 });
+      expect((await listRoutes()).bindings.map((row) => row.bindingId)).toEqual(["keep"]);
+      expect(parse).not.toHaveBeenCalled();
+
+      // A peer can atomically replace the file with a same-size, same-mtime edit.
+      await writeFile(`${configPath}.peer`, fixture.replace(named, peer));
+      await utimes(`${configPath}.peer`, timestamp, timestamp);
+      await rename(`${configPath}.peer`, configPath);
+      expect((await listRoutes()).bindings.map((row) => row.connectionId)).toEqual([peer, peer, peer]);
+      expect((await listRoutes()).bindings.map((row) => row.connectionId)).toEqual([peer, peer, peer]);
+      expect(parse).toHaveBeenCalledTimes(1);
+
+      await configStore.write({ messaging: { telegram: { connections: [] } } }, ["messaging"]);
+      parse.mockClear();
+      expect((await listRoutes()).bindings).toEqual([]);
+      expect(parse).not.toHaveBeenCalled();
+
+      await writeFile(configPath, fixture);
+      expect((await listRoutes()).bindings.map((row) => row.connectionId)).toEqual([named]);
+      await writeFile(configPath, "[broken");
+      await expect(listRoutes()).rejects.toThrow("Invalid TOML");
+      await rm(configPath);
+      expect((await listRoutes()).bindings).toEqual([]);
+    } finally {
+      existingStore.mockRestore();
+      parse.mockRestore();
+      registry.mockRestore();
+      resetDesktopMessagingRuntimeForTests();
+      configStore.dispose();
     }
   });
 
