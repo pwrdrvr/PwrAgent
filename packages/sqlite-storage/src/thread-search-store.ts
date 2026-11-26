@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type BetterSqlite3 from "better-sqlite3";
+import BetterSqlite3 from "better-sqlite3";
 import {
   buildLegacyEncodedThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
@@ -121,16 +121,35 @@ export class ThreadSearchStore implements ThreadSearchStorage {
       if (preflight.changed.length === 0) return;
     }
 
-    const committed = this.db.transaction(() => {
+    let reconciliationVersion: ProjectionVersion | undefined;
+    const reconcile = this.db.transaction(() => {
       // A peer may have reconciled these rows since preflight. Recheck first
       // so SQLite only upgrades to a write transaction if work remains.
       const version = this.refreshProjectionCache();
+      reconciliationVersion = version;
       const changed = version === preflight.version ? preflight.changed : this.findChanges(threads, cache);
       return {
         written: this.writeChangedProjections(changed, indexedAt),
         external: version.external,
       };
-    }).deferred();
+    });
+    let committed: ReturnType<typeof reconcile>;
+    try {
+      committed = reconcile.deferred();
+    } catch (error) {
+      if (this.db.inTransaction || !reconciliationVersion
+        || !(error instanceof BetterSqlite3.SqliteError)
+        || (error.code !== "SQLITE_BUSY_SNAPSHOT" && error.code !== "SQLITE_BUSY")) {
+        throw error;
+      }
+      const version = this.refreshProjectionCache();
+      if (error.code === "SQLITE_BUSY" && version.external === reconciliationVersion.external) throw error;
+      // The peer may have applied these same changes before our snapshot
+      // upgrade failed. Check again before attempting one locked retry.
+      preflight = { version, changed: this.findChanges(threads) };
+      if (preflight.changed.length === 0) return;
+      committed = reconcile.immediate();
+    }
     if (committed.written.size === 0) return;
     // Keep the external version from the transaction snapshot. FTS can flush
     // shadow changes at commit, so sample our own count after the commit.

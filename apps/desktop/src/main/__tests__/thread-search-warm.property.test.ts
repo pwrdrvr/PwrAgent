@@ -138,9 +138,11 @@ it.each([
 });
 
 it.each([
-  { peerCommit: "an unrelated write", indexesProjection: false },
-  { peerCommit: "indexing the desired projection", indexesProjection: true },
-])("returns current search rows while a peer holds the writer lock after $peerCommit", async ({ indexesProjection }) => {
+  { scenario: "unrelated write before recheck", duringReconcile: false, indexesProjection: false, holdsWriter: true },
+  { scenario: "peer indexes the projection before recheck", duringReconcile: false, indexesProjection: true, holdsWriter: true },
+  { scenario: "unrelated write invalidates the write snapshot", duringReconcile: true, indexesProjection: false, holdsWriter: false },
+  { scenario: "peer indexes the projection and keeps the writer lock", duringReconcile: true, indexesProjection: true, holdsWriter: true },
+])("returns current search rows when $scenario", async ({ duringReconcile, indexesProjection, holdsWriter }) => {
   const temp = createTempStateDb("search-preflight-lock-");
   const db = StateDb.open(temp.dbPath);
   const peer = StateDb.open(temp.dbPath);
@@ -148,21 +150,29 @@ it.each([
     db.raw.pragma("busy_timeout = 0");
     const afterVersionRead = interceptProjectionVersion(db);
     const thread = summary("unchanged");
-    const listed = indexesProjection ? { ...thread, title: "Asterism revised" } : thread;
+    const listed = indexesProjection || duringReconcile ? { ...thread, title: "Asterism revised" } : thread;
     const store = new ThreadSearchStore(db);
     store.upsertThreads([thread]);
-    afterVersionRead(() => {
+    const commitPeerChange = vi.fn(() => {
       if (indexesProjection) {
         new ThreadSearchStore(peer).upsertThread(listed);
       } else {
         peer.raw.prepare("INSERT INTO meta (key, value) VALUES (?, ?)").run("contrived-search-peer", "updated");
       }
-      peer.raw.exec("BEGIN IMMEDIATE");
+      if (holdsWriter) peer.raw.exec("BEGIN IMMEDIATE");
     });
+    if (duringReconcile) {
+      // Skip the preflight version and commit after reconciliation has pinned
+      // its own WAL snapshot, before the first write attempts to upgrade it.
+      afterVersionRead(() => afterVersionRead(commitPeerChange));
+    } else {
+      afterVersionRead(commitPeerChange);
+    }
 
     const service = new ThreadSearchService(store, async () => [listed]);
     const result = await service.search({ query: "Asterism", contentMode: "metadata" });
-    expect(peer.raw.inTransaction).toBe(true);
+    expect(commitPeerChange).toHaveBeenCalledOnce();
+    expect(peer.raw.inTransaction).toBe(holdsWriter);
     expect(result.results.map((row) => [row.threadId, row.title])).toEqual([[listed.id, listed.title]]);
   } finally {
     if (peer.raw.inTransaction) peer.raw.exec("ROLLBACK");
