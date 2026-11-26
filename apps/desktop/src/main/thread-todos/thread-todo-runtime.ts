@@ -84,6 +84,7 @@ import {
   getReviewAutoFixArming,
   getReviewAutoFixRuns,
   ReviewAutoFixDispatcher,
+  reviewAutoFixMessage,
   setReviewAutoFixListener,
 } from "../thread-reviews/review-auto-fix";
 
@@ -359,7 +360,12 @@ export function installThreadTodoRuntime(params: {
   setReviewAutoFixListener((thread) => params.broadcast({ ...thread, at: Date.now() }));
   // Someone settling a finding has taken the review on, so a failed send no
   // longer needs saying.
-  reviews.setOnUpdated((review) => reviewAutoFixRuns.record(review, review.id, { kind: "reviewUpdated", at: Date.now() }));
+  reviews.setOnUpdated((review) => {
+    reviewAutoFixRuns.record(review, review.id, { kind: "reviewUpdated", at: Date.now() });
+    if (!reviewAutoFixMessage(review)) {
+      reviewAutoFixDispatcher.wake(review);
+    }
+  });
   const reviewAutoFixDispatcher = new ReviewAutoFixDispatcher({
     getReview: (id) => reviews.get(id),
     isThreadArchived: (thread) => registry.getThreadInfo(thread)?.archived === true,
@@ -442,8 +448,11 @@ export function installThreadTodoRuntime(params: {
     const completed = completedThreadReview(event);
     if (completed) {
       const review = importReview(completed.identity, completed.entry, "live");
-      if (reviewAutoFix.takeOnCompletion(completed.identity, completed.turnId, event.relatedReviewTurnId) && review) {
-        reviewAutoFixDispatcher.onReviewLanded(review.id, completed.identity, event.relatedReviewTurnId ?? completed.turnId);
+      const resolvedReviewTurnId = completed.turnId
+        ? registry.resolveReviewTurnId?.({ ...completed.identity, turnId: completed.turnId })
+        : undefined;
+      if (reviewAutoFix.takeOnCompletion(completed.identity, completed.turnId, resolvedReviewTurnId) && review) {
+        reviewAutoFixDispatcher.onReviewLanded(review.id, completed.identity, resolvedReviewTurnId ?? completed.turnId);
       }
     }
     const autoFixQueue = reviewAutoFixQueueEvent(event);

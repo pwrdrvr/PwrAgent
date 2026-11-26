@@ -371,17 +371,36 @@ export class ReviewAutoFixDispatcher {
   }
 
   onThreadArchived(thread: ReviewAutoFixThread): void {
-    for (const [id, handoff] of [...this.handoffSuspensions.entries()]) {
-      if (handoff.backend === thread.backend && handoff.threadId === thread.threadId) {
+    const matchesThread = (id: string): boolean => {
+      const handoff = this.handoffSuspensions.get(id);
+      if (handoff) {
+        return handoff.backend === thread.backend && handoff.threadId === thread.threadId;
+      }
+      const review = this.deps.getReview(id);
+      return review !== undefined && review.backend === thread.backend && review.threadId === thread.threadId;
+    };
+    const cancelled = new Set<string>();
+    for (const id of [...this.handoffSuspensions.keys()]) {
+      if (matchesThread(id)) {
         this.heldReviews.delete(id);
         this.releaseHandoffSuspension(id);
+        cancelled.add(id);
       }
     }
     for (const id of [...this.heldReviews.keys()]) {
-      const review = this.deps.getReview(id);
-      if (review && review.backend === thread.backend && review.threadId === thread.threadId) {
+      if (matchesThread(id)) {
         this.heldReviews.delete(id);
+        cancelled.add(id);
       }
+    }
+    for (const id of this.checkingReviews) {
+      if (matchesThread(id)) {
+        this.recheckReviews.add(id);
+        cancelled.add(id);
+      }
+    }
+    for (const id of cancelled) {
+      this.deps.recordRun(thread, id, { kind: "queue", status: "cancelled", at: this.now() });
     }
   }
 
@@ -391,6 +410,12 @@ export class ReviewAutoFixDispatcher {
     }
     this.heldReviews.clear();
     this.recheckReviews.clear();
+  }
+
+  private cancelReview(id: string, thread: ReviewAutoFixThread): void {
+    this.heldReviews.delete(id);
+    this.releaseHandoffSuspension(id);
+    this.deps.recordRun(thread, id, { kind: "queue", status: "cancelled", at: this.now() });
   }
 
   private releaseHandoffSuspension(id: string): void {
@@ -432,10 +457,11 @@ export class ReviewAutoFixDispatcher {
         const review = this.deps.getReview(id);
         const message = review && reviewAutoFixMessage(review);
         if (!review || !message || this.deps.isThreadArchived(review)) {
-          this.heldReviews.delete(id);
-          this.releaseHandoffSuspension(id);
           if (review) {
-            this.deps.recordRun(review, id, { kind: "queue", status: "cancelled", at: this.now() });
+            this.cancelReview(id, review);
+          } else {
+            this.heldReviews.delete(id);
+            this.releaseHandoffSuspension(id);
           }
           return;
         }
@@ -443,26 +469,24 @@ export class ReviewAutoFixDispatcher {
           this.deps.recordRun(review, id, { kind: "queue", status: "held", at: this.now() });
         }
         const hold = await this.deps.readStackHold?.(review);
+        const current = this.deps.getReview(id);
+        const latest = current && reviewAutoFixMessage(current);
+        if (!current || !latest || this.deps.isThreadArchived(current)) {
+          this.cancelReview(id, current ?? review);
+          return;
+        }
         if (hold) {
           if (this.heldReviews.get(id) !== hold) {
-            this.deps.onHeld?.(review, hold);
+            this.deps.onHeld?.(current, hold);
           }
           this.heldReviews.set(id, hold);
           // Do not freeze queued user messages while a stack hold is active.
           this.releaseHandoffSuspension(id);
           continue;
         }
-        const current = this.deps.getReview(id);
-        const latest = current && reviewAutoFixMessage(current);
-        if (!latest) {
-          this.heldReviews.delete(id);
-          this.releaseHandoffSuspension(id);
-          this.deps.recordRun(review, id, { kind: "queue", status: "cancelled", at: this.now() });
-          return;
-        }
         const request: ReviewAutoFixTurnRequest = {
-          backend: review.backend,
-          threadId: review.threadId,
+          backend: current.backend,
+          threadId: current.threadId,
           input: [{ type: "text", text: latest.text }],
           origin: "automation",
           messageOrigin: latest.messageOrigin,
@@ -473,15 +497,20 @@ export class ReviewAutoFixDispatcher {
           const hasHandoff = this.handoffSuspensions.has(id);
           const result = await this.deps.submitTurnIfIdle({
             ...request,
-            canAdmit: async () => !await this.deps.readStackHold?.(review),
+            canAdmit: async () => !await this.deps.readStackHold?.(current),
             ...(hasHandoff ? { reviewAutoFixHandoff: true } : {}),
           });
           if (result.status === "busy") {
+            const afterBusy = this.deps.getReview(id);
+            if (!afterBusy || !reviewAutoFixMessage(afterBusy) || this.deps.isThreadArchived(afterBusy)) {
+              this.cancelReview(id, afterBusy ?? current);
+              return;
+            }
             this.heldReviews.set(id, "Waiting for turn admission");
             const handoff = this.handoffSuspensions.get(id);
             const reviewTurnStillActive = handoff !== undefined
               && !handoff.reviewTurnEnded
-              && (this.deps.threadHasActiveTurn?.(review) ?? true);
+              && (this.deps.threadHasActiveTurn?.(afterBusy) ?? true);
             if (handoff && !reviewTurnStillActive && !this.recheckReviews.has(id)) {
               this.releaseHandoffSuspension(id);
             }

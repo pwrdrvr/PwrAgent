@@ -11045,6 +11045,18 @@ export class DesktopBackendRegistry {
     return this.threadTurnQueue.suspendDispatch(thread);
   }
 
+  /**
+   * Resolve the owner's review turn ID for an active review when Codex emits
+   * a review item with a mismatched inner turn ID.
+   */
+  resolveReviewTurnId(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): string | undefined {
+    return this.managedReviewService.resolveReviewTurnId(params);
+  }
+
   submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn: true; reviewAutoFixHandoff?: boolean }): Promise<JoinedSubmissionResult>;
   submitTurnIfIdle(params: IdleSubmission & { joinRunningTurn?: false; reviewAutoFixHandoff?: boolean }): Promise<ThreadTurnQueueImmediateSubmissionResult>;
   async submitTurnIfIdle(params: IdleSubmission & {

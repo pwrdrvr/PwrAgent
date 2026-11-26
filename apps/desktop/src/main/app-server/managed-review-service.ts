@@ -2571,6 +2571,23 @@ export class ManagedReviewService {
   }
 
   /**
+   * Resolve the owner's review turn ID for an active or recently started review
+   * when Codex emits a review item on a mismatched inner turn ID.
+   */
+  resolveReviewTurnId(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): string | undefined {
+    const reviewKey = buildReviewSubAgentKey(params.backend, params.threadId, params.turnId);
+    const record =
+      this.context.turnState.liveReviewRecords().get(reviewKey)
+      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey)
+      ?? this.findActiveReviewSubAgentForTerminal(params)?.record;
+    return record?.turnId;
+  }
+
+  /**
    * Provider transcripts do not attach model settings to review-mode items.
    * The registry owns that association for the review's lifetime, so include
    * it in the live item as well as the durable review artifact.
@@ -2604,7 +2621,6 @@ export class ManagedReviewService {
     if (!record) {
       return event;
     }
-    const relatedReviewTurnId = record.turnId !== turnId ? record.turnId : undefined;
     const data = readRecord(item.data) ?? {};
     // Each field guards itself. Keying the whole decoration off `reviewer`
     // made a later field's delivery depend on an unrelated field's absence:
@@ -2614,27 +2630,24 @@ export class ManagedReviewService {
       ...(data.reviewer ? {} : { reviewer: reviewEntryReviewer(record) }),
       ...(record.context && !data.context ? { context: record.context } : {}),
     };
-    if (Object.keys(additions).length === 0 && !relatedReviewTurnId) {
+    if (Object.keys(additions).length === 0) {
       return event;
     }
     return {
       ...event,
-      ...(relatedReviewTurnId ? { relatedReviewTurnId } : {}),
-      ...(Object.keys(additions).length > 0 ? {
-        notification: {
-          ...event.notification,
-          params: {
-            ...event.notification.params,
-            item: {
-              ...item,
-              data: {
-                ...data,
-                ...additions,
-              },
+      notification: {
+        ...event.notification,
+        params: {
+          ...event.notification.params,
+          item: {
+            ...item,
+            data: {
+              ...data,
+              ...additions,
             },
           },
         },
-      } : {}),
+      },
     } as AgentEvent;
   }
 }

@@ -55,6 +55,7 @@ describe("review auto-fix dispatcher", () => {
           otherTurnAfterReview: fc.constantFrom("none" as const, "completed" as const, "failed" as const, "cancelled" as const),
           flakyHoldFlip: fc.boolean(),
           outcome: fc.constantFrom("normal" as const, "settle" as const, "archive" as const, "error" as const),
+          outcomeDelayTicks: fc.integer({ min: 0, max: 3 }),
         }),
         async (s, scenario) => {
           const runId = ++runCounter;
@@ -185,16 +186,26 @@ describe("review auto-fix dispatcher", () => {
               }
             })();
           }
-          if (scenario.outcome === "settle") {
+          const scheduleAfter = (ticks: number, action: () => void): void => {
             s.scheduleFunction(async () => {
+              if (ticks > 0) {
+                scheduleAfter(ticks - 1, action);
+                return;
+              }
+              action();
+            })();
+          };
+          if (scenario.outcome === "settle") {
+            scheduleAfter(scenario.outcomeDelayTicks, () => {
               review.status = "handled";
               review.items[0]!.status = "addressed";
-            })();
+              dispatcher.wake(THREAD);
+            });
           } else if (scenario.outcome === "archive") {
-            s.scheduleFunction(async () => {
+            scheduleAfter(scenario.outcomeDelayTicks, () => {
               archived = true;
               dispatcher.onThreadArchived(THREAD);
-            })();
+            });
           }
 
           await s.waitIdle();
@@ -231,6 +242,21 @@ describe("review auto-fix dispatcher", () => {
             expect(sendFailed).toBe(true);
             expect(runs.of(THREAD)[reviewId]).toMatchObject({ phase: "failed", reason: "Inference unavailable" });
             expect(queuedUser).toHaveLength(0);
+          } else if (scenario.outcome === "archive") {
+            expect(runs.of(THREAD)[reviewId]?.phase).not.toBe("queued");
+            if (autoFixCount === 0) {
+              expect(runs.of(THREAD)[reviewId]).toBeUndefined();
+            }
+            // Archiving must not leave the review stranded in heldReviews.
+            archived = false;
+            dispatcher.wake(THREAD);
+            await s.waitIdle();
+            expect(runs.of(THREAD)[reviewId]?.phase).not.toBe("queued");
+          } else if (scenario.outcome === "settle") {
+            expect(runs.of(THREAD)[reviewId]?.phase).not.toBe("queued");
+            if (autoFixCount === 0) {
+              expect(runs.of(THREAD)[reviewId]).toBeUndefined();
+            }
           }
         },
       ),
@@ -347,5 +373,78 @@ describe("review auto-fix dispatcher", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(autoFixStarts).toBe(1);
+  });
+
+  it("cancels queued run state when a thread is archived while Auto-fix is held", async () => {
+    const review = makeReview("rev-archive-held", true);
+    const runs = new ReviewAutoFixRuns();
+    let archived = false;
+    let autoFixStarts = 0;
+
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => archived,
+      readStackHold: async () => "Held by #1: CI running",
+      threadHasActiveTurn: () => false,
+      submitTurn: async () => ({ status: "started" }),
+      submitTurnIfIdle: async () => {
+        autoFixStarts++;
+        return { status: "started" };
+      },
+      recordRun: (thread, id, event) => runs.record(thread, id, event),
+      now: () => 1,
+    });
+
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1 });
+
+    archived = true;
+    dispatcher.onThreadArchived(THREAD);
+    expect(runs.of(THREAD)[review.id]).toBeUndefined();
+    expect(autoFixStarts).toBe(0);
+  });
+
+  it("cancels and does not re-hold an Auto-fix when thread/archived races with in-flight submitTurnIfIdle", async () => {
+    const review = makeReview("rev-archive-inflight", true);
+    const runs = new ReviewAutoFixRuns();
+    let archived = false;
+    let releaseSubmit!: () => void;
+    let submitCalls = 0;
+
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => archived,
+      readStackHold: async () => undefined,
+      threadHasActiveTurn: () => false,
+      submitTurn: async () => ({ status: "started" }),
+      submitTurnIfIdle: async () => {
+        submitCalls++;
+        if (submitCalls === 1) {
+          await new Promise<void>((resolve) => { releaseSubmit = resolve; });
+        }
+        return archived ? { status: "busy" } : { status: "started" };
+      },
+      recordRun: (thread, id, event) => runs.record(thread, id, event),
+      now: () => 1,
+    });
+
+    const inFlight = dispatcher.dispatch(review.id);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    archived = true;
+    dispatcher.onThreadArchived(THREAD);
+    releaseSubmit();
+    await inFlight;
+
+    expect(runs.of(THREAD)[review.id]).toBeUndefined();
+
+    // Must not have been re-added to heldReviews after submitTurnIfIdle returned busy.
+    archived = false;
+    dispatcher.wake(THREAD);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(submitCalls).toBe(1);
+    expect(runs.of(THREAD)[review.id]).toBeUndefined();
   });
 });

@@ -262,7 +262,23 @@ describe("review Auto-fix handoff", () => {
         readReviewStackHold: async () => undefined,
         feed: { loadOwners: async () => [], managedThreadKeys: () => new Set(), onDelta: () => {} },
       });
-      registry.onEvent(({ notification }) => {
+      const observedReviewItems: Array<{ type: string; relatedReviewTurnId?: string; reviewer?: unknown }> = [];
+      let terminalRelatedReviewTurnId: string | undefined;
+      registry.onEvent((event) => {
+        const { notification } = event;
+        if (notification.method === "item/completed") {
+          const item = notification.params.item as { type?: string; data?: { reviewer?: unknown } } | undefined;
+          if (item?.type === "enteredReviewMode" || item?.type === "exitedReviewMode") {
+            observedReviewItems.push({
+              type: item.type,
+              relatedReviewTurnId: event.relatedReviewTurnId,
+              reviewer: item.data?.reviewer,
+            });
+          }
+        }
+        if (notification.method === "turn/completed" && notification.params.turnId === "turn-inner-mismatched") {
+          terminalRelatedReviewTurnId = event.relatedReviewTurnId;
+        }
         if (notification.method === "thread/turnQueue/updated"
           && notification.params.status === "started"
           && notification.params.turnId === "fix-inner-0") {
@@ -281,12 +297,33 @@ describe("review Auto-fix handoff", () => {
 
       await registry.startReview({ ...thread, target: { type: "uncommittedChanges" }, afterReview: "auto-fix" });
       await client.emit({
+        method: "item/completed",
+        params: {
+          threadId: thread.threadId,
+          turnId: "turn-inner-mismatched",
+          item: {
+            id: "review-enter-inner",
+            type: "enteredReviewMode",
+            review: "Reviewing uncommitted changes",
+          },
+        },
+      });
+      await client.emit({
         ...findings,
         params: { ...findings.params, turnId: "turn-inner-mismatched" },
       });
       await client.emit(completed("turn-inner-mismatched"));
 
       await fixStarted.promise;
+      // relatedReviewTurnId is terminal-only: review item/completed events must
+      // never carry it (which would prematurely retire live renderer entries),
+      // while still receiving runtime metadata and terminal correlation.
+      expect(observedReviewItems).toHaveLength(2);
+      for (const item of observedReviewItems) {
+        expect(item.relatedReviewTurnId).toBeUndefined();
+        expect(item.reviewer).toBeDefined();
+      }
+      expect(terminalRelatedReviewTurnId).toBe(reviewTurnId);
       expect(client.startTurnCalls).toHaveLength(1);
       expect(client.startTurnCalls[0]?.input[0]).toMatchObject({ text: expect.stringContaining("Preserve the draft") });
       expect(readReviewAutoFixStatus(thread).armedTurnIds).toEqual([]);
