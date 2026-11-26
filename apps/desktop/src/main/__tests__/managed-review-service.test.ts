@@ -222,6 +222,7 @@ describe("ManagedReviewService", () => {
       const submit = vi.spyOn(reviews, "submitReview").mockReturnValue(submitted);
       const cancel = vi.spyOn(reviews, "cancelPendingReview").mockReturnValue(true);
       const attribution = { delegatedBy: { backend: "codex", threadId: "delegator" } } as never;
+      const antigravityAccess = { mode: "plan", fullAccess: false } as const;
 
       // A caller snapshot is never trusted unless the owner says so.
       expect(registry.prepareReviewRequest(REVIEW_REQUEST)).toBe(prepared);
@@ -230,9 +231,9 @@ describe("ManagedReviewService", () => {
       expect(prepare).toHaveBeenLastCalledWith(REVIEW_REQUEST, true);
 
       expect(registry.startReview(REVIEW_REQUEST)).toBe(started);
-      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, false, undefined);
-      expect(registry.startReview(REVIEW_REQUEST, true, attribution)).toBe(started);
-      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, true, attribution);
+      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, false, undefined, undefined);
+      expect(registry.startReview(REVIEW_REQUEST, true, attribution, antigravityAccess)).toBe(started);
+      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, true, attribution, antigravityAccess);
 
       const keyed = { ...REVIEW_REQUEST, idempotencyKey: "key-1" };
       expect(registry.submitReview(keyed)).toBe(submitted);
