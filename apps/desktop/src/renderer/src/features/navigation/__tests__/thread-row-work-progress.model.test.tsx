@@ -199,50 +199,77 @@ const dirtyAndAhead: ThreadGitWorkingState = {
 it("matches the pure hold model across active turns, selection, approvals, drift and background tasks", () => {
   const firstTodo = makeTodo(1);
   const secondTodo = makeTodo(2);
+  const thirdTodo = makeTodo(3);
   expectMountedRowMatchesPureModel([
-    // Idle baseline on HEAD.
+    // Two consecutive idle updates before the hold begins: ensures `useHeldWhile`
+    // refreshes its committed snapshot across unheld renders rather than snapping
+    // back to the initial mount when a turn later starts.
     { gitBranch: "HEAD" },
-    // Active turn edits, commits, drifts branch and adds a to-do; approvals stay live.
+    {
+      gitBranch: "main",
+      gitWorkingState: unpushed(1),
+      todos: [firstTodo],
+    },
+    // Two consecutive progress-changing updates while held: ensures `useHeldWhile`
+    // keeps the pre-turn snapshot (`committed.current = shown`) instead of lagging
+    // by one render (`committed.current = value`). Approvals stay live throughout.
     {
       activity: { turnActive: true },
       approval: true,
       gitBranch: "fix/contrived-branch",
       observedGitBranch: "test/another-contrived-branch",
       gitWorkingState: dirtyAndAhead,
-      todos: [firstTodo],
+      todos: [firstTodo, secondTodo],
+    },
+    {
+      activity: { turnActive: true },
+      approval: true,
+      gitBranch: "test/another-contrived-branch",
+      observedGitBranch: "fix/contrived-branch",
+      gitWorkingState: unpushed(4),
+      todos: [firstTodo, secondTodo, thirdTodo],
     },
     // Opening the thread reveals every live chip while the turn still runs.
     {
       activity: { turnActive: true },
       selected: true,
       approval: false,
-      gitBranch: "fix/contrived-branch",
-      observedGitBranch: "test/another-contrived-branch",
-      gitWorkingState: dirtyAndAhead,
-      todos: [firstTodo],
+      gitBranch: "test/another-contrived-branch",
+      observedGitBranch: "fix/contrived-branch",
+      gitWorkingState: unpushed(4),
+      todos: [firstTodo, secondTodo, thirdTodo],
     },
-    // Leaving it holds what was shown while open as further work lands.
+    // Leaving it holds what was shown while open across multiple mid-turn updates.
     {
       activity: { turnActive: true },
       selected: false,
       gitBranch: "main",
       observedGitBranch: "main",
-      gitWorkingState: unpushed(3),
-      todos: [firstTodo, secondTodo],
+      gitWorkingState: unpushed(5),
+      todos: [firstTodo],
+    },
+    {
+      activity: { turnActive: true },
+      selected: false,
+      gitBranch: "fix/contrived-branch",
+      observedGitBranch: "fix/contrived-branch",
+      gitWorkingState: dirtyAndAhead,
+      todos: [],
     },
     // Turn finishes with a background task still running: live chips appear at once.
     {
       activity: { background: true },
-      gitBranch: "main",
-      observedGitBranch: "main",
-      gitWorkingState: unpushed(3),
-      todos: [firstTodo, secondTodo],
+      gitBranch: "fix/contrived-branch",
+      observedGitBranch: "fix/contrived-branch",
+      gitWorkingState: dirtyAndAhead,
+      todos: [],
     },
   ]);
 });
 
 it("matches the pure hold model across owned workers, thinking state and mid-turn remounts", () => {
   const firstTodo = makeTodo(1);
+  const secondTodo = makeTodo(2);
   expectMountedRowMatchesPureModel([
     // Mounted mid-turn with an owned worker: shows its initial live values.
     {
@@ -251,12 +278,18 @@ it("matches the pure hold model across owned workers, thinking state and mid-tur
       gitWorkingState: dirtyAndAhead,
       todos: [firstTodo],
     },
-    // Subsequent changes while the worker runs stay held.
+    // Multiple subsequent changes while the worker runs stay held at the mount snapshot.
     {
       activity: { subAgent: true },
       gitBranch: "fix/contrived-branch",
       gitWorkingState: undefined,
       todos: [],
+    },
+    {
+      activity: { subAgent: true },
+      gitBranch: "main",
+      gitWorkingState: unpushed(3),
+      todos: [firstTodo, secondTodo],
     },
     // Remounting mid-turn drops the prior held snapshot and shows live values.
     {
