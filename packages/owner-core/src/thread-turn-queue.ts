@@ -41,6 +41,7 @@ export type ThreadTurnQueueEntry = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  isCompactCommand?: boolean;
   automationRunId?: string;
   automationName?: string;
   manualReleaseRequired?: boolean;
