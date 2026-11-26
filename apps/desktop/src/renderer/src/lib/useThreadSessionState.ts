@@ -5595,6 +5595,7 @@ export function useThreadSessionState(params: {
   ) => string;
   addOptimisticReviewEntry: (displayText: string) => string;
   beginReviewSubmission: () => (() => void) | undefined;
+  bindOptimisticReviewEntryToTurn: (id: string, turnId: string) => void;
   /**
    * Names the turn a pending user message started, from the owner's
    * `startTurn` response. Call it only for a send that opened that turn.
@@ -8720,6 +8721,39 @@ export function useThreadSessionState(params: {
     [thread, threadKey, updateSession]
   );
 
+  const bindOptimisticReviewEntryToTurn = useCallback(
+    (id: string, turnId: string): void => {
+      if (!threadKey) return;
+
+      updateSession(threadKey, (current) => {
+        const pending = current.optimisticEntries.find(
+          (entry): entry is AppServerThreadReviewEntry =>
+            entry.id === id && entry.type === "review"
+        );
+        if (!pending || pending.turn?.id === turnId) return current;
+
+        // The owner can publish its header before returning from startReview.
+        // When it already has, remove only our placeholder for that start.
+        const isOwnerHeader = (entry: AppServerThreadEntry) =>
+          entry.type === "review"
+          && entry.turn?.id === turnId
+          && !isPendingEntryId(entry.id)
+          && isReviewStartEntry(entry);
+        const ownerHeaderExists =
+          current.response?.replay.entries.some(isOwnerHeader)
+          || current.optimisticEntries.some(isOwnerHeader);
+        const bound = { ...pending, turn: { id: turnId } };
+        return {
+          ...current,
+          optimisticEntries: ownerHeaderExists
+            ? current.optimisticEntries.filter((entry) => entry.id !== id)
+            : current.optimisticEntries.map((entry) => entry.id === id ? bound : entry),
+        };
+      });
+    },
+    [threadKey, updateSession]
+  );
+
   const upsertLiveTranscriptEntry = useCallback(
     (entry: AppServerThreadEntry): void => {
       if (!threadKey) {
@@ -9307,6 +9341,7 @@ export function useThreadSessionState(params: {
     addOptimisticUserMessage,
     addOptimisticReviewEntry,
     beginReviewSubmission,
+    bindOptimisticReviewEntryToTurn,
     bindOptimisticUserMessageToTurn,
     clearPendingRequest,
     entries,

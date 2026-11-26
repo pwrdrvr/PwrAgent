@@ -16,11 +16,18 @@ function reviewStartTimestamp(entry: AppServerThreadReviewEntry): number | undef
   return latest;
 }
 
+function reviewStartAllowsUnboundLabelMatch(entry: AppServerThreadReviewEntry): boolean {
+  // Binding a local header records the accepted turn's identity only. A
+  // native start without a turn ID can still replace it by label.
+  return entry.turn?.status === "in_progress"
+    || (entry.turn?.status === undefined && isPendingEntryId(entry.id));
+}
+
 function reviewStartMatchesUnboundHeader(
   authoritative: AppServerThreadReviewEntry,
   unbound: AppServerThreadReviewEntry,
 ): boolean {
-  if (authoritative.turn?.status === "in_progress") {
+  if (reviewStartAllowsUnboundLabelMatch(authoritative)) {
     return true;
   }
   const unboundAt = unbound.createdAt;
@@ -149,7 +156,7 @@ function buildReplayReviewKeys(entry: AppServerThreadReviewEntry, lookup: boolea
     if (!turnId || !lookup) keys.push(JSON.stringify(["pending-start-any", entry.id]));
     if (!turnId || lookup) keys.push(JSON.stringify(["pending-start-unbound", entry.id]));
   }
-  if (turnId && entry.turn?.status !== "in_progress") return keys;
+  if (turnId && !reviewStartAllowsUnboundLabelMatch(entry)) return keys;
 
   // A start with a different known turn never matches by label. The only
   // cross-identity label fallback is an unbound header, with at least one

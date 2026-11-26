@@ -4314,6 +4314,7 @@ function DesktopAppShell(props: {
         activeTurnStartedAt: session.activeTurnStartedAt,
         terminals,
         addOptimisticReviewEntry: session.addOptimisticReviewEntry,
+        bindOptimisticReviewEntryToTurn: session.bindOptimisticReviewEntryToTurn,
         beginReviewSubmission: session.beginReviewSubmission,
         addOptimisticUserMessage: session.addOptimisticUserMessage,
         bindOptimisticUserMessageToTurn: session.bindOptimisticUserMessageToTurn,

@@ -1,11 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AgentEvent, StartReviewRequest, StartReviewResponse } from "@pwragent/shared/contracts/agent";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import type { AppServerThreadReviewEntry } from "@pwragent/shared/contracts/normalized-app-server";
 import { threadTodoThreadKey, type ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { useIntegratedTerminals } from "../../../lib/useIntegratedTerminals";
+import { useThreadSessionState } from "../../../lib/useThreadSessionState";
 import { ThreadView, type ThreadViewProps } from "../../thread-detail/ThreadView";
 import type { ThreadTodosView } from "../../thread-todos/thread-todos-view";
 import { Composer, type ComposerProps } from "../Composer";
@@ -123,6 +126,160 @@ async function openReviewPanel(): Promise<void> {
   await act(async () => fireEvent.keyDown(input, { key: "Enter" }));
   expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
 }
+
+it.each(["before", "after"] as const)(
+  "reconciles repeated mounted Antigravity reviews when the owner header arrives %s the start response",
+  async (arrivalOrder) => {
+    const backend = "acp:antigravity";
+    const pullRequest = {
+      provider: "github.com" as const, org: "fixture", repo: "project", number: 4408,
+      url: "https://github.com/fixture/project/pull/4408",
+    };
+    const thread = makeThread("managed-review-thread", {
+      source: backend,
+      prs: [{
+        ...pullRequest, title: "Sample change", state: "passing",
+        lifecycleState: "open", headRefName: "feature/review-test", baseRefName: "main",
+        linkedDirectoryPaths: ["/repo/project"],
+      }],
+    });
+    const context = {
+      workspacePath: "/repo/project",
+      gitBranch: "feature/review-test",
+      headCommit: "949b0964f7",
+      pullRequest,
+    };
+    const optimisticLabel = `Review ${pullRequest.url}`;
+    const canonicalLabel = `${optimisticLabel} at ${context.headCommit}`;
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const emit = (event: AgentEvent) => {
+      for (const listener of listeners) listener(event);
+    };
+    const ownerEntries: AppServerThreadReviewEntry[] = [];
+    const startReview = vi.fn<(request: StartReviewRequest) => Promise<StartReviewResponse>>();
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        listeners.add(listener);
+        return () => { listeners.delete(listener); };
+      },
+      startReview,
+      readThread: async () => ({
+        backend, threadId: thread.id, fetchedAt: Date.now(),
+        replay: {
+          entries: [...ownerEntries],
+          messages: [],
+          pagination: { supportsPagination: true, hasPreviousPage: false },
+        },
+      }),
+    };
+    let session!: ReturnType<typeof useThreadSessionState>;
+    function Harness() {
+      session = useThreadSessionState({ desktopApi, thread });
+      const store = useComposerDraftStore();
+      const terminals = useIntegratedTerminals(desktopApi);
+      return (
+        <ThreadView
+          activeTurnId={session.activeTurnId}
+          addOptimisticReviewEntry={session.addOptimisticReviewEntry}
+          addOptimisticUserMessage={session.addOptimisticUserMessage}
+          backends={[{
+            ...codexBackend, kind: backend, label: "Antigravity",
+            capabilities: { ...codexBackend.capabilities, reviewCodexSubAgent: false },
+          }]}
+          beginReviewSubmission={session.beginReviewSubmission}
+          bindOptimisticReviewEntryToTurn={session.bindOptimisticReviewEntryToTurn}
+          clearPendingRequest={session.clearPendingRequest}
+          composerDisabled={false}
+          composerDraftStore={store}
+          desktopApi={desktopApi}
+          loading={session.loading}
+          loadingMore={session.loadingMore}
+          messageCount={session.entries.length}
+          onActiveTurnIdChange={session.setActiveTurnId}
+          onLoadOlder={session.loadOlder}
+          onPendingStatusChange={session.setPendingStatusText}
+          removeOptimisticMessage={session.removeOptimisticMessage}
+          selectedThread={thread}
+          skills={[]}
+          terminals={terminals}
+          transcriptEntries={session.entries}
+        />
+      );
+    }
+
+    await act(async () => { render(<Harness />); });
+    const readHeaders = () => session.entries
+      .filter((entry): entry is AppServerThreadReviewEntry =>
+        entry.type === "review" && Boolean(entry.displayText))
+      .map(({ id, displayText, reviewer, context, turn }) => ({
+        id, displayText, reviewer, context, turnId: turn?.id,
+      }));
+    const headers: ReturnType<typeof readHeaders> = [];
+
+    for (const attempt of [1, 2]) {
+      const turnId = `managed-review-${attempt}`;
+      const id = `managed-review:${turnId}:started`;
+      const reviewer = { backend, model: `fixture-reviewer-${attempt}` } as const;
+      const receipt = Promise.withResolvers<StartReviewResponse>();
+      startReview.mockReturnValueOnce(receipt.promise);
+      await openReviewPanel();
+      fireEvent.click(screen.getByRole("button", { name: /Attached PR/ }));
+      const pr = screen.getByRole<HTMLInputElement>("radio", { name: /#4408/ });
+      if (!pr.checked) fireEvent.click(pr);
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Start review" })); });
+      expect(startReview).toHaveBeenCalledTimes(attempt);
+      expect(startReview).toHaveBeenLastCalledWith(expect.objectContaining({
+        backend, runMode: "pwragent-sub-agent", target: { type: "pullRequest", url: pullRequest.url },
+      }));
+      expect(readHeaders().map((header) => header.displayText)).toEqual([
+        ...headers.map((header) => header.displayText), optimisticLabel,
+      ]);
+
+      const acknowledge = async () => {
+        await act(async () => receipt.resolve({ backend, threadId: thread.id, reviewThreadId: thread.id, turnId }));
+      };
+      const publishStart = () => {
+        const startedAt = Date.now();
+        ownerEntries.push({
+          type: "review", id, review: canonicalLabel, displayText: canonicalLabel,
+          reviewer, context, createdAt: startedAt, turn: { id: turnId, status: "in_progress", startedAt },
+        });
+        act(() => {
+          emit({ backend, notification: { method: "turn/started", params: {
+            threadId: thread.id, turnId, turn: { id: turnId, status: "inProgress", startedAt },
+          } } });
+          emit({ backend, notification: { method: "item/completed", params: {
+            threadId: thread.id, turnId,
+            item: { type: "enteredReviewMode", id, review: canonicalLabel, createdAt: startedAt, data: { reviewer, context } },
+          } } });
+        });
+      };
+      if (arrivalOrder === "before") publishStart();
+      await acknowledge();
+      const headerBeforeLateEvent = readHeaders().at(-1);
+      if (arrivalOrder === "after") publishStart();
+
+      // The owner's turn IDs define the starts, even when two reviews use the
+      // same PR and commit. Each header should use that turn's provenance.
+      headers.push({ id, displayText: canonicalLabel, reviewer, context, turnId });
+      expect(readHeaders()).toEqual(headers);
+      if (arrivalOrder === "after") {
+        expect(headerBeforeLateEvent).toMatchObject({ displayText: optimisticLabel, turnId });
+      }
+
+      const completedAt = Date.now();
+      const turn = { id: turnId, status: "completed" as const, completedAt };
+      ownerEntries[ownerEntries.length - 1] = { ...ownerEntries.at(-1)!, turn };
+      await act(async () => {
+        emit({ backend, notification: { method: "turn/completed", params: {
+          threadId: thread.id, turnId, turn: { ...turn, output: [] },
+        } } });
+      });
+    }
+    await act(async () => { await session.reload(); });
+    expect(readHeaders()).toEqual(headers);
+  },
+);
 
 describe("review composer lifecycle invariants", () => {
   it.for([

@@ -15039,7 +15039,7 @@ describe("useThreadSessionState", () => {
     });
   });
 
-  it("retains all pinned PR commits on a live inline scope card", async () => {
+  it.each([false, true])("retains all pinned PR commits on a live inline scope card (bound placeholder: %s)", async (bindPlaceholder) => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
@@ -15076,6 +15076,14 @@ describe("useThreadSessionState", () => {
 
     await waitForThreadHydration(result);
 
+    const review = `Review ${snapshot.pullRequest.url}`;
+    if (bindPlaceholder) {
+      act(() => {
+        const placeholderId = result.current.addOptimisticReviewEntry(review);
+        result.current.bindOptimisticReviewEntryToTurn(placeholderId, "native-review");
+      });
+    }
+
     act(() => {
       agentEventHandler?.({
         backend: "codex",
@@ -15086,7 +15094,8 @@ describe("useThreadSessionState", () => {
             item: {
               id: "turn-review-2-item",
               type: "enteredReviewMode",
-              review: "One finding.",
+              review,
+              createdAt: Date.now() + 1_000,
               data: {
                 reviewer: { backend: "codex", model: "gpt-5.6-sol" },
                 // The registry freezes this onto the live item beside
@@ -15119,6 +15128,7 @@ describe("useThreadSessionState", () => {
     });
     expect(result.current.entries[0]).toMatchObject({
       type: "review",
+      id: "turn-review-2-item",
       context: {
         headCommit: snapshot.headCommit, baseCommit: snapshot.mergeBaseCommit, pullRequestSnapshot: snapshot,
         workspacePath: "/Users/dev/pwrdrvr/PwrAgent",

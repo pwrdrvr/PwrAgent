@@ -465,6 +465,7 @@ export type ComposerProps = {
   onOpenCodexSkillProfiles?: () => void;
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  bindOptimisticReviewEntryToTurn?: (id: string, turnId: string) => void;
   beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage?: (
     text: string,
@@ -7967,8 +7968,12 @@ function useComposerController(props: ComposerProps) {
       });
       // Claude publishes the /code-review user message when it accepts the
       // turn. It has no review-start item to replace the temporary header.
-      if (claudeCodeReview && optimisticReviewId) {
-        props.removeOptimisticMessage?.(optimisticReviewId);
+      if (optimisticReviewId) {
+        if (claudeCodeReview) {
+          props.removeOptimisticMessage?.(optimisticReviewId);
+        } else {
+          props.bindOptimisticReviewEntryToTurn?.(optimisticReviewId, response.turnId);
+        }
       }
       if (pickedReviewer) {
         // Only an explicit pick is worth replaying; recording inherited
