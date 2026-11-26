@@ -1096,10 +1096,6 @@
     "apps/desktop/src/renderer/src/features/onboarding/__tests__/GetStarted.test.tsx": {
       "heavyFixture": 1
     },
-    "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrChip.held-card.model.test.tsx": {
-      "heavyFixture": 1,
-      "highNumRunsWithoutComment": 1
-    },
     "apps/desktop/src/renderer/src/features/pr-status/__tests__/PrChip.property.test.tsx": {
       "heavyFixture": 1
     },

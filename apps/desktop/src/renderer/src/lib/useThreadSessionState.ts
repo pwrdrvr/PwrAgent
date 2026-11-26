@@ -212,6 +212,7 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   providerPageTurnIds?: ReadonlySet<string>;
   providerPageAnchorTurnId?: string;
   needsHydrationAfterCompletion: boolean;
+  activeTurnStartedSequence?: { turnId: string; sequence: number };
   nextLiveEntrySequence: number;
   // ThreadView's completed live aggregates live in a keyed ref store. State
   // keeps only its observable revision/count so one append stays O(1).
@@ -220,6 +221,7 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   recentlyCompletedTurnUsage?: RecentlyCompletedTurnUsage;
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
+  pendingReviewSubmissions?: ReadonlySet<symbol>;
   // A review may take focus before the parent turn's terminal event arrives.
   pendingUsageByTurn?: ReadonlyMap<string, PendingTurnUsage>;
   settledTransientMessages: AppServerTransientThreadMessageEntry[];
@@ -371,7 +373,7 @@ function persistFinalizedUsageEntry(params: {
 
 function isTerminalTurnEntry(entry: AppServerThreadEntry): boolean {
   if (entry.type === "review") {
-    return true;
+    return !isReviewStartEntry(entry);
   }
 
   return (
@@ -480,21 +482,33 @@ function preserveReviewMetadata(
   existingEntry: AppServerThreadEntry | undefined,
   replacementEntry: AppServerThreadEntry,
 ): AppServerThreadEntry {
+  const existingSequence = readRendererSequence(existingEntry);
+  const replacementSequence = readRendererSequence(replacementEntry);
   if (
     existingEntry?.type !== "review"
     || replacementEntry.type !== "review"
   ) {
-    return replacementEntry;
+    return typeof existingSequence === "number" && replacementSequence === undefined
+      ? withRendererSequence(replacementEntry, existingSequence)
+      : replacementEntry;
   }
   const context = replacementEntry.context ?? existingEntry.context;
   const reviewer = replacementEntry.reviewer ?? existingEntry.reviewer;
-  if (context === replacementEntry.context && reviewer === replacementEntry.reviewer) return replacementEntry;
+  const sequence = replacementSequence ?? existingSequence;
+  if (
+    context === replacementEntry.context
+    && reviewer === replacementEntry.reviewer
+    && sequence === replacementSequence
+  ) {
+    return replacementEntry;
+  }
 
-  return {
+  const next: AppServerThreadReviewEntry = {
     ...replacementEntry,
     ...(context ? { context } : {}),
     ...(reviewer ? { reviewer } : {}),
   };
+  return typeof sequence === "number" ? withRendererSequence(next, sequence) : next;
 }
 
 function mergeTranscriptEntries(
@@ -716,8 +730,7 @@ function mergeTranscriptEntries(
     // compaction can leave a finished turn's tools live while the next send
     // is promoted, and the two can carry the same stamp.
     const laterObservedIndex =
-      optimisticTurnId
-      && !mergedTurnIds.has(optimisticTurnId)
+      (!optimisticTurnId || !mergedTurnIds.has(optimisticTurnId))
       && typeof optimisticSequence === "number"
       // Nothing newer is merged in the common case: a live row of the
       // turn in progress. Skip the scan then.
@@ -756,8 +769,14 @@ function mergeTranscriptEntries(
             !mergedTurnIds.has(optimisticTurnId)
             || lastMergedTurnId === optimisticTurnId
           )
-        : optimisticCreatedAt === undefined
-          || (greatestCreatedAt ?? -Infinity) <= optimisticCreatedAt);
+        : (
+            optimisticSequence === undefined
+            || (greatestSequence ?? -Infinity) <= optimisticSequence
+          )
+          && (
+            optimisticCreatedAt === undefined
+            || (greatestCreatedAt ?? -Infinity) <= optimisticCreatedAt
+          ));
     if (canAppendInKnownOrder) {
       appendIndexedEntry(optimisticEntry);
       continue;
@@ -811,15 +830,10 @@ function mergeTranscriptEntries(
 
     const timedIndex =
       optimisticTurnId &&
-      typeof optimisticCreatedAt === "number" &&
-      !isTokenUsageActivityEntry(optimisticEntry)
+      !isTokenUsageActivityEntry(optimisticEntry) &&
+      (typeof optimisticCreatedAt === "number" || typeof optimisticSequence === "number")
         ? merged.findIndex((entry) => {
-            const entryCreatedAt =
-              typeof entry.createdAt === "number" ? entry.createdAt : undefined;
-            if (
-              entry.turn?.id !== optimisticTurnId ||
-              typeof entryCreatedAt !== "number"
-            ) {
+            if (entry.turn?.id !== optimisticTurnId) {
               return false;
             }
             const entrySequence = readRendererSequence(entry);
@@ -827,9 +841,17 @@ function mergeTranscriptEntries(
               typeof entrySequence === "number" &&
               typeof optimisticSequence === "number"
             ) {
-              // Completion can restamp an earlier message. The live sequence
-              // is the more precise record of the order the renderer observed.
+              // Completion can restamp an earlier message, or omit createdAt.
+              // The live sequence is the authoritative record of observed order.
               return entrySequence > optimisticSequence;
+            }
+            const entryCreatedAt =
+              typeof entry.createdAt === "number" ? entry.createdAt : undefined;
+            if (
+              typeof entryCreatedAt !== "number" ||
+              typeof optimisticCreatedAt !== "number"
+            ) {
+              return false;
             }
             if (entryCreatedAt > optimisticCreatedAt) {
               return true;
@@ -856,6 +878,13 @@ function mergeTranscriptEntries(
     const globalTimedIndex =
       !optimisticTurnId && typeof optimisticCreatedAt === "number"
         ? merged.findIndex((entry) => {
+            const entrySequence = readRendererSequence(entry);
+            if (
+              typeof entrySequence === "number"
+              && typeof optimisticSequence === "number"
+            ) {
+              return entrySequence > optimisticSequence;
+            }
             const entryCreatedAt =
               typeof entry.createdAt === "number" ? entry.createdAt : undefined;
             return (
@@ -875,6 +904,14 @@ function mergeTranscriptEntries(
         ? merged.findIndex(
             (entry) => {
               if (entry.turn?.id !== optimisticTurnId || !isTerminalTurnEntry(entry)) {
+                return false;
+              }
+              const entrySequence = readRendererSequence(entry);
+              if (
+                typeof entrySequence === "number"
+                && typeof optimisticSequence === "number"
+                && optimisticSequence > entrySequence
+              ) {
                 return false;
               }
 
@@ -899,19 +936,30 @@ function mergeTranscriptEntries(
     // below every later turn: Codex stamps a final message with its
     // second-truncated completion, so a live row received a few hundred
     // milliseconds later reads as newer than its own turn's answer. Keep the
-    // row inside its turn: work before the turn's first terminal entry,
-    // anything else after the turn's last entry.
+    // row inside its turn: work before the turn's first terminal entry
+    // (unless live sequence proves this work came after it, as in multi-final
+    // ACP turns), anything else after the turn's last entry.
     const lastTurnIndex = optimisticTurnId
       ? merged.findLastIndex((entry) => entry.turn?.id === optimisticTurnId)
       : -1;
     if (lastTurnIndex !== -1 && lastTurnIndex < merged.length - 1) {
       const firstTerminalIndex = isTerminalTurnEntry(optimisticEntry)
         ? -1
-        : merged.findIndex((entry, index) =>
-            index <= lastTurnIndex
-            && entry.turn?.id === optimisticTurnId
-            && isTerminalTurnEntry(entry)
-          );
+        : merged.findIndex((entry, index) => {
+            if (
+              index > lastTurnIndex
+              || entry.turn?.id !== optimisticTurnId
+              || !isTerminalTurnEntry(entry)
+            ) {
+              return false;
+            }
+            const entrySequence = readRendererSequence(entry);
+            return !(
+              typeof entrySequence === "number"
+              && typeof optimisticSequence === "number"
+              && optimisticSequence > entrySequence
+            );
+          });
       merged.splice(
         firstTerminalIndex !== -1 ? firstTerminalIndex : lastTurnIndex + 1,
         0,
@@ -1122,11 +1170,12 @@ function preserveRetainedTranscriptTail(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
   hasLoadedHistory: boolean,
+  preservesLiveRows = false,
 ): AppServerReadThreadResponse {
   if (
-    !hasLoadedHistory ||
-    !retainedResponse ||
-    !response.replay.pagination.supportsPagination
+    !retainedResponse
+    || (!preservesLiveRows
+      && (!hasLoadedHistory || !response.replay.pagination.supportsPagination))
   ) {
     return response;
   }
@@ -1136,10 +1185,21 @@ function preserveRetainedTranscriptTail(
   // Stable IDs take the indexed linear path; only entries whose server IDs
   // changed need the bounded logical-match fallback. Loaded history pages do
   // not participate, so pagination depth cannot amplify either path.
+  // A retained live tool bucket can be acknowledged across multiple independent
+  // replay entries (for example, a file edit and a command execution). Filter
+  // out any details the fresh response already owns before reconciling.
+  const freshDetailOwners = indexDetailOwners(response.replay.entries);
+  const retainedEntries = retainedResponse.replay.entries.flatMap((entry) => {
+    if (entry.type !== "activity" || !entry.id.startsWith("live-tools-")) {
+      return [entry];
+    }
+    const remaining = retainUnreplayedLiveToolDetails(entry, freshDetailOwners);
+    return remaining ? [remaining] : [];
+  });
   const matchedRetainedEntries = new Set<AppServerThreadEntry>();
   const retainedEntriesById = new Map<string, AppServerThreadEntry[]>();
   const retainedEntryIndexById = new Map<string, number>();
-  for (const retainedEntry of retainedResponse.replay.entries) {
+  for (const retainedEntry of retainedEntries) {
     const retainedEntryId = retainedEntry.id;
     const entriesForId = retainedEntriesById.get(retainedEntryId);
     if (entriesForId) {
@@ -1149,7 +1209,7 @@ function preserveRetainedTranscriptTail(
     }
   }
   const retainedLogicalMatchIndex = createLogicalTranscriptMatchIndex(
-    retainedResponse.replay.entries,
+    retainedEntries,
   );
   const freshEntryByRetainedEntry = new Map<
     AppServerThreadEntry,
@@ -1178,7 +1238,7 @@ function preserveRetainedTranscriptTail(
   }
   const entries = reconcileRetainedTranscriptTail(
     response.replay.entries,
-    retainedResponse.replay.entries,
+    retainedEntries,
     freshEntryByRetainedEntry,
   );
 
@@ -1423,6 +1483,24 @@ function mergeRetainedTranscriptSuffix(
         freshIndex += 1;
         continue;
       }
+      // Within one review turn, the review start card always precedes the result.
+      if (
+        freshEntry.type === "review"
+        && retainedEntry.type === "review"
+        && freshEntry.turn?.id
+        && freshEntry.turn.id === retainedEntry.turn?.id
+      ) {
+        const freshIsStart = isReviewStartEntry(freshEntry);
+        const retainedIsStart = isReviewStartEntry(retainedEntry);
+        if (freshIsStart && !retainedIsStart) {
+          mergedSuffix.push(freshEntry);
+          freshIndex += 1;
+          continue;
+        }
+        if (!freshIsStart && retainedIsStart) {
+          break;
+        }
+      }
       const freshTimestamp = transcriptRefreshOrderTimestamp(freshEntry);
       if (
         typeof freshTimestamp === "number"
@@ -1479,6 +1557,16 @@ function findUniqueLogicalTranscriptRefreshMatch(
       freshEntry.phase &&
       retainedEntry.phase &&
       freshEntry.phase !== retainedEntry.phase
+    ) {
+      return false;
+    }
+
+    if (
+      freshEntry.type === "message" &&
+      retainedEntry.type === "message" &&
+      freshEntry.id !== retainedEntry.id &&
+      !isPendingEntryId(retainedEntry.id) &&
+      isSteeredMessage(freshEntry) !== isSteeredMessage(retainedEntry)
     ) {
       return false;
     }
@@ -1868,13 +1956,28 @@ function pruneOptimisticEntries(
       // provider echo is still missing. That copy cannot acknowledge a
       // later send with the same text. Use renderable rows for turn matches
       // because replay.messages need not carry turn metadata.
-      return !response.replay.messages.some((message) =>
-        message.id !== reconciledLaunchpadMessageId
-        && !isPendingEntryId(message.id)
-        && messageMatchesOptimisticEntry(message, entry, {
+      return !response.replay.messages.some((message) => {
+        if (
+          message.id === reconciledLaunchpadMessageId
+          || isPendingEntryId(message.id)
+        ) {
+          return false;
+        }
+        if (isSteeredMessage(message)) {
+          const messageSeq = readRendererSequence(message);
+          const entrySeq = readRendererSequence(entry);
+          if (
+            typeof messageSeq === "number"
+            && typeof entrySeq === "number"
+            && messageSeq > entrySeq
+          ) {
+            return false;
+          }
+        }
+        return messageMatchesOptimisticEntry(message, entry, {
           allowImageUrlMismatch: true,
-        })
-      ) && !(readSentTurnId(entry) && response.replay.entries.some((candidate) =>
+        });
+      }) && !(readSentTurnId(entry) && response.replay.entries.some((candidate) =>
         candidate.type === "message"
         && candidate.id !== reconciledLaunchpadMessageId
         && messageEchoesSentTurn(candidate, entry)
@@ -2227,8 +2330,14 @@ function findUniqueTranscriptOrderSource(
     transcriptEntryTurnId(entry),
     logicalTranscriptMatchCandidates(entry, logicalSourceIndex),
     (source) =>
-      typeof source.createdAt === "number" &&
+      (typeof source.createdAt === "number" || readRendererSequence(source) !== undefined) &&
       source.id !== entry.id &&
+      !(
+        entry.type === "message"
+        && source.type === "message"
+        && !isPendingEntryId(source.id)
+        && isSteeredMessage(entry) !== isSteeredMessage(source)
+      ) &&
       sameTurnOrUnknown(entry, source) &&
       !sourceToolBelongsToAnotherRow(entry, source, readDetailOwners) &&
       !entryToolHasAnotherSource(entry, source, sourceDetailOwners) &&
@@ -2416,11 +2525,11 @@ function carryForwardTranscriptEntryOrder(
   const logicalSources: AppServerThreadEntry[] = [];
   for (const source of sources) {
     const sourceId = source.id;
-    if (typeof source.createdAt === "number") {
+    if (!exactSourcesById.has(sourceId)) {
+      exactSourcesById.set(sourceId, source);
+    }
+    if (typeof source.createdAt === "number" || readRendererSequence(source) !== undefined) {
       logicalSources.push(source);
-      if (!exactSourcesById.has(sourceId)) {
-        exactSourcesById.set(sourceId, source);
-      }
     }
   }
   const logicalSourceIndex = createLogicalTranscriptMatchIndex(logicalSources);
@@ -2445,16 +2554,62 @@ function carryForwardTranscriptEntryOrder(
       claimsBySource.set(source, (claimsBySource.get(source) ?? 0) + 1);
     }
   }
+  const liveToolSequenceForEntry = (entry: AppServerThreadEntry): number | undefined => {
+    if (entry.type !== "activity" || entry.details.length === 0) {
+      return undefined;
+    }
+    let sequence: number | undefined;
+    for (const detail of entry.details) {
+      const owners = sourceDetailOwners.get(detail.id);
+      if (!owners) {
+        return undefined;
+      }
+      let detailSequence: number | undefined;
+      for (const owner of owners) {
+        if (
+          owner.type !== "activity"
+          || !owner.id.startsWith("live-tools-")
+          || !sameTurnOrUnknown(entry, owner)
+        ) {
+          continue;
+        }
+        const ownerSequence = readRendererSequence(owner);
+        if (typeof ownerSequence === "number") {
+          detailSequence =
+            detailSequence === undefined
+              ? ownerSequence
+              : Math.min(detailSequence, ownerSequence);
+        }
+      }
+      if (detailSequence === undefined) {
+        return undefined;
+      }
+      sequence =
+        sequence === undefined ? detailSequence : Math.min(sequence, detailSequence);
+    }
+    return sequence;
+  };
   let changed = false;
   let entries = response.replay.entries.map((entry, index) => {
     const source = matchedSources[index];
     // One live row stands for one read row. When a turn repeats a command,
     // several read rows match the same live row by content; none of them
-    // can take its time or place.
+    // can take its time or place. However, when one live-tools bucket coalesced
+    // several distinct tool calls that replay splits into separate activities,
+    // each replayed activity still inherits that bucket's rendererSequence so
+    // later live rows stay after it.
     if (
       !source
       || (source.id !== entry.id && (claimsBySource.get(source) ?? 0) > 1)
     ) {
+      const bucketSequence = liveToolSequenceForEntry(entry);
+      if (
+        bucketSequence !== undefined
+        && bucketSequence !== readRendererSequence(entry)
+      ) {
+        changed = true;
+        return withRendererSequence(entry, bucketSequence);
+      }
       return entry;
     }
 
@@ -2468,16 +2623,22 @@ function carryForwardTranscriptEntryOrder(
       && source.origin
         ? source.origin
         : undefined;
+    const steered =
+      entry.type === "message"
+      && source.type === "message"
+      && !isSteeredMessage(entry)
+      && isSteeredMessage(source);
     const turn = source.turn && !entry.turn ? source.turn : undefined;
-    const createdAt = source.createdAt !== entry.createdAt
-      ? source.createdAt
-      : undefined;
+    const createdAt =
+      typeof source.createdAt === "number" && source.createdAt !== entry.createdAt
+        ? source.createdAt
+        : undefined;
     // Acknowledging a live row must keep its observed position. A later
     // redelivery reuses this sequence instead of placing the row after newer
     // optimistic work that the read has not acknowledged yet.
     const sequence = readRendererSequence(source);
     if (
-      !origin && !turn && createdAt === undefined
+      !origin && !steered && !turn && createdAt === undefined
       && (sequence === undefined || sequence === readRendererSequence(entry))
     ) {
       sourceByHydratedEntry.set(entry, source);
@@ -2490,6 +2651,7 @@ function carryForwardTranscriptEntryOrder(
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(turn ? { turn } : {}),
       ...(origin ? { origin } : {}),
+      ...(steered ? ({ steered: true } satisfies SteeredMessageMarker) : {}),
     };
     if (sequence !== undefined) {
       hydratedEntry = withRendererSequence(hydratedEntry, sequence);
@@ -2518,16 +2680,29 @@ function carryForwardTranscriptEntryOrder(
     const entry = entriesByMessageId.get(message.id);
     const origin = !message.origin ? entry?.origin : undefined;
     const createdAt = entry?.createdAt;
-    if (!origin && (createdAt === undefined || createdAt === message.createdAt)) {
+    const steered = !isSteeredMessage(message) && Boolean(entry && isSteeredMessage(entry));
+    const sequence = entry ? readRendererSequence(entry) : undefined;
+    const sequenceChanged =
+      sequence !== undefined && sequence !== readRendererSequence(message);
+    if (
+      !origin
+      && !steered
+      && !sequenceChanged
+      && (createdAt === undefined || createdAt === message.createdAt)
+    ) {
       return message;
     }
 
     changed = true;
-    return {
+    const hydratedMessage: AppServerThreadMessage = {
       ...message,
       ...(origin ? { origin } : {}),
       ...(createdAt !== undefined ? { createdAt } : {}),
+      ...(steered ? ({ steered: true } satisfies SteeredMessageMarker) : {}),
     };
+    return sequence !== undefined
+      ? withRendererSequence(hydratedMessage, sequence)
+      : hydratedMessage;
   });
 
   const freshCurrentTurnId = latestTranscriptTurnId(response.replay.entries);
@@ -2560,8 +2735,8 @@ function carryForwardTranscriptEntryOrder(
       continue;
     }
 
-    const pendingSource = response.backend === "acp:antigravity" && source.id.startsWith("live-tools-")
-      ? retainUnreplayedAntigravityDetails(source, readDetailOwners)
+    const pendingSource = source.id.startsWith("live-tools-")
+      ? retainUnreplayedLiveToolDetails(source, readDetailOwners)
       : source;
     if (!pendingSource) continue;
 
@@ -2618,7 +2793,7 @@ function latestTranscriptTurnId(entries: AppServerThreadEntry[]): string | undef
 }
 
 /** One live tool row can be acknowledged by several independent replay calls. */
-function retainUnreplayedAntigravityDetails(
+function retainUnreplayedLiveToolDetails(
   source: AppServerThreadActivityEntry,
   readDetailOwners: DetailOwners,
 ): AppServerThreadActivityEntry | undefined {
@@ -2760,9 +2935,12 @@ function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason
   }
 
   if (session.expectOwnUpdate) {
+    // A review card can survive its turn while replay catches up, and a
+    // local header may never match the owner's label. The review submission
+    // and the active turn own the busy state.
     reasons.push(
       ...session.optimisticEntries
-        .filter(isLiveOptimisticEntry)
+        .filter((entry) => entry.type !== "review" && isLiveOptimisticEntry(entry))
         .map(summarizeOptimisticEntryReason)
     );
   }
@@ -2771,7 +2949,7 @@ function describeThinkingState(session: ThreadSessionEntry): ThinkingStateReason
 }
 
 function hasThinkingState(session: ThreadSessionEntry): boolean {
-  return describeThinkingState(session).length > 0;
+  return Boolean(session.pendingReviewSubmissions) || describeThinkingState(session).length > 0;
 }
 
 function hasPendingApprovalRequest(session: ThreadSessionEntry): boolean {
@@ -4230,6 +4408,12 @@ function findPromotedOptimisticUserMessageEntry(
   response: AppServerReadThreadResponse | undefined,
   message: AppServerThreadMessageEntry
 ): AppServerThreadMessageEntry | undefined {
+  // Promoted optimistic entries were moved into the replay ahead of an earlier
+  // assistant message. A mid-turn steer joining the turn must not claim or
+  // remove an earlier promoted opening prompt that shares its text.
+  if (isSteeredMessage(message)) {
+    return undefined;
+  }
   return findOptimisticEcho(
     message,
     response?.replay.entries.filter(isOptimisticUserMessageEntry) ?? [],
@@ -4255,12 +4439,16 @@ function mergeCompletedUserMessageWithPromotedOptimisticEntry(
     ? optimisticEntry.parts
     : undefined;
 
-  return {
+  const merged: AppServerThreadMessageEntry = {
     ...message,
     ...(preservePresentation ? { text: optimisticEntry.text } : {}),
     ...(optimisticImageParts ? { parts: optimisticImageParts } : {}),
     createdAt: optimisticEntry.createdAt ?? message.createdAt,
   };
+  const sequence = readRendererSequence(optimisticEntry);
+  return typeof sequence === "number" && readRendererSequence(merged) === undefined
+    ? withRendererSequence(merged, sequence)
+    : merged;
 }
 
 function removePromotedOptimisticUserMessage(
@@ -5406,6 +5594,7 @@ export function useThreadSessionState(params: {
     turnId?: string,
   ) => string;
   addOptimisticReviewEntry: (displayText: string) => string;
+  beginReviewSubmission: () => (() => void) | undefined;
   /**
    * Names the turn a pending user message started, from the owner's
    * `startTurn` response. Call it only for a send that opened that turn.
@@ -5882,7 +6071,13 @@ export function useThreadSessionState(params: {
               retainedResponse = withoutTranscriptTurns(retainedResponse, previousPageTurnIds);
             }
           }
-          const responseWithRetainedTail = preserveRetainedTranscriptTail(orderedResponse, retainedResponse, bridgesRetainedRows);
+          const preservesLiveRows = lifecycleChangedDuringRead || transcriptChangedDuringRead;
+          const responseWithRetainedTail = preserveRetainedTranscriptTail(
+            orderedResponse,
+            retainedResponse,
+            bridgesRetainedRows,
+            preservesLiveRows,
+          );
           const providerPageTurnIds =
             bridgesRetainedRows && !skipsProviderTurns && previousPageTurnIds
               ? new Set([...previousPageTurnIds, ...pageTurnIds])
@@ -5961,6 +6156,7 @@ export function useThreadSessionState(params: {
           const shouldClearStaleThinking =
             responseThreadInactive
             && thinkingReasons.length > 0
+            && !current.pendingReviewSubmissions
             && !hydratedPendingInteraction
             && !ownUpdateStillSettling
             && !reviewUpdateStillSettling
@@ -6217,7 +6413,9 @@ export function useThreadSessionState(params: {
             return current;
           }
           const shouldRecheckStaleThinking =
-            !backendReportedActive && hasThinkingState(current);
+            !backendReportedActive
+            && !current.pendingReviewSubmissions
+            && hasThinkingState(current);
           if (
             current.backendReportedActive === backendReportedActive
             && !shouldRecheckStaleThinking
@@ -6882,24 +7080,98 @@ export function useThreadSessionState(params: {
                 unreconciledLaunchpadMessageCandidate,
               )
             );
-            const authoritativeUserMessageEntry =
+            const steeredTurnId =
+              isSteeredMessage(userMessageEntry) ? userMessageEntry.turn?.id : undefined;
+            const latestTurnSequence = steeredTurnId
+              ? [
+                  ...(current.response?.replay.entries ?? []),
+                  ...current.optimisticEntries,
+                  ...(current.pendingAssistantMessage ? [current.pendingAssistantMessage] : []),
+                ].reduce<number | undefined>((greatest, entry) => {
+                  if (entry.turn?.id !== steeredTurnId) {
+                    return greatest;
+                  }
+                  const seq = readRendererSequence(entry);
+                  return typeof seq === "number"
+                    ? Math.max(greatest ?? seq, seq)
+                    : greatest;
+                }, undefined)
+              : undefined;
+            const turnStartedExclusiveSequence =
+              steeredTurnId && current.activeTurnStartedSequence?.turnId === steeredTurnId
+                ? current.activeTurnStartedSequence.sequence - 1
+                : undefined;
+            const steeredSequenceFloor =
+              latestTurnSequence !== undefined && turnStartedExclusiveSequence !== undefined
+                ? Math.max(latestTurnSequence, turnStartedExclusiveSequence)
+                : latestTurnSequence ?? turnStartedExclusiveSequence;
+            const echoEligibleOptimisticEntries =
+              steeredSequenceFloor === undefined
+                ? current.optimisticEntries
+                : current.optimisticEntries.filter((entry) => {
+                    const seq = readRendererSequence(entry);
+                    return seq === undefined || seq > steeredSequenceFloor;
+                  });
+            const mergedUserMessageEntry =
               mergeCompletedUserMessageWithPromotedOptimisticEntry(
                 mergeCompletedUserMessageWithOptimisticEntry(
                   userMessageEntry,
                   reconcilesLaunchpadMessage
                     && unreconciledLaunchpadMessageCandidate
                     ? [unreconciledLaunchpadMessageCandidate.entry]
-                    : current.optimisticEntries
+                    : echoEligibleOptimisticEntries
                 ),
                 current.response
               );
+            const existingUserEntry = current.response?.replay.entries.find(
+              (entry) => entry.id === mergedUserMessageEntry.id
+            );
+            const hasExistingSameTurnEntries = Boolean(
+              mergedUserMessageEntry.turn?.id
+              && (
+                current.response?.replay.entries.some(
+                  (entry) => entry.turn?.id === mergedUserMessageEntry.turn?.id,
+                )
+                || current.optimisticEntries.some(
+                  (entry) => entry.turn?.id === mergedUserMessageEntry.turn?.id,
+                )
+                || current.pendingAssistantMessage?.turn?.id === mergedUserMessageEntry.turn?.id
+              )
+            );
+            // A late-arriving non-steered opening prompt may reach the window
+            // after the agent's first reply. Only allocate a new live sequence
+            // for steered messages or turns with no prior live entries so a
+            // late opening prompt can still place itself above that reply by
+            // its earlier send timestamp.
+            const shouldAllocateUserSequence =
+              isSteeredMessage(mergedUserMessageEntry) || !hasExistingSameTurnEntries;
+            const userSequence =
+              readRendererSequence(mergedUserMessageEntry)
+              ?? readRendererSequence(existingUserEntry)
+              ?? (shouldAllocateUserSequence ? current.nextLiveEntrySequence : undefined);
+            const authoritativeUserMessageEntry =
+              userSequence === undefined || readRendererSequence(mergedUserMessageEntry) === userSequence
+                ? mergedUserMessageEntry
+                : withRendererSequence(mergedUserMessageEntry, userSequence);
             if (reconcilesLaunchpadMessage) {
               reconciledLaunchpadMessageIdsRef.current[targetThreadKey] =
                 authoritativeUserMessageEntry.id;
             }
+            const flushedForUserMessage =
+              current.pendingAssistantMessage && isSteeredMessage(authoritativeUserMessageEntry)
+                ? appendPendingAssistantMessage(
+                    current.response,
+                    {
+                      backend: event.backend,
+                      threadId: notificationThreadId,
+                    },
+                    [],
+                    current.pendingAssistantMessage
+                  )
+                : current.response;
             const nextResponse = appendMessageEntries(
               removePromotedOptimisticUserMessage(
-                current.response,
+                flushedForUserMessage,
                 authoritativeUserMessageEntry
               ),
               {
@@ -6914,6 +7186,14 @@ export function useThreadSessionState(params: {
               expectOwnUpdate: true,
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
+              nextLiveEntrySequence:
+                userSequence !== undefined
+                  ? Math.max(current.nextLiveEntrySequence, userSequence + 1)
+                  : current.nextLiveEntrySequence,
+              pendingAssistantMessage:
+                isSteeredMessage(authoritativeUserMessageEntry)
+                  ? undefined
+                  : current.pendingAssistantMessage,
               optimisticEntries:
                 reconcilesLaunchpadMessage
                   && unreconciledLaunchpadMessageCandidate
@@ -6925,6 +7205,8 @@ export function useThreadSessionState(params: {
                       (entry) =>
                         entry.id === unreconciledLaunchpadMessageCandidate?.entry.id
                         || entry.type !== "message"
+                        || (steeredSequenceFloor !== undefined
+                          && (readRendererSequence(entry) ?? Infinity) <= steeredSequenceFloor)
                         || !messageEchoesOptimisticEntry(
                           authoritativeUserMessageEntry,
                           entry,
@@ -7195,6 +7477,12 @@ export function useThreadSessionState(params: {
             ...current,
             activeTurnId: turnId,
             activeTurnStartedAt: startedAt,
+            activeTurnStartedSequence:
+              turnId
+                ? current.activeTurnStartedSequence?.turnId === turnId
+                  ? current.activeTurnStartedSequence
+                  : { turnId, sequence: current.nextLiveEntrySequence }
+                : current.activeTurnStartedSequence,
             backendReportedActive: true,
             expectOwnUpdate: true,
             interacted: retainTranscript || current.interacted,
@@ -7358,35 +7646,53 @@ export function useThreadSessionState(params: {
 
           const reviewEntry = reviewEntryFromCompletedItem(event.notification.params);
           if (reviewEntry) {
+            const existingReview =
+              current.response?.replay.entries.find(
+                (entry) =>
+                  entry.id === reviewEntry.id
+                  || (entry.type === "review" && reviewEntriesMatch(entry, reviewEntry)),
+              )
+              ?? current.optimisticEntries.find(
+                (entry) =>
+                  entry.id === reviewEntry.id
+                  || (entry.type === "review" && reviewEntriesMatch(entry, reviewEntry)),
+              );
+            const reviewSequence =
+              readRendererSequence(existingReview) ?? current.nextLiveEntrySequence;
+            const sequencedReviewEntry = withRendererSequence(reviewEntry, reviewSequence);
             const nextResponse = appendThreadEntries(
               current.response,
               {
                 backend: event.backend,
                 threadId: notificationThreadId,
               },
-              [reviewEntry]
+              [sequencedReviewEntry]
             );
 
             return {
               ...current,
               activeTurnId:
-                reviewEntry.turn?.status === "in_progress" && reviewEntry.turn.id
-                  ? reviewEntry.turn.id
+                sequencedReviewEntry.turn?.status === "in_progress" && sequencedReviewEntry.turn.id
+                  ? sequencedReviewEntry.turn.id
                   : current.activeTurnId,
               activeTurnStartedAt:
-                reviewEntry.turn?.status === "in_progress" && reviewEntry.turn.id
+                sequencedReviewEntry.turn?.status === "in_progress" && sequencedReviewEntry.turn.id
                   ? current.activeTurnStartedAt ?? Date.now()
                   : current.activeTurnStartedAt,
               expectOwnUpdate: true,
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
+              nextLiveEntrySequence: Math.max(
+                current.nextLiveEntrySequence,
+                reviewSequence + 1,
+              ),
               // The live item replaces the placeholder, but a thread/read
               // snapshot can still omit it. Retain it until hydration returns
               // a matching terminal review; pruning then retires it.
               // Merge only the pending entries here, never the full transcript.
               optimisticEntries: mergeTranscriptEntries(
                 current.optimisticEntries,
-                [reviewEntry],
+                [sequencedReviewEntry],
               ),
               response: nextResponse,
             };
@@ -7519,6 +7825,18 @@ export function useThreadSessionState(params: {
             ...current.optimisticEntries
               .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
               .map((entry) => {
+                if (
+                  entry.role === "user"
+                  && !entry.turn
+                  && completedTurn
+                  && completedTurnOwnsPendingItems
+                  && (!readSentTurnId(entry) || readSentTurnId(entry) === completedTurn.id)
+                ) {
+                  return {
+                    ...entry,
+                    turn: completedTurn,
+                  };
+                }
                 if (entry.turn?.id !== completedTurn?.id) {
                   return entry;
                 }
@@ -7764,6 +8082,13 @@ export function useThreadSessionState(params: {
           }
 
           if (isInactiveThreadStatus(statusType)) {
+            if (current.pendingReviewSubmissions) {
+              return {
+                ...current,
+                backendReportedActive: false,
+                staleThinkingRecheckAt: undefined,
+              };
+            }
             const shouldRecheckStaleThinking =
               hasThinkingState(current) && !hasPendingInteraction(current);
             if (shouldRecheckStaleThinking) {
@@ -8338,6 +8663,31 @@ export function useThreadSessionState(params: {
     [thread, threadKey, updateSession]
   );
 
+  const beginReviewSubmission = useCallback(() => {
+    if (!threadKey) return undefined;
+    const submission = Symbol();
+    updateSession(threadKey, (current) => ({
+      ...current,
+      lastTouchedAt: Date.now(),
+      pendingReviewSubmissions: new Set(current.pendingReviewSubmissions).add(submission),
+      staleThinkingRecheckAt: undefined,
+    }));
+    // The promise can settle after selection changes. Release the original
+    // thread's reservation and keep any other pending submission busy.
+    return () => {
+      updateSession(threadKey, (current) => {
+        if (!current.pendingReviewSubmissions?.has(submission)) return current;
+        const remaining = new Set(current.pendingReviewSubmissions);
+        remaining.delete(submission);
+        return {
+          ...current,
+          lastTouchedAt: Date.now(),
+          pendingReviewSubmissions: remaining.size > 0 ? remaining : undefined,
+        };
+      });
+    };
+  }, [threadKey, updateSession]);
+
   const addOptimisticReviewEntry = useCallback(
     (displayText: string): string => {
       if (!thread || !threadKey) {
@@ -8350,15 +8700,19 @@ export function useThreadSessionState(params: {
         expectOwnUpdate: true,
         interacted: true,
         lastTouchedAt: Date.now(),
+        nextLiveEntrySequence: current.nextLiveEntrySequence + 1,
         optimisticEntries: [
           ...current.optimisticEntries,
-          {
-            type: "review",
-            id,
-            review: displayText,
-            displayText,
-            createdAt: Date.now(),
-          },
+          withRendererSequence(
+            {
+              type: "review",
+              id,
+              review: displayText,
+              displayText,
+              createdAt: Date.now(),
+            },
+            current.nextLiveEntrySequence,
+          ),
         ],
       }));
       return id;
@@ -8426,6 +8780,11 @@ export function useThreadSessionState(params: {
           ...current,
           activeTurnId: turnId,
           activeTurnStartedAt: turnId ? Date.now() : undefined,
+          activeTurnStartedSequence: turnId
+            ? current.activeTurnStartedSequence?.turnId === turnId
+              ? current.activeTurnStartedSequence
+              : { turnId, sequence: current.nextLiveEntrySequence }
+            : current.activeTurnStartedSequence,
           expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
           interacted: Boolean(turnId) || current.interacted,
           lastTouchedAt: Date.now(),
@@ -8896,9 +9255,11 @@ export function useThreadSessionState(params: {
       : selectedSession?.transientMessage
         ? undefined
         : selectedSession?.pendingStatusText ??
-          (selectedSession?.activeTurnId || selectedSession?.backendReportedActive
-            ? "Thinking"
-            : undefined);
+          (selectedSession?.pendingReviewSubmissions
+            ? "Reviewing"
+            : selectedSession?.activeTurnId || selectedSession?.backendReportedActive
+              ? "Thinking"
+              : undefined);
   const selectedThreadThinking = Boolean(
     selectedSession && hasThinkingState(selectedSession),
   );
@@ -8945,6 +9306,7 @@ export function useThreadSessionState(params: {
     activeTurnStartedAt: selectedSession?.activeTurnStartedAt,
     addOptimisticUserMessage,
     addOptimisticReviewEntry,
+    beginReviewSubmission,
     bindOptimisticUserMessageToTurn,
     clearPendingRequest,
     entries,

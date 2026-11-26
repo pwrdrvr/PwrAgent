@@ -511,4 +511,93 @@ describe("segmented transcript history", () => {
     expect(found).toBe(false);
     expect(retainedHistoryIdReads).toBe(2_000);
   });
+
+  it("does not insert a retained tool before an untimed opening user prompt of its turn", () => {
+    const index = createTranscriptHistoryIndex();
+    const turn0 = { id: "turn-0", status: "completed" as const, startedAt: 10, completedAt: 15 };
+    const turn1 = { id: "turn-1", status: "completed" as const, startedAt: 20, completedAt: 25 };
+    const history = prependTranscriptHistoryPage({
+      history: undefined,
+      index,
+      page: response([
+        { type: "message", id: "p-0", role: "user", text: "prompt 0", turn: turn0 },
+      ]),
+      tailEntries: [
+        { type: "message", id: "p-1", role: "user", text: "prompt 1", turn: turn1 },
+      ],
+    });
+    const retainedTool: AppServerThreadEntry = {
+      type: "activity",
+      id: "live-tools-turn-0-0",
+      createdAt: 10,
+      details: [{ id: "d-0", kind: "command", label: "cmd", status: "completed" }],
+      status: "completed",
+      summary: "Ran cmd",
+      turn: turn0,
+    };
+
+    const combined = Array.from(
+      combineTranscriptEntries(
+        history,
+        index,
+        [{ type: "message", id: "p-1", role: "user", text: "prompt 1", turn: turn1 }, retainedTool],
+        undefined,
+        [retainedTool],
+      ),
+    );
+
+    expect(combined.map((entry) => entry.id)).toEqual([
+      "p-0",
+      "live-tools-turn-0-0",
+      "p-1",
+    ]);
+  });
+
+  it("keeps neighboring turns contiguous when one inserts after its last row and the next inserts before its first", () => {
+    const index = createTranscriptHistoryIndex();
+    const turn0 = { id: "turn-0", status: "completed" as const, startedAt: 10, completedAt: 15 };
+    const turn1 = { id: "turn-1", status: "completed" as const, startedAt: 20, completedAt: 25 };
+    const history = prependTranscriptHistoryPage({
+      history: undefined,
+      index,
+      page: response([
+        { type: "message", id: "p-0", role: "user", text: "prompt 0", turn: turn0 },
+        { type: "message", id: "p-1", role: "assistant", phase: "final", text: "answer 1", turn: turn1 },
+      ]),
+      tailEntries: [],
+    });
+    const retainedTurn1Tool: AppServerThreadEntry = {
+      type: "activity",
+      id: "live-tools-turn-1-0",
+      details: [{ id: "d-1", kind: "command", label: "cmd 1", status: "completed" }],
+      status: "completed",
+      summary: "Ran cmd 1",
+      turn: turn1,
+    };
+    const retainedTurn0Tool: AppServerThreadEntry = {
+      type: "activity",
+      id: "live-tools-turn-0-1",
+      details: [{ id: "d-0", kind: "command", label: "cmd 0", status: "completed" }],
+      status: "completed",
+      summary: "Ran cmd 0",
+      turn: turn0,
+    };
+
+    const combined = Array.from(
+      combineTranscriptEntries(
+        history,
+        index,
+        [retainedTurn1Tool, retainedTurn0Tool],
+        undefined,
+        [retainedTurn1Tool, retainedTurn0Tool],
+      ),
+    );
+
+    expect(combined.map((entry) => entry.id)).toEqual([
+      "p-0",
+      "live-tools-turn-0-1",
+      "live-tools-turn-1-0",
+      "p-1",
+    ]);
+  });
 });

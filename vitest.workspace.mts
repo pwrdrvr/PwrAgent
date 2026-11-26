@@ -260,6 +260,9 @@ export default defineConfig({
             // Outpost consumers import its published JavaScript, whose bundle
             // must exist before workers start, regardless of test selection.
             "apps/desktop/src/test-setup/outpost-build.ts",
+            // The conformance shard needs both real owner bundles before its
+            // workers start, outside the suite's test and hook deadlines.
+            "apps/desktop/src/test-setup/owner-conformance-fixtures.ts",
             // Windows only in effect: warms the Job-object wrapper that owns
             // `git worktree remove` so its one-time PowerShell + helper-compile
             // cold start is not billed to whichever test reaches it first.
