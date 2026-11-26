@@ -340,6 +340,12 @@ it.each(["written", "start fails", "stop fails", "write fails"] as const)(
       capturedAt: samples.at(-1)?.capturedAt,
       sessionId: "cap-warn",
       target: "main",
+      // The post-cap notice carries the batch's Rearm offer, so it can rearm on its own.
+      rearm: {
+        captureLimit: 1,
+        profileFilename: "profile-1.cpuprofile",
+        sessionDirectoryName: profiler.rearmableCapture?.sessionDirectoryName,
+      },
     });
     expect(logger.warn).toHaveBeenCalledWith(
       "[pwragent:hot-cpu] hot CPU detected after profile cap reached",
@@ -378,7 +384,10 @@ it.each(["written", "start fails", "stop fails", "write fails"] as const)(
     expect(events.filter((event) => event.type === "profile-written")).toHaveLength(firstWrittenCount + 1);
     expect(events.filter((event) => event.type === "profile-cap-rearmed")).toHaveLength(1);
     expect(onPostCapHotCpu).toHaveBeenCalledTimes(2);
-    expect(onPostCapHotCpu).toHaveBeenLastCalledWith(expect.objectContaining({ captureCount: 2 }));
+    expect(onPostCapHotCpu).toHaveBeenLastCalledWith(expect.objectContaining({
+      captureCount: 2,
+      rearm: expect.objectContaining({ profileFilename: "profile-2.cpuprofile" }),
+    }));
     expect(profiler.rearm("profile-1.cpuprofile")).toBe(false);
     await profiler.stop();
     expect(profiler.rearmableCapture).toBeUndefined();

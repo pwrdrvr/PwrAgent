@@ -481,7 +481,20 @@ export class HotCpuProfiler {
           captureCap: this.captureCap,
         };
         this.logger.warn("[pwragent:hot-cpu] hot CPU detected after profile cap reached", detail);
-        this.onPostCapHotCpu?.({ captureCount: this.profileCount, capturedAt, sessionId: this.session.id, target });
+        const offer = this.rearmableCapture;
+        this.onPostCapHotCpu?.({
+          captureCount: this.profileCount,
+          capturedAt,
+          sessionId: this.session.id,
+          target,
+          ...(offer ? {
+            rearm: {
+              captureLimit: offer.captureLimit,
+              profileFilename: offer.profileFilename,
+              sessionDirectoryName: offer.sessionDirectoryName,
+            },
+          } : {}),
+        });
         await this.session.appendEvent({ capturedAt, type: "profile-cap-warning", detail });
       } else if (!this.stopped && this.profileCount < this.captureCap) {
         await this.maintainRecording(capturedAtMs);
