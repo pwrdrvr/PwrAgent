@@ -111,7 +111,11 @@ async function nonInteractiveUsageEnv(
     } catch {
       return undefined;
     }
-    const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+    const pathKey = Object.hasOwn(env, "PATH")
+      ? "PATH"
+      : process.platform === "win32"
+        ? Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "PATH"
+        : "PATH";
     env[pathKey] = `${browserBin}${path.delimiter}${env[pathKey] ?? "/usr/bin:/bin"}`;
   }
   return env;

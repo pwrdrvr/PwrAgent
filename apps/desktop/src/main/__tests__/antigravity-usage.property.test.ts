@@ -150,8 +150,12 @@ describe("Antigravity quota commands", () => {
           const isUsage = args.includes("/usage") || args.some((arg) => arg.includes("/usage"));
           const checkShim = isUsage && (platform === "darwin" || platform === "linux")
             ? (async () => {
-                const pathValue = Object.entries(options.env ?? {})
-                  .find(([key]) => key.toUpperCase() === "PATH")?.[1] ?? "";
+                const pathValue = process.platform === "win32"
+                  ? options.env?.PATH
+                    ?? Object.entries(options.env ?? {})
+                      .find(([key]) => key.toUpperCase() === "PATH")?.[1]
+                    ?? ""
+                  : options.env?.PATH ?? "";
                 const firstPath = pathValue.split(path.delimiter)[0];
                 const shimName = platform === "darwin" ? "open" : "xdg-open";
                 if (firstPath) {
@@ -185,6 +189,59 @@ describe("Antigravity quota commands", () => {
         expect(shimVerified).toBe(true);
       },
     ), { numRuns: 18 });
+  });
+
+  it.skipIf(process.platform === "win32")("prepends the browser shim to exact PATH on POSIX even when lowercase path precedes PATH", async () => {
+    const savedPath = process.env.PATH;
+    const savedLowerPath = process.env.path;
+    delete process.env.PATH;
+    delete process.env.path;
+    process.env.path = "/unrelated/lower-path";
+    process.env.PATH = savedPath ?? "/usr/bin:/bin";
+    try {
+      const launch = launchDescriptor("/fake/agy");
+      const outputs = [
+        "1.5.18\n",
+        JSON.stringify({ status: "SUCCESS", command: { name: "usage", data: { groups: [] } } }),
+      ];
+      let exactPathShimOk = false;
+      let lowerPathPreserved: string | undefined;
+      const spawn = vi.fn((_command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
+        const child = childProcess();
+        const isUsage = args.includes("/usage");
+        const check = isUsage
+          ? (async () => {
+              lowerPathPreserved = options.env?.path;
+              const firstPath = (options.env?.PATH ?? "").split(path.delimiter)[0];
+              const opener = process.platform === "darwin" ? "open" : "xdg-open";
+              if (firstPath) {
+                await access(path.join(firstPath, opener), constants.X_OK);
+                exactPathShimOk = true;
+              }
+            })().catch(() => {
+              exactPathShimOk = false;
+            })
+          : Promise.resolve();
+        void check.then(() => {
+          child.stdout.write(outputs.shift() ?? "");
+          child.exitCode = 0;
+          child.emit("close", 0);
+        });
+        return child;
+      });
+      await readAntigravityUsage(launch, new AbortController().signal, {
+        platform: process.platform,
+        spawn,
+        terminate: async () => undefined,
+      });
+      expect(exactPathShimOk).toBe(true);
+      expect(lowerPathPreserved).toBe("/unrelated/lower-path");
+    } finally {
+      delete process.env.path;
+      if (savedLowerPath !== undefined) process.env.path = savedLowerPath;
+      if (savedPath !== undefined) process.env.PATH = savedPath;
+      else delete process.env.PATH;
+    }
   });
 
   it("aborts immediately without waiting for timeout when agy prompts for authentication on stderr", async () => {
