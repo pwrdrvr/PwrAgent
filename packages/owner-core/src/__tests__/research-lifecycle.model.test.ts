@@ -786,4 +786,207 @@ describe("native research run lifecycle model", () => {
     expect(second.read(started.id, OP).activeWorkers).toBe(0);
     second.close();
   });
+
+  // Property/model test for stale queued coordinator review notices:
+  // Any queued coordinator submission notice must be withdrawn once its submission
+  // is reviewed or the run stops/finishes/deadlines (unless observeQueue already
+  // retired it), never stopping the coordinator thread or wedging stop on errors.
+  it("withdraws queued coordinator review notices on review, finish, stop, or deadline across generated interleavings", async () => {
+    const stepArb = fc.oneof(
+      fc.record({ kind: fc.constant("submit" as const), workerIndex: fc.integer({ min: 0, max: 3 }) }),
+      fc.record({
+        kind: fc.constant("review" as const),
+        subIndex: fc.integer({ min: 0, max: 7 }),
+        decision: fc.constantFrom<"accepted" | "rejected">("accepted", "rejected"),
+      }),
+      fc.record({
+        kind: fc.constant("observe_queue" as const),
+        queueIndex: fc.integer({ min: 0, max: 7 }),
+        status: fc.constantFrom<"started" | "cancelled" | "terminal">("started", "cancelled", "terminal"),
+      }),
+      fc.record({
+        kind: fc.constant("end" as const),
+        outcome: fc.constantFrom<"finish" | "stop" | "deadline">("finish", "stop", "deadline"),
+      }),
+    );
+
+    await fc.assert(
+      fc.asyncProperty(
+        fc.array(stepArb, { minLength: 4, maxLength: 18 }),
+        fc.constantFrom<"cancelled" | "admitted" | "throw">("cancelled", "admitted", "throw"),
+        async (steps, cancelBehavior) => {
+          const storage = new MemoryResearchStorage();
+          let workerSeq = 0;
+          let queueSeq = 0;
+          let turnSeq = 0;
+          const queuedOnCoordinator = new Map<string, string>(); // submissionId -> queueEntryId (model)
+          const pendingNoticeByQueue = new Map<string, string>(); // queueEntryId -> submissionId (model)
+          const cancelledIds: string[] = [];
+          const stoppedThreads: string[] = [];
+
+          const service = new ResearchService(storage, {
+            ownerId: "owner-1",
+            ownerPid: 1,
+            ownerStartedAt: START_TIME,
+            isOwnerAlive: () => true,
+            now: () => START_TIME,
+            schedule: () => () => {},
+            spawn: async (_c, _t, _title, _mode, onCreated) => {
+              const id = ++workerSeq;
+              const w = { backend: "codex" as const, threadId: `w-${id}`, turnId: `t-${id}` };
+              onCreated(w);
+              return w;
+            },
+            stop: async (w) => { stoppedThreads.push(w.threadId); },
+            notify: async (_actor, target) => {
+              if (target.threadId === COORD.threadId) {
+                return { queueEntryId: `q-coord-${++queueSeq}` };
+              }
+              return {};
+            },
+            cancelQueued: async (entryId) => {
+              cancelledIds.push(entryId);
+              if (cancelBehavior === "throw") throw new Error("Queue cancel error");
+              if (cancelBehavior === "admitted") return { turnId: `t-admitted-${++turnSeq}` };
+              return {};
+            },
+            changed: () => {},
+            onError: () => {},
+          });
+
+          const started = await service.start(
+            {
+              objective: "Coord queue model",
+              workspaceMode: "none",
+              approaches: [
+                { title: "A1", task: "T1" },
+                { title: "A2", task: "T2" },
+                { title: "A3", task: "T3" },
+                { title: "A4", task: "T4" },
+              ],
+            },
+            COORD_AGENT,
+          );
+          const runId = started.id;
+          let seq = 0;
+
+          for (const step of steps) {
+            seq++;
+            const run = service.read(runId, OP);
+            if (step.kind === "submit") {
+              if (run.status !== "running") continue;
+              const approach = run.approaches[step.workerIndex % run.approaches.length]!;
+              if (!approach.worker) continue;
+              const beforeSubIds = new Set(run.submissions.map((s) => s.id));
+              const beforeQueue = queueSeq;
+              await service.update(
+                runId,
+                `sub-${seq}`,
+                { action: "submit", approachId: approach.id, text: `Cand ${seq}`, paths: [] },
+                { ...approach.worker, kind: "agent", turnId: approach.worker.turnId, callId: `call-${seq}` },
+              );
+              const after = service.read(runId, OP);
+              const created = after.submissions.find((s) => !beforeSubIds.has(s.id));
+              if (created && queueSeq > beforeQueue) {
+                const qid = `q-coord-${queueSeq}`;
+                queuedOnCoordinator.set(created.id, qid);
+                pendingNoticeByQueue.set(qid, created.id);
+              }
+            } else if (step.kind === "review") {
+              if (!run.submissions.length) continue;
+              const sub = run.submissions[step.subIndex % run.submissions.length]!;
+              await service.update(
+                runId,
+                `rev-${seq}`,
+                { action: "review", submissionId: sub.id, decision: step.decision, reason: `Review ${seq}` },
+                OP,
+              );
+              const expectedCancel = queuedOnCoordinator.get(sub.id);
+              if (expectedCancel) {
+                expect(cancelledIds).toContain(expectedCancel);
+                queuedOnCoordinator.delete(sub.id);
+                pendingNoticeByQueue.delete(expectedCancel);
+              }
+            } else if (step.kind === "observe_queue") {
+              const entries = [...pendingNoticeByQueue.keys()];
+              if (!entries.length) continue;
+              const qid = entries[step.queueIndex % entries.length]!;
+              await service.observeQueue(COORD, qid, step.status, step.status === "cancelled" ? undefined : `t-coord-${++turnSeq}`);
+              const subId = pendingNoticeByQueue.get(qid)!;
+              pendingNoticeByQueue.delete(qid);
+              queuedOnCoordinator.delete(subId);
+            } else if (step.kind === "end") {
+              if (run.status !== "running") continue;
+              const hasAccepted = run.submissions.some((s) => s.review?.decision === "accepted");
+              if (step.outcome === "finish" && !hasAccepted) continue;
+              const ended = step.outcome === "deadline"
+                ? await service.stop(runId, OP, "deadline", "Deadline")
+                : await service.update(runId, `end-${seq}`, { action: step.outcome, reason: "End" }, OP);
+              // Stop/finish/deadline must settle cleanly (never wedged in "stopping" by coordinator notice cancel errors).
+              expect(ended.status).toBe(step.outcome === "finish" ? "completed" : step.outcome === "deadline" ? "deadline" : "stopped");
+              for (const qid of queuedOnCoordinator.values()) {
+                expect(cancelledIds).toContain(qid);
+              }
+              queuedOnCoordinator.clear();
+              pendingNoticeByQueue.clear();
+            }
+
+            // Coordinator thread must NEVER be stopped by review-notice cleanup.
+            expect(stoppedThreads).not.toContain(COORD.threadId);
+            // Each queued coordinator notice is cancelled at most once.
+            expect(new Set(cancelledIds).size).toBe(cancelledIds.length);
+          }
+
+          service.close();
+        },
+      ),
+      { numRuns: 100 },
+    );
+  });
+
+  // Late notify() race: a worker submission's notify() resolves with a queueEntryId
+  // after the coordinator already reviewed the submission or finished the run.
+  it.each(["reviewed", "finished"] as const)("cancels a late coordinator review notice queued after submission was %s", async (race) => {
+    const storage = new MemoryResearchStorage();
+    let resolveNotify!: (receipt: { queueEntryId?: string; turnId?: string }) => void;
+    const notifyPromise = new Promise<{ queueEntryId?: string; turnId?: string }>((resolve) => { resolveNotify = resolve; });
+    const cancelled: string[] = [];
+    const stopped: string[] = [];
+    const service = new ResearchService(storage, {
+      ownerId: "owner-1",
+      ownerPid: 1,
+      ownerStartedAt: START_TIME,
+      isOwnerAlive: () => true,
+      now: () => START_TIME,
+      schedule: () => () => {},
+      spawn: async (_c, _t, _title, _mode, onCreated) => {
+        const w = { backend: "codex" as const, threadId: "w-1", turnId: "t-1" };
+        onCreated(w);
+        return w;
+      },
+      stop: async (w) => { stopped.push(w.threadId); },
+      notify: async () => await notifyPromise,
+      cancelQueued: async (entryId) => { cancelled.push(entryId); return {}; },
+      changed: () => {},
+      onError: () => {},
+    });
+    const started = await service.start({ objective: "Obj", workspaceMode: "none", approaches: [{ title: "A1", task: "T1" }] }, COORD_AGENT);
+    const worker = service.read(started.id, OP).approaches[0]!.worker!;
+    const submitPromise = service.update(
+      started.id,
+      "sub-1",
+      { action: "submit", approachId: "a1", text: "Candidate", paths: [] },
+      { ...worker, kind: "agent", turnId: worker.turnId, callId: "c-1" },
+    );
+    const subId = service.read(started.id, OP).submissions[0]!.id;
+    await service.update(started.id, "rev-1", { action: "review", submissionId: subId, decision: "accepted", reason: "Good" }, OP);
+    if (race === "finished") {
+      await service.update(started.id, "fin-1", { action: "finish", reason: "Done" }, OP);
+    }
+    resolveNotify({ queueEntryId: "q-late-coord" });
+    await submitPromise;
+    expect(cancelled).toEqual(["q-late-coord"]);
+    expect(stopped).not.toContain(COORD.threadId);
+    service.close();
+  });
 });
