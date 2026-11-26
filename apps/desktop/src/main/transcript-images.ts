@@ -1461,13 +1461,19 @@ function mdastNodeText(node: MdastLikeNode): string {
   return "";
 }
 
+const IMAGE_EXTENSION_HINT_PATTERN = /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)/i;
+
 function extractMarkdownLinkedImageParts(text: string): Array<{
   alt?: string;
   sourcePath: string;
 }> {
   // Every CommonMark inline link/image, reference definition, or file://
-  // autolink contains `](`, `]:`, or `<file://`.
-  if (!text.includes("](") && !text.includes("]:") && !/<file:\/\//i.test(text)) {
+  // autolink contains `](`, `]:`, or `<file://`, and every materialized local
+  // image path carries a supported image extension (or percent-encoded bytes).
+  if (
+    (!text.includes("](") && !text.includes("]:") && !/<file:\/\//i.test(text))
+    || (!IMAGE_EXTENSION_HINT_PATTERN.test(text) && !/%[0-9a-f]{2}/i.test(text))
+  ) {
     return [];
   }
 

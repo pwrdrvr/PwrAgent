@@ -2866,24 +2866,46 @@ function mergeActivityEntryDetails(
   return merged;
 }
 
+const seenActivityDetailImageUrls = new WeakMap<AppServerThreadImagePart[], Set<string>>();
+
 function mergeActivityDetailImages(
   existing: AppServerThreadImagePart[] | undefined,
   incoming: AppServerThreadImagePart[] | undefined,
 ): AppServerThreadImagePart[] | undefined {
-  if (!existing?.length && !incoming?.length) {
-    return undefined;
+  if (!incoming?.length) {
+    return existing?.length ? existing : undefined;
   }
-  const seen = new Set<string>();
-  const combined: AppServerThreadImagePart[] = [];
-  for (const image of [...(existing ?? []), ...(incoming ?? [])]) {
+  if (!existing?.length) {
+    const seen = new Set<string>();
+    const combined: AppServerThreadImagePart[] = [];
+    for (const image of incoming) {
+      if (seen.has(image.url)) {
+        continue;
+      }
+      seen.add(image.url);
+      combined.push(image);
+    }
+    seenActivityDetailImageUrls.set(combined, seen);
+    return combined;
+  }
+  let seen = seenActivityDetailImageUrls.get(existing);
+  if (!seen) {
+    seen = new Set(existing.map((image) => image.url));
+    seenActivityDetailImageUrls.set(existing, seen);
+  }
+  let appended = false;
+  for (const image of incoming) {
     if (seen.has(image.url)) {
       continue;
     }
     seen.add(image.url);
-    combined.push(image);
+    existing.push(image);
+    appended = true;
   }
-  return combined;
+  return appended ? existing : existing;
 }
+
+const seenMessagePartImageUrls = new WeakMap<AppServerThreadMessagePart[], Set<string>>();
 
 function initialMessageChunkParts(
   text: string,
@@ -2892,9 +2914,11 @@ function initialMessageChunkParts(
   if (!parts?.length) {
     return undefined;
   }
-  return text && !parts.some((part) => part.type === "text")
-    ? [{ type: "text", text }, ...parts]
-    : parts;
+  const initial: AppServerThreadMessagePart[] =
+    text && !parts.some((part) => part.type === "text")
+      ? [{ type: "text", text }, ...parts]
+      : parts.map((part) => (part.type === "text" ? { ...part } : part));
+  return initial;
 }
 
 function mergeMessageChunkParts(
@@ -2905,27 +2929,81 @@ function mergeMessageChunkParts(
   if (!existingParts?.length && !incomingParts?.length) {
     return undefined;
   }
-  const nonTextParts: AppServerThreadMessagePart[] = [];
-  const seenImageUrls = new Set<string>();
-  for (const part of [...(existingParts ?? []), ...(incomingParts ?? [])]) {
+  if (existingParts?.length && !incomingParts?.length) {
+    // Fast path for streaming text deltas after an image part: update the
+    // leading text part in O(1) instead of rebuilding a Set and array per chunk.
+    const first = existingParts[0];
+    if (first?.type === "text") {
+      first.text = nextText;
+      return existingParts;
+    }
+    if (nextText) {
+      const next: AppServerThreadMessagePart[] = [{ type: "text", text: nextText }, ...existingParts];
+      const seen = seenMessagePartImageUrls.get(existingParts);
+      if (seen) {
+        seenMessagePartImageUrls.set(next, seen);
+      }
+      return next;
+    }
+    return existingParts;
+  }
+  if (!existingParts?.length) {
+    const seen = new Set<string>();
+    const nonText: AppServerThreadMessagePart[] = [];
+    for (const part of incomingParts ?? []) {
+      if (part.type === "text") {
+        continue;
+      }
+      if (part.type === "image") {
+        if (seen.has(part.url)) {
+          continue;
+        }
+        seen.add(part.url);
+      }
+      nonText.push(part);
+    }
+    if (nonText.length === 0) {
+      return undefined;
+    }
+    const created: AppServerThreadMessagePart[] = [
+      ...(nextText ? [{ type: "text" as const, text: nextText }] : []),
+      ...nonText,
+    ];
+    seenMessagePartImageUrls.set(created, seen);
+    return created;
+  }
+
+  let seen = seenMessagePartImageUrls.get(existingParts);
+  if (!seen) {
+    seen = new Set<string>();
+    for (const part of existingParts) {
+      if (part.type === "image") {
+        seen.add(part.url);
+      }
+    }
+    seenMessagePartImageUrls.set(existingParts, seen);
+  }
+  let target = existingParts;
+  const first = target[0];
+  if (first?.type === "text") {
+    first.text = nextText;
+  } else if (nextText) {
+    target = [{ type: "text", text: nextText }, ...target];
+    seenMessagePartImageUrls.set(target, seen);
+  }
+  for (const part of incomingParts ?? []) {
     if (part.type === "text") {
       continue;
     }
     if (part.type === "image") {
-      if (seenImageUrls.has(part.url)) {
+      if (seen.has(part.url)) {
         continue;
       }
-      seenImageUrls.add(part.url);
+      seen.add(part.url);
     }
-    nonTextParts.push(part);
+    target.push(part);
   }
-  if (nonTextParts.length === 0) {
-    return existingParts;
-  }
-  return [
-    ...(nextText ? [{ type: "text" as const, text: nextText }] : []),
-    ...nonTextParts,
-  ];
+  return target;
 }
 
 function preferSpecificLabel(

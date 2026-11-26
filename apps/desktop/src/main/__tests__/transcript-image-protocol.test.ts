@@ -1447,6 +1447,9 @@ describe("transcript image protocol", () => {
     expect(extractInlineMarkdownDestination(String.raw`[Run [1]](C:\work\shot(1).png "title")`)).toBe(
       String.raw`C:\work\shot(1).png`,
     );
+    expect(extractInlineMarkdownDestination(String.raw`[a ` + "`" + String.raw` b ` + "``" + String.raw` ](not) ` + "`" + String.raw` c](C:\work\shot.png)`)).toBe(
+      String.raw`C:\work\shot.png`,
+    );
 
     const { materializeTranscriptImageUrlsForRenderer } = await import(
       "../shell/transcript-image-protocol"

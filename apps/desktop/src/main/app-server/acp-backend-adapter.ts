@@ -513,6 +513,33 @@ function liveToolNotificationKey(
     : undefined;
 }
 
+const cachedToolImageFingerprints = new WeakMap<
+  object,
+  { url: string | undefined; alt: string | undefined; summary: { urlHash?: string; urlLength?: number; alt?: string } }
+>();
+
+function liveToolImageFingerprintSummary(
+  image: unknown,
+): { urlHash?: string; urlLength?: number; alt?: string } | undefined {
+  const record = asPlainRecord(image);
+  if (!record) {
+    return undefined;
+  }
+  const url = typeof record.url === "string" ? record.url : undefined;
+  const alt = typeof record.alt === "string" ? record.alt : undefined;
+  const cached = cachedToolImageFingerprints.get(record);
+  if (cached && cached.url === url && cached.alt === alt) {
+    return cached.summary;
+  }
+  const summary = {
+    urlHash: url ? hashString(url) : undefined,
+    urlLength: url?.length,
+    alt,
+  };
+  cachedToolImageFingerprints.set(record, { url, alt, summary });
+  return summary;
+}
+
 function liveToolNotificationFingerprint(
   notification: AppServerNotification,
 ): string | undefined {
@@ -526,17 +553,7 @@ function liveToolNotificationFingerprint(
   const fileDiff = asPlainRecord(item.fileDiff);
   const diff = typeof fileDiff?.diff === "string" ? fileDiff.diff : undefined;
   const images = Array.isArray(item.images)
-    ? item.images.map((image) => {
-        const record = asPlainRecord(image);
-        const url = typeof record?.url === "string" ? record.url : undefined;
-        return record
-          ? {
-              urlHash: url ? hashString(url) : undefined,
-              urlLength: url?.length,
-              alt: typeof record.alt === "string" ? record.alt : undefined,
-            }
-          : undefined;
-      })
+    ? item.images.map(liveToolImageFingerprintSummary)
     : undefined;
   return JSON.stringify({
     method: notification.method,

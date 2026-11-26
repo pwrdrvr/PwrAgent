@@ -12,23 +12,40 @@ function readString(record: Record<string, unknown> | undefined, key: string): s
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+const MAX_ACP_CONTENT_UNWRAP_DEPTH = 8;
+
 function unwrapAcpContentBlocks(value: unknown): unknown[] {
   if (!value) {
     return [];
   }
-  const items = Array.isArray(value) ? value : [value];
+  const stack: Array<{ value: unknown; depth: number }> = [];
+  if (Array.isArray(value)) {
+    for (let index = value.length - 1; index >= 0; index -= 1) {
+      stack.push({ value: value[index], depth: 0 });
+    }
+  } else {
+    stack.push({ value, depth: 0 });
+  }
   const blocks: unknown[] = [];
-  for (const item of items) {
-    const record = asRecord(item);
-    if (record?.type === "content" && record.content !== undefined) {
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    const record = asRecord(current.value);
+    if (
+      record?.type === "content"
+      && record.content !== undefined
+      && current.depth < MAX_ACP_CONTENT_UNWRAP_DEPTH
+    ) {
+      const nextDepth = current.depth + 1;
       if (Array.isArray(record.content)) {
-        blocks.push(...record.content);
+        for (let index = record.content.length - 1; index >= 0; index -= 1) {
+          stack.push({ value: record.content[index], depth: nextDepth });
+        }
       } else {
-        blocks.push(record.content);
+        stack.push({ value: record.content, depth: nextDepth });
       }
       continue;
     }
-    blocks.push(item);
+    blocks.push(current.value);
   }
   return blocks;
 }
@@ -70,6 +87,19 @@ export function extractAcpContentImageParts(
   content: unknown,
   fallbackAlt?: string,
 ): AppServerThreadImagePart[] {
+  // Hot path: streaming ACP text deltas arrive as a single `{ type: "text", text }`
+  // record. Skip allocation unless the text could hold a PwrSnap media link.
+  if (content !== null && typeof content === "object" && !Array.isArray(content)) {
+    const record = content as Record<string, unknown>;
+    if (
+      record.type === "text"
+      && typeof record.text === "string"
+      && !record.text.includes("pwrsnap:")
+      && !record.text.includes("127.0.0.1:51729")
+    ) {
+      return [];
+    }
+  }
   const blocks = unwrapAcpContentBlocks(content);
   if (blocks.length === 0) {
     return [];

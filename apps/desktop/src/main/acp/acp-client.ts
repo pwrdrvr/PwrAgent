@@ -2769,7 +2769,7 @@ export class AcpAgentClient {
       if (assistantMessageItemId && text) {
         activeTurn.assistantText += text;
       }
-      if (extractAcpContentImageParts(update.content).length > 0) {
+      if (!activeTurn.hasAssistantImage && extractAcpContentImageParts(update.content).length > 0) {
         activeTurn.hasAssistantImage = true;
       }
     } else if (

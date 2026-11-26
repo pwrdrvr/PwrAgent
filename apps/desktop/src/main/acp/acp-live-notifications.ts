@@ -128,25 +128,6 @@ function readFiniteNumber(
 const resolvedFileReads = new WeakMap<Record<string, unknown>, AcpFileRead>();
 const resolvedToolImages = new WeakMap<Record<string, unknown>, AppServerThreadImagePart[]>();
 
-function mergeAcpToolImages(
-  existing: readonly AppServerThreadImagePart[] | undefined,
-  incoming: readonly AppServerThreadImagePart[] | undefined,
-): AppServerThreadImagePart[] | undefined {
-  if (!existing?.length && !incoming?.length) {
-    return undefined;
-  }
-  const seen = new Set<string>();
-  const combined: AppServerThreadImagePart[] = [];
-  for (const image of [...(existing ?? []), ...(incoming ?? [])]) {
-    if (seen.has(image.url)) {
-      continue;
-    }
-    seen.add(image.url);
-    combined.push(image);
-  }
-  return combined;
-}
-
 export class AcpLiveToolUpdateResolver {
   private readonly activeUpdates = new Map<string, Record<string, unknown>>();
   private anonymousToolSequence = 0;
@@ -155,6 +136,7 @@ export class AcpLiveToolUpdateResolver {
   private readonly providerTools = new Map<string, AcpProviderTool>();
   private readonly fileReads = new Map<string, AcpFileRead>();
   private readonly toolImages = new Map<string, AppServerThreadImagePart[]>();
+  private readonly toolImageUrls = new Map<string, Set<string>>();
 
   resolve(params: {
     backendId: string;
@@ -222,12 +204,28 @@ export class AcpLiveToolUpdateResolver {
       this.fileReads.set(key, fileRead);
       resolvedFileReads.set(resolved, fileRead);
     }
-    const mergedImages = mergeAcpToolImages(
-      this.toolImages.get(key),
-      extractAcpToolImageParts(params.update, readString(resolved, "title")),
-    );
+    const incomingImages = extractAcpToolImageParts(params.update, readString(resolved, "title"));
+    let mergedImages = this.toolImages.get(key);
+    if (incomingImages.length > 0) {
+      let seen = this.toolImageUrls.get(key);
+      if (!seen) {
+        seen = new Set<string>();
+        this.toolImageUrls.set(key, seen);
+      }
+      const added: AppServerThreadImagePart[] = [];
+      for (const image of incomingImages) {
+        if (seen.has(image.url)) {
+          continue;
+        }
+        seen.add(image.url);
+        added.push(image);
+      }
+      if (added.length > 0) {
+        mergedImages = mergedImages ? [...mergedImages, ...added] : added;
+        this.toolImages.set(key, mergedImages);
+      }
+    }
     if (mergedImages?.length) {
-      this.toolImages.set(key, mergedImages);
       resolvedToolImages.set(resolved, mergedImages);
     }
     if (isTerminalToolStatus(resolved.status)) {
@@ -306,6 +304,7 @@ export class AcpLiveToolUpdateResolver {
     for (const key of this.toolImages.keys()) {
       if (key.startsWith(`${prefix}\0`)) {
         this.toolImages.delete(key);
+        this.toolImageUrls.delete(key);
       }
     }
   }
@@ -317,6 +316,7 @@ export class AcpLiveToolUpdateResolver {
     this.providerTools.clear();
     this.fileReads.clear();
     this.toolImages.clear();
+    this.toolImageUrls.clear();
   }
 
   private rememberTerminalUpdate(key: string, update: Record<string, unknown>): void {
@@ -334,6 +334,7 @@ export class AcpLiveToolUpdateResolver {
       this.providerTools.delete(oldest);
       this.fileReads.delete(oldest);
       this.toolImages.delete(oldest);
+      this.toolImageUrls.delete(oldest);
     }
   }
 }

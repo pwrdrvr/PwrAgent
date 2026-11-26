@@ -115,6 +115,7 @@ export function extractInlineMarkdownDestination(source: string | undefined): st
 
   let index = openBracket + 1;
   let bracketDepth = 1;
+  let unmatchedBacktickLengths: Set<number> | undefined;
   while (index < source.length && bracketDepth > 0) {
     const ch = source[index];
     if (ch === "\\") {
@@ -126,11 +127,33 @@ export function extractInlineMarkdownDestination(source: string | undefined): st
       while (tickEnd < source.length && source[tickEnd] === "`") {
         tickEnd += 1;
       }
-      const ticks = source.slice(index, tickEnd);
-      const closeTick = source.indexOf(ticks, tickEnd);
-      if (closeTick >= 0) {
-        index = closeTick + ticks.length;
-        continue;
+      const runLength = tickEnd - index;
+      if (!unmatchedBacktickLengths?.has(runLength)) {
+        // CommonMark code spans match an exact-length closing backtick run,
+        // and backslashes inside a code span are literal.
+        let search = tickEnd;
+        let closedAt = -1;
+        while (search < source.length) {
+          const nextTick = source.indexOf("`", search);
+          if (nextTick < 0) {
+            break;
+          }
+          let closeEnd = nextTick;
+          while (closeEnd < source.length && source[closeEnd] === "`") {
+            closeEnd += 1;
+          }
+          if (closeEnd - nextTick === runLength) {
+            closedAt = closeEnd;
+            break;
+          }
+          search = closeEnd;
+        }
+        if (closedAt >= 0) {
+          index = closedAt;
+          continue;
+        }
+        unmatchedBacktickLengths ??= new Set();
+        unmatchedBacktickLengths.add(runLength);
       }
       index = tickEnd;
       continue;

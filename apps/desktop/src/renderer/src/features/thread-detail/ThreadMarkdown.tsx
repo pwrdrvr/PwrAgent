@@ -423,6 +423,7 @@ type MarkdownRenderState = {
   markdownText: string;
   sourceMarkdownText: string;
   editorApplication?: EditorApplication;
+  imagePartsByPath?: ReadonlyMap<string, AppServerThreadImagePart>;
   skillsByPath: Map<string, AppServerSkillSummary & { path: string }>;
   skillsByToken: Map<string, AppServerSkillSummary & { path: string }>;
   sharedSkillNames: ReturnType<typeof findSharedSkillNames>;
@@ -444,6 +445,7 @@ const markdownComponents: Components = {
       props,
       markdownText,
       editorApplication,
+      imagePartsByPath,
       skillsByPath,
       sharedSkillNames,
       openSkillMarkdownInEditor,
@@ -464,7 +466,7 @@ const markdownComponents: Components = {
     const label = extractTextContent(anchorProps.children).trim();
     const source = sourceForNode(markdownText, anchorProps.node);
     const linkedImage = findMarkdownLinkedImagePart(
-      props.imageParts,
+      imagePartsByPath,
       windowsMarkdownDestinationFromSource(source) ?? href,
     );
     const linkedChildren = (
@@ -713,7 +715,7 @@ const markdownComponents: Components = {
     return <hr className="transcript-message__rule" />;
   },
   img: function MarkdownImage(imageProps) {
-    const { props, markdownText } = useContext(MarkdownRenderContext)!;
+    const { markdownText, imagePartsByPath } = useContext(MarkdownRenderContext)!;
     const altText = typeof imageProps.alt === "string" ? imageProps.alt : "";
     const href = windowsMarkdownDestinationFromSource(sourceForNode(markdownText, imageProps.node))
       ?? (typeof imageProps.src === "string" ? imageProps.src : "");
@@ -722,7 +724,7 @@ const markdownComponents: Components = {
 
     // The message's image strip owns previews and gallery navigation. Hide
     // markup only for a reference that main successfully materialized.
-    if (findMarkdownLinkedImagePart(props.imageParts, href)) {
+    if (findMarkdownLinkedImagePart(imagePartsByPath, href)) {
       return null;
     }
 
@@ -975,11 +977,17 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     [openLocalFileInEditor]
   );
 
+  const imagePartsByPath = useMemo(
+    () => indexMarkdownImagePartsByPath(props.imageParts),
+    [props.imageParts],
+  );
+
   const renderState = useMemo<MarkdownRenderState>(() => ({
     props,
     markdownText,
     sourceMarkdownText,
     editorApplication,
+    imagePartsByPath,
     skillsByPath,
     skillsByToken,
     sharedSkillNames,
@@ -994,6 +1002,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
     markdownText,
     sourceMarkdownText,
     editorApplication,
+    imagePartsByPath,
     skillsByPath,
     skillsByToken,
     sharedSkillNames,
@@ -1257,7 +1266,7 @@ function normalizePosixPath(filePath: string): string {
 
 function normalizeWindowsDrivePath(filePath: string): string {
   const slashPath = filePath.replace(/\\/g, "/");
-  const drive = slashPath.slice(0, 2);
+  const drive = slashPath.slice(0, 2).toUpperCase();
   const normalized = normalizePathSegments(slashPath.slice(2).split("/"));
   return `${drive}/${normalized.join("/")}`;
 }
@@ -1477,7 +1486,7 @@ function markdownImagePathFromHref(href: string): string | undefined {
         const url = new URL(href);
         const hasUncHost = Boolean(url.hostname && url.hostname.toLowerCase() !== "localhost");
         isUnc = hasUncHost;
-        imagePath = decodeURIComponent(
+        imagePath = decodeMarkdownDestination(
           hasUncHost ? `//${url.hostname}${url.pathname}` : url.pathname,
         );
       } catch {
@@ -1501,22 +1510,34 @@ function markdownImagePathFromHref(href: string): string | undefined {
     : undefined;
 }
 
-function findMarkdownLinkedImagePart(
+function indexMarkdownImagePartsByPath(
   imageParts: AppServerThreadImagePart[] | undefined,
-  href: string,
-): AppServerThreadImagePart | undefined {
-  const targetPath = markdownImagePathFromHref(href);
-  if (!targetPath) {
+): ReadonlyMap<string, AppServerThreadImagePart> | undefined {
+  if (!imageParts?.length) {
     return undefined;
   }
-
-  return imageParts?.find((imagePart) => {
+  const byPath = new Map<string, AppServerThreadImagePart>();
+  for (const imagePart of imageParts) {
     if (!imagePart.sourceUrl) {
-      return false;
+      continue;
     }
+    const normalized = markdownImagePathFromHref(imagePart.sourceUrl);
+    if (normalized && !byPath.has(normalized)) {
+      byPath.set(normalized, imagePart);
+    }
+  }
+  return byPath.size > 0 ? byPath : undefined;
+}
 
-    return markdownImagePathFromHref(imagePart.sourceUrl) === targetPath;
-  });
+function findMarkdownLinkedImagePart(
+  imagePartsByPath: ReadonlyMap<string, AppServerThreadImagePart> | undefined,
+  href: string,
+): AppServerThreadImagePart | undefined {
+  if (!imagePartsByPath) {
+    return undefined;
+  }
+  const targetPath = markdownImagePathFromHref(href);
+  return targetPath ? imagePartsByPath.get(targetPath) : undefined;
 }
 
 function fileNameFromPath(filePath: string): string {

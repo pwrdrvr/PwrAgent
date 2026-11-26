@@ -479,4 +479,33 @@ describe("ACP transcript image live completion and replay parity", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("extracts multi-level ACP content wrappers and avoids JSON.parse on plain streaming text chunks", async () => {
+    const { extractAcpContentImageParts } = await import("../acp/acp-tool-images");
+    const wrapped = {
+      type: "content",
+      content: {
+        type: "content",
+        content: { type: "image", uri: "https://example.test/nested.png", alt: "nested" },
+      },
+    };
+    expect(extractAcpContentImageParts(wrapped)).toEqual([
+      { type: "image", url: "https://example.test/nested.png", alt: "nested" },
+    ]);
+
+    const originalParse = JSON.parse;
+    let parseCount = 0;
+    JSON.parse = ((...args: Parameters<typeof JSON.parse>) => {
+      parseCount += 1;
+      return originalParse(...args);
+    }) as typeof JSON.parse;
+    try {
+      for (let i = 0; i < 50; i += 1) {
+        expect(extractAcpContentImageParts({ type: "text", text: `plain token ${i}` })).toEqual([]);
+      }
+      expect(parseCount).toBe(0);
+    } finally {
+      JSON.parse = originalParse;
+    }
+  });
 });
