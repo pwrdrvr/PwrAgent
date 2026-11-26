@@ -458,4 +458,115 @@ describe("start_thread to-do card continueAfter integration", () => {
     const createCall = federation.mock.calls.find(([req]) => req.operation === "create_instance_thread")?.[0];
     expect((createCall?.args as { input?: string } | undefined)?.input).toBe("Fix bug.");
   });
+
+  it("rejects add_todo action.continueAfter on non-start_thread action types and reports notice when redirecting a start_thread card to an existing thread", async () => {
+    const db = openInMemoryStateDb();
+    vi.spyOn(appState, "getAppStateDb").mockReturnValue(db);
+    try {
+      let registeredTodoHandler: Parameters<typeof buildPwrAgentThreadTodoToolRouter>[0];
+      const sendThreadTodoMessage = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "existing-1",
+        disposition: "queued" as const,
+        summary: "Queued message for Existing thread",
+      }));
+      const registry = {
+        setPwrAgentThreadTodoHandler: vi.fn((h) => { registeredTodoHandler = h; }),
+        onEvent: vi.fn(() => () => {}),
+        getThreadInfo: vi.fn(() => ({ title: "Parent PR #688" })),
+        resolveThreadWorkspaceCwd: vi.fn(async () => "/tmp/repo"),
+        resolveThreadPrimaryDirectory: vi.fn(async () => undefined),
+        readThreadHandoffSettings: vi.fn(async () => ({ executionMode: "default" as const })),
+        readBackendModelOptions: vi.fn(async () => ({ models: [] })),
+        listBackends: vi.fn(async () => ({ backends: [] })),
+        renameThread: vi.fn(async () => ({})),
+        startThread: vi.fn(),
+        startTurn: vi.fn(),
+        sendThreadTodoMessage,
+        buildThreadTodoMessageOrigin: vi.fn(async () => ({ kind: "user" as const })),
+      };
+      installThreadTodoRuntime({
+        registry: registry as never,
+        broadcast: vi.fn(),
+        listProjects: async () => [],
+        readDefaultMergeMethod: () => "squash",
+        registerContinueAfter: vi.fn(async () => {}),
+        feed: { loadOwners: async () => [], managedThreadKeys: () => new Set<string>(), onDelta: vi.fn() },
+      });
+      const router = buildPwrAgentThreadTodoToolRouter(registeredTodoHandler);
+
+      // Non-start_thread actions reject action.continueAfter instead of silently discarding it
+      for (const action of [
+        {
+          type: "send_message",
+          prompt: "Follow up.",
+          target: { backend: "codex", threadId: "existing-1" },
+          continueAfter: { conditions: [{ when: "pr_merged" }], continuation: "Open PR." },
+        },
+        {
+          type: "start_review",
+          continueAfter: { conditions: [{ when: "pr_merged" }], continuation: "Open PR." },
+        },
+        {
+          type: "merge_pull_request",
+          pullRequest: "688",
+          continueAfter: { conditions: [{ when: "pr_merged" }], continuation: "Open PR." },
+        },
+        {
+          type: "add_forge_hands_off_rule",
+          repository: "pwrdrvr/PwrGit",
+          continueAfter: { conditions: [{ when: "pr_merged" }], continuation: "Open PR." },
+        },
+      ]) {
+        const rejected = await router.handleDynamicToolCall({
+          backend: "codex",
+          call: {
+            threadId: "parent-1",
+            turnId: "t-1",
+            callId: `c-reject-${action.type}`,
+            namespace: "pwragent",
+            tool: "add_todo",
+            arguments: { title: "Invalid continueAfter", action },
+          },
+        });
+        expect(rejected.success).toBe(false);
+        const text = rejected.contentItems[0]?.type === "inputText" ? rejected.contentItems[0].text : "";
+        expect(text).toContain("action.continueAfter is only supported when action.type is start_thread");
+      }
+
+      // Redirecting a start_thread card with continueAfter via Send to thread reports an explicit notice
+      const added = await router.handleDynamicToolCall({
+        backend: "codex",
+        call: {
+          threadId: "parent-1",
+          turnId: "t-1",
+          callId: "c-send-redirect",
+          namespace: "pwragent",
+          tool: "add_todo",
+          arguments: {
+            title: "Stacked fix",
+            action: {
+              type: "start_thread",
+              prompt: "Build fix on top of #688.",
+              continueAfter: {
+                conditions: [{ when: "pr_merged", prUrl: "https://github.com/pwrdrvr/PwrGit/pull/688" }],
+                continuation: "Rebase and open PR.",
+              },
+            },
+          },
+        },
+      });
+      expect(added.success).toBe(true);
+      const addedText = added.contentItems[0]?.type === "inputText" ? added.contentItems[0].text : "";
+      const todoId = (JSON.parse(addedText) as { todo: { id: string } }).todo.id;
+
+      const done = await getThreadTodoService().runAction(todoId, {
+        messageTarget: { backend: "codex", threadId: "existing-1", title: "Existing thread" },
+      });
+      expect(done.status).toBe("done");
+      expect(done.result).toContain("Continue After was not registered because the request was sent to an existing thread.");
+    } finally {
+      db.close();
+    }
+  });
 });

@@ -555,15 +555,49 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isPlausibleCiRunUrl(value: string): boolean {
-  const match = /^https:\/\/([^/?#@\s]+)(\/[^?#\s]*)$/.exec(value);
-  if (!match) return false;
-  const host = match[1]!.toLowerCase();
-  const pathname = match[2]!;
-  if (host === "gitlab.com") {
-    return /^\/(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+\/-\/pipelines\/[1-9]\d{0,18}\/?$/.test(pathname);
+type RuntimeUrlLike = {
+  protocol: string;
+  username: string;
+  password: string;
+  host: string;
+  pathname: string;
+};
+
+function parseHttpsUrl(value: string): RuntimeUrlLike | undefined {
+  const UrlCtor = (globalThis as { URL?: new (input: string) => RuntimeUrlLike }).URL;
+  if (typeof UrlCtor === "function") {
+    try {
+      const url = new UrlCtor(value);
+      if (url.protocol !== "https:" || url.username || url.password) return undefined;
+      return url;
+    } catch {
+      return undefined;
+    }
   }
-  return /^\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/actions\/runs\/[1-9]\d{0,18}(?:\/attempts\/\d+)?\/?$/.test(pathname);
+  const match = /^https:\/\/([^/?#@\s]+)(\/[^?#\s]*)(?:\?[^#\s]*)?(?:#\S*)?$/.exec(value);
+  if (!match) return undefined;
+  const rawHost = match[1]!.toLowerCase();
+  return {
+    protocol: "https:",
+    username: "",
+    password: "",
+    host: rawHost.endsWith(":443") ? rawHost.slice(0, -4) : rawHost,
+    pathname: match[2]!,
+  };
+}
+
+function isPlausibleCiRunUrl(value: string): boolean {
+  const url = parseHttpsUrl(value);
+  if (!url || !url.host) return false;
+  if (url.host === "gitlab.com") {
+    const match = url.pathname.match(/^\/((?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/-\/pipelines\/(\d{1,19})\/?$/);
+    const runId = Number(match?.[3]);
+    return Boolean(match) && Number.isSafeInteger(runId) && runId >= 1;
+  }
+  const match = url.pathname.match(/^\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/actions\/runs\/(\d{1,19})(?:\/attempts\/\d+)?\/?$/);
+  if (!match) return false;
+  const runId = Number(match[3]);
+  return Number.isSafeInteger(runId) && runId >= 1;
 }
 
 /**

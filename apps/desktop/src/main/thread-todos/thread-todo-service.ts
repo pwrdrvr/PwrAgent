@@ -1079,7 +1079,13 @@ export class ThreadTodoService {
           sourceBackend: todo.backend, sourceThreadId: todo.threadId, target, prompt: action.prompt,
           todo: dispatchCard,
         });
-        return this.finish(id, { result: sent.summary });
+        const notice = action.type === "start_thread" && action.continueAfter
+          ? "Continue After was not registered because the request was sent to an existing thread."
+          : undefined;
+        const result = notice
+          ? (sent.summary.endsWith(".") ? `${sent.summary} ${notice}` : `${sent.summary}. ${notice}`)
+          : sent.summary;
+        return this.finish(id, { result });
       }
       if (action.type === "merge_pull_request") {
         const method = settleMergeMethod({

@@ -8,6 +8,7 @@ import {
   type InitialThreadDependencyCondition,
   type ThreadDependencyCiRun,
 } from "@pwragent/shared/contracts/thread-dependencies";
+import { parseCiRunUrl } from "../app-server/thread-dependency-ci-runs";
 import { validateDependencyCreate } from "../app-server/thread-dependency-coordinator";
 
 const BACKENDS = ["codex", "claude", "acp:antigravity"] as const satisfies readonly AppServerBackendKind[];
@@ -52,13 +53,29 @@ const validConditionArb: fc.Arbitrary<InitialThreadDependencyCondition> = fc.one
     when: fc.constant("marked_done" as const),
     subject: fc.string({ minLength: 1, maxLength: 60 }).filter((s) => s.trim().length > 0),
   }),
-  // CI run condition
+  // CI run condition (including generated run IDs, :443, query/fragment suffixes)
   fc.record({
     when: fc.constant("ci_run" as const),
-    ciRun: fc.constantFrom<ThreadDependencyCiRun>(
-      { url: "https://github.com/pwrdrvr/PwrAgent/actions/runs/123456" },
-      { url: "https://gitlab.com/pwrdrvr/pwragent/-/pipelines/987654", on: ["finished"] },
-      { url: "https://github.com/pwrdrvr/PwrAgent/actions/runs/555", on: ["approval_gate"], environments: ["prod"] },
+    ciRun: fc.oneof(
+      fc.tuple(
+        fc.integer({ min: 1, max: 9_000_000_000_000 }),
+        fc.constantFrom("", "?check_suite_focus=true", "#step:3:1", "?attempt=2#logs"),
+      ).map(([runId, suffix]): ThreadDependencyCiRun => ({
+        url: `https://github.com/pwrdrvr/PwrAgent/actions/runs/${runId}${suffix}`,
+      })),
+      fc.tuple(
+        fc.integer({ min: 1, max: 9_000_000_000_000 }),
+        fc.constantFrom("gitlab.com", "gitlab.com:443"),
+        fc.constantFrom("", "?tab=jobs", "#job-1"),
+      ).map(([runId, host, suffix]): ThreadDependencyCiRun => ({
+        url: `https://${host}/pwrdrvr/pwragent/-/pipelines/${runId}${suffix}`,
+        on: ["finished"],
+      })),
+      fc.constant<ThreadDependencyCiRun>({
+        url: "https://github.com/pwrdrvr/PwrAgent/actions/runs/555",
+        on: ["approval_gate"],
+        environments: ["prod"],
+      }),
     ),
   }),
 );
@@ -223,7 +240,58 @@ describe("initial Continue After contract properties", () => {
       }).ok,
     ).toBe(false);
 
+    // Non-safe-integer run IDs fail fast before worktree/thread creation
+    expect(
+      parseInitialThreadContinueAfter({
+        conditions: [{ when: "ci_run", ciRun: { url: "https://github.com/owner/repo/actions/runs/9999999999999999999" } }],
+        continuation: "Go",
+      }).ok,
+    ).toBe(false);
+
+    // Browser-copied URLs with query/fragment and explicit :443 match parseCiRunUrl
+    for (const validUrl of [
+      "https://github.com/owner/repo/actions/runs/123456?check_suite_focus=true#step:3:1",
+      "https://gitlab.com:443/group/project/-/pipelines/987654?tab=jobs#top",
+    ]) {
+      expect(parseInitialThreadContinueAfter({
+        conditions: [{ when: "ci_run", ciRun: { url: validUrl } }],
+        continuation: "Go",
+      }).ok).toBe(true);
+    }
+
     expect(INITIAL_THREAD_DEPENDENCY_CONDITIONS).not.toContain("compaction_completed");
+  });
+
+  it("matches parseCiRunUrl on github.com and gitlab.com URLs across run ID ranges, ports, credentials, queries, and fragments", () => {
+    fc.assert(
+      fc.property(
+        fc.constantFrom("https://", "http://", "https://user:pass@"),
+        fc.constantFrom("github.com", "github.com:443", "gitlab.com", "gitlab.com:443", "gitlab.com:8443"),
+        fc.oneof(
+          fc.integer({ min: 1, max: Number.MAX_SAFE_INTEGER }).map(String),
+          fc.constantFrom("0", "9007199254740992", "9999999999999999999", "abc"),
+        ),
+        fc.constantFrom("", "/", "?check_suite_focus=true", "#step:3:1", "?a=1#b"),
+        (scheme, host, runId, suffix) => {
+          const path = host.startsWith("gitlab.com")
+            ? `/group/project/-/pipelines/${runId}`
+            : `/owner/repo/actions/runs/${runId}`;
+          const url = `${scheme}${host}${path}${suffix}`;
+          const parsed = parseInitialThreadContinueAfter({
+            conditions: [{ when: "ci_run", ciRun: { url } }],
+            continuation: "Go",
+          });
+          // On github.com / gitlab.com (without custom GHE hosts), parity must be exact
+          // except non-443 ports on gitlab.com are neither github.com nor gitlab.com in parseCiRunUrl.
+          if (host === "gitlab.com:8443") {
+            expect(parsed.ok).toBe(false);
+          } else {
+            expect(parsed.ok).toBe(Boolean(parseCiRunUrl(url)));
+          }
+        },
+      ),
+      { numRuns: 100 },
+    );
   });
 });
 

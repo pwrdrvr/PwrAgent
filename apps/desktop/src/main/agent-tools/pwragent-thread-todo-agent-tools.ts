@@ -320,6 +320,12 @@ function normalizeAction(
     return { ok: false, message: "add_todo action must be an object." };
   }
   const action = value as Record<string, unknown>;
+  if (action.continueAfter !== undefined && action.type !== "start_thread") {
+    return {
+      ok: false,
+      message: "action.continueAfter is only supported when action.type is start_thread.",
+    };
+  }
   switch (action.type) {
     case "send_message": {
       const prompt = optionalString(action.prompt);

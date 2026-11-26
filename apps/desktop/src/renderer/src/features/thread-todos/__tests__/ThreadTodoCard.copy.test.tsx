@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ThreadReviewItem } from "@pwragent/shared/contracts/thread-reviews";
 import type { ThreadTodo } from "@pwragent/shared/contracts/thread-todos";
 import { ThreadTodoCard, type ThreadTodoCardProps } from "../ThreadTodoCard";
+import { TodoDispatchProvider } from "../TodoDispatchProvider";
 import { threadTodoMarkdown, threadTodosMarkdown } from "../thread-todo-copy";
 
 /**
@@ -193,6 +194,71 @@ describe("to-do card Markdown", () => {
     expect(screen.getByText("Continue after")).toBeTruthy();
     expect(screen.getByText("PR #688 is merged")).toBeTruthy();
     expect(screen.getByText("PR #688 merged. Fetch origin/main, rebase, verify, and open the PR.")).toBeTruthy();
+  });
+
+  it("lets operators expand a clamped continueAfter continuation without detail or steps, and warns when redirecting to an existing thread", async () => {
+    const scrollHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    const clientHeightDesc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    const api = {
+      getNavigationQueryPage: vi.fn(async () => ({ items: [], totalCount: 0, hasMore: false })),
+    } as unknown as Parameters<typeof TodoDispatchProvider>[0]["api"];
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("thread-todo-continue-after__continuation") ? 80 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.classList.contains("thread-todo-continue-after__continuation") ? 34 : 0;
+      },
+    });
+    try {
+      const handoff = card([], {
+        title: "Fix pointer-travel on top of #688",
+        detail: undefined,
+        items: undefined,
+        action: {
+          type: "start_thread",
+          prompt: "Build the fix locally on top of #688.",
+          continueAfter: {
+            conditions: [{
+              backend: "acp:antigravity",
+              threadId: "parent-1",
+              when: "pr_merged",
+              prUrl: "https://github.com/pwrdrvr/PwrGit/pull/688",
+            }],
+            continuation: "PR #688 merged. Fetch origin/main, rebase this branch, run all checks, push, and open a PR with before/after benchmarks.",
+          },
+        },
+      });
+      const { container } = render(
+        <TodoDispatchProvider api={api} backends={[]} todos={[handoff]}>
+          <ThreadTodoCard {...props(handoff)} />
+        </TodoDispatchProvider>,
+      );
+      const continuationEl = container.querySelector(".thread-todo-continue-after__continuation")!;
+      expect(continuationEl.classList.contains("is-clamped")).toBe(true);
+
+      const showMore = screen.getByRole("button", { name: "Show more" });
+      fireEvent.click(showMore);
+      expect(continuationEl.classList.contains("is-clamped")).toBe(false);
+      expect(screen.getByRole("button", { name: "Show less" })).toBeTruthy();
+
+      // Switching Start thread -> Send to thread… keeps Continue after visible with a clear note
+      fireEvent.click(screen.getByRole("button", { name: "Handoff options" }));
+      await act(async () => {
+        fireEvent.click(screen.getByText("Send to thread…"));
+      });
+      expect(screen.getByText("Continue after")).toBeTruthy();
+      expect(screen.getByText("Not registered when sending to an existing thread.")).toBeTruthy();
+    } finally {
+      if (scrollHeightDesc) Object.defineProperty(HTMLElement.prototype, "scrollHeight", scrollHeightDesc);
+      else Reflect.deleteProperty(HTMLElement.prototype, "scrollHeight");
+      if (clientHeightDesc) Object.defineProperty(HTMLElement.prototype, "clientHeight", clientHeightDesc);
+      else Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
+    }
   });
 });
 
