@@ -27,11 +27,17 @@ const STACKED: CompactStackMembership = {
   number: 11, health: "in_sync", trunk: "main", githubStack: 4402, openBelow: [9, 10],
 };
 
-function renderDialog(held = false, options: { stack?: CompactStackMembership; remote?: boolean } = {}) {
+function renderDialog(held = false, options: {
+  stack?: CompactStackMembership;
+  remote?: boolean;
+  pr?: PrSummary;
+  /** What the owner answers about the thread's project. */
+  owner?: { neverMergeProject?: string; mergeBranches?: string[] };
+} = {}) {
   const merge = vi.fn<PullRequestMergeService["merge"]>(async () => true);
   const onClose = vi.fn();
   const desktopApi = {
-    readThreadPullRequestMerge: vi.fn(async () => ({ fallback: "squash" as const })),
+    readThreadPullRequestMerge: vi.fn(async () => ({ fallback: "squash" as const, ...options.owner })),
     manageThreadDependencies: vi.fn(async () => ({
       dependencies: [],
       mergeHolds: held ? [{
@@ -44,7 +50,7 @@ function renderDialog(held = false, options: { stack?: CompactStackMembership; r
   };
   render(
     <MergePullRequestDialog
-      pr={PR}
+      pr={options.pr ?? PR}
       thread={options.remote
         ? { ...THREAD, federationTarget: { scope: "remote", instanceId: "peer-a" } } as never
         : THREAD}
@@ -61,6 +67,29 @@ afterEach(() => {
 });
 
 describe("MergePullRequestDialog", () => {
+  it.each<[string, string | undefined, string[] | undefined, boolean]>([
+    ["refuses a PR into main when nothing is listed", "main", undefined, false],
+    ["refuses a PR into main when pwrdrvr is listed", "main", ["pwrdrvr"], false],
+    ["offers a PR into pwrdrvr when pwrdrvr is listed", "pwrdrvr", ["pwrdrvr"], true],
+    ["offers a PR into pwrdrvr among several listed", "pwrdrvr", ["release", "pwrdrvr"], true],
+    ["refuses a PR whose base is unknown", undefined, ["pwrdrvr"], false],
+  ])("in a never-merge project, %s", async (_name, base, mergeBranches, offered) => {
+    const { baseRefName: _base, ...rest } = PR;
+    renderDialog(false, {
+      pr: base ? { ...rest, baseRefName: base } : rest,
+      owner: { neverMergeProject: "canvas", ...(mergeBranches ? { mergeBranches } : {}) },
+    });
+    if (offered) {
+      expect(await screen.findByRole("button", { name: "Squash merge" })).toBeInTheDocument();
+      return;
+    }
+    expect(await screen.findByText(mergeBranches
+      ? `canvas merges only pull requests into ${mergeBranches.join(" or ")}. Change it from the project menu: Forge Automation.`
+      : "canvas never merges its pull requests. Change it from the project menu: Forge Automation."))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Squash merge" })).toBeNull();
+  });
+
   it("starts on Cancel and the card's method, and remembers a changed method", async () => {
     const user = userEvent.setup();
     const { merge, onClose } = renderDialog();

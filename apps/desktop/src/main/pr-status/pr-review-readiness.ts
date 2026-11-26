@@ -1,4 +1,5 @@
 import type { PrSummary } from "@pwragent/shared/contracts/navigation";
+import { formatProjectMergeBranches } from "@pwragent/shared/project-forge-automation";
 
 /**
  * Where an open pull request stands on the way to merge, from PwrAgent's
@@ -283,6 +284,8 @@ export function describePrReviewReadiness(params: {
    * land upstream, so the guidance never mentions a merge offer.
    */
   neverMergeProject?: string;
+  /** With `neverMergeProject`, the branches it still merges into; this PR targets another. */
+  mergeBranches?: readonly string[];
 }): string {
   const name = `#${params.prNumber}`;
   if (params.neverMergeProject !== undefined) return describeNeverMergeReadiness(name, params);
@@ -307,10 +310,20 @@ export function describePrReviewReadiness(params: {
  */
 function describeNeverMergeReadiness(
   name: string,
-  params: { readiness: PrReviewReadiness; headSha?: string; reviewed: boolean; openFindings?: number; neverMergeProject?: string },
+  params: {
+    readiness: PrReviewReadiness;
+    headSha?: string;
+    reviewed: boolean;
+    openFindings?: number;
+    neverMergeProject?: string;
+    mergeBranches?: readonly string[];
+  },
 ): string {
   const at = params.headSha ? ` at ${params.headSha.slice(0, 7)}` : "";
-  const never = `${params.neverMergeProject} never merges its pull requests, so do not merge ${name}, offer a merge, or raise a merge card.`;
+  const rule = params.mergeBranches?.length
+    ? `merges only pull requests into ${formatProjectMergeBranches(params.mergeBranches)}`
+    : "never merges its pull requests";
+  const never = `${params.neverMergeProject} ${rule}, so do not merge ${name}, offer a merge, or raise a merge card.`;
   if (params.readiness === "closed") return `${name} is closed.`;
   if (params.readiness === "stack_parent_open") {
     return `${name} is waiting for its lower stack layers to merge and its base to be trunk. ${never}`;

@@ -53,6 +53,13 @@ export type ProjectForgeAutomation = {
    * Present only when on; an older owner never stores it.
    */
   neverMerge?: true;
+  /**
+   * With `neverMerge` on, the base branches whose pull requests still merge:
+   * the fork's own integration branches, such as `pwrdrvr`. Exact names.
+   * Present only with `neverMerge` and at least one branch. An owner that
+   * predates it drops it and merges none, so it never merges more.
+   */
+  mergeBranches?: string[];
   /** While paused, refuse agent messages from other threads. */
   refuseThreadMessages: boolean;
   /**
@@ -110,6 +117,7 @@ export function resolveProjectForgeAutomation(value: unknown): ProjectForgeAutom
       : {}),
     prOffers: flag("prOffers"),
     ...(record.neverMerge === true ? { neverMerge: true as const } : {}),
+    ...(record.neverMerge === true ? resolveMergeBranchesField(record.mergeBranches) : {}),
     refuseThreadMessages: flag("refuseThreadMessages"),
     wakeupPolicy: record.wakeupPolicy === "discard" ? "discard" : "hold",
   };
@@ -174,16 +182,121 @@ export function projectNeverMerges(value: Pick<ProjectForgeAutomation, "neverMer
   return value?.neverMerge === true;
 }
 
+/** Most branches one project lists; more is a mistake, not a workflow. */
+export const MAX_PROJECT_MERGE_BRANCHES = 20;
+
+const MAX_MERGE_BRANCH_LENGTH = 255;
+
+/**
+ * A branch name as the Merging list stores it, trimmed; undefined when it
+ * cannot be a Git branch name the forge reports as a base: empty, too long,
+ * or holding whitespace or control characters.
+ */
+export function normalizeProjectMergeBranch(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const branch = value.trim();
+  if (!branch || branch.length > MAX_MERGE_BRANCH_LENGTH) return undefined;
+  if (/\s/.test(branch) || [...branch].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)) {
+    return undefined;
+  }
+  return branch;
+}
+
+/** The stored list, cleaned: valid names, each once, in order, capped. */
+function resolveMergeBranchesField(value: unknown): { mergeBranches?: string[] } {
+  if (!Array.isArray(value)) return {};
+  const branches: string[] = [];
+  for (const entry of value) {
+    const branch = normalizeProjectMergeBranch(entry);
+    if (branch && !branches.includes(branch)) branches.push(branch);
+    if (branches.length === MAX_PROJECT_MERGE_BRANCHES) break;
+  }
+  return branches.length ? { mergeBranches: branches } : {};
+}
+
+/**
+ * The base branches that still merge in a never-merge project; empty when
+ * the project merges everything or nothing is listed.
+ */
+export function projectMergeBranches(
+  value: Pick<ProjectForgeAutomation, "neverMerge" | "mergeBranches"> | undefined,
+): string[] {
+  return projectNeverMerges(value) ? resolveMergeBranchesField(value?.mergeBranches).mergeBranches ?? [] : [];
+}
+
+/**
+ * Whether PwrAgent may merge, or offer to merge, a pull request into
+ * `baseRefName` in this project: always when the project merges, and in a
+ * never-merge project only into a listed branch. A base not read yet is not
+ * listed.
+ */
+export function projectMergesPullRequest(
+  value: Pick<ProjectForgeAutomation, "neverMerge" | "mergeBranches"> | undefined,
+  baseRefName: string | undefined,
+): boolean {
+  if (!projectNeverMerges(value)) return true;
+  const base = baseRefName?.trim();
+  return Boolean(base) && projectMergeBranches(value).includes(base!);
+}
+
+/** A never-merge project as a merge path reports it. */
+export type ProjectNeverMergePolicy = {
+  projectLabel: string;
+  /** Base branches it still merges into; empty merges none. */
+  mergeBranches: string[];
+};
+
+/** The project's never-merge policy; undefined when it merges. */
+export function resolveProjectNeverMergePolicy(
+  project: { label: string; automation: Pick<ProjectForgeAutomation, "neverMerge" | "mergeBranches"> } | undefined,
+): ProjectNeverMergePolicy | undefined {
+  return project && projectNeverMerges(project.automation)
+    ? { projectLabel: project.label, mergeBranches: projectMergeBranches(project.automation) }
+    : undefined;
+}
+
+/** `a`, `a or b`, `a, b or c`. */
+export function formatProjectMergeBranches(branches: readonly string[]): string {
+  if (branches.length <= 1) return branches[0] ?? "";
+  return `${branches.slice(0, -1).join(", ")} or ${branches.at(-1)}`;
+}
+
 /**
  * Why an agent may not merge, or raise a merge card for, a pull request in
  * a never-merge project. Used as the tool refusal and the readiness line.
+ * With `mergeBranches`, it names the branches that still merge, and with
+ * `baseUnknown` it says the PR's base has not been read, which counts as a
+ * branch the project does not list.
  */
 export function buildProjectNeverMergeRefusal(params: {
   projectLabel: string;
   pullRequest?: string;
+  mergeBranches?: readonly string[];
+  baseUnknown?: boolean;
 }): string {
+  const listed = Boolean(params.mergeBranches?.length);
   const subject = params.pullRequest ? `${params.pullRequest} is in` : "This thread is in";
-  return `${subject} ${params.projectLabel}, where Forge Automation is set to never merge pull requests: they land upstream. Do not merge it, offer a merge, or raise a merge card. The operator can change this from the project menu: Forge Automation.`;
+  const object = params.pullRequest ?? (listed ? "a pull request into any other branch" : "it");
+  const rule = listed
+    ? `merges only pull requests into ${formatProjectMergeBranches(params.mergeBranches!)}: the rest land upstream`
+    : "is set to never merge pull requests: they land upstream";
+  const unread = listed && params.pullRequest && params.baseUnknown
+    ? ` PwrAgent has not read ${params.pullRequest}'s base branch yet, so it counts as another branch.`
+    : "";
+  return `${subject} ${params.projectLabel}, where Forge Automation ${rule}.${unread} Do not merge ${object}, offer a merge, or raise a merge card. The operator can change this from the project menu: Forge Automation.`;
+}
+
+/**
+ * The owner's refusal for a merge from a PR card or a merge card in a
+ * never-merge project.
+ */
+export function buildProjectNeverMergeError(params: {
+  projectLabel: string;
+  mergeBranches?: readonly string[];
+}): string {
+  return params.mergeBranches?.length
+    ? `${params.projectLabel} merges only pull requests into ${formatProjectMergeBranches(params.mergeBranches)}. Change it from the project menu: Forge Automation.`
+    : `${params.projectLabel} never merges its pull requests. Change it from the project menu: Forge Automation.`;
 }
 
 /** Whether the project's pull requests should be polled at all. */

@@ -8,6 +8,7 @@ import {
   resolvePullRequestMergeOffer,
   type PullRequestMergeOffer,
 } from "@pwragent/shared/pull-request-merge-offer";
+import { projectMergesPullRequest } from "@pwragent/shared/project-forge-automation";
 import { conditionName } from "../thread-dependencies/dependency-labels";
 import {
   mergeHoldingDependencies,
@@ -20,8 +21,12 @@ export type PullRequestMergeOfferState =
   | { kind: "loading" }
   /** A Continue After wait holds the merge; the strings name what it waits for. */
   | { kind: "held"; waitingFor: string[] }
-  /** The thread's project never merges its pull requests (Forge Automation). */
-  | { kind: "never_merge"; projectLabel: string }
+  /**
+   * The thread's project never merges this pull request (Forge Automation):
+   * it never merges, or merges only into `mergeBranches` and this PR's base
+   * is not one of them.
+   */
+  | { kind: "never_merge"; projectLabel: string; mergeBranches?: string[] }
   | PullRequestMergeOffer;
 
 /**
@@ -60,7 +65,17 @@ export function usePullRequestMergeOffer(
   if (!offered) return base;
   if (preference?.key !== key) return { kind: "loading" };
   const neverMergeProject = preference.value?.neverMergeProject;
-  if (neverMergeProject) return { kind: "never_merge", projectLabel: neverMergeProject };
+  if (neverMergeProject) {
+    const mergeBranches = preference.value?.mergeBranches ?? [];
+    // The card's base; the owner checks its own copy again before merging.
+    if (!projectMergesPullRequest({ neverMerge: true, mergeBranches }, pr.baseRefName)) {
+      return {
+        kind: "never_merge",
+        projectLabel: neverMergeProject,
+        ...(mergeBranches.length ? { mergeBranches } : {}),
+      };
+    }
+  }
   // An owner that cannot answer still refuses a held merge itself.
   if (!holds.ready && !holds.error) return { kind: "loading" };
   const blocking = mergeHoldingDependencies(holds.data);

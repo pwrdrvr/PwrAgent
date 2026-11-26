@@ -52,9 +52,11 @@ export type PrReviewOfferPorts = {
   /** The primary attached PR keys of one thread, for review events. */
   threadPrKeys(thread: PrReviewOfferThread): string[];
   /**
-   * Why the thread's project never merges its pull requests, as an agent
-   * refusal; undefined when it merges them. Such a project gets review
-   * offers but no merge offer, and an open merge offer is withdrawn.
+   * Why the thread's project never merges `pr`, as an agent refusal;
+   * undefined when it merges it: the project merges, or `pr.baseRefName` is
+   * a branch its never-merge setting still merges into. A refused PR gets
+   * review offers but no merge offer, and an open merge offer is withdrawn.
+   * A change of base re-evaluates the PR, as any readiness field does.
    */
   neverMergeRefusal?(thread: PrReviewOfferThread, pr: PrSummary): string | undefined;
   /** The status registry's current PR. No forge request is made. */

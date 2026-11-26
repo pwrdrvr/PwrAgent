@@ -12538,6 +12538,106 @@ button.stack-display__thread,
   line-height: 1.35;
 }
 
+/* Never merge's exceptions: indented under its checkbox, past the box's
+   14px column and 8px gap, so the list reads as part of that choice. */
+.forge-automation-dialog__merge-branches {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 0 22px;
+  padding: 6px 0 2px 12px;
+  border-left: 2px solid var(--border-subtle);
+}
+
+.forge-automation-dialog__sublabel {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.forge-automation-dialog__branch-list {
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  list-style: none;
+}
+
+.forge-automation-dialog__branch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  padding: 0 4px 0 10px;
+}
+
+.forge-automation-dialog__branch + .forge-automation-dialog__branch {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.forge-automation-dialog__branch-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font: 12.5px var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.forge-automation-dialog__branch-remove {
+  display: inline-grid;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.forge-automation-dialog__branch-remove:hover:not(:disabled) {
+  background: var(--bg-panel-hover);
+  color: var(--text-primary);
+}
+
+.forge-automation-dialog__branch-remove:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.forge-automation-dialog__branch-add {
+  display: flex;
+  gap: 8px;
+}
+
+.forge-automation-dialog__branch-add input {
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: 12.5px var(--font-mono);
+}
+
+.forge-automation-dialog__branch-add input:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.forge-automation-dialog__branch-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .forge-automation-dialog__status {
   margin: 14px 0 0;
   padding: 8px 10px;

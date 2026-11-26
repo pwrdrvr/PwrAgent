@@ -139,6 +139,50 @@ describe("ForgeAutomationDialog", () => {
     await waitFor(() => expect(back.props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
   });
 
+  it("lists the branches a never-merge project still merges into, and saves them only with Never merge on", async () => {
+    const { props } = renderDialog();
+    const merging = screen.getByRole("group", { name: "Merging" });
+    expect(within(merging).queryByRole("textbox")).not.toBeInTheDocument();
+    fireEvent.click(within(merging).getByRole("checkbox", { name: "Never merge this project's pull requests" }));
+    const input = within(merging).getByRole("textbox", { name: "Branch that still merges" });
+    const add = within(merging).getByRole("button", { name: "Add" });
+    expect(add).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: " pwrdrvr " } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(within(merging).getByRole("list", { name: "Except pull requests into" })).toHaveTextContent("pwrdrvr");
+    expect(input).toHaveValue("");
+    // Merge cards come back for those PRs, so the offers switch names them again.
+    expect(screen.getByRole("checkbox", { name: "Review and merge offers" })).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "pwrdrvr" } });
+    fireEvent.click(add);
+    expect(within(merging).getByRole("alert")).toHaveTextContent("pwrdrvr is already listed.");
+    fireEvent.change(input, { target: { value: "two words" } });
+    expect(within(merging).queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(add);
+    expect(input).toHaveAccessibleDescription(/Enter one branch name, without spaces/);
+    fireEvent.change(input, { target: { value: "release" } });
+    fireEvent.click(add);
+    const remove = within(merging).getByRole("button", { name: "Remove release" });
+    remove.focus();
+    fireEvent.click(remove);
+    // The removed row took its button with it, so focus lands on the field.
+    expect(input).toHaveFocus();
+
+    save();
+    await waitFor(() => expect(props.onSubmit).toHaveBeenCalledWith({
+      ...DEFAULT_PROJECT_FORGE_AUTOMATION, neverMerge: true, mergeBranches: ["pwrdrvr"],
+    }));
+    cleanup();
+
+    // Turning Never merge off drops the list from what is saved.
+    const back = renderDialog({ automation: { ...DEFAULT_PROJECT_FORGE_AUTOMATION, neverMerge: true, mergeBranches: ["pwrdrvr"] } });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Never merge this project's pull requests" }));
+    save();
+    await waitFor(() => expect(back.props.onSubmit).toHaveBeenCalledWith(DEFAULT_PROJECT_FORGE_AUTOMATION));
+  });
+
   it("hides the offers switch while paused, since a paused project gets no offers", () => {
     renderDialog();
     fireEvent.click(screen.getByRole("radio", { name: "Paused" }));
