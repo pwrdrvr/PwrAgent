@@ -83,15 +83,6 @@ export function prepareRevisionBundle({
         ["-C", repoCwd, "worktree", "add", "--detach", "--quiet", tempWorktree, commitSha],
         { stdio: ["ignore", "pipe", "pipe"] },
       );
-      // Link node_modules read-only from the current checkout only for esbuild resolution
-      // inside this disposable build-only worktree (never mutated or installed into).
-      for (const rel of ["node_modules", path.join("apps", "desktop", "node_modules")]) {
-        const src = path.join(repoCwd, rel);
-        const dst = path.join(tempWorktree, rel);
-        if (fs.existsSync(src) && !fs.existsSync(dst)) {
-          fs.symlinkSync(src, dst, "dir");
-        }
-      }
       buildRepo = tempWorktree;
     }
 

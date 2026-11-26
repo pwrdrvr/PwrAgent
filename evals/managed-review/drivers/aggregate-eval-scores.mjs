@@ -125,6 +125,7 @@ const cohortPath = path.resolve(parseArg("--cohort", ""));
 const resultsDir = path.resolve(parseArg("--results", ""));
 const scoringDir = path.resolve(parseArg("--scoring", ""));
 const outDir = path.resolve(parseArg("--out", path.dirname(resultsDir)));
+const casesArg = parseArg("--cases", "").trim();
 const allowInspectTest = process.argv.includes("--allow-inspect-test");
 
 if (!cohortPath || !resultsDir || !scoringDir) {
@@ -134,7 +135,7 @@ if (!cohortPath || !resultsDir || !scoringDir) {
 const cohortBytes = fs.readFileSync(cohortPath);
 const rawCohort = JSON.parse(cohortBytes);
 const isBlind = !Array.isArray(rawCohort) && Boolean(rawCohort.blind);
-const cohortCases = Array.isArray(rawCohort) ? rawCohort : rawCohort.cases;
+const allCohortCases = Array.isArray(rawCohort) ? rawCohort : rawCohort.cases;
 
 const summary = JSON.parse(
   fs.readFileSync(path.join(scoringDir, "decision-batches-summary.json"), "utf8"),
@@ -144,6 +145,29 @@ const manifest = JSON.parse(
 );
 if (manifest.cohortSha256 !== createHash("sha256").update(cohortBytes).digest("hex") || !manifest.cellSha256) {
   throw new Error("Scoring sources changed or the manifest lacks source digests. Prepare the batches again.");
+}
+let cohortCases = allCohortCases;
+if (Array.isArray(manifest.selectedCaseIds)) {
+  if (isBlind && manifest.selectedCaseIds.length !== allCohortCases.length) {
+    throw new Error("Blind holdout cohorts cannot be aggregated from a partial case subset.");
+  }
+  const selectedSet = new Set(manifest.selectedCaseIds);
+  cohortCases = allCohortCases.filter((c) => selectedSet.has(c.id));
+  if (cohortCases.length !== manifest.selectedCaseIds.length) {
+    throw new Error("Scoring manifest selectedCaseIds do not match the cohort. Prepare the batches again.");
+  }
+  if (casesArg && casesArg !== "all") {
+    const requested = new Set(casesArg.split(",").map((s) => s.trim()).filter(Boolean));
+    if (requested.size !== selectedSet.size || [...requested].some((id) => !selectedSet.has(id))) {
+      throw new Error("Scoring manifest was prepared for a different --cases subset. Prepare the batches again.");
+    }
+  }
+} else if (casesArg && casesArg !== "all") {
+  if (isBlind) {
+    throw new Error("Blind holdout cohorts cannot be aggregated with a --cases subset.");
+  }
+  const requested = new Set(casesArg.split(",").map((s) => s.trim()).filter(Boolean));
+  cohortCases = allCohortCases.filter((c) => requested.has(c.id));
 }
 const unverifiedBaselineCount = cohortCases.filter(({ baseline }) => !hasVerifiedBaselineRange(baseline)).length;
 if (unverifiedBaselineCount !== manifest.unverifiedBaselineCount || (isBlind && unverifiedBaselineCount)) {
@@ -199,6 +223,8 @@ function loadAllFor(batchType, metaList) {
   }
   const merged = [];
   let totalCostUsd = 0;
+  let costKnown = true;
+  const observedModels = new Set();
   for (const [index, entry] of expected.entries()) {
     const chunk = chunks[index];
     if (chunk?.batchType !== batchType || chunk.chunkIndex !== index
@@ -223,10 +249,21 @@ function loadAllFor(batchType, metaList) {
     for (const item of items) {
       merged.push({ ...metaList[chunk.start + item.localIndex], ok: item.ok, answers: item.answers });
     }
-    totalCostUsd += chunk.estimatedCostUsd ?? 0;
+    if (typeof chunk.model === "string" && chunk.model.trim()) {
+      observedModels.add(chunk.model.trim());
+    }
+    if (typeof chunk.estimatedCostUsd === "number" && Number.isFinite(chunk.estimatedCostUsd)) {
+      totalCostUsd += chunk.estimatedCostUsd;
+    } else {
+      costKnown = false;
+    }
   }
   if (merged.length !== metaList.length) throw new Error(`Decision scorecard is incomplete for ${batchType}.`);
-  return { items: merged, totalCostUsd };
+  return {
+    items: merged,
+    totalCostUsd: expected.length === 0 ? 0 : costKnown ? totalCostUsd : null,
+    models: [...observedModels],
+  };
 }
 
 const recallData = loadAllFor("recall", recallMeta);
@@ -496,9 +533,13 @@ if (arms.includes("codex") && arms.includes("neon")) {
   };
 }
 
-const totalDecisionCostUsd = Number(
-  (recallData.totalCostUsd + precisionData.totalCostUsd + holisticData.totalCostUsd).toFixed(5),
-);
+const allBatchCosts = [recallData.totalCostUsd, precisionData.totalCostUsd, holisticData.totalCostUsd];
+const totalDecisionCostUsd = allBatchCosts.every((cost) => typeof cost === "number")
+  ? Number(allBatchCosts.reduce((sum, cost) => sum + cost, 0).toFixed(5))
+  : null;
+const observedJudgeModels = [
+  ...new Set([...recallData.models, ...precisionData.models, ...holisticData.models]),
+];
 
 const aggregates = {
   all: {
@@ -539,6 +580,16 @@ const resolvedJudgeProvider = definitions.precision.provider
   ?? summary.holistic?.[0]?.provider
   ?? "default";
 
+const resolvedJudgeModel = observedJudgeModels.length > 0
+  ? observedJudgeModels.join(", ")
+  : resolvedJudgeProvider === "openai"
+    ? "gpt-6-luna"
+    : resolvedJudgeProvider === "jev"
+      ? "jev-latest"
+      : resolvedJudgeProvider === "local"
+        ? "clef-flash"
+        : undefined;
+
 const report = {
   generatedAt: new Date().toISOString(),
   cohortName: Array.isArray(rawCohort) ? path.basename(cohortPath, ".json") : rawCohort.name,
@@ -546,13 +597,7 @@ const report = {
   ...(runMetadata ? { runMetadata } : {}),
   decisionScoring: {
     provider: resolvedJudgeProvider,
-    ...(resolvedJudgeProvider === "openai"
-      ? { model: "gpt-6-luna" }
-      : resolvedJudgeProvider === "jev"
-        ? { model: "jev-latest" }
-        : resolvedJudgeProvider === "local"
-          ? { model: "clef-flash" }
-          : {}),
+    ...(resolvedJudgeModel ? { model: resolvedJudgeModel } : {}),
     totalItems: recallRows.length + precisionRows.length + holisticRows.length,
     totalCostUsd: totalDecisionCostUsd,
     unverifiedBaselineCount,

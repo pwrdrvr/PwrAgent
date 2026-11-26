@@ -38,6 +38,7 @@ const arms = parseArg("--arms", "codex,neon")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+const casesArg = parseArg("--cases", "all").trim() || "all";
 
 if (!cohortPath || !resultsDir || !scoringDir) {
   throw new Error("Required flags: --cohort <file> --results <dir> --out <dir>");
@@ -47,7 +48,25 @@ fs.mkdirSync(scoringDir, { recursive: true });
 const cohortBytes = fs.readFileSync(cohortPath);
 const cohortSha256 = createHash("sha256").update(cohortBytes).digest("hex");
 const rawCohort = JSON.parse(cohortBytes);
-const cohortCases = Array.isArray(rawCohort) ? rawCohort : rawCohort.cases;
+const allCohortCases = Array.isArray(rawCohort) ? rawCohort : rawCohort.cases;
+let cohortCases = allCohortCases;
+if (casesArg !== "all") {
+  if (rawCohort.blind) {
+    throw new Error("Blind holdout cohorts cannot be scored with a --cases subset; run and score all cases.");
+  }
+  const wanted = [...new Set(casesArg.split(",").map((s) => s.trim()).filter(Boolean))];
+  const knownIds = new Set(allCohortCases.map((c) => c.id));
+  const unknown = wanted.filter((id) => !knownIds.has(id));
+  if (unknown.length > 0) {
+    throw new Error(`Unknown --cases id(s) not present in cohort: ${unknown.join(", ")}`);
+  }
+  const wantedSet = new Set(wanted);
+  cohortCases = allCohortCases.filter((c) => wantedSet.has(c.id));
+}
+if (cohortCases.length === 0) {
+  throw new Error("No cohort cases selected for scoring.");
+}
+const selectedCaseIds = cohortCases.map((c) => c.id);
 const unverifiedBaselineCount = cohortCases.filter(({ baseline }) => !hasVerifiedBaselineRange(baseline)).length;
 if (unverifiedBaselineCount && (rawCohort.blind || !process.argv.includes("--allow-legacy-baselines"))) {
   throw new Error(`Cohort contains ${unverifiedBaselineCount} baseline(s) without a verified original range.`);
@@ -359,7 +378,15 @@ const plans = {
   precision: planChunks("precision", precisionInputs, 8),
   holistic: planChunks("holistic", holisticInputs, 12),
 };
-const manifest = { arms, definitionSha256, unverifiedBaselineCount, cohortSha256, cellSha256 };
+const manifest = {
+  arms,
+  casesFilter: casesArg,
+  selectedCaseIds,
+  definitionSha256,
+  unverifiedBaselineCount,
+  cohortSha256,
+  cellSha256,
+};
 for (const [name, chunks] of Object.entries(plans)) {
   manifest[name] = chunks.map(({ data, ...chunk }) => {
     fs.writeFileSync(chunk.file, data);

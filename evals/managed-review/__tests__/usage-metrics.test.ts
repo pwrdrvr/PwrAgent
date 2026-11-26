@@ -93,36 +93,175 @@ describe("usage-metrics rollup", () => {
     expect(snapshotOnly.totalReplayCount).toBeNull();
   });
 
-  it("reads parent and review child threads via registry.readThread and deduplicates shared lines", async () => {
-    const calls: string[] = [];
-    const sharedLine = makeLine({ usageLineId: "shared-1", totalTokens: 4000, totalCostMicros: 5000 });
-    const childOnlyLine = makeLine({
-      usageLineId: "child-2",
-      totalTokens: 2500,
-      uncachedInputTokens: 500,
-      cachedInputTokens: 1500,
-      outputTokens: 500,
-      totalCostMicros: 3000,
-      observedColdReplayCount: 0,
-      observedHotReplayCount: 2,
+  it("flushes Codex buffered live usage via includeTurns: true and falls back to display pricing snapshot when empty", async () => {
+    const requests: Array<{ backend?: string; threadId: string; includeTurns?: boolean; resource?: string }> = [];
+    const bufferedCodexLine = makeLine({
+      usageLineId: "codex-buffered-1",
+      threadId: "review-child",
+      totalTokens: 6500,
+      uncachedInputTokens: 1500,
+      cachedInputTokens: 4200,
+      outputTokens: 800,
+      totalCostMicros: 8000,
+      observedColdReplayCount: 1,
+      observedHotReplayCount: 6,
     });
-    const result = await readCellUsageFromRegistry(
+    const flushedThreads = new Set<string>();
+
+    const codexResult = await readCellUsageFromRegistry(
       {
-        readThread: async ({ threadId }) => {
-          calls.push(threadId);
-          return threadId === "review-child"
-            ? { pricing: { lines: [sharedLine, childOnlyLine], summaries: [] } }
-            : { pricing: { lines: [sharedLine], summaries: [] } };
+        readThread: async (request) => {
+          requests.push({
+            backend: request.backend,
+            threadId: request.threadId,
+            includeTurns: request.includeTurns,
+            resource: request.display?.resource,
+          });
+          // Mirror backend-registry.ts: buffered Codex live usage is only flushed on includeTurns: true.
+          if (request.includeTurns === true && request.threadId === "review-child") {
+            flushedThreads.add(request.threadId);
+            return { pricing: { lines: [bufferedCodexLine], summaries: [] } };
+          }
+          if (request.display?.resource === "pricing" && request.threadId === "parent-1") {
+            return {
+              display: {
+                pricingPage: {
+                  rows: [],
+                  totalRows: 0,
+                  fallbackEstimate: {
+                    totalCostMicros: 12_000,
+                    tokens: { inputTokens: 2000, cachedInputTokens: 500, outputTokens: 200, totalTokens: 2200 },
+                  },
+                },
+              } as never,
+            };
+          }
+          return { pricing: { lines: [], summaries: [] } };
         },
       },
       { backend: "codex", parentThreadId: "parent-1", reviewThreadId: "review-child" },
     );
 
-    expect(calls).toEqual(["review-child", "parent-1"]);
+    expect(flushedThreads.has("review-child")).toBe(true);
+    expect(requests).toEqual([
+      { backend: "codex", threadId: "review-child", includeTurns: true, resource: undefined },
+      { backend: "codex", threadId: "parent-1", includeTurns: true, resource: undefined },
+      { backend: "codex", threadId: "parent-1", includeTurns: undefined, resource: "pricing" },
+    ]);
+    expect(codexResult?.source).toBe("ledger");
+    expect(codexResult?.lineCount).toBe(1);
+    expect(codexResult?.totalTokens).toBe(6500);
+    expect(codexResult?.totalReplayCount).toBe(7);
+    expect(codexResult?.estimatedCostUsd).toBe(0.008);
+
+    // When Codex has zero ledger lines, display pricing fallbackEstimate populates snapshot tokens and catalog cost.
+    const snapshotFallbackResult = await readCellUsageFromRegistry(
+      {
+        readThread: async (request) => {
+          if (request.display?.resource === "pricing") {
+            return {
+              display: {
+                pricingPage: {
+                  rows: [],
+                  totalRows: 0,
+                  fallbackEstimate: {
+                    totalCostMicros: 34_500,
+                    tokens: {
+                      inputTokens: 10_000,
+                      cachedInputTokens: 4_000,
+                      outputTokens: 1_500,
+                      totalTokens: 11_500,
+                    },
+                  },
+                },
+              } as never,
+            };
+          }
+          return { pricing: { lines: [], summaries: [] } };
+        },
+      },
+      { backend: "codex", parentThreadId: "codex-native-parent" },
+    );
+    expect(snapshotFallbackResult?.source).toBe("snapshot");
+    expect(snapshotFallbackResult?.totalTokens).toBe(11_500);
+    expect(snapshotFallbackResult?.estimatedCostUsd).toBe(0.0345);
+  });
+
+  it("reads Claude pricing via display: { resource: 'pricing' } across pages and ignores synthetic gap rows", async () => {
+    const requests: Array<{ resource?: string; cursor?: string }> = [];
+    const claudeTurnLine = makeLine({
+      usageLineId: "claude-turn-1",
+      backend: "claude",
+      provider: "anthropic",
+      threadId: "claude-parent",
+      totalTokens: 9000,
+      uncachedInputTokens: 3000,
+      cachedInputTokens: 5000,
+      outputTokens: 1000,
+      totalCostMicros: 15_000,
+    });
+    const claudePage2Line = makeLine({
+      usageLineId: "claude-turn-2",
+      backend: "claude",
+      provider: "anthropic",
+      threadId: "claude-parent",
+      totalTokens: 3000,
+      uncachedInputTokens: 1000,
+      cachedInputTokens: 1500,
+      outputTokens: 500,
+      totalCostMicros: 5_000,
+    });
+    const syntheticGapLine = {
+      ...makeLine({ usageLineId: "gap-1", totalTokens: 99_999, totalCostMicros: 99_999 }),
+      estimatedUsageGap: true as const,
+    };
+
+    const result = await readCellUsageFromRegistry(
+      {
+        readThread: async (request) => {
+          requests.push({
+            resource: request.display?.resource,
+            cursor: request.display?.cursor,
+          });
+          // Mirror backend-registry.ts:7945-7978: Claude readThreadData omits `pricing`.
+          if (request.display?.resource !== "pricing") {
+            return {};
+          }
+          if (!request.display.cursor) {
+            return {
+              display: {
+                nextCursor: "rev:1",
+                pricingPage: {
+                  rows: [
+                    { line: claudeTurnLine, gates: [] },
+                    { line: syntheticGapLine, gates: [] },
+                  ],
+                  totalRows: 2,
+                },
+              } as never,
+            };
+          }
+          return {
+            display: {
+              pricingPage: {
+                rows: [{ line: claudePage2Line, gates: [] }],
+                totalRows: 2,
+              },
+            } as never,
+          };
+        },
+      },
+      { backend: "claude", parentThreadId: "claude-parent" },
+    );
+
+    expect(requests).toEqual([
+      { resource: "pricing", cursor: undefined },
+      { resource: "pricing", cursor: "rev:1" },
+    ]);
+    expect(result?.source).toBe("ledger");
     expect(result?.lineCount).toBe(2);
-    expect(result?.totalTokens).toBe(6500);
-    expect(result?.totalReplayCount).toBe(7);
-    expect(result?.estimatedCostUsd).toBe(0.008);
+    expect(result?.totalTokens).toBe(12_000);
+    expect(result?.estimatedCostUsd).toBe(0.02);
   });
 
   it("preserves additive totals and idempotent deduplication across arbitrary line sets (property)", () => {

@@ -15,6 +15,10 @@ import os from "node:os";
 import path from "node:path";
 import { reviewedMergeBase } from "./review-range.mjs";
 import { initReviewWorkspace } from "./review-workspace.mjs";
+import {
+  extractReviewFromExitedItem,
+  isReviewTerminalEventMatch,
+} from "./review-event-normalizer";
 import { readCellUsageFromRegistry, type CellUsageMetrics } from "../../shared/usage-metrics";
 import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
 import type {
@@ -518,8 +522,8 @@ async function main(): Promise<void> {
     process.on("SIGINT", onSignal);
 
     const matchesSession = (threadId: string, eventTurnId?: string) =>
-      (threadId === parentThreadId || threadId === reviewThreadId)
-      && (!turnId || !eventTurnId || eventTurnId === turnId);
+      threadId === parentThreadId
+      || (threadId === reviewThreadId && (!turnId || !eventTurnId || eventTurnId === turnId));
 
     async function answerApproval(
       eventBackend: AppServerBackendKind,
@@ -567,14 +571,22 @@ async function main(): Promise<void> {
       if (threadId !== parentThreadId) return;
       const turn = params.turn as { id?: string; status?: string; error?: { message?: string } } | undefined;
       const eventTurnId = typeof params.turnId === "string" ? params.turnId : turn?.id;
-      if (!eventTurnId || (turnId && eventTurnId !== turnId)) return;
       if (method === "item/completed") {
         const item = params.item as Record<string, unknown> | undefined;
         if (item?.type !== "exitedReviewMode") return;
-        const data = item.data as Record<string, unknown> | undefined;
-        if (data?.reviewOutput) reviewOutput = data.reviewOutput as AppServerReviewOutput;
-        if (typeof item.review === "string") reviewText = item.review;
-      } else if (method === "turn/failed" || (method === "turn/completed" && turn?.status === "failed")) {
+        const extracted = extractReviewFromExitedItem(item, {
+          allowPlainTextReview: arm === "codex-native",
+        });
+        if (extracted.reviewOutput) reviewOutput = extracted.reviewOutput;
+        if (extracted.reviewText !== undefined) reviewText = extracted.reviewText;
+        return;
+      }
+      if (!isReviewTerminalEventMatch({
+        expectedTurnId: turnId,
+        eventTurnId,
+        relatedReviewTurnId: event.relatedReviewTurnId,
+      })) return;
+      if (method === "turn/failed" || (method === "turn/completed" && turn?.status === "failed")) {
         settleTerminal({ status: "failed", error: turn?.error?.message ?? "turn failed" });
       } else if (method === "turn/cancelled" || (method === "turn/completed"
         && (turn?.status === "cancelled" || turn?.status === "interrupted"))) {

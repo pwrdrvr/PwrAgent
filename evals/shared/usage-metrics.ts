@@ -1,11 +1,16 @@
 import type {
   AppServerBackendKind,
+  AppServerReadThreadRequest,
   AppServerReadThreadResponse,
 } from "@pwragent/shared/contracts/normalized-app-server";
 import type {
   ThreadPricingSnapshot,
   ThreadUsageLineRecord,
 } from "@pwragent/shared/token-usage-pricing";
+import type {
+  PricingUsageRowData,
+  ThreadPricingSnapshotEstimate,
+} from "@pwragent/shared/thread-pricing-display";
 
 export type CellUsageMetrics = {
   source: "ledger" | "snapshot" | "none";
@@ -82,12 +87,13 @@ function round(value: number, digits: number): number {
  */
 export function summarizeThreadUsageLines(
   rawLines: readonly ThreadUsageLineRecord[],
-  snapshot?: ThreadPricingSnapshot | null,
+  snapshot?: (ThreadPricingSnapshot & { totalCostMicros?: number }) | null,
 ): CellUsageMetrics {
   const byId = new Map<string, ThreadUsageLineRecord>();
   for (const line of rawLines) {
     if (!line || line.status === "superseded" || line.scope === "fork-baseline") continue;
     if (line.source === "openai_decisions") continue;
+    if ((line as { estimatedUsageGap?: boolean }).estimatedUsageGap === true) continue;
     const key = line.usageLineId || `${line.backend}:${line.threadId}:${line.turnId ?? ""}:${byId.size}`;
     const prev = byId.get(key);
     // Prefer finalized over pending if both appear in a combined parent+child read.
@@ -148,7 +154,7 @@ export function summarizeThreadUsageLines(
     const total = snapTokens?.totalTokens !== undefined
       ? nonNeg(snapTokens.totalTokens)
       : input + output;
-    const costMicros = optionalNonNeg(snapshot?.estimatedCostMicros);
+    const costMicros = optionalNonNeg(snapshot?.estimatedCostMicros ?? snapshot?.totalCostMicros);
     return {
       source: "snapshot",
       lineCount: 0,
@@ -365,17 +371,50 @@ export function aggregateCellUsage(
 }
 
 export type ThreadPricingReader = {
-  readThread?: (request: {
-    backend: AppServerBackendKind;
-    threadId: string;
-    includeTurns?: boolean;
-  }) => Promise<Pick<AppServerReadThreadResponse, "pricing">>;
+  readThread?: (
+    request: Pick<AppServerReadThreadRequest, "backend" | "threadId" | "includeTurns" | "display">,
+  ) => Promise<Pick<AppServerReadThreadResponse, "pricing" | "display">>;
 };
+
+const PRICING_PAGE_LIMIT = 500;
+const MAX_PRICING_PAGES = 20;
+
+function isActiveObservedUsageLine(line: ThreadUsageLineRecord | null | undefined): boolean {
+  if (!line) return false;
+  if (line.status === "superseded" || line.scope === "fork-baseline") return false;
+  if (line.source === "openai_decisions") return false;
+  if ((line as { estimatedUsageGap?: boolean }).estimatedUsageGap === true) return false;
+  return true;
+}
+
+function collectPricingPageRows(
+  rows: readonly PricingUsageRowData[] | undefined,
+  out: ThreadUsageLineRecord[],
+): void {
+  if (!Array.isArray(rows)) return;
+  for (const row of rows) {
+    if (row?.line && isActiveObservedUsageLine(row.line)) {
+      out.push(row.line);
+    }
+    if (Array.isArray(row?.gates) && row.gates.length > 0) {
+      collectPricingPageRows(row.gates, out);
+    }
+  }
+}
 
 /**
  * Read observed token usage, context replay counts, and list cost through the
  * owner registry API (`readThread`) for both the review child thread and parent
  * thread, never querying SQLite or Codex storage directly.
+ *
+ * - For Codex, runs an `includeTurns: true` read first so `backend-registry.ts`
+ *   flushes buffered live usage lines and persists replay usage lines before
+ *   pricing is inspected, then falls back to `display: { resource: "pricing" }`
+ *   when no active ledger lines exist so the Codex provider snapshot fallback
+ *   is populated.
+ * - For Claude and ACP backends, reads `display: { resource: "pricing" }`
+ *   (paginating `nextCursor` if present), because `readThreadData` omits
+ *   `pricing` on Claude.
  */
 export async function readCellUsageFromRegistry(
   registry: ThreadPricingReader,
@@ -392,23 +431,64 @@ export async function readCellUsageFromRegistry(
   if (threadIds.length === 0) return null;
 
   const lines: ThreadUsageLineRecord[] = [];
-  let snapshot: ThreadPricingSnapshot | undefined;
+  let snapshot: (ThreadPricingSnapshot & { totalCostMicros?: number }) | undefined;
+
   for (const threadId of threadIds) {
-    try {
-      const view = await registry.readThread({
-        backend: params.backend,
-        threadId,
-        includeTurns: false,
-      });
-      if (Array.isArray(view?.pricing?.lines)) {
-        lines.push(...view.pricing.lines);
+    let threadActiveLines = 0;
+    if (params.backend === "codex") {
+      try {
+        const transcriptView = await registry.readThread({
+          backend: params.backend,
+          threadId,
+          includeTurns: true,
+        });
+        if (Array.isArray(transcriptView?.pricing?.lines)) {
+          for (const line of transcriptView.pricing.lines) {
+            lines.push(line);
+            if (isActiveObservedUsageLine(line)) threadActiveLines += 1;
+          }
+        }
+        if (!snapshot && transcriptView?.pricing?.snapshot) {
+          snapshot = transcriptView.pricing.snapshot;
+        }
+      } catch {
+        // Fall through to pricing display read if transcript read fails.
       }
-      if (!snapshot && view?.pricing?.snapshot) {
-        snapshot = view.pricing.snapshot;
+      if (threadActiveLines > 0) continue;
+    }
+
+    let cursor: string | undefined;
+    for (let page = 0; page < MAX_PRICING_PAGES; page += 1) {
+      try {
+        const pricingView = await registry.readThread({
+          backend: params.backend,
+          threadId,
+          display: {
+            resource: "pricing",
+            limit: PRICING_PAGE_LIMIT,
+            ...(cursor ? { cursor } : {}),
+          },
+        });
+        if (Array.isArray(pricingView?.pricing?.lines)) {
+          lines.push(...pricingView.pricing.lines);
+        }
+        collectPricingPageRows(pricingView?.display?.pricingPage?.rows, lines);
+        const pageSnapshot: ThreadPricingSnapshotEstimate | ThreadPricingSnapshot | undefined =
+          pricingView?.pricing?.snapshot
+          ?? pricingView?.display?.pricingPage?.fallbackEstimate
+          ?? pricingView?.display?.pricing?.fallbackEstimate;
+        if (!snapshot && pageSnapshot) {
+          snapshot = pageSnapshot;
+        }
+        const nextCursor = pricingView?.display?.nextCursor;
+        if (!nextCursor || nextCursor === cursor) break;
+        cursor = nextCursor;
+      } catch {
+        // Best-effort read: a thread that failed before initialization may have no ledger view.
+        break;
       }
-    } catch {
-      // Best-effort read: a thread that failed before initialization may have no ledger view.
     }
   }
+
   return summarizeThreadUsageLines(lines, snapshot);
 }

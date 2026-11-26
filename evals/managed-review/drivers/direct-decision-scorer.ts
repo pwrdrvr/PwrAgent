@@ -18,7 +18,10 @@ import {
   DECISION_LOCAL_DEFAULT_ENDPOINT,
   DECISION_LOCAL_DEFAULT_MODEL,
 } from "@pwragent/shared/decision-models";
-import type { OpenAIDecisionQuestion } from "@pwragent/shared/openai-decisions";
+import {
+  OPENAI_DECISIONS_MODEL,
+  type OpenAIDecisionQuestion,
+} from "@pwragent/shared/openai-decisions";
 import {
   buildSystemOneDecisionRequest,
   postSystemOneDecision,
@@ -47,9 +50,9 @@ function writeAtomicJson(file: string, data: unknown): void {
   fs.renameSync(tmp, file);
 }
 
-function buildOpenAIBody(definition: BatchDefinition, input: unknown) {
+function buildOpenAIBody(definition: BatchDefinition, input: unknown, model: string) {
   return {
-    model: "gpt-6-luna",
+    model,
     ...(definition.prefix ? { prefix: definition.prefix } : {}),
     input,
     questions: definition.questions,
@@ -107,19 +110,31 @@ async function main(): Promise<void> {
   let executed = 0;
   for (const entry of plan.pending) {
     const { definition, inputsFile, outputFile } = entry.arguments;
-    const provider = definition.provider ?? "jev";
+    const provider = definition.provider;
+    if (!provider) {
+      throw new Error(
+        "Direct scoring batch has no explicit provider (prepared with --judge-provider default). "
+        + "Re-prepare with --judge-provider jev, local, or openai, or score via --mode mcp.",
+      );
+    }
     const inputs = JSON.parse(fs.readFileSync(inputsFile, "utf8")) as unknown[];
     if (!Array.isArray(inputs) || inputs.length !== entry.count) {
       throw new Error(`Input count mismatch for ${entry.batchType}#${entry.chunkIndex}.`);
     }
+
+    const resolvedModel = modelOverride
+      ?? (provider === "jev"
+        ? DECISION_JEV_DEFAULT_MODEL
+        : provider === "local"
+          ? DECISION_LOCAL_DEFAULT_MODEL
+          : OPENAI_DECISIONS_MODEL);
+    let observedModel: string | undefined;
 
     const batchId = `direct-${provider}-${randomUUID()}`;
     const results = await runPool(inputs, concurrency, async (input, index) => {
       if (provider === "jev" || provider === "local") {
         const endpoint = endpointOverride
           ?? (provider === "jev" ? DECISION_JEV_ENDPOINT : DECISION_LOCAL_DEFAULT_ENDPOINT);
-        const model = modelOverride
-          ?? (provider === "jev" ? DECISION_JEV_DEFAULT_MODEL : DECISION_LOCAL_DEFAULT_MODEL);
         const apiKey = provider === "jev"
           ? (process.env.TYPESAFE_JEV_API_KEY?.trim() || process.env.JEV_API_KEY?.trim() || undefined)
           : (process.env.PWRAGENT_DECISION_LOCAL_API_KEY?.trim() || undefined);
@@ -135,13 +150,16 @@ async function main(): Promise<void> {
           input,
         });
         const response = await postSystemOneDecision({
-          target: { endpoint: endpoint.replace(/\/+$/u, ""), model, ...(apiKey ? { apiKey } : {}) },
+          target: { endpoint: endpoint.replace(/\/+$/u, ""), model: resolvedModel, ...(apiKey ? { apiKey } : {}) },
           request,
           questions: definition.questions,
           timeoutMs,
         });
         if (!response.ok) {
           throw new Error(`Decision call failed (${provider} ${response.code}${response.status ? ` HTTP ${response.status}` : ""}): ${response.detail ?? "unknown error"}`);
+        }
+        if (!observedModel && "model" in response && typeof response.model === "string" && response.model.trim()) {
+          observedModel = response.model.trim();
         }
         return { index, ok: true, answers: response.answers };
       }
@@ -154,13 +172,16 @@ async function main(): Promise<void> {
         );
       }
       const response = await postOpenAIDecision({
-        body: buildOpenAIBody(definition, input) as never,
+        body: buildOpenAIBody(definition, input, resolvedModel) as never,
         apiKey,
         ...(endpointOverride ? { endpoint: endpointOverride } : {}),
         timeoutMs,
       });
       if (!response.ok) {
         throw new Error(`Decision call failed (openai ${response.code}${response.status ? ` HTTP ${response.status}` : ""}): ${response.detail ?? "unknown error"}`);
+      }
+      if (!observedModel && typeof response.body.model === "string" && response.body.model.trim()) {
+        observedModel = response.body.model.trim();
       }
       const answers = Array.isArray(response.body.answers) ? response.body.answers : [];
       return { index, ok: true, answers };
@@ -170,10 +191,11 @@ async function main(): Promise<void> {
       state: "completed",
       batchId,
       provider,
+      model: observedModel ?? resolvedModel,
       count: inputs.length,
       succeeded: results.length,
       failed: 0,
-      usage: { estimatedCostUsd: 0 },
+      usage: { estimatedCostUsd: null },
       results,
     });
     executed += 1;

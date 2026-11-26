@@ -287,7 +287,7 @@ describe("managed-review scoring (Jev / local / default) and CLI guards", () => 
     expect(unsafeAuto.stderr).toMatch(/OS-enforced isolation/i);
   });
 
-  it("executes direct System One (local/jev) scoring against a local loopback server without an API key", async () => {
+  it("executes direct System One (local/jev) scoring against a local loopback server, forwards --decision-model, and avoids fabricating $0 cost", async () => {
     const f = createScoringFixture({ blind: false });
     const prep = spawnSync(process.execPath, [
       path.join(driversDir, "prepare-scoring-batches.mjs"),
@@ -300,11 +300,16 @@ describe("managed-review scoring (Jev / local / default) and CLI guards", () => 
     ], { encoding: "utf8" });
     expect(prep.status, prep.stderr).toBe(0);
 
+    const seenModels: string[] = [];
     const server = http.createServer((req, res) => {
       let body = "";
       req.on("data", (chunk) => { body += chunk; });
       req.on("end", () => {
-        const parsed = JSON.parse(body) as { questions: Record<string, { type: string; criteria: Record<string, unknown> }> };
+        const parsed = JSON.parse(body) as {
+          model?: string;
+          questions: Record<string, { type: string; criteria: Record<string, unknown> }>;
+        };
+        if (parsed.model) seenModels.push(parsed.model);
         const answers: Record<string, unknown> = {};
         for (const [key, q] of Object.entries(parsed.questions)) {
           if (q.type === "noul") {
@@ -340,15 +345,200 @@ describe("managed-review scoring (Jev / local / default) and CLI guards", () => 
         path.join(distOut, "direct-decision-scorer.js"),
         "--scoring", f.scoring,
         "--decision-endpoint", `http://127.0.0.1:${port}`,
+        "--decision-model", "clef-custom-v2",
         "--concurrency", "2",
       ], { encoding: "utf8" });
       expect(JSON.parse(stdout).executed).toBe(3);
+      expect(seenModels.length).toBeGreaterThan(0);
+      expect(seenModels.every((m) => m === "clef-custom-v2")).toBe(true);
 
       const recorded = collectDecisionFileBatches(f.scoring, true);
       expect(recorded.complete).toBe(3);
       expect(recorded.recorded).toBe(true);
+
+      const agg = spawnSync(process.execPath, [
+        path.join(driversDir, "aggregate-eval-scores.mjs"),
+        "--cohort", f.cohort,
+        "--results", f.results,
+        "--scoring", f.scoring,
+        "--out", f.runDir,
+      ], { encoding: "utf8" });
+      expect(agg.status, agg.stderr).toBe(0);
+
+      const summary = JSON.parse(fs.readFileSync(path.join(f.runDir, "eval-matrix-summary.json"), "utf8"));
+      expect(summary.decisionScoring.model).toBe("clef-custom-v2");
+      expect(summary.decisionScoring.totalCostUsd).toBeNull();
+
+      // OpenAI direct mode also honors --decision-model and records actual model.
+      const openaiFixture = createScoringFixture({ blind: false });
+      const prepOpenAi = spawnSync(process.execPath, [
+        path.join(driversDir, "prepare-scoring-batches.mjs"),
+        "--repo", openaiFixture.repo,
+        "--cohort", openaiFixture.cohort,
+        "--results", openaiFixture.results,
+        "--out", openaiFixture.scoring,
+        "--arms", "codex",
+        "--judge-provider", "openai",
+      ], { encoding: "utf8" });
+      expect(prepOpenAi.status, prepOpenAi.stderr).toBe(0);
+
+      const openAiModels: string[] = [];
+      const openAiServer = http.createServer((req, res) => {
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; });
+        req.on("end", () => {
+          const parsed = JSON.parse(body) as {
+            model?: string;
+            questions: Array<{ name: string; type: string; choices?: Array<{ value: string }> }>;
+          };
+          if (parsed.model) openAiModels.push(parsed.model);
+          const answers = parsed.questions.map((q) => {
+            if (q.type === "predicate") return { name: q.name, type: "predicate", probability: 0.9 };
+            if (q.type === "choice") {
+              return { name: q.name, type: "choice", choice: q.choices?.[0]?.value ?? "exact_match", confidence: 0.9 };
+            }
+            return { name: q.name, type: "score", score: 2 };
+          });
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ model: parsed.model, answers }));
+        });
+      });
+      await new Promise<void>((resolve) => openAiServer.listen(0, "127.0.0.1", () => resolve()));
+      const openAiAddr = openAiServer.address();
+      const openAiPort = typeof openAiAddr === "object" && openAiAddr ? openAiAddr.port : 0;
+      try {
+        const openAiRun = await execFileAsync(process.execPath, [
+          path.join(distOut, "direct-decision-scorer.js"),
+          "--scoring", openaiFixture.scoring,
+          "--decision-endpoint", `http://127.0.0.1:${openAiPort}`,
+          "--decision-model", "gpt-6-luna-custom",
+          "--concurrency", "2",
+        ], {
+          encoding: "utf8",
+          env: { ...process.env, OPENAI_DECISIONS_API_KEY: "test-key" },
+        });
+        expect(JSON.parse(openAiRun.stdout).executed).toBe(3);
+        expect(openAiModels.every((m) => m === "gpt-6-luna-custom")).toBe(true);
+      } finally {
+        await new Promise<void>((resolve) => openAiServer.close(() => resolve()));
+      }
+
+      // Direct mode rejects --judge-provider default instead of silently misrouting to jev.
+      const defaultDirect = spawnSync(process.execPath, [
+        path.join(suiteDir, "score.mjs"),
+        "--run", f.runDir,
+        "--cohort", f.cohort,
+        "--mode", "direct",
+        "--judge-provider", "default",
+      ], { encoding: "utf8" });
+      expect(defaultDirect.status).not.toBe(0);
+      expect(defaultDirect.stderr).toMatch(/--judge-provider default.*--mode mcp/i);
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+
+  it("honors run-meta.json --cases subsets end-to-end in score.mjs and rejects --cases on blind cohorts", () => {
+    const f = createScoringFixture({ blind: false });
+    const parsedCohort = JSON.parse(fs.readFileSync(f.cohort, "utf8"));
+    // Add a second unrun case to the cohort to reproduce the Quick Start --cases subset scenario.
+    parsedCohort.cases.push({
+      ...parsedCohort.cases[0],
+      id: "case-unrun-beta",
+      pr: 99,
+    });
+    fs.writeFileSync(f.cohort, JSON.stringify(parsedCohort));
+    fs.writeFileSync(path.join(f.runDir, "run-meta.json"), JSON.stringify({
+      cohortPath: f.cohort,
+      arms: ["codex"],
+      cases: "case-secret-alpha",
+    }));
+
+    const firstScore = spawnSync(process.execPath, [
+      path.join(suiteDir, "score.mjs"),
+      "--run", f.runDir,
+      "--repo", f.repo,
+      "--judge-provider", "jev",
+    ], { encoding: "utf8" });
+    expect(firstScore.status, firstScore.stderr).toBe(0);
+    const pendingPayload = collectDecisionFileBatches(f.scoring, false) as {
+      pending: Array<{
+        batchType: string;
+        count: number;
+        arguments: { outputFile: string };
+      }>;
+    };
+    expect(pendingPayload.pending.length).toBe(3);
+
+    for (const entry of pendingPayload.pending) {
+      const results = Array.from({ length: entry.count }, (_, index) => {
+        if (entry.batchType === "recall") {
+          return {
+            index,
+            ok: true,
+            answers: [
+              { name: "same_root_cause", type: "predicate", probability: 0.9 },
+              { name: "match_grade", type: "choice", choice: "exact_match", confidence: 0.9 },
+            ],
+          };
+        }
+        if (entry.batchType === "precision") {
+          return {
+            index,
+            ok: true,
+            answers: [
+              { name: "matches_baseline", type: "predicate", probability: 0.8 },
+              { name: "concrete_defect", type: "predicate", probability: 0.85 },
+              { name: "defect_value", type: "score", score: 3 },
+            ],
+          };
+        }
+        return {
+          index,
+          ok: true,
+          answers: [
+            { name: "signal_to_noise", type: "score", score: 3 },
+            { name: "actionability", type: "score", score: 3 },
+            { name: "overall_quality", type: "score", score: 3 },
+          ],
+        };
+      });
+      fs.mkdirSync(path.dirname(entry.arguments.outputFile), { recursive: true });
+      fs.writeFileSync(entry.arguments.outputFile, JSON.stringify({
+        state: "completed",
+        batchId: `subset-batch-${entry.batchType}`,
+        provider: "jev",
+        count: entry.count,
+        succeeded: entry.count,
+        failed: 0,
+        usage: { estimatedCostUsd: 0.002 },
+        results,
+      }));
+    }
+
+    const secondScore = spawnSync(process.execPath, [
+      path.join(suiteDir, "score.mjs"),
+      "--run", f.runDir,
+      "--repo", f.repo,
+      "--judge-provider", "jev",
+      "--skip-prepare",
+    ], { encoding: "utf8" });
+    expect(secondScore.status, secondScore.stderr).toBe(0);
+    const summary = JSON.parse(fs.readFileSync(path.join(f.runDir, "eval-matrix-summary.json"), "utf8"));
+    expect(summary.aggregates.all.codex.cases).toBe(1);
+
+    // Blind cohorts must reject --cases subsets.
+    const blindFixture = createScoringFixture({ blind: true });
+    const blindSubset = spawnSync(process.execPath, [
+      path.join(driversDir, "prepare-scoring-batches.mjs"),
+      "--repo", blindFixture.repo,
+      "--cohort", blindFixture.cohort,
+      "--results", blindFixture.results,
+      "--out", blindFixture.scoring,
+      "--arms", "codex",
+      "--cases", "case-secret-alpha",
+    ], { encoding: "utf8" });
+    expect(blindSubset.status).not.toBe(0);
+    expect(blindSubset.stderr).toMatch(/Blind holdout cohorts cannot be scored with a --cases subset/i);
   });
 });

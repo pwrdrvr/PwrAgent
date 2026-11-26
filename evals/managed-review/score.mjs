@@ -56,6 +56,7 @@ function usage() {
     "  --run <dir>                   Run directory containing results/ and run-meta.json (required)",
     "  --cohort <name|path>          Override cohort path (default: read from run-meta.json)",
     "  --arms <list>                 Override arms list (default: read from run-meta.json)",
+    "  --cases <all|ids>             Override case subset (default: read from run-meta.json, or all)",
     "  --repo <dir>                  Repository checkout for git diffs (default: repo root)",
     "  --judge-provider <id>         Decision provider: jev (default), local, openai, or default",
     "  --mode <mcp|direct>           mcp = PwrAgent decisions_invoke proxy (no API key); direct = standalone CLI",
@@ -76,6 +77,7 @@ function main() {
       run: { type: "string" },
       cohort: { type: "string" },
       arms: { type: "string" },
+      cases: { type: "string" },
       repo: { type: "string", default: repoRoot },
       "judge-provider": { type: "string", default: "jev" },
       mode: { type: "string", default: "mcp" },
@@ -99,6 +101,12 @@ function main() {
   if (values.mode !== "mcp" && values.mode !== "direct") {
     throw new Error("--mode must be mcp or direct.");
   }
+  if (values.mode === "direct" && values["judge-provider"] === "default") {
+    throw new Error(
+      "--judge-provider default relies on PwrAgent Settings and requires --mode mcp. "
+      + "For --mode direct, specify --judge-provider jev, local, or openai.",
+    );
+  }
 
   const runDir = path.resolve(callerCwd, values.run);
   const metaPath = path.join(runDir, "run-meta.json");
@@ -113,6 +121,7 @@ function main() {
     throw new Error("Could not resolve cohort file. Pass --cohort <name|path>.");
   }
   const arms = values.arms ?? (Array.isArray(runMeta.arms) ? runMeta.arms.join(",") : "codex,neon");
+  const cases = values.cases ?? (typeof runMeta.cases === "string" && runMeta.cases.trim() ? runMeta.cases.trim() : "all");
   const repoCwd = path.resolve(callerCwd, values.repo);
   const resultsDir = path.join(runDir, "results");
   const scoringDir = path.join(runDir, "scoring");
@@ -124,6 +133,7 @@ function main() {
       "--results", resultsDir,
       "--out", scoringDir,
       "--arms", arms,
+      "--cases", cases,
       "--judge-provider", values["judge-provider"],
     ];
     if (values["allow-legacy-baselines"]) prepArgs.push("--allow-legacy-baselines");
@@ -166,6 +176,7 @@ function main() {
     "--results", resultsDir,
     "--scoring", scoringDir,
     "--out", runDir,
+    "--cases", cases,
   ];
   if (values["allow-inspect-test"]) aggArgs.push("--allow-inspect-test");
   runNode(path.join(driversDir, "aggregate-eval-scores.mjs"), aggArgs);

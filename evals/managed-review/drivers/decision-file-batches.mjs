@@ -69,8 +69,11 @@ export function collectDecisionFileBatches(scoring, record) {
       summary[batchType].push({
         batchType, chunkIndex, start: chunk.start, count: chunk.count,
         provider: output.provider,
+        ...(typeof output.model === "string" && output.model.trim() ? { model: output.model.trim() } : {}),
         batchId: output.batchId, succeeded: output.succeeded, failed: output.failed,
-        estimatedCostUsd: output.usage?.estimatedCostUsd ?? 0,
+        estimatedCostUsd: typeof output.usage?.estimatedCostUsd === "number" && Number.isFinite(output.usage.estimatedCostUsd)
+          ? output.usage.estimatedCostUsd
+          : null,
         definitionSha256, inputsSha256, outputFile,
       });
     }

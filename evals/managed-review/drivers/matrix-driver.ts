@@ -16,6 +16,10 @@ import { promisify } from "node:util";
 import { isNativeClaudeSourceKey, nativeClaudeReviewCommand } from "./native-claude-capture.mjs";
 import { reviewedMergeBase } from "./review-range.mjs";
 import { checkoutReviewSnapshot, initReviewWorkspace, writePinnedReviewPatch } from "./review-workspace.mjs";
+import {
+  extractReviewFromExitedItem,
+  isReviewTerminalEventMatch,
+} from "./review-event-normalizer";
 import { resolveSafeWorkspaceParent } from "../../shared/workspace-staging.mjs";
 import { readCellUsageFromRegistry, type CellUsageMetrics } from "../../shared/usage-metrics";
 import { buildPendingRequestResponse } from "@pwragent/shared/pending-request-response";
@@ -487,6 +491,7 @@ async function main() {
     );
 
     type Waiter = {
+      arm: ArmId;
       backend: AppServerBackendKind;
       parentThreadId: string;
       turnId?: string;
@@ -503,8 +508,8 @@ async function main() {
 
     function findWaiter(backend: AppServerBackendKind, threadId: string, turnId?: string) {
       return [...waiters.values()].find((w) => w.backend === backend
-        && (w.parentThreadId === threadId || w.reviewThreadId === threadId)
-        && (!w.turnId || !turnId || w.turnId === turnId));
+        && (w.parentThreadId === threadId
+          || (w.reviewThreadId === threadId && (!w.turnId || !turnId || w.turnId === turnId))));
     }
 
     async function answerApproval(backend: AppServerBackendKind, notification: AppServerPendingRequestNotification) {
@@ -544,13 +549,16 @@ async function main() {
       const turn = params.turn as { id?: string; status?: string; error?: { message?: string } } | undefined;
       const turnId = typeof params.turnId === "string" ? params.turnId : turn?.id;
       const wait = waiters.get(`${event.backend}:${threadId}`);
-      if (!turnId || !wait || (wait.turnId && turnId !== wait.turnId)) return;
+      if (!wait) return;
       if (method === "item/completed") {
         const item = params.item as Record<string, unknown> | undefined;
         if (item?.type !== "exitedReviewMode") return;
         const data = item.data as Record<string, unknown> | undefined;
-        if (data?.reviewOutput) wait.reviewOutput = data.reviewOutput as AppServerReviewOutput;
-        if (typeof item.review === "string") wait.reviewText = item.review;
+        const extracted = extractReviewFromExitedItem(item, {
+          allowPlainTextReview: wait.arm === "codex-native",
+        });
+        if (extracted.reviewOutput) wait.reviewOutput = extracted.reviewOutput;
+        if (extracted.reviewText !== undefined) wait.reviewText = extracted.reviewText;
         if (event.backend === "claude" && typeof item.id === "string" && isNativeClaudeSourceKey(item.id)) {
           wait.nativeSources.add(item.id);
           const reviewer = data?.reviewer as { backend?: string; model?: string } | undefined;
@@ -558,7 +566,14 @@ async function main() {
             wait.reviewerModel = reviewer.model;
           }
         }
-      } else if (method === "turn/failed" || (method === "turn/completed" && turn?.status === "failed")) {
+        return;
+      }
+      if (!isReviewTerminalEventMatch({
+        expectedTurnId: wait.turnId,
+        eventTurnId: turnId,
+        relatedReviewTurnId: event.relatedReviewTurnId,
+      })) return;
+      if (method === "turn/failed" || (method === "turn/completed" && turn?.status === "failed")) {
         wait.resolve({ status: "failed", error: turn?.error?.message ?? "turn failed" });
       } else if (method === "turn/cancelled" || (method === "turn/completed"
         && (turn?.status === "cancelled" || turn?.status === "interrupted"))) {
@@ -670,6 +685,7 @@ async function main() {
           let resolve!: Waiter["resolve"];
           const terminal = new Promise<Outcome>((done) => { resolve = done; });
           waiter = {
+            arm,
             backend,
             parentThreadId: parent.threadId,
             approvals: new Set(),
