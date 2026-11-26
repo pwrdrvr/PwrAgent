@@ -1434,10 +1434,20 @@ export class StackReader {
     const anchorPaths = new Set(directories);
     const scopedClones = new Map(anchors.map((entry) => [entry.commonDir, entry] as const));
     if (directories && !scopedClones.size) return { stacks: [], catalogs: unavailable };
+    const scopedCommonDirs = [...scopedClones.keys()];
+    const scopedCatalogsChanged = async () => (await Promise.all(
+      scopedCommonDirs.map((commonDir) => observation.revalidateCatalog(commonDir)),
+    )).some(Boolean);
+    const retryProjection = async (): Promise<{ stacks: StackSummary[]; catalogs: CatalogRead[] }> => {
+      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
+      return await this.readProjection(
+        threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments, trackedPublishingRepositories,
+      );
+    };
 
     const wanted = new Set<string>();
     // Read explicitly requested catalogs even when there is nothing to bind.
-    const scopedCatalogs = await Promise.all([...scopedClones.keys()].map(async (commonDir) => {
+    const scopedCatalogs = await Promise.all(scopedCommonDirs.map(async (commonDir) => {
       const catalog = await observation.catalog(commonDir);
       if (catalog.status === "ok" && catalog.catalog.stacks.length) wanted.add(commonDir);
       return catalog;
@@ -1445,10 +1455,13 @@ export class StackReader {
     // Auto-publishing only acts on tracked stacks. Once live Git has pinned
     // the scoped clones, an inferred chain alone cannot justify a fleet scan.
     if (directories && trackedPublishingRepositories && !wanted.size && !unavailable.length
-      && scopedCatalogs.every(({ status }) => status === "missing" || status === "ok")
-      && ![...trackedPublishingRepositories].some((repository) => githubForgeStacksIn(repository).length)) {
+      && scopedCatalogs.every(({ status }) => status === "missing" || status === "ok")) {
+      const changed = await scopedCatalogsChanged();
       demand.signal?.throwIfAborted();
-      return { stacks: [], catalogs: scopedCatalogs };
+      if (changed) return await retryProjection();
+      if (![...trackedPublishingRepositories].some((repository) => githubForgeStacksIn(repository).length)) {
+        return { stacks: [], catalogs: scopedCatalogs };
+      }
     }
     const eligible = possibleInferredLayers(local, knownPrs);
     const inferredRows = local.filter((row) => row.prs?.some((pr) => eligible.has(prIdentity(pr))));
@@ -1651,14 +1664,7 @@ export class StackReader {
     const attachmentCheckouts = await resolveAttachmentCheckouts(rows, checkouts, cloneCheckouts, observation);
     // Scoped admission used the initial catalog. A change during discovery
     // requires fresh admission before projection can assert settlement.
-    if (scopedClones.size && (await Promise.all(
-      [...scopedClones.keys()].map((commonDir) => observation.revalidateCatalog(commonDir)),
-    )).some(Boolean)) {
-      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
-      return await this.readProjection(
-        threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments, trackedPublishingRepositories,
-      );
-    }
+    if (scopedClones.size && await scopedCatalogsChanged()) return await retryProjection();
     const cloneThreads = new Map<string, CloneThread[]>();
     for (const row of rows) {
       const pathsByClone = new Map<string, string[]>();
@@ -1751,10 +1757,7 @@ export class StackReader {
     if (!await observation.checkoutsStillMatch(witnessedCheckouts) || !await observation.rostersStillMatch(checkouts.values())
       || (validatedAny && !await attachments!.unchanged())
       || (packagedHintVersion && packagedHintVersion !== hints.packagedDiscoveryHintVersion())) {
-      if (retried) return { stacks: [], catalogs: [{ status: "unavailable" }] };
-      return await this.readProjection(
-        threads, knownPrs, directories, activity, new StackReadObservation(demand), true, validateAttachments, trackedPublishingRepositories,
-      );
+      return await retryProjection();
     }
     return { stacks: stacks.map(({ stack, observed }) => {
       const layers = stack.layers.map((layer) => {

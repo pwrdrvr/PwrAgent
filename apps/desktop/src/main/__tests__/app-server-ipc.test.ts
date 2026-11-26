@@ -4349,6 +4349,32 @@ describe("app server ipc", () => {
     return response.data.pullRequestWatch;
   }
 
+  it.each([
+    ["merged", "success", 0],
+    ["closed", "failure", 60_000],
+  ] as const)("replays a PR's %s observation that arrives before its CI watch is inserted", async (lifecycleState, outcome, age) => {
+    const { appServerService } = await import("../shell/ipc/app-server");
+    const pending = githubPr({
+      number: 3195, org: "pwrdrvr", repo: "PwrAgent", state: "pending", headSha: "a".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/3195",
+    });
+    const watchHandler = await prepareWatchForAttachedPr(pending, { fetchedAt: Date.now() - age - 1000 });
+    const final = { ...pending, lifecycleState };
+    const fetchedAt = Date.now() - age;
+    const replay = vi.spyOn(appServerService["getPrStatusWatchCoordinator"](), "handleStatusSnapshot").mockResolvedValue(0);
+    onTestFinished(() => replay.mockRestore());
+    registerThreadPrStatusWatch.mockImplementationOnce(async ({ watch }) => {
+      appServerService["prStatusRegistry"].set(buildPullRequestStatusKey(final), { pr: final, fetchedAt });
+      return { status: "watching", existed: false, watch };
+    });
+
+    await watchHandler({ backend: "codex", threadId: "thread-1", notifyOn: [outcome] });
+
+    // A terminal PR leaves the poll rotation. Registration must offer the
+    // final canonical observation even if that poll could not see the watch.
+    expect(replay).toHaveBeenCalledExactlyOnceWith(final, fetchedAt);
+  });
+
   it("arms a CI watch after rerun_failed_ci_jobs while the cache still holds the replaced failure", async () => {
     const { SqliteOverlayStore } = await import("../state/overlay-store-sqlite");
     const { StateDb } = await import("../state/state-db");

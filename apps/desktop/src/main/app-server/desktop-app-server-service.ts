@@ -4888,10 +4888,14 @@ class DesktopAppServerService {
     if (watch || terminalWatch) {
       await this.publishPrWatchesUpdated([{ backend: args.backend, threadId, prKey }]);
     }
-    // A baseline is the outcome the watch must not fire on, so it is never
-    // offered as a snapshot.
-    if (watch && currentOutcomeIsFresh && !watch.baseline) {
-      await this.getPrStatusWatchCoordinator().handleStatusSnapshot(pr, createdAt);
+    if (watch) {
+      // The last poll can publish a terminal status before it can see the
+      // new watch. Replay canonical evidence after the registration commits.
+      const latest = this.prStatusRegistry.get(this.prRepositoryAliases.canonicalizeKey(prKey));
+      if (latest && (isTerminalPullRequest(latest.pr)
+        || (!watch.baseline && Date.now() - latest.fetchedAt <= PR_STATUS_WATCH_CURRENT_OUTCOME_MAX_AGE_MS))) {
+        await this.getPrStatusWatchCoordinator().handleStatusSnapshot(latest.pr, latest.fetchedAt);
+      }
     }
 
     const coveredByAutoFix: ThreadPullRequestWatchEvent[] =

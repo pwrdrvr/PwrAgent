@@ -79,6 +79,46 @@ async function packagedGitFixture() {
 }
 
 describe("StackReader installed-Git and unavailable checkout budgets", () => {
+  it("admits a catalog published while another scoped catalog is still being read", async () => {
+    const { sandbox } = await packagedGitFixture();
+    const first = path.join(sandbox, "first");
+    const second = path.join(sandbox, "second");
+    await Promise.all([mkdir(first), mkdir(second)]);
+    const head = initialize(first);
+    initialize(second);
+    git(first, "branch", "feat");
+
+    const observation = new StackReadObservation();
+    const readCatalog = observation.catalog.bind(observation);
+    const sampledFirst = Promise.withResolvers<void>();
+    const repository = "github.com:fixture/publishing";
+    vi.spyOn(observation, "catalog").mockImplementation(async (commonDir) => {
+      if (commonDir === path.join(first, ".git")) {
+        const result = await readCatalog(commonDir);
+        sampledFirst.resolve();
+        return result;
+      }
+      await sampledFirst.promise;
+      await writeFile(path.join(first, ".git", "gh-stack"), JSON.stringify({
+        schemaVersion: 1, repository, stacks: [{
+          trunk: { branch: "main", head },
+          branches: [{ branch: "feat", head, base: head }],
+        }],
+      }));
+      return await readCatalog(commonDir);
+    });
+
+    // The scope must match a fresh Git-backed read when its initially missing
+    // catalog becomes visible before the other scoped read completes.
+    const reader = new StackReader();
+    const rows = [row(first, "first"), row(second, "second")];
+    const scope = [first, second];
+    const interrupted = await reader.read(rows, [], scope, undefined, observation, undefined, new Set([repository]));
+    const fresh = await reader.read(rows, [], scope);
+    expect(fresh.stacks.map((stack) => stack.name)).toEqual(["feat"]);
+    expect(interrupted).toEqual(fresh);
+  });
+
   it.skipIf(process.platform === "win32")("observes only the scoped Git anchors when publication has no tracked stack", async () => {
     const { sandbox, executable } = await packagedGitFixture();
     const repo = path.join(sandbox, "repo");
