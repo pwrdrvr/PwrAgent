@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -60,6 +61,21 @@ afterEach(() => {
 });
 
 describe("ReactionPicker", () => {
+  it("skips localStorage reads and portal work while closed", () => {
+    const getItemSpy = vi.spyOn(Storage.prototype, "getItem");
+
+    render(<PickerHarness initialOpen={false} />);
+
+    expect(screen.queryByRole("dialog", { name: "Add reaction" })).toBeNull();
+    expect(getItemSpy).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open reactions" }));
+    expect(
+      screen.getByRole("dialog", { name: "Add reaction" }),
+    ).toBeInTheDocument();
+    expect(getItemSpy).toHaveBeenCalledWith(REACTION_RECENTS_STORAGE_KEY);
+  });
+
   it("opens as a searchable dialog focused on search with thumbs up first and no OS shortcut hint", () => {
     render(<PickerHarness current={["🚀"]} />);
 
@@ -84,6 +100,92 @@ describe("ReactionPicker", () => {
     expect(rocketButton).toHaveClass("is-active");
   });
 
+  it("re-measures placement after portal mount and ignores internal grid scrolls", () => {
+    const originalInnerWidth = window.innerWidth;
+    const originalInnerHeight = window.innerHeight;
+    Object.defineProperty(window, "innerWidth", { value: 1280, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+
+    let anchorRectCalls = 0;
+    const origGetBoundingClientRect = Element.prototype.getBoundingClientRect;
+    vi.spyOn(Element.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: Element,
+    ) {
+      if (this.classList.contains("reaction-picker")) {
+        return {
+          top: 0,
+          bottom: 230,
+          left: 0,
+          right: 316,
+          width: 316,
+          height: 230,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        } as DOMRect;
+      }
+      if (this.tagName === "BUTTON" && this.textContent === "Open reactions") {
+        anchorRectCalls++;
+        return {
+          top: 500,
+          bottom: 520,
+          left: 200,
+          right: 224,
+          width: 24,
+          height: 20,
+          x: 200,
+          y: 500,
+          toJSON: () => ({}),
+        } as DOMRect;
+      }
+      return origGetBoundingClientRect.call(this);
+    });
+
+    try {
+      render(<PickerHarness />);
+      const dialog = screen.getByRole("dialog", { name: "Add reaction" });
+      // With default height 378px, anchor.bottom(520)+6+378 > 792 would have
+      // flipped above to top=116. After re-measuring at 230px, 520+6+230=756<=792
+      // so it stays below at top=526px.
+      expect(dialog).toHaveAttribute("data-placement", "below");
+      expect(dialog).toHaveStyle({ top: "526px", left: "200px" });
+
+      const callsBeforeGridScroll = anchorRectCalls;
+      const body = dialog.querySelector(".reaction-picker__body") as HTMLElement;
+      fireEvent.scroll(body);
+      expect(anchorRectCalls).toBe(callsBeforeGridScroll);
+    } finally {
+      Object.defineProperty(window, "innerWidth", {
+        value: originalInnerWidth,
+        configurable: true,
+      });
+      Object.defineProperty(window, "innerHeight", {
+        value: originalInnerHeight,
+        configurable: true,
+      });
+    }
+  });
+
+  it("preserves exact stored VS16 variant strings when toggling active reactions off", () => {
+    const onSelect = vi.fn();
+    render(<PickerHarness current={["❤", "☀", "☀️"]} onSelect={onSelect} />);
+
+    // "❤" matches Quick's "❤️" by normalized key; clicking toggles off "❤".
+    const heartButton = screen.getByRole("button", { name: "Red heart" });
+    expect(heartButton).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(heartButton);
+    expect(onSelect).toHaveBeenCalledWith("❤");
+
+    // Reopen and verify "On this thread" dedupes "☀"/"☀️" and passes stored "☀".
+    onSelect.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Open reactions" }));
+    const activeGroup = screen.getByRole("group", { name: "On this thread" });
+    const activeButtons = within(activeGroup).getAllByRole("button");
+    expect(activeButtons).toHaveLength(1);
+    fireEvent.click(activeButtons[0]!);
+    expect(onSelect).toHaveBeenCalledWith("☀");
+  });
+
   it("filters across the full Unicode catalog and selects the top match on Enter", async () => {
     const onSelect = vi.fn();
     render(<PickerHarness onSelect={onSelect} />);
@@ -99,6 +201,19 @@ describe("ReactionPicker", () => {
 
     fireEvent.keyDown(searchInput, { key: "Enter" });
     expect(onSelect).toHaveBeenCalledWith("🥑");
+  });
+
+  it("ignores Enter and ArrowDown during active IME composition in the search input", () => {
+    const onSelect = vi.fn();
+    render(<PickerHarness onSelect={onSelect} />);
+
+    const searchInput = screen.getByRole("searchbox", { name: "Search emoji" });
+    fireEvent.keyDown(searchInput, { key: "Enter", isComposing: true });
+    fireEvent.keyDown(searchInput, { key: "Enter", keyCode: 229 });
+    fireEvent.keyDown(searchInput, { key: "ArrowDown", isComposing: true });
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(searchInput).toHaveFocus();
   });
 
   it("records added reactions in Recent and shows them on next open", () => {
@@ -128,7 +243,7 @@ describe("ReactionPicker", () => {
     expect(onSelect).toHaveBeenCalledWith("👍🏽");
   });
 
-  it("provides Numbers (0-10) and all 26 Letters (A-Z) under the Numbers & Letters tab", () => {
+  it("provides Numbers (0-10) and all 26 Letters (A-Z) and navigates cleanly between sections", () => {
     render(<PickerHarness />);
 
     fireEvent.click(screen.getByRole("tab", { name: "Numbers & Letters" }));
@@ -141,6 +256,46 @@ describe("ReactionPicker", () => {
     expect(
       within(letters).getByRole("button", { name: "Letter Z" }),
     ).toHaveTextContent("🅩");
+
+    // ArrowDown from 8️⃣ (row 1, col 0 of Numbers) lands on Letter A (row 0, col 0 of Letters).
+    const number8 = within(numbers).getByRole("button", { name: "Number 8" });
+    const letterA = within(letters).getByRole("button", { name: "Letter A" });
+    act(() => {
+      number8.focus();
+    });
+    fireEvent.keyDown(number8, { key: "ArrowDown" });
+    expect(letterA).toHaveFocus();
+
+    fireEvent.keyDown(letterA, { key: "ArrowUp" });
+    expect(number8).toHaveFocus();
+  });
+
+  it("clears stale preview and scroll offset on grid type-ahead into search", () => {
+    render(<PickerHarness />);
+
+    const dialog = screen.getByRole("dialog", { name: "Add reaction" });
+    const searchInput = within(dialog).getByRole("searchbox", {
+      name: "Search emoji",
+    });
+    const body = dialog.querySelector(".reaction-picker__body") as HTMLElement;
+    body.scrollTop = 120;
+
+    const rocket = screen.getByRole("button", { name: "Rocket" });
+    act(() => {
+      rocket.focus();
+    });
+    expect(within(dialog).getByText("Rocket")).toBeInTheDocument();
+
+    fireEvent.keyDown(rocket, { key: "f" });
+    expect(searchInput).toHaveFocus();
+    expect(searchInput).toHaveValue("f");
+    expect(body.scrollTop).toBe(0);
+
+    // Top search match should be highlighted and shown in the preview footer
+    // rather than remaining stuck on Rocket.
+    const firstMatch = body.querySelector('[data-reaction-index="0"]');
+    expect(firstMatch).toHaveClass("is-match");
+    expect(within(dialog).queryByText("Rocket")).toBeNull();
   });
 
   it("shows hovered emoji name and shortcode in the footer and Active when already present", () => {

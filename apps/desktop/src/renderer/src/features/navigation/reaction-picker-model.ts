@@ -342,44 +342,48 @@ function scoreEntry(
   }
 
   const lowerName = entry.name.toLowerCase();
+  const lowerShortcode = entry.shortcode.toLowerCase();
   const normalizedShortcode = normalizeSearchToken(entry.shortcode);
+  const hasNormalizedQuery = normalizedQuery.length > 0;
 
   if (
-    lowerName === normalizedQuery
-    || entry.shortcode.toLowerCase() === rawLower
-    || normalizedShortcode === normalizedQuery
+    lowerShortcode === rawLower
+    || (hasNormalizedQuery && (lowerName === normalizedQuery || normalizedShortcode === normalizedQuery))
     || entry.keywords.some(
       (keyword) =>
         keyword.toLowerCase() === rawLower
-        || normalizeSearchToken(keyword) === normalizedQuery,
+        || (hasNormalizedQuery && normalizeSearchToken(keyword) === normalizedQuery),
     )
   ) {
     return 1;
   }
 
   if (
-    lowerName.startsWith(normalizedQuery)
-    || entry.shortcode.toLowerCase().startsWith(rawLower)
-    || normalizedShortcode.startsWith(normalizedQuery)
+    lowerShortcode.startsWith(rawLower)
+    || (hasNormalizedQuery
+      && (lowerName.startsWith(normalizedQuery)
+        || normalizedShortcode.startsWith(normalizedQuery)))
   ) {
     return 2;
   }
 
   const words = lowerName.split(/\s+/);
   if (
-    words.some((word) => word.startsWith(normalizedQuery))
+    (hasNormalizedQuery && words.some((word) => word.startsWith(normalizedQuery)))
     || entry.keywords.some(
       (keyword) =>
         keyword.toLowerCase().startsWith(rawLower)
-        || normalizeSearchToken(keyword).startsWith(normalizedQuery),
+        || (hasNormalizedQuery && normalizeSearchToken(keyword).startsWith(normalizedQuery)),
     )
   ) {
     return 3;
   }
 
-  const searchable = `${lowerName} ${entry.shortcode.toLowerCase()} ${normalizedShortcode} ${entry.keywords.join(" ").toLowerCase()}`;
-  if (queryTokens.every((token) => searchable.includes(token))) {
-    return 4;
+  if (queryTokens.length > 0) {
+    const searchable = `${lowerName} ${lowerShortcode} ${normalizedShortcode} ${entry.keywords.join(" ").toLowerCase()}`;
+    if (queryTokens.every((token) => searchable.includes(token))) {
+      return 4;
+    }
   }
 
   return undefined;
@@ -497,39 +501,100 @@ export function computeReactionPickerPosition(
 export function moveReactionGridIndex(
   currentIndex: number,
   key: string,
-  itemCount: number,
+  sectionLengths: readonly number[],
   columns = REACTION_PICKER_COLUMNS,
 ): number | undefined {
-  if (itemCount <= 0 || columns <= 0) {
+  if (columns <= 0) {
     return undefined;
   }
-  const safeIndex = Math.max(0, Math.min(currentIndex, itemCount - 1));
+
+  const rows: { start: number; length: number }[] = [];
+  let totalItems = 0;
+  for (const sectionLength of sectionLengths) {
+    if (sectionLength <= 0) {
+      continue;
+    }
+    for (let offset = 0; offset < sectionLength; offset += columns) {
+      rows.push({
+        start: totalItems + offset,
+        length: Math.min(columns, sectionLength - offset),
+      });
+    }
+    totalItems += sectionLength;
+  }
+
+  if (totalItems <= 0 || rows.length === 0) {
+    return undefined;
+  }
+
+  const safeIndex = Math.max(0, Math.min(currentIndex, totalItems - 1));
   switch (key) {
     case "ArrowRight":
-      return (safeIndex + 1) % itemCount;
+      return (safeIndex + 1) % totalItems;
     case "ArrowLeft":
-      return (safeIndex - 1 + itemCount) % itemCount;
-    case "ArrowDown": {
-      const next = safeIndex + columns;
-      if (next < itemCount) {
-        return next;
-      }
-      return itemCount - 1;
-    }
-    case "ArrowUp": {
-      const prev = safeIndex - columns;
-      if (prev >= 0) {
-        return prev;
-      }
-      return undefined;
-    }
+      return (safeIndex - 1 + totalItems) % totalItems;
     case "Home":
       return 0;
     case "End":
-      return itemCount - 1;
+      return totalItems - 1;
+    case "ArrowDown":
+    case "ArrowUp": {
+      const rowIdx = rows.findIndex(
+        (row) => safeIndex >= row.start && safeIndex < row.start + row.length,
+      );
+      if (rowIdx < 0) {
+        return undefined;
+      }
+      const colIdx = safeIndex - rows[rowIdx]!.start;
+      if (key === "ArrowDown") {
+        if (rowIdx + 1 >= rows.length) {
+          return totalItems - 1;
+        }
+        const nextRow = rows[rowIdx + 1]!;
+        return nextRow.start + Math.min(colIdx, nextRow.length - 1);
+      }
+      if (rowIdx === 0) {
+        return undefined;
+      }
+      const prevRow = rows[rowIdx - 1]!;
+      return prevRow.start + Math.min(colIdx, prevRow.length - 1);
+    }
     default:
       return undefined;
   }
+}
+
+export type LazyValueCache<T> = {
+  getCached: () => T | undefined;
+  load: () => Promise<T>;
+};
+
+export function createLazyValueCache<T>(
+  loader: () => Promise<T>,
+): LazyValueCache<T> {
+  let cached: T | undefined;
+  let pending: Promise<T> | undefined;
+
+  return {
+    getCached: () => cached,
+    load: () => {
+      if (cached !== undefined) {
+        return Promise.resolve(cached);
+      }
+      if (!pending) {
+        pending = loader()
+          .then((value) => {
+            cached = value;
+            return value;
+          })
+          .catch((error: unknown) => {
+            pending = undefined;
+            throw error;
+          });
+      }
+      return pending;
+    },
+  };
 }
 
 export function normalizeRecentReactions(

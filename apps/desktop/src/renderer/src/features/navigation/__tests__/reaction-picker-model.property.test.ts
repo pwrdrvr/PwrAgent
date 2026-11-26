@@ -1,5 +1,5 @@
 import fc from "fast-check";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildReactionEmojiCatalog } from "../reaction-emoji-catalog";
 import {
   LABEL_LETTER_REACTIONS,
@@ -7,6 +7,7 @@ import {
   QUICK_REACTIONS,
   REACTION_CATEGORIES,
   computeReactionPickerPosition,
+  createLazyValueCache,
   moveReactionGridIndex,
   normalizeEmojiKey,
   recordRecentReactionList,
@@ -94,11 +95,11 @@ describe("recent reaction list properties", () => {
   });
 });
 
-describe("2D reaction grid navigation properties", () => {
-  it("always returns undefined (escape to search) or an in-bounds index", () => {
+describe("2D multi-section reaction grid navigation properties", () => {
+  it("moves row-by-row across sections, preserving column clamped to the target row", () => {
     fc.assert(
       fc.property(
-        fc.integer({ min: 1, max: 120 }),
+        fc.array(fc.integer({ min: 1, max: 30 }), { minLength: 1, maxLength: 4 }),
         fc.integer({ min: 1, max: 12 }),
         fc.integer({ min: 0, max: 150 }),
         fc.constantFrom(
@@ -109,19 +110,58 @@ describe("2D reaction grid navigation properties", () => {
           "Home",
           "End",
         ),
-        (itemCount, columns, rawIndex, key) => {
-          const currentIndex = rawIndex % itemCount;
-          const next = moveReactionGridIndex(currentIndex, key, itemCount, columns);
-          if (key === "ArrowUp" && currentIndex < columns) {
+        (sectionLengths, columns, rawIndex, key) => {
+          const total = sectionLengths.reduce((sum, len) => sum + len, 0);
+          const currentIndex = rawIndex % total;
+          const next = moveReactionGridIndex(
+            currentIndex,
+            key,
+            sectionLengths,
+            columns,
+          );
+          const firstRowLength = Math.min(columns, sectionLengths[0]!);
+          if (key === "ArrowUp" && currentIndex < firstRowLength) {
             expect(next).toBeUndefined();
           } else {
             expect(next).toBeTypeOf("number");
             expect(next).toBeGreaterThanOrEqual(0);
-            expect(next).toBeLessThan(itemCount);
+            expect(next).toBeLessThan(total);
           }
         },
       ),
     );
+  });
+
+  it("navigates across uneven section boundaries without skipping sections or shifting columns", () => {
+    // 1 recent item above 16 quick items (8 columns):
+    // Row 0: [0], Row 1: [1..8], Row 2: [9..16]
+    expect(moveReactionGridIndex(0, "ArrowDown", [1, 16], 8)).toBe(1);
+    expect(moveReactionGridIndex(3, "ArrowUp", [1, 16], 8)).toBe(0);
+    expect(moveReactionGridIndex(0, "ArrowUp", [1, 16], 8)).toBeUndefined();
+
+    // Numbers & Letters: 11 numbers (0..10) above 26 letters (11..36)
+    // Row 0: [0..7], Row 1: [8..10], Row 2: [11..18]
+    expect(moveReactionGridIndex(8, "ArrowDown", [11, 26], 8)).toBe(11);
+    expect(moveReactionGridIndex(11, "ArrowUp", [11, 26], 8)).toBe(8);
+    expect(moveReactionGridIndex(15, "ArrowUp", [11, 26], 8)).toBe(10);
+  });
+});
+
+describe("lazy value cache lifecycle", () => {
+  it("clears a rejected load promise so the next open retries and caches on success", async () => {
+    const loader = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(new Error("chunk failed"))
+      .mockResolvedValueOnce("catalog-ok");
+
+    const cache = createLazyValueCache(loader);
+    await expect(cache.load()).rejects.toThrow("chunk failed");
+    expect(cache.getCached()).toBeUndefined();
+
+    await expect(cache.load()).resolves.toBe("catalog-ok");
+    expect(cache.getCached()).toBe("catalog-ok");
+    await expect(cache.load()).resolves.toBe("catalog-ok");
+    expect(loader).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -149,6 +189,29 @@ describe("reaction emoji catalog and search", () => {
       const matches = searchReactionEmojis(catalog.all, query);
       expect(matches[0]?.emoji, `query=${query}`).toBe("👍");
     }
+  });
+
+  it("does not match the full catalog on hyphen or underscore punctuation queries", () => {
+    const dashMatches = searchReactionEmojis(catalog.all, "-");
+    expect(dashMatches[0]?.emoji).toBe("👎");
+    expect(dashMatches.some((entry) => entry.emoji === "👍")).toBe(false);
+
+    for (const query of ["_", "--", ":_:", "___"]) {
+      expect(searchReactionEmojis(catalog.all, query), `query=${query}`).toEqual(
+        [],
+      );
+    }
+
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom("-", "_", ":"), { minLength: 1, maxLength: 5 }),
+        (chars) => {
+          const query = chars.join("");
+          const matches = searchReactionEmojis(catalog.all, query);
+          expect(matches.some((entry) => entry.emoji === "👍")).toBe(false);
+        },
+      ),
+    );
   });
 
   it("finds full-catalog emojis, numbers, and letters by name and shortcode", () => {

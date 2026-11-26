@@ -23,6 +23,7 @@ import {
   REACTION_CATEGORIES,
   REACTION_PICKER_COLUMNS,
   computeReactionPickerPosition,
+  createLazyValueCache,
   moveReactionGridIndex,
   normalizeEmojiKey,
   readRecentReactions,
@@ -37,23 +38,11 @@ import {
 const DEFAULT_PICKER_WIDTH = 316;
 const DEFAULT_PICKER_HEIGHT = 378;
 
-let cachedCatalog: ReactionEmojiCatalog | undefined;
-let catalogLoadPromise: Promise<ReactionEmojiCatalog> | undefined;
-
-function ensureCatalogLoaded(): Promise<ReactionEmojiCatalog> {
-  if (cachedCatalog) {
-    return Promise.resolve(cachedCatalog);
-  }
-  if (!catalogLoadPromise) {
-    catalogLoadPromise = import("./reaction-emoji-catalog")
-      .then((module) => module.loadReactionEmojiCatalog())
-      .then((catalog) => {
-        cachedCatalog = catalog;
-        return catalog;
-      });
-  }
-  return catalogLoadPromise;
-}
+const catalogCache = createLazyValueCache<ReactionEmojiCatalog>(() =>
+  import("./reaction-emoji-catalog").then((module) =>
+    module.loadReactionEmojiCatalog(),
+  ),
+);
 
 const BASE_BY_KEY = new Map<string, ReactionEmojiEntry>(
   BASE_REACTION_ENTRIES.map((entry) => [normalizeEmojiKey(entry.emoji), entry]),
@@ -165,8 +154,24 @@ type ReactionPickerProps = {
   onDismiss: () => void;
 };
 
+type OpenReactionPickerProps = Omit<ReactionPickerProps, "open">;
+
 export function ReactionPicker(props: ReactionPickerProps) {
-  const { open, current, anchorRef, onSelect, onDismiss } = props;
+  if (!props.open) {
+    return null;
+  }
+  return (
+    <OpenReactionPicker
+      current={props.current}
+      anchorRef={props.anchorRef}
+      onSelect={props.onSelect}
+      onDismiss={props.onDismiss}
+    />
+  );
+}
+
+function OpenReactionPicker(props: OpenReactionPickerProps) {
+  const { current, anchorRef, onSelect, onDismiss } = props;
   const surfaceRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const gridBodyRef = useRef<HTMLDivElement>(null);
@@ -174,52 +179,53 @@ export function ReactionPicker(props: ReactionPickerProps) {
   const [placement, setPlacement] = useState<ReactionPickerPlacement>();
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState<ReactionCategoryId>("quick");
-  const [catalog, setCatalog] = useState<ReactionEmojiCatalog | undefined>(() => cachedCatalog);
+  const [catalog, setCatalog] = useState<ReactionEmojiCatalog | undefined>(() =>
+    catalogCache.getCached(),
+  );
   const [recents, setRecents] = useState<string[]>(() => readRecentReactions());
   const [previewEntry, setPreviewEntry] = useState<ReactionEmojiEntry | undefined>();
 
-  // Reset transient state when the picker opens/closes and warm the full
-  // emoji catalog chunk lazily on first open so startup stays lean.
+  // Warm the full emoji catalog chunk lazily on first open so startup stays lean.
+  // A transient import failure clears the cached promise so the next open retries.
   useEffect(() => {
-    if (!open) {
-      setQuery("");
-      setActiveCategory("quick");
-      setPreviewEntry(undefined);
-      return;
-    }
-    setRecents(readRecentReactions());
-    if (cachedCatalog) {
-      setCatalog(cachedCatalog);
+    const cached = catalogCache.getCached();
+    if (cached) {
+      setCatalog(cached);
       return;
     }
     let cancelled = false;
-    void ensureCatalogLoaded().then((loaded) => {
-      if (!cancelled) {
-        setCatalog(loaded);
-      }
-    });
+    void catalogCache
+      .load()
+      .then((loaded) => {
+        if (!cancelled) {
+          setCatalog(loaded);
+        }
+      })
+      .catch(() => {
+        // Keep Quick + Labels usable; next open retries the chunk load.
+      });
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, []);
 
   // Register Escape handling with the shared dismissable layer stack so
   // Escape closes only this popover and returns focus to the trigger.
   useDismissableLayer({
-    open,
+    open: true,
     onDismiss,
     surfaceRef,
     triggerRef: anchorRef,
   });
 
+  const isPlaced = placement !== undefined;
+
   // The picker is portaled to <body> with position:fixed because the sidebar
   // scroll container clips overflow on both axes. Compute placement from the
-  // anchor rect, clamping inside the viewport and flipping above if needed.
+  // anchor rect and re-measure once the portal mounts, when content height
+  // changes (category switch, search, async catalog load), or on viewport
+  // scroll/resize. Ignore scroll events inside the picker's own grid body.
   useLayoutEffect(() => {
-    if (!open) {
-      setPlacement(undefined);
-      return;
-    }
     const update = (): void => {
       const anchor = anchorRef.current;
       if (!anchor) {
@@ -227,8 +233,10 @@ export function ReactionPicker(props: ReactionPickerProps) {
       }
       const anchorRect = anchor.getBoundingClientRect();
       const measured = surfaceRef.current?.getBoundingClientRect();
-      const width = measured && measured.width > 0 ? measured.width : DEFAULT_PICKER_WIDTH;
-      const height = measured && measured.height > 0 ? measured.height : DEFAULT_PICKER_HEIGHT;
+      const width =
+        measured && measured.width > 0 ? measured.width : DEFAULT_PICKER_WIDTH;
+      const height =
+        measured && measured.height > 0 ? measured.height : DEFAULT_PICKER_HEIGHT;
       const next = computeReactionPickerPosition(
         anchorRect,
         { width, height },
@@ -243,29 +251,45 @@ export function ReactionPicker(props: ReactionPickerProps) {
           : next,
       );
     };
-    update();
-    window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, { capture: true });
-    return () => {
-      window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, { capture: true });
+
+    const handleScroll = (event: Event): void => {
+      if (
+        event.target instanceof Node
+        && surfaceRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      update();
     };
-  }, [open, anchorRef, activeCategory, query]);
+
+    update();
+
+    let resizeObserver: ResizeObserver | undefined;
+    if (typeof ResizeObserver === "function" && surfaceRef.current) {
+      resizeObserver = new ResizeObserver(update);
+      resizeObserver.observe(surfaceRef.current);
+    }
+
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", handleScroll, { capture: true });
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", handleScroll, { capture: true });
+    };
+  }, [anchorRef, isPlaced, activeCategory, query, catalog, recents.length, current.length]);
 
   // Focus the search field immediately once the picker is mounted and placed.
   useEffect(() => {
-    if (!open || !placement) {
+    if (!isPlaced) {
       return;
     }
     searchInputRef.current?.focus();
-  }, [open, placement !== undefined]);
+  }, [isPlaced]);
 
   // Dismiss on pointer-down outside both the popover and its trigger button
   // (ignoring the trigger avoids a dismiss-then-reopen flicker on click).
   useEffect(() => {
-    if (!open) {
-      return;
-    }
     const handlePointerDown = (event: PointerEvent): void => {
       const target = event.target as Node | null;
       if (
@@ -282,12 +306,21 @@ export function ReactionPicker(props: ReactionPickerProps) {
         capture: true,
       });
     };
-  }, [open, onDismiss, anchorRef]);
+  }, [onDismiss, anchorRef]);
 
-  const currentKeys = useMemo(
-    () => new Set(current.map((emoji) => normalizeEmojiKey(emoji))),
-    [current],
-  );
+  // Map normalized key -> exact stored reaction string on the thread so
+  // toggling off a stored VS16 variant (e.g. "❤" vs "❤️") removes the exact
+  // stored entry instead of appending a duplicate.
+  const currentByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const emoji of current) {
+      const key = normalizeEmojiKey(emoji);
+      if (!map.has(key)) {
+        map.set(key, emoji);
+      }
+    }
+    return map;
+  }, [current]);
 
   const isSearching = query.trim().length > 0;
 
@@ -311,7 +344,9 @@ export function ReactionPicker(props: ReactionPickerProps) {
       const result: ReactionSection[] = [];
       const shownKeys = new Set<string>();
 
-      const recentEntries = recents.map((emoji) => resolveEntryForEmoji(emoji, catalog));
+      const recentEntries = recents.map((emoji) =>
+        resolveEntryForEmoji(emoji, catalog),
+      );
       if (recentEntries.length > 0) {
         for (const entry of recentEntries) {
           shownKeys.add(normalizeEmojiKey(entry.emoji));
@@ -327,9 +362,18 @@ export function ReactionPicker(props: ReactionPickerProps) {
         shownKeys.add(normalizeEmojiKey(entry.emoji));
       }
 
-      const extraActive = current
-        .filter((emoji) => !shownKeys.has(normalizeEmojiKey(emoji)))
-        .map((emoji) => resolveEntryForEmoji(emoji, catalog));
+      const extraActive: ReactionEmojiEntry[] = [];
+      for (const emoji of current) {
+        const key = normalizeEmojiKey(emoji);
+        if (shownKeys.has(key)) {
+          continue;
+        }
+        shownKeys.add(key);
+        const resolved = resolveEntryForEmoji(emoji, catalog);
+        extraActive.push(
+          resolved.emoji === emoji ? resolved : { ...resolved, emoji },
+        );
+      }
 
       if (extraActive.length > 0) {
         result.push({
@@ -365,6 +409,11 @@ export function ReactionPicker(props: ReactionPickerProps) {
     ];
   }, [activeCategory, catalog, current, isSearching, recents, searchResults]);
 
+  const sectionLengths = useMemo(
+    () => sections.map((section) => section.entries.length),
+    [sections],
+  );
+
   const flatEntries = useMemo(
     () => sections.flatMap((section) => section.entries),
     [sections],
@@ -372,8 +421,9 @@ export function ReactionPicker(props: ReactionPickerProps) {
 
   const handleSelectEntry = useCallback(
     (entry: ReactionEmojiEntry, fromKeyboard: boolean) => {
-      const alreadyOn = currentKeys.has(normalizeEmojiKey(entry.emoji));
-      if (!alreadyOn) {
+      const key = normalizeEmojiKey(entry.emoji);
+      const storedActive = currentByKey.get(key);
+      if (storedActive === undefined) {
         const nextRecents = recordRecentReactionList(recents, entry.emoji);
         setRecents(nextRecents);
         writeRecentReactions(nextRecents);
@@ -381,9 +431,9 @@ export function ReactionPicker(props: ReactionPickerProps) {
       if (fromKeyboard) {
         anchorRef.current?.focus();
       }
-      onSelect(entry.emoji);
+      onSelect(storedActive ?? entry.emoji);
     },
-    [anchorRef, currentKeys, onSelect, recents],
+    [anchorRef, currentByKey, onSelect, recents],
   );
 
   const focusGridButton = useCallback((index: number): void => {
@@ -397,6 +447,9 @@ export function ReactionPicker(props: ReactionPickerProps) {
   const handleSearchKeyDown = (
     event: ReactKeyboardEvent<HTMLInputElement>,
   ): void => {
+    if (event.nativeEvent.isComposing || event.keyCode === 229) {
+      return;
+    }
     if (event.key === "Enter" && flatEntries.length > 0) {
       event.preventDefault();
       handleSelectEntry(flatEntries[0]!, true);
@@ -430,7 +483,7 @@ export function ReactionPicker(props: ReactionPickerProps) {
       const next = moveReactionGridIndex(
         flatIndex,
         event.key,
-        flatEntries.length,
+        sectionLengths,
         REACTION_PICKER_COLUMNS,
       );
       if (next === undefined) {
@@ -450,6 +503,10 @@ export function ReactionPicker(props: ReactionPickerProps) {
     ) {
       event.preventDefault();
       setQuery((prev) => prev + event.key);
+      setPreviewEntry(undefined);
+      if (gridBodyRef.current) {
+        gridBodyRef.current.scrollTop = 0;
+      }
       searchInputRef.current?.focus();
     }
   };
@@ -489,14 +546,14 @@ export function ReactionPicker(props: ReactionPickerProps) {
     }
   };
 
-  if (!open || !placement) {
+  if (!placement) {
     return null;
   }
 
   const activePreview =
     previewEntry ?? (isSearching ? searchResults[0] : undefined);
   const activePreviewIsOn = activePreview
-    ? currentKeys.has(normalizeEmojiKey(activePreview.emoji))
+    ? currentByKey.has(normalizeEmojiKey(activePreview.emoji))
     : false;
 
   let runningIndex = 0;
@@ -617,12 +674,12 @@ export function ReactionPicker(props: ReactionPickerProps) {
                 <div className="reaction-picker__grid">
                   {section.entries.map((entry) => {
                     const flatIndex = runningIndex++;
-                    const isOn = currentKeys.has(normalizeEmojiKey(entry.emoji));
+                    const isOn = currentByKey.has(normalizeEmojiKey(entry.emoji));
                     const isSearchTopMatch =
                       isSearching && flatIndex === 0 && !previewEntry;
                     return (
                       <button
-                        key={`${section.id}:${entry.emoji}`}
+                        key={`${section.id}:${normalizeEmojiKey(entry.emoji)}`}
                         type="button"
                         data-reaction-index={flatIndex}
                         aria-label={entry.name}
