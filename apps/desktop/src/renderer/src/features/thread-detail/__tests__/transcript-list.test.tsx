@@ -802,6 +802,42 @@ describe("TranscriptList", () => {
     }));
   });
 
+  it("reads and disarms a locally authored launchpad review on the mounted thread's owner", async () => {
+    const owner = { scope: "remote" as const, instanceId: "peer" };
+    const readReviewAutoFix = vi.fn(async () => ({ status: { armedTurnIds: ["turn"], runs: {} } }));
+    const disarmReviewAutoFix = vi.fn(async () => ({ disarmed: true, status: { armedTurnIds: [], runs: {} } }));
+    vi.stubGlobal("pwragent", { readReviewAutoFix, disarmReviewAutoFix });
+    onTestFinished(() => { vi.unstubAllGlobals(); });
+
+    render(
+      <ThreadLinkProvider localInstanceId="viewer" onShowThread={vi.fn()} threads={[]}>
+        <TranscriptList
+          entries={[{
+            type: "review", id: "optimistic-launchpad-review-thread",
+            review: "Review current changes", displayText: "Review current changes",
+            turn: { id: "turn", status: "in_progress" },
+          }]}
+          loading={false}
+          loadingMore={false}
+          parentThreadId="thread"
+          parentThreadBackend="acp:antigravity"
+          threadLinkSource={{ backend: "acp:antigravity", instanceId: owner.instanceId }}
+          fileViewerContext={{ key: "thread", title: "Thread", federationTarget: owner }}
+          onLoadOlder={async () => undefined}
+        />
+      </ThreadLinkProvider>,
+    );
+
+    const disarm = await screen.findByRole("button", { name: "Don't auto-fix" });
+    const identity = { backend: "acp:antigravity", threadId: "thread", federationTarget: owner };
+    // The optimistic entry's link author is the viewer. Only the owner can
+    // report or change the review's Auto-fix state.
+    expect(readReviewAutoFix).toHaveBeenCalledExactlyOnceWith(identity);
+    await act(async () => { fireEvent.click(disarm); });
+    expect(disarmReviewAutoFix).toHaveBeenCalledExactlyOnceWith({ ...identity, turnId: "turn" });
+    expect(disarm).not.toBeInTheDocument();
+  });
+
   it("prefers hydrated provenance over a cached fallback thread title", () => {
     const sourceThreadId = "019fde92-318a-7541-9281-029bdc1508b5";
     const sourceThread = {

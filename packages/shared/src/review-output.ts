@@ -22,10 +22,9 @@ export function reviewEntryFailure(
   return undefined;
 }
 
-/** Review headers have no result for the owner to import into tracking. */
+/** A result item can arrive while its enclosing review turn is still active. */
 export function isReviewResultEntry(entry: AppServerThreadReviewEntry): boolean {
   return !entry.id.endsWith(":started")
-    && entry.turn?.status !== "in_progress"
     && (entry.displayText === undefined || Boolean(entry.output));
 }
 

@@ -180,7 +180,7 @@ export class ThreadReviewService {
     entry: AppServerThreadReviewEntry,
     source: "live" | "replay" = "replay",
   ): ThreadReview | undefined {
-    if (reviewEntryFailure(entry) || !isReviewResultEntry(entry)) return undefined;
+    if (reviewEntryFailure(entry) || !isReviewResultEntry(entry) || entry.turn?.status === "in_progress") return undefined;
     // Reading history is not evidence that a review is still waiting on work.
     // A replay can recover a missed completion only after this profile began
     // tracking. Undated history cannot establish that and stays transcript-only.

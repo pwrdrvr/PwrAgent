@@ -218,7 +218,10 @@ export function useTrackedReview(
       const response = await api.updateThreadReview({ id: review.id, ...request,
         ...(instanceId ? { federationTarget: { scope: "remote", instanceId } } : {}),
       });
-      if (generation.current === startedGeneration) setReview(response.review);
+      if (generation.current === startedGeneration) {
+        setReview(response.review);
+        setReadError(undefined);
+      }
     } catch (error) {
       if (generation.current === startedGeneration) setUpdateError(ipcErrorMessage(error));
     } finally {

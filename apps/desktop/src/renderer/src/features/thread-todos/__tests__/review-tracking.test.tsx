@@ -66,6 +66,38 @@ describe("review status controls", () => {
     await screen.findByText("Handled");
   });
 
+  it("offers tracking controls for a native result replayed before its turn ends", async () => {
+    const api = installApi(review);
+    // Codex can publish the result before its enclosing turn finishes.
+    // Replay carries that turn's status even after the owner records the result.
+    render(<TranscriptReview entry={{ ...entry, output: undefined,
+      turn: { id: "review-turn", status: "in_progress" },
+    }} parentThreadId="owner" parentThreadBackend="codex" />);
+
+    expect(api.listThreadReviews).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex", threadId: "owner", status: "all",
+    });
+    await screen.findByRole("button", { name: "Dismiss review" });
+  });
+
+  it("clears a failed refresh when the owner's update response arrives without a change event", async () => {
+    const api = installApi({ ...review, status: "dismissed" });
+    let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+    vi.mocked(api.onThreadTodosChanged!).mockImplementation((listener) => { changed = listener; return () => {}; });
+    render(<TranscriptReview entry={entry} parentThreadId="owner" />);
+    const dismiss = await screen.findByRole("button", { name: "Dismiss review" });
+    vi.mocked(api.listThreadReviews!).mockRejectedValueOnce(new Error("Peer is disconnected."));
+    await act(async () => changed({ at: 2 }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Peer is disconnected.");
+
+    // The owner may already have applied this change for another viewer.
+    // Its successful response is enough to clear the earlier read error.
+    fireEvent.click(dismiss);
+    await screen.findByRole("button", { name: "Reopen review" });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(api.listThreadReviews).toHaveBeenCalledTimes(2);
+  });
+
   it("reloads transcript status when provider recovery refreshes all To-dos", async () => {
     const api = installApi(review);
     vi.mocked(api.listThreadReviews!).mockResolvedValueOnce({ reviews: [] });
