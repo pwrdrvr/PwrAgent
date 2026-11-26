@@ -1,0 +1,3 @@
+interface:
+  display_name: "Repository LOC Accounting"
+  short_description: "Count and compare repository lines of code"
