@@ -1,3 +1,5 @@
+import type { AppServerSkillSummary } from "@pwragent/shared/contracts/normalized-app-server";
+
 export type ComposerSlashCommand = {
   aliases?: readonly string[];
   /** The arguments the command takes, drawn after it in the menu and draft. */
@@ -8,6 +10,7 @@ export type ComposerSlashCommand = {
   name: string;
   /** Hide this client action while the compact composer holds attachments. */
   requiresNoAttachments?: boolean;
+  skill?: AppServerSkillSummary;
   sourceLabel: string;
 };
 

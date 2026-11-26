@@ -24,12 +24,12 @@ export class AcpAvailableCommandsStore implements AcpAvailableCommandsStorage {
       return undefined;
     }
 
-    const commands = parseCommands(row.payload);
-    return commands
+    const catalog = parseCatalog(row.payload);
+    return catalog
       ? {
           backendId,
           repositoryPath,
-          commands,
+          ...catalog,
           observedAt: row.observed_at,
         }
       : undefined;
@@ -50,27 +50,34 @@ export class AcpAvailableCommandsStore implements AcpAvailableCommandsStorage {
         record.backendId,
         record.repositoryPath,
         record.observedAt,
-        JSON.stringify(record.commands),
+        JSON.stringify(record.workspaceCwd
+          ? { commands: record.commands, workspaceCwd: record.workspaceCwd }
+          : record.commands),
       );
   }
 }
 
-function parseCommands(
+function parseCatalog(
   payload: string,
-): AppServerAvailableCommandSummary[] | undefined {
+): Pick<AcpAvailableCommandsRecord, "commands" | "workspaceCwd"> | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(payload);
   } catch {
     return undefined;
   }
-  if (!Array.isArray(parsed)) {
-    return undefined;
-  }
-  return parsed.filter(
-    (entry): entry is AppServerAvailableCommandSummary =>
-      Boolean(entry)
-      && typeof entry === "object"
-      && typeof (entry as { name?: unknown }).name === "string",
-  );
+  const catalog = parsed && typeof parsed === "object"
+    ? parsed as { commands?: unknown; workspaceCwd?: unknown }
+    : undefined;
+  const commands = Array.isArray(parsed) ? parsed : catalog?.commands;
+  if (!Array.isArray(commands)) return undefined;
+  return {
+    commands: commands.filter(
+      (entry): entry is AppServerAvailableCommandSummary =>
+        Boolean(entry)
+        && typeof entry === "object"
+        && typeof (entry as { name?: unknown }).name === "string",
+    ),
+    ...(typeof catalog?.workspaceCwd === "string" ? { workspaceCwd: catalog.workspaceCwd } : {}),
+  };
 }

@@ -3694,15 +3694,18 @@ export class AcpBackendAdapter {
           });
         }
         if (updateKind === "available_commands_update") {
+          const session = this.getSession(agent.backendId, sessionId);
+          const cwd = agent.backendId === "acp:antigravity" && !session?.requiresAgentSessionRebind
+            ? session?.antigravityPrimaryCwd ?? session?.cwd
+            : undefined;
           await this.emit({
             backend: agent.backendId,
             notification: {
               method: "thread/availableCommands/updated",
               params: {
                 threadId: sessionId,
-                commands:
-                  this.getSession(agent.backendId, sessionId)?.availableCommands ??
-                  [],
+                commands: session?.availableCommands ?? [],
+                ...(cwd ? { cwd: path.resolve(cwd) } : {}),
               },
             },
           });

@@ -94,6 +94,8 @@ export type AcpAvailableCommandsRecord = {
   backendId: AcpBackendId;
   repositoryPath: string;
   commands: AppServerAvailableCommandSummary[];
+  /** A worktree can report different commands from the shared repository. */
+  workspaceCwd?: string;
   observedAt: number;
 };
 

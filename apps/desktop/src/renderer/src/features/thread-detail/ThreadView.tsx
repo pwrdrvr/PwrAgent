@@ -42,7 +42,6 @@ import type {
   MoveThreadToMainCheckoutResponse,
   RecreateThreadWorktreeRequest,
   RecreateThreadWorktreeResponse,
-  AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
   AppServerReviewTarget,
   AppServerThreadActivityEntry,
@@ -99,6 +98,7 @@ import {
 } from "@pwragent/shared/codex-environment-action-runs";
 import { resolveThreadTerminalCwd } from "@pwragent/shared/thread-terminal";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import {
   agentEventMatchesThread,
   federationTargetsEqual,
@@ -852,7 +852,7 @@ export type ThreadViewProps = {
   worktreeArchiveError?: string;
   skillError?: string;
   skillLoading?: boolean;
-  providerCommands?: AppServerAvailableCommandSummary[];
+  providerCommands?: ThreadProviderCommand[];
   skills: AppServerSkillSummary[];
   transcriptEntries: AppServerThreadEntry[];
   transcriptError?: string;
@@ -863,7 +863,8 @@ export type ThreadViewProps = {
   transcriptPagination?: AppServerThreadReplayPagination;
   updatingExecutionMode?: ThreadExecutionMode;
   onActiveTurnIdChange?: (turnId?: string) => void;
-  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  skillCatalogTargetKey?: string;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void | Promise<void>;
   codexSkillProfiles?: readonly CodexSkillProfile[];
   onOpenCodexSkillProfiles?: () => void;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
@@ -3338,6 +3339,7 @@ export function ThreadView(props: ThreadViewProps) {
         onDismissFullAccessRiskWarning={
           props.onDismissFullAccessRiskWarning
         }
+        skillCatalogTargetKey={props.skillCatalogTargetKey}
         onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
         codexSkillProfiles={props.codexSkillProfiles}
         onOpenCodexSkillProfiles={props.onOpenCodexSkillProfiles}

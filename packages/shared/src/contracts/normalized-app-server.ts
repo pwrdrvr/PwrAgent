@@ -109,6 +109,8 @@ export type AppServerSkillSummary = {
   path?: string;
   enabled?: boolean;
   scope?: string;
+  /** Available through an explicit path mention outside the provider’s native skill catalog. */
+  mentionOnly?: boolean;
   /** Owning plugin, `<plugin>@<marketplace>`, when the skill ships in one. */
   pluginId?: string;
   /**
@@ -2115,6 +2117,8 @@ export type PersistThreadUsageActivityResponse = {
 
 export type AppServerListSkillsRequest = {
   backend?: AppServerBackendKind;
+  /** Antigravity can read either catalog independently. Omit for both. */
+  catalog?: "skills" | "commands";
   cwd?: string;
   cwds?: string[];
   federationTarget?: FederationTarget;
@@ -3064,6 +3068,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         commands: AppServerAvailableCommandSummary[];
+        /** Workspace where this command list was observed, when known. */
+        cwd?: string;
       };
     }
   | {

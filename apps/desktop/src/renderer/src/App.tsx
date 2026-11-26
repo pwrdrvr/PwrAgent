@@ -4403,6 +4403,7 @@ function DesktopAppShell(props: {
         setExecutionModeError: navigation.setThreadExecutionModeError,
         setThreadModelSettingsError: navigation.setThreadModelSettingsError,
         skillError: skills.error,
+        skillCatalogTargetKey: skills.skillCatalogTargetKey,
         skillLoading: skills.loading,
         codexSkillProfiles: remoteSkillProfileOwner
           ? skills.response?.codexSkillProfiles

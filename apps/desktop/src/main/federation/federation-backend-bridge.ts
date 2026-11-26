@@ -720,6 +720,8 @@ export function additionalFederationBackendCapabilities(
     || envelope.method === FEDERATION_BACKEND_METHODS.getSteerRequest) required.push("durable_steer_requests_v1");
   if (envelope.method === FEDERATION_BACKEND_METHODS.steerTurn
     && (envelope.params as Partial<SteerTurnRequest> | undefined)?.fallback) required.push("scheduled_actions");
+  if (envelope.method === FEDERATION_BACKEND_METHODS.listSkills
+    && (envelope.params as AppServerListSkillsRequest | undefined)?.backend === "acp:antigravity") required.push("file_pull");
   if (envelope.method === FEDERATION_BACKEND_METHODS.setThreadJobMonitorCreation) required.push("turn_control");
   return required;
 }
