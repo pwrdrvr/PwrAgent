@@ -1883,6 +1883,8 @@ export type DesktopApi = Partial<NativeVoiceApi> & {
   ) => () => void;
   captureRenderingDiagnostics?: (seconds?: number) => Promise<import("../../../shared/rendering-diagnostics").RenderingCaptureResult>;
   stopRenderingDiagnostics?: () => Promise<import("../../../shared/rendering-diagnostics").RenderingCaptureResult | undefined>;
+  recordToastHistory?: (observation: import("../../../shared/operator-alert-history").ToastHistoryObservation) => void;
+  readOperatorAlertHistory?: () => Promise<import("../../../shared/operator-alert-history").OperatorAlertHistory>;
   captureHeapSnapshot?: (
     request: CaptureHeapSnapshotRequest,
   ) => Promise<{ delayMs: number }>;

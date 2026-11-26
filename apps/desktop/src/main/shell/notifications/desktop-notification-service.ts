@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { BrowserWindow, Notification } from "electron";
 import {
   MessagingRateLimitGate,
@@ -7,6 +8,12 @@ import {
 import { rememberBoundedMap } from "../../bounded-map";
 import { getMainLogger } from "../../log";
 import type { TerminalNotification } from "../../owner-host";
+import type {
+  NativeAlertCategory,
+  NativeAlertObservation,
+  NativeHistoryPhase,
+} from "../../../shared/operator-alert-history";
+import { operatorAlertHistory } from "../../storage/operator-alert-history";
 
 const notificationLog = getMainLogger("pwragent:notifications");
 const NATIVE_NOTIFICATION_BODY_MAX_LENGTH = 220;
@@ -21,6 +28,7 @@ type NativeNotificationAction = {
   text: string;
   run: () => void;
 };
+type RecordNativePhase = (phase: NativeHistoryPhase) => void;
 
 /**
  * Native attention/terminal notifications for unattended turns.
@@ -39,9 +47,13 @@ export class DesktopNotificationService {
   private readonly attentionNotifications = new Map<string, Set<Notification>>();
   private readonly liveNotifications = new Set<Notification>();
   private readonly recentRoutineTurns = new Map<string, true>();
+  private readonly history = new WeakMap<Notification, RecordNativePhase>();
   private readonly terminalNotificationGate: MessagingRateLimitGate;
 
-  constructor(now: () => number = () => performance.now()) {
+  constructor(
+    now: () => number = () => performance.now(),
+    private readonly recordAlert?: (observation: NativeAlertObservation) => void,
+  ) {
     this.terminalNotificationGate = new MessagingRateLimitGate(now);
   }
 
@@ -54,6 +66,7 @@ export class DesktopNotificationService {
     this.attentionNotifications.delete(key);
     for (const notification of notifications) {
       this.liveNotifications.delete(notification);
+      this.history.get(notification)?.("cleared");
       try {
         notification.close();
       } catch (error) {
@@ -78,10 +91,12 @@ export class DesktopNotificationService {
       return;
     }
     if (!Notification.isSupported()) {
+      this.track("attention")?.("unsupported");
       return;
     }
     this.attentionKeys.add(params.key);
     this.show({
+      category: "attention",
       attentionKey: params.key,
       title: params.title,
       body: params.body,
@@ -103,6 +118,7 @@ export class DesktopNotificationService {
       return;
     }
     if (!Notification.isSupported()) {
+      this.track("approval")?.("unsupported");
       return;
     }
 
@@ -112,6 +128,7 @@ export class DesktopNotificationService {
     });
     this.attentionKeys.add(params.key);
     this.show({
+      category: "approval",
       attentionKey: params.key,
       title: "PwrAgent approval needed",
       body: nativeApprovalBody(params.intent),
@@ -121,6 +138,7 @@ export class DesktopNotificationService {
   }
 
   notifyTerminal(params: TerminalNotification): void {
+    const category = `turn-${params.status}` as const;
     if (!params.enabled || (params.key && this.attentionKeys.has(params.key))) {
       return;
     }
@@ -128,6 +146,7 @@ export class DesktopNotificationService {
       return;
     }
     if (!Notification.isSupported()) {
+      this.track(category)?.("unsupported");
       return;
     }
     if (params.status !== "failed" && !this.admitRoutineTerminal(params.key, params.turnId)) {
@@ -137,6 +156,7 @@ export class DesktopNotificationService {
       this.attentionKeys.add(params.key);
     }
     this.show({
+      category,
       attentionKey: params.key,
       title: params.title,
       body: params.body,
@@ -168,13 +188,23 @@ export class DesktopNotificationService {
     return windows.every((window) => window.isMinimized() || !window.isFocused());
   }
 
+  private track(category: NativeAlertCategory): RecordNativePhase | undefined {
+    const record = this.recordAlert;
+    if (!record) return undefined;
+    const identity = randomUUID();
+    return (phase) => record({ identity, category, surface: "native", phase });
+  }
+
   private show(params: {
+    category: NativeAlertCategory;
     attentionKey?: string;
     actions?: NativeNotificationAction[];
     onClick?: () => void;
     title: string;
     body: string;
   }): void {
+    const record = this.track(params.category);
+    record?.("submitted");
     try {
       const actions =
         params.actions && params.actions.length > 0 && this.supportsActionButtons()
@@ -193,6 +223,7 @@ export class DesktopNotificationService {
           : {}),
       });
       this.liveNotifications.add(notification);
+      if (record) this.history.set(notification, record);
       if (params.attentionKey) {
         let notifications = this.attentionNotifications.get(params.attentionKey);
         if (!notifications) {
@@ -212,20 +243,26 @@ export class DesktopNotificationService {
         }
       };
       let handledAction = false;
+      if (record) notification.on("show", () => record("displayed"));
       notification.on("click", () => {
         if (handledAction) {
           return;
         }
         cleanup();
+        record?.("clicked");
         params.onClick?.();
       });
-      notification.on("close", cleanup);
+      notification.on("close", () => {
+        cleanup();
+        record?.("closed");
+      });
       // Since Electron 42, macOS delivers through UNUserNotificationCenter,
       // which reports a notification it will not show (an unsigned build, or
       // notifications turned off in System Settings) as `failed`. No `close`
       // follows, so release it here.
       notification.on("failed", (_event, error) => {
         cleanup();
+        record?.("failed");
         notificationLog.warn("native notification failed", { error });
       });
       if (actions) {
@@ -242,11 +279,13 @@ export class DesktopNotificationService {
           }
           handled = true;
           handledAction = true;
+          record?.("action-invoked");
           action.run();
         });
       }
       notification.show();
     } catch (error) {
+      record?.("failed");
       notificationLog.warn("failed to display native notification", {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -319,7 +358,7 @@ let service: DesktopNotificationService | undefined;
 
 export function getDesktopNotificationService(): DesktopNotificationService {
   if (!service) {
-    service = new DesktopNotificationService();
+    service = new DesktopNotificationService(undefined, (observation) => operatorAlertHistory.recordNative(observation));
   }
   return service;
 }

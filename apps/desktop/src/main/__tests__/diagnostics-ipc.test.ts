@@ -16,6 +16,8 @@ vi.mock("electron", () => ({
     removeHandler: vi.fn((channel: string) => {
       handlers.delete(channel);
     }),
+    on: vi.fn(),
+    removeAllListeners: vi.fn(),
   },
 }));
 

@@ -1237,6 +1237,7 @@
     "rowsChanged": 1,
     "statements": 1
   },
+  "operator-alert-history-batch": {"commits": 1, "note": "One flush batches two toast lifecycles and a native display failure, including first-use correlation salt.", "observedWalBytes": 16512, "rowsChanged": 8, "statements": 9},
   "storage-maintenance-archive-lifecycle": {
     "commits": 3,
     "note": "Archive receipt, duplicate observation and restore; duplicate writes no pages",

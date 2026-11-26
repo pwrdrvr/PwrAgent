@@ -48,6 +48,7 @@ export function buildToolAccountingNotice(params: {
     ],
     autoDismiss: false,
     copyText: describeToolAccountingIncident({ showCost: true, summary }),
+    historyCategory: "tool-accounting",
     id: scopeThreadCostNoticeId({
       id: threadIncidentNoticeId(summary),
       ...(params.instanceId ? { instanceId: params.instanceId } : {}),

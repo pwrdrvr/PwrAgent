@@ -1,3 +1,4 @@
+import { useStandaloneToastHistory } from "../notifications/toast-history";
 // The update surface outside Settings. Three jobs, all driven from main and
 // all deliberately non-modal:
 //
@@ -272,6 +273,8 @@ export function AppUpdateBanner(props: {
       ? updateProgressCopy(updateStatus)
       : undefined;
   const offered = version !== undefined && dismissedVersion !== version;
+  const recordProgress = useStandaloneToastHistory(progress ? "app-update-progress" : undefined, "app-update");
+  const recordOffer = useStandaloneToastHistory(offered ? `app-update-offer:${version}` : undefined, "app-update");
 
   if (!progress && !offered) {
     return null;
@@ -350,7 +353,10 @@ export function AppUpdateBanner(props: {
                   className="button button--ghost app-update-banner__cancel"
                   type="button"
                   disabled={canceling}
-                  onClick={handleCancel}
+                  onClick={() => {
+                    recordProgress("action-invoked");
+                    handleCancel();
+                  }}
                 >
                   {canceling ? "Canceling..." : "Cancel"}
                 </button>
@@ -391,6 +397,7 @@ export function AppUpdateBanner(props: {
                 type="button"
                 disabled={restarting}
                 onClick={() => {
+                  recordOffer("action-invoked");
                   void handleRestart();
                 }}
               >
@@ -407,7 +414,10 @@ export function AppUpdateBanner(props: {
                     ? "Dismiss channel switch notification"
                     : "Dismiss update notification"
                 }
-                onClick={() => setDismissedVersion(version)}
+                onClick={() => {
+                  recordOffer("dismissed");
+                  setDismissedVersion(version);
+                }}
               >
                 Dismiss
               </button>

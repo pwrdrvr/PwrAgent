@@ -21,6 +21,11 @@ import { resolveActiveProfilePath } from "../../profile";
 import { isLocalMainWindowWebContents, subscribersForChannel } from "../window-channels";
 import { DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, DIAGNOSTICS_STOP_RENDERING_CHANNEL } from "../../../shared/rendering-diagnostics";
 import { captureRenderingDiagnostics, stopRenderingDiagnostics } from "../diagnostics/rendering-capture";
+import {
+  READ_OPERATOR_ALERT_HISTORY_CHANNEL,
+  RECORD_TOAST_HISTORY_CHANNEL,
+} from "../../../shared/operator-alert-history";
+import { operatorAlertHistory } from "../../storage/operator-alert-history";
 
 const logger = getMainLogger("pwragent:diagnostics-ipc");
 
@@ -78,6 +83,21 @@ export function registerDiagnosticsIpcHandlers(
   rearmHotCpuProfile?: (sessionDirectoryName: string, profileFilename: string) => boolean,
   listRearmableHotCpuProfiles?: () => Promise<HotCpuRearmableCapture[]>,
 ): void {
+  ipcMain.removeAllListeners(RECORD_TOAST_HISTORY_CHANNEL);
+  ipcMain.on(RECORD_TOAST_HISTORY_CHANNEL, (event, observation: unknown) => {
+    if (event.senderFrame && event.senderFrame === event.sender.mainFrame
+      && isLocalMainWindowWebContents(event.sender)) {
+      operatorAlertHistory.recordToast(observation);
+    }
+  });
+  ipcMain.removeHandler(READ_OPERATOR_ALERT_HISTORY_CHANNEL);
+  ipcMain.handle(READ_OPERATOR_ALERT_HISTORY_CHANNEL, (event) => {
+    if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame
+      || !isLocalMainWindowWebContents(event.sender)) {
+      throw new Error("Operator alert history is available in the local main window.");
+    }
+    return operatorAlertHistory.read();
+  });
   ipcMain.removeHandler(HOT_CPU_PROFILE_REARMABLE_CHANNEL);
   ipcMain.handle(HOT_CPU_PROFILE_REARMABLE_CHANNEL, (event) =>
     isLocalMainWindowWebContents(event.sender) ? listRearmableHotCpuProfiles?.() ?? [] : []);
@@ -151,6 +171,9 @@ export function registerDiagnosticsIpcHandlers(
 }
 
 export function disposeDiagnosticsIpcHandlers(): void {
+  ipcMain.removeAllListeners(RECORD_TOAST_HISTORY_CHANNEL);
+  ipcMain.removeHandler(READ_OPERATOR_ALERT_HISTORY_CHANNEL);
+  operatorAlertHistory.flushBestEffort();
   ipcMain.removeHandler(HOT_CPU_PROFILE_REARMABLE_CHANNEL);
   ipcMain.removeHandler(HOT_CPU_PROFILE_REARM_CHANNEL);
   ipcMain.removeHandler(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL);

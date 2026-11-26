@@ -1,3 +1,9 @@
+import {
+  READ_OPERATOR_ALERT_HISTORY_CHANNEL,
+  RECORD_TOAST_HISTORY_CHANNEL,
+  type OperatorAlertHistory,
+  type ToastHistoryObservation,
+} from "../shared/operator-alert-history";
 import type {
   ResourceCheckoutActionRequest, ResourceCheckoutActionResult, ResourceCheckoutsSnapshot, ResourceCheckoutsChangedEvent, ResourceCheckoutsWindowFocus, ResourceThreadRef,
 } from "@pwragent/shared/contracts/resource-checkouts";
@@ -2678,6 +2684,10 @@ const desktopApi = Object.freeze({
     ipcRenderer.invoke(DIAGNOSTICS_CAPTURE_RENDERING_CHANNEL, seconds),
   stopRenderingDiagnostics: (): Promise<RenderingCaptureResult | undefined> =>
     ipcRenderer.invoke(DIAGNOSTICS_STOP_RENDERING_CHANNEL),
+  recordToastHistory: (observation: ToastHistoryObservation): void =>
+    ipcRenderer.send(RECORD_TOAST_HISTORY_CHANNEL, observation),
+  readOperatorAlertHistory: (): Promise<OperatorAlertHistory> =>
+    ipcRenderer.invoke(READ_OPERATOR_ALERT_HISTORY_CHANNEL),
   captureHeapSnapshot: async (
     request: CaptureHeapSnapshotRequest,
   ): Promise<{ delayMs: number }> =>

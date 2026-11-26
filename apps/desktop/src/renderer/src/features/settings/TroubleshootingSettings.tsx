@@ -28,6 +28,7 @@ import {
 import { HotCpuCaptureRulesField } from "./HotCpuCaptureRulesField";
 import { SettingsCopyValue } from "./SettingsCopyValue";
 import { RenderingDiagnosticsSettings } from "./RenderingDiagnosticsSettings";
+import { OperatorAlertHistorySettings } from "./OperatorAlertHistorySettings";
 import { formatProcessIds, sourceBadge } from "./settings-fields";
 
 const HOT_CPU_HEAP_SNAPSHOT_LIMIT_OPTIONS: Array<{
@@ -368,6 +369,14 @@ export function TroubleshootingSettings(props: {
           />
         </div>
       </SettingsSection>
+
+      {props.desktopApi?.readOperatorAlertHistory ? (
+        <SettingsSection title="Operator alerts">
+          <div className="settings-fields">
+            <OperatorAlertHistorySettings desktopApi={props.desktopApi} />
+          </div>
+        </SettingsSection>
+      ) : null}
 
       <RenderingDiagnosticsSettings
         desktopApi={props.desktopApi}

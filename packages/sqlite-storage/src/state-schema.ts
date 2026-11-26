@@ -174,3 +174,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_openai_decision_versions_active_name
   )
   WHERE status = 'active';
 `;
+export const OPERATOR_ALERT_HISTORY_SCHEMA = `
+CREATE TABLE IF NOT EXISTS operator_alert_history (
+  sequence INTEGER PRIMARY KEY,
+  correlation_key TEXT NOT NULL,
+  category TEXT NOT NULL,
+  surface TEXT NOT NULL,
+  milestones TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_operator_alert_history_correlation
+  ON operator_alert_history(correlation_key, sequence DESC);
+`;
