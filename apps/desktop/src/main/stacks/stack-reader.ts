@@ -1,12 +1,12 @@
 import { constants, type BigIntStats } from "node:fs";
 import { createHash } from "node:crypto";
-import { lstat, open, realpath } from "node:fs/promises";
+import { lstat, open, readdir, readFile, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { IterableMapper } from "@shutterstock/p-map-iterable";
 import { buildThreadIdentityKey, type NavigationThreadSummary, type PrSummary } from "@pwragent/shared/contracts/navigation";
 import { parseGhStackCatalog, type GhStack, type GhStackBranch, type GhStackCatalogRead } from "@pwragent/shared/stacks/catalog";
 import {
-  inferPullRequestStacks, stackLayerBinding, stackLayerHealth,
+  inferPullRequestStacks, STACK_DETAIL_REUSE_MS, stackLayerBinding, stackLayerHealth,
   type StackLayer, type StackLayerPullRequest, type StackSummary, type StackThread, type StackWorktree, type ThreadStackMembership,
 } from "@pwragent/shared/stacks/stack-status";
 import { resolveCheckState } from "@pwragent/shared/pull-request-rollup";
@@ -23,6 +23,11 @@ const MAX_BACKGROUND_TTL_REVALIDATIONS_PER_PASS = 16;
 const MAX_INVENTORY_CHECKOUTS = 2_048;
 // Cover large thread histories without FIFO thrashing while still bounding memory.
 const MAX_INVENTORY_CHECKOUTS_CEILING = 32_768;
+const CLONE_STATUS_TTL_MS = STACK_DETAIL_REUSE_MS;
+const MAX_CLONE_STATUS_ENTRIES = 512;
+const MAX_WITNESSED_WORKTREES = 256;
+const MAX_WITNESSED_REF_ENTRIES = 1_024;
+const MAX_WITNESSED_CONFIG_BYTES = 1024 * 1024;
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
 type CatalogObservation = { catalog: CatalogRead; version?: string };
@@ -731,8 +736,186 @@ function clonePrs(threads: readonly CloneThread[], knownPrs: readonly PrSummary[
   return [...new Map(prs.filter((pr) => prRepository(pr) === repository).map((pr) => [pr.number, pr])).values()];
 }
 
+type CloneGitStatus = { worktrees: StackWorktree[]; refs: Refs };
+type CachedCloneGitStatus = CloneGitStatus & {
+  witness: string;
+  expiresAt: number;
+  wallObservedAt: number;
+};
+
+async function regularFileOrMissingVersion(target: string, signal: AbortSignal): Promise<string | undefined> {
+  signal.throwIfAborted();
+  try {
+    const info = await lstat(target, { bigint: true });
+    return info.isFile() ? catalogVersion(info) : undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "missing" : undefined;
+  }
+}
+
+async function followedFileOrMissingVersion(target: string, signal: AbortSignal): Promise<string | undefined> {
+  signal.throwIfAborted();
+  try {
+    const info = await stat(target, { bigint: true });
+    return info.isFile() ? catalogVersion(info) : undefined;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? "missing" : undefined;
+  }
+}
+
+async function configHasIncludes(configPath: string, expectedVersion: string, signal: AbortSignal): Promise<boolean | undefined> {
+  signal.throwIfAborted();
+  try {
+    const info = await lstat(configPath, { bigint: true });
+    if (!info.isFile() || info.size > MAX_WITNESSED_CONFIG_BYTES || catalogVersion(info) !== expectedVersion) return undefined;
+    const text = await readFile(configPath, "utf8");
+    const after = await lstat(configPath, { bigint: true });
+    if (!after.isFile() || catalogVersion(after) !== expectedVersion) return undefined;
+    return text.split(/\r?\n/).some((line) => /^\[\s*include(?:if)?\b/i.test(line.trim()));
+  } catch {
+    return undefined;
+  }
+}
+
+async function witnessLooseRefsTree(
+  root: string,
+  prefix: string,
+  hash: ReturnType<typeof createHash>,
+  counter: { entries: number },
+  signal: AbortSignal,
+): Promise<boolean> {
+  signal.throwIfAborted();
+  let entries;
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      hash.update(`${prefix}:missing\0`);
+      return true;
+    }
+    return false;
+  }
+  entries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+  hash.update(`${prefix}:dir:${entries.length}\0`);
+  for (const entry of entries) {
+    signal.throwIfAborted();
+    if (++counter.entries > MAX_WITNESSED_REF_ENTRIES) return false;
+    if (entry.isSymbolicLink()) return false;
+    const fullPath = path.join(root, entry.name);
+    const rel = `${prefix}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (!await witnessLooseRefsTree(fullPath, rel, hash, counter, signal)) return false;
+    } else if (entry.isFile()) {
+      const version = await regularFileOrMissingVersion(fullPath, signal);
+      if (!version) return false;
+      hash.update(`${rel}=${version}\0`);
+    } else {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Prove that every on-disk input to `git worktree list --porcelain -z` and
+ * `git for-each-ref refs/heads/ refs/remotes/` is unchanged. Returns undefined
+ * whenever discovery overrides, external config includes, symlinks, or
+ * unbounded loose refs prevent a complete proof so the caller falls back to Git.
+ */
+async function observeCloneStatusWitness(
+  clone: Checkout,
+  envVersion: string | undefined,
+  demand: PrMetadataDemand,
+): Promise<string | undefined> {
+  if (!envVersion) return undefined;
+  return await runPrMetadataFileProbe(async (signal) => {
+    const hash = createHash("sha256");
+    hash.update(JSON.stringify([envVersion, clone.commonDir, clone.root, clone.cwd]));
+    hash.update("\0");
+
+    const env = process.env;
+    const globalConfigPaths = new Set<string>();
+    if (env.HOME) {
+      globalConfigPaths.add(path.join(env.HOME, ".gitconfig"));
+      globalConfigPaths.add(path.join(env.HOME, ".config", "git", "config"));
+    }
+    if (env.USERPROFILE) globalConfigPaths.add(path.join(env.USERPROFILE, ".gitconfig"));
+    if (env.XDG_CONFIG_HOME) globalConfigPaths.add(path.join(env.XDG_CONFIG_HOME, "git", "config"));
+    for (const configPath of [...globalConfigPaths].sort()) {
+      const version = await followedFileOrMissingVersion(configPath, signal);
+      if (!version) return undefined;
+      hash.update(`gcfg:${configPath}=${version}\0`);
+    }
+
+    const commonInfo = await lstat(clone.commonDir, { bigint: true });
+    if (!commonInfo.isDirectory()) return undefined;
+    hash.update(`common:${commonInfo.dev}:${commonInfo.ino}:${commonInfo.mode}:${commonInfo.uid}:${commonInfo.gid}:${commonInfo.birthtimeNs}\0`);
+
+    const headVersion = await regularFileOrMissingVersion(path.join(clone.commonDir, "HEAD"), signal);
+    const configPath = path.join(clone.commonDir, "config");
+    const configVersion = await regularFileOrMissingVersion(configPath, signal);
+    const worktreeConfigVersion = await regularFileOrMissingVersion(path.join(clone.commonDir, "config.worktree"), signal);
+    const packedRefsVersion = await regularFileOrMissingVersion(path.join(clone.commonDir, "packed-refs"), signal);
+    const reftableVersion = await regularFileOrMissingVersion(path.join(clone.commonDir, "reftable", "tables.list"), signal);
+    if (!headVersion || !configVersion || !worktreeConfigVersion || !packedRefsVersion || !reftableVersion) return undefined;
+    if (configVersion !== "missing") {
+      const includes = await configHasIncludes(configPath, configVersion, signal);
+      if (includes !== false) return undefined;
+    }
+    hash.update(`head:${headVersion}\0cfg:${configVersion}\0wtcfg:${worktreeConfigVersion}\0packed:${packedRefsVersion}\0reftable:${reftableVersion}\0`);
+
+    const worktreesDir = path.join(clone.commonDir, "worktrees");
+    let worktreeEntries;
+    try {
+      worktreeEntries = await readdir(worktreesDir, { withFileTypes: true });
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+      worktreeEntries = undefined;
+    }
+    if (!worktreeEntries) {
+      hash.update("worktrees:missing\0");
+    } else {
+      if (worktreeEntries.length > MAX_WITNESSED_WORKTREES) return undefined;
+      worktreeEntries.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
+      hash.update(`worktrees:${worktreeEntries.length}\0`);
+      for (const entry of worktreeEntries) {
+        signal.throwIfAborted();
+        if (!entry.isDirectory()) return undefined;
+        const entryDir = path.join(worktreesDir, entry.name);
+        const [wtHead, wtGitdir, wtConfig, wtReftable, wtLocked] = await Promise.all([
+          regularFileOrMissingVersion(path.join(entryDir, "HEAD"), signal),
+          regularFileOrMissingVersion(path.join(entryDir, "gitdir"), signal),
+          regularFileOrMissingVersion(path.join(entryDir, "config.worktree"), signal),
+          regularFileOrMissingVersion(path.join(entryDir, "reftable", "tables.list"), signal),
+          regularFileOrMissingVersion(path.join(entryDir, "locked"), signal),
+        ]);
+        if (!wtHead || !wtGitdir || !wtConfig || !wtReftable || !wtLocked) return undefined;
+        hash.update(`wt:${entry.name}:${wtHead}:${wtGitdir}:${wtConfig}:${wtReftable}:${wtLocked}\0`);
+      }
+    }
+
+    if (reftableVersion === "missing") {
+      const counter = { entries: 0 };
+      if (!await witnessLooseRefsTree(path.join(clone.commonDir, "refs", "heads"), "refs/heads", hash, counter, signal)) {
+        return undefined;
+      }
+      if (!await witnessLooseRefsTree(path.join(clone.commonDir, "refs", "remotes"), "refs/remotes", hash, counter, signal)) {
+        return undefined;
+      }
+    }
+
+    return hash.digest("hex");
+  }, demand);
+}
+
 async function projectClone(
-  clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[], memo: CommitGraphMemo, demand?: PrMetadataDemand,
+  clone: Clone, threads: readonly CloneThread[], knownPrs: readonly PrSummary[], memo: CommitGraphMemo,
+  readStatus: (clone: Checkout, demand?: PrMetadataDemand) => Promise<CloneGitStatus>,
+  demand?: PrMetadataDemand,
 ): Promise<{ stacks: StackSummary[]; worktrees: StackWorktree[]; observed: Map<string, PrSummary> }> {
   const catalog = clone.catalog.status === "ok" ? clone.catalog.catalog : undefined;
   const repositories = new Set(threads.flatMap(({ row }) => (row.prs ?? []).map(prRepository)));
@@ -765,14 +948,11 @@ async function projectClone(
     return catalogStacks.length || inferred.length ? [{ repository, catalogStacks, forgeNumbers, prs, bindings, inferred }] : [];
   });
   if (!plans.length) return { stacks, worktrees: [], observed };
-  const [worktreeOutput, refOutput, graphScope] = await Promise.all([
-    git(clone.cwd, ["worktree", "list", "--porcelain", "-z"], demand).catch(() => ""),
-    git(clone.cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(upstream)", "refs/heads/", "refs/remotes/"], demand).catch(() => ""),
+  const [{ worktrees, refs }, graphScope] = await Promise.all([
+    readStatus(clone, demand),
     memo.scope(clone.commonDir),
   ]);
   const graph = commitGraph(clone.cwd, memo, graphScope, demand);
-  const worktrees = checkedOutWorktrees(worktreeOutput);
-  const refs = parseRefs(refOutput);
   const cloneKey = createHash("sha256").update(clone.commonDir).digest("hex").slice(0, 24);
   const busy = Boolean(catalog?.stacks.length) && await stackJournalInFlight(clone.commonDir);
   for (const { repository, catalogStacks, forgeNumbers, prs, bindings, inferred } of plans) {
@@ -872,6 +1052,8 @@ export class StackReader {
   private readonly inventoryCheckouts = new Map<string, {
     version: string; checkout: CheckoutLookup; expiresAt: number;
   }>();
+  private readonly pendingCloneStatuses = new Map<string, SharedPrMetadataRead<CloneGitStatus>>();
+  private readonly cloneStatuses = new Map<string, CachedCloneGitStatus>();
   private inventoryCheckoutCapacity = MAX_INVENTORY_CHECKOUTS;
   private readonly deferredTtlRevalidations = new Set<string>();
 
@@ -1037,6 +1219,87 @@ export class StackReader {
       && checkout.root === before.root && checkout.commonDir === before.commonDir
       && (await hints.checkoutIdentity(cwd))?.version === version) return recordWitness({ ...checkout, cwd }, true);
     return await observation.checkoutLookup(cwd, inventoryDemand);
+  }
+
+  private async sampleLiveCloneGitStatus(clone: Checkout, demand?: PrMetadataDemand): Promise<CloneGitStatus & { ok: boolean }> {
+    let worktreesOk = true;
+    let refsOk = true;
+    const [worktreeOutput, refOutput] = await Promise.all([
+      git(clone.cwd, ["worktree", "list", "--porcelain", "-z"], demand).catch(() => {
+        worktreesOk = false;
+        return "";
+      }),
+      git(clone.cwd, ["for-each-ref", "--format=%(refname)%00%(objectname)%00%(upstream)", "refs/heads/", "refs/remotes/"], demand).catch(() => {
+        refsOk = false;
+        return "";
+      }),
+    ]);
+    return { worktrees: checkedOutWorktrees(worktreeOutput), refs: parseRefs(refOutput), ok: worktreesOk && refsOk };
+  }
+
+  private async readCloneGitStatus(
+    clone: Checkout,
+    observation: StackReadObservation,
+    allowCache: boolean,
+    demand?: PrMetadataDemand,
+  ): Promise<CloneGitStatus> {
+    if (!allowCache) {
+      const { worktrees, refs } = await this.sampleLiveCloneGitStatus(clone, demand);
+      return { worktrees, refs };
+    }
+    const envVersion = observation.hints.gitEnvironmentVersion();
+    const beforeWitness = await observeCloneStatusWitness(clone, envVersion, observation.inventoryDemand);
+    demand?.signal?.throwIfAborted();
+    if (!beforeWitness) {
+      this.cloneStatuses.delete(clone.commonDir);
+      const { worktrees, refs } = await this.sampleLiveCloneGitStatus(clone, demand);
+      return { worktrees, refs };
+    }
+    const cached = this.cloneStatuses.get(clone.commonDir);
+    if (cached && cached.witness === beforeWitness) {
+      const wallAge = Date.now() - cached.wallObservedAt;
+      if (cached.expiresAt > this.now() && wallAge >= 0 && wallAge < CLONE_STATUS_TTL_MS) {
+        this.cloneStatuses.delete(clone.commonDir);
+        this.cloneStatuses.set(clone.commonDir, cached);
+        return { worktrees: cached.worktrees, refs: cached.refs };
+      }
+    } else if (cached) {
+      this.cloneStatuses.delete(clone.commonDir);
+    }
+
+    const pendingKey = JSON.stringify([clone.commonDir, beforeWitness]);
+    let pending = this.pendingCloneStatuses.get(pendingKey);
+    if (!pending || pending.signal.aborted) {
+      const read = new SharedPrMetadataRead<CloneGitStatus>(async (sharedDemand) => {
+        try {
+          const { worktrees, refs, ok } = await this.sampleLiveCloneGitStatus(clone, sharedDemand);
+          sharedDemand.signal?.throwIfAborted();
+          if (ok) {
+            const afterWitness = await observeCloneStatusWitness(clone, envVersion, sharedDemand);
+            sharedDemand.signal?.throwIfAborted();
+            if (afterWitness === beforeWitness) {
+              this.cloneStatuses.delete(clone.commonDir);
+              this.cloneStatuses.set(clone.commonDir, {
+                witness: beforeWitness,
+                worktrees,
+                refs,
+                expiresAt: this.now() + CLONE_STATUS_TTL_MS,
+                wallObservedAt: Date.now(),
+              });
+              while (this.cloneStatuses.size > MAX_CLONE_STATUS_ENTRIES) {
+                this.cloneStatuses.delete(this.cloneStatuses.keys().next().value!);
+              }
+            }
+          }
+          return { worktrees, refs };
+        } finally {
+          if (this.pendingCloneStatuses.get(pendingKey) === read) this.pendingCloneStatuses.delete(pendingKey);
+        }
+      });
+      this.pendingCloneStatuses.set(pendingKey, read);
+      pending = read;
+    }
+    return await pending.read(demand);
   }
 
   async read(threads: readonly StackThreadRow[], knownPrs: readonly PrSummary[], directories?: readonly string[],
@@ -1301,8 +1564,14 @@ export class StackReader {
       const catalog = await observation.catalog(checkout.commonDir);
       return {
         catalog,
-        ...await projectClone({ ...(validatedAny ? observation.projectionCheckout(checkout) : checkout), catalog },
-          cloneThreads.get(checkout.commonDir) ?? [], knownPrs, this.commitGraph, demand),
+        ...await projectClone(
+          { ...(validatedAny ? observation.projectionCheckout(checkout) : checkout), catalog },
+          cloneThreads.get(checkout.commonDir) ?? [],
+          knownPrs,
+          this.commitGraph,
+          (clone, cloneDemand) => this.readCloneGitStatus(clone, observation, backgroundNavigation, cloneDemand),
+          demand,
+        ),
       };
     }));
     if (directories && unavailablePaths.size && !unavailable.length) {

@@ -7,6 +7,7 @@ import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import { isWorkspaceHandoffDirectory } from "@pwragent/shared/navigation-state";
 import {
   NAVIGATION_DIRECTORY_SET_CHANGED_METHOD,
+  navigationPullRequestKeysMayMatch,
   navigationQueryEventRequiresRefresh,
 } from "@pwragent/shared/navigation-query-events";
 import { getDesktopBackendRegistry, type DesktopBackendRegistry } from "./backend-registry";
@@ -42,6 +43,75 @@ const indexReads = new NavigationIndexReadPool(1_000, 15_000);
 const actionIndexReads = new NavigationIndexReadPool();
 const stackReader = getDesktopStackReader();
 
+export type StackPrRelevanceScope = {
+  prKeys: ReadonlySet<string>;
+  repositories: ReadonlySet<string>;
+};
+
+export function buildStackPrRelevanceScope(params: {
+  prs?: readonly PrSummary[];
+  repositories?: readonly string[];
+  stackPrKeys?: readonly string[];
+}): StackPrRelevanceScope {
+  const prKeys = new Set<string>(params.stackPrKeys ?? []);
+  const repositories = new Set<string>();
+  for (const pr of params.prs ?? []) {
+    const key = buildPullRequestStatusKey(pr);
+    prKeys.add(key);
+    const repo = normalizedPullRequestRepository(key);
+    if (repo) repositories.add(repo);
+  }
+  for (const repository of params.repositories ?? []) {
+    const repo = normalizedPullRequestRepository(repository);
+    if (repo) repositories.add(repo);
+  }
+  return { prKeys, repositories };
+}
+
+function normalizedPullRequestRepository(value: string): string | undefined {
+  const trimmed = value.trim().toLowerCase();
+  const fromPrKey = /^([^/#]+)\/([^/#]+(?:\/[^/#]+)+)#\d+$/.exec(trimmed);
+  if (fromPrKey) {
+    const [, provider, repository] = fromPrKey;
+    const host = provider === "github" || provider === "gitlab" ? `${provider}.com` : provider;
+    return `${host}/${repository}`;
+  }
+  const fromCatalog = /^([^:/#]+):([^/#]+(?:\/[^/#]+)+)$/.exec(trimmed);
+  if (fromCatalog) {
+    const [, provider, repository] = fromCatalog;
+    const host = provider === "github" || provider === "gitlab" ? `${provider}.com` : provider;
+    return `${host}/${repository}`;
+  }
+  return undefined;
+}
+
+function extractPullRequestEventKey(params: unknown): string | undefined {
+  if (!params || typeof params !== "object") return undefined;
+  const record = params as { prKey?: unknown; pr?: PrSummary };
+  if (typeof record.prKey === "string" && record.prKey.trim()) return record.prKey.trim();
+  const pr = record.pr;
+  if (pr && typeof pr === "object"
+    && typeof pr.provider === "string"
+    && typeof pr.org === "string"
+    && typeof pr.repo === "string"
+    && typeof pr.number === "number") {
+    return buildPullRequestStatusKey(pr);
+  }
+  return undefined;
+}
+
+function pullRequestStatusEventRelevant(params: unknown, scope: StackPrRelevanceScope | undefined): boolean {
+  if (!scope) return true;
+  const eventPrKey = extractPullRequestEventKey(params);
+  if (!eventPrKey) return true;
+  for (const key of scope.prKeys) {
+    if (navigationPullRequestKeysMayMatch(key, eventPrKey)) return true;
+  }
+  const eventRepository = normalizedPullRequestRepository(eventPrKey);
+  if (!eventRepository) return true;
+  return scope.repositories.has(eventRepository);
+}
+
 /** Events that affect only viewer-mounted remote pins, never local owner membership or stacks. */
 function viewerOnlyNavigationEvent(method: string): boolean {
   return method === "navigation/remoteThreadPins/changed"
@@ -49,10 +119,15 @@ function viewerOnlyNavigationEvent(method: string): boolean {
 }
 
 /** A stacked index read is stale after this event; its stack inputs may have changed. */
-function stackIndexEventInvalidates(notification: { method: string; params?: unknown }): boolean {
+export function stackIndexEventInvalidates(
+  notification: { method: string; params?: unknown },
+  prScope?: StackPrRelevanceScope,
+): boolean {
   if (viewerOnlyNavigationEvent(notification.method)) return false;
-  return notification.method === "pullRequest/status/updated"
-    || navigationQueryEventRequiresRefresh(notification.method, notification.params);
+  if (notification.method === "pullRequest/status/updated") {
+    return pullRequestStatusEventRelevant(notification.params, prScope);
+  }
+  return navigationQueryEventRequiresRefresh(notification.method, notification.params);
 }
 
 /** Counts the events that invalidate stacked index reads, per registry. */
@@ -65,7 +140,7 @@ function stackInputEpoch(registry: DesktopBackendRegistry): { value: number } | 
   // One listener for the registry's lifetime, so no change is missed between
   // projections. Without events, nothing could say a projection went stale.
   registry.onEvent((event) => {
-    if (stackIndexEventInvalidates(event.notification)) counter.value += 1;
+    if (stackIndexEventInvalidates(event.notification, latestStackProjections.get(registry)?.prScope)) counter.value += 1;
   });
   epoch = counter;
   stackInputEpochs.set(registry, epoch);
@@ -74,6 +149,7 @@ function stackInputEpoch(registry: DesktopBackendRegistry): { value: number } | 
 
 type StackProjectionRecord = {
   stacks: StackSummary[];
+  prScope?: StackPrRelevanceScope;
   overlayStore: object;
   /** The stack input epoch when the projection started reading. */
   epoch: number;
@@ -81,6 +157,7 @@ type StackProjectionRecord = {
   completedAt: number;
 };
 const latestStackProjections = new WeakMap<DesktopBackendRegistry, StackProjectionRecord>();
+const stackPrScopes = new WeakMap<NavigationQueryIndex, StackPrRelevanceScope>();
 
 function navigationIndexVersion(
   registry: DesktopBackendRegistry,
@@ -235,6 +312,7 @@ export async function loadLocalNavigationQueryIndex(params: {
   const version = navigationIndexVersion(registry, overlayStore, Boolean(params.viewer));
   return reads.read(key, async (signal, checkpoint, previous, limitReuseTo) => {
     let navigationChanged = false;
+    let stackPrScope: StackPrRelevanceScope | undefined;
     // An event during a scan stops later readers from joining it; they share
     // one follow-up scan. Each run owns its listener, because the pool can
     // run this same load again for a follow-up.
@@ -244,7 +322,7 @@ export async function loadLocalNavigationQueryIndex(params: {
       // A PR status observation changes page chips, not the compact index's
       // attachments. The page reads those statuses from the live registry.
       const viewerEvent = viewerOnlyNavigationEvent(event.notification.method);
-      if ((params.includeStacks ? stackIndexEventInvalidates(event.notification)
+      if ((params.includeStacks ? stackIndexEventInvalidates(event.notification, stackPrScope)
         : !viewerEvent
           && event.notification.method !== "pullRequest/status/updated"
           && navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params))
@@ -274,6 +352,7 @@ export async function loadLocalNavigationQueryIndex(params: {
           }),
         ]);
         signal.throwIfAborted();
+        stackPrScope = stackPrScopes.get(nativeStacks);
         limitReuseTo(keyFor(["stacks", sourceId(params.viewer.source)]), nativeStacks);
         if (!nativeStacks.stacks?.length) return viewerLocal;
         const nativeRows = navigationQuerySnapshotSharedThreads(viewerLocal);
@@ -303,23 +382,30 @@ export async function loadLocalNavigationQueryIndex(params: {
             };
           });
         }
-        return createNavigationQuerySnapshot({
+        const combined = createNavigationQuerySnapshot({
           ...viewerLocal,
           stacks: nativeStacks.stacks,
           threads,
         }, undefined, share ? nativeStacks : viewerLocal, previous());
+        if (stackPrScope) stackPrScopes.set(combined, stackPrScope);
+        return combined;
       }
       // Taken before reading: a change during the read makes its result stale.
       const epoch = backend === "all" && !params.requireVerifiedDirectories ? stackInputEpoch(registry)?.value : undefined;
       // Share the same membership with stack-free queries.
       const local = await loadLocalNavigationQueryIndex({ ...params, includeStacks: false, stackLeaseScope: undefined, signal });
-      const projected = await projectNavigationIndexStacks(local, registry, version, signal, previous);
+      const priority = params.callerReason === "selected-stack-detail"
+        ? PR_METADATA_PRIORITY.selected
+        : PR_METADATA_PRIORITY.background;
+      const { index: projected, prScope } = await projectNavigationIndexStacks(local, registry, version, priority, signal, previous);
+      stackPrScope = prScope;
+      if (prScope) stackPrScopes.set(projected, prScope);
       // Owner and viewer leases project the same native stacks, so either can
       // answer a later stack detail read. A slower read that started before
       // a newer one must not replace it.
       if (epoch !== undefined && !((latestStackProjections.get(registry)?.epoch ?? -1) > epoch)) {
         latestStackProjections.set(registry, {
-          stacks: projected.stacks ?? [], overlayStore, epoch, version, completedAt: Date.now(),
+          stacks: projected.stacks ?? [], prScope, overlayStore, epoch, version, completedAt: Date.now(),
         });
       }
       return projected;
@@ -489,31 +575,39 @@ export function getNavigationDirectorySetAnnouncer(): NavigationDirectorySetAnno
   return directorySetAnnouncer;
 }
 
-type NavigationStackProjection = Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined;
+type NavigationStackProjection = {
+  projection: Pick<NavigationQueryIndex, "threads" | "stacks"> | undefined;
+  prScope: StackPrRelevanceScope;
+};
 const activeStackReads = new Map<string, SharedPrMetadataRead<NavigationStackProjection>>();
 
 async function projectNavigationIndexStacks(
   local: NavigationQueryIndex,
   registry: DesktopBackendRegistry,
   version: string,
+  priority: number,
   signal: AbortSignal,
   previous: () => NavigationQueryIndex | undefined,
-): Promise<NavigationQueryIndex> {
+): Promise<{ index: NavigationQueryIndex; prScope: StackPrRelevanceScope }> {
   const nativeRows = navigationQuerySnapshotSharedThreads(local);
   const pins = nativeRows && local.threads !== nativeRows ? local.threads.slice(nativeRows.length) : [];
   const observedAt = local.observedAt;
   // A viewer observes the same native inventory even if saving its resolved
   // pins advances the source version while projecting this read.
-  const share = nativeRows && observedAt !== undefined && pins.every((thread) => thread.federation);
-  const projection = share
-    ? await readActiveNavigationStacks(nativeRows, observedAt, registry, version, signal)
-    : await projectNavigationStacks(local.threads, registry, signal);
-  if (!projection) return local;
-  return createNavigationQuerySnapshot({
-    ...local,
-    ...projection,
-    threads: share && pins.length ? [...projection.threads, ...pins] : projection.threads,
-  }, undefined, local, previous());
+  const share = priority === PR_METADATA_PRIORITY.background
+    && Boolean(nativeRows && observedAt !== undefined && pins.every((thread) => thread.federation));
+  const { projection, prScope } = share
+    ? await readActiveNavigationStacks(nativeRows!, observedAt!, registry, version, priority, signal)
+    : await projectNavigationStacks(local.threads, registry, priority, signal);
+  if (!projection) return { index: local, prScope };
+  return {
+    index: createNavigationQuerySnapshot({
+      ...local,
+      ...projection,
+      threads: share && pins.length ? [...projection.threads, ...pins] : projection.threads,
+    }, undefined, local, previous()),
+    prScope,
+  };
 }
 
 async function readActiveNavigationStacks(
@@ -521,6 +615,7 @@ async function readActiveNavigationStacks(
   observedAt: number,
   registry: DesktopBackendRegistry,
   version: string,
+  priority: number,
   signal: AbortSignal,
 ): Promise<NavigationStackProjection> {
   signal.throwIfAborted();
@@ -534,15 +629,18 @@ async function readActiveNavigationStacks(
     unsubscribe?.();
     unsubscribe = undefined;
   };
+  let prScope: StackPrRelevanceScope | undefined;
   const read = new SharedPrMetadataRead(async (demand) => {
     try {
-      return await projectNavigationStacks(nativeRows, registry, demand.signal!);
+      return await projectNavigationStacks(nativeRows, registry, priority, demand.signal!, (scope) => {
+        prScope = scope;
+      });
     } finally {
       release();
     }
   });
   let unsubscribe: (() => void) | undefined = registry.onEvent?.((event) => {
-    if (stackIndexEventInvalidates(event.notification)) release();
+    if (stackIndexEventInvalidates(event.notification, prScope)) release();
   });
   read.signal.addEventListener("abort", release, { once: true });
   activeStackReads.set(key, read);
@@ -552,28 +650,48 @@ async function readActiveNavigationStacks(
 async function projectNavigationStacks(
   threads: readonly NavigationThreadSummary[],
   registry: DesktopBackendRegistry,
+  priority: number,
   signal: AbortSignal,
+  onPrScope?: (scope: StackPrRelevanceScope) => void,
 ): Promise<NavigationStackProjection> {
+  const prKeys = new Set<string>();
+  const repositories = new Set<string>();
+  const recordPr = (pr: PrSummary) => {
+    const key = buildPullRequestStatusKey(pr);
+    prKeys.add(key);
+    const repo = normalizedPullRequestRepository(key);
+    if (repo) repositories.add(repo);
+  };
   const candidates = threads.filter((thread) => !thread.federation && (thread.linkedDirectories?.some((directory) =>
     directory.gitBranch || directory.worktreePath || directory.repositoryKey)
     || ((thread.observedGitBranch || thread.gitBranch) && thread.linkedDirectories?.length)));
-  if (!candidates.length) return undefined;
+  if (!candidates.length) {
+    const prScope = { prKeys, repositories };
+    onPrScope?.(prScope);
+    return { projection: undefined, prScope };
+  }
   const attachments = getDesktopOverlayStore().readNavigationPullRequests(
     candidates.map((thread) => ({ backend: thread.source, threadId: thread.id })),
   );
+  for (const list of attachments) {
+    for (const pr of list ?? []) recordPr(pr);
+  }
   // Canonical status supplies the refs used to find potential stacks. Validate
   // automatic attachments only after checkout and stack admission. Neither
   // navigation nor stack detail can initiate forge repository-name lookups.
-  const demand = { signal, priority: () => PR_METADATA_PRIORITY.background, allowForgeLookup: false as const };
+  const demand = { signal, priority: () => priority, allowForgeLookup: false as const };
   const rows = await Promise.all(candidates.map(async (thread, index) => ({
     ...thread,
     prs: attachments[index]?.length ? await registry.canonicalizeNavigationPullRequests(attachments[index]!, demand, false) : [],
   })));
   signal.throwIfAborted();
+  for (const row of rows) {
+    for (const pr of row.prs) recordPr(pr);
+  }
   const validated = new Map<string, readonly PrSummary[]>(rows.map((row) => [
     buildThreadIdentityKey(row.source, row.id), row.prs,
   ]));
-  const { stacks } = await stackReader.read(rows, [], undefined,
+  const { stacks, catalogs } = await stackReader.read(rows, [], undefined,
     async (key) => {
       const thread = parseThreadIdentityKey(key);
       if (!thread) return {};
@@ -586,7 +704,21 @@ async function projectNavigationStacks(
       return prs;
     });
   signal.throwIfAborted();
-  return projectBoundNavigationStacks(threads, stacks, validated);
+  for (const catalog of catalogs) {
+    if (catalog.status !== "ok") continue;
+    const repo = normalizedPullRequestRepository(catalog.catalog.repository);
+    if (repo) repositories.add(repo);
+  }
+  for (const stack of stacks) {
+    const repo = normalizedPullRequestRepository(stack.repository);
+    if (repo) repositories.add(repo);
+    for (const layer of stack.layers) {
+      if (repo && layer.pullRequest) prKeys.add(`${repo}#${layer.pullRequest.number}`);
+    }
+  }
+  const prScope = { prKeys, repositories };
+  onPrScope?.(prScope);
+  return { projection: projectBoundNavigationStacks(threads, stacks, validated), prScope };
 }
 
 export function projectBoundNavigationStacks(
