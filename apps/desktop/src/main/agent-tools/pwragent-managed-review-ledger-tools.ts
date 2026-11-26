@@ -159,7 +159,7 @@ export function buildManagedReviewLedgerToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "dispose_review_candidate",
       description:
-        "Mark a recorded review candidate as keep (with calibrated P0-P3 priority) or drop (with concrete code-grounded justification) during Pass 2 triage.",
+        "Mark a candidate by ID as keep or drop during Pass 2 triage. Optionally refine its title, body, location, category, or confidence in the same call. Omitted details are retained.",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -177,7 +177,7 @@ export function buildManagedReviewLedgerToolDefinitions(
           disposition: {
             type: "string",
             enum: ["keep", "drop"],
-            description: "Whether to keep the defect in the final JSON or drop it.",
+            description: "Whether to include the candidate in the final review or drop it.",
           },
           priority: {
             type: "integer",
@@ -193,6 +193,34 @@ export function buildManagedReviewLedgerToolDefinitions(
           reason: {
             type: "string",
             description: "Concise code-grounded reason for keeping or dropping this candidate.",
+          },
+          summary: {
+            type: "string",
+            description: "Optional replacement finding title without a priority prefix.",
+          },
+          mechanism: {
+            type: "string",
+            description: "Optional replacement finding body with the observable consequence, code mechanism, and fix when clear.",
+          },
+          file: {
+            type: "string",
+            description: "Optional corrected absolute or workspace-relative file path.",
+          },
+          start_line: {
+            type: "integer",
+            minimum: 1,
+            description: "Optional corrected first affected 1-based line number.",
+          },
+          end_line: {
+            type: "integer",
+            minimum: 1,
+            description: "Optional corrected last affected 1-based line number (>= start_line).",
+          },
+          confidence_score: {
+            type: "number",
+            minimum: 0,
+            maximum: 1,
+            description: "Optional certainty from 0 to 1 that the issue is real and verified in the code.",
           },
         },
         required: ["id", "disposition", "reason"],
@@ -211,6 +239,12 @@ export function buildManagedReviewLedgerToolDefinitions(
           priority: args.priority,
           category: args.category,
           reason: args.reason,
+          summary: args.summary,
+          mechanism: args.mechanism,
+          file: args.file,
+          start_line: args.start_line,
+          end_line: args.end_line,
+          confidence_score: args.confidence_score,
         });
         return result.ok
           ? agentToolSuccess(result.data)
@@ -221,7 +255,7 @@ export function buildManagedReviewLedgerToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "submit_review_output",
       description:
-        "Submit the final structured code review verdict and findings at the end of Pass 2 so PwrAgent records them directly without parsing free-text JSON.",
+        "Submit the final review verdict and findings. Set use_ledger to true to submit all kept candidates after triage, or provide the full findings array to submit explicitly.",
       annotations: {
         readOnlyHint: false,
         destructiveHint: false,
@@ -232,10 +266,14 @@ export function buildManagedReviewLedgerToolDefinitions(
         type: "object",
         additionalProperties: false,
         properties: {
+          use_ledger: {
+            type: "boolean",
+            description: "Set true to include every kept candidate from this review turn. Every recorded candidate must first be marked keep or drop. The combined batch is ordered by priority.",
+          },
           findings: {
             type: "array",
             maxItems: MANAGED_REVIEW_OUTPUT_MAX_FINDINGS,
-            description: "Ordered list of concrete findings to report (empty array when no actionable defects remain).",
+            description: "With use_ledger true, omit this field unless adding verified findings that could not be recorded, such as when the ledger was full. Otherwise, supply the full ordered list (empty when no actionable defects remain).",
             items: {
               type: "object",
               additionalProperties: false,
@@ -319,7 +357,6 @@ export function buildManagedReviewLedgerToolDefinitions(
           },
         },
         required: [
-          "findings",
           "overall_correctness",
           "overall_explanation",
         ],
@@ -333,6 +370,7 @@ export function buildManagedReviewLedgerToolDefinitions(
           });
         }
         const result = ledger.submitOutput(turnKey, {
+          use_ledger: args.use_ledger,
           findings: args.findings,
           overall_correctness: args.overall_correctness,
           overall_explanation: args.overall_explanation,

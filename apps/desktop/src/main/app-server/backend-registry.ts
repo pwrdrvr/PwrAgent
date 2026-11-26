@@ -6590,7 +6590,7 @@ export class DesktopBackendRegistry {
     }
     const syntheticStartedTurnId = `pending:${params.threadId}:${Date.now()}`;
     if (params.managedReviewLedger) {
-      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId);
+      this.managedReviewService.candidateLedger.armToolTurn(params, syntheticStartedTurnId, sessionForTurn.cwd);
     }
     await this.emit({
       backend: params.backend,

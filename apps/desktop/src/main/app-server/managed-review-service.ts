@@ -1135,7 +1135,7 @@ export class ManagedReviewService {
       parentThreadId: params.parentThreadId,
     });
     if (candidateLedger) {
-      this.candidateLedger.armToolTurn({ backend: "codex", threadId: thread.threadId }, null);
+      this.candidateLedger.armToolTurn({ backend: "codex", threadId: thread.threadId }, null, params.cwd);
     }
     const startReservation = this.context.turnState.reserveStart(thread.threadId, "worker");
     try {

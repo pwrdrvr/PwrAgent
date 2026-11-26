@@ -31,6 +31,7 @@ export type ManagedReviewCandidatePriority = 0 | 1 | 2 | 3;
 
 export const MANAGED_REVIEW_CANDIDATE_MAX_PER_TURN = 100;
 export const MANAGED_REVIEW_CANDIDATE_MAX_FIELD_LENGTH = 2_000;
+// The explicit findings array has its own cap so a full ledger can still report overflow.
 export const MANAGED_REVIEW_OUTPUT_MAX_FINDINGS = 100;
 
 export type ManagedReviewCandidateTurnKey = {
@@ -51,6 +52,7 @@ export type ManagedReviewCandidate = {
   mechanism: string;
   disposition: ManagedReviewCandidateDisposition;
   priority?: ManagedReviewCandidatePriority;
+  confidenceScore?: number;
   dispositionReason?: string;
 };
 
@@ -75,16 +77,17 @@ export type ManagedReviewCandidateRecordInput = {
   mechanism: unknown;
 };
 
-export type ManagedReviewCandidateDisposeInput = {
+export type ManagedReviewCandidateDisposeInput = Partial<ManagedReviewCandidateRecordInput> & {
   id: unknown;
   disposition: unknown;
   priority?: unknown;
-  category?: unknown;
+  confidence_score?: unknown;
   reason: unknown;
 };
 
 export type ManagedReviewOutputSubmitInput = {
-  findings: unknown;
+  use_ledger?: unknown;
+  findings?: unknown;
   overall_correctness: unknown;
   overall_explanation: unknown;
   overall_confidence_score?: unknown;
@@ -112,7 +115,9 @@ function buildTurnKey(turn: ManagedReviewCandidateTurnKey): string {
 function readBoundedText(
   value: unknown,
   field: string,
+  fallback?: string,
 ): { ok: true; value: string } | { ok: false; message: string } {
+  if (value === undefined && fallback !== undefined) return { ok: true, value: fallback };
   if (typeof value !== "string") {
     return { ok: false, message: `${field} must be a non-empty string.` };
   }
@@ -137,6 +142,38 @@ function readPositiveLine(
     return { ok: false, message: `${field} must be a positive integer.` };
   }
   return { ok: true, value };
+}
+
+function readCandidateDetails(
+  input: Partial<ManagedReviewCandidateRecordInput>,
+  previous?: ManagedReviewCandidate,
+):
+  | { ok: true; value: Pick<ManagedReviewCandidate, "file" | "startLine" | "endLine" | "summary" | "mechanism"> }
+  | { ok: false; message: string } {
+  const { start_line = previous?.startLine, end_line = previous?.endLine } = input;
+  const file = readBoundedText(input.file, "file", previous?.file);
+  if (!file.ok) return file;
+  const startLine = readPositiveLine(start_line, "start_line");
+  if (!startLine.ok) return startLine;
+  const endLine = readPositiveLine(end_line, "end_line");
+  if (!endLine.ok) return endLine;
+  if (endLine.value < startLine.value) {
+    return { ok: false, message: "end_line must be greater than or equal to start_line." };
+  }
+  const summary = readBoundedText(input.summary, "summary", previous?.summary);
+  if (!summary.ok) return summary;
+  const mechanism = readBoundedText(input.mechanism, "mechanism", previous?.mechanism);
+  if (!mechanism.ok) return mechanism;
+  return {
+    ok: true,
+    value: {
+      file: file.value,
+      startLine: startLine.value,
+      endLine: endLine.value,
+      summary: summary.value,
+      mechanism: mechanism.value,
+    },
+  };
 }
 
 function readCategory(
@@ -341,6 +378,22 @@ function parseSubmittedFinding(
   };
 }
 
+function fullyQualifiedWindowsPath(value: string): boolean {
+  return path.win32.isAbsolute(value) && path.win32.parse(value).root.length > 1;
+}
+
+function resolveLedgerFindingPath(file: string, cwd?: string): string | undefined {
+  if (fullyQualifiedWindowsPath(file)) return file;
+  if (cwd && fullyQualifiedWindowsPath(cwd)) {
+    // A partially rooted path can depend on a drive or its working directory.
+    return path.win32.parse(file).root ? undefined : path.win32.resolve(cwd, file);
+  }
+  if (cwd && path.posix.isAbsolute(cwd)) {
+    return path.posix.isAbsolute(file) ? file : path.posix.resolve(cwd, file);
+  }
+  return process.platform !== "win32" && path.posix.isAbsolute(file) ? file : undefined;
+}
+
 /**
  * Purely in-memory scratchpad of candidate defects recorded during a single
  * managed code review turn. Entries never touch SQLite or disk and are cleared
@@ -349,25 +402,25 @@ function parseSubmittedFinding(
 export class ManagedReviewCandidateLedger {
   private readonly turns = new Map<string, TurnLedgerState>();
   /** Only a fresh Codex child can be armed before the provider assigns its turn ID. */
-  private readonly toolTurns = new Map<string, string | null>();
+  private readonly toolTurns = new Map<string, { turnId: string | null; cwd?: string }>();
 
-  armToolTurn(child: ReviewChild, turnId: string | null): void {
-    this.toolTurns.set(buildThreadIdentityKey(child.backend, child.threadId), turnId);
+  armToolTurn(child: ReviewChild, turnId: string | null, cwd?: string): void {
+    this.toolTurns.set(buildThreadIdentityKey(child.backend, child.threadId), { turnId, cwd });
   }
 
   confirmToolTurn(turn: ManagedReviewCandidateTurnKey): void {
-    const key = buildThreadIdentityKey(turn.backend, turn.threadId);
-    if (this.toolTurns.get(key) === null) this.toolTurns.set(key, turn.turnId);
+    const active = this.toolTurns.get(buildThreadIdentityKey(turn.backend, turn.threadId));
+    if (active?.turnId === null) active.turnId = turn.turnId;
   }
 
   hasToolTurn(turn: ReviewChild & { turnId?: string }): boolean {
     return Boolean(turn.turnId)
-      && this.toolTurns.get(buildThreadIdentityKey(turn.backend, turn.threadId)) === turn.turnId;
+      && this.toolTurns.get(buildThreadIdentityKey(turn.backend, turn.threadId))?.turnId === turn.turnId;
   }
 
   retireToolTurn(turn: ManagedReviewCandidateTurnKey): void {
     const key = buildThreadIdentityKey(turn.backend, turn.threadId);
-    const active = this.toolTurns.get(key);
+    const active = this.toolTurns.get(key)?.turnId;
     // A terminal can arrive before startTurn returns or before turn/started
     // for a freshly created Codex child. Never reopen it on a late receipt.
     if (active === null || active === turn.turnId) this.toolTurns.delete(key);
@@ -381,38 +434,12 @@ export class ManagedReviewCandidateLedger {
     recorded: ManagedReviewCandidate;
     total_candidates: number;
   }> {
-    const file = readBoundedText(input.file, "file");
-    if (!file.ok) {
-      return { ok: false, code: "invalid_arguments", message: file.message };
-    }
-    const startLine = readPositiveLine(input.start_line, "start_line");
-    if (!startLine.ok) {
-      return { ok: false, code: "invalid_arguments", message: startLine.message };
-    }
-    const endLine = readPositiveLine(input.end_line, "end_line");
-    if (!endLine.ok) {
-      return { ok: false, code: "invalid_arguments", message: endLine.message };
-    }
-    if (endLine.value < startLine.value) {
-      return {
-        ok: false,
-        code: "invalid_arguments",
-        message: "end_line must be greater than or equal to start_line.",
-      };
-    }
+    const details = readCandidateDetails(input);
+    if (!details.ok) return { ok: false, code: "invalid_arguments", message: details.message };
     const category = readCategory(input.category);
     if (!category.ok) {
       return { ok: false, code: "invalid_arguments", message: category.message };
     }
-    const summary = readBoundedText(input.summary, "summary");
-    if (!summary.ok) {
-      return { ok: false, code: "invalid_arguments", message: summary.message };
-    }
-    const mechanism = readBoundedText(input.mechanism, "mechanism");
-    if (!mechanism.ok) {
-      return { ok: false, code: "invalid_arguments", message: mechanism.message };
-    }
-
     const key = buildTurnKey(turn);
     let state = this.turns.get(key);
     if (!state) {
@@ -435,12 +462,8 @@ export class ManagedReviewCandidateLedger {
 
     const candidate: ManagedReviewCandidate = {
       id: `C${state.nextId}`,
-      file: file.value,
-      startLine: startLine.value,
-      endLine: endLine.value,
+      ...details.value,
       category: category.value,
-      summary: summary.value,
-      mechanism: mechanism.value,
       disposition: "pending",
     };
     state.nextId += 1;
@@ -529,6 +552,15 @@ export class ManagedReviewCandidateLedger {
       };
     }
 
+    const details = readCandidateDetails(input, candidate);
+    if (!details.ok) return { ok: false, code: "invalid_arguments", message: details.message };
+    if (input.confidence_score !== undefined) {
+      const confidence = readConfidenceScore(input.confidence_score, "confidence_score");
+      if (!confidence.ok) return { ok: false, code: "invalid_arguments", message: confidence.message };
+      candidate.confidenceScore = confidence.value;
+    }
+
+    Object.assign(candidate, details.value);
     candidate.disposition = input.disposition;
     candidate.dispositionReason = reason.value;
     if (nextCategory !== undefined) {
@@ -556,23 +588,66 @@ export class ManagedReviewCandidateLedger {
     finding_count: number;
     ledger_summary: ManagedReviewCandidateCounts & { total: number };
   }> {
-    if (!Array.isArray(input.findings)) {
+    if (input.use_ledger !== undefined && typeof input.use_ledger !== "boolean") {
+      return { ok: false, code: "invalid_arguments", message: "use_ledger must be a boolean." };
+    }
+    const useLedger = input.use_ledger === true;
+    const explicitFindings = useLedger && input.findings === undefined ? [] : input.findings;
+    if (!Array.isArray(explicitFindings)) {
       return { ok: false, code: "invalid_arguments", message: "findings must be an array." };
     }
-    if (input.findings.length > MANAGED_REVIEW_OUTPUT_MAX_FINDINGS) {
+    if (explicitFindings.length > MANAGED_REVIEW_OUTPUT_MAX_FINDINGS) {
       return {
         ok: false,
         code: "limit_exceeded",
-        message: `At most ${MANAGED_REVIEW_OUTPUT_MAX_FINDINGS} review findings may be submitted per review turn.`,
+        message: `The findings array may contain at most ${MANAGED_REVIEW_OUTPUT_MAX_FINDINGS} explicit review findings.`,
       };
     }
     const findings: AppServerReviewFinding[] = [];
-    for (let index = 0; index < input.findings.length; index += 1) {
-      const parsed = parseSubmittedFinding(input.findings[index], index);
+    const key = buildTurnKey(turn);
+    let state = this.turns.get(key);
+    if (useLedger && state?.candidates.some(({ disposition }) => disposition === "pending")) {
+      return {
+        ok: false,
+        code: "invalid_arguments",
+        message: "Mark every recorded candidate keep or drop before submitting the ledger.",
+      };
+    }
+    if (useLedger && state) {
+      const active = this.toolTurns.get(buildThreadIdentityKey(turn.backend, turn.threadId));
+      const cwd = active?.turnId === turn.turnId ? active.cwd : undefined;
+      for (const candidate of state.candidates) {
+        if (candidate.disposition !== "keep") continue;
+        const file = resolveLedgerFindingPath(candidate.file, cwd);
+        if (!file) {
+          return {
+            ok: false,
+            code: "invalid_arguments",
+            message: `Update candidate ${candidate.id} with an absolute file path before submitting.`,
+          };
+        }
+        findings.push({
+          title: candidate.summary,
+          body: candidate.mechanism,
+          priority: candidate.priority,
+          category: candidate.category,
+          confidence_score: candidate.confidenceScore ?? 0,
+          code_location: {
+            absolute_file_path: file,
+            line_range: { start: candidate.startLine, end: candidate.endLine },
+          },
+        });
+      }
+    }
+    for (let index = 0; index < explicitFindings.length; index += 1) {
+      const parsed = parseSubmittedFinding(explicitFindings[index], index);
       if (!parsed.ok) {
         return { ok: false, code: "invalid_arguments", message: parsed.message };
       }
       findings.push(parsed.value);
+    }
+    if (useLedger) {
+      findings.sort((a, b) => (a.priority ?? 3) - (b.priority ?? 3));
     }
     const correctness = readNonEmptyString(
       input.overall_correctness,
@@ -618,8 +693,6 @@ export class ManagedReviewCandidateLedger {
         : { overall_confidence_score: overallConfidence }),
     };
 
-    const key = buildTurnKey(turn);
-    let state = this.turns.get(key);
     if (!state) {
       state = {
         backend: turn.backend,
