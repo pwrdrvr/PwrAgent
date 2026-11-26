@@ -37,6 +37,7 @@ await mkdir(outdir, { recursive: true });
 await build({
   entryPoints: {
     "review-matrix-driver": path.join(scriptDir, "review-matrix-driver.ts"),
+    "isolated-review-runner": path.join(scriptDir, "isolated-review-runner.ts"),
     "storage-maintenance-worker": path.join(
       desktop,
       "src/main/state/storage-maintenance-worker.ts",

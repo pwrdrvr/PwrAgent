@@ -2,7 +2,7 @@
 
 Use the same cohort and arms as the matrix. Pass the candidate source checkout as `--repo`. Preparation resolves absolute finding paths against the reviewer checkout recorded in each cell and reads the pinned Git diff from the source checkout. It can score archived results after the reviewer checkouts are removed. Preparation requires completed structured results for every cell. To score a smoke run, supply a one-case development cohort file that matches it.
 
-Baselines must have a verified original review range with provenance. On development cohorts, `--allow-legacy-baselines` allows exploratory scoring of historical cases and labels the results provisional. Blind scoring requires verified baseline ranges and matching merge-base and head metadata in every candidate cell.
+Baselines must have a verified original review range with provenance. On development cohorts, `--allow-legacy-baselines` allows exploratory scoring of historical cases and labels the results provisional. Blind scoring requires verified baseline ranges and matching merge-base and head metadata in every candidate cell; results written by the [isolated reviewer runner](isolated-runner.md) preserve both fields and score identically on the controller side after ephemeral workspaces are deleted.
 
 ```bash
 skill=.agents/skills/managed-review-eval
