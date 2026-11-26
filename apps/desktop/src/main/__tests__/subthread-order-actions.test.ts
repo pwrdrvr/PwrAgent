@@ -670,6 +670,7 @@ async function checkRejectedMoveKeepsArchiveProof(rejection: "owner-event" | "pi
   const reader = StateDb.open(dbPath);
   const writer = StateDb.open(dbPath);
   const published = Promise.withResolvers<void>();
+  const archivedMountRemoved = vi.fn();
   const cache = new RemoteThreadSummaryCache({
     peers: () => [{ target: { scope: "remote", instanceId: PEER }, label: "Peer", capabilities: ["thread_navigation"] }],
     fetchSnapshot: async () => ({ backend: "all", fetchedAt: 0, unchanged: false, threads: [], inboxThreadKeys: [], directories: [],
@@ -677,6 +678,7 @@ async function checkRejectedMoveKeepsArchiveProof(rejection: "owner-event" | "pi
     fetchArchivedThreads: vi.fn().mockResolvedValueOnce([summary("codex", "archived-peer")]).mockResolvedValue([]),
     peerStatus: () => ({ status: "connected" }),
     onPinnedSummariesRefreshed: () => published.resolve(),
+    onArchivedMountRemoved: archivedMountRemoved,
     hasNavigationSubscription: () => true,
   });
   try {
@@ -712,12 +714,16 @@ async function checkRejectedMoveKeepsArchiveProof(rejection: "owner-event" | "pi
     resume.resolve(LOCAL);
     await assertion;
     expect((await store.listRemoteThreadPins()).map(({ ref }) => ref.threadId)).toContain("archived-peer");
+    expect(archivedMountRemoved).not.toHaveBeenCalled();
 
     // A rejected command never removed the pin. The next sidebar read must
     // still see the owner proof and be able to commit the guarded deletion.
     const remaining = await loadViewerNavigationPins(store, cache);
     expect(remaining.map(({ id }) => id)).toEqual(["other-pin"]);
     expect((await store.listRemoteThreadPins()).map(({ ref }) => ref.threadId)).toEqual(["other-pin"]);
+    expect(archivedMountRemoved).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ threadId: "archived-peer" }));
+    await loadViewerNavigationPins(store, cache);
+    expect(archivedMountRemoved).toHaveBeenCalledOnce();
   } finally {
     cache.dispose();
     writer.close();

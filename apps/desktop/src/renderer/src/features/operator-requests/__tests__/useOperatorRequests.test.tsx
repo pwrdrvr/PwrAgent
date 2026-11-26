@@ -30,7 +30,7 @@ describe("operator queue owner identity", () => {
   it("loads in a remote window, reloads invalidations and records owner-qualified seen keys", async () => {
     Object.assign(window, { __pwragentFederationTarget: target });
     const { api, changed } = fixture();
-    const { result, rerender } = renderHook(({ mounts }) => useOperatorRequests(api, mounts), { initialProps: { mounts: "" } });
+    const { result, rerender } = renderHook(() => useOperatorRequests(api));
     await waitFor(() => expect(result.current.waits).toHaveLength(2));
     const remote = result.current.waits.find((wait) => wait.federationTarget)!;
     expect(remote.threadKey).toBe(threadTodoThreadKey({ ...question, federationTarget: target }));
@@ -39,8 +39,8 @@ describe("operator queue owner identity", () => {
     expect(api.markOperatorItemsSeen).toHaveBeenCalledExactlyOnceWith({ keys: [operatorQuestionItemKey("codex", "same", "same", target)] });
     act(() => changed({ reason: "seen", federationTarget: target }));
     await waitFor(() => expect(api.listOperatorRequests).toHaveBeenCalledTimes(2));
-    rerender({ mounts: "new-mount" });
-    await waitFor(() => expect(api.listOperatorRequests).toHaveBeenCalledTimes(3));
+    rerender();
+    expect(api.listOperatorRequests).toHaveBeenCalledTimes(2);
   });
 
   it("updates owner-qualified titles without replacing unchanged waits", async () => {
@@ -136,9 +136,9 @@ describe("operator queue owner identity", () => {
 });
 
 describe("operator queue refresh", () => {
-  it("reads the initial queue once when StrictMode replays the unchanged mount effect", async () => {
+  it("reads the initial queue once when StrictMode replays the effect and still refreshes on invalidation", async () => {
     const { api, changed } = fixture();
-    const { result } = renderHook(() => useOperatorRequests(api, ""), { wrapper: StrictMode });
+    const { result } = renderHook(() => useOperatorRequests(api), { wrapper: StrictMode });
     await act(async () => {});
     expect(result.current.ready).toBe(true);
     expect(api.listOperatorRequests).toHaveBeenCalledTimes(1);
