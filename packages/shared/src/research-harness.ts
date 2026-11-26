@@ -1,4 +1,5 @@
-import type { ResearchThread } from "./research";
+import type { FederationRemoteTarget } from "./contracts/federation";
+import type { ResearchThreadRequest } from "./research";
 
 export const RESEARCH_HARNESS_VERSION = 1;
 export const RESEARCH_HARNESS_REVISION = "687f2a20dc6ff552d3c881e10910b46c13e84e2a";
@@ -69,7 +70,7 @@ export type ResearchHarnessState = {
   problem?: string;
   discovery?: ResearchDiscoverySnapshot;
 };
-export type ResearchHarnessRequest = ResearchThread & {
+export type ResearchHarnessRequest = ResearchThreadRequest & {
   requestId: string;
   mode: "execute" | "import";
   project: string;
@@ -89,7 +90,8 @@ export type ResearchHarnessRequest = ResearchThread & {
   problem?: string;
 };
 /** A read-only observation into an existing run from its stored cursor. Never sends execute or cancel. */
-export type ResearchHarnessReconcileRequest = ResearchThread & { runId: string };
+export type ResearchHarnessReconcileRequest = ResearchThreadRequest & { runId: string };
+export type ResearchMathosSwarmsRequest = { federationTarget?: FederationRemoteTarget };
 export type ResearchHarnessCapabilities = {
   version: 1;
   upstreamRevision: string;

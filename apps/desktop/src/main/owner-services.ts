@@ -548,6 +548,10 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         try { target.send(RESEARCH_CHANGED_EVENT_CHANNEL, change); }
         catch (error) { mainLog.warn("research view notification failed", { error: String(error) }); }
       }
+      void registry.publishLocalEvent({
+        backend: change.backend,
+        notification: { method: "thread/research/changed", params: change },
+      });
     },
     ...createResearchRegistryPorts(registry),
   });

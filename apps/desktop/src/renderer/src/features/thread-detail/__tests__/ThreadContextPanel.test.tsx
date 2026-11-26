@@ -272,13 +272,16 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByRole("tab", { name: "Research" })).not.toBeInTheDocument();
   });
 
-  it("shows Research on a local thread of every backend, and never on a thread another instance owns", () => {
+  it("shows Research on local and federated threads of every backend when opted in", () => {
     for (const source of ["codex", "claude", "acp:kimi"] as const) {
       for (const federated of [false, true]) {
-        const thread = { ...baseThread, source, ...(federated ? { federation: { ref: { target: "peer-instance" } } } : {}) } as NavigationThreadSummary;
+        const thread = {
+          ...baseThread,
+          source,
+          ...(federated ? { federation: { ref: { backend: source, threadId: baseThread.id, target: { scope: "remote", instanceId: "peer-instance" } }, instanceLabel: "Peer Mac" } } : {}),
+        } as NavigationThreadSummary;
         renderPanel({ researchEnabled: true, thread });
-        if (federated) expect(screen.queryByRole("tab", { name: "Research" })).not.toBeInTheDocument();
-        else expect(screen.getByRole("tab", { name: "Research" })).toBeInTheDocument();
+        expect(screen.getByRole("tab", { name: "Research" })).toBeInTheDocument();
         cleanup();
       }
     }

@@ -13,13 +13,15 @@ import { ResearchThreadButton } from "./ResearchThreadButton";
 import { EvidenceList } from "./ResearchViews";
 import { approachTitle, excerpt, formatClock, RESEARCH_FOCUSED_CHILD_PREFIX, researchApproachStateLabel, researchItemText, researchLabel, researchReviewStatusLabel, type ResearchRunView } from "./research-view-model";
 import { ResearchSourceTag } from "./ResearchSourceTag";
+import { researchErrorMessage } from "./research-error";
 
 const WORK_ACTION_LABELS: Partial<Record<ResearchWorkCommand["state"], string>> = {
   open: "Release / reopen", claimed: "Claim", in_progress: "In progress", blocked: "Blocked", completed: "Completed", cancelled: "Cancel item",
 };
 
-export function ResearchItemDetail({ api, thread, run, itemId, writable, coordinator, onBack, onOpenItem, backLabel, children }: {
+export function ResearchItemDetail({ api, thread, run, itemId, writable, coordinator, evidenceAvailable, onBack, onOpenItem, backLabel, children }: {
   api: DesktopApi; thread: ResearchThread; run: ResearchRunView; itemId: string; writable: boolean; coordinator: boolean;
+  evidenceAvailable?: boolean;
   onBack: () => void; onOpenItem: (itemId: string) => void;
   /** What leaving this detail is called where it does not replace a result list. */
   backLabel?: string;
@@ -44,7 +46,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
     if (!readResearchItem) return;
     void readResearchItem({ backend, threadId, runId, itemId }).then((context) => {
       if (!disposed) setDetail({ key, context });
-    }, (failure: unknown) => { if (!disposed) setDetail({ key, error: failure instanceof Error ? failure.message : "This item could not be read" }); });
+    }, (failure: unknown) => { if (!disposed) setDetail({ key, error: researchErrorMessage(failure, "This item could not be read") }); });
     return () => { disposed = true; };
   }, [readResearchItem, backend, threadId, runId, itemId, key]);
   useEffect(() => { headingRef.current?.focus(); setReason(""); setTask(""); setNotice(""); setError(""); }, [itemId]);
@@ -59,7 +61,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
         command: { action: "work", itemId: context.item.id, expectedVersion: context.item.version, state: next, reason: reason.trim() } });
       setDetail({ key, context: result }); setReason("");
       setNotice(result.item.work.state === "cancel_requested" ? "Cancellation requested. The worker’s outcome is not confirmed yet." : "Progress saved.");
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "Progress could not be saved"); }
+    } catch (failure) { setError(researchErrorMessage(failure, "Progress could not be saved")); }
     finally { setBusy(false); }
   }
   async function resume() {
@@ -69,7 +71,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       await api.updateResearch({ backend, threadId, runId, requestId: crypto.randomUUID(), command: { action: "resume", approachIds: [context.item.id] } });
       setRefresh((value) => value + 1);
       setNotice("Resume sent. The worker takes its slot back when its turn starts.");
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "The worker could not be resumed"); }
+    } catch (failure) { setError(researchErrorMessage(failure, "The worker could not be resumed")); }
     finally { setBusy(false); }
   }
   async function assign() {
@@ -81,7 +83,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       if (!receipt) throw new Error("The coordinating thread did not accept the assignment request");
       setNotice(receipt.queueStatus === "queued" ? "Assignment request queued in the coordinating thread." : "Assignment request sent to the coordinating thread.");
       setTask("");
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "The assignment could not be requested"); }
+    } catch (failure) { setError(researchErrorMessage(failure, "The assignment could not be requested")); }
     finally { setBusy(false); }
   }
   async function openEvidence(pathIndex: number) {
@@ -90,7 +92,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
     try {
       const result = await api.openResearchEvidence({ backend, threadId, runId, itemId, pathIndex });
       if (!result.opened) throw new Error(result.error ?? "Evidence could not be opened");
-    } catch (failure) { setError(failure instanceof Error ? failure.message : "Evidence could not be opened"); }
+    } catch (failure) { setError(researchErrorMessage(failure, "Evidence could not be opened")); }
   }
 
   const item = context?.item;
@@ -121,7 +123,7 @@ export function ResearchItemDetail({ api, thread, run, itemId, writable, coordin
       {related && "relation" in record && <button type="button" className="research-link" onClick={() => onOpenItem(related.id)}>{researchLabel(record.relation ?? "related")}: {excerpt(researchItemText(related), 80)}</button>}
       {source && <button type="button" className="research-link" onClick={() => onOpenItem(source.id)}>Investigates: {excerpt(researchItemText(source), 80)}</button>}
       {item.type !== "approach" && item.approachId !== item.id && <button type="button" className="research-link" onClick={() => onOpenItem(item.approachId)}>Approach: {approachTitle(run, item.approachId)}</button>}
-      {"paths" in record && record.paths.length > 0 && <EvidenceList paths={record.paths} available={Boolean(api.openResearchEvidence)} onOpen={(index) => { void openEvidence(index); }} />}
+      {"paths" in record && record.paths.length > 0 && <EvidenceList paths={record.paths} available={evidenceAvailable ?? Boolean(api.openResearchEvidence)} onOpen={(index) => { void openEvidence(index); }} />}
       {item.type === "approach" && item.record.worker && <ResearchThreadButton thread={item.record.worker} title="Open worker thread" />}
       {"author" in record && record.author && <ResearchThreadButton thread={record.author} title="Open source thread" />}
       {item.type === "approach" && researchApproachResumable(item.record, (itemId) => run.items.get(itemId)) && resumable && <div className="research-actions">
