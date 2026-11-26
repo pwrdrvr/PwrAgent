@@ -28,6 +28,7 @@ import {
 } from "../../lib/federated-thread-events";
 import {
   getSubthreadDisclosureCount,
+  hasNativeSubAgents,
   isSubthreadSectionCollapsed,
   NativeSubAgentsDisclosure,
 } from "./NativeSubAgentsDisclosure";
@@ -469,7 +470,7 @@ export const RecentsList = memo(function RecentsList(props: RecentsListProps) {
             // A child's workers belong to the child, so they render under its
             // own row. They follow it out of this tray when it is unlinked,
             // because the child summary is what carries them.
-            child.codexNativeSubAgents?.length ? (
+            hasNativeSubAgents(child) ? (
               <NativeSubAgentsDisclosure
                 key={`${childKey}:subagents`}
                 nested

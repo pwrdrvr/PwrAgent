@@ -99,6 +99,10 @@ import {
   readAcpContextTokens,
 } from "../acp/acp-live-notifications";
 import {
+  AcpSubAgentTracker,
+  type AcpSubAgentCard,
+} from "../acp/acp-subagents";
+import {
   foldAcpTurnUsage,
   readAcpSelectedModel,
   readAcpUsageEnvelope,
@@ -417,6 +421,11 @@ export type AcpBackendAdapterOptions = {
     request: AppServerPendingRequestNotification,
   ) => Promise<unknown>;
   onTurnTerminalIngress?: (turn: { backend: AcpBackendId; threadId: string; turnId: string }) => void;
+  recordSubAgents?: (params: {
+    backend: AcpBackendId;
+    threadId: string;
+    subAgents: AcpSubAgentCard[];
+  }) => Promise<void>;
 };
 
 export function readAcpUpdateKind(
@@ -1425,6 +1434,15 @@ export class AcpBackendAdapter {
   private closePromise?: Promise<void>;
   private readonly closeTimeoutMs: number;
   private readonly liveTurnUsage = new Map<string, AcpLiveTurnUsage>();
+  private readonly subAgentSessions = new Map<
+    string,
+    {
+      tracker: AcpSubAgentTracker;
+      recordedKeys: Map<string, string>;
+      lastTurnId?: string;
+      flushChain: Promise<void>;
+    }
+  >();
   // Last context fill sent per session this turn. Grok repeats the same
   // count on every streamed update, so this keeps one emit per change.
   private readonly liveContextWindows = new Map<
@@ -1878,6 +1896,7 @@ export class AcpBackendAdapter {
     }
     this.acpRolloutStore.deleteSession(backendId, sessionId);
     this.acpSessionStore.deleteSession(backendId, sessionId);
+    this.subAgentSessions.delete(`${backendId}:${sessionId}`);
     if (backendId === "acp:antigravity") this.antigravitySessionOwners.delete(sessionId);
   }
 
@@ -3394,6 +3413,7 @@ export class AcpBackendAdapter {
     this.pendingCapabilityProbes.clear();
     this.liveTurnUsage.clear();
     this.liveContextWindows.clear();
+    this.subAgentSessions.clear();
     this.localAgentSnapshot = [];
     this.closePromise = this.closeResources(acpClients, quotaProbes);
     return await this.closePromise;
@@ -3697,6 +3717,17 @@ export class AcpBackendAdapter {
           updateKind === "turn_finished"
           && !fromSessionLoad
           && replay.threadStatus !== "active";
+        if (!fromSessionLoad) {
+          this.observeAcpSubAgentUpdate({
+            backend: agent.backendId,
+            sessionId,
+            turnId,
+            update,
+            turnSettledOutcome: promptSettledTurnFinished
+              ? (update.stopReason === "cancelled" ? "cancelled" : "completed")
+              : undefined,
+          });
+        }
         if (promptSettledTurnFinished && turnId) {
           this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
         }
@@ -4037,6 +4068,12 @@ export class AcpBackendAdapter {
           }
         }
         this.options.onTurnTerminalIngress?.({ backend: agent.backendId, threadId: sessionId, turnId });
+        this.settleAcpSessionSubAgents({
+          backend: agent.backendId,
+          sessionId,
+          turnId,
+          outcome: "failed",
+        });
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
         );
@@ -4281,5 +4318,148 @@ export class AcpBackendAdapter {
       },
     });
     return client;
+  }
+
+  private getOrCreateSubAgentSession(backend: AcpBackendId, sessionId: string) {
+    const key = `${backend}:${sessionId}`;
+    let state = this.subAgentSessions.get(key);
+    if (!state) {
+      state = {
+        tracker: new AcpSubAgentTracker(),
+        recordedKeys: new Map(),
+        flushChain: Promise.resolve(),
+      };
+      this.subAgentSessions.set(key, state);
+    }
+    return state;
+  }
+
+  private observeAcpSubAgentUpdate(params: {
+    backend: AcpBackendId;
+    sessionId: string;
+    turnId?: string;
+    update: Record<string, unknown>;
+    turnSettledOutcome?: "completed" | "cancelled";
+  }): void {
+    if (!this.options.recordSubAgents) {
+      return;
+    }
+    const key = `${params.backend}:${params.sessionId}`;
+    const existing = this.subAgentSessions.get(key);
+    const kind = readAcpUpdateKind(params.update);
+    const isRelevantUpdate =
+      kind === "subagent_spawned"
+      || kind === "subagent_progress"
+      || kind === "subagent_finished"
+      || kind === "tool_call"
+      || kind === "tool_call_update";
+    if (!existing && !isRelevantUpdate) {
+      return;
+    }
+    const state = existing ?? this.getOrCreateSubAgentSession(params.backend, params.sessionId);
+    let dirty = false;
+    if (params.turnId && state.lastTurnId && state.lastTurnId !== params.turnId) {
+      dirty = state.tracker.onTurnStarted(params.turnId) || dirty;
+    }
+    if (params.turnId) {
+      state.lastTurnId = params.turnId;
+    }
+    if (isRelevantUpdate) {
+      dirty = state.tracker.apply({
+        backendId: params.backend,
+        turnId: params.turnId,
+        update: params.update,
+      }) || dirty;
+    }
+    if (params.turnSettledOutcome) {
+      dirty = state.tracker.settleTurn({
+        turnId: params.turnId,
+        outcome: params.turnSettledOutcome,
+      }) || dirty;
+    }
+    if (!dirty) {
+      return;
+    }
+    this.enqueueAcpSessionSubAgentFlush(params.backend, params.sessionId, state);
+  }
+
+  private settleAcpSessionSubAgents(params: {
+    backend: AcpBackendId;
+    sessionId: string;
+    turnId?: string;
+    outcome: "completed" | "failed" | "cancelled";
+  }): void {
+    if (!this.options.recordSubAgents) {
+      return;
+    }
+    const state = this.subAgentSessions.get(`${params.backend}:${params.sessionId}`);
+    if (!state) {
+      return;
+    }
+    if (!state.tracker.settleTurn({ turnId: params.turnId, outcome: params.outcome })) {
+      return;
+    }
+    this.enqueueAcpSessionSubAgentFlush(params.backend, params.sessionId, state);
+  }
+
+  private enqueueAcpSessionSubAgentFlush(
+    backend: AcpBackendId,
+    sessionId: string,
+    state: {
+      tracker: AcpSubAgentTracker;
+      recordedKeys: Map<string, string>;
+      flushChain: Promise<void>;
+    },
+  ): void {
+    const recordSubAgents = this.options.recordSubAgents;
+    if (!recordSubAgents) {
+      return;
+    }
+    const changed = state.tracker.subAgentCards().flatMap((card) => {
+      const fingerprint = JSON.stringify(card);
+      return state.recordedKeys.get(card.monitorId) === fingerprint
+        ? []
+        : [{ card, fingerprint }];
+    });
+    if (changed.length === 0) {
+      return;
+    }
+    // Optimistically stamp fingerprints before enqueueing so rapid back-to-back
+    // updates only emit deltas, and clear them if persistence fails so a later
+    // update can retry.
+    const previousFingerprints = changed.map(({ card, fingerprint }) => ({
+      monitorId: card.monitorId,
+      fingerprint,
+      previous: state.recordedKeys.get(card.monitorId),
+    }));
+    for (const { card, fingerprint } of changed) {
+      state.recordedKeys.set(card.monitorId, fingerprint);
+    }
+    const subAgents = changed.map(({ card }) => card);
+    state.flushChain = state.flushChain.then(async () => {
+      try {
+        await recordSubAgents({
+          backend,
+          threadId: sessionId,
+          subAgents,
+        });
+      } catch (error) {
+        for (const { monitorId, fingerprint, previous } of previousFingerprints) {
+          if (state.recordedKeys.get(monitorId) !== fingerprint) {
+            continue;
+          }
+          if (previous === undefined) {
+            state.recordedKeys.delete(monitorId);
+          } else {
+            state.recordedKeys.set(monitorId, previous);
+          }
+        }
+        acpBackendAdapterLog.warn("acp_subagents_record_failed", {
+          backend,
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
   }
 }

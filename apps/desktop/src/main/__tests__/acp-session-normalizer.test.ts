@@ -2602,6 +2602,57 @@ describe("AcpSessionReplayNormalizer", () => {
         }),
       ]);
     });
+
+    it("formats Antigravity invoke_subagent tool calls with the role and type instead of 'Run invoke_subagent'", () => {
+      const normalizer = startTurn();
+      apply(normalizer, 1002, {
+        sessionUpdate: "tool_call",
+        toolCallId: "call_7559445546344402176",
+        name: "invoke_subagent",
+        status: "in_progress",
+        kind: "other",
+        title: "Run invoke_subagent",
+        args: {
+          Role: "PwrAgent Transcript Auditor",
+          TypeName: "research",
+          Prompt: "Audit transcript UX",
+        },
+        rawInput: {
+          Role: "PwrAgent Transcript Auditor",
+          TypeName: "research",
+          Prompt: "Audit transcript UX",
+        },
+      });
+      apply(normalizer, 1003, {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call_7559445546344402176",
+        name: "invoke_subagent",
+        status: "completed",
+        kind: "other",
+        title: "Run invoke_subagent",
+        args: {
+          Role: "PwrAgent Transcript Auditor",
+          TypeName: "research",
+          Prompt: "Audit transcript UX",
+        },
+      });
+
+      expect(activities(normalizer)).toEqual([
+        expect.objectContaining({
+          summary: "Sub-agent: PwrAgent Transcript Auditor",
+          status: "completed",
+          details: [
+            expect.objectContaining({
+              label: "Sub-agent: PwrAgent Transcript Auditor (research)",
+              command: expect.objectContaining({
+                rawCommand: "invoke_subagent",
+                displayCommand: "Audit transcript UX",
+              }),
+            }),
+          ],
+        }),
+      ]);
+    });
   });
 
   it("updates known tool progress without splitting a streaming assistant message", () => {

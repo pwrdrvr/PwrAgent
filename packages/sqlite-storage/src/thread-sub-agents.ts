@@ -140,13 +140,14 @@ export const THREAD_SUB_AGENT_LENS_SQL = `(CASE
   WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
   WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
   WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
+  WHEN substr(monitor_id, 1, 11) = 'acp-native:' THEN 'harness'
   ELSE 'pwragent' END)`;
 /**
- * `_v2` added Claude's own sub-agents to the harness lens. The first index
- * stays: older builds sharing the profile name it with INDEXED BY, which fails
- * outright when the index is missing.
+ * `_v3` added ACP native sub-agents to the harness lens. Earlier indexes
+ * (`_v1`, `_v2`) stay: older builds sharing the profile name them with
+ * INDEXED BY, which fails outright when an index is missing.
  */
-const LENS_INDEX = `CREATE INDEX IF NOT EXISTS thread_sub_agents_by_lens_v2
+const LENS_INDEX = `CREATE INDEX IF NOT EXISTS thread_sub_agents_by_lens_v3
   ON thread_sub_agents(thread_id, ${THREAD_SUB_AGENT_LENS_SQL}, created_at DESC, monitor_id)`;
 
 // Keep composer decisions outside the card table so its history revision
@@ -354,7 +355,7 @@ function columnNames(db: BetterSqlite3.Database, table: string): Set<string> {
 export function ensureThreadSubAgentPanelSchema(db: BetterSqlite3.Database): void {
   if (!tableExists(db, "thread_sub_agents") || !tableExists(db, "thread_sub_agent_revisions")) return;
   const isCurrent = () =>
-    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'thread_sub_agents_by_lens_v2'").get() !== undefined
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'thread_sub_agents_by_lens_v3'").get() !== undefined
     && columnNames(db, "thread_sub_agent_revisions").has("gate_totals_ready")
     && tableExists(db, "thread_sub_agent_failure_dismissals");
   if (isCurrent()) return;
@@ -534,11 +535,12 @@ export class ThreadSubAgentTable {
     // `isThreadSubAgentVisibleInPanel` hides the cards an earlier build wrote
     // for decision batches (`DECISION_BATCH_SUBAGENT_MONITOR_ID_PREFIX`),
     // whatever their status. They fall in the pwragent lens.
-    const count = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v2
+    const count = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v3
       WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
           WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
+          WHEN substr(monitor_id, 1, 11) = 'acp-native:' THEN 'harness'
           ELSE 'pwragent' END) = ?
         AND monitor_id NOT IN (SELECT value FROM json_each(?))
         AND substr(monitor_id, 1, 22) <> 'system:decision-batch:'`);
@@ -546,11 +548,12 @@ export class ThreadSubAgentTable {
     // finished native worker leaves the panel a day after it last moved. A
     // card that is not JSON is skipped, as `parseCards` skips it, rather than
     // failing the read.
-    const harness = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v2
+    const harness = this.db.prepare(`SELECT count(*) AS count FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v3
       WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
           WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
+          WHEN substr(monitor_id, 1, 11) = 'acp-native:' THEN 'harness'
           ELSE 'pwragent' END) = 'harness'
         AND monitor_id NOT IN (SELECT value FROM json_each(?))
         AND json_valid(card) AND NOT (
@@ -577,11 +580,12 @@ export class ThreadSubAgentTable {
   }): ThreadSubAgentSummary[] {
     const excluded = JSON.stringify([...new Set(params.excludeMonitorIds ?? [])]);
     const rows = params.lens === "harness"
-      ? this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v2
+      ? this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v3
           WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
           WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
+          WHEN substr(monitor_id, 1, 11) = 'acp-native:' THEN 'harness'
           ELSE 'pwragent' END) = 'harness'
             AND monitor_id NOT IN (SELECT value FROM json_each(?))
             AND json_valid(card) AND NOT (
@@ -592,11 +596,12 @@ export class ThreadSubAgentTable {
           AND coalesce(completed_at, updated_at) < ?)
           ORDER BY created_at DESC, monitor_id LIMIT ? OFFSET ?`)
         .all(params.storageKey, excluded, params.visibleSince, params.limit, params.offset)
-      : this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v2
+      : this.db.prepare(`SELECT card FROM thread_sub_agents INDEXED BY thread_sub_agents_by_lens_v3
           WHERE thread_id = ? AND (CASE
           WHEN substr(monitor_id, 1, 19) = 'system:token-miser:' THEN 'token-miser'
           WHEN substr(monitor_id, 1, 13) = 'codex-native:' THEN 'harness'
           WHEN substr(monitor_id, 1, 14) = 'claude-native:' THEN 'harness'
+          WHEN substr(monitor_id, 1, 11) = 'acp-native:' THEN 'harness'
           ELSE 'pwragent' END) = ?
             AND monitor_id NOT IN (SELECT value FROM json_each(?))
             AND substr(monitor_id, 1, 22) <> 'system:decision-batch:'

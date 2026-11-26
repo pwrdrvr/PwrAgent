@@ -686,6 +686,54 @@ describe("sqlite write metrics", () => {
     } finally { await registry.close(); }
   });
 
+  it("budgets ACP native sub-agent card writes (Antigravity launch/settle and Grok zero-write progress)", async () => {
+    const registry = createDesktopBackendRegistry({
+      codexClient: createStubBackendClient(), overlayStore: store,
+      agentToolMcpServer: null, pdfToolMcpServer: null,
+    });
+    const internal = registryModules(registry).subAgentMonitorService;
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        // Antigravity: 4 parallel invoke_subagent launches, then turn settlement, then a late repeat.
+        const cards = [1, 2, 3, 4].map((index) => ({
+          monitorId: `acp-native:call-${index}`,
+          subAgentId: `call-${index}`,
+          task: `Audit repo ${index}`,
+          displayTitle: `Auditor ${index}`,
+          agentName: `Auditor ${index}`,
+          agentRole: "research",
+          startedAt: 1_000 + index,
+        }));
+        await internal.recordAcpSubAgents({
+          backend: "acp:antigravity",
+          threadId: "ag-thread",
+          subAgents: cards.map((card) => ({ ...card, status: "running" as const })),
+        });
+        await internal.recordAcpSubAgents({
+          backend: "acp:antigravity",
+          threadId: "ag-thread",
+          subAgents: cards.map((card) => ({ ...card, status: "success" as const })),
+        });
+        // Late redelivery after terminal writes nothing.
+        await internal.recordAcpSubAgents({
+          backend: "acp:antigravity",
+          threadId: "ag-thread",
+          subAgents: cards.map((card) => ({ ...card, status: "running" as const })),
+        });
+      });
+      expect(await store.readThreadSubAgentLensCounts({
+        backend: "acp:antigravity",
+        threadId: "ag-thread",
+        visibleSince: 0,
+      })).toEqual({ harness: 4, pwragent: 0, "token-miser": 0 });
+      expectSqliteWriteBudget({
+        scenario: "acp-subagent-cards",
+        note: "four parallel ACP native sub-agents started in one batch and settled together, then a late report: 2 commits total; ~1.5 MB/day at 20 batches/day, zero progress/idle writes",
+        writes,
+      });
+    } finally { await registry.close(); }
+  });
+
   it("persists a federated bulk dismissal in one commit and retains the original cards", async () => {
     const identity = { backend: "codex", threadId: "parent" } as const;
     const otherIdentity = { ...identity, backend: "claude" } as const;

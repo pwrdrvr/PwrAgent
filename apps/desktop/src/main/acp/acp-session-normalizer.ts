@@ -55,6 +55,10 @@ import {
 } from "./acp-file-read.js";
 import { sanitizeAcpToolOutput } from "./acp-tool-output.js";
 import { extractAcpContentImageParts, extractAcpToolImageParts } from "./acp-tool-images.js";
+import {
+  formatAcpInvokeSubAgentLabel,
+  readAcpInvokeSubAgentDetails,
+} from "./acp-subagents.js";
 import { reduceNormalizedThread } from "./normalized-thread-reducer.js";
 import { normalizedThreadToReplay, normalizedToolCallToReplayDetail } from "./normalized-thread-to-replay.js";
 
@@ -335,6 +339,7 @@ export class AcpSessionReplayNormalizer {
   private readonly messageIndexes = new Map<string, number>();
   private readonly entryIndexes = new Map<string, number>();
   private readonly typedEntryIndexes = new Map<string, number>();
+  private readonly turnEntryIndexes = new Map<string, number[]>();
   private lastUserMessageIndex?: number;
   private lastAssistantMessageIndex?: number;
   private status: AppServerThreadStatus = "idle";
@@ -442,6 +447,7 @@ export class AcpSessionReplayNormalizer {
     const normalizedPrompt = normalizeUserPrompt(params.prompt, params.parts);
     this.settleOpenRetry("completed");
     this.settleOpenCompaction("cancelled");
+    this.removeCurrentAgentWaitingActivity();
     this.currentTurnId = params.turnId;
     this.currentTurnStartedAt = createdAt;
     this.activeAssistantMessageId = undefined;
@@ -1628,10 +1634,29 @@ export class AcpSessionReplayNormalizer {
 
   private removeAgentWaitingActivity(turnId: string): void {
     const id = agentWaitingActivityId(turnId);
-    if (!this.entryIndexes.has(id)) {
+    const index = this.entryIndexes.get(id);
+    if (index === undefined) {
       return;
     }
-    this.entries = this.entries.filter((entry) => entry.id !== id);
+    const entry = this.entries[index];
+    if (
+      index === this.entries.length - 1
+      && entry?.id === id
+      && this.typedEntryIndexes.get(`${entry.type}:${id}`) === index
+    ) {
+      // Fast O(1) path: waiting rows are appended at turn start and removed
+      // before any later entry arrives in the common case, avoiding O(n²)
+      // full-history rebuilds across multi-turn rollouts.
+      this.entries.pop();
+      this.entryIndexes.delete(id);
+      this.typedEntryIndexes.delete(`${entry.type}:${id}`);
+      const turnIndexes = entry.turn?.id ? this.turnEntryIndexes.get(entry.turn.id) : undefined;
+      if (turnIndexes && turnIndexes[turnIndexes.length - 1] === index) {
+        turnIndexes.pop();
+      }
+      return;
+    }
+    this.entries = this.entries.filter((candidate) => candidate.id !== id);
     this.rebuildEntryIndexes();
   }
 
@@ -1829,10 +1854,23 @@ export class AcpSessionReplayNormalizer {
       this.appendEntry(entryWithTurn);
       return;
     }
-    const previousType = this.entries[index]?.type;
+    const previous = this.entries[index];
+    const previousType = previous?.type;
+    const previousTurnId = previous?.turn?.id;
     this.entries[index] = entryWithTurn;
     if (previousType !== entryWithTurn.type) {
       this.rebuildEntryIndexes();
+    } else if (entryWithTurn.turn?.id && entryWithTurn.turn.id !== previousTurnId) {
+      this.indexTurnEntry(entryWithTurn.turn.id, index);
+    }
+  }
+
+  private indexTurnEntry(turnId: string, index: number): void {
+    const turnIndexes = this.turnEntryIndexes.get(turnId);
+    if (turnIndexes) {
+      turnIndexes.push(index);
+    } else {
+      this.turnEntryIndexes.set(turnId, [index]);
     }
   }
 
@@ -1852,11 +1890,15 @@ export class AcpSessionReplayNormalizer {
     if (!this.typedEntryIndexes.has(key)) {
       this.typedEntryIndexes.set(key, index);
     }
+    if (entry.turn?.id) {
+      this.indexTurnEntry(entry.turn.id, index);
+    }
   }
 
   private rebuildEntryIndexes(): void {
     this.entryIndexes.clear();
     this.typedEntryIndexes.clear();
+    this.turnEntryIndexes.clear();
     this.entries.forEach((entry, index) => this.indexEntry(entry, index));
   }
 
@@ -1985,12 +2027,17 @@ export class AcpSessionReplayNormalizer {
     status: "completed" | "failed" | "interrupted",
     completedAt: number,
   ): void {
-    this.entries = this.entries.map((entry) => {
-      if (entry.turn?.id !== turnId) {
-        return entry;
+    const indexes = this.turnEntryIndexes.get(turnId);
+    if (!indexes || indexes.length === 0) {
+      return;
+    }
+    for (const index of indexes) {
+      const entry = this.entries[index];
+      if (!entry || entry.turn?.id !== turnId) {
+        continue;
       }
       const startedAt = entry.turn.startedAt ?? this.currentTurnStartedAt;
-      return {
+      this.entries[index] = {
         ...entry,
         turn: {
           ...entry.turn,
@@ -2004,7 +2051,7 @@ export class AcpSessionReplayNormalizer {
             : {}),
         },
       };
-    });
+    }
   }
 }
 
@@ -2540,6 +2587,42 @@ function toolActivity(
               }),
             ]
           : [],
+    };
+  }
+
+  const invokeSubAgent = readAcpInvokeSubAgentDetails(update.update);
+  if (invokeSubAgent) {
+    const status = readToolActivityStatus(update.update) ?? "in_progress";
+    const summary = formatAcpInvokeSubAgentLabel(invokeSubAgent, status);
+    const metaLabel = [
+      invokeSubAgent.typeName,
+      invokeSubAgent.model,
+    ].filter(Boolean).join(" · ");
+    const output = readToolOutput(update.update);
+    return {
+      type: "activity",
+      id,
+      createdAt,
+      summary,
+      status,
+      details: [
+        {
+          id: detailId,
+          kind: "read",
+          label: metaLabel ? `${summary} (${metaLabel})` : summary,
+          status,
+          ...(invokeSubAgent.prompt || output
+            ? {
+                command: {
+                  displayCommand: invokeSubAgent.prompt ?? summary,
+                  rawCommand: "invoke_subagent",
+                  source: "tool" as const,
+                  ...(output ? { output } : {}),
+                },
+              }
+            : {}),
+        },
+      ],
     };
   }
 

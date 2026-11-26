@@ -491,6 +491,7 @@ export type ThreadSubAgentSummary = {
   ownerRegistrySessionId?: string;
   backend?: AppServerBackendKind;
   agentName?: string;
+  agentRole?: string;
   preferredModel?: string;
   preferredReasoningEffort?: string;
   preferredFastMode?: boolean;
