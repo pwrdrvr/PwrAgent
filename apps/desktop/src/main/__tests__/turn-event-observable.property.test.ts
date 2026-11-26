@@ -80,3 +80,33 @@ it("keeps concurrent notifications independent across provider threads", async (
     } finally { await registry.close(); }
   }), { numRuns: 15 });
 });
+
+it("retires a drifted ACP terminal on its registered thread across opaque turn IDs", async () => {
+  const registry = registryWithInMemoryStore(databases);
+  const ports = registry.constructionPorts();
+  const state = registryModules(registry).turnState;
+  try {
+    await fc.assert(fc.asyncProperty(terminal, fc.stringMatching(/^[a-z]{1,8}$/), async (method, suffix) => {
+      const threadId = `fixture-${suffix}`;
+      const owner = { backend: "acp:fixture" as const, threadId, turnId: "pending:started-turn" };
+      const sibling = { ...owner, threadId: `${threadId}:pending`, turnId: "sibling-turn" };
+      const otherProvider = { ...owner, backend: "acp:other-fixture" as const };
+      for (const turn of [owner, sibling, otherProvider]) {
+        await ports.emit(event(turn.backend, turn.threadId, turn.turnId, "turn/started"));
+      }
+
+      // The terminal ends the registered turn for its backend and thread even
+      // when its turn ID changes. Similar IDs on other threads stay live.
+      await ports.emit(event(owner.backend, owner.threadId, "pending:terminal-turn", method));
+      expect(state.hasRegisteredTurn(owner)).toBe(false);
+      expect(state.hasRegisteredTurn(sibling)).toBe(true);
+      expect(state.hasRegisteredTurn(otherProvider)).toBe(true);
+
+      for (const turn of [sibling, otherProvider]) {
+        await ports.emit(event(turn.backend, turn.threadId, turn.turnId, method));
+      }
+    }), { numRuns: 5 });
+  } finally {
+    await registry.close();
+  }
+});

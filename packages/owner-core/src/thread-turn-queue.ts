@@ -41,6 +41,7 @@ export type ThreadTurnQueueEntry = {
   serviceTier?: string;
   reasoningEffort?: string;
   fastMode?: boolean;
+  reviewFix?: boolean;
   isCompactCommand?: boolean;
   automationRunId?: string;
   automationName?: string;
@@ -287,7 +288,7 @@ function sameAcceptance(left: ThreadTurnQueueEntry, right: ThreadTurnQueueEntry)
   const fields = [
     "backend", "threadId", "origin", "turnInputSource", "messageOrigin", "delivery", "input",
     "executionMode", "approvalPolicy", "sandbox", "model", "collaborationMode",
-    "serviceTier", "reasoningEffort", "fastMode", "automationRunId", "automationName",
+    "serviceTier", "reasoningEffort", "fastMode", "reviewFix", "automationRunId", "automationName",
     "agentMessages", "agentMessageOrigins", "restartContinuation",
   ] as const;
   return isDeepStrictEqual(
@@ -864,7 +865,13 @@ export class ThreadTurnQueue {
   async submitIfIdle(
     input: Omit<ThreadTurnQueueEntry, "id" | "createdAt"> &
       Partial<Pick<ThreadTurnQueueEntry, "id" | "createdAt">>,
-    options?: { onAdmission?: () => void },
+    options?: {
+      onAdmission?: () => void;
+      /** Allow a review Auto-fix handoff to run ahead of waiting FIFO entries. */
+      bypassWaitingQueue?: boolean;
+      /** Caller-owned dispatch suspensions that should not block this submission. */
+      ignoreDispatchSuspensionCount?: number;
+    },
   ): Promise<ThreadTurnQueueImmediateSubmissionResult> {
     if (this.options.isAdmissionHeld?.()) return { status: "busy" };
     const entry: ThreadTurnQueueEntry = {
@@ -875,6 +882,8 @@ export class ThreadTurnQueue {
     if (!this.canStartImmediately({
       backend: entry.backend,
       threadId: entry.threadId,
+      bypassWaitingQueue: options?.bypassWaitingQueue,
+      ignoreDispatchSuspensionCount: options?.ignoreDispatchSuspensionCount,
     })) {
       options?.onAdmission?.();
       return { status: "busy" };
@@ -892,14 +901,17 @@ export class ThreadTurnQueue {
   canStartImmediately(params: {
     backend: AppServerBackendKind;
     threadId: ThreadIdentifier;
+    bypassWaitingQueue?: boolean;
+    ignoreDispatchSuspensionCount?: number;
   }): boolean {
     const key = this.keyFor(params);
+    const suspensions = this.dispatchSuspensions.get(key) ?? 0;
     return (
       !this.admissions.has(key) &&
-      !this.dispatchSuspensions.has(key) &&
+      suspensions <= (params.ignoreDispatchSuspensionCount ?? 0) &&
       !this.runningEntries.has(key) &&
       !this.heldQueues.has(key) &&
-      !hasWaitingEntry(this.queueFor(key)) &&
+      (params.bypassWaitingQueue === true || !hasWaitingEntry(this.queueFor(key))) &&
       !(this.options.isThreadActive?.(params) ?? false) &&
       !this.isDispatchHeld({ backend: params.backend, threadId: params.threadId })
     );

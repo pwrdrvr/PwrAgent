@@ -1905,6 +1905,77 @@ describe("TranscriptList", () => {
     expect(screen.getByText("Follow-up prose should not inherit", { exact: false })).toBeInTheDocument();
   });
 
+  it("draws an agent message's pipe rows that have no delimiter row as a table", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-pipe-rows",
+            role: "user",
+            text: [
+              "Cold and warm matched in the same-workload A/B fixture:",
+              "MRs/repos | attempts base→head | peak | fixture bytes | simulated ms",
+              "1/1 | 5→1 | 3→1 | 4,278→1,767 | 50→25",
+              "40/1 | 200→1 | 3→1 | 171,616→28,404 | 1,675→25",
+              "400/4 | 2,000→4 | 3→1 | 1,717,088→277,800 | 16,675→100",
+              "The original research-derived fixture measured the same reduction.",
+            ].join("\n"),
+            origin: {
+              kind: "agent",
+              sourceThread: { backend: "codex", threadId: "source-thread" },
+            },
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const table = container.querySelector("table");
+    expect(table).toBeInTheDocument();
+    expect(
+      [...table!.querySelectorAll("th")].map((cell) => cell.textContent),
+    ).toEqual(["MRs/repos", "attempts base→head", "peak", "fixture bytes", "simulated ms"]);
+    expect(table!.querySelectorAll("tbody tr")).toHaveLength(3);
+    expect(table).not.toHaveTextContent("Cold and warm matched");
+    expect(table).not.toHaveTextContent("The original research-derived fixture");
+    expect(screen.getByText("The original research-derived fixture", { exact: false }))
+      .toBeInTheDocument();
+  });
+
+  it("draws pipe rows that end an assistant reply as a table, last row included", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-trailing-pipe-rows",
+            role: "assistant",
+            text: [
+              "Sweep finished. Results:",
+              "Repos | requests | peak",
+              "1 | 6→1 | 3→1",
+              "20 | 120→2 | 3→1",
+              "200 | 1,200→5 | 3→1",
+            ].join("\n"),
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const table = container.querySelector("table");
+    expect(table).toBeInTheDocument();
+    expect(
+      [...table!.querySelectorAll("tbody tr")].map((row) => row.firstElementChild?.textContent),
+    ).toEqual(["1", "20", "200"]);
+    expect(table).not.toHaveTextContent("Sweep finished");
+  });
+
   it("keeps a trailing heading and separators with its wide table split block", async () => {
     const copyText = vi.fn(async () => undefined);
     const tableBlock = `## Quick matrix
@@ -2296,6 +2367,64 @@ Implementation notes remain in a readable bubble.`;
     expect(container.querySelector("article.transcript-message--table")).toBeNull();
     expect(container.querySelector("table")).toBeNull();
     expect(container.querySelector("pre code")).toHaveTextContent("| Key | Value |");
+  });
+
+  it("marks wide GFM tables with short single-dash delimiters and escaped pipes as wide", () => {
+    const shortDelimiterTable = [
+      "| Metric \\| Scope | Col A | Col B | Col C |",
+      "| - | :-: | -: | :- |",
+      "| Latency | 12ms | 18ms | OK |",
+    ].join("\n");
+
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-short-delim-table",
+            role: "assistant",
+            text: `Summary:\n\n${shortDelimiterTable}`,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const tableArticle = container.querySelector("article.transcript-message--table");
+    expect(tableArticle).toHaveClass("transcript-message--table-wide");
+    expect(tableArticle?.querySelector("table.thread-markdown__table")).toBeInTheDocument();
+  });
+
+  it("keeps compact 3-column tables with CRLF endings or surrounding spaces out of wide-table breakout", () => {
+    const compactCrlfTable = [
+      "  | Key | Env | Mode |  ",
+      "  | --- | --- | --- |  ",
+      "  | API | Prod | On |  ",
+    ].join("\r\n");
+
+    const { container } = render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-compact-crlf-table",
+            role: "assistant",
+            text: `Summary:\r\n\r\n${compactCrlfTable}`,
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    const articles = container.querySelectorAll("article.transcript-message--assistant");
+    expect(articles).toHaveLength(1);
+    expect(articles[0]).not.toHaveClass("transcript-message--table");
+    expect(articles[0]).not.toHaveClass("transcript-message--table-wide");
+    expect(container.querySelector("table.thread-markdown__table")).toBeInTheDocument();
   });
 
   it("opens transcript file links with the OS default and provides a separate editor action", async () => {
@@ -5788,6 +5917,46 @@ Implementation notes remain in a readable bubble.`;
     expect(screen.getByText("Read pull request #42.")).toBeInTheDocument();
     expect(screen.queryByText("Command:")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Allow" })).toBeInTheDocument();
+  });
+
+  it("renders unwrapped MCP tool name, redacted arguments, and scoped conversation grant", () => {
+    const { container } = render(
+      <TranscriptList
+        entries={[]}
+        loading={false}
+        loadingMore={false}
+        pendingRequest={{
+          method: "item/commandExecution/requestApproval",
+          params: {
+            threadId: "thread-1",
+            requestId: "approval-wrapped-1",
+            prompt: "Antigravity wants to use the PwrAgent tool update_review_item.\n\nSettle finding 1 as addressed",
+            acpMcpToolName: "update_review_item",
+            acpMcpToolDetail: JSON.stringify({ id: "review-1", itemId: "finding-1", status: "addressed" }, null, 2),
+            acpPermissionOptions: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              {
+                optionId: "pwragent_allow_tool_for_thread",
+                name: "Allow update_review_item for this conversation",
+                kind: "allow_always",
+              },
+              { optionId: "deny", name: "Deny", kind: "reject_once" },
+            ],
+          },
+        }}
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />
+    );
+
+    expect(screen.getByText("MCP tool approval")).toBeInTheDocument();
+    const codeText = container.querySelector(".transcript-request pre code")?.textContent ?? "";
+    expect(codeText).toContain("update_review_item");
+    expect(codeText).toContain("\"status\": \"addressed\"");
+    expect(codeText).not.toContain("mcp_pwragent_call_pwragent_tool");
+    expect(
+      screen.getByRole("button", { name: "Allow update_review_item for this conversation" }),
+    ).toBeInTheDocument();
   });
 
   it("shows command approval reason and command when no prompt is provided", () => {

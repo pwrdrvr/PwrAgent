@@ -15,6 +15,7 @@ import {
   withSeenExecutionMode,
 } from "./features/thread-todos/useThreadTodoFullAccessGate";
 import { formatBackendLabel } from "./lib/backend-label";
+import { ipcErrorMessage } from "./lib/open-path-failure";
 import { classifyDirectory, directoryIncludesCheckout } from "@pwragent/shared/directory-navigation";
 import { detectProviderResponseBlock } from "@pwragent/shared/provider-response-block";
 import { operatorTodoItemKey } from "@pwragent/shared/contracts/operator-requests";
@@ -338,10 +339,7 @@ import {
   describeHeapSnapshotResult,
   HEAP_SNAPSHOT_SECRET_WARNING,
 } from "../../shared/heap-snapshot";
-import {
-  buildHotCpuProfileHandoffMessage,
-  formatHotCpuProfileTriggerSummary,
-} from "../../shared/hot-cpu-profile";
+import { useHotCpuProfileNotices } from "./features/notifications/useHotCpuProfileNotices";
 import type { BundledGitLfsAdvisoryEvent } from "../../shared/bundled-git-lfs";
 import {
   githubPrAccessTargetKey,
@@ -1120,45 +1118,7 @@ function DesktopAppShell(props: {
       };
     }, [desktopApi, showPrAutoDispatchBudgetNotice]);
 
-    useEffect(() => {
-      return desktopApi?.onHotCpuProfileCaptured?.((event) => {
-        const heapSnapshotCount = event.heapSnapshotArtifacts?.length ?? 0;
-        const heapSnapshotSummary =
-          heapSnapshotCount > 0
-            ? ` ${heapSnapshotCount} heap snapshots captured.`
-            : "";
-        showAppNotice({
-          autoDismiss: false,
-          copyText: buildHotCpuProfileHandoffMessage(event),
-          facts: [
-            {
-              label: "Source",
-              value: `Local app${event.sourceHostname ? ` on ${event.sourceHostname}` : ""}`,
-            },
-            {
-              label: "Captured",
-              value: new Date(event.capturedAt).toLocaleString(undefined, {
-                year: "numeric",
-                month: "short",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-                second: "2-digit",
-                timeZoneName: "short",
-              }),
-            },
-            { label: "Session", value: event.sessionDirectoryName },
-          ],
-          dismissGroup: { key: "hot-cpu-profile", label: "CPU profile notices" },
-          id: `hot-cpu-profile:${event.sessionDirectoryName}:${event.profileFilename}`,
-          title: `${event.target === "main" ? "Main" : "Renderer"} CPU profile captured`,
-          message: [
-            `Matched ${formatHotCpuProfileTriggerSummary(event)}. Saved ${event.profileFilename}.`,
-            heapSnapshotSummary,
-          ].join(""),
-        });
-      });
-    }, [desktopApi, showAppNotice]);
+    useHotCpuProfileNotices(desktopApi, dispatchAppNotice);
 
     // On-demand heap snapshots. The capture (and its countdown) run in main, so
     // the result can land here even if Settings was closed to stage the scenario.
@@ -2559,7 +2519,7 @@ function DesktopAppShell(props: {
     !readRendererFederationTarget() && selectedTodoThread && selectedTodoTarget?.scope === "remote"
       ? { backend: selectedTodoThread.source, threadId: selectedTodoThread.id, federationTarget: selectedTodoTarget }
       : undefined);
-  const operatorRequests = useOperatorRequests(desktopApi, mountedTodoThreadKeys);
+  const operatorRequests = useOperatorRequests(desktopApi);
   // Providers with threads, from the directory index that counts them all.
   // Keyed by the joined list so a refreshed page keeps one array identity.
   // Each row names a Codex model provider from its owner's catalog.
@@ -3493,7 +3453,7 @@ function DesktopAppShell(props: {
       showAppNotice({
         id: `merge-build-watch:${threadSummaryIdentityKey(thread)}:${pr.url}`,
         title: "Couldn't watch the merge build",
-        message: error instanceof Error ? error.message : String(error),
+        message: ipcErrorMessage(error),
       });
     }
   });
@@ -3504,7 +3464,7 @@ function DesktopAppShell(props: {
       showAppNotice({
         id: `merge-build-watch:${wait.id}`,
         title: "The merge build watch is still running",
-        message: error instanceof Error ? error.message : String(error),
+        message: ipcErrorMessage(error),
       });
     }
   });
@@ -4054,15 +4014,8 @@ function DesktopAppShell(props: {
     ? undefined
     : {
         onOpen: () => {
-          // Both ends of this call are assumptions, not guarantees:
-          // `useDesktopApi` resolves the preload bridge by polling, so the
-          // control is mounted and clickable for however long that takes,
-          // and the channel is an `ipcRenderer.invoke` that can reject.
-          // The optional chaining stays — a half-built bridge must not
-          // throw out of a click handler — but a click that goes nowhere
-          // has to say so. Swallowing it cost a Star Map E2E failure six
-          // seconds of silence and a bare "window did not open", with
-          // nothing in the trace to say which end had dropped it.
+          // The control can mount before useDesktopApi resolves. Report
+          // the missing bridge and any rejection from the native handler.
           if (!desktopApi?.openStarMapWindow) {
             console.error(
               "Open Star Map ignored: the desktop bridge is not ready.",
@@ -4070,9 +4023,18 @@ function DesktopAppShell(props: {
             );
             return;
           }
-          void desktopApi.openStarMapWindow().catch((error) => {
-            console.error("Opening the Star Map window failed.", error);
-          });
+          if (desktopApi.replayFixtureActive) {
+            console.debug("[star-map-open] invoking main");
+          }
+          void desktopApi.openStarMapWindow()
+            .then(() => {
+              if (desktopApi.replayFixtureActive) {
+                console.debug("[star-map-open] main acknowledged open");
+              }
+            })
+            .catch((error) => {
+              console.error("Opening the Star Map window failed.", error);
+            });
         },
         onOpenFederationSettings: () => openSettingsSection("federation"),
       };
@@ -4317,6 +4279,7 @@ function DesktopAppShell(props: {
         activeTurnStartedAt: session.activeTurnStartedAt,
         terminals,
         addOptimisticReviewEntry: session.addOptimisticReviewEntry,
+        bindOptimisticReviewEntryToTurn: session.bindOptimisticReviewEntryToTurn,
         beginReviewSubmission: session.beginReviewSubmission,
         addOptimisticUserMessage: session.addOptimisticUserMessage,
         bindOptimisticUserMessageToTurn: session.bindOptimisticUserMessageToTurn,
@@ -4362,6 +4325,7 @@ function DesktopAppShell(props: {
         loading: session.loading,
         loadingMore: session.loadingMore,
         messageCount: session.messages.length,
+        autoCompaction: session.autoCompaction,
         contextWindow: session.contextWindow,
         pricing: session.response?.pricing,
         tokenMiserAccounting: session.response?.toolAccounting?.tokenMiser,
@@ -4445,6 +4409,7 @@ function DesktopAppShell(props: {
         setExecutionModeError: navigation.setThreadExecutionModeError,
         setThreadModelSettingsError: navigation.setThreadModelSettingsError,
         skillError: skills.error,
+        skillCatalogTargetKey: skills.skillCatalogTargetKey,
         skillLoading: skills.loading,
         codexSkillProfiles: remoteSkillProfileOwner
           ? skills.response?.codexSkillProfiles

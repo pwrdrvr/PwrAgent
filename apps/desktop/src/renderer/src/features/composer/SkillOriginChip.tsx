@@ -103,9 +103,15 @@ type CardState = {
   skill: OriginSkill;
   left?: number;
   top?: number;
+  returnFocus?: HTMLElement;
 };
 
+export function isSkillOriginShortcut(event: { key: string; shiftKey: boolean }): boolean {
+  return event.key === "ContextMenu" || (event.shiftKey && event.key === "F10");
+}
+
 export type SkillOriginCardController = {
+  openFromKeyboard: (skill: AppServerSkillSummary, anchor: HTMLElement, returnFocus: HTMLElement) => boolean;
   /** Pointer handlers for one row's chip. */
   chipHandlers: (skill: AppServerSkillSummary) => {
     onPointerEnter: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -166,6 +172,7 @@ export function useSkillOriginCard(options: {
   const cardRef = useRef<HTMLDivElement>(null);
   const openTimerRef = useRef<number | null>(null);
   const closeTimerRef = useRef<number | null>(null);
+  const cardPointerHeldRef = useRef(false);
   const copiedTimerRef = useRef<number | null>(null);
   const [state, setState] = useState<CardState | undefined>(undefined);
   // Read synchronously by the pointer handlers, which decide between "wait"
@@ -189,17 +196,20 @@ export function useSkillOriginCard(options: {
   const close = useCallback(() => {
     clearTimer(openTimerRef);
     clearTimer(closeTimerRef);
+    cardPointerHeldRef.current = false;
     if (stateRef.current) {
       commitState(undefined);
     }
   }, [clearTimer, commitState]);
 
   const scheduleClose = useCallback(() => {
+    if (stateRef.current?.returnFocus) return;
     clearTimer(openTimerRef);
     clearTimer(closeTimerRef);
     closeTimerRef.current = window.setTimeout(() => {
       closeTimerRef.current = null;
-      commitState(undefined);
+      cardPointerHeldRef.current = false;
+      if (!cardRef.current?.contains(document.activeElement)) commitState(undefined);
     }, CARD_CLOSE_GRACE_MS);
   }, [clearTimer, commitState]);
 
@@ -217,13 +227,14 @@ export function useSkillOriginCard(options: {
       clearTimer(closeTimerRef);
       clearTimer(openTimerRef);
       const current = stateRef.current;
-      if (current?.anchor === anchor) {
+      if (current?.returnFocus || current?.anchor === anchor) {
         return;
       }
       const next: CardState = { anchor, skill: { ...skill, origin, path } };
       // Moving between chips while a card is up swaps it at once, the way
       // a menu bar does; only the first card waits.
       if (current) {
+        cardPointerHeldRef.current = false;
         commitState(next);
         return;
       }
@@ -241,6 +252,17 @@ export function useSkillOriginCard(options: {
       onPointerLeave: scheduleClose,
     }),
     [hoverAnchor, scheduleClose],
+  );
+
+  const openFromKeyboard = useCallback<SkillOriginCardController["openFromKeyboard"]>(
+    (skill, anchor, returnFocus) => {
+      if (!skill.origin || !skill.path) return false;
+      clearTimer(openTimerRef);
+      clearTimer(closeTimerRef);
+      commitState({ anchor, skill: { ...skill, origin: skill.origin, path: skill.path }, returnFocus });
+      return true;
+    },
+    [clearTimer, commitState],
   );
 
   // Place below the chip, or above when the viewport has no room. Measured
@@ -267,6 +289,12 @@ export function useSkillOriginCard(options: {
     commitState({ ...state, left, top });
   }, [commitState, state]);
 
+  useLayoutEffect(() => {
+    if (state?.returnFocus && state.left !== undefined) {
+      cardRef.current?.querySelector<HTMLElement>("button")?.focus();
+    }
+  }, [state]);
+
   // The picker re-renders its rows on every keystroke, and closes without
   // telling the card. A card whose chip is gone must not float over the list
   // or come back with the next picker, so check before paint, not after.
@@ -289,13 +317,19 @@ export function useSkillOriginCard(options: {
       // and the next one closes the picker.
       event.preventDefault();
       event.stopPropagation();
+      const returnFocus = stateRef.current?.returnFocus;
       close();
+      if (returnFocus?.isConnected) returnFocus.focus();
     };
     const onPointerDown = (event: PointerEvent): void => {
       const target = event.target;
       if (target instanceof Node && cardRef.current?.contains(target)) {
         return;
       }
+      close();
+    };
+    const dismissOnLayout = () => {
+      if (cardPointerHeldRef.current || cardRef.current?.contains(document.activeElement)) return;
       close();
     };
     // Only a scroll that moves the chip. A streaming transcript scrolls
@@ -307,19 +341,19 @@ export function useSkillOriginCard(options: {
         target === document
         || (target instanceof Node && anchor && target.contains(anchor))
       ) {
-        close();
+        dismissOnLayout();
       }
     };
     window.addEventListener("keydown", onKeyDown, { capture: true });
     document.addEventListener("pointerdown", onPointerDown, { capture: true });
     window.addEventListener("scroll", onScroll, { capture: true });
-    window.addEventListener("resize", close);
+    window.addEventListener("resize", dismissOnLayout);
     window.addEventListener("blur", close);
     return () => {
       window.removeEventListener("keydown", onKeyDown, { capture: true });
       document.removeEventListener("pointerdown", onPointerDown, { capture: true });
       window.removeEventListener("scroll", onScroll, { capture: true });
-      window.removeEventListener("resize", close);
+      window.removeEventListener("resize", dismissOnLayout);
       window.removeEventListener("blur", close);
     };
   }, [close, visible]);
@@ -376,7 +410,13 @@ export function useSkillOriginCard(options: {
         top={state.top}
         onCopy={copyPath}
         onOpen={openSkillFile}
-        onPointerEnter={() => clearTimer(closeTimerRef)}
+        onBlur={state.returnFocus ? (target) => {
+          if (!(target instanceof Node) || !cardRef.current?.contains(target)) close();
+        } : undefined}
+        onPointerEnter={() => {
+          cardPointerHeldRef.current = true;
+          clearTimer(closeTimerRef);
+        }}
         onPointerLeave={scheduleClose}
       />,
       document.body,
@@ -387,6 +427,7 @@ export function useSkillOriginCard(options: {
     cardNode,
     chipHandlers,
     close,
+    openFromKeyboard,
     describedBy: (skill) =>
       state && state.left !== undefined && state.skill.path === skill.path
         ? cardId
@@ -425,6 +466,7 @@ function SkillOriginCard(props: {
   skill: OriginSkill;
   top?: number;
   onCopy: (path: string) => void;
+  onBlur?: (target: EventTarget | null) => void;
   onOpen?: (skill: OriginSkill) => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
@@ -445,6 +487,7 @@ function SkillOriginCard(props: {
         top: props.top,
         visibility: props.left === undefined ? "hidden" : undefined,
       }}
+      onBlur={props.onBlur ? (event) => props.onBlur?.(event.relatedTarget) : undefined}
       onClick={stopHostPropagation}
       onKeyDown={stopHostPropagation}
       onMouseDown={keepComposerFocus}

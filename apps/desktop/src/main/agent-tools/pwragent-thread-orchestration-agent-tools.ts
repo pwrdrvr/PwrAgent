@@ -32,7 +32,9 @@ import {
   HANDOFF_TASK_WORKSPACE_MODES,
   PWRAGENT_THREAD_ORCHESTRATION_OPERATION_NAMES,
 } from "@pwragent/shared/contracts/thread-orchestration-tools";
+import { parseInitialThreadContinueAfter } from "@pwragent/shared/contracts/thread-dependencies";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import { buildInitialContinueAfterInputSchema } from "./continue-after-schema.js";
 import {
   THREAD_WORKSPACE_HANDOFF_DIRECTIONS,
   THREAD_WORKSPACE_HANDOFF_STRATEGIES,
@@ -172,9 +174,16 @@ export function buildPwrAgentThreadOrchestrationToolDefinitions(
       }
       const normalizedArgs = normalizeArgsForOperation(operation, args);
       if (!normalizedArgs) {
+        const continueAfterError =
+          operation === "handoff_task" && args.continueAfter !== undefined
+            ? parseInitialThreadContinueAfter(args.continueAfter)
+            : undefined;
         return agentToolFailure({
           code: "invalid_arguments",
-          message: invalidArgumentsMessageForOperation(operation),
+          message:
+            continueAfterError && !continueAfterError.ok
+              ? continueAfterError.message
+              : invalidArgumentsMessageForOperation(operation),
         });
       }
       const response = await handler({
@@ -199,7 +208,7 @@ function descriptionForOperation(
     case "register_thread_worktree":
       return "Register a known current-profile thread's existing linked checkout for snapshot and cleanup, including outside PwrAgent roots. Use only when the operator explicitly requests ownership registration. Pass the target backend, threadId and exact canonical worktreePath. Find them with search_threads/get_thread_status. Register and unregister always show an operator approval card, including in Full Access. Registration changes no files and grants no immediate removal: idle, activity, shared-owner and snapshot protections still apply. Tracked edits and non-ignored untracked files are saved before removal. Ignored files are deleted without recovery. Main checkouts, aliases and unrelated paths are refused. Use action=inspect to read the receipt and validity without writes, or action=unregister to revoke authorization. Provider cwd, PR links, directory trust and to-project moves never authorize registration.";
     case "handoff_task":
-      return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend spawning unless the user requests it or needs an unsupported feature. Agent settings inherit from the current turn. Same-project handoffs create grouped subthreads in new worktrees by default. Assigned worktrees remain authoritative for child threads. Children must not edit, build, or run Git in another worktree because a branch is checked out there. When the user names another local project, pass its path as cwd. Also pass cwd when the user links or references a local directory. Never put the target path only in task or context. For an isolated worktree in that project, set workspaceMode=new_worktree. Set branchName only to an existing base ref. Omit cwd only to inherit the current project. Cross-project handoffs are not grouped. Use fork or same_workspace only when the user requests them. Use project_local for the project checkout. workspaceMode=none creates an unscoped scratch workspace. Do not use none as a fallback for work in a named project. Provider overrides need a registered backend and exact model ID. Set environment to an environment id or name from the project's .codex/environments, or environment=none for no environment. Omit it to give a same-project child this thread's environment. Report a failed setup from the result's environment field. Do not retry while startup is pending. Inspect pendingHandoffs and return threadLink verbatim.";
+      return "Create a PwrAgent-managed thread for delegated work. Prefer this to backend spawning unless the user requests it or needs an unsupported feature. Agent settings inherit from the current turn. Same-project handoffs create grouped subthreads in new worktrees by default. Assigned worktrees remain authoritative for child threads. Children must not edit, build, or run Git in another worktree because a branch is checked out there. When the user names another local project, pass its path as cwd. Also pass cwd when the user links or references a local directory. Never put the target path only in task or context. For an isolated worktree in that project, set workspaceMode=new_worktree. Set branchName only to an existing base ref. Omit cwd only to inherit the current project. Cross-project handoffs are not grouped. Use fork or same_workspace only when the user requests them. Use project_local for the project checkout. workspaceMode=none creates an unscoped scratch workspace. Do not use none as a fallback for work in a named project. Provider overrides need a registered backend and exact model ID. Set environment to an environment id or name from the project's .codex/environments, or environment=none for no environment. Omit it to give a same-project child this thread's environment. Report a failed setup from the result's environment field. Pass continueAfter to register a wait when the child starts. Omit backend and threadId to wait on this thread. Do not retry while startup is pending. Inspect pendingHandoffs and return threadLink verbatim.";
     case "attach_thread_directory":
       return "Attach another Git directory to the current PwrAgent thread. Use this for user-requested cross-project work. Omit backend for the current thread. Use workspaceMode=local for the repository or new_worktree for a managed worktree. Default Access requires confirmation for an untrusted path. This tool does not change the primary cwd. To continue this thread in an existing worktree, use move_thread_workspace with direction=to-project and targetPath. Use detach_thread_directory to remove a temporary link.";
     case "detach_thread_directory":
@@ -372,6 +381,9 @@ function inputSchemaForOperation(
             description:
               "Environment id or name from the project's `.codex/environments/*.toml`, or `none`. PwrAgent runs its setup in the child's workspace before the first turn. The child gets its Run commands and captured shell environment, such as PATH. Omit it and a same-project child inherits the parent thread's environment. A cross-project child gets none. An unknown name fails before a child exists and lists the available environments.",
           },
+          continueAfter: buildInitialContinueAfterInputSchema(
+            "Continue After wait registered after Turn 1.",
+          ),
         },
       };
     case "move_thread_workspace":
@@ -701,6 +713,12 @@ function normalizeHandoffTaskArgs(
   if (!task || (args.worktreeBranchMode !== undefined && !worktreeBranchMode)) {
     return undefined;
   }
+  let continueAfter: HandoffTaskToolArgs["continueAfter"];
+  if (args.continueAfter !== undefined) {
+    const parsed = parseInitialThreadContinueAfter(args.continueAfter);
+    if (!parsed.ok) return undefined;
+    continueAfter = parsed.value;
+  }
   return {
     task,
     ...(readTrimmedString(args.title)
@@ -778,6 +796,7 @@ function normalizeHandoffTaskArgs(
       ? { branchName: readTrimmedString(args.branchName) }
       : {}),
     ...(worktreeBranchMode ? { worktreeBranchMode } : {}),
+    ...(continueAfter ? { continueAfter } : {}),
   };
 }
 

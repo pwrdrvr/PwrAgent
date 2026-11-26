@@ -1,6 +1,8 @@
 import fc from "fast-check";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AcpAvailableCommandsRecord, AcpSessionMetadata } from "@pwragent/owner-core/acp-storage";
+import { projectAcpSessionThread } from "@pwragent/owner-core/acp-thread-projection";
+import { isEligibleForGeneratedTitle } from "@pwragent/owner-core/thread-naming-lifecycle";
 import type {
   AcpBackendId,
   AppServerAvailableCommandSummary,
@@ -210,4 +212,85 @@ it.each([
     });
     expect(reads.writes.commits).toBe(0);
   } finally { db.close(); removeTempStateDbDir(fixture.tempDir); }
+});
+
+// Pre-upgrade acp_sessions rows persisted with the old "ACP session" fallback
+// title (with titleSource omitted or "fallback") must normalize to
+// "Untitled thread" ("fallback") on read with zero SQLite writes so naming and
+// provider topic updates keep working after upgrade, while explicit and derived
+// titles remain untouched.
+it("normalizes legacy persisted 'ACP session' fallback rows on read without touching explicit or derived titles", async () => {
+  vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+  const fixture = createTempStateDb("shared-acp-legacy-title-");
+  const db = StateDb.open(fixture.dbPath);
+  const rawTitles = ["ACP session", "acp session", "  ACP session  ", "Fix login bug"] as const;
+  const rawTitleSources: Array<AcpSessionMetadata["titleSource"]> = [
+    undefined,
+    "fallback",
+    "derived",
+    "explicit",
+  ];
+  try {
+    let index = 0;
+    for (const backendId of ["acp:antigravity", "acp:alpha"] as const) {
+      for (const rawTitle of rawTitles) {
+        for (const rawTitleSource of rawTitleSources) {
+          index += 1;
+          const sessionId = `legacy-session-${index}`;
+          const stored: Record<string, unknown> = {
+            backendId,
+            sessionId,
+            title: rawTitle,
+            ...(rawTitleSource === undefined ? {} : { titleSource: rawTitleSource }),
+            cwd: "/fixture/repo",
+            createdAt: 1,
+            updatedAt: 100 + index,
+            executionMode: "default",
+            status: "idle",
+          };
+          db.raw.prepare(
+            "INSERT INTO acp_sessions (backend_id, session_id, created_at, updated_at, payload) VALUES (?, ?, ?, ?, ?)",
+          ).run(backendId, sessionId, 1, 100 + index, JSON.stringify(stored));
+
+          const isLegacyFallback =
+            rawTitle.trim().toLowerCase() === "acp session"
+            && (rawTitleSource === undefined || rawTitleSource === "fallback");
+          const expectedTitle = isLegacyFallback ? "Untitled thread" : rawTitle;
+          const expectedTitleSource = isLegacyFallback ? "fallback" : rawTitleSource;
+
+          const reads = await measureSqliteWrites(() => {
+            for (const Store of sessionBindings) {
+              const store = new Store(db);
+              const fromGet = store.getSession(backendId, sessionId);
+              const fromList = store.listSessions(backendId).find((s) => s.sessionId === sessionId);
+              const fromAll = store.listAllSessions().find((s) => s.sessionId === sessionId);
+              const fromInventory = store
+                .listInventorySessions()
+                .find((group) => group.backendId === backendId)
+                ?.sessions.find((s) => s.sessionId === sessionId);
+              for (const session of [fromGet, fromList, fromAll, fromInventory]) {
+                expect(session).toBeDefined();
+                expect(session?.title).toBe(expectedTitle);
+                expect(session?.titleSource).toBe(expectedTitleSource);
+                const projected = projectAcpSessionThread(session!, undefined, "repo");
+                if (isLegacyFallback) {
+                  expect(projected.title).toBe("Untitled thread");
+                  expect(projected.titleSource).toBe("fallback");
+                  expect(isEligibleForGeneratedTitle(projected, "Investigate flaky build")).toBe(true);
+                } else if (rawTitleSource === "explicit") {
+                  expect(projected.title).toBe(rawTitle);
+                  expect(projected.titleSource).toBe("explicit");
+                  expect(isEligibleForGeneratedTitle(projected, "Investigate flaky build")).toBe(false);
+                }
+              }
+            }
+          });
+          expect(reads.writes.commits).toBe(0);
+        }
+      }
+    }
+  } finally {
+    db.close();
+    removeTempStateDbDir(fixture.tempDir);
+  }
 });

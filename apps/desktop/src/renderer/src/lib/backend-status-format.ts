@@ -64,6 +64,15 @@ export function selectVisibleRateLimits(
       if (leftName.labelOrder !== rightName.labelOrder) {
         return leftName.labelOrder - rightName.labelOrder;
       }
+      if (leftName.groupTier !== rightName.groupTier) {
+        return leftName.groupTier - rightName.groupTier;
+      }
+      if (leftName.groupKey !== rightName.groupKey) {
+        return leftName.groupKey.localeCompare(rightName.groupKey);
+      }
+      if (leftName.windowOrder !== rightName.windowOrder) {
+        return leftName.windowOrder - rightName.windowOrder;
+      }
       return left.name.localeCompare(right.name);
     });
 }
@@ -200,19 +209,41 @@ export function formatRateLimitLine(limit: BackendRateLimitSummary): string {
 function splitRateLimitName(name: string): {
   label: string;
   labelOrder: number;
+  groupTier: number;
+  groupKey: string;
+  windowOrder: number;
 } {
   const trimmed = name.trim();
   const lower = trimmed.toLowerCase();
   if (lower.endsWith("5h limit")) {
-    return { label: "5h limit", labelOrder: 0 };
+    return { label: "5h limit", labelOrder: 0, groupTier: 0, groupKey: "", windowOrder: 0 };
   }
   if (lower.endsWith("weekly limit")) {
-    return { label: "Weekly limit", labelOrder: 1 };
+    return { label: "Weekly limit", labelOrder: 1, groupTier: 0, groupKey: "", windowOrder: 1 };
   }
   if (lower.endsWith("individual limit")) {
-    return { label: "Individual limit", labelOrder: 2 };
+    return { label: "Individual limit", labelOrder: 2, groupTier: 0, groupKey: "", windowOrder: 2 };
   }
-  return { label: trimmed, labelOrder: 99 };
+  // Pool-scoped limits such as "5h Gemini limit" and "Weekly Gemini limit"
+  // stay grouped by pool, with 5h ahead of Weekly inside each pool.
+  const pooled = /^(5h|weekly)\s+(.+?)\s+limit$/i.exec(trimmed);
+  if (pooled) {
+    const pool = pooled[2]!.toLowerCase();
+    return {
+      label: trimmed,
+      labelOrder: 99,
+      groupTier: pool === "gemini" ? 1 : 2,
+      groupKey: pool,
+      windowOrder: pooled[1]!.toLowerCase() === "5h" ? 0 : 1,
+    };
+  }
+  return {
+    label: trimmed,
+    labelOrder: 99,
+    groupTier: lower.startsWith("5-hour") ? 0 : 3,
+    groupKey: lower,
+    windowOrder: 0,
+  };
 }
 
 function formatWholeNumber(value: number): string {

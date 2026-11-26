@@ -1551,6 +1551,7 @@ class DesktopAppServerService {
         .remoteBackend(request.federationTarget)
         .listSkills({
           backend: request.backend,
+          catalog: request.catalog,
           cwd: request.cwd,
           cwds: request.cwds,
           threadId: request.threadId,
@@ -1560,6 +1561,7 @@ class DesktopAppServerService {
     const backend = request.backend ?? "codex";
     const response = await getDesktopBackendRegistry().listSkills({
       backend,
+      catalog: request.catalog,
       cwd: request.cwd,
       cwds: request.cwds,
       threadId: request.threadId,
@@ -8389,6 +8391,7 @@ class DesktopAppServerService {
           instanceId,
           threadId: request.ref.threadId,
           pinned: Boolean(result.pinnedRank),
+          membershipChanged: false,
         },
       },
     });
@@ -9434,7 +9437,9 @@ class DesktopAppServerService {
       });
       return;
     }
+    const registry = getDesktopBackendRegistry();
     const coordinator = new PrReviewOfferCoordinator({
+      liveReviews: () => registry.reviewsInProgress(),
       ownerThread: async (prKey) => await this.prReviewOfferOwner(prKey),
       ineligibleThreads: async (prKey) => ineligiblePrReviewOfferThreads(this.prReviewOfferCandidates(prKey)),
       threadPrKeys: (thread) => {
@@ -9473,11 +9478,13 @@ class DesktopAppServerService {
     const unsubscribeReviews = reviews.addChangeListener((review) => {
       coordinator.handleReviewChanged(review);
     });
+    const unsubscribeLiveReviews = registry.onLiveReviewChanged((context) => coordinator.handleLiveReviewChanged(context));
     setThreadTodoMergeOfferGate(async (thread, pullRequest) =>
       await this.prMergeOfferRefusal(thread, pullRequest)
     );
     this.prReviewOfferUnsubscribe = () => {
       unsubscribeReviews();
+      unsubscribeLiveReviews();
       setThreadTodoMergeOfferGate(undefined);
     };
     this.prReviewOfferCoordinator = coordinator;
@@ -10148,12 +10155,25 @@ class DesktopAppServerService {
     if (typeof request.backend !== "string" || !isAppServerBackendKind(request.backend) || typeof request.threadId !== "string" || !request.threadId.trim()) {
       throw new Error("A local backend and waiting threadId are required.");
     }
+    let normalizedRequest = request;
     if (request.action === "create") {
       validateDependencyCreate(request, () => this.ciRunUrlOptions());
       // The resumed turn starts from this text alone, for the operator's
-      // dialog as for an agent's tool call.
+      // dialog as for an agent's tool call. Accept an operator/peer single
+      // self merge_build watch without continuation for older viewers.
+      const legacySelfMergeBuild = !actor.startsWith("agent:")
+        && request.continuation === undefined
+        && (request.deliver === undefined || request.deliver === "agent")
+        && request.conditions?.length === 1
+        && request.conditions[0]?.when === "merge_build"
+        && request.conditions[0].backend === request.backend
+        && request.conditions[0].threadId === request.threadId
+        && request.conditions[0].target === undefined;
       if (typeof request.continuation !== "string" || !request.continuation.trim()) {
-        throw new Error("Write what this thread should do when the prerequisites are met.");
+        if (!legacySelfMergeBuild) {
+          throw new Error("Write what this thread should do when the prerequisites are met.");
+        }
+        normalizedRequest = { ...request, continuation: "Report the merge build result." };
       }
       if (request.conditions?.some((condition) => !isAppServerBackendKind(condition?.backend))) throw new Error("Prerequisites must use known local backends.");
       // Validate PR-only prerequisites through the protocol before
@@ -10169,7 +10189,7 @@ class DesktopAppServerService {
         throw new Error("Enable background PR polling before waiting for a CI run.");
       }
     }
-    const { pullRequest, ...managed } = request;
+    const { pullRequest, ...managed } = normalizedRequest;
     if (pullRequest !== undefined && (managed.action !== "list" || typeof pullRequest !== "string" || !pullRequest.trim())) {
       throw new Error("pullRequest is a PR number or URL, and only list takes it.");
     }

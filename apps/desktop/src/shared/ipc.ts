@@ -1039,6 +1039,10 @@ export const APP_UPDATE_CHECK_RESULT_EVENT_CHANNEL =
   "app:update-check-result-event";
 export const HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL =
   "hot-cpu-profile:captured";
+export const HOT_CPU_POST_CAP_EVENT_CHANNEL = "hot-cpu-profile:post-cap";
+export const HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL = "hot-cpu-profile:final-capture-failed";
+export const HOT_CPU_PROFILE_REARMABLE_CHANNEL = "hot-cpu-profile:list-rearmable";
+export const HOT_CPU_PROFILE_REARM_CHANNEL = "hot-cpu-profile:rearm";
 /** Main → renderer push: appearance (theme + density) was written to
  *  the per-profile config.toml by a settings update. Every BrowserWindow
  *  subscribes so secondary windows (changelog, app-log, license,

@@ -75,7 +75,7 @@ const RBAC_SECTION_PATH = ["messaging", "rbac"] as const;
 const LEGACY_JSON_SEGMENT = "rbac-policy.json";
 
 /** Detects `[messaging.rbac]` / `[[messaging.rbac.*]]` headers in raw TOML. */
-const RBAC_HEADER_PATTERN = /^\s*\[\[?\s*messaging\.rbac\b/m;
+const RBAC_HEADER_PATTERN = /^\s*\[\[?\s*messaging\.rbac(?![\w-])/m;
 
 /**
  * The fail-closed posture: enforcement ON with no permission-granting
@@ -85,13 +85,17 @@ const RBAC_HEADER_PATTERN = /^\s*\[\[?\s*messaging\.rbac\b/m;
  * legacy mode — would silently promote every admitted actor to Admin the
  * moment a configured policy became unreadable.
  */
-function failClosedRbacPolicy(): RbacPolicy {
+function failClosedRbacPolicyState(retryRead = false): RbacPolicyReadState {
   return {
-    policyVersion: RBAC_POLICY_VERSION,
-    enforced: true,
-    roles: [],
-    attachments: [],
+    policy: { ...emptyRbacPolicy(), enforced: true },
+    failClosed: true,
+    ignoredReservedRoleIds: [],
+    ...(retryRead ? { retryRead: true } : {}),
   };
+}
+
+function isMissingPolicyFile(error: unknown): boolean {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
 }
 
 export function resolveRbacConfigPath(options?: RbacPolicyStoreOptions): string {
@@ -110,10 +114,9 @@ export function resolveLegacyRbacPolicyJsonPath(
  * - **No RBAC data anywhere** (no config, or config with no `[messaging.rbac]`
  *   section and no legacy JSON) → the empty, UNENFORCED policy. The feature
  *   was never configured, so legacy-compatible mode is correct.
- * - **RBAC data demonstrably exists but cannot be parsed** (malformed TOML
- *   whose raw text still contains a `[messaging.rbac]` header, or an
- *   unparseable legacy JSON file) → FAIL CLOSED: enforced with zero
- *   attachments, default-denying everyone until the operator repairs it.
+ * - **A source cannot be read, or contains invalid RBAC data** (such as a
+ *   garbled enforcement flag or unparseable legacy JSON) → FAIL CLOSED:
+ *   enforced with zero attachments, default-denying everyone until repair.
  *   Falling open here would silently re-promote every admitted actor to
  *   Admin — the exact regression enforcement was configured to prevent.
  *
@@ -126,12 +129,14 @@ export function readRbacPolicy(options?: RbacPolicyStoreOptions): RbacPolicy {
 export type RbacPolicyReadState = {
   policy: RbacPolicy;
   /**
-   * True when the policy came from the fail-closed path — RBAC data exists on
-   * disk but could not be parsed, so enforcement is locked ON with zero
-   * attachments. The Access Control pane surfaces this so the operator knows
+   * True when a source could not be read or its RBAC data was invalid, so
+   * enforcement is locked ON with zero attachments. The Access Control pane
+   * surfaces this so the operator knows
    * to repair the file instead of puzzling over an empty enforced graph.
    */
   failClosed: boolean;
+  /** I/O failures can clear without a change to the source fingerprint. */
+  retryRead?: true;
   /**
    * Reserved built-in ids found on persisted roles and discarded. Surfaced so
    * a hand-edit that tries to redefine a built-in is visible rather than
@@ -145,29 +150,30 @@ export function readRbacPolicyState(
   options?: RbacPolicyStoreOptions,
 ): RbacPolicyReadState {
   const configPath = resolveRbacConfigPath(options);
-  let source: string | null;
+  let source: string;
   try {
     source = fs.readFileSync(configPath, "utf8");
-  } catch {
-    source = null;
+  } catch (error) {
+    return isMissingPolicyFile(error)
+      ? readLegacyJsonPolicyState(options)
+      : failClosedRbacPolicyState(true);
   }
-  if (source !== null) {
-    let tables: ReturnType<typeof parseTomlTables>;
-    try {
-      tables = parseTomlTables(source, configPath);
-    } catch {
-      return RBAC_HEADER_PATTERN.test(source)
-        ? {
-            policy: failClosedRbacPolicy(),
-            failClosed: true,
-            ignoredReservedRoleIds: [],
-          }
-        : readLegacyJsonPolicyState(options);
-    }
-    const section = tables[RBAC_SECTION];
-    if (section !== undefined) {
-      return policyFromSection(section);
-    }
+  let tables: ReturnType<typeof parseTomlTables>;
+  try {
+    tables = parseTomlTables(source, configPath);
+  } catch {
+    return RBAC_HEADER_PATTERN.test(source)
+      ? failClosedRbacPolicyState()
+      : readLegacyJsonPolicyState(options);
+  }
+  const section = tables[RBAC_SECTION];
+  if (section !== undefined) {
+    return policyFromSection(section);
+  }
+  // A malformed parent or a child table still indicates configured RBAC.
+  if (tables.messaging?.rbac !== undefined
+    || Object.keys(tables).some((table) => table.startsWith(`${RBAC_SECTION}.`))) {
+    return failClosedRbacPolicyState();
   }
   return readLegacyJsonPolicyState(options);
 }
@@ -181,20 +187,22 @@ export function readRbacPolicyState(
  */
 export function rbacPolicySourceFingerprint(
   options?: RbacPolicyStoreOptions,
-): string {
-  return [
-    resolveRbacConfigPath(options),
-    resolveLegacyRbacPolicyJsonPath(options),
-  ]
-    .map((filePath) => {
-      try {
-        const stat = fs.statSync(filePath);
-        return `${stat.mtimeMs}:${stat.size}`;
-      } catch {
-        return "-";
-      }
-    })
-    .join("|");
+): string | null {
+  const paths = [resolveRbacConfigPath(options), resolveLegacyRbacPolicyJsonPath(options)];
+  try {
+    return paths
+      .map((filePath) => {
+        const stat = fs.statSync(filePath, { bigint: true, throwIfNoEntry: false });
+        if (!stat) return "-";
+        // A peer can replace the file while preserving its size and mtime.
+        // Identity catches replacements, and ctime also covers in-place edits.
+        return `${stat.dev}:${stat.ino}:${stat.ctimeNs}:${stat.mtimeNs}:${stat.size}`;
+      })
+      .join("|");
+  } catch {
+    // Unavailable metadata cannot establish that the cached policy is current.
+    return null;
+  }
 }
 
 /**
@@ -282,6 +290,7 @@ function attachmentToRow(attachment: RbacAttachment): TomlRow {
 function policyFromSection(
   section: Record<string, TomlValue>,
 ): RbacPolicyReadState {
+  if (typeof section.enforced !== "boolean") return failClosedRbacPolicyState();
   const parsedRoles = rowsOf(section.roles)
     .map(roleFromRow)
     .filter((role): role is RbacRoleDefinition => role !== null);
@@ -296,9 +305,7 @@ function policyFromSection(
         typeof section.policy_version === "number"
           ? section.policy_version
           : RBAC_POLICY_VERSION,
-      // The section exists, so RBAC is configured: only a clean `enforced =
-      // false` turns enforcement off. A missing or garbled flag fails closed.
-      enforced: section.enforced !== false,
+      enforced: section.enforced,
       roles: parsedRoles.filter((role) => !isBuiltInRbacRoleId(role.id)),
       attachments: rowsOf(section.attachments)
         .map(attachmentFromRow)
@@ -381,40 +388,46 @@ function readLegacyJsonPolicyState(
   options?: RbacPolicyStoreOptions,
 ): RbacPolicyReadState {
   const legacyPath = resolveLegacyRbacPolicyJsonPath(options);
-  if (!fs.existsSync(legacyPath)) {
+  let source: string;
+  try {
+    source = fs.readFileSync(legacyPath, "utf8");
+  } catch (error) {
+    if (!isMissingPolicyFile(error)) return failClosedRbacPolicyState(true);
     return {
       policy: emptyRbacPolicy(),
       failClosed: false,
       ignoredReservedRoleIds: [],
     };
   }
-  // From here on RBAC data demonstrably exists — unreadable or unparseable
-  // states fail closed rather than falling open to everyone-is-Admin.
-  let parsed: unknown;
+  let value: unknown;
   try {
-    parsed = JSON.parse(fs.readFileSync(legacyPath, "utf8"));
+    value = JSON.parse(source);
   } catch {
-    return {
-      policy: failClosedRbacPolicy(),
-      failClosed: true,
-      ignoredReservedRoleIds: [],
-    };
+    return failClosedRbacPolicyState();
   }
-  if (typeof parsed !== "object" || parsed === null) {
-    return {
-      policy: failClosedRbacPolicy(),
-      failClosed: true,
-      ignoredReservedRoleIds: [],
-    };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return failClosedRbacPolicyState();
   }
-  const policy = sanitizeRbacPolicy(parsed);
-  const ignoredReservedRoleIds = policy.roles
+  const record = value as Record<string, unknown>;
+  if (typeof record.enforced !== "boolean") return failClosedRbacPolicyState();
+  const roles = Array.isArray(record.roles)
+    ? record.roles.map(sanitizeRole).filter((role): role is RbacRoleDefinition => role !== null)
+    : [];
+  const attachments = Array.isArray(record.attachments)
+    ? record.attachments
+        .map(sanitizeAttachment)
+        .filter((attachment): attachment is RbacAttachment => attachment !== null)
+    : [];
+  const ignoredReservedRoleIds = roles
     .filter((role) => isBuiltInRbacRoleId(role.id))
     .map((role) => role.id);
   return {
     policy: {
-      ...policy,
-      roles: policy.roles.filter((role) => !isBuiltInRbacRoleId(role.id)),
+      policyVersion:
+        typeof record.policyVersion === "number" ? record.policyVersion : RBAC_POLICY_VERSION,
+      enforced: record.enforced,
+      roles: roles.filter((role) => !isBuiltInRbacRoleId(role.id)),
+      attachments,
     },
     failClosed: false,
     ignoredReservedRoleIds,
@@ -440,30 +453,6 @@ function retireLegacyJsonPolicy(options?: RbacPolicyStoreOptions): void {
 // ---------------------------------------------------------------------------
 // Sanitizers — keep the readers defensive against hand-edited / corrupt files.
 // ---------------------------------------------------------------------------
-
-function sanitizeRbacPolicy(value: unknown): RbacPolicy {
-  if (typeof value !== "object" || value === null) {
-    return emptyRbacPolicy();
-  }
-  const record = value as Record<string, unknown>;
-  const roles = Array.isArray(record.roles)
-    ? record.roles.map(sanitizeRole).filter((role): role is RbacRoleDefinition => role !== null)
-    : [];
-  const attachments = Array.isArray(record.attachments)
-    ? record.attachments
-        .map(sanitizeAttachment)
-        .filter((attachment): attachment is RbacAttachment => attachment !== null)
-    : [];
-  return {
-    policyVersion:
-      typeof record.policyVersion === "number"
-        ? record.policyVersion
-        : RBAC_POLICY_VERSION,
-    enforced: record.enforced === true,
-    roles,
-    attachments,
-  };
-}
 
 function sanitizeRole(value: unknown): RbacRoleDefinition | null {
   if (typeof value !== "object" || value === null) return null;

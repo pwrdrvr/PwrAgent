@@ -26,6 +26,7 @@ export type TranscriptReviewHistoryIndex = {
   oldestEventSegment?: TranscriptReviewEventSegment;
   newestEventSegment?: TranscriptReviewEventSegment;
   eventIds: Set<string>;
+  eventTurnIds: Set<string>;
   revisedAssistantEvents: Map<string, AppServerThreadMessageEntry | undefined>;
   hasUnboundReview: boolean;
   unboundAssistantHashes: Set<number>;
@@ -150,7 +151,7 @@ export function summarizeTranscriptReviewSegment(
   for (const entry of entries) {
     const entryType = entry.type;
     if (entryType === "review") {
-      events.push(entry);
+      if (!isPendingEntryId(entry.id)) events.push(entry);
       continue;
     }
     if (
@@ -189,11 +190,20 @@ export function createTranscriptReviewHistoryIndex(): TranscriptReviewHistoryInd
     assistantEntriesByTextHash: createTranscriptTextIndex(),
     assistantMessagesByTextHash: createTranscriptTextIndex(),
     eventIds: new Set(),
+    eventTurnIds: new Set(),
     revisedAssistantEvents: new Map(),
     hasUnboundReview: false,
     unboundAssistantHashes: new Set(),
     revision: 0,
   };
+}
+
+function eventTurnIdentities(event: TranscriptReviewEvent): string[] {
+  const turn = event.turn;
+  if (!turn) return [];
+  return typeof turn.rootTurnId === "string" && turn.rootTurnId !== turn.id
+    ? [turn.id, turn.rootTurnId]
+    : [turn.id];
 }
 
 function addTextCandidates(
@@ -272,7 +282,12 @@ export function addTranscriptReviewSegmentToIndex(
     }
   }
   const canExtend = position === "newer" && independent && unboundAssistantHashes.size === 0
-    && !summary.events.some((event) => !event.turn?.id || sharesLegacyReviewEvidence(index, event));
+    && !summary.events.some(
+      (event) =>
+        !event.turn?.id
+        || sharesLegacyReviewEvidence(index, event)
+        || eventTurnIdentities(event).some((turnId) => index.eventTurnIds.has(turnId)),
+    );
   const cached = cachedReviewRules.get(index);
   const previousRevision = index.revision;
   if (!canExtend || summary.events.length || index.hasUnboundReview) index.revision++;
@@ -296,6 +311,7 @@ export function addTranscriptReviewSegmentToIndex(
   }
   for (const event of summary.events) {
     index.eventIds.add(event.id);
+    for (const turnId of eventTurnIdentities(event)) index.eventTurnIds.add(turnId);
     if (event.type === "review" && !event.turn?.id) index.hasUnboundReview = true;
   }
   for (const hash of unboundAssistantHashes) index.unboundAssistantHashes.add(hash);
@@ -348,9 +364,9 @@ export function* iterateTranscriptReviewHistoryEvents(
 
 function reviewEvent(entry: AppServerThreadEntry): TranscriptReviewEvent | undefined {
   if (entry.type === "review") {
-    // A local submission header has neither a provider turn nor findings.
-    // It cannot claim messages in earlier turns even with identical text.
-    return !entry.turn?.id && isPendingEntryId(entry.id) ? undefined : entry;
+    // The receipt gives the placeholder a turn ID, but only the owner's
+    // review rows can be evidence for suppressing transcript messages.
+    return isPendingEntryId(entry.id) ? undefined : entry;
   }
   if (
     entry.type === "message"
@@ -481,14 +497,21 @@ function analyzeTranscriptReviews(params: {
 
   // Correlate by turn, after collecting all markers: replay pages and live
   // items may deliver the generated prompt before the review start marker.
+  // Inline Codex reviews can emit the generated prompt on a child turn whose
+  // `rootTurnId` names the outer review turn.
   const reviewTurnIds = new Set(
     candidates.flatMap(({ entry }) => entry.turn?.id ? [entry.turn.id] : []),
   );
+  const matchesReviewTurn = (turn: AppServerThreadEntry["turn"]): boolean => {
+    if (!turn) return false;
+    return reviewTurnIds.has(turn.id)
+      || (typeof turn.rootTurnId === "string" && reviewTurnIds.has(turn.rootTurnId));
+  };
   const excludedPromptIds = new Set<string>();
   for (const { entry, source } of userPrompts) {
     if (
       !isPwrAgentInlineReviewPrompt(entry.text)
-      && (!entry.turn?.id || !reviewTurnIds.has(entry.turn.id) || entry.origin)
+      && (!matchesReviewTurn(entry.turn) || entry.origin)
     ) {
       continue;
     }
@@ -619,7 +642,10 @@ export function presentIndexedTranscriptReviews(params: ReviewTail & {
   // the current evidence.
   const crossesPageBoundary = historyOverlaps.size > 0
     || tailEvents.some((event) => !event.turn?.id || sharesLegacyReviewEvidence(index, event)
-      || params.historyTurns.has(event.turn.id) || params.historyEntryIds.has(event.id)
+      || eventTurnIdentities(event).some(
+        (turnId) => params.historyTurns.has(turnId) || index.eventTurnIds.has(turnId),
+      )
+      || params.historyEntryIds.has(event.id)
       || params.historyMessageIds.has(event.id));
   if (!crossesPageBoundary) {
     cache.history ??= analyzeTranscriptReviews({

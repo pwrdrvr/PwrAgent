@@ -27,8 +27,9 @@ export function isTurnAnswer(entry: AppServerThreadEntry, turnId: string): boole
  * While the turn runs, nothing moves. When the renderer saw the reply before
  * the row (both carry renderer sequences), the row stays below it.
  *
- * Rows that cannot fold an answer (replies, file diffs, usage, failure
- * markers) never move.
+ * Rows that cannot fold an answer (replies, post-answer file diffs, usage,
+ * failure markers) never move; live tool buckets (`live-tools-*`) do move even
+ * when they carry ACP edit patches, because they fold answers on ACP turns.
  */
 export function lateWorkBelongsAboveAnswer(
   row: AppServerThreadEntry,

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fc from "fast-check";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import {
   describeRateLimitRow,
@@ -122,6 +123,43 @@ describe("backend status formatting", () => {
       "Included credits",
       "other limit",
     ]);
+  });
+
+  it("groups Antigravity 5h and weekly limits by model pool regardless of arrival order", () => {
+    const now = new Date(2026, 10, 26, 14, 0, 0).getTime();
+    const limits = [
+      { name: "Weekly Gemini limit", limitId: "gemini-weekly", usedPercent: 15, windowMinutes: 10_080 },
+      { name: "5h Gemini limit", limitId: "gemini-5h", usedPercent: 20, windowMinutes: 300, resetAt: now + 3 * 3_600_000 },
+      { name: "Weekly Claude/GPT limit", limitId: "3p-weekly", usedPercent: 25, windowMinutes: 10_080 },
+      { name: "5h Claude/GPT limit", limitId: "3p-5h", usedPercent: 0, windowMinutes: 300 },
+    ];
+
+    fc.assert(fc.property(
+      fc.shuffledSubarray(limits, { minLength: limits.length, maxLength: limits.length }),
+      (shuffled) => {
+        const visible = selectVisibleRateLimits({ kind: "acp:antigravity", rateLimits: shuffled });
+        expect(visible.map((limit) => limit.name)).toEqual([
+          "5h Gemini limit",
+          "Weekly Gemini limit",
+          "5h Claude/GPT limit",
+          "Weekly Claude/GPT limit",
+        ]);
+      },
+    ));
+
+    const visible = selectVisibleRateLimits({ kind: "acp:antigravity", rateLimits: limits });
+    expect(describeRateLimitRow(visible[0]!, now)).toMatchObject({
+      label: "5h Gemini limit",
+      figure: "20%",
+      text: "used",
+      usedPercent: 20,
+    });
+    expect(describeRateLimitRow(visible[2]!, now)).toEqual({
+      label: "5h Claude/GPT limit",
+      figure: "0%",
+      text: "used",
+      usedPercent: 0,
+    });
   });
 
   it("formats sub-24-hour resets as times", () => {

@@ -60,12 +60,10 @@ import { contextWindowMoonFace } from "./context-window-moon";
 import {
   applyContextWindowBudget,
   autoCompactionStatusLine,
-  isAutoCompactionActive,
   type ContextWindowBudget,
-  type ThreadAutoCompactionStatus,
 } from "./context-window-budget";
 import { useAutoCompactionRules, useContextMoonStyle } from "../../lib/context-moon-preferences";
-import { useThreadAutoCompaction } from "../../lib/useThreadAutoCompaction";
+import { isAutoCompactionActive, type ThreadAutoCompactionStatus } from "../../lib/thread-session-transitions";
 import {
   getShortTermRateLimitResetAt,
   getRateLimitResetSendAt,
@@ -141,7 +139,6 @@ import { createPortal, flushSync } from "react-dom";
 import type { JSONContent } from "@tiptap/react";
 import type {
   MoveThreadToMainCheckoutResponse,
-  AppServerAvailableCommandSummary,
   AppServerBackendKind,
   AppServerReviewTarget,
   AppServerSkillSummary,
@@ -183,7 +180,6 @@ import { projectWatchesMergeBuilds } from "@pwragent/shared/project-forge-automa
 import { describeAutoFixCoverage } from "./auto-fix-coverage";
 import type { FederationTarget } from "@pwragent/shared/contracts/federation";
 import { ComposerPrMenu } from "./ComposerPrMenu";
-import { mergeBuildPullRequestUrl } from "../pr-watches/merge-build-watches";
 import type { ScheduledThreadAction, ScheduledThreadReviewPayload } from "@pwragent/shared/contracts/scheduled-thread-actions";
 import {
   HANDOFF_TO_NEW_WORKTREE_UNSUPPORTED_MESSAGE,
@@ -238,6 +234,7 @@ import { openImageGallery } from "../thread-detail/ImageGalleryLayer";
 import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ThreadProviderCommand } from "../../lib/useThreadSkills";
 import { LaunchpadSkillProfilePersistenceError, LaunchpadStartupCancelledError } from "../../lib/launchpad-creation-client";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import { prefersClaudeCodeReview, resolveReviewRunMode } from "../../lib/review-run-mode";
@@ -358,6 +355,9 @@ import {
   type ComposerImageFile,
 } from "./composer-image-files";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
+import { EmojiAutocompleteList } from "./EmojiAutocompleteList";
+import { useComposerEmojiAutocomplete } from "./useComposerEmojiAutocomplete";
+import { resolveComposerAutocompleteProjection } from "./composer-autocomplete-projection";
 import { SkillPickerHeader } from "./SkillPickerHeader";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
 import {
@@ -404,7 +404,7 @@ import {
 } from "./ComposerDropdown";
 import { providerPickerDropdownOptions } from "./provider-picker-options";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
-import { SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
+import { isSkillOriginShortcut, SkillOriginChip, useSkillOriginCard } from "./SkillOriginChip";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import {
   canPushToRemoteTarget,
@@ -465,6 +465,7 @@ export type ComposerProps = {
   onOpenCodexSkillProfiles?: () => void;
   activeTurnId?: string;
   addOptimisticReviewEntry?: (displayText: string) => string;
+  bindOptimisticReviewEntryToTurn?: (id: string, turnId: string) => void;
   beginReviewSubmission?: () => (() => void) | undefined;
   addOptimisticUserMessage?: (
     text: string,
@@ -507,6 +508,7 @@ export type ComposerProps = {
   /** Threads searchable from the inline `#` reference picker. */
   threads?: NavigationThreadSummary[];
   disabled?: boolean;
+  autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
   composerImplementation?: DesktopChatReplyComposer;
   draftStore?: ComposerDraftStore;
@@ -524,6 +526,8 @@ export type ComposerProps = {
     text: string;
     /** Queue behind an active turn even when the backend supports steering. */
     busyBehavior?: "queue";
+    /** True when submitted from a review card's Auto-fix / Fix control. */
+    reviewFix?: boolean;
   };
   onReplySubmissionSettled?: (id: number, accepted: boolean) => void;
   /**
@@ -612,7 +616,8 @@ export type ComposerProps = {
   unavailableReason?: string;
   onActiveTurnIdChange?: (turnId?: string) => void;
   fullAccessRiskWarningDismissed?: boolean;
-  onEnsureSkillsLoaded?: (options?: { force?: boolean }) => void | Promise<void>;
+  skillCatalogTargetKey?: string;
+  onEnsureSkillsLoaded?: (options?: { force?: boolean; includeCommands?: boolean }) => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
   pendingRequestActive?: boolean;
   pendingUserInputActive?: boolean;
@@ -768,7 +773,7 @@ export type ComposerProps = {
   setExecutionModeError?: string;
   skillError?: string;
   skillLoading?: boolean;
-  providerCommands?: AppServerAvailableCommandSummary[];
+  providerCommands?: ThreadProviderCommand[];
   skills: AppServerSkillSummary[];
   thread?: NavigationThreadSummary;
   integratedTerminal?: ComposerTerminalToggleProps;
@@ -983,6 +988,7 @@ type QueuedTurnDraft = {
   paused?: boolean;
   pauseRevision?: number;
   title?: string;
+  reviewFix?: boolean;
   input?: AppServerTurnInputItem[];
   imageAttachments: ComposerImageAttachment[];
   fileAttachments: ComposerFileAttachment[];
@@ -1050,15 +1056,11 @@ type SlashCommandSuggestion = {
   id: string;
   insertText: string;
   label: string;
+  skill?: AppServerSkillSummary;
   source: "provider" | "pwragent";
   sourceLabel: string;
 };
 
-type AutocompleteKind =
-  | "directories"
-  | "hash-references"
-  | "skills"
-  | "slash";
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 type ReviewConfigState = {
@@ -1207,7 +1209,7 @@ const CODEX_MCP_SLASH_COMMANDS: SlashCommandSuggestion[] = [
 ];
 
 function providerCommandToSlashSuggestion(
-  command: AppServerAvailableCommandSummary,
+  command: ThreadProviderCommand,
   backends: BackendSummary[] = [],
 ): SlashCommandSuggestion {
   const commandName = command.name.startsWith("/")
@@ -1222,6 +1224,7 @@ function providerCommandToSlashSuggestion(
     insertText: `/${commandName}`,
     description: command.description ?? "Provider command",
     aliases: command.aliases,
+    skill: command.skill,
     ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
     source: "provider",
     sourceLabel,
@@ -5052,7 +5055,7 @@ function useComposerController(props: ComposerProps) {
     // that gate opens instead of consuming its id and rejecting it silently.
     if (props.disabled) return;
     appliedReplySubmissionId.current = submission.id;
-    void submitReplyText(submission.text, submission.busyBehavior)
+    void submitReplyText(submission.text, submission.busyBehavior, submission.reviewFix)
       .catch(() => false)
       .then((accepted) => props.onReplySubmissionSettled?.(submission.id, accepted));
     // submitReplyText is recreated each render; the id guard sends once.
@@ -6174,6 +6177,12 @@ function useComposerController(props: ComposerProps) {
   const directoryRefTrigger = referenceTriggers
     ? referenceTriggers["@"]
     : findDirectoryReferenceTrigger(draft, selectionStart);
+  const emojiAutocomplete = useComposerEmojiAutocomplete({
+    draft,
+    input: inputRef.current,
+    scopeKey: `${props.launchpad?.directoryKey ?? ""}:${props.thread?.id ?? ""}`,
+    selectionStart,
+  });
   // `#` is the one trigger whose query spans spaces — thread titles have
   // spaces in them — so unlike `@` and `$` nothing retires it. Left alone,
   // a `#` anywhere in a sentence keeps the picker armed and the federated
@@ -6342,66 +6351,41 @@ function useComposerController(props: ComposerProps) {
     mentionNavigation.settledQuery,
   ]);
   const hashReferenceCount = filteredHashReferenceOptions.length;
-  const availableAutocompleteKind: AutocompleteKind | undefined = trigger && (matchingSkills.length > 0 || props.onEnsureSkillsLoaded)
-    ? "skills"
-    : slashTrigger && filteredSlashCommands.length > 0
-      ? "slash"
-      : directoryRefTrigger && filteredDirectoryRefs.length > 0
-        ? "directories"
-        : hashReferenceTrigger
-            && (hashReferenceCount > 0 || federatedHashSearchLoading)
-          ? "hash-references"
-          : undefined;
-  const autocompleteKey =
-    availableAutocompleteKind === "skills" && trigger
-      ? `skills:${trigger.start}:${trigger.end}:${trigger.query}`
-      : availableAutocompleteKind === "slash" && slashTrigger
-        ? `slash:${slashTrigger.start}:${slashTrigger.end}:/${slashTrigger.query}`
-        : availableAutocompleteKind === "directories" && directoryRefTrigger
-          ? `directories:${directoryRefTrigger.start}:${directoryRefTrigger.end}:@${directoryRefTrigger.query}`
-          : availableAutocompleteKind === "hash-references" && hashReferenceTrigger
-            ? `hash-references:${hashReferenceTrigger.start}:${hashReferenceTrigger.end}:#${hashReferenceTrigger.query}`
-          : undefined;
-  const displayedAutocompleteKind =
-    autocompleteKey && autocompleteKey === dismissedAutocompleteKey
-      ? undefined
-      : availableAutocompleteKind;
-  const autocompleteKind: AutocompleteKind | undefined = reviewConfig
-    ? undefined
-    : displayedAutocompleteKind;
-  const activeAutocompleteIndex =
-    autocompleteKind === "skills"
-      ? activeSkillIndex
-      : autocompleteKind === "directories"
-        ? activeDirectoryRefIndex
-        : autocompleteKind === "hash-references"
-          ? activeHashReferenceIndex
-          : activeSlashIndex;
-  const autocompleteLength =
-    autocompleteKind === "skills"
-      ? filteredSkills.length
-      : autocompleteKind === "directories"
-        ? filteredDirectoryRefs.length
-        : autocompleteKind === "hash-references"
-          ? hashReferenceCount
-          : filteredSlashCommands.length;
-  const hasAutocompleteOptions = Boolean(
-    autocompleteKind && autocompleteLength > 0,
-  );
-  const autocompleteListboxId =
-    autocompleteKind === "skills"
-      ? skillListboxId
-      : autocompleteKind === "slash"
-        ? slashListboxId
-        : autocompleteKind === "directories"
-          ? directoryRefListboxId
-          : autocompleteKind === "hash-references"
-            ? hashReferenceListboxId
-          : undefined;
-  const activeAutocompleteOptionId =
-    autocompleteListboxId && autocompleteKind && autocompleteLength > 0
-      ? `${autocompleteListboxId}-option-${activeAutocompleteIndex}`
-      : undefined;
+  const {
+    activeAutocompleteIndex,
+    activeAutocompleteOptionId,
+    autocompleteKey,
+    autocompleteKind,
+    autocompleteLength,
+    autocompleteListboxId,
+    hasAutocompleteOptions,
+  } = resolveComposerAutocompleteProjection({
+    activeDirectoryRefIndex,
+    activeEmojiIndex: emojiAutocomplete.activeIndex,
+    activeHashReferenceIndex,
+    activeSkillIndex,
+    activeSlashIndex,
+    directoryRefCount: filteredDirectoryRefs.length,
+    directoryRefListboxId,
+    directoryRefTrigger,
+    dismissedAutocompleteKey,
+    emojiCount: emojiAutocomplete.options.length,
+    emojiListboxId: emojiAutocomplete.listboxId,
+    emojiTrigger: emojiAutocomplete.trigger,
+    federatedHashSearchLoading,
+    filteredSkillCount: filteredSkills.length,
+    hashReferenceCount,
+    hashReferenceListboxId,
+    hashReferenceTrigger,
+    hasEnsureSkillsLoaded: Boolean(props.onEnsureSkillsLoaded),
+    matchingSkillCount: matchingSkills.length,
+    reviewConfigActive: Boolean(reviewConfig),
+    skillListboxId,
+    skillTrigger: trigger,
+    slashCount: filteredSlashCommands.length,
+    slashListboxId,
+    slashTrigger,
+  });
   // Directories the draft references: `@` chips only, from the token state
   // and the chips serialized in the draft. A path typed or pasted as plain
   // text is not a reference. Deleting a chip drops the reference.
@@ -7232,10 +7216,13 @@ function useComposerController(props: ComposerProps) {
     };
   }, [activeAutocompleteIndex, autocompleteKind]);
 
+  const onEnsureSkillsLoaded = props.onEnsureSkillsLoaded;
+  const isSlashSkillPicker = !trigger && Boolean(slashTrigger);
+  const skillPickerScope = `${composerScopeKey}:${props.skillCatalogTargetKey ?? props.thread?.source ?? props.launchpad?.backend}`;
   const skillPickerLoadKey = trigger
-    ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:skills:${trigger.start}`
+    ? `${skillPickerScope}:skills:${trigger.start}`
     : slashTrigger
-      ? `${composerScopeKey}:${props.thread?.source ?? props.launchpad?.backend}:slash:${slashTrigger.start}`
+      ? `${skillPickerScope}:slash:${slashTrigger.start}`
       : undefined;
   const loadedSkillPickerRef = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -7243,15 +7230,16 @@ function useComposerController(props: ComposerProps) {
       loadedSkillPickerRef.current = undefined;
       return;
     }
-    if (!props.onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
+    if (!onEnsureSkillsLoaded || loadedSkillPickerRef.current === skillPickerLoadKey) {
       return;
     }
     // Query edits and streamed thread summaries can replace the callback.
     // Check freshness once per trigger opening, including an empty list.
     loadedSkillPickerRef.current = skillPickerLoadKey;
-    void props.onEnsureSkillsLoaded?.();
+    void onEnsureSkillsLoaded(isSlashSkillPicker ? { includeCommands: true } : undefined);
   }, [
-    props.onEnsureSkillsLoaded,
+    onEnsureSkillsLoaded,
+    isSlashSkillPicker,
     skillPickerLoadKey,
   ]);
 
@@ -7967,8 +7955,12 @@ function useComposerController(props: ComposerProps) {
       });
       // Claude publishes the /code-review user message when it accepts the
       // turn. It has no review-start item to replace the temporary header.
-      if (claudeCodeReview && optimisticReviewId) {
-        props.removeOptimisticMessage?.(optimisticReviewId);
+      if (optimisticReviewId) {
+        if (claudeCodeReview) {
+          props.removeOptimisticMessage?.(optimisticReviewId);
+        } else {
+          props.bindOptimisticReviewEntryToTurn?.(optimisticReviewId, response.turnId);
+        }
       }
       if (pickedReviewer) {
         // Only an explicit pick is worth replaying; recording inherited
@@ -8352,6 +8344,18 @@ function useComposerController(props: ComposerProps) {
   // The review's own choice, else Settings -> General -> Reviews.
   const reviewWaitsAfter = (config: ReviewConfigState | undefined): boolean =>
     config?.waitAfterReview ?? props.reviewAutoFixDefault === false;
+
+  const withDefaultReviewAfterAction = <
+    T extends { displayText: string; target: AppServerReviewTarget; afterReview?: ReviewAfterAction },
+  >(
+    command: T,
+  ): T & { afterReview?: ReviewAfterAction } =>
+    command.afterReview || !reviewAutoFixSupported
+      ? command
+      : {
+          ...command,
+          afterReview: props.reviewAutoFixDefault === false ? "wait" : "auto-fix",
+        };
 
   const submitReviewConfig = async (
     config: ReviewConfigState | undefined,
@@ -8922,6 +8926,7 @@ function useComposerController(props: ComposerProps) {
         fastMode: props.thread.source === "codex" && supportsFast
           ? Boolean(currentSettings?.fastMode)
           : undefined,
+        ...(queued?.reviewFix ? { reviewFix: true } : {}),
       });
       // Only once the turn is actually accepted. Reporting the reply before
       // the await would clear the thread out of the Attention work queue even
@@ -9706,7 +9711,7 @@ function useComposerController(props: ComposerProps) {
         setSendError("Choose a project to review.");
         return;
       }
-      queueReviewCommand(reviewCommand, { scheduledSendAt });
+      queueReviewCommand(withDefaultReviewAfterAction(reviewCommand), { scheduledSendAt });
       return;
     }
 
@@ -10238,7 +10243,11 @@ function useComposerController(props: ComposerProps) {
    * as its own queued draft, so a failure never restores it into the
    * operator's reply and a success never clears what they were typing.
    */
-  const submitReplyText = async (text: string, busyBehavior?: "queue"): Promise<boolean> => {
+  const submitReplyText = async (
+    text: string,
+    busyBehavior?: "queue",
+    reviewFix?: boolean,
+  ): Promise<boolean> => {
     if (
       !props.thread
       || props.launchpad
@@ -10254,6 +10263,7 @@ function useComposerController(props: ComposerProps) {
     const reply: QueuedTurnDraft = {
       id: createQueuedTurnId(),
       text,
+      ...(reviewFix ? { reviewFix: true } : {}),
       imageAttachments: [],
       fileAttachments: [],
       input,
@@ -10375,7 +10385,7 @@ function useComposerController(props: ComposerProps) {
           }));
           setSendError(undefined);
         } else {
-          await submitReviewCommand(reviewCommand);
+          await submitReviewCommand(withDefaultReviewAfterAction(reviewCommand));
         }
         return;
       }
@@ -10461,7 +10471,7 @@ function useComposerController(props: ComposerProps) {
           return;
         }
         queueReviewCommand(
-          reviewCommand,
+          withDefaultReviewAfterAction(reviewCommand),
           effectiveScheduledSendAt
             ? { scheduledSendAt: effectiveScheduledSendAt }
             : undefined,
@@ -10561,7 +10571,7 @@ function useComposerController(props: ComposerProps) {
       }
 
       if (effectiveScheduledSendAt) {
-        queueReviewCommand(reviewCommand, {
+        queueReviewCommand(withDefaultReviewAfterAction(reviewCommand), {
           scheduledSendAt: effectiveScheduledSendAt,
         });
         return;
@@ -10571,7 +10581,7 @@ function useComposerController(props: ComposerProps) {
       // pending time before firing so it doesn't linger and re-arm the toggle.
       setScheduledDraftSendAt(undefined);
       setScheduleArmed(true);
-      await submitReviewCommand(reviewCommand);
+      await submitReviewCommand(withDefaultReviewAfterAction(reviewCommand));
       return;
     }
 
@@ -10908,6 +10918,11 @@ function useComposerController(props: ComposerProps) {
   ): void => {
     inputRef.current?.replaceReference("#", [createToken(0)]);
     setActiveHashReferenceIndex(0);
+  };
+
+  const applyEmojiShortcode = (emoji: string): void => {
+    inputRef.current?.replaceEmojiTrigger(emoji);
+    emojiAutocomplete.setActiveIndex(0);
   };
 
   /**
@@ -13087,6 +13102,16 @@ function useComposerController(props: ComposerProps) {
         return;
       }
 
+      if (autocompleteKind === "emoji") {
+        const entry =
+          emojiAutocomplete.options[emojiAutocomplete.activeIndex]
+          ?? emojiAutocomplete.options[0];
+        if (entry) {
+          applyEmojiShortcode(entry.emoji);
+        }
+        return;
+      }
+
       if (autocompleteKind === "hash-references") {
         const option =
           filteredHashReferenceOptions[activeHashReferenceIndex]
@@ -13202,16 +13227,35 @@ function useComposerController(props: ComposerProps) {
       setActiveSlashIndex(0);
       setActiveDirectoryRefIndex(0);
       setActiveHashReferenceIndex(0);
+      emojiAutocomplete.setActiveIndex(0);
       if (restoreFocus) {
         requestAnimationFrame(() => inputRef.current?.focus());
       }
-    }, [autocompleteKey]);
+    }, [autocompleteKey, emojiAutocomplete.setActiveIndex]);
 
     const handleAutocompleteKeyDown = (
       event: ReactKeyboardEvent<HTMLElement>,
     ): void => {
+      const composing = Boolean(
+        (event as { isComposing?: boolean }).isComposing
+        || event.nativeEvent?.isComposing
+        || event.keyCode === 229,
+      );
+      if (composing) {
+        return;
+      }
       if (!hasAutocompleteOptions && event.key !== "Escape") {
         return;
+      }
+
+      if (autocompleteKind === "slash" && isSkillOriginShortcut(event)) {
+        const skill = filteredSlashCommands[activeSlashIndex]?.skill;
+        const anchor = autocompleteOptionRefs.current[activeSlashIndex];
+        if (skill && anchor && skillOriginCard.openFromKeyboard(skill, anchor, event.currentTarget)) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
       }
 
       const updateActiveAutocompleteIndex = (
@@ -13221,6 +13265,8 @@ function useComposerController(props: ComposerProps) {
           setActiveSkillIndex(updater);
         } else if (autocompleteKind === "directories") {
           setActiveDirectoryRefIndex(updater);
+        } else if (autocompleteKind === "emoji") {
+          emojiAutocomplete.setActiveIndex(updater);
         } else if (autocompleteKind === "hash-references") {
           setActiveHashReferenceIndex(updater);
         } else {
@@ -13420,11 +13466,17 @@ function useComposerController(props: ComposerProps) {
       setActiveSkillIndex(0);
       setActiveSlashIndex(0);
       setActiveDirectoryRefIndex(0);
+      emojiAutocomplete.setActiveIndex(0);
     };
     const handlePlainComposerKeyDown = (
       event: ReactKeyboardEvent<HTMLElement>,
     ): void => {
-      if (event.defaultPrevented) {
+      if (
+        event.defaultPrevented
+        || (event as { isComposing?: boolean }).isComposing
+        || event.nativeEvent?.isComposing
+        || event.keyCode === 229
+      ) {
         return;
       }
 
@@ -15200,6 +15252,8 @@ function useComposerController(props: ComposerProps) {
               ref={(node) => {
                 autocompleteOptionRefs.current[index] = node;
               }}
+              aria-describedby={command.skill ? skillOriginCard.describedBy(command.skill) : undefined}
+              aria-keyshortcuts={command.skill ? "Shift+F10" : undefined}
               aria-selected={index === activeSlashIndex}
               className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
               role="option"
@@ -15227,11 +15281,18 @@ function useComposerController(props: ComposerProps) {
                     {command.argumentHint}
                   </span>
                 ) : null}
-                <span
-                  className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
-                >
-                  {command.sourceLabel}
-                </span>
+                {command.skill?.origin ? (
+                  <SkillOriginChip
+                    origin={command.skill.origin}
+                    {...skillOriginCard.chipHandlers(command.skill)}
+                  />
+                ) : (
+                  <span
+                    className={`composer__autocomplete-source composer__autocomplete-source--${command.source}`}
+                  >
+                    {command.sourceLabel}
+                  </span>
+                )}
               </span>
               <span className="composer__autocomplete-meta">
                 {command.description}
@@ -15352,6 +15413,20 @@ function useComposerController(props: ComposerProps) {
             </button>
           ) : null}
         </div>
+      ) : autocompleteKind === "emoji" ? (
+        <EmojiAutocompleteList
+          activeIndex={emojiAutocomplete.activeIndex}
+          listboxId={emojiAutocomplete.listboxId}
+          listRef={autocompleteListRef}
+          maxHeight={autocompleteLayout.maxHeight}
+          onKeyDown={handleAutocompleteKeyDown}
+          onSelect={(entry) => applyEmojiShortcode(entry.emoji)}
+          onSetActiveIndex={emojiAutocomplete.setActiveIndex}
+          optionRefs={autocompleteOptionRefs}
+          options={emojiAutocomplete.options}
+          placement={autocompleteLayout.placement}
+          query={emojiAutocomplete.trigger?.query ?? ""}
+        />
       ) : autocompleteKind === "hash-references" ? (
         <div
           className={`composer__autocomplete composer__autocomplete--hash-references composer__autocomplete--${autocompleteLayout.placement}`}
@@ -15829,9 +15904,9 @@ function useComposerController(props: ComposerProps) {
       && filesystemFederationTarget?.scope !== "remote" ? props.launchpad : undefined;
     return (
       props.launchpad || props.thread ? (
-        <div
-          className="composer__setup"
-          aria-label={props.launchpad ? "New thread settings" : "Thread settings"}
+        <fieldset
+          className="composer__pending-controls"
+          disabled={preparingSend}
         >
           {props.launchpad && launchpadMachine && props.launchpadMachineChipHost !== null ? (
             renderLaunchpadMachineChip(
@@ -16217,7 +16292,7 @@ function useComposerController(props: ComposerProps) {
               thread={props.thread}
               desktopApi={props.desktopApi}
               watchMergeBuildsDefault={prMergeBuildWatchDefault}
-              prUrl={mergeBuildPullRequestUrl(primaryWorkspacePullRequests(props.thread))}
+              primaryPrs={primaryWorkspacePullRequests(props.thread)}
               className={`composer__toggle${
                 props.thread.prAutoDispatchEnabled ? " is-active" : ""
               }${prAutoDispatchProjectMuted ? " is-project-overridden" : ""}${
@@ -16417,7 +16492,7 @@ function useComposerController(props: ComposerProps) {
                 }, { owner: { scope: "local" } });
               }} />
           ) : null}
-        </div>
+        </fieldset>
       ) : null
     );
   }
@@ -16439,13 +16514,27 @@ function useComposerController(props: ComposerProps) {
   }
 
   function renderComposerFooter(): ReactNode {
+    const hasSetup = Boolean(props.launchpad || props.thread);
+    const hasApplicationActions = Boolean(
+      launchpadCodexEnvironmentOptions.length > 0
+      || threadCodexEnvironmentOptions.length > 0
+      || props.thread?.codexEnvironmentRuntime
+      || (workspaceOpenPath && (editorApplication || terminalApplication))
+      || (props.thread && !props.launchpad && props.integratedTerminal),
+    );
     return (
-      <div className="composer__footer">
-        {launchpadCodexEnvironmentOptions.length > 0 ||
-        threadCodexEnvironmentOptions.length > 0 ||
-        props.thread?.codexEnvironmentRuntime ||
-        (workspaceOpenPath && (editorApplication || terminalApplication)) ||
-        (props.thread && !props.launchpad && props.integratedTerminal) ? (
+      <div
+        className={hasSetup ? "composer__setup" : "composer__footer"}
+        aria-label={
+          props.launchpad
+            ? "New thread settings"
+            : props.thread
+              ? "Thread settings"
+              : undefined
+        }
+      >
+        {renderComposerToolbar()}
+        {hasApplicationActions ? (
           <div className="composer__application-actions" aria-label="Composer tools">
             <fieldset
               className="composer__pending-controls composer__pending-controls--dim"
@@ -16612,9 +16701,7 @@ function useComposerController(props: ComposerProps) {
             ) : null}
             </fieldset>
           </div>
-        ) : (
-          <span aria-hidden="true" className="composer__footer-spacer" />
-        )}
+        ) : null}
         <div className="composer__actions">
           {rewoundPromptScope === composerScopeKey ? (
             <span className="composer__rewound-chip">
@@ -16623,8 +16710,8 @@ function useComposerController(props: ComposerProps) {
             </span>
           ) : null}
           <ContextWindowMoon
+            autoCompaction={props.autoCompaction}
             contextWindow={props.contextWindow}
-            desktopApi={props.desktopApi}
             model={selectedModelOption?.id ?? currentSettings?.model}
             thread={props.thread}
             onOpenUsage={props.desktopApi?.openUsageActivity
@@ -17464,9 +17551,9 @@ function useComposerController(props: ComposerProps) {
           {renderComposerAutocomplete()}
         </div>
 
-        {renderComposerToolbar()}
-
         {renderComposerWorkspaceHandoff()}
+        </fieldset>
+        {renderComposerFooter()}
 
         {props.unavailableReason ? (
          <p className="composer__meta composer__meta--error">
@@ -17497,9 +17584,6 @@ function useComposerController(props: ComposerProps) {
             Waiting for input before this turn can continue.
           </p>
         ) : null}
-
-        </fieldset>
-        {renderComposerFooter()}
         </form>
         {fullAccessRiskDialog}
         {renderComposerImageLightbox()}
@@ -17780,14 +17864,14 @@ function AttachmentTooltip({
 }
 
 function ContextWindowMoon({
+  autoCompaction,
   contextWindow: reportedContextWindow,
-  desktopApi,
   model,
   thread,
   onOpenUsage,
 }: {
+  autoCompaction?: ThreadAutoCompactionStatus;
   contextWindow?: ThreadContextWindowState;
-  desktopApi?: DesktopApi;
   /** The thread's model, matched against auto-compaction rules. */
   model?: string;
   thread?: NavigationThreadSummary;
@@ -17801,7 +17885,6 @@ function ContextWindowMoon({
   const opensUsage = Boolean(onOpenUsage);
   const moonStyle = useContextMoonStyle();
   const savedRules = useAutoCompactionRules();
-  const autoCompaction = useThreadAutoCompaction(desktopApi, thread);
   const backend = thread?.source;
   const ownedElsewhere = Boolean(thread?.federation?.ref);
   // A rule's budget, when one matches, is the window the moon measures.
@@ -17811,15 +17894,27 @@ function ContextWindowMoon({
       : undefined,
     [backend, model, ownedElsewhere, reportedContextWindow, savedRules],
   );
-  const contextWindow = measured?.contextWindow;
+  const awaitingContextUsage = autoCompaction?.phase === "verifying";
+  const contextWindow = awaitingContextUsage ? undefined : measured?.contextWindow;
   const budget = measured?.budget;
+  const moonFace = contextWindow ? contextWindowMoonFace(contextWindow.usedPercent, moonStyle) : undefined;
+  const card = useMemo(() => contextWindow || awaitingContextUsage ? (
+    <ContextWindowUsageCard
+      autoCompaction={autoCompaction}
+      budget={budget}
+      contextWindow={contextWindow}
+      critical={moonFace?.critical ?? false}
+      opensUsage={opensUsage}
+      phaseLabel={moonFace?.phaseLabel}
+    />
+  ) : undefined, [awaitingContextUsage, autoCompaction, budget, contextWindow, moonFace?.critical, moonFace?.phaseLabel, opensUsage]);
 
   // Token-usage notifications keep streaming while a turn runs; push the
   // fresh numbers into an already-open card instead of freezing it at
   // hover-time values. If the context state disappears (thread switch),
   // drop the card so it can't reappear at stale coordinates.
   useEffect(() => {
-    if (!contextWindow) {
+    if (!card) {
       recordRendererUpdate(RendererUpdateEvent.contextCardClear, tooltipId);
       hide();
       return;
@@ -17827,63 +17922,45 @@ function ContextWindowMoon({
     if (!visible) {
       return;
     }
-    const moonFace = contextWindowMoonFace(contextWindow.usedPercent, moonStyle);
     recordRendererUpdate(RendererUpdateEvent.contextCardRefresh, tooltipId);
-    update(
-      <ContextWindowUsageCard
-        autoCompaction={autoCompaction}
-        budget={budget}
-        contextWindow={contextWindow}
-        critical={moonFace.critical}
-        opensUsage={opensUsage}
-        phaseLabel={moonFace.phaseLabel}
-      />,
-    );
-  }, [autoCompaction, budget, contextWindow, hide, moonStyle, opensUsage, tooltipId, update, visible]);
+    update(card);
+  }, [card, hide, tooltipId, update, visible]);
 
-  if (!contextWindow) {
+  if (!card) {
     return null;
   }
 
-  const moonFace = contextWindowMoonFace(contextWindow.usedPercent, moonStyle);
-  const phaseLabel = moonFace.phaseLabel;
-  const percentLabel = `${Math.round(contextWindow.usedPercent)}%`;
-  const tokenLabel = `${formatCompactNumber(
-    contextWindow.totalTokens
-  )}/${formatCompactNumber(contextWindow.modelContextWindow)}`;
+  const percentLabel = contextWindow ? `${Math.round(contextWindow.usedPercent)}%` : undefined;
+  const tokenLabel = contextWindow
+    ? `${formatCompactNumber(contextWindow.totalTokens)}/${formatCompactNumber(contextWindow.modelContextWindow)}`
+    : undefined;
   const compacting = isAutoCompactionActive(autoCompaction);
-  const label = budget
-    ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : phaseLabel}`
-    : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${phaseLabel}`;
+  const label = awaitingContextUsage
+    ? "Context usage pending"
+    : budget
+      ? `Context budget ${percentLabel} full, ${tokenLabel} tokens, compacts at ${formatCompactNumber(budget.triggerTokens)}, ${compacting ? "compacting" : moonFace?.phaseLabel}`
+      : `Context window ${percentLabel} full, ${tokenLabel} tokens, ${moonFace?.phaseLabel}`;
   const moonClassName = compacting ? " context-window-moon--compacting" : "";
-  const card = (
-    <ContextWindowUsageCard
-      autoCompaction={autoCompaction}
-      budget={budget}
-      contextWindow={contextWindow}
-      critical={moonFace.critical}
-      opensUsage={opensUsage}
-      phaseLabel={phaseLabel}
-    />
-  );
   const face = (
     <>
-      <span
-        aria-hidden="true"
-        className={`context-window-moon__sprite context-window-moon__sprite--${moonFace.phaseKind}`}
-      >
-        <span className="context-window-moon__disc">
-          <svg
-            className="context-window-moon__shadow"
-            focusable="false"
-            preserveAspectRatio="none"
-            viewBox="-1 -1 2 2"
-          >
-            <path d={moonFace.path} />
-          </svg>
+      {moonFace ? (
+        <span
+          aria-hidden="true"
+          className={`context-window-moon__sprite context-window-moon__sprite--${moonFace.phaseKind}`}
+        >
+          <span className="context-window-moon__disc">
+            <svg
+              className="context-window-moon__shadow"
+              focusable="false"
+              preserveAspectRatio="none"
+              viewBox="-1 -1 2 2"
+            >
+              <path d={moonFace.path} />
+            </svg>
+          </span>
         </span>
-      </span>
-      <span className="context-window-moon__label">{percentLabel}</span>
+      ) : null}
+      {percentLabel ? <span className="context-window-moon__label">{percentLabel}</span> : <span>Pending</span>}
       {tooltipNode}
     </>
   );
@@ -17893,6 +17970,7 @@ function ContextWindowMoon({
   return onOpenUsage ? (
     <button
       aria-label={label}
+      aria-describedby={visible ? tooltipId : undefined}
       className={`context-window-moon context-window-moon--button${moonClassName}`}
       type="button"
       onBlur={hide}
@@ -17909,6 +17987,7 @@ function ContextWindowMoon({
   ) : (
     <div
       aria-label={label}
+      aria-describedby={visible ? tooltipId : undefined}
       className={`context-window-moon${moonClassName}`}
       role="img"
       tabIndex={0}
@@ -17932,12 +18011,23 @@ function ContextWindowUsageCard({
 }: {
   autoCompaction?: ThreadAutoCompactionStatus;
   budget?: ContextWindowBudget;
-  contextWindow: ThreadContextWindowState;
+  contextWindow?: ThreadContextWindowState;
   critical: boolean;
   opensUsage?: boolean;
-  phaseLabel: string;
+  phaseLabel?: string;
 }) {
-  const statusLine = budget ? autoCompactionStatusLine(autoCompaction, formatCompactNumber) : undefined;
+  const statusLine = autoCompactionStatusLine(autoCompaction, formatCompactNumber);
+  if (!contextWindow) {
+    return (
+      <>
+        <div className="context-usage-card__header">
+          <span className="context-usage-card__eyebrow">Context usage</span>
+          <span className="context-usage-card__phase">Pending</span>
+        </div>
+        <div className="context-usage-card__status">{statusLine}</div>
+      </>
+    );
+  }
   const usedPercent = Math.max(0, Math.min(100, contextWindow.usedPercent));
   const hasBreakdown =
     typeof contextWindow.inputTokens === "number"

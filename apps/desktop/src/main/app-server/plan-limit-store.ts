@@ -79,6 +79,13 @@ export type PlanLimitReading = {
    * names every limit held after the merge.
    */
   dated?: boolean;
+  /**
+   * Every row in this reading is complete: when this reading is the newest,
+   * each named window replaces what was held (clearing absent fields such as
+   * `resetAt` when a bucket resets to idle) rather than carrying forward prior
+   * fields.
+   */
+  complete?: boolean;
   /** The opaque account key the reading was taken for, recorded as is. */
   account?: string;
   /**
@@ -353,7 +360,7 @@ export function planLimitKey(limit: BackendRateLimitSummary): string {
  */
 function mergePlanLimits(
   held: readonly HeldLimit[],
-  reading: Pick<PlanLimitReading, "limits" | "precise" | "resetToleranceMs" | "creditsRenewTogether" | "describe">,
+  reading: Pick<PlanLimitReading, "limits" | "precise" | "complete" | "resetToleranceMs" | "creditsRenewTogether" | "describe">,
   now: number,
   newest: boolean,
 ): HeldLimit[] {
@@ -376,7 +383,7 @@ function mergePlanLimits(
     const counts = !named.has(key);
     named.add(key);
     const known = limits.get(key);
-    const merged = mergeWindow(known, { limit, toleranceMs, precise }, newest, counts);
+    const merged = mergeWindow(known, { limit, toleranceMs, precise }, newest, counts, reading.complete === true);
     if (!merged) continue;
     if (known && credit(known, merged)) credited.push(known);
     limits.set(key, reading.describe
@@ -410,17 +417,18 @@ function mergeWindow(
   reading: HeldLimit,
   newest: boolean,
   counts = true,
+  complete = false,
 ): HeldLimit | undefined {
   const { limit } = reading;
   // A balance has no window to order by; the last reading is the balance.
   if (!known || limit.windowKey === "credits") return reading;
   const order = windowOrder(known.limit.resetAt, limit.resetAt, Math.max(known.toleranceMs, reading.toleranceMs));
   // A new window: nothing measured in the old one carries over.
-  if (order > 0) return { ...reading, limit: { ...withoutUsage(known.limit), ...limit } };
+  if (order > 0) return newest && complete ? reading : { ...reading, limit: { ...withoutUsage(known.limit), ...limit } };
   // Even the newest read cannot bring back an earlier window: a coarse reading
   // recorded while it was in flight may have started the next one.
   if (order < 0) return undefined;
-  if (newest) return refined(known, reading, { ...known.limit, ...limit });
+  if (newest) return complete ? reading : refined(known, reading, { ...known.limit, ...limit });
   const lower = lowerRun(known, limit, counts);
   if (compareUsage(known.limit, limit) > 0 || (lower && lower.readings >= CREDIT_RUN_READINGS)) {
     // The reading is the newer one: a precise reading takes over the window,

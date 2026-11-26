@@ -299,6 +299,8 @@ export class RemoteThreadSummaryCache {
        * time (rows must dim).
        */
       onPinnedSummariesRefreshed?: (instanceId: string, rowChanges?: SummaryRowChanges) => void;
+      /** Fired after an archive proof removes a saved mount. */
+      onArchivedMountRemoved?: (ref: RemoteThreadPin["ref"]) => void;
       onPinnedRefreshProblem?: (problem: {
         instanceId: string;
         requestedCount: number;
@@ -1034,9 +1036,11 @@ export class RemoteThreadSummaryCache {
     const { instanceId } = ref.target;
     const proofs = this.provenArchived.get(instanceId);
     const key = buildThreadIdentityKey(ref.backend, ref.threadId);
-    if (!proofs || proofs.get(key) !== mountToken) return;
-    proofs.delete(key);
-    if (!proofs.size) this.provenArchived.delete(instanceId);
+    if (proofs?.get(key) === mountToken) {
+      proofs.delete(key);
+      if (!proofs.size) this.provenArchived.delete(instanceId);
+    }
+    this.options.onArchivedMountRemoved?.(ref);
   }
 
   /**

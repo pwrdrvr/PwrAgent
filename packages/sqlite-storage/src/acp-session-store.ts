@@ -160,6 +160,15 @@ function parseJson(value: string): unknown {
   }
 }
 
+const LEGACY_ACP_FALLBACK_TITLE = "acp session";
+
+function isLegacyAcpFallbackTitle(metadata: AcpSessionMetadata): boolean {
+  return (
+    (metadata.titleSource === undefined || metadata.titleSource === "fallback") &&
+    metadata.title.trim().toLowerCase() === LEGACY_ACP_FALLBACK_TITLE
+  );
+}
+
 function stripAcpSessionHistory(metadata: AcpSessionMetadata): AcpSessionMetadata {
   const legacyTranscriptUpdates = readLegacyTranscriptUpdates(metadata);
   const {
@@ -171,8 +180,12 @@ function stripAcpSessionHistory(metadata: AcpSessionMetadata): AcpSessionMetadat
   const hasConversationHistory =
     metadata.hasConversationHistory ??
     (legacyTranscriptUpdates.some(isConversationTranscriptUpdate) || undefined);
+  const normalizedTitle = isLegacyAcpFallbackTitle(metadata)
+    ? { title: "Untitled thread", titleSource: "fallback" as const }
+    : {};
   return {
     ...metadataWithoutHistory,
+    ...normalizedTitle,
     executionMode: acpSessionExecutionMode(metadata),
     ...(hasConversationHistory === undefined ? {} : { hasConversationHistory }),
   };

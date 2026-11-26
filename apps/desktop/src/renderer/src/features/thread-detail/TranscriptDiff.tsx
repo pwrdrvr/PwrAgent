@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { AppServerThreadActivityDetail } from "@pwragent/shared/contracts/normalized-app-server";
 import { parseUnifiedDiff } from "../../../../shared/unified-diff";
 import { useDesktopApi } from "../../lib/desktop-api";
@@ -15,7 +15,7 @@ type TranscriptDiffProps = {
   compact?: boolean;
 };
 
-export function TranscriptDiff(props: TranscriptDiffProps) {
+export const TranscriptDiff = memo(function TranscriptDiff(props: TranscriptDiffProps) {
   const [fetchedDiff, setFetchedDiff] = useState<{
     refKey?: string;
     diff?: string;
@@ -40,7 +40,11 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
 
   useEffect(() => {
     if (diffRefs.length === 0 || !shouldFetchDiff) {
-      setFetchedDiff({ loading: false });
+      setFetchedDiff((current) =>
+        !current.loading && !current.refKey && !current.diff && !current.omittedReason
+          ? current
+          : { loading: false },
+      );
       return;
     }
 
@@ -197,7 +201,7 @@ export function TranscriptDiff(props: TranscriptDiffProps) {
       </div>
     </div>
   );
-}
+});
 
 function formatLineNumber(value: number | undefined): string {
   if (typeof value !== "number") {

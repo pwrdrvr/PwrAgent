@@ -51,7 +51,10 @@ import {
 } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { NavigationPresentedThread } from "../../lib/navigation-loaded-rows";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import {
+  readRendererFederationTarget,
+  resolveThreadOwnerFederationTarget,
+} from "../../lib/federation-window";
 import { threadJobMonitorControl } from "../../lib/job-monitor-control";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -322,8 +325,8 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const lastMousePositionRef = useRef<{ x: number; y: number } | undefined>(undefined);
   const outsideRailSinceRef = useRef<number | undefined>(undefined);
   const threadPricingSummaryEnabled = props.threadPricingSummaryEnabled ?? true;
-  // Research is for every local backend; a federated thread's runs live on its owning instance.
-  const researchEnabled = props.researchEnabled === true && Boolean(props.thread) && !props.thread?.federation?.ref.target;
+  // Research runs live on the thread's owning instance; viewers route reads and mutations there.
+  const researchEnabled = props.researchEnabled === true && Boolean(props.thread);
   // The tab shows on every thread this machine owns, set up or not: it is
   // where the operator finds decisions and sets a provider up.
   const decisionsRail = useDecisionsRail({
@@ -906,8 +909,19 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         );
       case "pr-activity":
         return <PrActivityPanel desktopApi={props.desktopApi} thread={props.thread} />;
-      case "research":
-        return <ResearchPanel key={`${props.thread?.source}:${props.thread?.id}`} desktopApi={props.desktopApi} thread={props.thread} onOpenSettings={props.onOpenResearchSettings} />;
+      case "research": {
+        const ownerTarget = props.thread
+          ? resolveThreadOwnerFederationTarget(props.thread, readRendererFederationTarget()?.instanceId)
+          : undefined;
+        return (
+          <ResearchPanel
+            key={`${ownerTarget?.instanceId ?? "local"}:${props.thread?.source}:${props.thread?.id}`}
+            desktopApi={props.desktopApi}
+            thread={props.thread}
+            onOpenSettings={ownerTarget ? undefined : props.onOpenResearchSettings}
+          />
+        );
+      }
       case "info":
         if (!props.thread) return null;
         return (

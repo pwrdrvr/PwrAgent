@@ -46,7 +46,12 @@ export function pwrSnapResourceLinkImageParts(result: unknown): AppServerThreadI
   for (const value of content) {
     readLink(value);
     const block = record(value);
-    if (block?.type !== "text" || typeof block.text !== "string" || block.text.length > 1024 * 1024) continue;
+    if (
+      block?.type !== "text"
+      || typeof block.text !== "string"
+      || block.text.length > 1024 * 1024
+      || (!block.text.includes("pwrsnap:") && !block.text.includes("127.0.0.1:51729"))
+    ) continue;
     let parsed: Record<string, unknown> | undefined;
     try { parsed = record(JSON.parse(block.text)); } catch { continue; }
     const source = record(parsed?.source);
@@ -95,6 +100,9 @@ export function isPwrSnapResourceUri(value: string): boolean {
  * that hold one show the image as unavailable.
  */
 export function isLegacyPwrSnapMediaUrl(value: string): boolean {
+  // Data URLs have opaque origins, so their potentially large payloads cannot affect this check.
+  if (value.startsWith("data:")) return false;
+
   let parsed: ParsedUrl;
   try {
     parsed = new URL(value);

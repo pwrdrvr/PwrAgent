@@ -6,7 +6,7 @@ import { AGENT_MEMORY_CHANNEL, AGENT_PRESETS_CHANNEL } from "../shared/ipc";
 import type { AgentPreset, ManageAgentPresetsRequest } from "@pwragent/shared/contracts/agent-presets";
 import type { ClaudeGatewayRequest, ClaudeGatewayResponse } from "@pwragent/shared/contracts/claude-gateway";
 import type {
-  ResearchThread,
+  ResearchThreadRequest,
   ResearchUpdateRequest,
   ResearchSnapshot,
   ResearchSnapshotRequest,
@@ -44,6 +44,7 @@ import type {
   ResearchHarnessReconcileRequest,
   ResearchHarnessRequest,
   ResearchHarnessStatus,
+  ResearchMathosSwarmsRequest,
   MathosTeamsResult,
   MathosSwarmsResult,
 } from "@pwragent/shared/research-harness";
@@ -848,7 +849,7 @@ import type {
   ImageUploadFallbackResponse,
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
-import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
+import type { HotCpuFinalCaptureFailedEvent, HotCpuPostCapEvent, HotCpuProfileCapturedEvent, HotCpuRearmableCapture, RearmHotCpuProfileRequest } from "../shared/hot-cpu-profile";
 import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
 import type { ManagedRuntimeProgress } from "../shared/managed-runtime-progress";
 import type {
@@ -1166,7 +1167,11 @@ import {
   COMPOSER_DRAFT_RECORD_HISTORY_CHANNEL,
   COMPOSER_DRAFT_SAVE_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
+  HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL,
+  HOT_CPU_POST_CAP_EVENT_CHANNEL,
   HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL,
+  HOT_CPU_PROFILE_REARM_CHANNEL,
+  HOT_CPU_PROFILE_REARMABLE_CHANNEL,
   IMAGE_UPLOAD_FALLBACK_CHANNEL,
   IMAGE_UPLOAD_NORMALIZATION_LOG_CHANNEL,
   MESSAGING_BINDINGS_CHANGED_EVENT_CHANNEL,
@@ -1830,6 +1835,24 @@ const desktopApi = Object.freeze({
   },
   cancelAppUpdateDownload: async (): Promise<AppUpdateCancelResult> =>
     await ipcRenderer.invoke(APP_UPDATE_CANCEL_DOWNLOAD_CHANNEL),
+  rearmHotCpuProfile: (request: RearmHotCpuProfileRequest): Promise<boolean> =>
+    ipcRenderer.invoke(HOT_CPU_PROFILE_REARM_CHANNEL, request),
+  listRearmableHotCpuProfiles: (): Promise<HotCpuRearmableCapture[]> =>
+    ipcRenderer.invoke(HOT_CPU_PROFILE_REARMABLE_CHANNEL),
+  onHotCpuFinalCaptureFailed: (callback: (event: HotCpuFinalCaptureFailedEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: HotCpuFinalCaptureFailedEvent) => callback(payload);
+    ipcRenderer.on(HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(HOT_CPU_FINAL_CAPTURE_FAILED_EVENT_CHANNEL, listener);
+    };
+  },
+  onHotCpuPostCap: (callback: (event: HotCpuPostCapEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: HotCpuPostCapEvent) => callback(payload);
+    ipcRenderer.on(HOT_CPU_POST_CAP_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(HOT_CPU_POST_CAP_EVENT_CHANNEL, listener);
+    };
+  },
   onHotCpuProfileCaptured: (
     callback: (event: HotCpuProfileCapturedEvent) => void,
   ): (() => void) => {
@@ -2206,9 +2229,9 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_SNAPSHOT_CHANNEL, request),
   researchChanges: async (request: ResearchChangesRequest): Promise<ResearchChanges> =>
     await ipcRenderer.invoke(RESEARCH_CHANGES_CHANNEL, request),
-  researchHarnessStatus: async (request: ResearchThread): Promise<ResearchHarnessStatus> =>
+  researchHarnessStatus: async (request: ResearchThreadRequest): Promise<ResearchHarnessStatus> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_STATUS_CHANNEL, request),
-  checkResearchHarness: async (request: ResearchThread): Promise<ResearchHarnessCheck> =>
+  checkResearchHarness: async (request: ResearchThreadRequest): Promise<ResearchHarnessCheck> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_CHECK_CHANNEL, request),
   reconcileResearchHarness: async (request: ResearchHarnessReconcileRequest): Promise<ResearchUpdateReceipt> =>
     await ipcRenderer.invoke(RESEARCH_HARNESS_RECONCILE_CHANNEL, request),
@@ -2220,8 +2243,8 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_HARNESS_PICK_BRIDGE_CHANNEL),
   listMathosTeams: async (): Promise<MathosTeamsResult> =>
     await ipcRenderer.invoke(RESEARCH_MATHOS_TEAMS_CHANNEL),
-  listMathosSwarms: async (): Promise<MathosSwarmsResult> =>
-    await ipcRenderer.invoke(RESEARCH_MATHOS_SWARMS_CHANNEL),
+  listMathosSwarms: async (request?: ResearchMathosSwarmsRequest): Promise<MathosSwarmsResult> =>
+    await ipcRenderer.invoke(RESEARCH_MATHOS_SWARMS_CHANNEL, request),
   researchProfileRuns: async (request?: ResearchProfileRunsQuery): Promise<ResearchProfileRunsPage> =>
     await ipcRenderer.invoke(RESEARCH_PROFILE_RUNS_CHANNEL, request),
   openResearchWindow: async (request?: { runId?: string }): Promise<void> =>
@@ -2238,7 +2261,7 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(RESEARCH_EVENTS_CHANNEL, request),
   prepareResearch: async (request: PrepareResearchRequest): Promise<{ intentId: string }> =>
     await ipcRenderer.invoke(RESEARCH_PREPARE_CHANNEL, request),
-  withdrawResearch: async (request: ResearchThread): Promise<void> =>
+  withdrawResearch: async (request: ResearchThreadRequest): Promise<void> =>
     await ipcRenderer.invoke(RESEARCH_WITHDRAW_CHANNEL, request),
   updateResearch: async (request: ResearchUpdateRequest): Promise<ResearchUpdateReceipt> =>
     await ipcRenderer.invoke(RESEARCH_UPDATE_CHANNEL, request),

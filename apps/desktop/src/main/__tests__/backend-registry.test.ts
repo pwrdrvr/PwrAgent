@@ -3675,7 +3675,7 @@ describe("DesktopBackendRegistry", () => {
       {
         backendId: acpBackendId,
         sessionId: "session-1",
-        title: "ACP session",
+        title: "Untitled thread",
         cwd: "/repo/project",
         createdAt: 1000,
         updatedAt: 1000,
@@ -3710,7 +3710,7 @@ describe("DesktopBackendRegistry", () => {
     ).resolves.toEqual([
       expect.objectContaining({
         id: "session-1",
-        title: "ACP session",
+        title: "Untitled thread",
       }),
     ]);
 
@@ -3933,7 +3933,7 @@ describe("DesktopBackendRegistry", () => {
       {
         backendId: acpBackendId,
         sessionId: "session-1",
-        title: "ACP session",
+        title: "Untitled thread",
         cwd: "/repo/project",
         createdAt: 1000,
         updatedAt: 1000,
@@ -4059,7 +4059,7 @@ describe("DesktopBackendRegistry", () => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "session-1",
-          title: params.title ?? "ACP session",
+          title: params.title ?? "Untitled thread",
           cwd: params.cwd,
           createdAt: 1000,
           updatedAt: 1000,
@@ -4414,7 +4414,7 @@ describe("DesktopBackendRegistry", () => {
         {
           backendId: acpBackendId,
           sessionId: threadId,
-          title: "ACP session",
+          title: "Untitled thread",
           createdAt: 1_000,
           updatedAt: 4_000,
           executionMode: "default",
@@ -4520,7 +4520,7 @@ describe("DesktopBackendRegistry", () => {
         {
           backendId: acpBackendId,
           sessionId: threadId,
-          title: "ACP session",
+          title: "Untitled thread",
           createdAt: 1_000,
           updatedAt: 4_000,
           executionMode: "default",
@@ -4642,7 +4642,7 @@ describe("DesktopBackendRegistry", () => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "qwen-session-1",
-          title: "ACP session",
+          title: "Untitled thread",
           cwd: params.cwd,
           createdAt: 1000,
           updatedAt: 1000,
@@ -6435,7 +6435,7 @@ describe("DesktopBackendRegistry", () => {
         {
           backendId: "acp:kimi" as AcpBackendId,
           sessionId: "kimi-session-1",
-          title: "ACP session",
+          title: "Untitled thread",
           createdAt: 1000,
           updatedAt: 1000,
           executionMode: "default",
@@ -6481,7 +6481,7 @@ describe("DesktopBackendRegistry", () => {
         {
           backendId: "acp:kimi" as AcpBackendId,
           sessionId: "same-thread",
-          title: "ACP session",
+          title: "Untitled thread",
           createdAt: 1000,
           updatedAt: 1000,
           executionMode: "default",
@@ -6555,7 +6555,7 @@ describe("DesktopBackendRegistry", () => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "session-1",
-          title: params.title ?? "ACP session",
+          title: params.title ?? "Untitled thread",
           cwd: params.cwd,
           createdAt: 1000,
           updatedAt: 1000,
@@ -6660,7 +6660,7 @@ describe("DesktopBackendRegistry", () => {
     const session: AcpSessionMetadata = {
       backendId: acpBackendId,
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo/project",
       createdAt: 1000,
       updatedAt: 1000,
@@ -11893,6 +11893,67 @@ command = "pnpm dev"
       content: [{ type: "text", text: "Add blueberries" }],
       interjectionId: "grok-steer-1",
     });
+
+    await registry.close();
+  });
+
+  it("forwards prompt and parts when steering an active Grok turn with an image attachment", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const threadId = "grok-session-image-steer";
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: backend,
+        sessionId: threadId,
+        title: "Image steer",
+        createdAt: 1000,
+        updatedAt: 2000,
+        executionMode: "default",
+        status: "active",
+      },
+    ];
+    const installedAgent = {
+      ...createKimiAgentRecord(backend),
+      registryId: "grok",
+      name: "Grok Build",
+      version: "1.0.50-pwragent.1",
+    };
+    const { registry, steerSession } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent,
+      sessions,
+      supportsTurnSteering: true,
+    });
+    const pendingTurnId = `pending:${threadId}:1000`;
+    await emitStartedTurn(registry, backend, threadId, pendingTurnId);
+
+    const pngBase64 = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4,
+    ]).toString("base64");
+    await expect(registry.steerTurn({
+      backend,
+      threadId,
+      expectedTurnId: pendingTurnId,
+      input: [
+        { type: "text", text: "Use this layout" },
+        { type: "image", name: "grok-steer.png", url: `data:image/png;base64,${pngBase64}` },
+      ],
+      requestId: "grok-steer-img-1",
+    })).resolves.toEqual({
+      backend,
+      threadId,
+      turnId: pendingTurnId,
+      disposition: "steered",
+    });
+    expect(steerSession).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: threadId,
+      text: "Use this layout",
+      prompt: "Use this layout",
+      parts: [
+        { type: "text", text: "Use this layout" },
+        expect.objectContaining({ type: "image", alt: "grok-steer.png" }),
+      ],
+      interjectionId: "grok-steer-img-1",
+    }));
 
     await registry.close();
   });

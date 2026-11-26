@@ -24,16 +24,17 @@ export function normalizeAntigravityUsageStatus(value: unknown): AcpProviderStat
       : groupName.replace(/ models$/i, "");
     for (const value of group.buckets) {
       const bucket = asRecord(value);
+      const windowSpec = antigravityWindowSpec(bucket?.window);
       const limitId = readString(bucket, "id");
       const remaining = readFiniteNumber(bucket, "remaining_fraction");
-      if (bucket?.window !== "weekly" || !limitId || remaining === undefined
+      if (!windowSpec || !limitId || remaining === undefined
         || remaining < 0 || remaining > 1) continue;
       const resetAt = parseTimestamp(readString(bucket, "reset_time"));
       rateLimits.set(limitId, {
-        name: `Weekly ${label} limit`,
+        name: `${windowSpec.prefix} ${label} limit`,
         limitId,
         usedPercent: 100 - remaining * 100,
-        windowMinutes: 7 * 24 * 60,
+        windowMinutes: windowSpec.windowMinutes,
         ...(resetAt !== undefined ? { resetAt } : {}),
       });
     }
@@ -127,12 +128,25 @@ function formatPeriodLimitName(periodType: string | undefined): string {
   return "Included credits";
 }
 
+function antigravityWindowSpec(
+  window: unknown,
+): { prefix: string; windowMinutes: number } | undefined {
+  switch (window) {
+    case "5h":
+      return { prefix: "5h", windowMinutes: 5 * 60 };
+    case "weekly":
+      return { prefix: "Weekly", windowMinutes: 7 * 24 * 60 };
+    default:
+      return undefined;
+  }
+}
+
 function parseTimestamp(value: string | undefined): number | undefined {
   if (!value) {
     return undefined;
   }
   const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? timestamp : undefined;
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : undefined;
 }
 
 function readString(

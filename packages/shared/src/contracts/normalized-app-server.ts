@@ -109,6 +109,8 @@ export type AppServerSkillSummary = {
   path?: string;
   enabled?: boolean;
   scope?: string;
+  /** Available through an explicit path mention outside the provider’s native skill catalog. */
+  mentionOnly?: boolean;
   /** Owning plugin, `<plugin>@<marketplace>`, when the skill ships in one. */
   pluginId?: string;
   /**
@@ -1767,10 +1769,27 @@ export type AppServerReadThreadRequest = {
   includeAccounting?: boolean;
 };
 
+/** The thread owner's transient auto-compaction state. */
+export type AppServerThreadAutoCompactionStatus = {
+  threadId: string;
+  phase: "armed" | "due" | "steering" | "starting" | "compacting" | "resume" | "verifying" | "held";
+  /** The live turn carrying the compaction, when known. */
+  turnId?: string;
+  triggerTokens?: number;
+  effectiveContextWindow?: number;
+  reportedContextWindow?: number;
+  via?: "steer" | "start";
+  /** The fill when PwrAgent asked for the compaction. */
+  dispatchedAtTokens?: number;
+  heldReason?: "no-shrink" | "refused" | "unsupported";
+};
+
 export type AppServerReadThreadResponse = {
   /** Isolated invocation bodies; never a transcript page or a complete activity group. */
   toolInvocationDetails?: { turnId: string; itemId: string; details: AppServerThreadActivityDetail[] };
   display?: ThreadDisplayData;
+  /** Transcript read: null if the owner tracks no compaction state. */
+  autoCompaction?: AppServerThreadAutoCompactionStatus | null;
   /** Opaque hash of the complete owner response, excluding observation timings. */
   replayRevision?: string;
   /** Only in response to knownRevision. Reuse that exact cached response, not this empty replay. */
@@ -2115,6 +2134,8 @@ export type PersistThreadUsageActivityResponse = {
 
 export type AppServerListSkillsRequest = {
   backend?: AppServerBackendKind;
+  /** Antigravity can read either catalog independently. Omit for both. */
+  catalog?: "skills" | "commands";
   cwd?: string;
   cwds?: string[];
   federationTarget?: FederationTarget;
@@ -2150,8 +2171,10 @@ export type AppServerPendingRequestNotification = {
     turnId?: string | null;
     requestId: string;
     prompt?: string;
-    /** Tool name reported by ACP. This is display metadata, not a grant. */
+    /** Display name of an MCP tool approval target. Display metadata only, never a grant key. */
     acpMcpToolName?: string;
+    /** Redacted, bounded invocation detail (such as formatted arguments) for an MCP tool approval. */
+    acpMcpToolDetail?: string;
     options?: string[];
     [key: string]: unknown;
   };
@@ -2321,6 +2344,14 @@ export type AppServerNotification =
   | { method: "thread/todos/delta"; params: import("./thread-todos").ThreadTodoFeedDelta }
   /** See `THREAD_TODO_FEED_ACKNOWLEDGED_METHOD`. */
   | { method: "thread/todos/feedAcknowledged"; params: { reason: "subscribed" } }
+  | {
+      /**
+       * A thread's Research runs or pending request changed on the owning
+       * instance. Viewers sync incremental changes from that owner.
+       */
+      method: "thread/research/changed";
+      params: { backend: AppServerBackendKind; threadId: string; runId?: string; revision?: number };
+    }
   | {
       method: "thread/dependencies/updated";
       params: { threadId: string; dependencyId: string };
@@ -2579,6 +2610,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         turnId?: string;
+        /** Server- or owner-correlated root turn ID when this item runs inside a child turn (e.g. inline Codex review). */
+        rootTurnId?: string | null;
         item: {
           id: string;
           type: string;
@@ -2701,6 +2734,13 @@ export type AppServerNotification =
       };
     }
   | {
+      method: "thread/launchedThreads/updated";
+      params: {
+        threadId: string;
+        launchId: string;
+      };
+    }
+  | {
       method: "thread/tokenUsage/updated";
       params: {
         threadId: string;
@@ -2725,23 +2765,9 @@ export type AppServerNotification =
       };
     }
   | {
-      /**
-       * The owner's auto-compaction state for a thread. Transient and never
-       * persisted: sent when the phase or the threshold changes, so a view
-       * opened later shows nothing until the next change.
-       */
+      /** Sent when the owner's transient compaction status changes. */
       method: "thread/autoCompaction/updated";
-      params: {
-        threadId: string;
-        phase: "armed" | "due" | "steering" | "starting" | "compacting" | "resume" | "verifying" | "held";
-        triggerTokens?: number;
-        effectiveContextWindow?: number;
-        reportedContextWindow?: number;
-        via?: "steer" | "start";
-        /** The fill when PwrAgent asked for the compaction. */
-        dispatchedAtTokens?: number;
-        heldReason?: "no-shrink" | "refused" | "unsupported";
-      };
+      params: AppServerThreadAutoCompactionStatus;
     }
   | {
       method: "thread/pricing/updated";
@@ -3064,6 +3090,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         commands: AppServerAvailableCommandSummary[];
+        /** Workspace where this command list was observed, when known. */
+        cwd?: string;
       };
     }
   | {
@@ -3148,6 +3176,11 @@ export type AppServerNotification =
         threadId: string;
         /** False only for producer-proven detail/accounting changes. */
         navigationChanged?: false;
+        /** Owner-correlated inner turn -> outer review root turn ID for inline native Codex reviews. */
+        correlatedTurn?: {
+          turnId: string;
+          rootTurnId: string;
+        };
         subAgents?: ThreadSubAgentSummary[];
       };
     }
@@ -3308,6 +3341,8 @@ export type AppServerNotification =
          */
         threadId?: string;
         pinned?: boolean;
+        /** Whether the saved mount set changed, independent of pin rank or snapshot updates. */
+        membershipChanged?: boolean;
         /** Correlates a completed explicit mount with its IPC reply. */
         publicationId?: string;
         /** All departing root anchors when the mount also ranks a companion. */

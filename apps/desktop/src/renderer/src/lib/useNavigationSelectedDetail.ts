@@ -117,6 +117,16 @@ export function useNavigationSelectedDetail(params: {
       // Configuration is usable now. Historical collections have a separate
       // lease/readiness and may finish after the operator starts composing.
       if (detail.collections?.length && next.detail?.thread) {
+        const pendingManifests = detail.collections.filter((manifest) =>
+          (!currentParams.collections || currentParams.collections.includes(manifest.name))
+          && collectionsRef.current.revisions.get(manifest.name) !== manifest.revision);
+        if (pendingManifests.length === 0) {
+          if (currentRef.current?.collectionReadiness !== "ready" || currentRef.current.collectionError !== undefined) {
+            currentRef.current = { ...currentRef.current!, collectionReadiness: "ready", collectionError: undefined };
+            setState(currentRef.current);
+          }
+          return;
+        }
         const token = `${consumerRef.current}:collections:${sequence}`;
         collectionConsumersRef.current.add(token);
         const publish = (patch: Partial<NavigationSelectionState>) => {
@@ -126,9 +136,7 @@ export function useNavigationSelectedDetail(params: {
         };
         publish({ collectionReadiness: "loading", collectionError: undefined });
         try {
-          for (const manifest of detail.collections) {
-            if (currentParams.collections && !currentParams.collections.includes(manifest.name)) continue;
-            if (collectionsRef.current.revisions.get(manifest.name) === manifest.revision) continue;
+          for (const manifest of pendingManifests) {
             const cached = collectionsRef.current.values[manifest.name];
             if (cached && await collectionRevision(detail.ref, manifest.name, cached) === manifest.revision) {
               if (sequenceRef.current !== sequence) return;
@@ -281,6 +289,7 @@ export function useNavigationSelectedDetail(params: {
         && notification.method !== "thread/acpRuntime/updated"
         && notification.method !== "thread/prWatches/updated"
         && notification.method !== "thread/subAgentFailures/dismissed"
+        && notification.method !== "thread/launchedThreads/updated"
         && !(selectedOwner && isThreadPendingWakeInvalidation(notification.method, notification.params))) return;
       // A canonical event supersedes the retained collection too. Otherwise
       // the configuration read overlays its older cache and briefly erases

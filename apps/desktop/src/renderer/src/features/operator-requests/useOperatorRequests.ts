@@ -62,7 +62,6 @@ const EMPTY_UNAVAILABLE: TodoUnavailableInstance[] = [];
  */
 export function useOperatorRequests(
   desktopApi: OperatorRequestsApi | undefined,
-  mountedThreadKeys?: string,
 ): OperatorRequestsController {
   const api = desktopApi;
   const [ready, setReady] = useState(false);
@@ -124,12 +123,19 @@ export function useOperatorRequests(
   }, [api]);
 
   useEffect(() => {
-    void reload();
+    // StrictMode can dispose this setup before the first read starts.
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void reload();
+    });
     const unsubscribe = api?.onOperatorRequestsChanged?.(() => {
       void reload();
     });
-    return () => unsubscribe?.();
-  }, [api, reload, mountedThreadKeys]);
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [api, reload]);
 
   const markSeen = useCallback((keys: readonly string[]): void => {
     const send = api?.markOperatorItemsSeen;

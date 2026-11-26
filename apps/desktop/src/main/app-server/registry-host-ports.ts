@@ -8,6 +8,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
+  AppServerThreadTitleSource,
   AppServerTurnInputItem,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
@@ -194,6 +195,9 @@ export interface RegistryHostPorts {
     backend: AcpBackendId;
     cwd?: string;
     executionMode: ThreadExecutionMode;
+    title?: string;
+    titleSource?: AppServerThreadTitleSource;
+    promptPlaceholderTitle?: true;
     acpRuntime?: BackendAcpSessionRuntimeState;
     reasoningEffort?: string;
     mcpRegistration?: AcpMcpRegistrationSource;
@@ -253,6 +257,11 @@ export interface RegistryHostPorts {
     rerunCodexEnvironmentSetup?: boolean;
     linkedDirectories?: LinkedDirectorySummary[];
     /**
+     * Initial prompt-derived placeholder title for a newly created ACP thread
+     * started with an immediate prompt (for example from a launchpad).
+     */
+    initialPromptTitle?: string;
+    /**
      * Report the start to every list while its workspace is prepared, as a
      * starting row (`thread/start/pending`). For callers with no row of
      * their own: a launchpad draws its own.
@@ -276,6 +285,7 @@ export interface RegistryHostPorts {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     messageOrigin?: AppServerThreadMessageOrigin;
   }, turnInputSource?: TurnInputSource): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }>;
   submitTurn(params: {
@@ -292,6 +302,7 @@ export interface RegistryHostPorts {
     serviceTier?: string;
     reasoningEffort?: string;
     fastMode?: boolean;
+    reviewFix?: boolean;
     automationRunId?: string;
     messageOrigin?: AppServerThreadMessageOrigin;
     delivery?: "new_turn";

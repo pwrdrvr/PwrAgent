@@ -174,6 +174,12 @@ export const FEDERATION_CAPABILITIES = [
    * would run the wait as the peer.
    */
   "thread_dependency_provenance_v1",
+  /**
+   * Owner-local Research runs, Harness reads/imports/execution, and live
+   * `thread/research/changed` notifications. The owner stays the only writer
+   * and keeps all Harness secrets local.
+   */
+  "thread_research",
 ] as const;
 
 export const FEDERATION_SHUTDOWN_METHOD = "federation/shutdown";

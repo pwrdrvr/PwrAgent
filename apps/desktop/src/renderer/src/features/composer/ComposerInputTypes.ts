@@ -75,8 +75,10 @@ export type ComposerInputHandle = {
   appendPlainText: (text: string, options?: { focusEnd?: boolean }) => boolean;
   deleteSelection: () => void;
   focus: (options?: { synchronous?: boolean }) => void;
+  getEmojiTrigger: () => ComposerReferenceTrigger | undefined;
   getReferenceTriggers: () => Partial<Record<ComposerReferenceSigil, ComposerReferenceTrigger>>;
   insertMentionToken: (token: ComposerSkillToken) => boolean;
+  replaceEmojiTrigger: (emoji: string) => void;
   replaceReference: (sigil: ComposerReferenceSigil, tokens: ComposerSkillToken[]) => void;
   readonly selectionEnd: number;
   readonly selectionStart: number;

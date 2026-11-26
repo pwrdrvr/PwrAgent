@@ -24,7 +24,7 @@ export { RESTART_CONTINUATION_SCHEMA } from "@pwragent/sqlite-storage/state-sche
 export type StoredRestartQueuedFields = Partial<Pick<ThreadTurnQueueEntry,
   | "origin" | "turnInputSource" | "delivery" | "agentMessages" | "agentMessageOrigins" | "executionMode"
   | "approvalPolicy" | "sandbox" | "model" | "collaborationMode" | "serviceTier"
-  | "reasoningEffort" | "fastMode" | "automationRunId" | "automationName" | "title"
+  | "reasoningEffort" | "fastMode" | "reviewFix" | "automationRunId" | "automationName" | "title"
 >> & {
   /** Paused, or held for the operator: it comes back paused, never sent. */
   paused?: true;

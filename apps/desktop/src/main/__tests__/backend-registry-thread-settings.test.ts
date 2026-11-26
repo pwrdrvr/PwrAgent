@@ -131,7 +131,7 @@ describe("DesktopBackendRegistry", () => {
         {
           backendId: acpBackendId,
           sessionId: "kimi-session-1",
-          title: "ACP session",
+          title: "Untitled thread",
           cwd: "/repo/project",
           createdAt: 1000,
           updatedAt: 1000,
@@ -257,7 +257,7 @@ describe("DesktopBackendRegistry", () => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "grok-session",
-          title: "ACP session",
+          title: "Untitled thread",
           cwd: params.cwd,
           createdAt: 1000,
           updatedAt: 1000,
@@ -584,7 +584,7 @@ describe("DesktopBackendRegistry", () => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "kimi-session-1",
-          title: "ACP session",
+          title: "Untitled thread",
           cwd: params.cwd,
           createdAt: 1000,
           updatedAt: 1000,
@@ -725,7 +725,7 @@ describe("DesktopBackendRegistry", () => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "native-permission-session",
-          title: "ACP session",
+          title: "Untitled thread",
           cwd: params.cwd,
           createdAt: 1000,
           updatedAt: 1000,
@@ -1034,7 +1034,7 @@ describe("DesktopBackendRegistry", () => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "grok-session-1",
-          title: "ACP session",
+          title: "Untitled thread",
           cwd: params.cwd,
           createdAt: 1000,
           updatedAt: 1000,
@@ -1260,7 +1260,7 @@ describe("DesktopBackendRegistry", () => {
           {
             backendId: "acp:kimi" as AcpBackendId,
             sessionId: "kimi-session-1",
-            title: "ACP session",
+            title: "Untitled thread",
             createdAt: 1000,
             updatedAt: 1000,
             executionMode: "default",
@@ -1505,7 +1505,7 @@ describe("DesktopBackendRegistry", () => {
           {
             backendId: "acp:kimi" as AcpBackendId,
             sessionId: "kimi-session-1",
-            title: "ACP session",
+            title: "Untitled thread",
             createdAt: 1000,
             updatedAt: 1000,
             executionMode: "default",
@@ -1599,7 +1599,7 @@ describe("DesktopBackendRegistry", () => {
         {
           backendId: "acp:kimi" as AcpBackendId,
           sessionId: "kimi-session-1",
-          title: "ACP session",
+          title: "Untitled thread",
           createdAt: 1000,
           updatedAt: 1000,
           executionMode: "default",
@@ -1669,7 +1669,7 @@ describe("DesktopBackendRegistry", () => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "session-1",
-          title: params.title ?? "ACP session",
+          title: params.title ?? "Untitled thread",
           titleSource: params.title ? "explicit" : "fallback",
           cwd: params.cwd,
           createdAt: 1000,
@@ -1804,7 +1804,7 @@ describe("DesktopBackendRegistry", () => {
         const metadata: AcpSessionMetadata = {
           backendId: acpBackendId,
           sessionId: "session-1",
-          title: params.title ?? "ACP session",
+          title: params.title ?? "Untitled thread",
           cwd: params.cwd,
           createdAt: 1000,
           updatedAt: 1000,
@@ -3521,7 +3521,7 @@ describe("DesktopBackendRegistry", () => {
       {
         backendId: acpBackendId,
         sessionId: "session-1",
-        title: "ACP session",
+        title: "Untitled thread",
         titleSource: "fallback",
         cwd: "/repo/project",
         createdAt: 1000,

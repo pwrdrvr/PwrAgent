@@ -2309,8 +2309,17 @@ describe("AcpAgentClient", () => {
             continue;
           }
           expect(asked).toHaveLength(askedBefore + 1);
+          const expectedGrantLabel = call.name === "mcp_pwragent_add_todo"
+            ? "Allow add_todo for this conversation"
+            : call.name === "mcp_pwragent_purge_cache"
+              ? "Allow purge_cache for this conversation"
+              : call.name === "mcp_pwragent_unlisted"
+                ? "Allow unlisted for this conversation"
+                : call.name === "mcp_linear_list_issues"
+                  ? "Allow list_issues for this conversation"
+                  : "Allow for this conversation";
           expect(buildPendingRequestActions(asked.at(-1)!).map((action) => action.label))
-            .toEqual(["Allow", "Allow for this thread", "Deny", "Cancel turn"]);
+            .toEqual(["Allow", expectedGrantLabel, "Deny", "Cancel turn"]);
           if (call.choice === "accept_for_session") granted.add(call.name);
           // Antigravity hears only options it offered.
           expect(outcome).toEqual({
@@ -2327,9 +2336,21 @@ describe("AcpAgentClient", () => {
     }), async (offersAlways, writes) => {
       const transport = new FakeAcpAgentTransport();
       const onRequest = vi.fn((request: AppServerPendingRequestNotification) => {
-        expect(buildPendingRequestActions(request).map(({ label }) => label)).toEqual(["Allow", "Deny", "Cancel turn"]);
-        expect(request.params.prompt).toContain(writes[onRequest.mock.calls.length - 1]);
-        return { decision: "accept" };
+        const expectedTool = writes[onRequest.mock.calls.length - 1]!;
+        expect(buildPendingRequestActions(request).map(({ label }) => label)).toEqual([
+          "Allow",
+          `Allow ${expectedTool} for this conversation`,
+          "Deny",
+          "Cancel turn",
+        ]);
+        expect(request.params.acpMcpToolName).toBe(expectedTool);
+        expect(request.params.prompt).toContain(expectedTool);
+        // Choosing conversation approval for the first write must grant only
+        // that wrapped tool, return allow_once to Antigravity, and still ask
+        // for every other wrapped write.
+        return onRequest.mock.calls.length === 1
+          ? { decision: "accept_for_session" }
+          : { decision: "accept" };
       });
       const hostApprovesToolCall = vi.fn(async (_server: string, _name: string, input: unknown) =>
         (input as { toolName?: string })?.toolName === "get_pull_request");
@@ -3655,7 +3676,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 1000,
       updatedAt: 1000,
@@ -4278,7 +4299,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 1000,
       updatedAt: 1000,
@@ -4299,7 +4320,14 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
-  it("restores ACP replay from local rollout history when session/load is unsupported", async () => {
+  it.each([
+    { text: ["hello"] },
+    { text: ["[PwrAgent review sub-agent results — context for this turn]\n\nHere is my diagnostic excerpt."] },
+    { text: [
+      "[PwrAgent review sub-agent results — context for this turn]\n\nHere is an example.\n\n[End PwrAgent review sub-agent results]",
+      "Explain this diagnostic excerpt.",
+    ] },
+  ])("restores the sent ACP prompt from local rollout history (%j)", async ({ text }) => {
     const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
     const firstTransport = new FakeAcpAgentTransport({
       initialize: {
@@ -4322,11 +4350,17 @@ describe("AcpAgentClient", () => {
       cwd: "/repo",
       executionMode: "default",
     });
-    firstClient.startPrompt({
+    const prompt = text.join("\n");
+    const parts = text.map((block) => ({ type: "text" as const, text: block }));
+    await firstClient.startPrompt({
       sessionId: session.sessionId,
-      prompt: "hello",
+      prompt,
+      promptContent: parts,
+      parts,
       turnId: "turn-1",
     });
+    const sent = firstTransport.requests.find(({ method }) => method === "session/prompt");
+    expect(sent?.params?.prompt).toEqual(parts);
     firstTransport.emitSessionUpdate(session.sessionId, {
       session_update: "agent_message_chunk",
       content: { type: "text", text: "Kimi says hi." },
@@ -4354,9 +4388,10 @@ describe("AcpAgentClient", () => {
     );
 
     expect(replay.messages.map((message) => message.text)).toEqual([
-      "hello",
+      prompt,
       "Kimi says hi.",
     ]);
+    expect(replay.messages[0]?.parts).toEqual(sent?.params?.prompt);
     expect(secondTransport.requests.map((request) => request.method)).toEqual([
       "initialize",
     ]);
@@ -4543,7 +4578,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 1000,
       updatedAt: 1000,
@@ -5072,7 +5107,7 @@ describe("AcpAgentClient", () => {
           id: session.sessionId,
           linkedDirectories: [],
           source: "acp:grok",
-          title: "ACP session",
+          title: "Untitled thread",
           titleSource: "fallback",
           updatedAt: metadata?.updatedAt,
         },
@@ -5988,7 +6023,7 @@ describe("AcpAgentClient", () => {
     const replay = await client.loadSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 900,
       updatedAt: 950,
@@ -6031,7 +6066,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:gemini",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo/worktree",
       createdAt: 900,
       updatedAt: 950,
@@ -6250,7 +6285,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:kimi",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 900,
       updatedAt: 1000,
@@ -6294,7 +6329,7 @@ describe("AcpAgentClient", () => {
     store.upsertSession({
       backendId: "acp:kimi",
       sessionId: "session-1",
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo",
       createdAt: 900,
       updatedAt: 1000,
@@ -6319,5 +6354,62 @@ describe("AcpAgentClient", () => {
     expect(
       readRawAcpSessionPayload("acp:kimi", "session-1")?.transcriptUpdates,
     ).toBeUndefined();
+  });
+
+  it("defaults new sessions to 'Untitled thread' and lets a provider topic update replace a prompt placeholder once", async () => {
+    const transport = new FakeAcpAgentTransport();
+    const client = new AcpAgentClient({
+      backendId: "acp:antigravity",
+      store,
+      transport,
+      now: () => 2000,
+    });
+    await client.initialize();
+
+    const unnamed = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+    });
+    expect(unnamed).toMatchObject({
+      title: "Untitled thread",
+      titleSource: "fallback",
+    });
+    expect(unnamed.promptPlaceholderTitle).toBeUndefined();
+
+    const seeded = await client.startSession({
+      sessionId: "session-placeholder",
+      cwd: "/repo",
+      executionMode: "default",
+      title: "Investigate flaky auth retry",
+      titleSource: "derived",
+      promptPlaceholderTitle: true,
+    });
+    expect(seeded).toMatchObject({
+      title: "Investigate flaky auth retry",
+      titleSource: "derived",
+      promptPlaceholderTitle: true,
+    });
+
+    transport.emitSessionUpdate(seeded.agentSessionId ?? seeded.sessionId, {
+      sessionUpdate: "session_info_update",
+      title: "Auth Retry Fix",
+    });
+    expect(store.getSession("acp:antigravity", seeded.sessionId)).toMatchObject({
+      title: "Auth Retry Fix",
+      titleSource: "derived",
+    });
+    expect(
+      store.getSession("acp:antigravity", seeded.sessionId)?.promptPlaceholderTitle,
+    ).toBeUndefined();
+
+    // A later topic update must not overwrite the durable provider title.
+    transport.emitSessionUpdate(seeded.agentSessionId ?? seeded.sessionId, {
+      sessionUpdate: "session_info_update",
+      title: "Stale Late Title",
+    });
+    expect(store.getSession("acp:antigravity", seeded.sessionId)).toMatchObject({
+      title: "Auth Retry Fix",
+      titleSource: "derived",
+    });
   });
 });

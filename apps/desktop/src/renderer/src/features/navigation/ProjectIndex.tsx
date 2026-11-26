@@ -84,7 +84,10 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
       publish(NO_PROJECT_SPY);
       return;
     }
-    if (resize) viewportHeight = height;
+    if (resize) {
+      viewportHeight = height;
+      listBlockSize ??= height;
+    }
     const scrollTop = target.scrollTop;
     let listTop: number | undefined;
     publish(spyProjects(sections.length, (index) => {
@@ -101,7 +104,13 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
         top: rect.top - listTop + scrollTop,
         bottom: rect.bottom - listTop + scrollTop,
       };
-      if (resize) blocks[index] = block;
+      if (resize) {
+        blocks[index] = block;
+        const child = children.get(section);
+        if (child && child.blockSize === undefined) {
+          child.blockSize = rect.height;
+        }
+      }
       return block;
     }, scrollTop + height, scrollTop + topDockReserve(region)));
   };
@@ -134,7 +143,9 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
         continue;
       }
       if (entry.target === list) {
-        const size = entry.contentBoxSize?.[0]?.blockSize;
+        // `.directory-list` has bottom padding and no vertical borders, so its
+        // border-box block size matches `clientHeight` (padding box).
+        const size = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentBoxSize?.[0]?.blockSize;
         if (size === undefined || size !== listBlockSize) {
           listBlockSize = size;
           viewportHeight = undefined;
@@ -151,9 +162,12 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
       }
     }
     // The list is a zero-gap column. Inline size changes do not move its
-    // project bounds unless a child also changes block size.
-    if (firstChanged < sections.length) invalidateFrom(firstChanged);
-    if (sampleRequested || viewportChanged || firstChanged < sections.length) {
+    // project bounds unless a child also changes block size, and changes
+    // past the cached visible prefix cannot move any currently visible section.
+    const affectsCached = firstChanged < sections.length
+      && (blocks.length === 0 || firstChanged < blocks.length);
+    if (affectsCached) invalidateFrom(firstChanged);
+    if (sampleRequested || viewportChanged || affectsCached) {
       // Observer delivery order can change when the selection changes. Finish
       // the dock's pending sample before reading where the headers stick.
       region.dispatchEvent(new Event(TOP_DOCK_RESERVE_SAMPLE_EVENT));
@@ -222,7 +236,7 @@ function observeProjectSpy(region: HTMLElement, publish: (next: ProjectSpy) => v
     resize?.disconnect();
     if (list !== null) {
       mutation.observe(list, { childList: true });
-      resize?.observe(list);
+      resize?.observe(list, { box: "border-box" });
     }
     syncSections();
   };
@@ -334,7 +348,23 @@ export const ProjectIndex = memo(function ProjectIndex(props: {
   useEffect(() => {
     const nav = navRef.current;
     if (nav === null || typeof ResizeObserver !== "function") return undefined;
-    const observer = new ResizeObserver(syncBox);
+    const lastInlineSizes = new WeakMap<Element, number>();
+    const observer = new ResizeObserver((entries) => {
+      if (!entries || entries.length === 0) {
+        syncBox();
+        return;
+      }
+      let inlineChanged = false;
+      for (const entry of entries) {
+        const inlineSize = entry.borderBoxSize?.[0]?.inlineSize
+          ?? entry.contentBoxSize?.[0]?.inlineSize;
+        if (inlineSize === undefined || lastInlineSizes.get(entry.target) !== inlineSize) {
+          if (inlineSize !== undefined) lastInlineSizes.set(entry.target, inlineSize);
+          inlineChanged = true;
+        }
+      }
+      if (inlineChanged) syncBox();
+    });
     observer.observe(nav);
     // The sidebar's width moves the cap (max-width) without always moving
     // the column, so watch the row it sits in too.

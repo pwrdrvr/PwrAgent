@@ -5,6 +5,8 @@ on:
     branches:
       - main
       - "releases/**"
+  schedule:
+    - cron: "23 9 * * *"
   pull_request:
     # Do not add `labeled` back here. Dependabot applies labels to dependency
     # PRs, and label-triggered CI creates skipped check suites that can make
@@ -41,6 +43,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       code_impacting: ${{ steps.classify.outputs.code_impacting }}
+      plan_tests: ${{ steps.classify.outputs.plan_tests }}
       docs_only: ${{ steps.classify.outputs.docs_only }}
       # `true` runs the macOS unit tests, macOS Desktop E2E and Windows
       # Desktop E2E. Pull requests leave them to `main` unless the `ci:full`
@@ -54,6 +57,12 @@ jobs:
       # `a11y.spec.ts`, or wherever `full_platforms` is `true`; a narrowed
       # test plan that selects the spec also runs it. Every push runs it.
       a11y: ${{ steps.classify.outputs.a11y }}
+      # `true` runs all four Windows Desktop E2E lanes on a pull request when
+      # `ci:windows-e2e` is present (or wherever `full_platforms` is `true`).
+      # A narrowed test plan with affected specs runs one narrowed
+      # Windows E2E lane without needing this label.
+      windows_e2e: ${{ steps.classify.outputs.windows_e2e }}
+      e2e_only: ${{ steps.classify.outputs.e2e_only }}
     steps:
       # Docs-only PRs skip Lint, so the instruction-size guard runs here,
       # where every PR and push passes through.
@@ -77,16 +86,20 @@ jobs:
         uses: actions/github-script@v9
         with:
           script: |
-            const fullCi = (reason) => {
+            const fullCi = (reason, planTests = false) => {
               core.setOutput("code_impacting", "true");
               core.setOutput("docs_only", "false");
               core.setOutput("full_platforms", "true");
+              core.setOutput("plan_tests", String(planTests));
               core.setOutput("a11y", "true");
-              core.notice(`Running full CI: ${reason}`);
+              core.setOutput("windows_e2e", String(!planTests));
+              core.setOutput("e2e_only", "false");
+              core.notice(reason);
             };
 
             if (context.eventName !== "pull_request") {
-              fullCi(`${context.eventName} events always run full CI`);
+              const main = context.eventName === "push" && context.ref === "refs/heads/main";
+              fullCi(main ? "Plan tests across all platforms for this main push" : `Running full CI for ${context.eventName}`, main);
               return;
             }
 
@@ -133,7 +146,7 @@ jobs:
             }
 
             const isNonProductPath = (path) =>
-              path.startsWith("docs/")
+              (path.startsWith("docs/") && path !== "docs/desktop-e2e-shard-durations.json")
               || path.toLowerCase().endsWith(".md")
               || path.startsWith(".agents/skills/");
             // Changes that require native platform coverage: the lockfile
@@ -169,11 +182,17 @@ jobs:
               pathsOf(file).includes("apps/desktop/e2e/a11y.spec.ts"));
             const a11y = labels.some((label) => label.name === "ci:a11y") || a11yFile !== undefined;
             core.setOutput("a11y", String(a11y));
+            const windowsE2e = labels.some((label) => label.name === "ci:windows-e2e");
+            core.setOutput("windows_e2e", String(windowsE2e));
 
             const codeImpactingFile = files.find((file) =>
               pathsOf(file).some((path) => !isNonProductPath(path)));
             const skipFullCi = codeImpactingFile === undefined;
+            const e2eOnly = !skipFullCi && files.every((file) => pathsOf(file).every((path) =>
+              isNonProductPath(path) || path.startsWith("apps/desktop/e2e/")));
+            core.setOutput("e2e_only", String(e2eOnly));
 
+            core.setOutput("plan_tests", String(!skipFullCi));
             core.setOutput("code_impacting", String(!skipFullCi));
             core.setOutput("docs_only", String(skipFullCi));
             await core.summary
@@ -186,10 +205,15 @@ jobs:
                 skipFullCi
                   ? "Only `docs/**`, Markdown, or `.agents/skills/**` changed; expensive CI jobs are skipped."
                   : `Product CI runs because \`${codeImpactingFile.filename}\` requires it. `
-                    + "No platform-specific path changed, so the macOS unit tests, macOS Desktop E2E "
-                    + "and Windows Desktop E2E run on `main`; "
-                    + "to run them here, add the `ci:full` label, then push or use **Re-run all jobs** "
-                    + "(\"Re-run failed jobs\" does not rerun this classifier). "
+                    + (windowsE2e
+                      ? "No platform-specific path changed, so the macOS unit tests and macOS Desktop E2E run on `main`; "
+                        + "to run them here, add the `ci:full` label, then push or use **Re-run all jobs** "
+                        + "(\"Re-run failed jobs\" does not rerun this classifier). "
+                        + "Windows Desktop E2E runs in full here because the `ci:windows-e2e` label is present. "
+                      : "No platform-specific path changed, so the macOS unit tests, macOS Desktop E2E "
+                        + "and full Windows Desktop E2E run on `main` (narrowed E2E plans still run affected Windows specs here); "
+                        + "to run them here, add the `ci:full` (or `ci:windows-e2e` for Windows E2E only) label, then push or use **Re-run all jobs** "
+                        + "(\"Re-run failed jobs\" does not rerun this classifier). ")
                     + (a11y
                       ? "The accessibility audit runs here."
                       : "The accessibility audit (`a11y.spec.ts`) also runs on `main`; "
@@ -366,12 +390,13 @@ jobs:
     # job is skipped or fails, and they then run the full suite.
     if: >-
       ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
-      && needs.install-deps.result == 'success' }}
+      && needs.install-deps.result == 'success'
+      && (needs.pr-test-impact-plan.result != 'success' || needs.pr-test-impact-plan.outputs.unit_linux_lanes != '[]') }}
     strategy:
       # Keep the other lane running after a failure so it still reports.
       fail-fast: false
       matrix:
-        lane: ${{ fromJSON(needs.pr-test-impact-plan.outputs.unit_linux_lanes || '[1, 2, 3, 4]') }}
+        lane: ${{ fromJSON(needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_linux_lanes || '[1, 2, 3, 4]') }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -389,7 +414,7 @@ jobs:
         timeout-minutes: 5
 
       - name: Download the test plan
-        if: needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
+        if: needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
         uses: actions/download-artifact@v8
         with:
           name: pr-test-impact-plan
@@ -404,7 +429,7 @@ jobs:
           PWRAGENT_DEV_SQLITE_WRITE_METRICS: ${{ github.event_name == 'pull_request' && '1' || '' }}
           PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE: ${{ github.event_name == 'pull_request' && format('{0}/.local/ci/sqlite-writes/first.jsonl', github.workspace) || '' }}
         run: >-
-          ${{ needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
+          ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
           && format('pnpm exec node scripts/ci/run-pr-test-impact.mjs unit linux {0}', matrix.lane)
           || format('pnpm exec vitest run --config vitest.linux-ci.mts --shard={0}/4 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs', matrix.lane) }}
 
@@ -492,7 +517,7 @@ jobs:
     # in the step below rather than gating entry to the job.
     name: Test
     runs-on: ubuntu-latest
-    needs: [changes, test]
+    needs: [changes, pr-test-impact-plan, test]
     if: >-
       always() &&
       needs.changes.outputs.code_impacting == 'true'
@@ -500,11 +525,17 @@ jobs:
     steps:
       - name: Require every Test lane
         env:
+          UNIT_LINUX_LANES: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_linux_lanes || '' }}
           TEST_RESULT: ${{ needs.test.result }}
         run: |
           set -euo pipefail
           # Mirror the result into the job summary, as the Desktop E2E gate
           # does, so the checks page says why the gate failed.
+          if [[ "${UNIT_LINUX_LANES:-}" == "[]" && "$TEST_RESULT" == "skipped" ]]; then
+            echo "- SKIP \`Test\` lanes (the test plan found no unit test that this change affects)" >> "$GITHUB_STEP_SUMMARY"
+            echo "No Test lane needed for this change."
+            exit 0
+          fi
           if [[ "$TEST_RESULT" != "success" ]]; then
             echo "- FAIL \`Test\` lanes ($TEST_RESULT); see the failing \`Test (lane N of 4)\` job" >> "$GITHUB_STEP_SUMMARY"
             echo "::error::A Test lane did not succeed ($TEST_RESULT)."
@@ -580,11 +611,11 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
       && needs.windows-install-deps.result == 'success'
-      && needs.pr-test-impact-plan.outputs.unit_windows_main_lanes != '[]' }}
+      && (needs.pr-test-impact-plan.result != 'success' || needs.pr-test-impact-plan.outputs.unit_windows_main_lanes != '[]') }}
     strategy:
       fail-fast: false
       matrix:
-        lane: ${{ fromJSON(needs.pr-test-impact-plan.outputs.unit_windows_main_lanes || '[1, 2, 3, 4]') }}
+        lane: ${{ fromJSON(needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_windows_main_lanes || '[1, 2, 3, 4]') }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -600,7 +631,7 @@ jobs:
           cache-electron: "true"
 
       - name: Download the test plan
-        if: needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
+        if: needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
         uses: actions/download-artifact@v8
         with:
           name: pr-test-impact-plan
@@ -625,16 +656,13 @@ jobs:
         # The deploy-isolation test launches pnpm's native executable directly
         # to avoid Windows .cmd handoffs; pnpm supplies it in npm_execpath.
         run: >-
-          ${{ needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
+          ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
           && format('pnpm exec node scripts/ci/run-pr-test-impact.mjs unit windows-main {0}', matrix.lane)
           || format('pnpm test --project desktop-main --shard={0}/4 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs', matrix.lane) }}
 
       - name: Verify the unit slice completed
         id: unit-completion
-        # A narrowed lane writes no report when Windows collects none of its files.
-        if: >-
-          ${{ steps.unit-tests.outcome == 'success' && (needs.pr-test-impact-plan.outputs.unit_mode != 'selected'
-          || hashFiles('.local/ci/retry/unit-first.json') != '') }}
+        if: steps.unit-tests.outcome == 'success'
         run: node scripts/ci/run-retry-failures.mjs unit-verify
 
       - name: Retry failed unit tests
@@ -677,11 +705,11 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
       && needs.windows-install-deps.result == 'success'
-      && needs.pr-test-impact-plan.outputs.unit_windows_renderer_lanes != '[]' }}
+      && (needs.pr-test-impact-plan.result != 'success' || needs.pr-test-impact-plan.outputs.unit_windows_renderer_lanes != '[]') }}
     strategy:
       fail-fast: false
       matrix:
-        lane: ${{ fromJSON(needs.pr-test-impact-plan.outputs.unit_windows_renderer_lanes || '[1, 2]') }}
+        lane: ${{ fromJSON(needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_windows_renderer_lanes || '[1, 2]') }}
     timeout-minutes: 30
     steps:
       - name: Checkout repository
@@ -701,7 +729,7 @@ jobs:
         uses: ./.github/actions/install-ripgrep
 
       - name: Download the test plan
-        if: needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
+        if: needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
         uses: actions/download-artifact@v8
         with:
           name: pr-test-impact-plan
@@ -716,16 +744,13 @@ jobs:
         # The project list is the one `unitGroups` gives this job in
         # scripts/ci/pr-test-impact.mjs. Change both together.
         run: >-
-          ${{ needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
+          ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
           && format('pnpm exec node scripts/ci/run-pr-test-impact.mjs unit windows-renderer {0}', matrix.lane)
           || format('pnpm exec vitest run --config vitest.workspace.mts --project desktop-renderer --project desktop-renderer-node --project messaging --project owner-core --project shared --shard={0}/2 --reporter=default --reporter=./scripts/ci/vitest-ci-reporter.mjs', matrix.lane) }}
 
       - name: Verify the unit slice completed
         id: unit-completion
-        # A narrowed lane writes no report when Windows collects none of its files.
-        if: >-
-          ${{ steps.unit-tests.outcome == 'success' && (needs.pr-test-impact-plan.outputs.unit_mode != 'selected'
-          || hashFiles('.local/ci/retry/unit-first.json') != '') }}
+        if: steps.unit-tests.outcome == 'success'
         run: node scripts/ci/run-retry-failures.mjs unit-verify
 
       - name: Retry failed unit tests
@@ -831,7 +856,7 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
       && needs.install-deps.result == 'success'
-      && needs.pr-test-impact-plan.outputs.e2e_lanes != '[]' }}
+      && (needs.pr-test-impact-plan.result != 'success' || needs.pr-test-impact-plan.outputs.e2e_lanes != '[]') }}
     strategy:
       # Playwright weights test counts, then assigns each indivisible group
       # by its first test's position. Files stay together; workers remain at
@@ -855,7 +880,7 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        lane: ${{ fromJSON(needs.pr-test-impact-plan.outputs.e2e_lanes || '[1, 2, 3, 4]') }}
+        lane: ${{ fromJSON(needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_lanes || '[1, 2, 3, 4]') }}
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -875,7 +900,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y openbox x11-utils
 
       - name: Download the test plan
-        if: needs.pr-test-impact-plan.outputs.e2e_mode == 'selected'
+        if: needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected'
         uses: actions/download-artifact@v8
         with:
           name: pr-test-impact-plan
@@ -886,7 +911,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 10
         env:
-          E2E_MODE: ${{ needs.pr-test-impact-plan.outputs.e2e_mode }}
+          E2E_MODE: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode || '' }}
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
           PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
         # Wide-layout specs request 1440px windows. Keep the virtual desktop
@@ -896,8 +921,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$E2E_MODE" == "selected" ]]; then
-            mapfile -t tests < <(node scripts/ci/run-pr-test-impact.mjs e2e-files)
-            [[ ${#tests[@]} -gt 0 ]]
+            tests=(--test-list "$GITHUB_WORKSPACE/.local/ci/pr-test-impact/linux-e2e.txt")
           else
             # `desktop-a11y` runs the accessibility audit. Lane sizes by test
             # count; see the strategy comment above.
@@ -913,11 +937,15 @@ jobs:
 
       - name: Verify the E2E slice completed
         if: steps.e2e-tests.outcome == 'success'
+        env:
+          E2E_TEST_LIST: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected' && '.local/ci/pr-test-impact/linux-e2e.txt' || '' }}
         run: node scripts/ci/run-retry-failures.mjs e2e-first-verify
 
       - name: Select failed E2E tests
         id: e2e-selection
         if: steps.e2e-tests.outcome == 'failure'
+        env:
+          E2E_TEST_LIST: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected' && '.local/ci/pr-test-impact/linux-e2e.txt' || '' }}
         run: node scripts/ci/run-retry-failures.mjs e2e-prepare
 
       - name: Retry failed E2E tests
@@ -979,7 +1007,7 @@ jobs:
     if: >-
       ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
       && needs.install-deps.result == 'success'
-      && (needs.changes.outputs.a11y == 'true' || needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') }}
+      && ((needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') || (needs.pr-test-impact-plan.result != 'success' && needs.changes.outputs.a11y == 'true')) }}
     strategy:
       # The spec runs in `parallel` mode, so each test is its own shard group
       # and Playwright splits its 63 tests 32/31 by count. Modeled from three
@@ -1109,7 +1137,8 @@ jobs:
           LINUX_E2E_RESULT: ${{ needs.desktop-e2e.result }}
           A11Y_RESULT: ${{ needs.desktop-a11y.result }}
           # Mirrors the `if:` of desktop-a11y.
-          A11Y_REQUESTED: ${{ (needs.changes.outputs.a11y == 'true' || needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') && 'true' || 'false' }}
+          A11Y_REQUESTED: ${{ ((needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') || (needs.pr-test-impact-plan.result != 'success' && needs.changes.outputs.a11y == 'true')) && 'true' || 'false' }}
+          MACOS_E2E_LANES: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_macos_lanes || '' }}
           MACOS_E2E_RESULT: ${{ needs.desktop-e2e-macos.result }}
           FULL_PLATFORMS: ${{ needs.changes.outputs.full_platforms }}
         run: |
@@ -1154,7 +1183,9 @@ jobs:
           # The classifier leaves macOS to `main` on pull requests. Accept a
           # skip only when it said so; any other skip, and every other
           # result, still fails the gate.
-          if [[ "$FULL_PLATFORMS" == "false" && "$MACOS_E2E_RESULT" == "skipped" ]]; then
+          if [[ "${MACOS_E2E_LANES:-}" == "[]" && "$MACOS_E2E_RESULT" == "skipped" && "$FULL_PLATFORMS" == "true" ]]; then
+            say "- SKIP \`macOS\` (the test plan found no spec that this change affects)"
+          elif [[ "$FULL_PLATFORMS" == "false" && "$MACOS_E2E_RESULT" == "skipped" ]]; then
             say "- SKIP \`macOS\` (runs on \`main\`; add the \`ci:full\` label and use **Re-run all jobs** to run it here)"
           else
             require "macOS" "$MACOS_E2E_RESULT"
@@ -1201,17 +1232,20 @@ jobs:
   test-macos:
     name: macOS unit tests (lane ${{ matrix.lane }} of 4)
     runs-on: macos-26
-    needs: [changes, macos-install-deps]
+    needs: [changes, macos-install-deps, pr-test-impact-plan]
     # Exercise the release unit-test platform before a tag is cut. Pull
     # requests run it only when `changes` sets `full_platforms`.
-    if: needs.changes.outputs.code_impacting == 'true' && needs.changes.outputs.full_platforms == 'true'
+    if: >-
+      ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
+      && needs.changes.outputs.full_platforms == 'true' && needs.macos-install-deps.result == 'success'
+      && (needs.pr-test-impact-plan.result != 'success' || needs.pr-test-impact-plan.outputs.unit_macos_lanes != '[]') }}
     # Two lanes exhausted this deadline while still running tests. Four keep
     # native-module process isolation and the deadline with less work per VM.
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        lane: [1, 2, 3, 4]
+        lane: ${{ fromJSON(needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_macos_lanes || '[1, 2, 3, 4]') }}
     steps:
       # Nothing on a CI runner searches the index, but a fresh VM runs 14-19
       # Spotlight workers at about 20% CPU for the whole lane, on 3 cores.
@@ -1244,6 +1278,13 @@ jobs:
         id: xcode
         uses: ./.github/actions/select-xcode-for-actool
 
+      - name: Download the test plan
+        if: needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_mode == 'selected'
+        uses: actions/download-artifact@v8
+        with:
+          name: pr-test-impact-plan
+          path: .local/ci/pr-test-impact
+
       - name: Test (unit)
         id: unit-tests
         continue-on-error: true
@@ -1251,10 +1292,16 @@ jobs:
           # Require the icon compile check wherever Vitest assigns its suite.
           DEVELOPER_DIR: ${{ steps.xcode.outputs.developer-dir }}
           PWRAGENT_REQUIRE_ACTOOL: "1"
+          UNIT_MODE: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.unit_mode || '' }}
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/unit-first.json
           # Test-only phase evidence for the v1.4.12 native relay timeout.
           PWRAGENT_NATIVE_ORACLE_PROFILE: ${{ github.workspace }}/.local/ci/native-relay-profile.jsonl
-        run: pnpm test --shard=${{ matrix.lane }}/4 --reporter=default --reporter=json --reporter=./scripts/ci/vitest-ci-reporter.mjs --outputFile=.local/ci/macos-unit-results.json
+        run: |
+          if [[ "$UNIT_MODE" == "selected" ]]; then
+            pnpm exec node scripts/ci/run-pr-test-impact.mjs unit macos ${{ matrix.lane }}
+          else
+            pnpm test --shard=${{ matrix.lane }}/4 --reporter=default --reporter=json --reporter=./scripts/ci/vitest-ci-reporter.mjs --outputFile=.local/ci/macos-unit-results.json
+          fi
 
       - name: Verify the unit slice completed
         id: unit-completion
@@ -1309,9 +1356,12 @@ jobs:
     # GitHub-hosted, fresh VM per job, so fork PRs run here too. Never move
     # this lane back to self-hosted machines: this is a public repository.
     # Pull requests run it only when `changes` sets `full_platforms`.
-    if: needs.changes.outputs.code_impacting == 'true' && needs.changes.outputs.full_platforms == 'true'
+    if: >-
+      ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
+      && needs.changes.outputs.full_platforms == 'true' && needs.macos-install-deps.result == 'success'
+      && (needs.pr-test-impact-plan.result != 'success' || needs.pr-test-impact-plan.outputs.e2e_macos_lanes != '[]') }}
     runs-on: macos-26
-    needs: [changes, macos-install-deps]
+    needs: [changes, macos-install-deps, pr-test-impact-plan]
     strategy:
       # The five-lane fit models a 12:14 worst job time using recent main
       # test durations plus the worst observed job overhead.
@@ -1321,7 +1371,7 @@ jobs:
       # a product failure from runner trouble.
       fail-fast: false
       matrix:
-        lane: [1, 2, 3, 4, 5]
+        lane: ${{ fromJSON(needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_macos_lanes || '[1, 2, 3, 4, 5]') }}
     # Keep five extra minutes above the 15-minute timing benchmark so slow
     # runners have time for retries, reporting, and cleanup.
     timeout-minutes: 20
@@ -1349,6 +1399,13 @@ jobs:
           node-version: "^24.22.1"
           cache-electron: "true"
 
+      - name: Download the test plan
+        if: needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected'
+        uses: actions/download-artifact@v8
+        with:
+          name: pr-test-impact-plan
+          path: .local/ci/pr-test-impact
+
       - name: Run desktop replay-backed Electron tests
         # Hosted macOS runners are VMs with a paravirtual GPU, which can reset
         # under Electron load. The early PWRAGENT_E2E_DISABLE_GPU gate selects
@@ -1361,7 +1418,7 @@ jobs:
         env:
           PWRAGENT_E2E_DISABLE_GPU: "1"
           PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
-          PWTEST_SHARD_WEIGHTS: "69:87:78:87:112"
+          E2E_MODE: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode || '' }}
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
           PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
         # The wrapper keeps a cancelled step alive until Playwright has closed
@@ -1369,14 +1426,20 @@ jobs:
         # Without it, the runner's orphan reap killed the renderer under a
         # pending failure screenshot and the main segfaulted; see the script.
         # `exec` makes the wrapper the step process, so it gets the signals.
-        run: >-
-          exec bash ./scripts/ci/macos-e2e-run-lane.sh
-          pnpm --filter @pwragent/desktop test:e2e
-          --shard=${{ matrix.lane }}/5
-          --retries=0
+        run: |
+          if [[ "$E2E_MODE" == "selected" ]]; then
+            tests=(--test-list "$GITHUB_WORKSPACE/.local/ci/pr-test-impact/native-e2e.txt")
+          else
+            export PWTEST_SHARD_WEIGHTS="69:87:78:87:112"
+            tests=(--shard=${{ matrix.lane }}/5)
+          fi
+          exec bash ./scripts/ci/macos-e2e-run-lane.sh \
+            pnpm --filter @pwragent/desktop test:e2e "${tests[@]}" --retries=0
 
       - name: Verify the E2E slice completed
         if: steps.e2e-tests.outcome == 'success'
+        env:
+          E2E_TEST_LIST: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected' && '.local/ci/pr-test-impact/native-e2e.txt' || '' }}
         run: node scripts/ci/run-retry-failures.mjs e2e-first-verify
 
       - name: Select failed E2E tests
@@ -1384,6 +1447,7 @@ jobs:
         if: steps.e2e-tests.outcome == 'failure'
         env:
           PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
+          E2E_TEST_LIST: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_mode == 'selected' && '.local/ci/pr-test-impact/native-e2e.txt' || '' }}
         run: node scripts/ci/run-retry-failures.mjs e2e-prepare
 
       - name: Retry failed E2E tests
@@ -1445,15 +1509,21 @@ jobs:
     # and launch, which is exactly the Git-for-Windows launcher-handoff class
     # that CLAUDE.md records as expensive.
     #
-    # Pull requests run it only when `changes` sets `full_platforms`, or with
-    # the shutdown-diagnostics label, which exists to run this job.
+    # Pull requests run all four lanes when `changes` sets `full_platforms` or
+    # `windows_e2e` (`ci:windows-e2e`), or with `ci:windows-shutdown-diagnostics`.
+    # When the test plan narrows E2E to affected specs
+    # (for example a spec-only edit), one lane runs only those selected specs
+    # without turning on all four Windows E2E lanes for ordinary product PRs.
     runs-on: windows-latest
-    needs: [changes, windows-install-deps]
+    needs: [changes, windows-install-deps, pr-test-impact-plan]
     if: >-
-      needs.changes.outputs.code_impacting == 'true' && (
-        needs.changes.outputs.full_platforms == 'true'
-        || contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics')
-      )
+      ${{ !cancelled() && needs.changes.outputs.code_impacting == 'true'
+      && needs.windows-install-deps.result == 'success'
+      && (needs.pr-test-impact-plan.result != 'success' || needs.pr-test-impact-plan.outputs.e2e_windows_lanes != '[]')
+      && (needs.pr-test-impact-plan.result == 'success' || needs.changes.outputs.full_platforms == 'true'
+        || needs.changes.outputs.windows_e2e == 'true'
+        || needs.changes.outputs.e2e_only == 'true'
+        || contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics')) }}
     strategy:
       # Keep the other lanes running after a failure so their artifacts show
       # whether a failure is isolated or suite-wide, exactly as the Linux and
@@ -1461,7 +1531,7 @@ jobs:
       # so no max-parallel cap is needed.
       fail-fast: false
       matrix:
-        lane: [1, 2, 3, 4]
+        lane: ${{ fromJSON(needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_windows_lanes || '[1, 2, 3, 4]') }}
         # Repeated samples and native observation are opt-in investigation work.
         sample: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && '[1, 2, 3]' || '[1]') }}
     # One budget for setup, build, tests, and reporting. Do not add shorter
@@ -1511,6 +1581,13 @@ jobs:
           }
           "PWRAGENT_WINDOWS_CDB_EXE=$diagnosticCdbPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Download the test plan
+        if: needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_windows_mode == 'selected'
+        uses: actions/download-artifact@v8
+        with:
+          name: pr-test-impact-plan
+          path: .local/ci/pr-test-impact
+
       - name: Run desktop replay-backed Electron tests
         # windows-latest provides an interactive desktop session, so unlike the
         # Linux lane this needs neither xvfb nor a window manager.
@@ -1530,23 +1607,32 @@ jobs:
         id: e2e-tests
         continue-on-error: true
         env:
+          E2E_MODE: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_windows_mode || '' }}
           PWTEST_SHARD_WEIGHTS: "59:121:104:112"
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
           PWRAGENT_CI_TEST_REPORT: ${{ github.workspace }}/.local/ci/retry/e2e-first.json
           PLAYWRIGHT_LAST_RUN_OUTPUT_FILE: ${{ github.workspace }}/.local/ci/retry/e2e-last.json
-        run: >-
-          pnpm ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && 'test:desktop-e2e:windows-diagnostics' || 'test:desktop-e2e' }}
-          --shard=${{ matrix.lane }}/4
-          --retries=0
+        run: |
+          if ($env:E2E_MODE -eq "selected") {
+            Remove-Item Env:PWTEST_SHARD_WEIGHTS -ErrorAction SilentlyContinue
+            $tests = Join-Path $env:GITHUB_WORKSPACE ".local/ci/pr-test-impact/native-e2e.txt"
+            pnpm test:desktop-e2e --test-list $tests --retries=0
+          } else {
+            pnpm ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && 'test:desktop-e2e:windows-diagnostics' || 'test:desktop-e2e' }} --shard=${{ matrix.lane }}/4 --retries=0
+          }
 
       - name: Verify the E2E slice completed
         if: steps.e2e-tests.outcome == 'success'
+        env:
+          E2E_TEST_LIST: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_windows_mode == 'selected' && '.local/ci/pr-test-impact/native-e2e.txt' || '' }}
         run: node scripts/ci/run-retry-failures.mjs e2e-first-verify
 
       - name: Select failed E2E tests
         id: e2e-selection
         if: steps.e2e-tests.outcome == 'failure'
+        env:
+          E2E_TEST_LIST: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_windows_mode == 'selected' && '.local/ci/pr-test-impact/native-e2e.txt' || '' }}
         run: node scripts/ci/run-retry-failures.mjs e2e-prepare
 
       - name: Retry failed E2E tests
@@ -1612,26 +1698,18 @@ jobs:
           FLAKE_SAMPLES: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') && '3' || '1' }}
           FLAKE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           FULL_PLATFORMS: ${{ needs.changes.outputs.full_platforms }}
+          E2E_ONLY: ${{ needs.changes.outputs.e2e_only }}
+          WINDOWS_E2E_REQUESTED: ${{ needs.changes.outputs.windows_e2e }}
           WINDOWS_DIAGNOSTICS: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') }}
-          A11Y_REQUESTED: ${{ (needs.changes.outputs.a11y == 'true' || needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') && 'true' || 'false' }}
-          # The lanes a pull request's test plan ran. A lane it left out is
-          # not a missing slice.
-          FLAKE_LANES: >-
-            ${{ needs.pr-test-impact-plan.result == 'success' && format(
-            '{{"unit-linux":{0},"unit-windows-main":{1},"unit-windows-renderer":{2},"e2e-linux":{3}}}',
-            needs.pr-test-impact-plan.outputs.unit_linux_lanes,
-            needs.pr-test-impact-plan.outputs.unit_windows_main_lanes,
-            needs.pr-test-impact-plan.outputs.unit_windows_renderer_lanes,
-            needs.pr-test-impact-plan.outputs.e2e_lanes) || '' }}
-        # Mirror the `if:` of test-macos, desktop-e2e-macos, windows-e2e and
-        # desktop-a11y, so a platform the classifier skipped is not reported
-        # as missing.
+          A11Y_REQUESTED: ${{ ((needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.e2e_a11y == 'true') || (needs.pr-test-impact-plan.result != 'success' && needs.changes.outputs.a11y == 'true')) && 'true' || 'false' }}
+          FLAKE_LANES: ${{ needs.pr-test-impact-plan.result == 'success' && needs.pr-test-impact-plan.outputs.lane_inventory || '' }}
+        # With no plan, the classifier still defines the platform defaults.
         run: |
           set -euo pipefail
           not_run=""
-          if [[ "$FULL_PLATFORMS" != "true" ]]; then
+          if [[ -z "$FLAKE_LANES" && "$FULL_PLATFORMS" != "true" ]]; then
             not_run="unit-macos,e2e-macos"
-            if [[ "$WINDOWS_DIAGNOSTICS" != "true" ]]; then
+            if [[ "$WINDOWS_E2E_REQUESTED" != "true" && "$WINDOWS_DIAGNOSTICS" != "true" && "$E2E_ONLY" != "true" ]]; then
               not_run+=",e2e-windows"
             fi
           fi
@@ -1661,14 +1739,9 @@ jobs:
 
   pr-test-impact-plan:
     name: Test plan
-    # Decides which tests a pull request affects. The unit and Linux Desktop
-    # E2E lanes run that plan in place of the full suite; see
-    # docs/pr-test-impact.md. The job does not run for a push, for the
-    # `ci:full` label or for a platform-specific path, and every lane then
-    # runs in full. A failure here has the same effect.
-    if: >-
-      ${{ github.event_name == 'pull_request' && needs.changes.outputs.code_impacting == 'true'
-      && needs.changes.outputs.full_platforms != 'true' }}
+    # Plan ordinary PRs and verified pushes to main. A missing plan keeps
+    # the classifier's full-suite defaults.
+    if: needs.changes.outputs.plan_tests == 'true'
     needs: [changes, install-deps]
     runs-on: ubuntu-latest
     permissions:
@@ -1679,9 +1752,14 @@ jobs:
       unit_mode: ${{ steps.lanes.outputs.unit_mode }}
       e2e_mode: ${{ steps.lanes.outputs.e2e_mode }}
       unit_linux_lanes: ${{ steps.lanes.outputs.unit_linux_lanes }}
+      unit_macos_lanes: ${{ steps.lanes.outputs.unit_macos_lanes }}
       unit_windows_main_lanes: ${{ steps.lanes.outputs.unit_windows_main_lanes }}
       unit_windows_renderer_lanes: ${{ steps.lanes.outputs.unit_windows_renderer_lanes }}
       e2e_lanes: ${{ steps.lanes.outputs.e2e_lanes }}
+      e2e_windows_mode: ${{ steps.lanes.outputs.e2e_windows_mode }}
+      e2e_macos_lanes: ${{ steps.lanes.outputs.e2e_macos_lanes }}
+      lane_inventory: ${{ steps.lanes.outputs.lane_inventory }}
+      e2e_windows_lanes: ${{ steps.lanes.outputs.e2e_windows_lanes }}
       # `true` when a narrowed plan selected `a11y.spec.ts`, which the
       # `desktop-a11y` job then runs; the Desktop E2E lane leaves it out.
       e2e_a11y: ${{ steps.lanes.outputs.e2e_a11y }}
@@ -1693,6 +1771,7 @@ jobs:
           persist-credentials: false
 
       - name: Read PR changed files
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v9
         with:
           script: |
@@ -1717,6 +1796,12 @@ jobs:
           node-version: "^24.22.1"
 
       - name: Plan the affected tests
+        env:
+          FULL_PLATFORMS: ${{ needs.changes.outputs.full_platforms }}
+          A11Y_REQUESTED: ${{ needs.changes.outputs.a11y == 'true' && needs.changes.outputs.full_platforms != 'true' }}
+          E2E_ONLY: ${{ needs.changes.outputs.e2e_only }}
+          WINDOWS_E2E_REQUESTED: ${{ needs.changes.outputs.windows_e2e }}
+          WINDOWS_DIAGNOSTICS: ${{ contains(github.event.pull_request.labels.*.name, 'ci:windows-shutdown-diagnostics') }}
         run: node scripts/ci/write-pr-test-impact.mjs
 
       - name: Upload plan
@@ -1725,7 +1810,9 @@ jobs:
           # "Re-run failed jobs" keeps this job's result, so the lanes of a
           # later attempt read the same artifact for as long as it is kept.
           name: pr-test-impact-plan
-          path: .local/ci/pr-test-impact/plan.json
+          path: |
+            .local/ci/pr-test-impact/plan.json
+            .local/ci/pr-test-impact/*-e2e.txt
           include-hidden-files: true
           if-no-files-found: error
           overwrite: true

@@ -52,6 +52,7 @@ export function storedRestartQueuedEntry(entry: ThreadTurnQueueEntry, position: 
       ...(entry.serviceTier ? { serviceTier: entry.serviceTier } : {}),
       ...(entry.reasoningEffort ? { reasoningEffort: entry.reasoningEffort } : {}),
       ...(entry.fastMode !== undefined ? { fastMode: entry.fastMode } : {}),
+      ...(entry.reviewFix ? { reviewFix: true } : {}),
       ...(entry.automationRunId ? { automationRunId: entry.automationRunId } : {}),
       ...(entry.automationName ? { automationName: entry.automationName } : {}),
       ...(entry.title ? { title: entry.title } : {}),

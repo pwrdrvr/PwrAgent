@@ -5,8 +5,11 @@ import { ResearchThreadButton } from "./ResearchThreadButton";
 import { ResearchBoundsEditor, type ResearchBoundsChange } from "./ResearchBoundsEditor";
 import { formatClock, formatResearchDuration, isResearchRunLive, plural, researchWorkerMinutesUsed, researchCutOffWorkers, researchFinishBlocker, researchHarnessOutcome, researchHarnessTime, researchRunCounts, researchRunPhase, researchTimeLeft, type ResearchRunView } from "./research-view-model";
 
-export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop, onFinish, onReconcile, onResume, onChangeBounds }: {
-  run: ResearchRunView; now: number; coordinator: boolean; writable: boolean; busy: boolean;
+export function ResearchRunCard({ run, now, coordinator, writable, readOnlyNote, busy, onStop, onFinish, onReconcile, onResume, onChangeBounds }: {
+  run: ResearchRunView; now: number; coordinator: boolean; writable: boolean;
+  /** Shown in place of the multi-process ownership notice when the run is read-only for another reason (e.g. peer lacks turn_control). */
+  readOnlyNote?: string;
+  busy: boolean;
   onStop: () => void; onFinish: () => void; onReconcile?: () => void; onResume?: () => void;
   /** The operator's change to a running run's bounds. Resolves true once the owner records it. */
   onChangeBounds?: (change: ResearchBoundsChange) => Promise<boolean>;
@@ -87,7 +90,11 @@ export function ResearchRunCard({ run, now, coordinator, writable, busy, onStop,
       </dl>
     </details>}
     {!harness && run.reason && !live && <p className="research-muted">{run.reason}</p>}
-    {!writable && run.status !== "completed" && !outcome && <p className="research-muted">Another running PwrAgent process owns this run. Its records are kept here as they arrive; review and finish it from that process.</p>}
+    {!writable && run.status !== "completed" && !outcome && (
+      <p className="research-muted">
+        {readOnlyNote ?? "Another running PwrAgent process owns this run. Its records are kept here as they arrive; review and finish it from that process."}
+      </p>
+    )}
     {!coordinator && <ResearchThreadButton thread={run.coordinator} title="Open coordinating thread" />}
     {editing && changeBounds && <ResearchBoundsEditor run={run} now={now} busy={busy} onSave={changeBounds} onCancel={() => setEditingBounds(false)} />}
     {controls && !confirmingStop && !editing && <div className="research-card__actions">

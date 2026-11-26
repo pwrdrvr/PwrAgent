@@ -142,13 +142,23 @@ export const localThreadTodoOperations = {
   },
   listTodos: async (request: ListThreadTodosRequest = {}): Promise<ListThreadTodosResponse> => {
     const todos = getThreadTodoService();
+    const raw = [
+      ...todos.list(request),
+      ...getThreadReviewService().list({
+        ...request, status: request.status === "done" ? "handled" : request.status,
+      }).map(threadReviewTodo),
+    ].sort((a, b) => b.createdAt - a.createdAt);
+    // Single-thread completed history (such as launched to-dos rendered in a
+    // transcript) remains readable even when that thread is archived and does
+    // not need a full provider inventory scan or open-card dispatch defaults.
+    if (request.status === "done" && request.backend && request.threadId) {
+      return {
+        todos: raw,
+        mergeMethods: todos.mergeMethodPreferences(),
+      };
+    }
     return {
-      todos: await todos.withDispatchDefaults(await listThreadTodosForAvailableOwners([
-        ...todos.list(request),
-        ...getThreadReviewService().list({
-          ...request, status: request.status === "done" ? "handled" : request.status,
-        }).map(threadReviewTodo),
-      ].sort((a, b) => b.createdAt - a.createdAt), listLocalTodoOwners)),
+      todos: await todos.withDispatchDefaults(await listThreadTodosForAvailableOwners(raw, listLocalTodoOwners)),
       mergeMethods: todos.mergeMethodPreferences(),
     };
   },

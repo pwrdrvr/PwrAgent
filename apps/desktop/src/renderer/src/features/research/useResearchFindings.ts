@@ -4,6 +4,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import {
   appendResearchFindingsOlder, emptyResearchFindings, mergeResearchFindingsHead, researchFindingsOlderCursor, type ResearchFindingsWindow,
 } from "./research-view-model";
+import { researchErrorMessage } from "./research-error";
 
 export const RESEARCH_FINDINGS_PAGE = 20;
 
@@ -62,7 +63,7 @@ export function useResearchFindings(api: DesktopApi | undefined, thread: Researc
         commit(mergeResearchFindingsHead(current.current, page));
         if (live.current) setError("");
       } catch (failure) {
-        if (live.current && latest.current === wanted) setError(failure instanceof Error ? failure.message : "Findings could not be read");
+        if (live.current && latest.current === wanted) setError(researchErrorMessage(failure, "Findings could not be read"));
       }
     });
   }, [key, findings, search, read, enqueue, commit]);
@@ -90,7 +91,7 @@ export function useResearchFindings(api: DesktopApi | undefined, thread: Researc
         commit(appendResearchFindingsOlder(current.current, page));
         if (live.current) setError("");
       } catch (failure) {
-        if (live.current) setError(failure instanceof Error ? failure.message : "More findings could not be read");
+        if (live.current) setError(researchErrorMessage(failure, "More findings could not be read"));
       } finally {
         if (live.current) setLoadingOlder(false);
       }

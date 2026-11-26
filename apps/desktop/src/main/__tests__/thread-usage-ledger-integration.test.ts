@@ -179,7 +179,7 @@ describe("DesktopBackendRegistry", () => {
         {
           backendId: acpBackendId,
           sessionId: threadId,
-          title: "ACP session",
+          title: "Untitled thread",
           createdAt: 1_000,
           updatedAt: 4_000,
           executionMode: "default",

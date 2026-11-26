@@ -124,14 +124,16 @@ it.for([
   { height: 1, cataloged: true },
   { height: 4, cataloged: false },
   { height: 4, cataloged: true },
-])("spends only ref and worktree reads for an unchanged stack of height $height, cataloged=$cataloged", { timeout: 120_000 }, async ({ height, cataloged }) => {
+])("reuses warm clone status on background reads and memoizes commit-graph answers on scoped reads for height $height, cataloged=$cataloged", { timeout: 120_000 }, async ({ height, cataloged }) => {
   const fixture = await stackFixture(height, cataloged);
   try {
     const reader = new StackReader();
     const first = await reader.read(fixture.rows, []);
     expect(first.stacks).toHaveLength(cataloged || height > 1 ? 1 : 0);
-    const starts = await stackStatusStarts(() => reader.read(fixture.rows, []));
-    expect(starts.toSorted()).toEqual(first.stacks.length ? ["for-each-ref", "worktree"] : []);
+    const backgroundStarts = await stackStatusStarts(() => reader.read(fixture.rows, []));
+    expect(backgroundStarts).toEqual([]);
+    const scopedStarts = await stackStatusStarts(() => reader.read(fixture.rows, [], [fixture.root]));
+    expect(scopedStarts.toSorted()).toEqual(first.stacks.length ? ["for-each-ref", "worktree"] : []);
   } finally {
     await rm(fixture.base, { recursive: true, force: true });
   }

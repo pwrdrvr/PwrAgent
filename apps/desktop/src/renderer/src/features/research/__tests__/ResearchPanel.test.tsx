@@ -401,12 +401,154 @@ describe("Research panel", () => {
     expect(screen.queryByText("Stale")).not.toBeInTheDocument();
   });
 
-  it("does not read the local owner's data for a remote thread", () => {
+  it("renders and drives a remote thread's runs through the owner-scoped API without offering local window popout", async () => {
     const { api, mocks } = apiFor();
-    const remote = { ...thread, federation: { ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" } } } as NavigationThreadSummary;
+    const remote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "Build Mac",
+        capabilities: ["thread_detail", "turn_control", "thread_research"],
+      },
+    } as NavigationThreadSummary;
+    render(<ResearchPanel desktopApi={{ ...api, openResearchWindow: vi.fn() } as DesktopApi} thread={remote} />);
+    await screen.findByLabelText("Research map");
+    expect(mocks.researchSnapshot).toHaveBeenCalledWith({ backend: "codex", threadId: "parent" });
+    expect(screen.queryByRole("button", { name: "Open in Research window" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: /^Review/ }));
+    fireEvent.change(screen.getByLabelText("Reason for your decision"), { target: { value: "Looks solid" } });
+    fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(mocks.updateResearch).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "parent",
+      command: { action: "review", submissionId: "s1", decision: "accepted", reason: "Looks solid" },
+    })));
+  });
+
+  it("shows an honest state when a remote owner does not support Research runs", () => {
+    const { api, mocks } = apiFor();
+    const remote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "Older Mini",
+        capabilities: ["thread_detail", "turn_control"],
+      },
+    } as NavigationThreadSummary;
     render(<ResearchPanel desktopApi={api} thread={remote} />);
-    expect(screen.getByText(/owning instance/)).toBeInTheDocument();
+    expect(screen.getByText(/Research runs are not supported on Older Mini/)).toBeInTheDocument();
     expect(mocks.researchSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("gives a remote viewer an honest per-instance state when the owner has no Harness configured", async () => {
+    const { api } = apiFor({ runs: [], writableRunIds: [] });
+    const researchHarnessStatus = vi.fn(async () => ({ configured: false, source: "mathos" as const, platformKeyStored: false }));
+    const remote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "Lab Studio",
+        capabilities: ["thread_detail", "turn_control", "thread_research"],
+      },
+    } as NavigationThreadSummary;
+    render(
+      <ResearchPanel
+        desktopApi={{ ...api, researchHarnessStatus, startResearchHarness: vi.fn(), revealResearchHarnessConfig: vi.fn() } as DesktopApi}
+        thread={remote}
+        onOpenSettings={vi.fn()}
+      />,
+    );
+    await screen.findByLabelText("Objective");
+    fireEvent.click(screen.getByRole("button", { name: "Open Math Harness" }));
+    expect(await screen.findByText(/Open Math Harness is not set up on Lab Studio/)).toBeInTheDocument();
+    expect(screen.getByText(/API keys never leave the owning machine/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Harness settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show config.toml" })).not.toBeInTheDocument();
+  });
+
+  it("gates write and run-start controls when a remote peer lacks turn_control", async () => {
+    const { api } = apiFor({
+      ...snapshot(),
+      pending: { objective: "Queued run", workers: 2, minutes: 10, workspaceMode: "none", preparedAt: Date.now(), expiresAt: Date.now() + 60_000 },
+    });
+    const readOnlyRemote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "ReadOnly Mac",
+        capabilities: ["thread_detail", "thread_research"],
+      },
+    } as NavigationThreadSummary;
+    render(
+      <ResearchPanel
+        desktopApi={{ ...api, startResearchHarness: vi.fn(), reconcileResearchHarness: vi.fn() } as DesktopApi}
+        thread={readOnlyRemote}
+      />,
+    );
+    await screen.findByLabelText("Research map");
+    expect(screen.queryByRole("button", { name: "New run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Withdraw request" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Stop run…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Finish run" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Change bounds…" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Another running PwrAgent process owns this run/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Read-only view of ReadOnly Mac/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /^Review/ }));
+    expect(screen.queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Request revision" })).not.toBeInTheDocument();
+  });
+
+  it("shows an empty read-only state instead of the creation form when a read-only remote thread has no runs", async () => {
+    const { api } = apiFor({ runs: [], writableRunIds: [] });
+    const readOnlyRemote = {
+      ...thread,
+      federation: {
+        ref: { target: { scope: "remote", instanceId: "peer" }, backend: "codex", threadId: "parent" },
+        instanceLabel: "ReadOnly Mac",
+        capabilities: ["thread_detail", "thread_research"],
+      },
+    } as NavigationThreadSummary;
+    render(<ResearchPanel desktopApi={api} thread={readOnlyRemote} />);
+    expect(await screen.findByText(/No research runs yet\. This connection is read-only on ReadOnly Mac\./)).toBeInTheDocument();
+    expect(screen.queryByLabelText("Objective")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New run" })).not.toBeInTheDocument();
+  });
+
+  it("strips Electron IPC and Federation wire error prefixes in Items, Item Detail, Findings, and Activity", async () => {
+    const { api } = apiFor();
+    const failingApi: DesktopApi = {
+      ...api,
+      searchResearch: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'research:search': Error: target_unavailable: Build Mac is offline");
+      }),
+      readResearchItem: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'research:item': Error: capability_denied: Turn control is required");
+      }),
+      readResearchEvents: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'research:events': Error: instance_shutting_down: Owner is restarting");
+      }),
+    };
+    render(<ResearchPanel desktopApi={failingApi} thread={thread} />);
+    await screen.findByLabelText("Research map");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Findings" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Build Mac is offline");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("target_unavailable");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("Error invoking remote method");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Items" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Build Mac is offline");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Activity" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Owner is restarting");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("instance_shutting_down");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Map" }));
+    fireEvent.click(screen.getByRole("button", { name: /Counterexample 0/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Turn control is required");
+    expect(screen.getByRole("alert")).not.toHaveTextContent("capability_denied");
   });
 
   it("keeps a thousand recorded contributions out of the map DOM and links to the rest", async () => {

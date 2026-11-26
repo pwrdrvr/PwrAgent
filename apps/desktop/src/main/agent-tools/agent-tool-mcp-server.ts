@@ -117,7 +117,7 @@ const agentToolMcpLog = getMainLogger("pwragent:agent-tool-mcp");
 export type AgentToolMcpClientContext = {
   backend: AppServerBackendKind;
   threadId?: string;
-  memoryOnly?: boolean;
+  stdioFallback?: boolean;
   managedReview?: boolean;
   observeJobMonitorCatalog?: boolean;
 };
@@ -327,7 +327,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const token = randomBytes(32).toString("base64url");
     const normalizedContext = {
       backend: context.backend,
-      ...(context.memoryOnly ? { memoryOnly: true } : {}),
+      ...(context.stdioFallback ? { stdioFallback: true } : {}),
       ...(context.managedReview ? { managedReview: true } : {}),
       ...(normalizedThreadId ? { threadId: normalizedThreadId } : {}),
     };
@@ -450,7 +450,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     ] = await Promise.all([mcpServerSdk.load(), mcpServerStreamableHttp.load(), mcpTypes.load(), skillRequestSchemas.load()]);
     const body = await readMcpRequestBody(params.request);
     const messages = Array.isArray(body) ? body : [body];
-    const streamed = !params.clientContext.memoryOnly && messages.some((message) =>
+    const streamed = !params.clientContext.stdioFallback && messages.some((message) =>
       !!message && typeof message === "object" && (message as { method?: unknown }).method === "tools/call");
     const initializing = messages.some(isInitializeRequest);
     if (initializing && sessionNonce) {
@@ -644,8 +644,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         "PwrAgent MCP tools are callable only during an active turn on the registered thread.",
       );
     }
-    if (clientContext.memoryOnly && request.params.name !== "agent_memory") {
-      return forbiddenMcpResponse("This client may call Agent memory only.");
+    if (!allowsStdioFallbackTool(clientContext, request.params.name)) {
+      return forbiddenMcpResponse("This ACP stdio client may call agent_memory and list_reviews only.");
     }
     let { name, arguments: args } = request.params;
     if (usesAntigravityCatalog(clientContext) && (name === PWRAGENT_TOOL_SEARCH || name === CALL_PWRAGENT_TOOL)) {
@@ -754,7 +754,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
 
   /** One tool in the full allowed catalog, without checking the others. */
   private async resolveMcpTool(context: AgentToolMcpClientContext, name: string): Promise<AgentMcpTool | undefined> {
-    if (context.memoryOnly && name !== "agent_memory") return undefined;
+    if (!allowsStdioFallbackTool(context, name)) return undefined;
     const matches = this.options.resolveCatalogs(context)
       .flatMap((catalog) => catalog.router.buildMcpTools())
       .filter((tool) => tool.name === name);
@@ -767,7 +767,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     const toolsByName = new Map<string, AgentMcpTool>();
     for (const catalog of this.options.resolveCatalogs(context)) {
       for (const tool of catalog.router.buildMcpTools()) {
-        if (context.memoryOnly && tool.name !== "agent_memory") continue;
+        if (!allowsStdioFallbackTool(context, tool.name)) continue;
         if (!await this.isToolAdvertised(tool.name, context)) continue;
         if (toolsByName.has(tool.name)) {
           throw new Error(`Duplicate PwrAgent MCP tool name: ${tool.name}`);
@@ -946,9 +946,13 @@ function unsupportedMcpTool(): AgentMcpToolCallResponse {
   }));
 }
 
+function allowsStdioFallbackTool(context: AgentToolMcpClientContext, name: string): boolean {
+  return !context.stdioFallback || name === "agent_memory" || name === "list_reviews";
+}
+
 function usesAntigravityCatalog(context: AgentToolMcpClientContext): boolean {
   return context.backend === "acp:antigravity"
-    && !context.memoryOnly
+    && !context.stdioFallback
     && !context.managedReview;
 }
 
@@ -964,7 +968,7 @@ function boundThreadKey(
   return JSON.stringify([
     context.backend,
     threadId,
-    context.memoryOnly === true,
+    context.stdioFallback === true,
     context.managedReview === true,
   ]);
 }

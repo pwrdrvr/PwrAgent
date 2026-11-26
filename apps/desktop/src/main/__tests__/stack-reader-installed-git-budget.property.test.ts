@@ -2,9 +2,10 @@ import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promis
 import os from "node:os";
 import path from "node:path";
 import fc from "fast-check";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared/contracts/navigation";
 import * as gitExecutable from "../app-server/git-executable";
+import { bundledGitDirectory, bundledGitExecutable, configureBundledGit } from "../bundled-git";
 import { gitSubprocessDiagnostics } from "../diagnostics/git-subprocess-diagnostics";
 import { StackReader, StackReadObservation } from "../stacks/stack-reader";
 import { isolateProcessGitEnvironment, runIsolatedGitSync } from "./helpers/isolated-git";
@@ -18,6 +19,14 @@ afterEach(() => {
 
 function git(cwd: string, ...args: string[]): string {
   return runIsolatedGitSync(cwd, args).trim();
+}
+
+function missingCheckoutError(cwd: string): Error {
+  return Object.assign(new Error("not found"), {
+    code: 128,
+    killed: false,
+    stderr: `fatal: cannot change to '${cwd}': No such file or directory\n`,
+  });
 }
 
 function initialize(cwd: string): string {
@@ -53,7 +62,200 @@ function row(cwd: string, id: string): NavigationThreadSummary {
   };
 }
 
+async function packagedGitFixture() {
+  const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-packaged-selection-")));
+  onTestFinished(async () => await rm(sandbox, { recursive: true, force: true }));
+  onTestFinished(isolateProcessGitEnvironment());
+  onTestFinished(() => { vi.unstubAllEnvs(); configureBundledGit(undefined); });
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:DYLD_|LD_|GIT_TEST_|GIT_IMPLICIT_WORK_TREE$)/i.test(key)) vi.stubEnv(key, undefined);
+  }
+  vi.stubEnv("HOME", sandbox);
+  vi.stubEnv("USERPROFILE", sandbox);
+  vi.stubEnv("XDG_CONFIG_HOME", sandbox);
+  configureBundledGit(path.dirname(bundledGitDirectory()));
+  return { sandbox, executable: bundledGitExecutable() };
+}
+
 describe("StackReader installed-Git and unavailable checkout budgets", () => {
+  it.skipIf(process.platform === "win32")("skips ordinary unrelated checkouts for explicitly selected packaged Git while matching the live Git projection", async () => {
+    const { sandbox, executable } = await packagedGitFixture();
+    const stacked = path.join(sandbox, "stacked");
+    const unrelated = path.join(sandbox, "unrelated");
+    const nested = path.join(unrelated, "nested");
+    const missing = path.join(sandbox, "missing");
+    for (const cwd of [stacked, unrelated]) {
+      await mkdir(cwd);
+      initialize(cwd);
+    }
+    await mkdir(nested);
+    await writeCatalog(stacked, "stacked");
+    const wrapper = path.join(sandbox, "git-wrapper");
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    await writeFile(wrapper, `#!/bin/sh\nexec ${quote(executable)} "$@"\n`, { mode: 0o700 });
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    onTestFinished(() => starts.mockRestore());
+    const layer = { ...row(stacked, "stacked"), gitBranch: "feat" };
+    const checkoutReads = () => starts.mock.calls.filter(([, [verb], purpose]) =>
+      verb === "rev-parse" && purpose === "stack-checkout").map(([cwd]) => cwd);
+
+    // Adding unrelated rows must preserve the Git-backed catalog and bindings.
+    // Only the package's own entry point may prune their ordinary checkouts.
+    await fc.assert(fc.asyncProperty(fc.shuffledSubarray([unrelated, nested], { minLength: 1 }), async (paths) => {
+      const rows = [layer, row(missing, "missing"), ...paths.map((cwd) => row(cwd, cwd))];
+      process.env.PWRAGENT_GIT_PATH = wrapper;
+      const oracle = await new StackReader().read(rows, []);
+      expect(oracle.stacks[0]?.layers[0]?.thread?.key).toContain("stacked");
+      starts.mockClear();
+      process.env.PWRAGENT_GIT_PATH = executable;
+      const actual = await new StackReader().read(rows, []);
+      expect(actual).toEqual(oracle);
+      expect(checkoutReads()).toContain(stacked);
+      expect(checkoutReads()).toContain(missing);
+      expect(checkoutReads().filter((cwd) => paths.includes(cwd))).toEqual([]);
+    }), { numRuns: 3, examples: [[[unrelated, nested]]] });
+
+    // A wrapper can discover the stack from a path with no catalog of its own.
+    await writeFile(wrapper, [
+      "#!/bin/sh",
+      `if [ "$1" = "-C" ] && [ "$2" = ${quote(unrelated)} ]; then shift 2; set -- -C ${quote(stacked)} "$@"; fi`,
+      `exec ${quote(executable)} "$@"`,
+      "",
+    ].join("\n"));
+    process.env.PWRAGENT_GIT_PATH = wrapper;
+    starts.mockClear();
+    const redirectedRow: NavigationThreadSummary = { ...row(unrelated, "redirected"), gitBranch: "feat" };
+    const redirected = await new StackReader().read([redirectedRow], []);
+    expect(redirected.stacks[0]?.layers[0]?.thread?.key).toContain("redirected");
+    expect(redirected.stacks[0]?.repository).toBe("github.com:fixture/stacked");
+    expect(checkoutReads()).toContain(unrelated);
+
+    process.env.PWRAGENT_GIT_PATH = executable;
+    vi.stubEnv("GIT_COMMON_DIR", path.join(stacked, ".git"));
+    starts.mockClear();
+    const overridden = await new StackReader().read([redirectedRow], []);
+    expect(overridden.stacks[0]?.repository).toBe("github.com:fixture/stacked");
+    expect(checkoutReads()).toContain(unrelated);
+    vi.stubEnv("GIT_COMMON_DIR", undefined);
+
+    const withAttachment: NavigationThreadSummary = { ...layer, prs: [{
+      number: 1, provider: "github.com", org: "fixture", repo: "stacked", state: "passing",
+      lifecycleState: "open", url: "https://github.com/fixture/stacked/pull/1", explicitlyAttached: true,
+      headRefName: "feat", linkedDirectoryPaths: [stacked],
+    }] };
+    const rows = [withAttachment, redirectedRow];
+    const validate = async (candidate: Pick<NavigationThreadSummary, "prs">) => candidate.prs ?? [];
+    process.env.PWRAGENT_GIT_PATH = wrapper;
+    const oracle = await new StackReader().read(rows, [], undefined, undefined, undefined, validate);
+    starts.mockClear();
+    process.env.PWRAGENT_GIT_PATH = executable;
+    const afterSelectionChange = await new StackReader().read(rows, [], undefined, undefined, undefined, async (candidate) => {
+      process.env.PWRAGENT_GIT_PATH = wrapper;
+      return await validate(candidate);
+    });
+    expect(afterSelectionChange).toEqual(oracle);
+    expect(checkoutReads()).toContain(unrelated);
+
+    process.env.PWRAGENT_GIT_PATH = executable;
+    const reader = new StackReader();
+    const unrelatedRows = [{ ...row(unrelated, "new-stack"), gitBranch: "feat" }];
+    expect((await reader.read(unrelatedRows, [])).stacks).toEqual([]);
+    await writeCatalog(unrelated, "unrelated");
+    expect((await reader.read(unrelatedRows, [])).stacks[0]?.repository).toBe("github.com:fixture/unrelated");
+  });
+
+  it.skipIf(process.platform === "win32")("admits a nested inferred stack only in the clone found by Git", async () => {
+    const { sandbox, executable } = await packagedGitFixture();
+    const outer = path.join(sandbox, "outer");
+    const inner = path.join(outer, "inner");
+    await mkdir(inner, { recursive: true });
+    initialize(outer);
+    initialize(inner);
+    git(inner, "branch", "lower");
+    git(inner, "branch", "upper");
+    const thread = (cwd: string, id: string, repo: string, number: number, head: string, base: string) => {
+      const pr: PrSummary = {
+        number, provider: "github.com", org: "fixture", repo, lifecycleState: "open", state: "passing",
+        headRefName: head, baseRefName: base, url: `https://github.com/fixture/${repo}/pull/${number}`,
+        linkedDirectoryPaths: [cwd],
+      };
+      return { ...row(cwd, id), prs: [pr] };
+    };
+    const rows = [
+      thread(inner, "lower", "inner", 1, "lower", "main"),
+      thread(inner, "upper", "inner", 2, "upper", "lower"),
+      thread(outer, "outer", "outer", 3, "outer-topic", "main"),
+    ];
+    const wrapper = path.join(sandbox, "git-wrapper");
+    const quoted = "'" + executable.replaceAll("'", "'\\''") + "'";
+    await writeFile(wrapper, `#!/bin/sh\nexec ${quoted} "$@"\n`, { mode: 0o700 });
+    const read = async (command: string) => {
+      process.env.PWRAGENT_GIT_PATH = command;
+      const validated: string[] = [];
+      const projection = await new StackReader().read(rows, [], undefined, undefined, undefined, async (candidate) => {
+        validated.push(candidate.id);
+        return candidate.prs;
+      });
+      return { ...projection, validated: validated.sort() };
+    };
+
+    // Git resolves the nested repository's PR chain to one clone. The
+    // enclosing repository has an attachment but no stack of its own.
+    const live = await read(wrapper);
+    expect(live.stacks).toHaveLength(1);
+    expect(live.stacks[0]).toMatchObject({ repository: "github.com:fixture/inner", inferred: true });
+    expect(live.catalogs).toEqual([{ status: "missing" }]);
+    expect(live.validated).toEqual(["lower", "upper"]);
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    onTestFinished(() => starts.mockRestore());
+    expect(await read(executable)).toEqual(live);
+    expect(starts.mock.calls.filter(([, [verb], purpose]) => verb === "rev-parse" && purpose === "stack-checkout")
+      .map(([cwd]) => cwd)).toEqual([inner]);
+  });
+
+  it("revalidates attachment checkouts without repeating Git on unrelated repositories", async () => {
+    const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-witnesses-")));
+    restoreGit = isolateProcessGitEnvironment(sandbox);
+    const starts = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    try {
+      const stacked = path.join(sandbox, "stacked");
+      const secondary = path.join(sandbox, "secondary");
+      const unrelated = path.join(sandbox, "unrelated");
+      for (const cwd of [stacked, secondary, unrelated]) {
+        await mkdir(cwd);
+        initialize(cwd);
+      }
+      await writeCatalog(stacked, "stacked");
+      await writeCatalog(unrelated, "unrelated");
+      const layer = row(stacked, "layer");
+      layer.linkedDirectories.push(row(secondary, "other-link").linkedDirectories[0]!);
+      layer.prs = [{ number: 1, provider: "github.com", org: "fixture", repo: "stacked", state: "passing",
+        lifecycleState: "open", url: "https://github.com/fixture/stacked/pull/1", explicitlyAttached: true,
+        headRefName: "feat", linkedDirectoryPaths: [stacked] }];
+      layer.prs.push({ ...layer.prs[0]!, number: 2, url: "https://github.com/fixture/stacked/pull/2", linkedDirectoryPaths: undefined });
+      // Explicit Git with config overrides supplies the checkout oracle. There
+      // are no filesystem witnesses to substitute for its live observations.
+      process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
+      const validate = async (candidate: Pick<NavigationThreadSummary, "prs">) => candidate.prs ?? [];
+      const oracle = await new StackReader().read([layer], [], undefined, undefined, undefined, validate);
+      const other = row(unrelated, "unrelated");
+      const independent = await new StackReader().read([other], []);
+      starts.mockClear();
+      const actual = await new StackReader().read([layer, other], [], undefined, undefined, undefined, validate);
+      expect(actual.stacks).toEqual([...oracle.stacks, ...independent.stacks]);
+      expect(actual.catalogs).toEqual([...oracle.catalogs, ...independent.catalogs]);
+      expect(actual.stacks[0]?.layers[0]?.pullRequest?.number).toBe(1);
+      const checkoutReads = (cwd: string) => starts.mock.calls.filter(([directory, [verb], purpose]) =>
+        directory === cwd && verb === "rev-parse" && purpose === "stack-checkout").length;
+      expect(checkoutReads(stacked)).toBeGreaterThan(1);
+      expect(checkoutReads(secondary)).toBeGreaterThan(1);
+      expect(checkoutReads(unrelated)).toBe(1);
+    } finally {
+      starts.mockRestore();
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+
   it("drops an alias-backed attachment when selected Git rejects changed global config", async () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-installed-alias-")));
     restoreGit = isolateProcessGitEnvironment();
@@ -209,6 +411,8 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
     const sandbox = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-stack-ttl-budget-")));
     restoreGit = isolateProcessGitEnvironment();
     const start = vi.spyOn(gitSubprocessDiagnostics, "startGit");
+    const realRunGit = gitExecutable.runGitCommand;
+    const runSpy = vi.spyOn(gitExecutable, "runGitCommand");
     try {
       const tracked = path.join(sandbox, "tracked");
       await mkdir(tracked, { recursive: true });
@@ -222,8 +426,25 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       ];
 
       process.env.PWRAGENT_GIT_PATH = await gitExecutable.resolveGitExecutable();
-      const probedPaths = () => start.mock.calls.filter(([, args]) => args[0] === "rev-parse").map(([cwd]) => cwd);
+      const fixturePaths = new Set(rows.map((item) => item.linkedDirectories[0]!.path));
+      const observed = new Map<string, ReturnType<typeof realRunGit>>();
+      // Sample the real checkout once. The generated cases vary only the
+      // clock and revalidation budget, so they need the same Git answers.
+      runSpy.mockImplementation((cwd, args, options) => {
+        const answer = realRunGit(cwd, args, options);
+        if (cwd === tracked) observed.set(JSON.stringify(args), answer);
+        return answer;
+      });
       const oracle = await new StackReader().read([rows[0]!], []);
+      start.mockClear();
+      runSpy.mockImplementation(async (cwd, args, options) => {
+        const answer = cwd === tracked ? observed.get(JSON.stringify(args)) : undefined;
+        if (answer) return await answer;
+        if (cwd !== tracked && fixturePaths.has(cwd) && args[0] === "rev-parse") throw missingCheckoutError(cwd);
+        return await realRunGit(cwd, args, options);
+      });
+      const probedPaths = () => runSpy.mock.calls
+        .filter(([cwd, args]) => fixturePaths.has(cwd) && args[0] === "rev-parse").map(([cwd]) => cwd);
 
       await fc.assert(fc.asyncProperty(
         fc.integer({ min: 1, max: 4 }),
@@ -235,7 +456,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
           let now = 0;
           const reader = new StackReader(() => now, budget);
 
-          start.mockClear();
+          runSpy.mockClear();
           const cold = await reader.read(subset, []);
           expect(cold.stacks).toEqual(oracle.stacks);
           expect(probedPaths()).toHaveLength(subsetSize);
@@ -243,7 +464,7 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
           now += 31_000;
           const refreshedPaths = new Set<string>();
           for (let pass = 0; pass < Math.ceil(subsetSize / budget); pass++) {
-            start.mockClear();
+            runSpy.mockClear();
             const refreshed = await reader.read(subset, []);
             expect(refreshed.stacks).toEqual(oracle.stacks);
             const paths = probedPaths();
@@ -254,7 +475,9 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
           expect(refreshedPaths).toEqual(new Set(subset.map((item) => item.linkedDirectories[0]!.path)));
         },
       ), { numRuns: 4 });
+      expect(start.mock.calls.filter(([cwd]) => fixturePaths.has(cwd))).toEqual([]);
     } finally {
+      runSpy.mockRestore();
       start.mockRestore();
       await rm(sandbox, { recursive: true, force: true });
     }
@@ -311,23 +534,21 @@ describe("StackReader installed-Git and unavailable checkout budgets", () => {
       const count = 2_060;
       const dirs = Array.from({ length: count }, (_, index) =>
         path.join(sandbox, `deleted-${String(index).padStart(4, "0")}`));
+      const fixturePaths = new Set(dirs);
       const rows = dirs.map((dir, index) => row(dir, `deleted-${index}`));
       const preflight = dirs[0]!;
       let initialized = false;
       const runSpy = vi.spyOn(gitExecutable, "runGitCommand").mockImplementation(async (cwd, args, options) => {
-        if (args[0] === "rev-parse" && cwd.startsWith(sandbox) && !(initialized && cwd === preflight)) {
-          throw Object.assign(new Error("not found"), {
-            code: 128,
-            killed: false,
-            stderr: `fatal: cannot change to '${cwd}': No such file or directory\n`,
-          });
+        if (args[0] === "rev-parse" && fixturePaths.has(cwd) && !(initialized && cwd === preflight)) {
+          throw missingCheckoutError(cwd);
         }
         return await realRunGit(cwd, args, options);
       });
       try {
         let now = 0;
         const reader = new StackReader(() => now);
-        const revParseCalls = () => runSpy.mock.calls.filter(([, args]) => args[0] === "rev-parse").length;
+        const revParseCalls = () => runSpy.mock.calls
+          .filter(([cwd, args]) => fixturePaths.has(cwd) && args[0] === "rev-parse").length;
 
         await reader.read(rows, []);
         expect(revParseCalls()).toBe(count);

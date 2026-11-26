@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildManagedReviewContextInput,
-  buildManagedReviewPrompt,
-} from "../app-server/managed-review";
+import { buildManagedReviewPrompt } from "../app-server/managed-review";
 import {
   formatReviewOutputText,
   parseReviewOutputText,
@@ -10,15 +7,6 @@ import {
 import grokReviewSession from "./fixtures/grok-managed-review-session.json";
 
 describe("managed review", () => {
-  it("returns only the context envelope and intended review output", () => {
-    expect(buildManagedReviewContextInput(["  Review result.  "])).toBe(
-      "[PwrAgent review sub-agent results — context for this turn]\n\nReview result.\n\n[End PwrAgent review sub-agent results]",
-    );
-    expect(buildManagedReviewContextInput([" First result. ", " Second result. "])).toBe(
-      "[PwrAgent review sub-agent results — context for this turn]\n\nReview 1:\nFirst result.\n\nReview 2:\nSecond result.\n\n[End PwrAgent review sub-agent results]",
-    );
-  });
-
   it.each([
     [
       { type: "uncommittedChanges" as const },
@@ -85,6 +73,14 @@ describe("managed review", () => {
     expect(prompt).not.toContain("list_review_candidates");
     expect(prompt).not.toContain("dispose_review_candidate");
     expect(prompt).not.toContain("submit_review_output");
+
+    if (target.type === "pullRequest") {
+      const filePrompt = buildManagedReviewPrompt(target, { pinnedPatchFile: "pwragent-eval-review.patch" });
+      expect(filePrompt).toContain(target.snapshot.mergeBaseCommit);
+      expect(filePrompt).toContain(target.snapshot.headCommit);
+      expect(filePrompt).toContain('Open "pwragent-eval-review.patch" in the review workspace with a file-reading tool');
+      expect(filePrompt).not.toContain(expected);
+    }
   });
 
   it("builds the two-pass candidate ledger prompt when candidateLedger is enabled", () => {
@@ -98,6 +94,10 @@ describe("managed review", () => {
     expect(prompt).toContain("list_review_candidates");
     expect(prompt).toContain("dispose_review_candidate");
     expect(prompt).toContain("submit_review_output");
+    expect(prompt).toContain('"use_ledger":true');
+    expect(prompt).toContain("Refine a kept candidate by ID");
+    expect(prompt).toContain("Submit even when the ledger is empty or every candidate was dropped.");
+    expect(prompt).toContain("for verified findings you could not record");
     expect(prompt).toMatch(/pass 1/i);
     expect(prompt).toMatch(/pass 2/i);
     expect(prompt).toMatch(/do not drop a concrete P2 or P3 defect/i);

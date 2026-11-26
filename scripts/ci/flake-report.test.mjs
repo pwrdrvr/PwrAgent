@@ -74,6 +74,20 @@ test("platforms the classifier skipped are not reported as missing", () => {
     "unit-windows-main-lane-1-sample-1",
     "unit-windows-main-lane-2-sample-1",
   ]);
+  // A narrowed spec-only PR also runs one Windows E2E lane without expecting
+  // lanes 2–4 or marking e2e-windows as notRun.
+  const narrowedWithWindowsE2e = aggregateSlices({
+    slices: [
+      createSlice({ kind: "unit", platform: "linux", lane: 1, sample: 1, first: null, retries: [] }),
+      createSlice({ kind: "unit", platform: "windows-main", lane: 1, sample: 1, first: null, retries: [] }),
+      createSlice({ kind: "e2e", platform: "linux", lane: 1, sample: 1, first: null, retries: [] }),
+      createSlice({ kind: "e2e", platform: "windows", lane: 1, sample: 1, first: null, retries: [] }),
+    ],
+    notRun: ["unit-macos", "e2e-macos", "e2e-linux-a11y"],
+    lanes: { "unit-linux": [1], "unit-windows-main": [1], "unit-windows-renderer": [], "e2e-linux": [1], "e2e-windows": [1] },
+  });
+  assert.equal(narrowedWithWindowsE2e.expectedSlices, 4);
+  assert.deepEqual(narrowedWithWindowsE2e.missingSlices, []);
   assert.deepEqual(parseNotRun(""), []);
   assert.deepEqual(parseNotRun(undefined), []);
   assert.deepEqual(parseNotRun("unit-macos,e2e-macos,e2e-windows"), ["unit-macos", "e2e-macos", "e2e-windows"]);
@@ -99,7 +113,7 @@ test("retry inventory, PR unit plans, and full test shards match their workflow 
     if (job === "desktop-e2e-macos") {
       assert.equal(lanes.length, 5, "macOS Desktop E2E needs five lanes for deadline headroom");
       assert.ok(section.includes(`--shard=\${{ matrix.lane }}/${lanes.length}`));
-      const weights = section.match(/PWTEST_SHARD_WEIGHTS: "([\d:]+)"/)?.[1].split(":");
+      const weights = section.match(/PWTEST_SHARD_WEIGHTS="([\d:]+)"/)?.[1].split(":");
       assert.equal(weights?.length, lanes.length, "macOS E2E weights must cover the full matrix");
     }
     assert.deepEqual(expectedSlices().filter((s) => s.kind === kind && s.platform === platform).map((s) => s.lane), lanes,
@@ -107,7 +121,8 @@ test("retry inventory, PR unit plans, and full test shards match their workflow 
     if (kind === "unit" && Object.hasOwn(unitGroups, platform)) {
       assert.deepEqual(Array.from({ length: unitGroups[platform].lanes }, (_, index) => index + 1), lanes,
         `PR test planner lanes for ${job}`);
-      assert.ok(section.includes(`--shard={0}/${lanes.length} `), `full test shard count for ${job}`);
+      const shard = platform === "macos" ? "${{ matrix.lane }}" : "{0}";
+      assert.ok(section.includes(`--shard=${shard}/${lanes.length} `), `full test shard count for ${job}`);
     }
     assert.match(section, new RegExp(`kind: ${kind}\\n\\s+platform: ${platform}\\n`));
     assert.match(section, /uses: \.\/\.github\/actions\/flake-slice/);

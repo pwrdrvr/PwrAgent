@@ -6,6 +6,7 @@ const registry = vi.hoisted(() => ({
   startCodexProtocolCapture: vi.fn(),
   stopCodexProtocolCapture: vi.fn(),
 }));
+const isLocalMainWindowWebContents = vi.hoisted(() => vi.fn());
 
 vi.mock("electron", () => ({
   ipcMain: {
@@ -31,6 +32,7 @@ vi.mock("../profile", () => ({
 }));
 
 vi.mock("../shell/window-channels", () => ({
+  isLocalMainWindowWebContents,
   subscribersForChannel: vi.fn(() => []),
 }));
 
@@ -43,6 +45,43 @@ describe("diagnostics ipc", () => {
   afterEach(async () => {
     const { disposeDiagnosticsIpcHandlers } = await import("../shell/ipc/diagnostics");
     disposeDiagnosticsIpcHandlers();
+  });
+
+  it("routes Rearm only from a local main window with a matching capture request", async () => {
+    const { registerDiagnosticsIpcHandlers } = await import("../shell/ipc/diagnostics");
+    const { HOT_CPU_PROFILE_REARM_CHANNEL } = await import("../../shared/ipc");
+    const rearm = vi.fn(() => true);
+    registerDiagnosticsIpcHandlers(rearm);
+    const invoke = handlers.get(HOT_CPU_PROFILE_REARM_CHANNEL)!;
+    const request = { sessionDirectoryName: "hot-cpu-example", profileFilename: "main-hot-0005.cpuprofile" };
+    const sender = { id: 1 };
+    isLocalMainWindowWebContents.mockImplementation((candidate) => candidate === sender);
+
+    expect(invoke({ sender: { id: 2 } }, request)).toBe(false);
+    expect(invoke({ sender }, { ...request, profileFilename: 5 })).toBe(false);
+    expect(invoke({ sender }, request)).toBe(true);
+    expect(rearm).toHaveBeenCalledExactlyOnceWith(request.sessionDirectoryName, request.profileFilename);
+  });
+
+  it("returns the current rearmable captures only to a local main window", async () => {
+    const { registerDiagnosticsIpcHandlers } = await import("../shell/ipc/diagnostics");
+    const { HOT_CPU_PROFILE_REARMABLE_CHANNEL } = await import("../../shared/ipc");
+    const captures = [{
+      sessionDirectoryName: "hot-cpu-example",
+      profileFilename: "main-hot-0005.cpuprofile",
+      capturedAt: "2026-11-25T18:00:00.000Z",
+      captureLimit: 5,
+      target: "main" as const,
+    }];
+    const list = vi.fn(async () => captures);
+    registerDiagnosticsIpcHandlers(undefined, list);
+    const invoke = handlers.get(HOT_CPU_PROFILE_REARMABLE_CHANNEL)!;
+    const sender = { id: 1 };
+    isLocalMainWindowWebContents.mockImplementation((candidate) => candidate === sender);
+
+    expect(invoke({ sender: { id: 2 } })).toEqual([]);
+    expect(list).not.toHaveBeenCalled();
+    await expect(invoke({ sender })).resolves.toEqual(captures);
   });
 
   it("routes Codex protocol capture status, start, and stop", async () => {

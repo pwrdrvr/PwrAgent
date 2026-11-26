@@ -7,11 +7,7 @@ import type {
   AcpBackendId,
   AppServerReviewTarget,
 } from "@pwragent/shared/contracts/normalized-app-server";
-import {
-  MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
-  reviewTargetInstructions,
-  MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
-} from "../../shared/review-command";
+import { reviewTargetInstructions } from "../../shared/review-command";
 import {
   REVIEW_OUTPUT_INSTRUCTIONS,
   REVIEW_OUTPUT_TOOL_INSTRUCTIONS,
@@ -38,6 +34,7 @@ export type BuildManagedReviewPromptOptions = {
    * `dispose_review_candidate`, and `submit_review_output` attached.
    */
   candidateLedger?: boolean;
+  pinnedPatchFile?: string;
 };
 
 export function buildManagedReviewPrompt(
@@ -45,9 +42,12 @@ export function buildManagedReviewPrompt(
   options?: BuildManagedReviewPromptOptions,
 ): string {
   const useLedgerTools = options?.candidateLedger === true;
+  const instructions = options?.pinnedPatchFile && target.type === "pullRequest" && target.snapshot
+    ? `Review the pinned change from ${target.snapshot.mergeBaseCommit} to ${target.snapshot.headCommit}. Open ${JSON.stringify(options.pinnedPatchFile)} in the review workspace with a file-reading tool and use it as the complete diff.`
+    : reviewTargetInstructions(target);
   return [
     "Perform a code review. Do not modify files or mutate git state. Do not run commands that require elevated permissions.",
-    reviewTargetInstructions(target),
+    instructions,
     useLedgerTools
       ? MANAGED_REVIEW_LEDGER_GUIDANCE
       : MANAGED_REVIEW_STATIC_GUIDANCE,
@@ -114,15 +114,4 @@ export function managedReviewAcpRuntime(params: {
     ...(!params.requireCallerMode ? { currentModeId: "auto" } : {}),
     updatedAt: params.now ?? Date.now(),
   };
-}
-
-export function buildManagedReviewContextInput(outputs: string[]): string {
-  return [
-    MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
-    ...outputs.map((output, index) => [
-      outputs.length > 1 ? `Review ${index + 1}:` : undefined,
-      output.trim(),
-    ].filter((line): line is string => Boolean(line)).join("\n")),
-    MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
-  ].join("\n\n");
 }

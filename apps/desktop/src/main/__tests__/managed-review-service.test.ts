@@ -222,6 +222,7 @@ describe("ManagedReviewService", () => {
       const submit = vi.spyOn(reviews, "submitReview").mockReturnValue(submitted);
       const cancel = vi.spyOn(reviews, "cancelPendingReview").mockReturnValue(true);
       const attribution = { delegatedBy: { backend: "codex", threadId: "delegator" } } as never;
+      const antigravityAccess = { mode: "plan", fullAccess: false } as const;
 
       // A caller snapshot is never trusted unless the owner says so.
       expect(registry.prepareReviewRequest(REVIEW_REQUEST)).toBe(prepared);
@@ -230,9 +231,9 @@ describe("ManagedReviewService", () => {
       expect(prepare).toHaveBeenLastCalledWith(REVIEW_REQUEST, true);
 
       expect(registry.startReview(REVIEW_REQUEST)).toBe(started);
-      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, false, undefined);
-      expect(registry.startReview(REVIEW_REQUEST, true, attribution)).toBe(started);
-      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, true, attribution);
+      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, false, undefined, undefined);
+      expect(registry.startReview(REVIEW_REQUEST, true, attribution, antigravityAccess)).toBe(started);
+      expect(start).toHaveBeenLastCalledWith(REVIEW_REQUEST, true, attribution, antigravityAccess);
 
       const keyed = { ...REVIEW_REQUEST, idempotencyKey: "key-1" };
       expect(registry.submitReview(keyed)).toBe(submitted);
@@ -536,5 +537,153 @@ describe("ManagedReviewService pending review starts", () => {
       expect(startReview).toHaveBeenCalledTimes(expectedStarts);
       expect(submitTurn).toHaveBeenCalledTimes(expectedNotices);
     }), { numRuns: 200 });
+  });
+
+  it("correlates inner inline Codex review events with the outer review rootTurnId", async () => {
+    const harness = createReviewHarness();
+    await harness.service.startReview(REVIEW_REQUEST);
+    harness.activity.setReviewInterrupt(
+      { threadId: THREAD, turnId: REVIEW_TURN },
+      "inner-review-turn",
+    );
+
+    const startedEvent: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: THREAD,
+          turnId: "inner-review-turn",
+          turn: { id: "inner-review-turn", status: "inProgress" },
+        },
+      },
+    };
+    const decoratedStarted = harness.service.withReviewRuntimeMetadata(startedEvent);
+    expect(decoratedStarted.notification).toMatchObject({
+      method: "turn/started",
+      params: {
+        threadId: THREAD,
+        turnId: "inner-review-turn",
+        turn: { id: "inner-review-turn", rootTurnId: REVIEW_TURN },
+      },
+    });
+
+    const promptEvent: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: THREAD,
+          turnId: "inner-review-turn",
+          item: { id: "prompt-1", type: "userMessage", text: "Review the current code changes and provide prioritized findings." },
+        },
+      },
+    };
+    const decoratedPrompt = harness.service.withReviewRuntimeMetadata(promptEvent);
+    expect(decoratedPrompt.notification).toMatchObject({
+      method: "item/completed",
+      params: {
+        threadId: THREAD,
+        turnId: "inner-review-turn",
+        rootTurnId: REVIEW_TURN,
+      },
+    });
+
+    const unrelatedPrompt: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: THREAD,
+          turnId: "ordinary-turn",
+          item: { id: "prompt-2", type: "userMessage", text: "Hello" },
+        },
+      },
+    };
+    expect(harness.service.withReviewRuntimeMetadata(unrelatedPrompt)).toBe(unrelatedPrompt);
+
+    const completedEvent: AgentEvent = {
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: THREAD,
+          turnId: "inner-review-turn",
+          turn: { id: "inner-review-turn", rootTurnId: null, status: "interrupted", output: [] },
+        },
+      },
+    };
+    const decoratedCompleted = harness.service.withReviewRuntimeMetadata(completedEvent);
+    expect(decoratedCompleted.notification).toMatchObject({
+      method: "turn/completed",
+      params: {
+        threadId: THREAD,
+        turnId: "inner-review-turn",
+        turn: { id: "inner-review-turn", rootTurnId: REVIEW_TURN },
+      },
+    });
+  });
+
+  it("propagates inner->outer inline Codex review correlation when inner turn starts before review/start resolves and on inner terminal", async () => {
+    const harness = createReviewHarness({
+      onStep: (step) => {
+        if (step === "startReview") {
+          harness.activity.registerTurn({
+            backend: "codex",
+            threadId: THREAD,
+            turnId: "inner-early-turn",
+          });
+        }
+      },
+    });
+
+    await harness.service.startReview(REVIEW_REQUEST);
+
+    expect(harness.events).toContainEqual({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: THREAD,
+          correlatedTurn: {
+            turnId: "inner-early-turn",
+            rootTurnId: REVIEW_TURN,
+          },
+        },
+      },
+    });
+
+    const delivery = {
+      event: {
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: THREAD,
+            turnId: "inner-early-turn",
+            turn: {
+              id: "inner-early-turn",
+              status: "interrupted",
+              output: [],
+            },
+          },
+        },
+      } as AgentEvent,
+    };
+    await harness.service.turnEventObservers().terminal.onTurnTerminal?.(delivery as never);
+    expect(delivery.event).toMatchObject({
+      relatedReviewTurnId: REVIEW_TURN,
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: THREAD,
+          turnId: "inner-early-turn",
+          turn: {
+            id: "inner-early-turn",
+            rootTurnId: REVIEW_TURN,
+          },
+        },
+      },
+    });
   });
 });

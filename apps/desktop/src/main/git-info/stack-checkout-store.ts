@@ -45,8 +45,8 @@ export function createStackCheckoutHints(demand: PrMetadataDemand, purpose: "rea
   const selectsPackagedGit = () => configuredGit !== undefined && isPackagedBundledGit(configuredGit)
     && gitCommandPreference(process.env) === configuredGit && !hasGitDiscoveryOverrides()
     && !Object.keys(process.env).some((key) => /^(?:DYLD_|LD_|GIT_TEST_)/.test(key));
-  const usePackagedRecoveryHints = purpose === "recovery" && process.platform !== "win32"
-    && !discoveryOverrides && selectsPackagedGit();
+  const usePackagedDiscoveryHints = process.platform !== "win32" && selectsPackagedGit();
+  const usePackagedRecoveryHints = purpose === "recovery" && usePackagedDiscoveryHints;
   // A selected executable can be a wrapper. Its Git result is required on
   // the first read and retained only while the environment and disk agree.
   const installedGitVersion = configuredGit && !discoveryOverrides && !Object.keys(process.env).some((key) =>
@@ -60,7 +60,7 @@ export function createStackCheckoutHints(demand: PrMetadataDemand, purpose: "rea
   function possiblyLossyPath(value: string): boolean {
     // Git reads POSIX pointer paths as bytes. A replacement character can
     // represent an invalid UTF-8 byte sequence in a different path.
-    return usePackagedRecoveryHints && value.includes("\uFFFD");
+    return usePackagedDiscoveryHints && value.includes("\uFFFD");
   }
 
   async function probe<T>(read: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -162,16 +162,24 @@ export function createStackCheckoutHints(demand: PrMetadataDemand, purpose: "rea
     return observed;
   }
 
+  function gitEnvironmentVersion(): string | undefined {
+    // Nonstandard discovery or runtime settings belong to Git. Do not
+    // transfer confirmed checkout or clone evidence across these environments.
+    const env = process.env;
+    if ((requiresGitDiscovery && !installedGitVersion) || hasRelativeConfigRoot(env)
+      || gitCommandPreference(env) !== configuredGit || hasGitDiscoveryOverrides() || Object.keys(env).some((key) =>
+      /^GIT_(?:CONFIG(?:_|$)|TEST_|NAMESPACE$|OBJECT_DIRECTORY$)/i.test(key))) return undefined;
+    return JSON.stringify([getSelectedManagedGit(), installedGitVersion, env.HOME, env.USERPROFILE, env.XDG_CONFIG_HOME, env.SUDO_UID]);
+  }
+
   return {
     requiresGitDiscovery,
     installedGitVersion,
+    gitEnvironmentVersion,
+    packagedDiscoveryHintVersion: () => usePackagedDiscoveryHints && selectsPackagedGit() ? gitEnvironmentVersion() : undefined,
     async checkoutIdentity(cwd: string) {
-      // Nonstandard discovery or runtime settings belong to Git. Do not
-      // transfer a confirmed inventory checkout across these environments.
       const env = process.env;
-      if ((requiresGitDiscovery && !installedGitVersion) || hasRelativeConfigRoot(env)
-        || gitCommandPreference(env) !== configuredGit || hasGitDiscoveryOverrides() || Object.keys(env).some((key) =>
-        /^GIT_(?:CONFIG(?:_|$)|TEST_|NAMESPACE$|OBJECT_DIRECTORY$)/i.test(key))) return undefined;
+      if (!gitEnvironmentVersion()) return undefined;
       const runtime = getSelectedManagedGit();
       return await runPrMetadataFileProbe(async (signal) => {
         const observed = await observeInventoryCheckout(cwd, undefined, signal);

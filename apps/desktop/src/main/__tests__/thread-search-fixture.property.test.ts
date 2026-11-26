@@ -9,7 +9,7 @@ import { ThreadSearchStore } from "../storage/thread-search-store";
 import { seedSearchThreads } from "./helpers/thread-search-fixture";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
 
-it("compiles fixture SQL once while preserving the uncached store's documents, FTS and ranking", () => {
+it("compiles fixture SQL once while preserving the store's documents, FTS and ranking", () => {
   const baseline = openInMemoryStateDb();
   const fixture = openInMemoryStateDb();
   const now = vi.spyOn(Date, "now").mockReturnValue(100);
@@ -33,17 +33,25 @@ it("compiles fixture SQL once while preserving the uncached store's documents, F
         linkedDirectories: row.directory ? [{ id: `dir-${i}`, label: `Directory ${i}`,
           path: `/fixture/${i}`, worktreePath: `/fixture/worktree/${i}`, kind: "local" }] : [],
       }));
-      const originalStore = new ThreadSearchStore(baseline);
       // Initial inserts, unchanged rows and replacements must all agree with
       // the production store. The unchanged batch must still make no writes.
-      for (const batch of [threads, threads, threads.map((thread) => ({
-        ...thread, title: `Revised ${thread.title}`,
-      }))]) {
+      const batches = [
+        { batch: threads, writes: true },
+        { batch: threads, writes: false },
+        { batch: threads.map((thread) => ({ ...thread, title: `Revised ${thread.title}` })), writes: true },
+      ];
+      for (const { batch, writes } of batches) {
+        // The fixture creates a store per batch. Use the same lifetime so
+        // both probes observe the first preparation of the verifier.
+        const originalStore = new ThreadSearchStore(baseline);
         const oldSources = preparations(baseline, () => originalStore.upsertThreads(batch));
         const sources = preparations(fixture, () => seedSearchThreads(fixture, batch));
-        // Negative control: the exact pre-fix setup recompiles SQL per row,
-        // violating this same compile-once property on every generated input.
-        expect(oldSources.length).toBeGreaterThan(new Set(oldSources).size);
+        if (writes) {
+          // The normal write path still prepares statements per changed row.
+          expect(oldSources.length).toBeGreaterThan(new Set(oldSources).size);
+        } else {
+          expect(oldSources).toHaveLength(1);
+        }
         expect(sources.length).toBe(new Set(sources).size);
         expect(new Set(sources)).toEqual(new Set(oldSources));
         totals.baseline += oldSources.length;

@@ -36,13 +36,15 @@ const REVIEW_OUTPUT_RUBRIC_LINES = [
   // copy through, and a literal zero renders as "0% confidence" beside a
   // correct verdict.
   "overall_confidence_score is how confident you are, from 0 to 1, that overall_correctness is the right verdict. It is not a quality score for the patch and not a merge recommendation. Omit the field entirely if you cannot distinguish.",
-  "Each finding must contain title, body, confidence_score (0 to 1, reflecting certainty that the issue is real and verified in the code), priority (integer 0-3), and code_location with absolute_file_path plus line_range.start/end. Put the numeric priority in the priority field rather than repeating [P0]-[P3] in title.",
   "Calibrate priority by impact:",
   "- 0 (P0): Critical or release-blocking defect (severe breakage, crash, data loss/corruption, or security vulnerability). Must fix before merge.",
   "- 1 (P1): Urgent, high-impact bug, broken contract, or major regression likely hit in normal usage. Should fix before merge.",
   "- 2 (P2): Moderate-impact issue worth fixing (edge-case or lifecycle bug, violated repository rule, or a non-falsifying/missing regression test that leaves the core fix unprotected).",
   "- 3 (P3): Low-impact, narrow-scope defect with a specific worthwhile fix (for example, inaccurate telemetry/metric semantics, misleading diagnostics, or minor contract roughness).",
 ];
+
+const EXPLICIT_REVIEW_FINDING_FIELDS =
+  "Each explicit finding must contain title, body, confidence_score (0 to 1, reflecting certainty that the issue is real and verified in the code), priority (integer 0-3), and code_location with absolute_file_path plus line_range.start/end. Put the numeric priority in the priority field and leave the [P0]-[P3] tag out of the title.";
 
 /**
  * The structured review contract a PwrAgent Sub Agent child answers in when no
@@ -52,6 +54,7 @@ const REVIEW_OUTPUT_RUBRIC_LINES = [
 export const REVIEW_OUTPUT_INSTRUCTIONS = [
   "Return only one JSON object with this exact top-level shape:",
   '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.85}',
+  EXPLICIT_REVIEW_FINDING_FIELDS,
   ...REVIEW_OUTPUT_RUBRIC_LINES,
   "Do not wrap the JSON in Markdown fences and do not include prose outside it.",
 ].join("\n");
@@ -63,8 +66,11 @@ export const REVIEW_OUTPUT_INSTRUCTIONS = [
  * the model to hand-escape long Markdown prose in free text.
  */
 export const REVIEW_OUTPUT_TOOL_INSTRUCTIONS = [
-  "Submit your final review by calling the `submit_review_output` tool with this top-level shape:",
-  '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.85}',
+  "After triaging every recorded candidate, call `submit_review_output` once with `use_ledger: true`, the verdict, and a short explanation. Example for a review with zero kept or overflow findings:",
+  '{"use_ledger":true,"overall_correctness":"patch is correct","overall_explanation":"No actionable defects found."}',
+  "PwrAgent includes every kept candidate using its current title, body, and location. Submit even when the ledger is empty or every candidate was dropped.",
+  "Only include a `findings` array alongside `use_ledger: true` for verified findings you could not record, such as when the ledger was full. Include each finding once. To submit a fully explicit review, omit `use_ledger` and send the complete `findings` array.",
+  EXPLICIT_REVIEW_FINDING_FIELDS,
   ...REVIEW_OUTPUT_RUBRIC_LINES,
   "After `submit_review_output` succeeds, end your turn with a brief one-sentence confirmation rather than repeating the JSON in plain text.",
 ].join("\n");

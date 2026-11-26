@@ -1810,7 +1810,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       titleSource: "fallback",
       cwd: "/repo/worktree",
       createdAt: 1000,
@@ -1884,7 +1884,7 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
-  it("runs Kimi review in a hidden child and injects its output into the next parent turn", async () => {
+  it("keeps a managed review on its own card and out of the next ACP prompt and user message", async () => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const parentThreadId = "kimi-parent";
     const parentRuntime: BackendAcpSessionRuntimeState = {
@@ -1896,7 +1896,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       titleSource: "fallback",
       cwd: "/repo/worktree",
       createdAt: 1000,
@@ -1986,9 +1986,15 @@ describe("DesktopBackendRegistry", () => {
       backend: acpBackendId,
       threadId: parentThreadId,
     });
-    expect(completedOverlay?.pendingManagedReviewContextEntryIds).toEqual([
-      `managed-review:${response.turnId}:result`,
-    ]);
+    const resultEntry = completedOverlay?.managedReviewEntries?.find((entry) =>
+      entry.id === `managed-review:${response.turnId}:result`,
+    );
+    expect(resultEntry?.output?.overall_explanation).toBe("No blocking findings.");
+    if (!resultEntry) throw new Error("Managed review did not publish a result.");
+    // Old profiles can still have a pending context marker when they upgrade.
+    await overlayStore.upsertManagedReviewEntry({
+      backend: acpBackendId, threadId: parentThreadId, entry: resultEntry, pendingContext: true,
+    });
     await registry.close();
 
     const followupStartPrompt = vi.fn(
@@ -2015,15 +2021,29 @@ describe("DesktopBackendRegistry", () => {
       "scheduleThreadTitleGeneration",
     );
 
+    const events: AgentEvent[] = [];
+    const unsubscribe = followup.registry.onEvent((event) => { events.push(event); });
+    onTestFinished(unsubscribe);
     const nextTurn = await followup.registry.startTurn({
       backend: acpBackendId,
       threadId: parentThreadId,
       input: [{ type: "text", text: "Continue after review" }],
     });
     const nextPrompt = followupStartPrompt.mock.calls.at(-1)?.[0].prompt;
-    expect(nextPrompt).toContain("PwrAgent review sub-agent results");
-    expect(nextPrompt).toContain(reviewOutput);
-    expect(nextPrompt).toContain("Continue after review");
+    expect(nextPrompt).toBe("Continue after review");
+    expect(completedOverlay?.pendingManagedReviewContextEntryIds).toBeUndefined();
+    await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+      notification: expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          threadId: parentThreadId,
+          turnId: nextTurn.turnId,
+          item: expect.objectContaining({
+            id: `user:${nextTurn.turnId}`, type: "userMessage", text: "Continue after review",
+          }),
+        }),
+      }),
+    })));
     expect(scheduleTitleGeneration).toHaveBeenCalledWith({
       backend: acpBackendId,
       threadId: parentThreadId,
@@ -2074,7 +2094,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo/worktree",
       createdAt: 1000,
       updatedAt: 1000,
@@ -2138,7 +2158,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo/worktree",
       createdAt: 1000,
       updatedAt: 1000,
@@ -2200,7 +2220,7 @@ describe("DesktopBackendRegistry", () => {
     const sessions: AcpSessionMetadata[] = [{
       backendId: acpBackendId,
       sessionId: parentThreadId,
-      title: "ACP session",
+      title: "Untitled thread",
       cwd: "/repo/worktree",
       createdAt: 1000,
       updatedAt: 1000,
@@ -3709,6 +3729,247 @@ describe("DesktopBackendRegistry", () => {
     } finally {
       await registry.close();
     }
+  });
+
+  async function prReviewStartFixture(persistence?: SqliteOverlayStore) {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "pwragent-pr-review-start-"));
+    onTestFinished(async () => { await rm(cwd, { recursive: true, force: true }); });
+    const url = "https://github.com/example/atlas/pull/42";
+    await git(cwd, ["init", "-b", "main"]);
+    await git(cwd, ["remote", "add", "origin", "https://github.com/example/atlas.git"]);
+    await git(cwd, ["commit", "--allow-empty", "-m", "Base"]);
+    const baseCommit = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+    await git(cwd, ["commit", "--allow-empty", "-m", "Head"]);
+    const headCommit = (await git(cwd, ["rev-parse", "HEAD"])).trim();
+    const pullRequest = { provider: "github.com", org: "example", repo: "atlas", number: 42, url,
+      headRefName: "feature", baseRefName: "main", state: "passing" as const };
+    const attachment = (threadId: string): ThreadOverlayState => ({
+      backend: "codex", threadId, executionMode: "default", extraLinkedDirectories: [], prs: [pullRequest],
+    });
+    const codexClient = new MockBackendClient({ initializeResult: { methods: ["thread/start", "turn/start"] } });
+    const overlayStore = createOverlayStoreMock({
+      overlays: { "codex:independent": attachment("independent"), "codex:offer-owner": attachment("offer-owner") },
+    });
+    if (persistence) {
+      overlayStore.getThreadSubAgent = (...args) => persistence.getThreadSubAgent(...args);
+      overlayStore.upsertThreadSubAgent = (...args) => persistence.upsertThreadSubAgent(...args);
+      overlayStore.upsertManagedReviewEntry = (...args) => persistence.upsertManagedReviewEntry(...args);
+    }
+    const registry = createDesktopBackendRegistry({ codexClient, overlayStore });
+    onTestFinished(async () => { await registry.close(); });
+    const request = {
+      backend: "codex" as const,
+      cwd,
+      runMode: "pwragent-sub-agent" as const,
+      target: { type: "pullRequest" as const, url,
+        snapshot: { pullRequest, headCommit, baseCommit, mergeBaseCommit: baseCommit, capturedAt: 1_000 } },
+    };
+
+    return { codexClient, registry, request, headCommit };
+  }
+
+  function reviewTerminal(
+    status: "cancelled" | "failed" | "completed",
+    child: { reviewThreadId: string; turnId: string },
+  ): AppServerNotification {
+    const terminal = { threadId: child.reviewThreadId, turnId: child.turnId };
+    const turn = { id: child.turnId };
+    switch (status) {
+      case "failed": return { method: "turn/failed", params: { ...terminal,
+        turn: { ...turn, status, error: { message: "Review failed" } },
+      } };
+      case "cancelled": return { method: "turn/cancelled", params: { ...terminal, turn: { ...turn, status } } };
+      case "completed": return { method: "turn/completed", params: { ...terminal,
+        turn: { ...turn, status, output: [{ type: "text", text: "Early reviewer output." }] },
+      } };
+    }
+  }
+
+  it.each(["cancelled", "failed"] as const)(
+    "refuses a stale PR review start until the accepted review is %s",
+    async (status) => {
+      const { registry, codexClient, request, headCommit } = await prReviewStartFixture();
+      const activeHeads: Array<string | undefined> = [];
+      const unsubscribe = registry.onLiveReviewChanged(() => {
+        activeHeads.push([...registry.reviewsInProgress()][0]?.context?.headCommit);
+      });
+      const original = await registry.startReview({ ...request, threadId: "independent" }, true);
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .rejects.toThrow("A review is already running for PR #42");
+      expect(codexClient.startTurnCallCount).toBe(1);
+
+      await codexClient.emit(reviewTerminal(status, original));
+      expect(activeHeads).toEqual([headCommit, undefined]);
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .resolves.toMatchObject({ status: "started" });
+      expect(codexClient.startTurnCallCount).toBe(2);
+      unsubscribe();
+    },
+  );
+
+  it.each(["acknowledges", "refuses"] as const)("permits only one overlapping provider dispatch when the first start %s", async (outcome) => {
+    const { registry, codexClient, request } = await prReviewStartFixture();
+    const dispatched = createDeferred<void>();
+    const acknowledgement = createDeferred<void>();
+    const start = codexClient.startTurn.bind(codexClient);
+    const provider = vi.spyOn(codexClient, "startTurn").mockImplementationOnce(async (params) => {
+      dispatched.resolve();
+      await acknowledgement.promise;
+      if (outcome === "refuses") throw new Error("Provider refused");
+      return await start(params);
+    });
+    const first = registry.startReview({ ...request, threadId: "independent" }, true);
+    const receipt = Promise.allSettled([first]);
+    try {
+      // First dispatch is live at the provider, but the owner has no accepted
+      // turn ID. The second thread must be refused before it calls the provider.
+      await dispatched.promise;
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .rejects.toThrow(/review is already starting for PR #42/i);
+      expect(provider).toHaveBeenCalledTimes(1);
+    } finally {
+      acknowledgement.resolve();
+      await receipt;
+    }
+
+    if (outcome === "refuses") {
+      await expect(first).rejects.toThrow("Provider refused");
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .resolves.toMatchObject({ status: "started" });
+    } else {
+      await first;
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .rejects.toThrow("A review is already running for PR #42");
+    }
+  });
+
+  it.each(["cancelled", "failed", "completed"] as const)("settles a managed review whose child is %s before its start acknowledgement", async (status) => {
+    vi.stubEnv(SQLITE_WRITE_METRICS_ENV, "1");
+    const temp = createTempStateDb("pwragent-early-managed-review-");
+    const db = StateDb.open(temp.dbPath);
+    onTestFinished(async () => {
+      db.close();
+      await removeTempStateDbDir(temp.tempDir);
+      vi.unstubAllEnvs();
+    });
+    const { registry, codexClient, request } = await prReviewStartFixture(new SqliteOverlayStore(db));
+    const events: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => { events.push(event); });
+    onTestFinished(unsubscribe);
+    const start = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementationOnce(async (params) => {
+      const response = await start(params);
+      await codexClient.emit(reviewTerminal(status, { reviewThreadId: response.threadId, turnId: response.turnId }));
+      return response;
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      const response = await registry.startReview({ ...request, threadId: "independent" }, true);
+      // A terminal delivered before the acknowledgement is still the final
+      // state. Repeated delivery must not republish it or restore the hold.
+      expect([...registry.reviewsInProgress()]).toEqual([]);
+      expect(registry.getActiveTurnForThread({ backend: "codex", threadId: response.reviewThreadId })).toBeUndefined();
+      await codexClient.emit(reviewTerminal(status, response));
+    });
+    expectSqliteWriteBudget({
+      scenario: `managed-review-early-${status}`,
+      note: "Early terminal uses the regular review storage writes, without a running sub-agent write. Duplicate terminal adds none.",
+      writes,
+    });
+    expect(events.filter(({ notification }) =>
+      notification.method === `turn/${status}`
+      && "threadId" in notification.params && notification.params.threadId === "independent"
+    )).toHaveLength(1);
+    if (status === "completed") {
+      expect(events.filter((event) => isCompletedItemType(event, "exitedReviewMode"))).toEqual([
+        expect.objectContaining({ notification: expect.objectContaining({
+          params: expect.objectContaining({ item: expect.objectContaining({ review: "Early reviewer output." }) }),
+        }) }),
+      ]);
+    } else {
+      await expect(registry.submitReview({ ...request, threadId: "offer-owner" }, true))
+        .resolves.toMatchObject({ status: "started" });
+    }
+  });
+
+  it("publishes submitted output when a managed child completes twice before its start acknowledgement", async () => {
+    const { registry, codexClient, request } = await prReviewStartFixture();
+    const output = { findings: [], overall_correctness: "patch is correct" as const, overall_explanation: "The structured review passed." };
+    const ledger = registryModules(registry).managedReviewService.candidateLedger;
+    const events: AgentEvent[] = [];
+    onTestFinished(registry.onEvent((event) => { events.push(event); }));
+
+    const start = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementationOnce(async (params) => {
+      const response = await start(params);
+      expect(ledger.submitOutput({ backend: "codex", ...response }, output).ok).toBe(true);
+      const terminal = reviewTerminal("completed", { reviewThreadId: response.threadId, turnId: response.turnId });
+      await codexClient.emit(terminal);
+      await codexClient.emit(terminal);
+      return response;
+    });
+
+    await registry.startReview({ ...request, threadId: "independent" }, true);
+    expect([...registry.reviewsInProgress()]).toEqual([]);
+    expect(events.filter((event) => isCompletedItemType(event, "exitedReviewMode"))).toEqual([
+      expect.objectContaining({ notification: expect.objectContaining({
+        params: expect.objectContaining({ item: expect.objectContaining({
+          data: expect.objectContaining({ reviewOutput: output }),
+        }) }),
+      }) }),
+    ]);
+  });
+
+  it.each([1, 2])("recovers kept candidates after %i early managed completion deliveries", async (deliveries) => {
+    const { registry, codexClient, request } = await prReviewStartFixture();
+    const checkoutRoot = await git(request.cwd, ["rev-parse", "--show-toplevel"]);
+    const ledger = registryModules(registry).managedReviewService.candidateLedger;
+    const events: AgentEvent[] = [];
+    onTestFinished(registry.onEvent((event) => { events.push(event); }));
+
+    const start = codexClient.startTurn.bind(codexClient);
+    vi.spyOn(codexClient, "startTurn").mockImplementationOnce(async (params) => {
+      const response = await start(params);
+      const turn = { backend: "codex" as const, ...response };
+      expect(ledger.record(turn, {
+        file: "src/review.ts",
+        start_line: 5,
+        end_line: 8,
+        category: "correctness",
+        summary: "Preserve the guard",
+        mechanism: "The retry bypasses the guard.",
+      }).ok).toBe(true);
+      expect(ledger.dispose(turn, {
+        id: "C1", disposition: "keep", priority: 2, confidence_score: 0.91, reason: "Verified retry path.",
+      }).ok).toBe(true);
+      const terminal = reviewTerminal("completed", { reviewThreadId: response.threadId, turnId: response.turnId });
+      for (let index = 0; index < deliveries; index += 1) await codexClient.emit(terminal);
+      return response;
+    });
+
+    await registry.startReview({ ...request, threadId: "independent" }, true);
+    expect(events.filter((event) => isCompletedItemType(event, "exitedReviewMode"))).toEqual([
+      expect.objectContaining({ notification: expect.objectContaining({
+        params: expect.objectContaining({ item: expect.objectContaining({
+          data: expect.objectContaining({ reviewOutput: {
+            overall_correctness: "patch is incorrect",
+            overall_explanation: "Recovered 1 kept finding from the managed review candidate ledger because no valid final review report was submitted or parsed.",
+            findings: [{
+              title: "Preserve the guard",
+              body: "The retry bypasses the guard.",
+              category: "correctness",
+              confidence_score: 0.91,
+              priority: 2,
+              code_location: {
+                absolute_file_path: path.join(checkoutRoot, "src", "review.ts"),
+                line_range: { start: 5, end: 8 },
+              },
+            }],
+          } }),
+        }) }),
+      }) }),
+    ]);
+    expect(ledger.activeTurnCount).toBe(0);
   });
 
   it("fingerprints failed review starts by target and error, not snapshot time", () => {

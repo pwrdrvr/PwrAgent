@@ -15,7 +15,7 @@ describe("AcpThreadTitleGenerator", () => {
         getSession: () => ({
           backendId: "acp:qwen",
           sessionId: "parent",
-          title: "ACP session",
+          title: "Untitled thread",
           cwd,
           createdAt: 1,
           updatedAt: 1,
@@ -102,7 +102,7 @@ describe("AcpThreadTitleGenerator", () => {
         backendId: backend,
         sessionId: "qwen-session-1",
         cwd: "/repo/project",
-        title: "ACP session",
+        title: "Untitled thread",
         createdAt: 1000,
         updatedAt: 1000,
         executionMode: "full-access",

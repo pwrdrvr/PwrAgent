@@ -3,6 +3,13 @@
 This directory holds the deterministic replay artifacts that power the desktop
 Electron E2E suite.
 
+Replay launches and the Playwright startup canary use an ACP discovery root
+under the temporary fixture home. Automatic probes look in its `.local/bin`
+and rebased fallback locations. The launcher clears inherited provider CLI
+overrides. A spec can pass an explicit `PWRAGENT_E2E_ACP_DISCOVERY_ROOT` or
+provider CLI override in its launch `env`, or seed a configured or installed
+runtime in its fixture profile.
+
 Each scenario directory should contain:
 
 - `capture-recipe.md`: the live Computer Use recipe for reproducing the capture

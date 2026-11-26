@@ -99,6 +99,7 @@ import { readLocalNavigationDirectoryIndex } from "./app-server/navigation-direc
 import { setNavigationDetailPendingWakesProjector } from "./app-server/navigation-detail-service";
 import { appServerService } from "./app-server/desktop-app-server-service";
 import { startOwnerQueues } from "./owner-queue-services";
+import { changesOperatorQueueMounts } from "./operator-requests/operator-request-mount-change";
 import { disposeOperatorRequestService } from "./operator-requests/operator-request-runtime";
 
 const MAIN_PROCESS_SHUTDOWN_TIMEOUT_MS = 12_000;
@@ -547,6 +548,10 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         try { target.send(RESEARCH_CHANGED_EVENT_CHANNEL, change); }
         catch (error) { mainLog.warn("research view notification failed", { error: String(error) }); }
       }
+      void registry.publishLocalEvent({
+        backend: change.backend,
+        notification: { method: "thread/research/changed", params: change },
+      });
     },
     ...createResearchRegistryPorts(registry),
   });
@@ -597,6 +602,23 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         notification: {
           method: "navigation/remoteThreadPins/changed",
           params: { instanceId, threadId, pinned: true },
+        },
+      });
+    },
+    onLaunchedThreadRecorded: async ({
+      backend,
+      threadId,
+      launchId,
+    }: {
+      backend: PwrAgentFederationContext["backend"];
+      threadId: string;
+      launchId: string;
+    }) => {
+      await getDesktopBackendRegistry().publishLocalEvent({
+        backend,
+        notification: {
+          method: "thread/launchedThreads/updated",
+          params: { threadId, launchId },
         },
       });
     },
@@ -725,28 +747,45 @@ wireOwnerRendererEvents();
   }
 
   if (ownerShutdownStarted) throw new Error("Owner startup was cancelled by shutdown.");
+  const autoCompaction = createRegistryAutoCompactionMonitor({
+    registry,
+    resolveSavedRules: () => getDesktopSettingsService().resolveAutoCompactionRules(),
+    log: mainLog,
+  });
+  registry.setThreadAutoCompactionReader((backend, threadId) => autoCompaction.readStatus(backend, threadId));
+  ownerSubscriptions.add(() => {
+    registry.setThreadAutoCompactionReader(undefined);
+    autoCompaction.dispose();
+  });
   const queues = startOwnerQueues(federationRuntime, {
     registry,
     readDefaultMergeMethod: () => settings.resolveDefaultMergeMethod(),
     readReviewStackHold: (thread) => getDesktopAppServerService().automationStackHold(thread),
+    registerContinueAfter: async ({ backend, threadId, continueAfter }) => {
+      await getDesktopAppServerService().manageThreadDependencies({
+        action: "create",
+        backend,
+        threadId,
+        ...continueAfter,
+      }, undefined, "operator");
+    },
     // Clicking a card approves the mode it shows, so these handlers skip the agent access ceiling.
     federation: createFederationAgentToolsHandler({ ...federationAgentToolOptions, operatorApproved: true }),
     federationWithOrigin: (messageOrigin: AppServerThreadMessageOrigin) => createFederationAgentToolsHandler({
       ...federationAgentToolOptions, operatorApproved: true, resolveMessageOrigin: () => messageOrigin,
     }),
   });
+  ownerSubscriptions.add(registry.onEvent((event) => {
+    if (changesOperatorQueueMounts(event)) {
+      queues.events.emit("operatorRequestsChanged", { reason: "questions" });
+    }
+  }));
   void startAppServerOwnerNavigation().catch((error) => {
     mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
   });
   scheduledActions.start();
   // Compacts threads past their model's auto-compaction threshold.
-  const autoCompaction = createRegistryAutoCompactionMonitor({
-    registry,
-    resolveSavedRules: () => getDesktopSettingsService().resolveAutoCompactionRules(),
-    log: mainLog,
-  });
   autoCompaction.start();
-  ownerSubscriptions.add(() => autoCompaction.dispose());
   // Windows read the status once at load; this tells them when another
   // instance on the profile takes or hands back scheduled automations.
   ownerSubscriptions.add(automations.onSchedulingStatusChanged((status) => {

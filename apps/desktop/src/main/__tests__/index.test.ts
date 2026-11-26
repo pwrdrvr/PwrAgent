@@ -28,6 +28,8 @@ const mainWindowHandlers = new Map<string, (...args: unknown[]) => void>();
 const installWindowFrameSyncMock = vi.fn();
 const wireWindowControlsBridgeMock = vi.fn();
 const createMainWindowMock = vi.fn();
+const rearmHotCpuProfileMock = vi.fn(() => false);
+const listRearmableHotCpuProfilesMock = vi.fn(async () => []);
 const stopWindowDiagnosticsMock = vi.fn<() => Promise<void>>();
 const registerAppServerIpcHandlersMock = vi.fn();
 const registerNativeVoiceIpcHandlersMock = vi.fn();
@@ -368,6 +370,8 @@ vi.mock("../shell/window", () => ({
   createMainWindow: createMainWindowMock,
   getRendererEntry: () => ({ kind: "file", value: "/fixture/renderer/index.html" }),
   isFederationWindowWebContents: vi.fn(() => false),
+  listRearmableHotCpuProfiles: listRearmableHotCpuProfilesMock,
+  rearmHotCpuProfile: rearmHotCpuProfileMock,
   stopWindowDiagnostics: stopWindowDiagnosticsMock,
   syncHotCpuProfilersFromSettings: vi.fn(),
 }));
@@ -781,6 +785,7 @@ vi.mock("../app-server/backend-registry", () => { const mocked = {
     setThreadPullRequestCanonicalizer: vi.fn(),
     setPullRequestReferenceResolver: vi.fn(),
     setThreadPrimaryGitRepositoryReader: vi.fn(),
+    setThreadAutoCompactionReader: vi.fn(),
     setThreadProjectRepositoryResolver: vi.fn(),
     setLocalPullRequestAuthorityResolver: vi.fn(),
     setThreadMaintenanceToolHandler: vi.fn(),
@@ -982,7 +987,7 @@ describe("bootstrapApp", () => {
       if (name === "registry.setMessagingAgentToolService") return [name, "registry.setMessagingWorkingUpdatesSettings"];
       return [name];
     });
-    const handlers = [...coreHandlers, "registry.setPwrAgentThreadTodoHandler"];
+    const handlers = [...coreHandlers, "registry.setThreadAutoCompactionReader", "registry.setPwrAgentThreadTodoHandler"];
     expect(events.filter(isHandler)).toEqual(handlers);
     // Core subscribers retain their recorded order.
     const coreSubscriber = /^(maintenance|working|renderer)\.subscribe$/;
@@ -1006,8 +1011,11 @@ describe("bootstrapApp", () => {
       "registry.onCodexAppServerRestartStatusChanged", "registry.onThreadArchiveSweepStatusChanged",
     ]);
     assertOwnerHooksBeforeWork(events, [...coreHandlers, "research.subscribe"], ["maintenance.start"]);
+    // Both owners observe mount membership before navigation and intake start.
+    expect(events.filter((name) => name === "operatorRequestMounts.subscribe")).toHaveLength(1);
     assertOwnerHooksBeforeWork(events, [
       ...handlers, "research.subscribe", "threadTodos.subscribe", "operatorRequests.subscribe", "operatorRequests.prune",
+      "operatorRequestMounts.subscribe",
     ], ["navigation.start", "scheduled.start", "automations.start", "gateway.start", "federation.start", "messaging.start"]);
     // Auto-compaction dispatches through the registry, so it observes only once every handler is bound.
     expect(events.filter((name) => name === "autoCompaction.subscribe")).toHaveLength(1);
@@ -1535,6 +1543,9 @@ describe("bootstrapApp", () => {
       startupCpuProfiler: startupProfilerInstance,
     });
     expect(registerAppServerIpcHandlersMock).toHaveBeenCalledTimes(1);
+    expect(registerDiagnosticsIpcHandlersMock).toHaveBeenCalledExactlyOnceWith(
+      rearmHotCpuProfileMock, listRearmableHotCpuProfilesMock,
+    );
     expect(registerNativeVoiceIpcHandlersMock).toHaveBeenCalledTimes(1);
     expect(registerAudioTranscriptionIpcMock).toHaveBeenCalledOnce();
     expect(registerAudioTranscriptionIpcMock).toHaveBeenCalledBefore(createMainWindowMock);

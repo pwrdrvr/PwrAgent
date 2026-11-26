@@ -1,8 +1,10 @@
 import { isPendingTurnId } from "./turn-placeholder";
+import type { FederationRemoteTarget } from "./contracts/federation";
 import type { AppServerBackendKind } from "./contracts/normalized-app-server";
 import type { ResearchHarnessState, ResearchProvenance } from "./research-harness";
 
 export type ResearchThread = { backend: AppServerBackendKind; threadId: string };
+export type ResearchThreadRequest = ResearchThread & { federationTarget?: FederationRemoteTarget };
 export type ResearchActor = ResearchThread & { kind: "agent" | "operator"; turnId?: string; callId?: string };
 export type ResearchStatus = "running" | "stopping" | "stopped" | "deadline" | "completed" | "interrupted" | "exhausted";
 export type ResearchFindingKind = "lemma" | "partial" | "counterexample" | "dead_end" | "experiment" | "file" | "note";
@@ -62,7 +64,7 @@ export type StartResearchRequest = {
   totalWorkerMinutes?: number;
   workspaceMode: "new_worktree" | "none";
 };
-export type PrepareResearchRequest = ResearchThread & Omit<StartResearchRequest, "approaches" | "intentId"> & { workers: number };
+export type PrepareResearchRequest = ResearchThreadRequest & Omit<StartResearchRequest, "approaches" | "intentId"> & { workers: number };
 export const RESEARCH_WORK_STATES = ["open", "assigned", "claimed", "in_progress", "blocked", "completed", "cancel_requested", "cancelled"] as const;
 export type ResearchWorkState = typeof RESEARCH_WORK_STATES[number];
 export const RESEARCH_WORK_TRANSITIONS: Record<ResearchWorkState, readonly string[]> = {
@@ -249,7 +251,7 @@ export type ResearchProfileRunsPage = {
 /** The thread's run summaries. Each run's items are read separately, by delta (`ResearchChangesRequest`). */
 export type ResearchSnapshot = { runs: ResearchRunSummary[]; writableRunIds: string[]; pending?: ResearchPendingRequest };
 /** With `runId`, `runs` holds only that run's summary, or nothing when the thread cannot see it. */
-export type ResearchSnapshotRequest = ResearchThread & { runId?: string };
+export type ResearchSnapshotRequest = ResearchThreadRequest & { runId?: string };
 /**
  * What a `research:changed` event names. With `runId`, that run reached
  * `revision`. Without one, the thread's pending request changed.
@@ -283,7 +285,7 @@ export type ResearchChangePage = {
   reset?: boolean;
 };
 export type ResearchChanges = ResearchChangePage & { writable: boolean };
-export type ResearchChangesRequest = ResearchThread & { runId: string; sinceRevision?: number; after?: ResearchChangesCursor };
+export type ResearchChangesRequest = ResearchThreadRequest & { runId: string; sinceRevision?: number; after?: ResearchChangesCursor };
 /** What a panel command returns. The changed items arrive by delta. */
 export type ResearchUpdateReceipt = { runId: string; revision: number; status: ResearchStatus; delivery?: ResearchDelivery };
 /** Offsets into a run's approaches, findings and submissions, each in creation order. */
@@ -301,12 +303,12 @@ export type ResearchBoardPage = {
 export type ResearchEventRange = { beforeSeq?: number; afterSeq?: number; limit?: number };
 /** `nextBeforeSeq` is set while older events remain inside the range; pass it as the next `beforeSeq`. */
 export type ResearchEventPage = { runId: string; revision: number; events: ResearchEvent[]; nextBeforeSeq?: number };
-export type ResearchEventsRequest = ResearchThread & { runId: string; range: ResearchEventRange };
-export type ResearchUpdateRequest = ResearchThread & { runId: string; requestId: string; command: ResearchCommand };
+export type ResearchEventsRequest = ResearchThreadRequest & { runId: string; range: ResearchEventRange };
+export type ResearchUpdateRequest = ResearchThreadRequest & { runId: string; requestId: string; command: ResearchCommand };
 export type ResearchEvidenceRequest = ResearchThread & { runId: string; itemId: string; pathIndex: number };
-export type ResearchItemReadRequest = ResearchThread & { runId: string; itemId: string };
-export type ResearchSearchRequest = ResearchThread & { runId: string; query: ResearchSearchQuery };
-export type ResearchWorkRequest = ResearchThread & { runId: string; requestId: string; command: ResearchWorkCommand };
+export type ResearchItemReadRequest = ResearchThreadRequest & { runId: string; itemId: string };
+export type ResearchSearchRequest = ResearchThreadRequest & { runId: string; query: ResearchSearchQuery };
+export type ResearchWorkRequest = ResearchThreadRequest & { runId: string; requestId: string; command: ResearchWorkCommand };
 
 /** A journal is a complete ordered prefix. Duplicates may repeat a seq, never change it. */
 export function projectResearchRun(id: string, records: ResearchEvent[]): ResearchRun {
@@ -469,13 +471,14 @@ export function researchWorkerTimeReachedAt(time: ResearchWorkerTime, limitMs: n
 
 /**
  * Whether a cut-off worker can be resumed: it has a thread to continue in, its direction was not abandoned,
- * and its work is still open. A focused child also needs the item it investigates to still be assigned to it,
- * the rule the owner applies when it admits a worker.
+ * its work is still open, and it has not been reassigned to a focused child. A focused child also needs the
+ * item it investigates to still be assigned to it, the rule the owner applies when it admits a worker.
  */
 export function researchApproachResumable(approach: ResearchApproach, read: (itemId: string) => Pick<ResearchItem, "work"> | undefined): boolean {
   if (!approach.interrupted || !approach.worker || approach.directionState === "abandoned") return false;
   const closed = (item: Pick<ResearchItem, "work"> | undefined) => !item || ["completed", "cancel_requested", "cancelled"].includes(item.work.state);
-  if (closed(read(approach.id))) return false;
+  const own = read(approach.id);
+  if (closed(own) || (own?.work.assignmentId !== undefined && own.work.assignmentId !== approach.id)) return false;
   if (!approach.itemId) return true;
   const source = read(approach.itemId);
   return !closed(source) && source!.work.assignmentId === approach.id && source!.work.state !== "open";

@@ -27,7 +27,15 @@ export type ThreadRenameOptions = {
 export interface ThreadNamingHost {
   readName(identity: OwnerThreadIdentity): Promise<string | undefined>;
   readTitle(identity: OwnerThreadIdentity): Promise<AppServerThreadSummary | undefined>;
-  renameProvider(request: RenameThreadRequest, titleSource: AppServerThreadTitleSource): Promise<{ threadId: string }>;
+  renameProvider(
+    request: RenameThreadRequest,
+    titleSource: AppServerThreadTitleSource,
+    options?: {
+      promptPlaceholder?: boolean;
+      /** Atomic pre-write eligibility guard against out-of-band provider updates. */
+      guard?: (current: AppServerThreadSummary) => boolean;
+    },
+  ): Promise<{ threadId: string; skipped?: true; thread?: AppServerThreadSummary }>;
   getAgent(identity: OwnerThreadIdentity): Promise<ThreadAgentMetadata | undefined>;
   setAgent(identity: OwnerThreadIdentity, agent: Pick<ThreadAgentMetadata, "name" | "instructions" | "instructionsDelivery">): Promise<void>;
   invalidate(backend: AppServerBackendKind): void;
@@ -93,6 +101,7 @@ export class ThreadNamingLifecycle {
     prompt: string;
     title: string;
     titleSource?: "derived" | "fallback";
+    promptPlaceholder?: boolean;
   }): Promise<ThreadTitleApplication> {
     return this.serialize(params.attempt, async () => {
       const { attempt } = params;
@@ -105,7 +114,25 @@ export class ThreadNamingLifecycle {
       const source = params.titleSource ?? "derived";
       if (isAcpBackendId(attempt.backend)) {
         // ACP generated naming has always updated only its session and event.
-        const result = await this.host.renameProvider({ ...attempt, name: params.title }, source);
+        // Pass an atomic pre-write guard so a provider topic update arriving
+        // between `readTitle` and the synchronous store write cannot be overwritten.
+        const result = await this.host.renameProvider(
+          { ...attempt, name: params.title },
+          source,
+          {
+            ...(params.promptPlaceholder ? { promptPlaceholder: true } : {}),
+            guard: (current) =>
+              this.attempts.get(key) === attempt
+              && this.isEligible(attempt, current, params.prompt),
+          },
+        );
+        if (result.skipped) {
+          return {
+            applied: false,
+            reason: this.attempts.get(key) !== attempt ? "superseded" : "ineligible",
+            thread: result.thread,
+          };
+        }
         await this.announce(attempt.backend, result.threadId, params.title, source);
       } else {
         await this.applyRename({ ...attempt, name: params.title }, { titleSource: "derived" });
@@ -212,8 +239,8 @@ export function isEligibleForGeneratedTitle(
   }
   if (thread.titleSource === "fallback") {
     return (
-      !isAcpBackendId(thread.source) ||
-      isAcpFallbackPlaceholderTitle(thread.title)
+      !isAcpBackendId(thread.source)
+      || isGenericPlaceholderTitle(thread.title)
     );
   }
   const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
@@ -242,13 +269,8 @@ export function isInjectedContextPlaceholderTitle(title: string): boolean {
   );
 }
 
-function isAcpFallbackPlaceholderTitle(title: string): boolean {
-  const normalizedTitle = normalizeTitleForComparison(title);
-  return normalizedTitle === "acp session";
-}
-
 function isGenericPlaceholderTitle(title: string): boolean {
   const normalizedTitle = normalizeTitleForComparison(title);
-  return normalizedTitle === "untitled thread";
+  return normalizedTitle === "untitled thread" || normalizedTitle === "";
 }
 

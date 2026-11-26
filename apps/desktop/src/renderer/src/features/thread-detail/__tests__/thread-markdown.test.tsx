@@ -324,6 +324,38 @@ describe("ThreadMarkdown", () => {
       expect(container.querySelectorAll("td .katex")).toHaveLength(1);
     });
     expect(container.querySelector("annotation[encoding='application/x-tex']")).toHaveTextContent("x");
+    expect(container.querySelector("td")).toHaveAttribute("data-cell-math", "only");
+  });
+
+  it("marks standalone math table cells without disabling wrapping on mixed prose and inline math cells", async () => {
+    const markdown = [
+      String.raw`| $f(x)$ | Complexity $O(n)$ | Plain |`,
+      "| --- | --- | --- |",
+      String.raw`| $\sum_{i=1}^{n} \frac{a_i x_i + b_i y_i}{\sqrt{c_i^2 + d_i^2}}$ | This algorithm achieves $O(n \log n)$ worst-case time across balanced trees. | Plain text |`,
+    ].join("\n");
+
+    const { container } = render(
+      <MarkdownRenderingOptionsProvider mathEnabled>
+        <ThreadMarkdown text={markdown} />
+      </MarkdownRenderingOptionsProvider>,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelectorAll("table .katex")).toHaveLength(4);
+    });
+
+    const headers = Array.from(container.querySelectorAll("thead th"));
+    expect(headers[0]).toHaveAttribute("data-cell-math", "only");
+    expect(headers[1]).not.toHaveAttribute("data-cell-math");
+    expect(headers[2]).not.toHaveAttribute("data-cell-math");
+
+    const cells = Array.from(container.querySelectorAll("tbody td"));
+    expect(cells[0]).toHaveAttribute("data-cell-math", "only");
+    expect(cells[0]?.querySelector(".katex")).not.toBeNull();
+    expect(cells[1]).toHaveAttribute("data-col-kind", "prose");
+    expect(cells[1]).not.toHaveAttribute("data-cell-math");
+    expect(cells[1]?.querySelector(".katex")).not.toBeNull();
+    expect(cells[2]).not.toHaveAttribute("data-cell-math");
   });
 
   it.each([
@@ -563,6 +595,66 @@ describe("ThreadMarkdown", () => {
     expect(link).toHaveAttribute("href", imagePart.url);
     fireEvent.click(link);
     expect(onOpenImage).toHaveBeenCalledWith(imagePart);
+  });
+
+  it.each([
+    ["angle path with literal percent", "[pct](</work/100% done.png>)", "pct", "file:///work/100%25%20done.png"],
+    ["angle path with literal hash", "[hash](</work/shot #1.png>)", "hash", "file:///work/shot%20%231.png"],
+    ["double slash path", "[dup](/work//shot.png)", "dup", "file:///work/shot.png"],
+    ["leading double slash POSIX path", "[leading](//work/shot.png)", "leading", "file:///work/shot.png"],
+    ["dotdot path", "[dotdot](/work/nested/../shot.png)", "dotdot", "file:///work/shot.png"],
+    ["Windows balanced parens", String.raw`[winparens](C:\work\shot(1).png)`, "winparens", "file:///C:/work/shot(1).png"],
+    ["Windows nested brackets with parens", String.raw`[Run [1]](C:\work\shot(1).png)`, "Run [1]", "file:///C:/work/shot(1).png"],
+    ["Windows dotdot path", String.raw`[windotdot](C:\work\nested\..\shot.png)`, "windotdot", "file:///C:/work/shot.png"],
+    ["Windows lowercase drive", String.raw`[winlower](c:\work\shot.png)`, "winlower", "file:///C:/work/shot.png"],
+    ["Windows file URL double slash", "[windup](file:///C:/work//shot.png)", "windup", "file:///C:/work/shot.png"],
+    ["UNC file URL dotdot", "[unc](file://server/share/nested/../shot.png)", "unc", "file://server/share/shot.png"],
+    ["malformed percent file URL", "[badpct](file:///work/100%ZZ.png)", "badpct", "file:///work/100%25ZZ.png"],
+    ["CommonMark file autolink", "<file:///work/shot.png>", "file:///work/shot.png", "file:///work/shot.png"],
+    ["file localhost with query", "[host](file://localhost/work/shot.png?v=1)", "host", "file:///work/shot.png"],
+    ["parens with fragment", "[parens](file:///work/shot(1).png#view=fit)", "parens", "file:///work/shot(1).png"],
+    ["reference link", "[ref][r1]\n\n[r1]: file:///work/shot.png", "ref", "file:///work/shot.png"],
+    ["nested brackets", "[Run [1] shot](/work/shot.png:1)", "Run [1] shot", "file:///work/shot.png"],
+  ])("opens %s in the built-in lightbox instead of OS Preview", (_label, text, linkName, sourceUrl) => {
+    const onOpenImage = vi.fn();
+    const openPath = vi.fn(async () => ({ opened: true as const }));
+    const imagePart = {
+      type: "image" as const,
+      url: "pwragent-image://file/cached-image",
+      sourceUrl,
+    };
+    render(<ThreadMarkdown
+      desktopApi={{ openPath }}
+      text={text}
+      imageParts={[imagePart]}
+      onOpenImage={onOpenImage}
+    />);
+    const link = screen.getByRole("link", { name: linkName });
+    expect(link).toHaveAttribute("href", imagePart.url);
+    expect(link).toHaveAttribute("title", "Open image in PwrAgent");
+    fireEvent.click(link);
+    expect(onOpenImage).toHaveBeenCalledWith(imagePart);
+    expect(openPath).not.toHaveBeenCalled();
+  });
+
+  it("renders Markdown images with malformed percent sequences without throwing URIError", () => {
+    const unmaterialized = render(
+      <ThreadMarkdown text={String.raw`![bad](file:///work/100%ZZ.png) ![win](C:\work\100%ZZ.png)`} />,
+    );
+    expect(unmaterialized.container.textContent).toContain("![bad](/work/100%ZZ.png)");
+    expect(unmaterialized.container.textContent).toContain(String.raw`![win](C:\work\100%ZZ.png)`);
+
+    const materialized = render(
+      <ThreadMarkdown
+        text="![bad](file:///work/100%ZZ.png)"
+        imageParts={[{
+          type: "image",
+          url: "pwragent-image://file/cached-badpct",
+          sourceUrl: "file:///work/100%25ZZ.png",
+        }]}
+      />,
+    );
+    expect(materialized.container.querySelector(".thread-markdown__image-literal")).toBeNull();
   });
 
   it.each([undefined, "File pull is disabled on the owning machine.", "The owning machine does not support file pull.", "Remote machine disconnected."])("keeps remote Markdown reads in the local modal: %s", async (error) => {
@@ -1733,6 +1825,279 @@ describe("ThreadMarkdown", () => {
 
     // ✓/✗ -> tag, P1/P2/P3 -> tag, long Note prose -> prose
     expect(headerCellKinds).toEqual(["tag", "tag", "prose"]);
+  });
+
+  it("preserves GFM column alignments on table header and body cells", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={`| Issue | Ref | Run A | Run B |
+| --- | :---: | ---: | :--- |
+| Check | **Found** | 42 | Left |`}
+      />
+    );
+
+    const headerCells = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("thead th")
+    );
+    const bodyCells = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("tbody td")
+    );
+
+    expect(headerCells.map((cell) => cell.style.textAlign)).toEqual([
+      "",
+      "center",
+      "right",
+      "left",
+    ]);
+    expect(bodyCells.map((cell) => cell.style.textAlign)).toEqual([
+      "",
+      "center",
+      "right",
+      "left",
+    ]);
+  });
+
+  it("profiles comparison tables with long headers over short body values as prose", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={`| Real Issue (Manually Verified at \`d693ea7d7\`) | Historical Codex Built-in Review (Ref) | **Exact \`#4445\` (\`e7d684457\`) — PwrAgent / Codex (\`6:09\`, \`5.95M\` tok, \`$1.22\`)** |
+| --- | :---: | :---: |
+| **B1 [P1]** Merge review ledger tools | **Found** | **Found** *(P2)* |
+| **B2 [P2]** Release ACP review sessions | **Found** | Missed |`}
+      />
+    );
+
+    const headerCellKinds = Array.from(
+      container.querySelectorAll<HTMLTableCellElement>("thead th")
+    ).map((cell) => cell.getAttribute("data-col-kind"));
+
+    expect(headerCellKinds).toEqual(["prose", "prose", "prose"]);
+  });
+
+  it("tracks horizontal scroll-edge overflow cues on wide tables and keeps keyboard focusability", () => {
+    let observerCallback: ResizeObserverCallback | undefined;
+    const observedTargets = new Set<Element>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          observerCallback = callback;
+        }
+        observe(target: Element) {
+          observedTargets.add(target);
+        }
+        unobserve(target: Element) {
+          observedTargets.delete(target);
+        }
+        disconnect() {
+          observedTargets.clear();
+        }
+      },
+    );
+
+    try {
+      const { container } = render(
+        <ThreadMarkdown
+          text={`| Metric | North America | Europe | Asia Pacific |
+| --- | ---: | ---: | ---: |
+| Latency | 12.4ms | 18.2ms | 24.9ms |`}
+        />,
+      );
+
+      const wrap = container.querySelector<HTMLDivElement>(".thread-markdown__table-wrap")!;
+      const scroller = container.querySelector<HTMLDivElement>(".thread-markdown__table-scroll")!;
+      const table = container.querySelector<HTMLTableElement>(".thread-markdown__table")!;
+
+      expect(wrap).not.toBeNull();
+      expect(scroller).toHaveAttribute("tabindex", "0");
+      expect(observedTargets.has(scroller)).toBe(true);
+      expect(observedTargets.has(table)).toBe(true);
+
+      // Default jsdom metrics (0 / 0) show no edge fades.
+      expect(wrap).not.toHaveAttribute("data-scroll-left");
+      expect(wrap).not.toHaveAttribute("data-scroll-right");
+
+      let clientWidth = 400;
+      let scrollWidth = 760;
+      let scrollLeft = 0;
+      Object.defineProperties(scroller, {
+        clientWidth: { configurable: true, get: () => clientWidth },
+        scrollWidth: { configurable: true, get: () => scrollWidth },
+        scrollLeft: {
+          configurable: true,
+          get: () => scrollLeft,
+          set: (value: number) => {
+            scrollLeft = value;
+          },
+        },
+      });
+
+      // ResizeObserver notifies initial overflow -> right fade visible only.
+      act(() => {
+        observerCallback?.(
+          [{ target: scroller } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wrap).not.toHaveAttribute("data-scroll-left");
+      expect(wrap).toHaveAttribute("data-scroll-right", "true");
+
+      // Scroll midway -> both edges visible.
+      scrollLeft = 180;
+      fireEvent.scroll(scroller);
+      expect(wrap).toHaveAttribute("data-scroll-left", "true");
+      expect(wrap).toHaveAttribute("data-scroll-right", "true");
+
+      // Scroll to right end -> left edge visible only.
+      scrollLeft = 360;
+      fireEvent.scroll(scroller);
+      expect(wrap).toHaveAttribute("data-scroll-left", "true");
+      expect(wrap).not.toHaveAttribute("data-scroll-right");
+
+      // Container widens past table -> both fades clear.
+      clientWidth = 800;
+      scrollLeft = 0;
+      act(() => {
+        observerCallback?.(
+          [{ target: table } as unknown as ResizeObserverEntry],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wrap).not.toHaveAttribute("data-scroll-left");
+      expect(wrap).not.toHaveAttribute("data-scroll-right");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("skips layout reads on height-only table resizes and batches reads before writes across multiple tables", () => {
+    let observerCallback: ResizeObserverCallback | undefined;
+    const observedTargets = new Set<Element>();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          observerCallback = callback;
+        }
+        observe(target: Element) {
+          observedTargets.add(target);
+        }
+        unobserve(target: Element) {
+          observedTargets.delete(target);
+        }
+        disconnect() {
+          observedTargets.clear();
+        }
+      },
+    );
+
+    try {
+      const { container } = render(
+        <ThreadMarkdown
+          text={[
+            "| A | B | C |",
+            "| --- | ---: | ---: |",
+            "| 1 | 10 | 20 |",
+            "",
+            "| X | Y | Z |",
+            "| --- | ---: | ---: |",
+            "| 2 | 30 | 40 |",
+          ].join("\n")}
+        />,
+      );
+
+      const wraps = Array.from(
+        container.querySelectorAll<HTMLDivElement>(".thread-markdown__table-wrap"),
+      );
+      const scrollers = Array.from(
+        container.querySelectorAll<HTMLDivElement>(".thread-markdown__table-scroll"),
+      );
+      const tables = Array.from(
+        container.querySelectorAll<HTMLTableElement>(".thread-markdown__table"),
+      );
+      expect(wraps).toHaveLength(2);
+
+      const events: Array<"read" | "write"> = [];
+      let readCount = 0;
+
+      for (let i = 0; i < scrollers.length; i += 1) {
+        const scroller = scrollers[i]!;
+        const wrap = wraps[i]!;
+        Object.defineProperties(scroller, {
+          clientWidth: {
+            configurable: true,
+            get: () => {
+              readCount += 1;
+              events.push("read");
+              return 300;
+            },
+          },
+          scrollWidth: { configurable: true, get: () => 620 },
+          scrollLeft: { configurable: true, get: () => 0 },
+        });
+        const originalSet = wrap.setAttribute.bind(wrap);
+        const originalRemove = wrap.removeAttribute.bind(wrap);
+        wrap.setAttribute = (name: string, value: string) => {
+          events.push("write");
+          originalSet(name, value);
+        };
+        wrap.removeAttribute = (name: string) => {
+          events.push("write");
+          originalRemove(name);
+        };
+      }
+
+      // First batch across both tables: every layout read happens strictly before any attribute write.
+      act(() => {
+        observerCallback?.(
+          [
+            {
+              target: scrollers[0]!,
+              borderBoxSize: [{ inlineSize: 300, blockSize: 120 }],
+            },
+            {
+              target: tables[0]!,
+              borderBoxSize: [{ inlineSize: 620, blockSize: 120 }],
+            },
+            {
+              target: scrollers[1]!,
+              borderBoxSize: [{ inlineSize: 300, blockSize: 120 }],
+            },
+            {
+              target: tables[1]!,
+              borderBoxSize: [{ inlineSize: 620, blockSize: 120 }],
+            },
+          ] as unknown as ResizeObserverEntry[],
+          {} as ResizeObserver,
+        );
+      });
+      expect(wraps[0]).toHaveAttribute("data-scroll-right", "true");
+      expect(wraps[1]).toHaveAttribute("data-scroll-right", "true");
+      const firstWriteIndex = events.indexOf("write");
+      expect(firstWriteIndex).toBeGreaterThan(0);
+      expect(events.slice(firstWriteIndex)).not.toContain("read");
+
+      // Height-only deliveries (e.g. streaming rows appended without changing table width) must do zero layout reads.
+      const readsBeforeHeightOnly = readCount;
+      act(() => {
+        observerCallback?.(
+          [
+            {
+              target: tables[0]!,
+              borderBoxSize: [{ inlineSize: 620, blockSize: 240 }],
+            },
+            {
+              target: tables[1]!,
+              borderBoxSize: [{ inlineSize: 620, blockSize: 360 }],
+            },
+          ] as unknown as ResizeObserverEntry[],
+          {} as ResizeObserver,
+        );
+      });
+      expect(readCount).toBe(readsBeforeHeightOnly);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("skips raw html parsing for oversized html-like messages", () => {
