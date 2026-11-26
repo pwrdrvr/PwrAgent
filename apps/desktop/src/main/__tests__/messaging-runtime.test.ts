@@ -4497,7 +4497,6 @@ describe("DesktopMessagingRuntime", () => {
     const { openMessagingConnectionStorage } = await import("../storage/desktop-messaging-storage");
     const { resolveDesktopConfigPath } = await import("../settings/desktop-config");
     const { DesktopConfigStore } = await import("../settings/config-store/desktop-config-store");
-    const configOwner = await import("../settings/config-store/desktop-config-store-singleton");
     const toml = await import("../settings/toml-editor");
     const configPath = resolveDesktopConfigPath();
     const named = `mc_${"a".repeat(32)}`;
@@ -4542,7 +4541,6 @@ describe("DesktopMessagingRuntime", () => {
       listThreads: async () => [],
       getThreadAgentMetadata: async () => undefined,
     } as never);
-    const existingStore = vi.spyOn(configOwner, "getExistingDesktopConfigStore").mockReturnValue(configStore);
     const parse = vi.spyOn(toml, "parseTomlTables");
     try {
       const runtime = trackRuntime(initializeDesktopMessagingRuntime({}));
@@ -4576,7 +4574,6 @@ describe("DesktopMessagingRuntime", () => {
       await rm(configPath);
       expect((await listRoutes()).bindings).toEqual([]);
     } finally {
-      existingStore.mockRestore();
       parse.mockRestore();
       registry.mockRestore();
       resetDesktopMessagingRuntimeForTests();
