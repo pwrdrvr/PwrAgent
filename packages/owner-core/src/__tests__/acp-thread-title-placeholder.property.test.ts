@@ -327,6 +327,17 @@ it("maintains ACP prompt-placeholder and naming invariants across 100 interleave
 });
 
 it("never treats 'ACP session' as a fallback title in projection", () => {
+  const legacyString = projectAcpSessionThread({
+    backendId: "acp:antigravity",
+    sessionId: "s-legacy",
+    title: "ACP session",
+    createdAt: 1,
+    updatedAt: 1,
+    executionMode: "default",
+    status: "idle",
+  }, undefined, "repo");
+  expect(legacyString.titleSource).toBe("derived");
+
   const untitled = projectAcpSessionThread({
     backendId: "acp:antigravity",
     sessionId: "s-1",
@@ -337,6 +348,17 @@ it("never treats 'ACP session' as a fallback title in projection", () => {
     status: "idle",
   }, undefined, "repo");
   expect(untitled.titleSource).toBe("fallback");
+
+  const blank = projectAcpSessionThread({
+    backendId: "acp:antigravity",
+    sessionId: "s-2",
+    title: "   ",
+    createdAt: 1,
+    updatedAt: 1,
+    executionMode: "default",
+    status: "idle",
+  }, undefined, "repo");
+  expect(blank.titleSource).toBe("fallback");
   expect(isAcpBackendId(untitled.source)).toBe(true);
 });
 
