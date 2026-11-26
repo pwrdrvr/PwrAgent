@@ -899,7 +899,7 @@ export function startProfileFocusRequestWatcher(
 
 export function updateLastUsed(
   profileName: string,
-  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string; onlyIfMissing?: boolean },
 ): void {
   const normalizedProfileName = normalizeProfileName(profileName);
   if (!normalizedProfileName) {
@@ -907,6 +907,9 @@ export function updateLastUsed(
   }
   const registry = readProfilesRegistry(options);
   const entry = registry.profiles.find((p) => p.name === normalizedProfileName);
+  if (entry && options?.onlyIfMissing) {
+    return;
+  }
   const now = new Date().toISOString();
   if (entry) {
     entry.last_used = now;

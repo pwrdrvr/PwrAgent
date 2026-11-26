@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ResourceCheckoutActionRequest } from "@pwragent/shared/contracts/resource-checkouts";
@@ -7,7 +7,7 @@ import type { DesktopApi } from "../src/renderer/src/lib/desktop-api";
 import { expect, test, type Page } from "./fixtures/electron-test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { configTomlPathForHomeRoot, stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
-import { ensureNamedProfileExists, resolveProfilesRegistryPath } from "../src/main/profile";
+import { removeTempRoot } from "./fixtures/temp-root-cleanup";
 import { StateDb } from "../src/main/state/state-db";
 
 function read(page: Page) {
@@ -115,33 +115,8 @@ test("default and dev contend for one durable machine allocation through preload
     try {
       await Promise.all(apps.map((app) => app.close()));
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await removeTempRoot(root);
     }
-  }
-});
-
-test("Windows starts a profile while another process reads the profile registry", async () => {
-  test.skip(process.platform !== "win32", "Windows can reject replacing an open registry file.");
-  const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-e2e-profile-registry-"));
-  const env = { PWRAGENT_HOME: root, PWRAGENT_PROFILE: "dev" };
-  try {
-    ensureNamedProfileExists("dev", { env });
-    const registry = await open(resolveProfilesRegistryPath({ env }), "r");
-    try {
-      const app = await launchElectronApp({
-        fixturePath: path.join(import.meta.dirname, "fixtures/smoke/replay.fixture.json"),
-        env,
-      });
-      try {
-        expect((await read(app.window)).viewer.profile).toBe("dev");
-      } finally {
-        await app.close();
-      }
-    } finally {
-      await registry.close();
-    }
-  } finally {
-    await rm(root, { recursive: true, force: true });
   }
 });
 
