@@ -548,6 +548,13 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         backend: caller.backend as AppServerBackendKind,
         threadId: caller.threadId,
       }),
+      onBackgroundBatchSettled: (caller, woken) => {
+        if (woken) return;
+        researchServiceRef?.observeDecisionBatchFinished({
+          backend: caller.backend as AppServerBackendKind,
+          threadId: caller.threadId,
+        });
+      },
     }),
   );
   const researchEnabled = () => getDesktopSettingsService().resolveResearchEnabled?.() === true;
@@ -571,6 +578,8 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
     cancelDecisionBatches: async (thread, reason, options) => {
       await getOpenAIDecisionsRail()?.cancelThreadBatches(thread, reason, options);
     },
+    hasActiveBackgroundDecisionBatch: (thread, runId) =>
+      getOpenAIDecisionsRail()?.hasActiveBackgroundBatch(thread, runId) === true,
     ...createResearchRegistryPorts(registry),
   });
   researchServiceRef = research;

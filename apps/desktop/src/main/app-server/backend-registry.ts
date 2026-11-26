@@ -2436,7 +2436,7 @@ export class DesktopBackendRegistry {
       get checkoutHandler() { return current().checkoutHandler; },
       resourceCheckoutToolMode: (thread: { backend: AppServerBackendKind; threadId?: string }) => this.resourceCheckoutToolMode(thread),
       get mcpResearchHandler() { return current().mcpResearchHandler; },
-      get researchDecisionsReady() { return current().lastResearchDecisionsReady; },
+      isResearchDecisionsReady: () => current().isResearchDecisionsReady(),
       get threadTurnQueue() { return current().threadTurnQueue; },
       get tokenMiserCodeModeGroupingVersion() { return current().tokenMiserCodeModeGroupingVersion; },
       set tokenMiserCodeModeGroupingVersion(value) { current().tokenMiserCodeModeGroupingVersion = value; },
@@ -9279,7 +9279,7 @@ export class DesktopBackendRegistry {
       threadTodoHandler: this.threadTodoHandler,
       openAIDecisionsHandler: this.openAIDecisionsHandler,
       researchHandler: this.advertisedResearchHandler,
-      researchDecisionsReady: this.lastResearchDecisionsReady,
+      researchDecisionsReady: await this.isResearchDecisionsReady(),
       checkoutHandler: this.checkoutHandler,
       checkoutMode: this.resourceCheckoutToolMode(),
     });

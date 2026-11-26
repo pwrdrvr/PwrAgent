@@ -228,6 +228,8 @@ export type OpenAIDecisionsServiceOptions = {
   resolveCallerResearchRuns?: (caller: DecisionBatchCaller) => readonly DecisionResearchRunMembership[];
   /** Participant details for a research run when the caller is a member; undefined otherwise. */
   resolveResearchRunContext?: (caller: DecisionBatchCaller, runId: string) => DecisionResearchRunContext | undefined;
+  /** Called when a background batch settles; `woken` is false when no wake-up turn was delivered. */
+  onBackgroundBatchSettled?: (caller: DecisionBatchCaller, woken: boolean) => void;
   newBatchId?: () => string;
 };
 
@@ -292,13 +294,18 @@ export class OpenAIDecisionsService {
   private readonly runs = new Map<string, Promise<void>>();
   /** Batches their caller cancelled: no wake-up follows. */
   private readonly silentBatches = new Set<string>();
+  /** Background batches currently delivering their completion wake-up turn. */
+  private readonly pendingWakeups = new Map<string, { caller: DecisionBatchCaller; researchRunId?: string }>();
   /** Each running batch's result file writer. */
   private readonly writers = new Map<string, DecisionBatchFileWriter>();
   /**
    * Finished batches the Decisions tab read from result files, by file,
    * so polling the tab stats files instead of parsing them again.
    */
-  private readonly railFileSummaries = new Map<string, { mtimeMs: number; size: number; batch: DecisionsRailBatch }>();
+  private readonly railFileSummaries = new Map<
+    string,
+    { mtimeMs: number; size: number; batch: DecisionsRailBatch; researchRunId?: string; resultsFile: string }
+  >();
   /** The last result file the tab paged through, parsed. */
   private railFileRecord: { file: string; mtimeMs: number; size: number; record: DecisionBatchRecord } | undefined;
   private closing = false;
@@ -343,7 +350,16 @@ export class OpenAIDecisionsService {
       threadId: caller.threadId,
       ...(researchRunId ? { researchRunIds: [researchRunId] } : {}),
     };
-    if (this.options.store.findActiveByName(definition.name, scopeCaller).length > 0) {
+    const existing = this.options.store.findActiveByName(definition.name, scopeCaller);
+    const sameScopeCollision = existing.some((record) => {
+      if (record.scope !== definition.scope) return false;
+      if (definition.scope === "research_run") return record.researchRunId === researchRunId;
+      if (definition.scope === "thread") {
+        return record.ownerBackend === caller.backend && record.ownerThreadId === caller.threadId;
+      }
+      return true;
+    });
+    if (sameScopeCollision) {
       throw nameTaken(definition.name);
     }
     const provider = definition.provider
@@ -435,7 +451,7 @@ export class OpenAIDecisionsService {
     const requestedRunId = parseOptionalResearchRunId(args.researchRunId);
     const enriched = this.callerWithResearchRuns(caller, requestedRunId, "decision_not_found");
     if (hasDecisionImageParts(args.prefix)) {
-      const current = this.resolveTarget(enriched, args);
+      const current = this.resolveTarget(enriched, args, requestedRunId);
       this.assertDefinitionImages(isRegisteredDecisionProvider(args.provider) ? args.provider : current.provider, args);
     }
     const parsed = parseOpenAIDecisionRegistration(args, { extraKeys: ["decisionId"] });
@@ -443,7 +459,7 @@ export class OpenAIDecisionsService {
     const current = this.resolveTarget(enriched, {
       decisionId: args.decisionId,
       name: parsed.value.name,
-    });
+    }, requestedRunId);
     if (current.name !== parsed.value.name) {
       throw new OpenAIDecisionsError("invalid_definition", "Update cannot rename a decision.");
     }
@@ -502,7 +518,7 @@ export class OpenAIDecisionsService {
     }
     const requestedRunId = parseOptionalResearchRunId(args.researchRunId);
     const enriched = this.callerWithResearchRuns(caller, requestedRunId, "decision_not_found");
-    const current = this.resolveTarget(enriched, args);
+    const current = this.resolveTarget(enriched, args, requestedRunId);
     this.assertCanMutateResearchDecision(caller, current, "invalid_input", "delete");
     this.options.store.softDelete(current.decisionId);
     this.options.log?.info("deleted decision", logFields(current));
@@ -547,7 +563,7 @@ export class OpenAIDecisionsService {
     const enrichedCaller = this.callerWithResearchRuns(caller, requestedRunId, "decision_not_found");
     const { record, schema } = args.definition !== undefined
       ? await this.adHocRecord(caller, args)
-      : this.registeredRecord(enrichedCaller, args);
+      : this.registeredRecord(enrichedCaller, args, requestedRunId);
     const batchResearchRunId = record.scope === "research_run"
       ? record.researchRunId
       : requestedRunId ?? this.soleActiveResearchRunId(caller);
@@ -779,6 +795,30 @@ export class OpenAIDecisionsService {
   }
 
   /**
+   * Whether `caller` currently has an in-flight background batch (queued,
+   * running, or delivering its completion wake-up turn).
+   */
+  hasActiveBackgroundBatch(caller: DecisionBatchCaller, researchRunId?: string): boolean {
+    const matchesRun = (batchRunId: string | undefined) =>
+      researchRunId === undefined || batchRunId === undefined || batchRunId === researchRunId;
+    if (this.batches.list(caller).some((batch) =>
+      batch.background && !isFinishedBatch(batch) && matchesRun(batch.researchRunId),
+    )) {
+      return true;
+    }
+    for (const pending of this.pendingWakeups.values()) {
+      if (
+        pending.caller.backend === caller.backend
+        && pending.caller.threadId === caller.threadId
+        && matchesRun(pending.researchRunId)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * The Decisions tab: decisions visible to the thread, with each
    * provider's on/off state and observed timing, and the thread's batches,
    * newest first: running ones from memory, finished ones from memory or
@@ -804,14 +844,7 @@ export class OpenAIDecisionsService {
       ? this.options.store.listActiveForResearchRun(ctx.runId)
       : [];
     const decisions = runRecords.map((record) => this.railDecision(record));
-    const entries = await this.listResearchRunBatches(ctx);
-    const batches: ResearchDecisionBatchSummary[] = entries.map(({ batch, participant }) => ({
-      ...railBatch(batch, now),
-      caller: { backend: batch.caller.backend as ResearchThread["backend"], threadId: batch.caller.threadId },
-      role: participant.role,
-      ...(participant.approachId ? { approachId: participant.approachId } : {}),
-      ...(participant.approachTitle ? { approachTitle: participant.approachTitle } : {}),
-    }));
+    const batches = await this.listResearchRunRailBatches(ctx, now);
     return { runId: ctx.runId, readiness, decisions, batches, now };
   }
 
@@ -820,8 +853,17 @@ export class OpenAIDecisionsService {
     ctx: DecisionResearchRunContext,
     params: { batchId: string; status: DecisionsRailItemFilter; from: number; limit: number },
   ): Promise<DecisionsRailBatchPage> {
-    const { batch } = await this.findResearchRunBatch(ctx, params.batchId);
-    return railBatchPage(batch, { status: params.status, from: params.from, limit: params.limit, now: this.now() });
+    if (typeof params.batchId !== "string" || params.batchId.length === 0) {
+      throw new OpenAIDecisionsError("invalid_input", "batchId must be a string.");
+    }
+    for (const participant of ctx.participants) {
+      const record = this.batches.get(participant.thread, params.batchId)
+        ?? await this.railFileRecordFor(participant.thread, params.batchId);
+      if (record && batchBelongsToResearchRun(record, participant, ctx)) {
+        return railBatchPage(record, { status: params.status, from: params.from, limit: params.limit, now: this.now() });
+      }
+    }
+    throw new OpenAIDecisionsError("batch_not_found", "This research run has no batch with that id.");
   }
 
   /** Operator Stop or Cancel on a batch owned by any participant of `ctx`. */
@@ -848,8 +890,13 @@ export class OpenAIDecisionsService {
     for (const participant of ctx.participants) {
       const inMemory = this.batches.get(participant.thread, batchId);
       if (inMemory && batchBelongsToResearchRun(inMemory, participant, ctx)) return inMemory.resultsFile;
-      const fromFile = await this.readBatchFile(participant.thread, batchId);
-      if (fromFile && batchBelongsToResearchRun(fromFile, participant, ctx)) return fromFile.resultsFile;
+      const directory = this.options.batchResultsDirectory?.(participant.thread);
+      if (!directory) continue;
+      const file = decisionBatchFilePath(directory, batchId);
+      const entry = await this.railFileSummaryEntry(participant.thread, file);
+      if (entry && batchBelongsToResearchRun({ createdAt: entry.batch.createdAt, researchRunId: entry.researchRunId }, participant, ctx)) {
+        return entry.resultsFile;
+      }
     }
     return undefined;
   }
@@ -1178,23 +1225,85 @@ export class OpenAIDecisionsService {
     ].sort((left, right) => right.createdAt - left.createdAt);
   }
 
+  /** Cached participant batches for the Research Decisions tab, newest first. */
+  private async listResearchRunRailBatches(
+    ctx: DecisionResearchRunContext,
+    now: number,
+  ): Promise<ResearchDecisionBatchSummary[]> {
+    const seen = new Set<string>();
+    const perParticipant = await Promise.all(ctx.participants.map(async (participant) => {
+      const directory = this.options.batchResultsDirectory?.(participant.thread);
+      const fileIds = directory ? await listDecisionBatchFileIds(directory) : [];
+      const inMemory = this.batches.list(participant.thread);
+      const known = new Set(inMemory.map((batch) => batch.batchId));
+      const caller = {
+        backend: participant.thread.backend as ResearchThread["backend"],
+        threadId: participant.thread.threadId,
+      };
+      const meta = {
+        caller,
+        role: participant.role,
+        ...(participant.approachId ? { approachId: participant.approachId } : {}),
+        ...(participant.approachTitle ? { approachTitle: participant.approachTitle } : {}),
+      };
+      const live: ResearchDecisionBatchSummary[] = inMemory
+        .filter((batch) => batchBelongsToResearchRun(batch, participant, ctx))
+        .map((batch) => ({ ...railBatch(batch, now), ...meta }));
+      const onDisk = directory
+        ? await Promise.all(fileIds
+          .filter((batchId) => !known.has(batchId))
+          .map(async (batchId) => {
+            const entry = await this.railFileSummaryEntry(participant.thread, decisionBatchFilePath(directory, batchId));
+            if (!entry) return undefined;
+            if (!batchBelongsToResearchRun({ createdAt: entry.batch.createdAt, researchRunId: entry.researchRunId }, participant, ctx)) {
+              return undefined;
+            }
+            return { ...entry.batch, ...meta };
+          }))
+        : [];
+      return [...live, ...onDisk.filter((item): item is ResearchDecisionBatchSummary => item !== undefined)];
+    }));
+    const combined: ResearchDecisionBatchSummary[] = [];
+    for (const list of perParticipant) {
+      for (const entry of list) {
+        if (seen.has(entry.batchId)) continue;
+        seen.add(entry.batchId);
+        combined.push(entry);
+      }
+    }
+    return combined.sort((left, right) => right.createdAt - left.createdAt);
+  }
+
   private async railFileSummary(caller: OpenAIDecisionCaller, file: string): Promise<DecisionsRailBatch | undefined> {
+    return (await this.railFileSummaryEntry(caller, file))?.batch;
+  }
+
+  private async railFileSummaryEntry(
+    caller: OpenAIDecisionCaller,
+    file: string,
+  ): Promise<{ mtimeMs: number; size: number; batch: DecisionsRailBatch; researchRunId?: string; resultsFile: string } | undefined> {
     const info = await stat(file).catch(() => undefined);
     if (!info) return undefined;
     const cached = this.railFileSummaries.get(file);
-    if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached.batch;
+    if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached;
     const record = await readDecisionBatchFile(file, caller);
     if (!record) return undefined;
-    const batch = railBatch(record, this.now());
+    const entry = {
+      mtimeMs: info.mtimeMs,
+      size: info.size,
+      batch: railBatch(record, this.now()),
+      ...(record.researchRunId ? { researchRunId: record.researchRunId } : {}),
+      resultsFile: record.resultsFile ?? file,
+    };
     this.railFileSummaries.delete(file);
-    this.railFileSummaries.set(file, { mtimeMs: info.mtimeMs, size: info.size, batch });
+    this.railFileSummaries.set(file, entry);
     // Result files keep 20 batches per thread; this bounds the cache across threads.
     while (this.railFileSummaries.size > RAIL_FILE_SUMMARY_LIMIT) {
       const oldest = this.railFileSummaries.keys().next().value;
       if (oldest === undefined) break;
       this.railFileSummaries.delete(oldest);
     }
-    return batch;
+    return entry;
   }
 
   private async railFileRecordFor(caller: OpenAIDecisionCaller, batchId: string) {
@@ -1364,14 +1473,14 @@ export class OpenAIDecisionsService {
   }
 
   /** The stored version a call names: latest active, or a pinned version. */
-  private registeredRecord(caller: OpenAIDecisionCaller, args: Record<string, unknown>) {
+  private registeredRecord(caller: OpenAIDecisionCaller, args: Record<string, unknown>, requestedRunId?: string) {
     if (
       args.version !== undefined
       && (!Number.isInteger(args.version) || (args.version as number) < 1)
     ) {
       throw new OpenAIDecisionsError("invalid_input", "version must be a positive integer.");
     }
-    const latest = this.resolveTarget(caller, args);
+    const latest = this.resolveTarget(caller, args, requestedRunId);
     const record = args.version === undefined || args.version === latest.version
       ? latest
       : this.options.store.getVersion(latest.decisionId, args.version as number);
@@ -1627,6 +1736,16 @@ export class OpenAIDecisionsService {
         this.recordItem(batch, { index, ok: false, code: "skipped", message: skippedReason });
       }
     }
+    const willWake = batch.background
+      && !this.silentBatches.has(batch.batchId)
+      && !this.closing
+      && this.options.wakeThread !== undefined;
+    if (willWake) {
+      this.pendingWakeups.set(batch.batchId, {
+        caller: batch.caller,
+        ...(batch.researchRunId ? { researchRunId: batch.researchRunId } : {}),
+      });
+    }
     // A cancel that came after every item was answered cancelled nothing.
     batch.state = batch.stoppedBy
       ? "stopped"
@@ -1657,16 +1776,26 @@ export class OpenAIDecisionsService {
     });
     await announcer.finish();
     const silent = this.silentBatches.delete(batch.batchId);
-    if (!batch.background || silent || this.closing || !this.options.wakeThread) return;
+    if (!batch.background) return;
+    if (silent || this.closing || !this.options.wakeThread) {
+      this.pendingWakeups.delete(batch.batchId);
+      if (!this.closing) this.options.onBackgroundBatchSettled?.(batch.caller, false);
+      return;
+    }
+    let woken = false;
     try {
       await this.options.wakeThread(batch.caller, { batchId: batch.batchId, text: batchWakeupText(batch) });
+      woken = true;
     } catch (error) {
       this.options.log?.warn("decision batch wake-up not delivered", {
         decisionId: batch.decisionId,
         batchId: batch.batchId,
         error: error instanceof Error ? error.name : "unknown",
       });
+    } finally {
+      this.pendingWakeups.delete(batch.batchId);
     }
+    this.options.onBackgroundBatchSettled?.(batch.caller, woken);
   }
 
   /**
@@ -1859,6 +1988,7 @@ export class OpenAIDecisionsService {
   private resolveTarget(
     caller: OpenAIDecisionCaller,
     args: { name?: unknown; decisionId?: unknown },
+    requestedRunId?: string,
   ): OpenAIDecisionVersionRecord {
     const decisionId = args.decisionId;
     const name = args.name;
@@ -1871,28 +2001,41 @@ export class OpenAIDecisionsService {
     if (!decisionId && !name) {
       throw new OpenAIDecisionsError("invalid_input", "Pass name or decisionId.");
     }
+    const matchesRequestedRun = (record: OpenAIDecisionVersionRecord): boolean =>
+      requestedRunId === undefined
+      || (record.scope === "research_run" && record.researchRunId === requestedRunId);
     if (decisionId) {
       const active = this.options.store.getActive(decisionId);
-      if (active && isVisible(active, caller)) {
+      if (active && isVisible(active, caller) && matchesRequestedRun(active)) {
         if (name && active.name !== name) {
           throw new OpenAIDecisionsError("invalid_input", "name and decisionId name different decisions.");
         }
         return active;
       }
       const first = this.options.store.getVersion(decisionId, 1);
-      if (first && first.status === "deleted" && isVisible(first, caller)) {
+      if (first && first.status === "deleted" && isVisible(first, caller) && matchesRequestedRun(first)) {
         throw new OpenAIDecisionsError("decision_deleted", `Decision "${first.name}" was deleted.`);
       }
-      throw new OpenAIDecisionsError("decision_not_found", "No visible decision has that id.");
+      throw new OpenAIDecisionsError(
+        "decision_not_found",
+        requestedRunId !== undefined
+          ? `No active decision with that id exists in research run "${requestedRunId}".`
+          : "No visible decision has that id.",
+      );
     }
-    const [match] = this.options.store.findActiveByName(name!, caller);
+    const matches = this.options.store.findActiveByName(name!, caller);
+    const match = requestedRunId !== undefined
+      ? matches.find(matchesRequestedRun)
+      : matches[0];
     if (!match) {
-      if (this.options.store.hasDeletedName(name!, caller)) {
+      if (requestedRunId === undefined && this.options.store.hasDeletedName(name!, caller)) {
         throw new OpenAIDecisionsError("decision_deleted", `Decision "${name}" was deleted.`);
       }
       throw new OpenAIDecisionsError(
         "decision_not_found",
-        `No active decision named "${name}" is visible to this thread. Call decisions_list.`,
+        requestedRunId !== undefined
+          ? `No active decision named "${name}" exists in research run "${requestedRunId}". Call decisions_list.`
+          : `No active decision named "${name}" is visible to this thread. Call decisions_list.`,
       );
     }
     return match;
@@ -2179,7 +2322,7 @@ function batchBelongsToResearchRun(
   ctx: Pick<DecisionResearchRunContext, "runId" | "createdAt">,
 ): boolean {
   if (batch.researchRunId !== undefined) return batch.researchRunId === ctx.runId;
-  return participant.role === "worker" || batch.createdAt >= ctx.createdAt;
+  return participant.role === "worker";
 }
 
 function isVisible(record: OpenAIDecisionVersionRecord, caller: OpenAIDecisionCaller): boolean {

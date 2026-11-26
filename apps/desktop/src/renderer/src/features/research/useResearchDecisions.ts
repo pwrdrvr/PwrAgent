@@ -71,6 +71,7 @@ export function useResearchDecisions(params: {
   useEffect(() => {
     if (!available || !subscribe || !backend || !threadId) return;
     return subscribe((event) => {
+      if (event.federationTarget?.scope === "remote") return;
       if (event.notification.method !== "thread/decisionBatches/updated") return;
       const eventThreadId = event.notification.params.threadId;
       const eventKey = `${event.backend}:${eventThreadId}`;

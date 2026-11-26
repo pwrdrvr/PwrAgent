@@ -37,6 +37,7 @@ export type OpenAIDecisionsRail = Pick<
   | "profileDecisions"
   | "deleteProfileDecision"
   | "cancelThreadBatches"
+  | "hasActiveBackgroundBatch"
   | "researchRunDecisionsSnapshot"
   | "researchRunBatchPage"
   | "researchRunBatchAction"
@@ -79,6 +80,8 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
   resolveCallerResearchRuns?: OpenAIDecisionsServiceOptions["resolveCallerResearchRuns"];
   /** Research run participant lookup when the caller is a member. */
   resolveResearchRunContext?: OpenAIDecisionsServiceOptions["resolveResearchRunContext"];
+  /** Called when a background batch settles; `woken` is false when no wake-up turn was delivered. */
+  onBackgroundBatchSettled?: OpenAIDecisionsServiceOptions["onBackgroundBatchSettled"];
 }): PwrAgentOpenAIDecisionsHandler {
   // Opened on first tool call, so installing the handler never touches the
   // profile database during boot.
@@ -115,6 +118,7 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     ...(params.wakeThread ? { wakeThread: params.wakeThread } : {}),
     ...(params.resolveCallerResearchRuns ? { resolveCallerResearchRuns: params.resolveCallerResearchRuns } : {}),
     ...(params.resolveResearchRunContext ? { resolveResearchRunContext: params.resolveResearchRunContext } : {}),
+    ...(params.onBackgroundBatchSettled ? { onBackgroundBatchSettled: params.onBackgroundBatchSettled } : {}),
     // Each batch's answers as JSONL in its thread's storage, removed with the thread.
     batchResultsDirectory: (caller) => threadDecisionBatchDirectory({
       backend: caller.backend as AppServerBackendKind,
@@ -156,6 +160,7 @@ export function createOpenAIDecisionsAgentToolsHandler(params: {
     profileDecisions: () => service.profileDecisions(),
     deleteProfileDecision: (decisionId) => service.deleteProfileDecision(decisionId),
     cancelThreadBatches: async (caller, reason, options) => await service.cancelThreadBatches(caller, reason, options),
+    hasActiveBackgroundBatch: (caller, researchRunId) => service.hasActiveBackgroundBatch(caller, researchRunId),
     researchRunDecisionsSnapshot: async (ctx, readiness) => await service.researchRunDecisionsSnapshot(ctx, readiness),
     researchRunBatchPage: async (ctx, params) => await service.researchRunBatchPage(ctx, params),
     researchRunBatchAction: async (ctx, batchId, action) => await service.researchRunBatchAction(ctx, batchId, action),

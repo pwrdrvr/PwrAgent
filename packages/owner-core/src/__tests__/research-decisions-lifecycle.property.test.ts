@@ -32,6 +32,7 @@ type BatchTracker = {
 
 function createHarness(options: {
   readyProviders?: readonly DecisionRunProvider[];
+  trackBackgroundOccupancy?: boolean;
 } = {}) {
   const storage = new MemoryResearchStorage();
   let clock = 10_000;
@@ -66,6 +67,18 @@ function createHarness(options: {
         batch.cancelReason = reason;
       }
     },
+    ...(options.trackBackgroundOccupancy
+      ? {
+          hasActiveBackgroundDecisionBatch: (thread, runId) =>
+            batches.some((batch) =>
+              batch.active
+              && batch.background
+              && batch.owner.backend === thread.backend
+              && batch.owner.threadId === thread.threadId
+              && (runId === undefined || batch.researchRunId === undefined || batch.researchRunId === runId),
+            ),
+        }
+      : {}),
     spawn: async (_context, task, _title, _workspaceMode, onCreated) => {
       workerSeq += 1;
       const worker = { backend: "codex" as const, threadId: `worker-${workerSeq}` };
@@ -276,5 +289,108 @@ describe("ResearchService Decisions lifecycle and prompt gating", () => {
     expect(researchItemWorkerPrompt("r1", approach, [])).not.toContain("decisions_list");
     expect(researchResumePrompt("r1", approach, ["jev"])).toContain("TypeSafe Jev");
     expect(researchItemWorkerPrompt("r1", approach, ["local"])).toContain("local Clef");
+  });
+
+  it("keeps run alive and holds worker slot while a worker awaits a background decision batch, then exhausts if batch ends without wake", async () => {
+    const harness = createHarness({ readyProviders: ["jev"], trackBackgroundOccupancy: true });
+    const started = await harness.service.start({
+      objective: "Background batch wake-up survival",
+      approaches: [{ title: "Score paragraphs", task: "Run background Jev batch" }],
+      minutes: 15,
+      workspaceMode: "none",
+    }, coordinator);
+
+    const run = harness.service.read(started.id, coordinator);
+    const worker = run.approaches[0]!.worker!;
+    const workerThread = { backend: worker.backend, threadId: worker.threadId };
+
+    // Worker launches background batch and ends Turn 1 to wait for wake-up.
+    harness.batches.push({
+      batchId: "batch_bg_1",
+      owner: workerThread,
+      researchRunId: run.id,
+      background: true,
+      active: true,
+    });
+    harness.service.observeEnd(workerThread, worker.turnId!);
+
+    // Run MUST remain "running" (not "exhausted"), and worker slot stays reserved against new assignments.
+    expect(harness.service.read(run.id, coordinator).status).toBe("running");
+    const finding = await harness.service.update(
+      run.id,
+      "coord-finding-1",
+      { action: "finding", approachId: run.approaches[0]!.id, kind: "note", text: "Seed note", paths: [] },
+      coordinator,
+    );
+    const findingItem = harness.service.read(run.id, coordinator).items.find((item) => item.type === "finding")!;
+    await expect(harness.service.assign({
+      runId: run.id,
+      itemId: findingItem.id,
+      expectedVersion: findingItem.version,
+      task: "Should not steal background batch slot",
+    }, coordinator)).rejects.toThrow("Research worker limit reached");
+    expect(finding.status).toBe("running");
+
+    // Batch finishes and wakes worker into Turn 2: turn is admitted (not killed) and can submit.
+    harness.batches[0]!.active = false;
+    await harness.service.observeStart(workerThread, "worker-wake-turn-2");
+    expect(harness.stoppedTurns).toEqual([]);
+    await harness.service.update(
+      run.id,
+      "worker-submit-1",
+      { action: "submit", approachId: run.approaches[0]!.id, text: "Results from batch_bg_1", paths: [] },
+      { ...workerThread, kind: "agent" },
+    );
+    harness.service.observeEnd(workerThread, "worker-wake-turn-2");
+    expect(harness.service.read(run.id, coordinator).submissions).toHaveLength(1);
+
+    // Separate 1-worker run: if background batch settles silently (no wake), observeDecisionBatchFinished exhausts the run.
+    const silentRun = await harness.service.start({
+      objective: "Silent cancel exhaustion",
+      approaches: [{ title: "Solo", task: "Background batch" }],
+      workspaceMode: "none",
+    }, { ...coordinator, callId: "coord-call-2" });
+    const silentWorker = harness.service.read(silentRun.id, coordinator).approaches[0]!.worker!;
+    const silentThread = { backend: silentWorker.backend, threadId: silentWorker.threadId };
+    harness.batches.push({
+      batchId: "batch_silent",
+      owner: silentThread,
+      researchRunId: silentRun.id,
+      background: true,
+      active: true,
+    });
+    harness.service.observeEnd(silentThread, silentWorker.turnId!);
+    expect(harness.service.read(silentRun.id, coordinator).status).toBe("running");
+
+    harness.batches[1]!.active = false;
+    harness.service.observeDecisionBatchFinished(silentThread);
+    expect(harness.service.read(silentRun.id, coordinator).status).toBe("exhausted");
+  });
+
+  it("validates completed-run preconditions in stop before cancelling decision batches", async () => {
+    const harness = createHarness({ readyProviders: ["openai"] });
+    const started = await harness.service.start({
+      objective: "Stop precondition check",
+      approaches: [{ title: "Solo", task: "Work" }],
+      workspaceMode: "none",
+    }, coordinator);
+    const run = harness.service.read(started.id, coordinator);
+    const worker = run.approaches[0]!.worker!;
+    harness.batches.push({
+      batchId: "batch_precond",
+      owner: { backend: worker.backend, threadId: worker.threadId },
+      researchRunId: run.id,
+      background: true,
+      active: true,
+    });
+
+    harness.service.observeEnd({ backend: worker.backend, threadId: worker.threadId }, worker.turnId!);
+    expect(harness.service.read(run.id, coordinator).status).toBe("exhausted");
+
+    // Completing an exhausted run with no accepted submission must fail BEFORE cancelling batches.
+    await expect(
+      harness.service.stop(run.id, { ...coordinator, kind: "operator" }, "completed", "Premature finish"),
+    ).rejects.toThrow("Accept a submission before completing the run");
+    expect(harness.batches[0]!.active).toBe(true);
   });
 });

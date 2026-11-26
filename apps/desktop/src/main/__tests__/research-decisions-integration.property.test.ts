@@ -235,11 +235,46 @@ describe("Research Decisions integration", () => {
     ), { numRuns: 20 });
   });
 
-  it("exposes worker batches to run members via decisions_batch_results without leaking to outsiders or pre-run batches", async () => {
+  it("exposes worker batches to run members via decisions_batch_results without leaking to outsiders or pre/post/multi-run untagged batches", async () => {
     let clock = 500;
-    const { resolveCallerResearchRuns, resolveResearchRunContext } = buildRunFixture([
-      { runId: "run-alpha", createdAt: 1_000, status: "running", coordinatorId: "coord-a", workerIds: ["worker-a1", "worker-a2"] },
-    ]);
+    const runs: Array<{
+      runId: string;
+      createdAt: number;
+      status: "running" | "stopping" | "completed" | "stopped" | "exhausted" | "deadline" | "interrupted";
+      coordinatorId: string;
+      workerIds: string[];
+    }> = [];
+    const resolveCallerResearchRuns = (caller: { backend: string; threadId: string }) =>
+      runs
+        .filter((run) => run.coordinatorId === caller.threadId || run.workerIds.includes(caller.threadId))
+        .map((run) => ({
+          runId: run.runId,
+          status: run.status,
+          createdAt: run.createdAt,
+          isCoordinator: run.coordinatorId === caller.threadId,
+        }));
+    const resolveResearchRunContext = (caller: { backend: string; threadId: string }, runId: string) => {
+      const run = runs.find((entry) => entry.runId === runId);
+      if (!run) return undefined;
+      const isCoordinator = run.coordinatorId === caller.threadId;
+      if (!isCoordinator && !run.workerIds.includes(caller.threadId)) return undefined;
+      return {
+        runId: run.runId,
+        createdAt: run.createdAt,
+        status: run.status,
+        isCoordinator,
+        participants: [
+          { thread: { backend: "codex", threadId: run.coordinatorId }, role: "coordinator" as const },
+          ...run.workerIds.map((workerId, index) => ({
+            thread: { backend: "codex", threadId: workerId },
+            role: "worker" as const,
+            approachId: `a${index + 1}`,
+            approachTitle: `Approach ${index + 1}`,
+          })),
+        ],
+      };
+    };
+
     const service = new OpenAIDecisionsService({
       store: new MemoryDecisionRegistry(),
       readApiKey: async () => "sk-test-batch-visibility-fixture",
@@ -256,20 +291,28 @@ describe("Research Decisions integration", () => {
     const worker1 = { backend: "codex", threadId: "worker-a1" };
     const outsider = { backend: "codex", threadId: "unrelated-thread" };
 
-    // Pre-run batch on coordinator (createdAt 500 < run.createdAt 1000) tagged with another run.
+    // 1. Pre-run batch on coordinator at t=500 BEFORE run-alpha exists.
     await service.register(coord, {
-      name: "pre_run_rule",
+      name: "coord_rule",
       scope: "thread",
-      instructions: "Old check",
+      instructions: "Manual check",
       question: { type: "predicate" },
       inputSchema: { type: "string" },
     });
     const preRunBatch = await service.invoke(coord, {
-      name: "pre_run_rule",
+      name: "coord_rule",
       inputs: ["old item"],
     }) as { batchId: string };
 
-    // Now run-alpha starts at t=1500.
+    // 2. run-alpha starts at t=1000; worker runs a rubric batch at t=1500.
+    clock = 1_000;
+    runs.push({
+      runId: "run-alpha",
+      createdAt: 1_000,
+      status: "running",
+      coordinatorId: "coord-a",
+      workerIds: ["worker-a1", "worker-a2"],
+    });
     clock = 1_500;
     await service.register(coord, {
       name: "rubric",
@@ -284,13 +327,40 @@ describe("Research Decisions integration", () => {
       inputs: ["claim 1", "claim 2"],
     }) as { batchId: string };
 
-    // Coordinator lists all batches for run-alpha and sees worker1's batch (with role & approach metadata).
+    // 3. Coordinator also coordinates a second active run-beta and runs an untagged thread batch at t=1750.
+    clock = 1_750;
+    runs.push({
+      runId: "run-beta",
+      createdAt: 1_700,
+      status: "running",
+      coordinatorId: "coord-a",
+      workerIds: ["worker-b1"],
+    });
+    const multiRunUntaggedBatch = await service.invoke(coord, {
+      name: "coord_rule",
+      inputs: ["ambiguous multi-run item"],
+    }) as { batchId: string };
+
+    // 4. Both runs finish; coordinator runs an untagged post-run batch at t=2500.
+    runs[0]!.status = "completed";
+    runs[1]!.status = "completed";
+    clock = 2_500;
+    const postRunBatch = await service.invoke(coord, {
+      name: "coord_rule",
+      inputs: ["post-run item"],
+    }) as { batchId: string };
+
+    // Coordinator lists batches for run-alpha: MUST see workerBatch and MUST exclude pre-run, multi-run untagged, and post-run batches.
     const listed = await service.batchResults(coord, { researchRunId: "run-alpha" }) as {
       researchRunId: string;
       batches: Array<{ batchId: string; role: string; approachId?: string; caller: { threadId: string } }>;
     };
     expect(listed.researchRunId).toBe("run-alpha");
-    expect(listed.batches.map((b) => b.batchId)).toContain(workerBatch.batchId);
+    const listedIds = listed.batches.map((b) => b.batchId);
+    expect(listedIds).toContain(workerBatch.batchId);
+    expect(listedIds).not.toContain(preRunBatch.batchId);
+    expect(listedIds).not.toContain(multiRunUntaggedBatch.batchId);
+    expect(listedIds).not.toContain(postRunBatch.batchId);
     expect(listed.batches.find((b) => b.batchId === workerBatch.batchId)).toMatchObject({
       role: "worker",
       approachId: "a1",
@@ -312,13 +382,117 @@ describe("Research Decisions integration", () => {
     expect(readWithoutRun.batchId).toBe(workerBatch.batchId);
     expect(readWithoutRun.results).toHaveLength(2);
 
-    // Pre-run batch was created at t=500 < run.createdAt=1000, wait: soleActiveResearchRunId tagged it only if active;
-    // ensure preRunBatch is checked honestly and outsider is strictly blocked.
-    expect(preRunBatch.batchId).toBeTruthy();
+    // Worker1 and outsiders cannot read pre-run, multi-run untagged, or post-run coordinator batches.
+    for (const leakedId of [preRunBatch.batchId, multiRunUntaggedBatch.batchId, postRunBatch.batchId]) {
+      await expect(service.batchResults(worker1, { batchId: leakedId }))
+        .rejects.toMatchObject({ code: "batch_not_found" });
+      await expect(service.batchResults(worker1, { batchId: leakedId, researchRunId: "run-alpha" }))
+        .rejects.toMatchObject({ code: "batch_not_found" });
+    }
     await expect(service.batchResults(outsider, { researchRunId: "run-alpha" }))
       .rejects.toMatchObject({ code: "batch_not_found" });
     await expect(service.batchResults(outsider, { batchId: workerBatch.batchId }))
       .rejects.toMatchObject({ code: "batch_not_found" });
+  });
+
+  it("isolates explicit researchRunId in invoke/update/delete from thread/profile decisions and enforces symmetric same-scope name collisions", async () => {
+    const { resolveCallerResearchRuns, resolveResearchRunContext } = buildRunFixture([
+      { runId: "run-1", createdAt: 1_000, status: "running", coordinatorId: "coord-1", workerIds: ["worker-1"] },
+      { runId: "run-empty", createdAt: 1_100, status: "running", coordinatorId: "coord-1", workerIds: ["worker-2"] },
+    ]);
+    const service = new OpenAIDecisionsService({
+      store: new MemoryDecisionRegistry(),
+      readApiKey: async () => "sk-test-explicit-run-scope",
+      readAccountSettings: () => ({}),
+      profileId: () => "profile-test",
+      recordUsageLines: async () => {},
+      fetch: async () => okDecisionResponse(),
+      resolveCallerResearchRuns,
+      resolveResearchRunContext,
+    });
+
+    const coord = { backend: "codex", threadId: "coord-1" };
+
+    // Symmetric cross-scope registration: same name allowed across profile, thread, and research_run.
+    const profileDec = await service.register(coord, {
+      name: "rubric",
+      scope: "profile",
+      instructions: "Profile check",
+      question: { type: "predicate" },
+      inputSchema: { type: "string" },
+    }) as { decisionId: string };
+    const threadDec = await service.register(coord, {
+      name: "rubric",
+      scope: "thread",
+      instructions: "Thread check",
+      question: { type: "predicate" },
+      inputSchema: { type: "string" },
+    }) as { decisionId: string };
+    const runDec = await service.register(coord, {
+      name: "rubric",
+      scope: "research_run",
+      researchRunId: "run-1",
+      instructions: "Run-1 check",
+      question: { type: "predicate" },
+      inputSchema: { type: "string" },
+    }) as { decisionId: string };
+
+    // Same-scope duplicate MUST fail symmetrically in every scope.
+    await expect(service.register(coord, {
+      name: "rubric",
+      scope: "research_run",
+      researchRunId: "run-1",
+      instructions: "Dup",
+      question: { type: "predicate" },
+      inputSchema: { type: "string" },
+    })).rejects.toMatchObject({ code: "decision_name_taken" });
+    await expect(service.register(coord, {
+      name: "rubric",
+      scope: "thread",
+      instructions: "Dup",
+      question: { type: "predicate" },
+      inputSchema: { type: "string" },
+    })).rejects.toMatchObject({ code: "decision_name_taken" });
+    await expect(service.register(coord, {
+      name: "rubric",
+      scope: "profile",
+      instructions: "Dup",
+      question: { type: "predicate" },
+      inputSchema: { type: "string" },
+    })).rejects.toMatchObject({ code: "decision_name_taken" });
+
+    // Explicit researchRunId on invoke MUST hit run-1's decision, NOT the thread-scoped decision.
+    const invoked = await service.invoke(coord, {
+      name: "rubric",
+      researchRunId: "run-1",
+      input: "check me",
+    }) as { decisionId: string };
+    expect(invoked.decisionId).toBe(runDec.decisionId);
+
+    // Explicit researchRunId on update MUST update run-1's decision, NOT fail against thread-scoped decision.
+    const updated = service.update(coord, {
+      name: "rubric",
+      scope: "research_run",
+      researchRunId: "run-1",
+      instructions: "Updated Run-1 check",
+      question: { type: "predicate" },
+      inputSchema: { type: "string" },
+    }) as { decisionId: string; version: number };
+    expect(updated.decisionId).toBe(runDec.decisionId);
+    expect(updated.version).toBe(2);
+
+    // Explicit researchRunId on delete for a run WITHOUT that decision MUST fail and NEVER delete thread/profile decisions.
+    expect(() => service.delete(coord, { name: "rubric", researchRunId: "run-empty" }))
+      .toThrowError(/No active decision named "rubric" exists in research run "run-empty"/);
+    expect(() => service.delete(coord, { decisionId: profileDec.decisionId, researchRunId: "run-1" }))
+      .toThrowError(/No active decision with that id exists in research run "run-1"/);
+
+    // Both profile and thread decisions are still intact.
+    const visibleIds = (service.list(coord, {}) as { decisions: Array<{ decisionId: string }> })
+      .decisions.map((d) => d.decisionId);
+    expect(visibleIds).toContain(profileDec.decisionId);
+    expect(visibleIds).toContain(threadDec.decisionId);
+    expect(visibleIds).toContain(runDec.decisionId);
   });
 
   it("aborts in-flight background batches via cancelThreadBatches and suppresses wake-up turns", async () => {

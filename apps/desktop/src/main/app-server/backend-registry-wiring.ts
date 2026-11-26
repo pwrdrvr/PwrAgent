@@ -979,7 +979,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
         new AgentToolMcpServer({
           resolveCallContext: (context) =>
             ports.resolveAgentToolMcpCallContext(context),
-          resolveCatalogs: (context) => context.managedReview
+          resolveCatalogs: async (context) => context.managedReview
             ? [{ id: "managed_review", router: managedReviewLedgerRouter }]
             : context.threadId && ports.isTaskMonitorThread({ ...context, threadId: context.threadId })
             ? [
@@ -1014,7 +1014,7 @@ export function createDesktopBackendRegistry(options?: DesktopBackendRegistryOpt
               threadTodoHandler: ports.threadTodoHandler,
               openAIDecisionsHandler: ports.openAIDecisionsHandler,
               researchHandler: ports.mcpResearchHandler,
-              researchDecisionsReady: ports.researchDecisionsReady,
+              researchDecisionsReady: await ports.isResearchDecisionsReady(),
               checkoutHandler: ports.checkoutHandler,
               checkoutMode: ports.resourceCheckoutToolMode(context),
             }, {

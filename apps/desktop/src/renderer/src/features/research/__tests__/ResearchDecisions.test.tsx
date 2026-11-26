@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DecisionProvidersReadiness } from "@pwragent/shared/decision-models";
 import {
@@ -266,5 +266,51 @@ describe("Research Decisions UI", () => {
     fireEvent.click(within(main).getByRole("tab", { name: /Decisions/ }));
     expect(await within(main).findByText("Worker: Claim Rubric")).toBeInTheDocument();
     expect(within(main).getByText("claim_validity")).toBeInTheDocument();
+  });
+
+  it("ignores remote federation decision batch events in useResearchDecisions while refreshing on local events", async () => {
+    const run = makeRunWithDecisionCitation();
+    const decisionsSnapshot = makeDecisionsSnapshot(readyOpenAI);
+    let agentEventListener: ((event: Record<string, unknown>) => void) | undefined;
+    const readResearchDecisions = vi.fn(async () => decisionsSnapshot);
+    const api = {
+      researchSnapshot: vi.fn(async () => ({ runs: [summarizeResearchRun(run)], writableRunIds: [run.id] })),
+      researchChanges: vi.fn(async () => ({ ...researchChangePage(run, 0), writable: true })),
+      readResearchEvents: vi.fn(async (req) => researchEventPage(run, req.range)),
+      searchResearch: vi.fn(async (req) => searchResearchItems(run.id, run.items, run.revision, req.query)),
+      readResearchItem: vi.fn(async (req) => ({ run, item: run.items.find((item) => item.id === req.itemId)! })),
+      onResearchChanged: vi.fn(() => () => {}),
+      onAgentEvent: vi.fn((listener: (event: Record<string, unknown>) => void) => {
+        agentEventListener = listener;
+        return () => { agentEventListener = undefined; };
+      }),
+      readResearchDecisionsStatus: vi.fn(async () => readyOpenAI),
+      readResearchDecisions,
+      openThreadInMainWindow: vi.fn(async () => {}),
+    } as unknown as DesktopApi;
+
+    render(<ResearchPanel desktopApi={api} thread={thread} />);
+    await screen.findByText(/Decisions: 1 run decision/);
+    const initialCalls = readResearchDecisions.mock.calls.length;
+
+    // Remote federation event with colliding backend:threadId MUST NOT trigger local refresh.
+    await act(async () => {
+      agentEventListener?.({
+        backend: "codex",
+        federationTarget: { scope: "remote", instanceId: "peer-remote-1" },
+        notification: { method: "thread/decisionBatches/updated", params: { threadId: "worker-1" } },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    });
+    expect(readResearchDecisions).toHaveBeenCalledTimes(initialCalls);
+
+    // Local event for the worker thread MUST trigger a refresh.
+    await act(async () => {
+      agentEventListener?.({
+        backend: "codex",
+        notification: { method: "thread/decisionBatches/updated", params: { threadId: "worker-1" } },
+      });
+    });
+    await waitFor(() => expect(readResearchDecisions.mock.calls.length).toBeGreaterThan(initialCalls));
   });
 });

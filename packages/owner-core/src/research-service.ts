@@ -51,6 +51,8 @@ export type ResearchPorts = {
     reason: string,
     options?: { researchRunId?: string },
   ) => Promise<void>;
+  /** Whether `thread` currently has an in-flight background decision batch (queued, running, or delivering wake-up). */
+  hasActiveBackgroundDecisionBatch?: (thread: ResearchThread, runId?: string) => boolean;
 };
 
 export type ResearchMemberRunSummary = {
@@ -418,7 +420,9 @@ export class ResearchService {
     const item = this.requireItemVersion(run.id, request.itemId, request.expectedVersion);
     this.requireReleasedAssignment(run.id, item);
     if (!["open", "blocked"].includes(item.work.state) || item.work.assignee) throw new Error("Release or reopen the item before assigning it");
-    if (run.activeWorkers >= run.workerLimit) throw new Error("Research worker limit reached; wait for or cancel an existing worker");
+    if (run.activeWorkers + this.approachesAwaitingBackgroundDecisions(run.id).length >= run.workerLimit) {
+      throw new Error("Research worker limit reached; wait for or cancel an existing worker");
+    }
     if (item.type === "approach" && researchApproachOccupiesSlot(item.record)) throw new Error("The prior assignment is still active or unresolved; cancel it before reassigning");
     if (run.status === "exhausted") {
       this.append(run, `reopen:${key}`, context, { type: "status", status: "running", reason: "The coordinator explicitly assigned retained evidence within the original deadline." });
@@ -510,7 +514,10 @@ export class ResearchService {
 
   private requireReleasedAssignment(id: string, item: ResearchItem): void {
     const assignment = item.work.assignmentId ? this.approach(id, item.work.assignmentId) : undefined;
-    if (assignment && researchApproachOccupiesSlot(assignment)) throw new Error("The prior assignment is still active or unresolved; cancel it before reassigning");
+    if (!assignment) return;
+    if (researchApproachOccupiesSlot(assignment) || this.approachAwaitsBackgroundDecisions(id, assignment)) {
+      throw new Error("The prior assignment is still active or unresolved; cancel it before reassigning");
+    }
   }
 
   private settleItemCancellation(id: string, assignmentId: string): void {
@@ -830,16 +837,19 @@ export class ResearchService {
     const pending = this.stops.get(id);
     if (pending) return pending;
     if (!["running", "stopping"].includes(run.status)) {
-      if (this.ports.cancelDecisionBatches) {
-        await this.cancelRunDecisions(id, run, reason);
-      }
       // A run that ended without being finished, as every live run does when PwrAgent quits, can still be
       // completed once a candidate is accepted. Nothing is running, so this records the outcome and stops nothing.
       if (outcome === "completed" && ["interrupted", "exhausted"].includes(run.status)) {
         if (!this.storage.hasSubmission(id, "accepted")) throw new Error("Accept a submission before completing the run");
+        if (this.ports.cancelDecisionBatches) {
+          await this.cancelRunDecisions(id, run, reason);
+        }
         this.append(run, requestId, actor, { type: "status", status: "completed", reason }, signature);
         await this.cancelCoordinatorReviewNotices(id);
         return this.requireHeader(id);
+      }
+      if (this.ports.cancelDecisionBatches) {
+        await this.cancelRunDecisions(id, run, reason);
       }
       return run;
     }
@@ -1053,6 +1063,15 @@ export class ResearchService {
     }
   }
 
+  /** Re-checks exploration exhaustion after a thread's background decision batch ends without waking its worker. */
+  observeDecisionBatchFinished(thread: ResearchThread): void {
+    if (this.closed) return;
+    for (const run of this.storage.activeRuns(thread)) {
+      if (run.ownerId !== this.ports.ownerId || run.status !== "running") continue;
+      this.finishExploration(this.requireHeader(run.id));
+    }
+  }
+
   close(): void {
     this.closed = true;
     this.intents.clear();
@@ -1227,6 +1246,8 @@ export class ResearchService {
     if (run.status !== "running" || run.activeWorkers > 0 || this.pendingStarts.get(run.id)?.size || this.storage.hasSubmission(run.id)) return;
     // Workers cut off by a restart have not ended: they are waiting to be resumed, unless their work has closed.
     if (this.storage.approaches(run.id, { interrupted: true }).some((approach) => researchApproachResumable(approach, (itemId) => this.storage.readItem(run.id, itemId)))) return;
+    // Workers awaiting an in-flight background decision batch will wake when the batch completes.
+    if (this.approachesAwaitingBackgroundDecisions(run.id).length > 0) return;
     this.append(run, `exhausted:${run.revision}`, this.operator(run), { type: "status", status: "exhausted", reason: "All workers ended without submitting a candidate. Findings are retained; this does not establish that the problem is unsolvable." });
     this.deadlines.get(run.id)?.();
     this.deadlines.delete(run.id);
@@ -1371,6 +1392,26 @@ export class ResearchService {
       this.ports.onError(error);
       return [];
     }
+  }
+
+  private approachAwaitsBackgroundDecisions(id: string, approach: ResearchApproach): boolean {
+    if (!this.ports.hasActiveBackgroundDecisionBatch) return false;
+    if (approach.state !== "ended" || !approach.worker) return false;
+    try {
+      return this.ports.hasActiveBackgroundDecisionBatch(approach.worker, id);
+    } catch (error) {
+      this.ports.onError(error);
+      return false;
+    }
+  }
+
+  private approachesAwaitingBackgroundDecisions(id: string): ResearchApproach[] {
+    if (!this.ports.hasActiveBackgroundDecisionBatch) return [];
+    const run = this.storage.header(id);
+    if (!run || !this.canDispatch(run)) return [];
+    return this.storage.approaches(id, { all: true }).filter((approach) =>
+      this.approachAwaitsBackgroundDecisions(id, approach) && this.canAdmitApproach(run, approach),
+    );
   }
 
   private async cancelRunDecisions(id: string, run: Pick<ResearchRunHeader, "coordinator">, reason: string): Promise<void> {
