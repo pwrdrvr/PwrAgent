@@ -422,9 +422,19 @@ export class ManagedReviewCandidateLedger {
   }
 }
 
+function isWindowsAbsolutePath(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || /^\\\\[^\\]/.test(value);
+}
+
 function resolveCandidateFilePath(file: string, cwd?: string): string {
-  if (!cwd || path.isAbsolute(file) || /^[A-Za-z]:[\\/]/.test(file)) {
+  if (!cwd || file.startsWith("/") || isWindowsAbsolutePath(file)) {
     return file;
+  }
+  if (isWindowsAbsolutePath(cwd)) {
+    return path.win32.resolve(cwd, file);
+  }
+  if (cwd.startsWith("/")) {
+    return path.posix.resolve(cwd, file.replace(/\\/g, "/"));
   }
   return path.resolve(cwd, file);
 }

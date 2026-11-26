@@ -1117,8 +1117,8 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
     const candidateArb = fc.record({
       id: fc.string({ minLength: 1, maxLength: 6 }).map((s) => `C${s}`),
       file: fc.oneof(
-        fc.constantFrom("src/a.ts", "packages/shared/b.ts"),
-        fc.constantFrom("/abs/x.ts", "/repo/sub/y.ts"),
+        fc.constantFrom("src/a.ts", "packages/shared/b.ts", "src\\win-rel.ts"),
+        fc.constantFrom("/abs/x.ts", "/repo/sub/y.ts", "D:\\abs\\z.ts"),
       ),
       startLine: fc.integer({ min: 1, max: 500 }),
       endSpan: fc.integer({ min: 0, max: 40 }),
@@ -1128,9 +1128,10 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
       disposition: fc.constantFrom<"pending" | "keep" | "drop">("pending", "keep", "drop"),
       priority: priorityArb,
     });
+    const cwdArb = fc.constantFrom("/repo", "C:\\work\\repo");
 
     fc.assert(
-      fc.property(fc.array(candidateArb, { maxLength: 15 }), (raw) => {
+      fc.property(fc.array(candidateArb, { maxLength: 15 }), cwdArb, (raw, cwd) => {
         const candidates: ManagedReviewCandidate[] = raw.map((c, idx) => ({
           id: `C${idx + 1}`,
           file: c.file,
@@ -1143,23 +1144,42 @@ describe("ManagedReviewService candidate ledger lifecycle integration", () => {
           ...(c.disposition === "keep" ? { priority: c.priority } : {}),
         }));
         const expectedKept = candidates.filter((c) => c.disposition === "keep");
-        const recovered = buildReviewOutputFromCandidateLedger(candidates, "/repo");
+        const recovered = buildReviewOutputFromCandidateLedger(candidates, cwd);
 
         if (expectedKept.length === 0) {
           expect(recovered).toBeUndefined();
           return;
         }
 
+        const expectedSorted = expectedKept
+          .map((candidate, index) => ({ candidate, index }))
+          .sort((a, b) => {
+            const pDiff = (a.candidate.priority ?? 3) - (b.candidate.priority ?? 3);
+            return pDiff !== 0 ? pDiff : a.index - b.index;
+          })
+          .map((entry) => entry.candidate);
+
         expect(recovered).toBeDefined();
         expect(recovered!.overall_correctness).toBe("patch is incorrect");
-        expect(recovered!.findings).toHaveLength(expectedKept.length);
+        expect(recovered!.findings).toHaveLength(expectedSorted.length);
         for (let i = 1; i < recovered!.findings.length; i += 1) {
           expect(recovered!.findings[i]!.priority ?? 3).toBeGreaterThanOrEqual(
             recovered!.findings[i - 1]!.priority ?? 3,
           );
         }
-        for (const finding of recovered!.findings) {
-          expect(finding.code_location.absolute_file_path.startsWith("/")).toBe(true);
+        for (let i = 0; i < recovered!.findings.length; i += 1) {
+          const finding = recovered!.findings[i]!;
+          const sourceFile = expectedSorted[i]!.file;
+          const resolvedPath = finding.code_location.absolute_file_path;
+          if (sourceFile.startsWith("/") || /^[A-Za-z]:[\\/]/.test(sourceFile)) {
+            expect(resolvedPath).toBe(sourceFile);
+          } else if (cwd.startsWith("/")) {
+            expect(resolvedPath.startsWith(`${cwd}/`)).toBe(true);
+            expect(resolvedPath).not.toContain("\\");
+          } else {
+            expect(resolvedPath.startsWith(`${cwd}\\`)).toBe(true);
+            expect(resolvedPath).not.toContain("/");
+          }
           expect(finding.code_location.line_range.end).toBeGreaterThanOrEqual(
             finding.code_location.line_range.start,
           );
