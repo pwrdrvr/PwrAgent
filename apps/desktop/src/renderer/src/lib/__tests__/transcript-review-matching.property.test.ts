@@ -56,4 +56,16 @@ it("matches an unbound optimistic review start against its settled replay start 
   expect(hasMatchingReplayReview([settledCurrentStart], optimisticStart, true)).toBe(true);
   expect(reviewEntriesMatch(settledOlderStart, optimisticStart)).toBe(false);
   expect(hasMatchingReplayReview([settledOlderStart], optimisticStart, true)).toBe(false);
+
+  // Backward clock skew or second-truncated completedAt must not hide a newer createdAt.
+  const skewedCompletedStart: AppServerThreadReviewEntry = {
+    type: "review",
+    id: "managed-review:turn-3:started",
+    review: "Review pull request #683",
+    displayText: "Review pull request #683",
+    createdAt: 1_005,
+    turn: { id: "turn-3", status: "completed", startedAt: 1_005, completedAt: 990 },
+  };
+  expect(reviewEntriesMatch(skewedCompletedStart, optimisticStart)).toBe(true);
+  expect(hasMatchingReplayReview([skewedCompletedStart], optimisticStart, true)).toBe(true);
 });

@@ -212,6 +212,7 @@ type ThreadSessionEntry = ThreadActiveTurnState & ThreadPendingInteractionState 
   providerPageTurnIds?: ReadonlySet<string>;
   providerPageAnchorTurnId?: string;
   needsHydrationAfterCompletion: boolean;
+  activeTurnStartedSequence?: { turnId: string; sequence: number };
   nextLiveEntrySequence: number;
   // ThreadView's completed live aggregates live in a keyed ref store. State
   // keeps only its observable revision/count so one append stays O(1).
@@ -2330,6 +2331,12 @@ function findUniqueTranscriptOrderSource(
     (source) =>
       (typeof source.createdAt === "number" || readRendererSequence(source) !== undefined) &&
       source.id !== entry.id &&
+      !(
+        entry.type === "message"
+        && source.type === "message"
+        && !isPendingEntryId(source.id)
+        && isSteeredMessage(entry) !== isSteeredMessage(source)
+      ) &&
       sameTurnOrUnknown(entry, source) &&
       !sourceToolBelongsToAnotherRow(entry, source, readDetailOwners) &&
       !entryToolHasAnotherSource(entry, source, sourceDetailOwners) &&
@@ -2615,6 +2622,11 @@ function carryForwardTranscriptEntryOrder(
       && source.origin
         ? source.origin
         : undefined;
+    const steered =
+      entry.type === "message"
+      && source.type === "message"
+      && !isSteeredMessage(entry)
+      && isSteeredMessage(source);
     const turn = source.turn && !entry.turn ? source.turn : undefined;
     const createdAt =
       typeof source.createdAt === "number" && source.createdAt !== entry.createdAt
@@ -2625,7 +2637,7 @@ function carryForwardTranscriptEntryOrder(
     // optimistic work that the read has not acknowledged yet.
     const sequence = readRendererSequence(source);
     if (
-      !origin && !turn && createdAt === undefined
+      !origin && !steered && !turn && createdAt === undefined
       && (sequence === undefined || sequence === readRendererSequence(entry))
     ) {
       sourceByHydratedEntry.set(entry, source);
@@ -2638,6 +2650,7 @@ function carryForwardTranscriptEntryOrder(
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(turn ? { turn } : {}),
       ...(origin ? { origin } : {}),
+      ...(steered ? ({ steered: true } satisfies SteeredMessageMarker) : {}),
     };
     if (sequence !== undefined) {
       hydratedEntry = withRendererSequence(hydratedEntry, sequence);
@@ -2666,16 +2679,29 @@ function carryForwardTranscriptEntryOrder(
     const entry = entriesByMessageId.get(message.id);
     const origin = !message.origin ? entry?.origin : undefined;
     const createdAt = entry?.createdAt;
-    if (!origin && (createdAt === undefined || createdAt === message.createdAt)) {
+    const steered = !isSteeredMessage(message) && Boolean(entry && isSteeredMessage(entry));
+    const sequence = entry ? readRendererSequence(entry) : undefined;
+    const sequenceChanged =
+      sequence !== undefined && sequence !== readRendererSequence(message);
+    if (
+      !origin
+      && !steered
+      && !sequenceChanged
+      && (createdAt === undefined || createdAt === message.createdAt)
+    ) {
       return message;
     }
 
     changed = true;
-    return {
+    const hydratedMessage: AppServerThreadMessage = {
       ...message,
       ...(origin ? { origin } : {}),
       ...(createdAt !== undefined ? { createdAt } : {}),
+      ...(steered ? ({ steered: true } satisfies SteeredMessageMarker) : {}),
     };
+    return sequence !== undefined
+      ? withRendererSequence(hydratedMessage, sequence)
+      : hydratedMessage;
   });
 
   const freshCurrentTurnId = latestTranscriptTurnId(response.replay.entries);
@@ -4378,6 +4404,12 @@ function findPromotedOptimisticUserMessageEntry(
   response: AppServerReadThreadResponse | undefined,
   message: AppServerThreadMessageEntry
 ): AppServerThreadMessageEntry | undefined {
+  // Promoted optimistic entries were moved into the replay ahead of an earlier
+  // assistant message. A mid-turn steer joining the turn must not claim or
+  // remove an earlier promoted opening prompt that shares its text.
+  if (isSteeredMessage(message)) {
+    return undefined;
+  }
   return findOptimisticEcho(
     message,
     response?.replay.entries.filter(isOptimisticUserMessageEntry) ?? [],
@@ -7056,12 +7088,20 @@ export function useThreadSessionState(params: {
                     : greatest;
                 }, undefined)
               : undefined;
+            const turnStartedExclusiveSequence =
+              steeredTurnId && current.activeTurnStartedSequence?.turnId === steeredTurnId
+                ? current.activeTurnStartedSequence.sequence - 1
+                : undefined;
+            const steeredSequenceFloor =
+              latestTurnSequence !== undefined && turnStartedExclusiveSequence !== undefined
+                ? Math.max(latestTurnSequence, turnStartedExclusiveSequence)
+                : latestTurnSequence ?? turnStartedExclusiveSequence;
             const echoEligibleOptimisticEntries =
-              latestTurnSequence === undefined
+              steeredSequenceFloor === undefined
                 ? current.optimisticEntries
                 : current.optimisticEntries.filter((entry) => {
                     const seq = readRendererSequence(entry);
-                    return seq === undefined || seq > latestTurnSequence;
+                    return seq === undefined || seq > steeredSequenceFloor;
                   });
             const mergedUserMessageEntry =
               mergeCompletedUserMessageWithPromotedOptimisticEntry(
@@ -7156,8 +7196,8 @@ export function useThreadSessionState(params: {
                       (entry) =>
                         entry.id === unreconciledLaunchpadMessageCandidate?.entry.id
                         || entry.type !== "message"
-                        || (latestTurnSequence !== undefined
-                          && (readRendererSequence(entry) ?? Infinity) <= latestTurnSequence)
+                        || (steeredSequenceFloor !== undefined
+                          && (readRendererSequence(entry) ?? Infinity) <= steeredSequenceFloor)
                         || !messageEchoesOptimisticEntry(
                           authoritativeUserMessageEntry,
                           entry,
@@ -7428,6 +7468,12 @@ export function useThreadSessionState(params: {
             ...current,
             activeTurnId: turnId,
             activeTurnStartedAt: startedAt,
+            activeTurnStartedSequence:
+              turnId
+                ? current.activeTurnStartedSequence?.turnId === turnId
+                  ? current.activeTurnStartedSequence
+                  : { turnId, sequence: current.nextLiveEntrySequence }
+                : current.activeTurnStartedSequence,
             backendReportedActive: true,
             expectOwnUpdate: true,
             interacted: retainTranscript || current.interacted,
@@ -7770,6 +7816,18 @@ export function useThreadSessionState(params: {
             ...current.optimisticEntries
               .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
               .map((entry) => {
+                if (
+                  entry.role === "user"
+                  && !entry.turn
+                  && completedTurn
+                  && completedTurnOwnsPendingItems
+                  && (!readSentTurnId(entry) || readSentTurnId(entry) === completedTurn.id)
+                ) {
+                  return {
+                    ...entry,
+                    turn: completedTurn,
+                  };
+                }
                 if (entry.turn?.id !== completedTurn?.id) {
                   return entry;
                 }
@@ -8681,6 +8739,11 @@ export function useThreadSessionState(params: {
           ...current,
           activeTurnId: turnId,
           activeTurnStartedAt: turnId ? Date.now() : undefined,
+          activeTurnStartedSequence: turnId
+            ? current.activeTurnStartedSequence?.turnId === turnId
+              ? current.activeTurnStartedSequence
+              : { turnId, sequence: current.nextLiveEntrySequence }
+            : current.activeTurnStartedSequence,
           expectOwnUpdate: Boolean(turnId) || current.expectOwnUpdate,
           interacted: Boolean(turnId) || current.interacted,
           lastTouchedAt: Date.now(),

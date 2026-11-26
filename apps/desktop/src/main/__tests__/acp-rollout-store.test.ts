@@ -962,57 +962,92 @@ describe("AcpRolloutStore", () => {
     ]);
   });
 
-  it("does not drop a repeated tool_call after a turn boundary or intervening tool_call_update", () => {
+  it("does not drop a repeated tool_call after an intervening tool_call_update within the same turn", () => {
     const store = new AcpRolloutStore(tempDir);
     const backendId = "acp:antigravity" as AcpBackendId;
 
     store.appendUpdate({
       backendId,
-      sessionId: "session-1",
+      sessionId: "session-same-turn",
       receivedAt: 1000,
       update: { kind: "pwragent_user_prompt", prompt: "turn 1", turnId: "turn-1" },
     });
     store.appendUpdate({
       backendId,
-      sessionId: "session-1",
+      sessionId: "session-same-turn",
       receivedAt: 1001,
       update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read a.ts", kind: "execute", status: "completed" },
     });
     store.appendUpdate({
       backendId,
-      sessionId: "session-1",
+      sessionId: "session-same-turn",
       receivedAt: 1002,
       update: { sessionUpdate: "tool_call_update", toolCallId: "tc-1", status: "in_progress" },
     });
     store.appendUpdate({
       backendId,
-      sessionId: "session-1",
+      sessionId: "session-same-turn",
       receivedAt: 1003,
+      update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read a.ts", kind: "execute", status: "completed" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-same-turn",
+      receivedAt: 1004,
+      update: { kind: "turn_finished", turnId: "turn-1" },
+    });
+
+    const replay = store.readReplay({ backendId, sessionId: "session-same-turn" });
+    const activities = replay.entries.filter((entry) => entry.type === "activity");
+    expect(activities).toHaveLength(1);
+    expect(activities[0]?.status).toBe("completed");
+  });
+
+  it("does not drop a repeated tool_call across a turn boundary without an intervening tool_call_update", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:antigravity" as AcpBackendId;
+
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-cross-turn",
+      receivedAt: 1000,
+      update: { kind: "pwragent_user_prompt", prompt: "turn 1", turnId: "turn-1" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-cross-turn",
+      receivedAt: 1001,
+      update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read a.ts", kind: "execute", status: "completed" },
+    });
+    store.appendUpdate({
+      backendId,
+      sessionId: "session-cross-turn",
+      receivedAt: 1002,
       update: { kind: "turn_finished", turnId: "turn-1" },
     });
     store.appendUpdate({
       backendId,
-      sessionId: "session-1",
+      sessionId: "session-cross-turn",
       receivedAt: 2000,
       update: { kind: "pwragent_user_prompt", prompt: "turn 2", turnId: "turn-2" },
     });
     store.appendUpdate({
       backendId,
-      sessionId: "session-1",
+      sessionId: "session-cross-turn",
       receivedAt: 2001,
       update: { sessionUpdate: "tool_call", toolCallId: "tc-1", title: "Read a.ts", kind: "execute", status: "completed" },
     });
     store.appendUpdate({
       backendId,
-      sessionId: "session-1",
+      sessionId: "session-cross-turn",
       receivedAt: 2002,
       update: { kind: "turn_finished", turnId: "turn-2" },
     });
 
-    const replay = store.readReplay({ backendId, sessionId: "session-1" });
-    const activities = replay.entries.filter((entry) => entry.type === "activity");
-    expect(activities).toHaveLength(1);
-    expect(activities[0]?.status).toBe("completed");
+    const toolCallUpdates = store
+      .readUpdates({ backendId, sessionId: "session-cross-turn" })
+      .filter((record) => record.update.sessionUpdate === "tool_call");
+    expect(toolCallUpdates).toHaveLength(2);
   });
 
   it("keeps untimed synthetic workspace entries after timed provider entries", () => {

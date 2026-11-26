@@ -677,4 +677,235 @@ describe("useThreadSessionState transcript ordering regressions (MBT shrunk coun
       session.close();
     }
   });
+
+  it("does not let a first-in-turn or post-promotion same-text steer steal an un-echoed opening prompt", async () => {
+    const entries: AppServerThreadEntry[] = [];
+    const session = await mountSession({
+      backend: "acp:antigravity",
+      supportsPagination: false,
+      snapshot: () => entries,
+    });
+    try {
+      // Case 1: first-in-turn steer arrives before any assistant/tool entry in turn-1.
+      let optTurn1!: string;
+      act(() => {
+        optTurn1 = session.result.current.addOptimisticUserMessage("continue");
+        session.emit("turn/started", {
+          turn: { id: "turn-1", status: "in_progress", startedAt: BASE_NOW },
+        });
+        session.emit("item/completed", {
+          turnId: "turn-1",
+          item: {
+            id: "user:turn-1:steer:1",
+            type: "userMessage",
+            steered: true,
+            content: [{ type: "text", text: "continue" }],
+            createdAt: BASE_NOW + 10,
+          },
+        });
+      });
+
+      expect(entryKeys(session.result.current.entries)).toEqual([
+        optTurn1,
+        "user:turn-1:steer:1",
+      ]);
+
+      // Case 2: opening prompt was promoted into response.replay.entries by an
+      // assistant completion before a same-text steer arrives.
+      let optTurn2!: string;
+      act(() => {
+        session.emit("turn/completed", {
+          turnId: "turn-1",
+          turn: { id: "turn-1", status: "completed", completedAt: BASE_NOW + 20 },
+        });
+        optTurn2 = session.result.current.addOptimisticUserMessage("continue");
+        session.emit("turn/started", {
+          turn: { id: "turn-2", status: "in_progress", startedAt: BASE_NOW + 30 },
+        });
+        session.emit("item/completed", {
+          turnId: "turn-2",
+          item: {
+            id: "assistant:turn-2:1",
+            type: "agentMessage",
+            text: "Working on it",
+            phase: "commentary",
+            createdAt: BASE_NOW + 35,
+          },
+        });
+        session.emit("item/completed", {
+          turnId: "turn-2",
+          item: {
+            id: "user:turn-2:steer:1",
+            type: "userMessage",
+            steered: true,
+            content: [{ type: "text", text: "continue" }],
+            createdAt: BASE_NOW + 40,
+          },
+        });
+      });
+
+      expect(entryKeys(session.result.current.entries)).toEqual([
+        optTurn1,
+        "user:turn-1:steer:1",
+        optTurn2,
+        "assistant:turn-2:1",
+        "user:turn-2:steer:1",
+      ]);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("does not let a same-text live steer stamp an opening prompt during an active-turn lagging read", async () => {
+    let entries: AppServerThreadEntry[] = [];
+    const session = await mountSession({
+      backend: "acp:antigravity",
+      supportsPagination: false,
+      snapshot: () => entries,
+    });
+    try {
+      act(() => {
+        session.result.current.addOptimisticUserMessage("continue");
+        session.emit("turn/started", {
+          turn: { id: "turn-1", status: "in_progress", startedAt: BASE_NOW },
+        });
+        entries = [
+          {
+            type: "message",
+            id: "user:turn-1",
+            role: "user",
+            text: "continue",
+            createdAt: BASE_NOW,
+            turn: { id: "turn-1", status: "in_progress", startedAt: BASE_NOW },
+          },
+        ];
+        void session.result.current.reload();
+        session.emit("item/completed", {
+          turnId: "turn-1",
+          item: {
+            id: "user:turn-1:steer:1",
+            type: "userMessage",
+            steered: true,
+            content: [{ type: "text", text: "first steer" }],
+            createdAt: BASE_NOW + 10,
+          },
+        });
+        session.emit("item/completed", {
+          turnId: "turn-1",
+          item: {
+            id: "user:turn-1:steer:2",
+            type: "userMessage",
+            steered: true,
+            content: [{ type: "text", text: "continue" }],
+            createdAt: BASE_NOW + 50,
+          },
+        });
+      });
+
+      // Resolve lagging read while turn-1 is STILL in progress.
+      await act(async () => {
+        const laggingRead = session.reads.shift()!;
+        laggingRead.resolve(laggingRead.response);
+      });
+
+      expect(entryKeys(session.result.current.entries)).toEqual([
+        "user:turn-1",
+        "user:turn-1:steer:1",
+        "user:turn-1:steer:2",
+      ]);
+    } finally {
+      session.close();
+    }
+  });
+
+  it("preserves steered and rendererSequence markers across readThread hydration so same-text steers cannot prune opening prompts", async () => {
+    let entries: AppServerThreadEntry[] = [];
+    const session = await mountSession({
+      backend: "acp:antigravity",
+      supportsPagination: false,
+      snapshot: () => entries,
+    });
+    try {
+      let optId!: string;
+      act(() => {
+        optId = session.result.current.addOptimisticUserMessage("continue");
+        session.emit("turn/started", {
+          turn: { id: "turn-1", status: "in_progress", startedAt: BASE_NOW },
+        });
+        session.emit("item/completed", {
+          turnId: "turn-1",
+          item: {
+            id: "user:turn-1:steer:1",
+            type: "userMessage",
+            steered: true,
+            content: [{ type: "text", text: "continue" }],
+            createdAt: BASE_NOW + 20,
+          },
+        });
+        // A mid-turn snapshot containing the persisted steer before the opening prompt is echoed.
+        entries = [
+          {
+            type: "message",
+            id: "user:turn-1:steer:1",
+            role: "user",
+            text: "continue",
+            createdAt: BASE_NOW + 20,
+            turn: { id: "turn-1", status: "in_progress", startedAt: BASE_NOW },
+          },
+        ];
+        void session.result.current.reload();
+      });
+
+      await act(async () => {
+        const read1 = session.reads.shift()!;
+        read1.resolve(read1.response);
+      });
+
+      // Opening optimistic prompt must survive hydration and stay ahead of the steer.
+      expect(entryKeys(session.result.current.entries)).toEqual([
+        optId,
+        "user:turn-1:steer:1",
+      ]);
+
+      // A subsequent lagging snapshot with only the opening prompt while live
+      // turn activity continues must still recognize user:turn-1:steer:1 as
+      // steered and refuse to match user:turn-1 against it.
+      act(() => {
+        entries = [
+          {
+            type: "message",
+            id: "user:turn-1",
+            role: "user",
+            text: "continue",
+            createdAt: BASE_NOW,
+            turn: { id: "turn-1", status: "in_progress", startedAt: BASE_NOW },
+          },
+        ];
+        void session.result.current.reload();
+        session.emit("item/completed", {
+          turnId: "turn-1",
+          item: {
+            id: "assistant:turn-1:1",
+            type: "agentMessage",
+            text: "Continuing",
+            phase: "commentary",
+            createdAt: BASE_NOW + 30,
+          },
+        });
+      });
+
+      await act(async () => {
+        const read2 = session.reads.shift()!;
+        read2.resolve(read2.response);
+      });
+
+      expect(entryKeys(session.result.current.entries)).toEqual([
+        "user:turn-1",
+        "user:turn-1:steer:1",
+        "assistant:turn-1:1",
+      ]);
+    } finally {
+      session.close();
+    }
+  });
 });

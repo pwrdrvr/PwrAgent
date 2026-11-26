@@ -3,7 +3,17 @@ import { normalizeReviewDisplayText } from "../../../shared/review-command";
 import { isPendingEntryId } from "./pending-entry-id";
 
 function reviewStartTimestamp(entry: AppServerThreadReviewEntry): number | undefined {
-  return entry.turn?.completedAt ?? entry.createdAt ?? entry.turn?.startedAt;
+  let latest: number | undefined;
+  for (const candidate of [
+    entry.turn?.completedAt,
+    entry.createdAt,
+    entry.turn?.startedAt,
+  ]) {
+    if (typeof candidate === "number" && (latest === undefined || candidate > latest)) {
+      latest = candidate;
+    }
+  }
+  return latest;
 }
 
 function reviewStartMatchesUnboundHeader(
