@@ -11,7 +11,7 @@ Use this skill to run a repeatable, end-to-end live test of PwrAgent's native **
 
 - **Use real native Research runs, not ad-hoc subagents.** A native Research run must start from a bound operator `intentId` created in the **Research** panel (`PwrAgent workers` → `Request research`) so `research_start`, `research_read`, `research_update`, worker tracking, and the Research window are actually exercised. Do not substitute `handoff_task` or manual subagent fan-out.
 - **Never edit canonical source files on the project's default branch.** Keep the coordinating thread and workers in isolated worktrees, write the synthesized deliverable to a new path (for example `rewrites/<name>-rewrite.tex` or `rewrites/<name>-rewrite.md`), and verify the canonical checkout stays clean.
-- **Use a real model only when the operator asks for a live run.** Live Research runs spend model usage across multiple concurrent workers; confirm the requested model, reasoning effort, max concurrent workers (1–8), and time bounds before starting.
+- **Use a real model only when the operator asks for a live run.** Live Research runs spend model usage across multiple concurrent workers; confirm the requested model, reasoning effort, max concurrent workers (1–64; typically 4–8), and time bounds before starting.
 - **Never target generic Electron or kill PIDs directly.** Use `.agents/skills/pwragent-dev-profile/scripts/pwragent-dev-profile.zsh` to start, inspect, or close `PWRAGENT_PROFILE=dev`, and target only the exact checkout-local `appPath` / `rendererUrl` it reports.
 
 ## 1. Prepare the Dev Profile and Target Document
