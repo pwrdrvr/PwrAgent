@@ -63,6 +63,7 @@ import { PlanLimitStore } from "./plan-limit-store";
 import {
   MAX_TURN_INPUT_ATTACHMENT_BYTES,
   stageLocalTurnInputAttachment,
+  stageTurnInputAttachment,
 } from "./turn-input-attachment-files";
 import type { ThreadAssetOwner } from "./thread-assets";
 import { toTranscriptImageProtocolUrl } from "../transcript-images";
@@ -1069,8 +1070,21 @@ export async function inputToAcpPrompt(
       if (name) {
         promptContent.push({ type: "text", text: `Attached image filename: ${name}` });
       }
-      parts.push({ type: "image", ...(name ? { alt: name } : {}), url: item.url });
       const image = parseImageDataUrl(item.url);
+      let replayUrl = item.url;
+      if (image && options?.owner) {
+        const bytes = Buffer.from(image.data, "base64");
+        if (bytes.byteLength > 0) {
+          const staged = await stageTurnInputAttachment({
+            type: "localImage",
+            data: bytes,
+            ...(name ? { name } : {}),
+            mimeType: image.mimeType,
+          }, options.owner);
+          replayUrl = toTranscriptImageProtocolUrl(pathToFileURL(staged.path).toString());
+        }
+      }
+      parts.push({ type: "image", ...(name ? { alt: name } : {}), url: replayUrl });
       if (image) {
         promptContent.push({
           type: "image",

@@ -10,6 +10,7 @@ import {
 import {
   type AcpProviderTool,
   isGenericShellToolTitle,
+  readAcpMcpToolLabel,
   readAcpMcpToolName,
   readAcpProviderTool,
   readAcpToolCommand,
@@ -491,7 +492,8 @@ function liveItemForAcpToolUpdate(
     readString(update, "item_id");
   const rawCommand = readAcpToolCommand(update);
   const mcpToolName = readAcpMcpToolName(update);
-  const description = mcpToolName
+  const mcpToolLabel = readAcpMcpToolLabel(update);
+  const description = mcpToolLabel
     ?? (rawCommand ? readAcpToolDescription(update) : undefined);
   const title =
     description ??
@@ -631,7 +633,7 @@ function hasMeaningfulAcpToolMetadata(update: Record<string, unknown>): boolean 
 }
 
 function isGenericAcpToolMetadata(value: string): boolean {
-  return /^(?:tool|tool call|tool_call|tool call update|tool_call_update|unknown|other|tool details unavailable)$/i.test(
+  return /^(?:tool|tool call|tool_call|tool call update|tool_call_update|unknown|other|tool details unavailable|(?:run\s+)?mcp_[a-z0-9_-]+)$/i.test(
     value.trim(),
   );
 }

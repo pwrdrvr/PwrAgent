@@ -35,6 +35,7 @@ import {
   acpSessionReplayNormalizerOptions,
   isAcpUserBoilerplateMessage,
   readAcpContentText,
+  readAcpMessageParts,
   readAcpToolCallId,
   readAcpTopicTitle,
   readAcpUpdateTimestamp,
@@ -1570,7 +1571,7 @@ export class AcpAgentClient {
       // Antigravity's prompt identities annotate a clean provider transcript.
       // Other incomplete fallbacks provide timestamps that agents such as
       // Kimi omit, so those fallbacks merge with the incoming replay.
-      if (localHistory.isComplete || replayPrompts) {
+      if (localHistory.isComplete || (this.options.backendId === "acp:antigravity" && replayPrompts)) {
         this.normalizers.delete(metadata.sessionId);
       }
       const providerNormalizer = replayPrompts && this.normalizerFor(metadata.sessionId);
@@ -2955,16 +2956,14 @@ export class AcpAgentClient {
       this.normalizerOptionsFor(metadata),
     );
     let hasTranscriptHistory = false;
-    const antigravityReplayPrompts: AcpReplayPromptIdentity[] = [];
+    const replayPrompts: AcpReplayPromptIdentity[] = [];
     const { current: records } = this.workspaceHistory(metadata);
     for (const record of records) {
       if (isPwrAgentSyntheticAcpUpdate(record.update)) {
         continue;
       }
-      if (this.options.backendId === "acp:antigravity") {
-        const identity = readAntigravityReplayPromptIdentity(record);
-        if (identity) antigravityReplayPrompts.push(identity);
-      }
+      const identity = readReplayPromptIdentity(record);
+      if (identity) replayPrompts.push(identity);
       if (isTranscriptReplayUpdate(record.update)) {
         hasTranscriptHistory = true;
       }
@@ -2977,11 +2976,12 @@ export class AcpAgentClient {
     this.normalizers.set(metadata.sessionId, normalizer);
     const replay = normalizer.replay();
     const hasReplay = replay.messages.length > 0 || replay.entries.length > 0;
+    const needsPromptReplayOverlay =
+      (metadata.antigravityWorkspaceRebound && replayPrompts.length > 0)
+      || replayPrompts.some((prompt) => Boolean(prompt.steerMessageId || prompt.attachmentParts?.length));
     return {
       isComplete: (hasTranscriptHistory || hasReplay) && replay.threadStatus === "idle",
-      antigravityReplayPrompts: ((metadata.antigravityWorkspaceRebound && antigravityReplayPrompts.length > 0)
-        || antigravityReplayPrompts.some((prompt) => prompt.steerMessageId))
-        ? antigravityReplayPrompts : undefined,
+      antigravityReplayPrompts: needsPromptReplayOverlay ? replayPrompts : undefined,
     };
   }
 
@@ -3711,17 +3711,30 @@ export class AcpAgentClient {
     // cannot prove that session/load returned usable transcript history, and
     // providers such as Kimi still need the local timestamps they omit.
     if (verifiedReplay?.lastTimestampedTranscriptAt !== undefined) {
-      if (this.options.backendId !== "acp:antigravity") return;
-      const identity = readAntigravityReplayPromptIdentity({ type: "update", receivedAt, update });
+      const identity = readReplayPromptIdentity({ type: "update", receivedAt, update });
       if (!identity) return;
-      // The provider owns the transcript. Keep only the metadata required
-      // to recognize local prompt boundaries on its next replay.
-      update = {
-        kind: "pwragent_antigravity_prompt_identity",
-        turnId: identity.turnId,
-        messageId: identity.steerMessageId,
-        textDigest: identity.textDigest,
-      };
+      const lightweightAttachments = persistableAttachmentParts(identity.attachmentParts);
+      if (this.options.backendId === "acp:antigravity") {
+        // The provider owns the transcript. Keep only the metadata required
+        // to recognize local prompt boundaries and lightweight attachment refs
+        // on its next replay.
+        update = {
+          kind: "pwragent_antigravity_prompt_identity",
+          turnId: identity.turnId,
+          messageId: identity.steerMessageId,
+          textDigest: identity.textDigest,
+          ...(lightweightAttachments?.length ? { attachmentParts: lightweightAttachments } : {}),
+        };
+      } else if (lightweightAttachments?.length) {
+        update = {
+          kind: "pwragent_prompt_attachments",
+          turnId: identity.turnId,
+          textDigest: identity.textDigest,
+          attachmentParts: lightweightAttachments,
+        };
+      } else {
+        return;
+      }
     }
     this.options.rolloutStore?.appendUpdate({
       backendId: this.options.backendId,
@@ -4307,20 +4320,54 @@ function isAntigravityPromptEndTurn(result: unknown): boolean {
     || record?.stop_reason === "end_turn";
 }
 
-function readAntigravityReplayPromptIdentity(record: AcpRolloutRecord): AcpReplayPromptIdentity | undefined {
+function readReplayPromptIdentity(record: AcpRolloutRecord): AcpReplayPromptIdentity | undefined {
   const { update, receivedAt } = record;
   const turnId = typeof update.turnId === "string" ? update.turnId : undefined;
   if (!turnId) return undefined;
   const kind = readUpdateKind(update);
   const steerMessageId = typeof update.messageId === "string" ? update.messageId : undefined;
-  if (kind === "pwragent_antigravity_prompt_identity" && typeof update.textDigest === "string") {
-    return { turnId, receivedAt, steerMessageId, textDigest: update.textDigest };
+  if (
+    (kind === "pwragent_antigravity_prompt_identity" || kind === "pwragent_prompt_attachments")
+    && typeof update.textDigest === "string"
+  ) {
+    const attachmentParts = readNonTextAttachmentParts(update, "attachmentParts");
+    return {
+      turnId,
+      receivedAt,
+      ...(steerMessageId ? { steerMessageId } : {}),
+      textDigest: update.textDigest,
+      ...(attachmentParts?.length ? { attachmentParts } : {}),
+    };
   }
   if ((kind === "pwragent_user_prompt" || kind === "pwragent_steered_user_prompt")
     && typeof update.prompt === "string") {
-    return { turnId, receivedAt, steerMessageId, textDigest: acpReplayPromptTextDigest(update.prompt) };
+    const attachmentParts = readNonTextAttachmentParts(update, "parts");
+    return {
+      turnId,
+      receivedAt,
+      ...(steerMessageId ? { steerMessageId } : {}),
+      textDigest: acpReplayPromptTextDigest(update.prompt),
+      ...(attachmentParts?.length ? { attachmentParts } : {}),
+    };
   }
   return undefined;
+}
+
+function readNonTextAttachmentParts(
+  update: Record<string, unknown>,
+  key: string,
+): AppServerThreadMessagePart[] | undefined {
+  const parts = readAcpMessageParts(update, key)?.filter((part) => part.type !== "text");
+  return parts?.length ? parts : undefined;
+}
+
+function persistableAttachmentParts(
+  parts: readonly AppServerThreadMessagePart[] | undefined,
+): AppServerThreadMessagePart[] | undefined {
+  const retained = parts?.filter(
+    (part) => part.type !== "text" && (part.type !== "image" || !part.url.startsWith("data:")),
+  );
+  return retained?.length ? retained : undefined;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
