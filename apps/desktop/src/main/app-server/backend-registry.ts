@@ -854,6 +854,7 @@ import {
   buildTurnStartReservationKey,
   executionModeQueueKey,
   formatQuitThreadKey,
+  isAcpPromptTurnId,
   parseActiveTurnKey,
   parseReservedAcpStartThreadKey,
   parseThreadIdFromThreadTurnKeyBody,
@@ -23321,29 +23322,30 @@ export class DesktopBackendRegistry {
     const turnId = turnIdFromTerminalNotification(event.notification);
     const notification = event.notification;
     const { managedReview } = delivery;
-    const genericActiveTurnKeyPrefix =
-      `${event.backend}:${notification.params.threadId}:`;
-    const hadGenericActiveTurn = Array.from(this.context.turnState.registeredTurnKeys()).some((key) =>
-      key.startsWith(genericActiveTurnKeyPrefix),
-    );
+    const thread = { backend: event.backend, threadId: notification.params.threadId };
     const hadMatchingGenericActiveTurn = turnId !== undefined
-      && this.context.turnState.hasRegisteredTurn({ backend: event.backend, threadId: notification.params.threadId, turnId: turnId });
+      && this.context.turnState.hasRegisteredTurn({ ...thread, turnId });
+    let retiredAcpTurn = false;
     if (turnId) {
       if (isAcpBackendId(event.backend)) {
-        for (const key of Array.from(this.context.turnState.registeredTurnKeys())) {
-          if (key.startsWith(genericActiveTurnKeyPrefix)) {
-            this.context.turnState.unregisterTurn(key);
-            const parsed = parseActiveTurnKey(key);
-            backendRegistryLog.info("ACP active turn removed", {
-              backend: event.backend,
-              threadId: notification.params.threadId,
-              turnId: parsed?.turnId ?? null,
-              method: event.notification.method,
-              completedTurnId: turnId,
-            });
-            if (parsed) {
-              this.clearAcceptedToolCallsForEndedTurn(parsed.backend, parsed.threadId, parsed.turnId);
-            }
+        const terminalTurn = { ...thread, turnId };
+        // A stopped prompt can report its own terminal again after a new
+        // prompt starts. A prompt ID issued for this thread can only retire
+        // that prompt. Keep the fallback for terminals with a drifted ID.
+        const recoverDriftedId = !hadMatchingGenericActiveTurn && !isAcpPromptTurnId(thread.threadId, turnId);
+        const turns = recoverDriftedId
+          ? this.context.turnState.registeredOtherProviderTurnsForThread(thread)
+          : [terminalTurn];
+        for (const turn of turns) {
+          if (!this.context.turnState.unregisterTurn(turn)) continue;
+          retiredAcpTurn = true;
+          backendRegistryLog.info("ACP active turn removed", {
+            ...turn,
+            method: event.notification.method,
+            completedTurnId: turnId,
+          });
+          if (turn.turnId !== turnId) {
+            this.clearAcceptedToolCallsForEndedTurn(turn.backend, turn.threadId, turn.turnId);
           }
         }
       } else {
@@ -23358,8 +23360,7 @@ export class DesktopBackendRegistry {
         turnId,
       });
     }
-    if ((event.backend === "claude" && hadMatchingGenericActiveTurn)
-      || (isAcpBackendId(event.backend) && hadGenericActiveTurn)) {
+    if ((event.backend === "claude" && hadMatchingGenericActiveTurn) || retiredAcpTurn) {
       await this.adoptThreadBranchChangeFromActiveTurn({
         backend: event.backend,
         threadId: notification.params.threadId,
