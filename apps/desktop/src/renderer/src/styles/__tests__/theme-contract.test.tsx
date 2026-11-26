@@ -2534,6 +2534,14 @@ describe("Tangerine Terminal theme contract", () => {
 
     expect(extractRuleBody(css, ".thread-markdown .task-list-item"))
       .toContain("list-style-type: none;");
+    expect(extractRuleBody(css, ".thread-markdown ul.transcript-message__list.contains-task-list"))
+      .toContain("padding-left: 22px;");
+    const orderedTaskListRule = extractRuleBody(
+      css,
+      ".thread-markdown ol.transcript-message__list.contains-task-list",
+    );
+    expect(orderedTaskListRule).toContain("--list-gutter: 22px;");
+    expect(orderedTaskListRule).not.toContain("padding-left:");
     const taskChecked = extractRuleBody(
       css,
       '.thread-markdown .task-list-item > input[type="checkbox"]:checked,\n.thread-markdown .task-list-item > p:first-child > input[type="checkbox"]:checked',

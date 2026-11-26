@@ -526,6 +526,11 @@ const markdownComponents: Components = {
           data-footnote-ref={isFootnoteRef ? "" : undefined}
           href={href}
           id={anchorProps.id}
+          onAuxClick={(event) => {
+            if (event.button === 1) {
+              event.preventDefault();
+            }
+          }}
           onClick={(event) => {
             openFragmentLink(event, href);
           }}
@@ -1163,9 +1168,17 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         behavior: prefersReducedMotion ? "auto" : "smooth",
         block: "center",
       });
-      if (target.matches("a[href], button, input, [tabindex]")) {
-        target.focus({ preventScroll: true });
+      if (!target.matches("a[href], button, input, [tabindex]")) {
+        target.setAttribute("tabindex", "-1");
+        target.addEventListener(
+          "blur",
+          () => {
+            target.removeAttribute("tabindex");
+          },
+          { once: true },
+        );
       }
+      target.focus({ preventScroll: true });
     },
     [],
   );

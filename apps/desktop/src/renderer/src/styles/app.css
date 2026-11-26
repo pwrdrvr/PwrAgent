@@ -32631,8 +32631,12 @@ ol.transcript-message__list > li::marker {
   margin-top: 4px;
 }
 
-.thread-markdown .transcript-message__list.contains-task-list {
+.thread-markdown ul.transcript-message__list.contains-task-list {
   padding-left: 22px;
+}
+
+.thread-markdown ol.transcript-message__list.contains-task-list {
+  --list-gutter: 22px;
 }
 
 .thread-markdown .task-list-item {

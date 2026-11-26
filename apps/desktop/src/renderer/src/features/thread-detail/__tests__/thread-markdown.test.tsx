@@ -2253,6 +2253,24 @@ describe("ThreadMarkdown", () => {
       expect(scrollIntoView).toHaveBeenCalledTimes(1);
       expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "center" });
       expect(scrollIntoView.mock.contexts[0]).toBe(targetItem);
+      expect(document.activeElement).toBe(targetItem);
+      expect(targetItem).toHaveAttribute("tabindex", "-1");
+
+      const middleClickEvent = new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 1,
+      });
+      fireEvent(refLink!, middleClickEvent);
+      expect(middleClickEvent.defaultPrevented).toBe(true);
+
+      const rightClickEvent = new MouseEvent("auxclick", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+      });
+      fireEvent(refLink!, rightClickEvent);
+      expect(rightClickEvent.defaultPrevented).toBe(false);
 
       scrollIntoView.mockClear();
       const backref = targetItem?.querySelector<HTMLAnchorElement>("a[data-footnote-backref]");
@@ -2264,6 +2282,7 @@ describe("ThreadMarkdown", () => {
       expect(scrollIntoView).toHaveBeenCalledTimes(1);
       expect(scrollIntoView.mock.contexts[0]).toBe(refLink);
       expect(document.activeElement).toBe(refLink);
+      expect(targetItem).not.toHaveAttribute("tabindex");
 
       // Ensure message one's footnote was never scrolled when interacting with message two.
       const messageOneItem = container
@@ -2313,12 +2332,18 @@ describe("ThreadMarkdown", () => {
       expect(cppLink).not.toHaveAttribute("target");
       fireEvent.click(cppLink);
       expect(scrollIntoView.mock.contexts.at(-1)).toBe(headings[0]);
+      expect(document.activeElement).toBe(headings[0]);
+      expect(headings[0]).toHaveAttribute("tabindex", "-1");
 
       fireEvent.click(screen.getByRole("link", { name: "First Setup" }));
       expect(scrollIntoView.mock.contexts.at(-1)).toBe(headings[1]);
+      expect(document.activeElement).toBe(headings[1]);
+      expect(headings[0]).not.toHaveAttribute("tabindex");
 
       fireEvent.click(screen.getByRole("link", { name: "Second Setup" }));
       expect(scrollIntoView.mock.contexts.at(-1)).toBe(headings[2]);
+      expect(document.activeElement).toBe(headings[2]);
+      expect(headings[1]).not.toHaveAttribute("tabindex");
 
       expect(window.location.hash).toBe("#files/context-key");
     } finally {
