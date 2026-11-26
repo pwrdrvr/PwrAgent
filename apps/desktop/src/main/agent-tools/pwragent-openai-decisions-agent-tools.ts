@@ -127,7 +127,8 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "An active name in the same scope fails with decision_name_taken.",
     "Scope profile, the default, reaches every thread in this profile.",
     "Scope thread reaches only the registering thread.",
-    "Scope research_run shares the decision across the coordinator and every worker of one research run (pass researchRunId or omit it when this thread belongs to a single active run) without leaking to unrelated threads.",
+    "Scope research_run shares the decision across one research run's coordinator and workers.",
+    "Pass researchRunId, or omit it when this thread belongs to one active run.",
     "Never pass a key. PwrAgent attaches the operator's OpenAI key.",
     "Call decisions_list to see what exists.",
   ].join(" "),
@@ -192,7 +193,8 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "The name can then be registered again as a new decision.",
   ].join(" "),
   decisions_batch_results: [
-    "Read a decisions_invoke batch this thread started, or any batch run by a member of a research run this thread belongs to, while it runs or after it ends.",
+    "Read a decisions_invoke batch while it runs or after it ends.",
+    "Covers batches this thread started and batches run by members of its research runs.",
     "Pass batchId for its state, totals, and a page of finished items in input order.",
     "Pass researchRunId without batchId to list batches across the coordinator and all workers of that research run.",
     "status picks succeeded, failed (skipped included), or skipped items. The default is all.",
@@ -204,7 +206,8 @@ const DESCRIPTIONS: Record<OpenAIDecisionsToolName, string> = {
     "Reading makes no API call.",
   ].join(" "),
   decisions_batch_cancel: [
-    "Cancel a running decisions_invoke batch this thread started (or, for a research run coordinator passing researchRunId, a worker's batch in that run).",
+    "Cancel a running decisions_invoke batch this thread started.",
+    "A research run coordinator can pass researchRunId to cancel a worker's batch.",
     "Requests in flight are aborted and unsent items are skipped.",
     "Finished answers stay readable with decisions_batch_results.",
     "No wake-up turn follows a cancel.",
@@ -351,7 +354,7 @@ const INPUT_SCHEMAS: Record<OpenAIDecisionsToolName, Record<string, unknown>> = 
         type: "string",
         minLength: 1,
         maxLength: 300,
-        description: "Optional research run id to disambiguate a research_run-scoped decision name or tag an ad hoc batch with the run.",
+        description: "Optional research run id to disambiguate a research_run decision or tag an ad hoc batch.",
       },
       definition: {
         type: "object",

@@ -67,9 +67,9 @@ const descriptions: Record<ResearchToolName, string> = {
 };
 
 const decisionsDescriptions: Partial<Record<ResearchToolName, string>> = {
-  research_start: "When decision models are ready, you can register shared run-scoped rubrics with decisions_register (scope=\"research_run\", researchRunId) so workers reuse them via decisions_list and decisions_invoke, and inspect worker batches via decisions_batch_results (researchRunId).",
-  research_read: "When decision models are ready, call decisions_list (researchRunId) to discover run-scoped rubrics and decisions_batch_results (researchRunId) to inspect batch evaluations across the coordinator and workers.",
-  research_update: "When citing decision batch evidence in a finding or submission, include the batchId (and any output file path) so the coordinator and Research tracker link directly to the batch results.",
+  research_start: "When decision models are ready, register shared run rubrics with decisions_register using scope research_run and researchRunId. Workers reuse them via decisions_list and decisions_invoke. Inspect worker batches with decisions_batch_results.",
+  research_read: "When decision models are ready, call decisions_list with researchRunId for run rubrics. Call decisions_batch_results with researchRunId to inspect run batches.",
+  research_update: "When citing decision batch evidence, include the batchId and any output file path. The coordinator and Research tracker link directly to those batch results.",
 };
 
 const text = { type: "string", minLength: 1 };
