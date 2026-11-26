@@ -9,6 +9,7 @@ import {
   REACTION_CATEGORIES,
   computeReactionPickerPosition,
   createLazyValueCache,
+  isSyntheticStationaryPointerLeave,
   moveReactionGridIndex,
   normalizeEmojiKey,
   recordRecentReactionList,
@@ -16,6 +17,10 @@ import {
   transitionReactionPickerLeaveState,
   type ReactionPickerLeaveEvent,
 } from "../reaction-picker-model";
+import {
+  applyPendingThreadReactions,
+  applyThreadReactionToggle,
+} from "../../../lib/useThreadNavigation";
 
 describe("reaction picker positioning properties", () => {
   it("keeps the picker within viewport margins whenever it fits", () => {
@@ -169,7 +174,7 @@ describe("lazy value cache lifecycle", () => {
 });
 
 describe("reaction picker post-pick leave-dismiss state machine", () => {
-  it("never arms leave-close before a pick, arms on leave after a pick, and cancels on re-entry or inside interaction", () => {
+  it("matches an independent oracle for hasPicked preservation, timer arming, and cancellation across all event sequences", () => {
     const events = fc.constantFrom<ReactionPickerLeaveEvent>(
       "pick",
       "pointer_enter",
@@ -181,39 +186,128 @@ describe("reaction picker post-pick leave-dismiss state machine", () => {
     fc.assert(
       fc.property(fc.array(events, { minLength: 1, maxLength: 40 }), (sequence) => {
         let state = INITIAL_REACTION_PICKER_LEAVE_STATE;
+        let expectedHasPicked = false;
+        let expectedTimerArmed = false;
+
         for (const event of sequence) {
-          const prev = state;
-          const next = transitionReactionPickerLeaveState(prev, event);
+          const next = transitionReactionPickerLeaveState(state, event);
           state = next.state;
 
           if (event === "dismiss_immediate") {
+            expectedHasPicked = false;
+            expectedTimerArmed = false;
             expect(next.effect).toBe("dismiss_now");
-            expect(state).toEqual(INITIAL_REACTION_PICKER_LEAVE_STATE);
+            expect(state).toEqual({
+              hasPicked: expectedHasPicked,
+              leaveTimerArmed: expectedTimerArmed,
+            });
             continue;
           }
 
           if (event === "pointer_leave") {
-            if (!prev.hasPicked) {
+            if (!expectedHasPicked) {
               expect(next.effect).toBe("none");
-              expect(state.leaveTimerArmed).toBe(false);
+              expect(state).toEqual({
+                hasPicked: false,
+                leaveTimerArmed: false,
+              });
             } else {
+              expectedTimerArmed = true;
               expect(next.effect).toBe("arm_timer");
-              expect(state.leaveTimerArmed).toBe(true);
+              expect(state).toEqual({
+                hasPicked: true,
+                leaveTimerArmed: true,
+              });
             }
             continue;
           }
 
-          if (prev.leaveTimerArmed) {
-            expect(next.effect).toBe("cancel_timer");
-          } else {
-            expect(next.effect).toBe("none");
-          }
-          expect(state.leaveTimerArmed).toBe(false);
+          const expectedEffect = expectedTimerArmed ? "cancel_timer" : "none";
+          expectedTimerArmed = false;
           if (event === "pick") {
-            expect(state.hasPicked).toBe(true);
+            expectedHasPicked = true;
           }
+          expect(next.effect).toBe(expectedEffect);
+          expect(state).toEqual({
+            hasPicked: expectedHasPicked,
+            leaveTimerArmed: expectedTimerArmed,
+          });
         }
       }),
+    );
+  });
+
+  it("identifies synthetic stationary mouseleave only when coordinates match the last recorded inside pointer", () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 8, max: 2000 }),
+        fc.integer({ min: 8, max: 1400 }),
+        fc.integer({ min: 0, max: 2000 }),
+        fc.integer({ min: 0, max: 1400 }),
+        (insideX, insideY, leaveX, leaveY) => {
+          expect(
+            isSyntheticStationaryPointerLeave(undefined, { x: leaveX, y: leaveY }),
+          ).toBe(false);
+          expect(
+            isSyntheticStationaryPointerLeave(
+              { x: insideX, y: insideY },
+              { x: insideX, y: insideY },
+            ),
+          ).toBe(true);
+          expect(
+            isSyntheticStationaryPointerLeave(
+              { x: insideX, y: insideY },
+              { x: leaveX, y: leaveY },
+            ),
+          ).toBe(insideX === leaveX && insideY === leaveY);
+        },
+      ),
+    );
+  });
+});
+
+describe("pending thread reaction reconciliation properties", () => {
+  it("preserves every queued toggle in click order on top of stale or concurrent server snapshots", () => {
+    const emojiPool = fc.constantFrom("👍", "👎", "🚀", "🔥", "🎉", "👀", "✅");
+    const mutationArb = fc.record({
+      emoji: emojiPool,
+      present: fc.boolean(),
+    });
+
+    fc.assert(
+      fc.property(
+        fc.uniqueArray(emojiPool, { maxLength: 5 }),
+        fc.array(mutationArb, { minLength: 1, maxLength: 15 }),
+        (initialServer, mutations) => {
+          // Simulate applying prefix `k` on the server while suffix `k..n`
+          // remains pending on the client: every intermediate server snapshot
+          // overlaid with remaining pending mutations must match applying all
+          // mutations to the initial server state.
+          let fullExpected: string[] = [...initialServer];
+          for (const m of mutations) {
+            fullExpected = applyThreadReactionToggle(
+              fullExpected,
+              m.emoji,
+              m.present,
+            );
+          }
+
+          let serverState: string[] = [...initialServer];
+          for (let completed = 0; completed <= mutations.length; completed++) {
+            const pending = mutations.slice(completed);
+            const visible = applyPendingThreadReactions(serverState, pending);
+            expect(visible).toEqual(fullExpected);
+            if (completed < mutations.length) {
+              const nextMutation = mutations[completed]!;
+              serverState = applyThreadReactionToggle(
+                serverState,
+                nextMutation.emoji,
+                nextMutation.present,
+              );
+            }
+          }
+        },
+      ),
     );
   });
 });

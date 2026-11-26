@@ -29,6 +29,7 @@ import {
   REACTION_CATEGORIES,
   REACTION_PICKER_COLUMNS,
   computeReactionPickerPosition,
+  isSyntheticStationaryPointerLeave,
   moveReactionGridIndex,
   normalizeEmojiKey,
   readRecentReactions,
@@ -41,6 +42,7 @@ import {
   type ReactionPickerLeaveEvent,
   type ReactionPickerLeaveState,
   type ReactionPickerPlacement,
+  type ReactionPickerPointerPoint,
 } from "./reaction-picker-model";
 
 const DEFAULT_PICKER_WIDTH = 316;
@@ -199,6 +201,25 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
 
   const leaveStateRef = useRef<ReactionPickerLeaveState>(
     INITIAL_REACTION_PICKER_LEAVE_STATE,
+  );
+  const lastInsidePointerRef = useRef<ReactionPickerPointerPoint | undefined>(
+    undefined,
+  );
+
+  const recordInsidePointer = useCallback(
+    (event: { clientX: number; clientY: number }): void => {
+      // The picker always stays >= 8px inside viewport margins, so real
+      // in-picker pointer events have non-zero coordinates; ignore unpositioned
+      // synthetic events (0, 0) such as keyboard-activated clicks or bare DOM dispatches.
+      if (event.clientX === 0 && event.clientY === 0) {
+        return;
+      }
+      lastInsidePointerRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+    },
+    [],
   );
 
   const dispatchLeaveEvent = useCallback(
@@ -619,8 +640,24 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
       data-placement={placement.side}
       style={{ top: placement.top, left: placement.left }}
       onClick={(event) => event.stopPropagation()}
-      onMouseEnter={() => dispatchLeaveEvent("pointer_enter")}
-      onMouseLeave={() => dispatchLeaveEvent("pointer_leave")}
+      onMouseEnter={(event) => {
+        recordInsidePointer(event);
+        dispatchLeaveEvent("pointer_enter");
+      }}
+      onMouseMove={recordInsidePointer}
+      onMouseDown={recordInsidePointer}
+      onMouseLeave={(event) => {
+        if (
+          isSyntheticStationaryPointerLeave(lastInsidePointerRef.current, {
+            x: event.clientX,
+            y: event.clientY,
+          })
+        ) {
+          return;
+        }
+        lastInsidePointerRef.current = undefined;
+        dispatchLeaveEvent("pointer_leave");
+      }}
     >
       <div className="reaction-picker__search">
         <SearchIcon

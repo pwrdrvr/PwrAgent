@@ -1367,6 +1367,52 @@ function updateThreadCheckoutHibernationInLoadedRows(
   return changed ? { ...snapshot, threadRows: indexLoadedThreadRows(threads) } : snapshot;
 }
 
+export type PendingThreadReactionMutation = {
+  id: number;
+  emoji: string;
+  present: boolean;
+};
+
+type PendingThreadReactionQueue = {
+  pending: PendingThreadReactionMutation[];
+  tail: Promise<void> | undefined;
+};
+
+export function applyThreadReactionToggle(
+  reactions: readonly string[],
+  emoji: string,
+  present: boolean,
+): string[] {
+  return present
+    ? [...reactions.filter((existing) => existing !== emoji), emoji]
+    : reactions.filter((existing) => existing !== emoji);
+}
+
+export function applyPendingThreadReactions(
+  serverReactions: readonly string[],
+  pending: readonly Pick<PendingThreadReactionMutation, "emoji" | "present">[],
+): string[] {
+  let next = [...serverReactions];
+  for (const mutation of pending) {
+    next = applyThreadReactionToggle(next, mutation.emoji, mutation.present);
+  }
+  return next;
+}
+
+function buildThreadReactionMutationKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+  federationTarget?: FederationTarget,
+): string {
+  return federationTarget && isRemoteFederationTarget(federationTarget)
+    ? federatedThreadIdentityKey({
+        backend,
+        target: federationTarget,
+        threadId,
+      })
+    : buildThreadIdentityKey(backend, threadId);
+}
+
 function updateThreadReactionsInLoadedRows(
   snapshot: NavigationLoadedRows | undefined,
   params: {
@@ -1403,6 +1449,57 @@ function updateThreadReactionsInLoadedRows(
     }
     changed = true;
     return { ...thread, reactions: params.reactions };
+  });
+
+  if (!changed) {
+    return snapshot;
+  }
+
+  return { ...snapshot, threadRows: indexLoadedThreadRows(threads) };
+}
+
+function toggleThreadReactionInLoadedRows(
+  snapshot: NavigationLoadedRows | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    emoji: string;
+    present: boolean;
+  },
+): NavigationLoadedRows | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  let changed = false;
+  const threads = loadedThreadRows(snapshot).map((thread) => {
+    if (buildThreadIdentityKey(thread.source, thread.id) !== threadKey) {
+      return thread;
+    }
+    if (
+      !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
+      return thread;
+    }
+    const current = thread.reactions ?? [];
+    const nextReactions = applyThreadReactionToggle(
+      current,
+      params.emoji,
+      params.present,
+    );
+    if (
+      current.length === nextReactions.length
+      && current.every((emoji, index) => emoji === nextReactions[index])
+    ) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, reactions: nextReactions };
   });
 
   if (!changed) {
@@ -3901,6 +3998,10 @@ export function useThreadNavigation(
   const threadNameObservationsRef = useRef(
     new Map<string, ThreadNameObservation>(),
   );
+  const pendingThreadReactionsRef = useRef(
+    new Map<string, PendingThreadReactionQueue>(),
+  );
+  const nextReactionMutationIdRef = useRef(1);
   const setNavigationBrowseModeRequestRef = useRef(setNavigationBrowseModeRequest);
   const stateRef = useRef(state);
 
@@ -4205,6 +4306,24 @@ export function useThreadNavigation(
               threadNameObservationsRef.current.delete(key);
             } else {
               presentedRow = { ...presentedRow, title: observedName.threadName, titleSource: observedName.titleSource };
+            }
+          }
+          if (pendingThreadReactionsRef.current.size > 0) {
+            const pendingReactions = pendingThreadReactionsRef.current.get(
+              buildThreadReactionMutationKey(
+                presentedRow.source,
+                presentedRow.id,
+                presentedRow.federation?.ref.target ?? rendererFederationTarget,
+              ),
+            )?.pending;
+            if (pendingReactions && pendingReactions.length > 0) {
+              presentedRow = {
+                ...presentedRow,
+                reactions: applyPendingThreadReactions(
+                  presentedRow.reactions ?? [],
+                  pendingReactions,
+                ),
+              };
             }
           }
           if (!suppressedArchivedThreadKeysRef.current.has(key)) threadRows.set(key, presentedRow);
@@ -4877,13 +4996,24 @@ export function useThreadNavigation(
           threadId: string;
           reactions: string[];
         };
+        const mutationKey = buildThreadReactionMutationKey(
+          event.backend,
+          threadId,
+          event.federationTarget,
+        );
+        const pendingReactions =
+          pendingThreadReactionsRef.current.get(mutationKey)?.pending;
+        const effectiveReactions =
+          pendingReactions && pendingReactions.length > 0
+            ? applyPendingThreadReactions(reactions, pendingReactions)
+            : reactions;
         setState((current) => ({
           ...current,
           rows: updateThreadReactionsInLoadedRows(current.rows, {
             backend: event.backend,
             federationTarget: event.federationTarget,
             threadId,
-            reactions,
+            reactions: effectiveReactions,
           }),
         }));
         return;
@@ -9665,45 +9795,92 @@ export function useThreadNavigation(
         return;
       }
 
-      // Optimistic update so the chip appears/disappears instantly.
-      const currentReactions = thread.reactions ?? [];
-      const optimisticReactions = present
-        ? [...currentReactions.filter((existing) => existing !== emoji), emoji]
-        : currentReactions.filter((existing) => existing !== emoji);
+      const federationTarget = thread.federation?.ref.target
+        ?? readRendererFederationTarget();
+      const mutationKey = buildThreadReactionMutationKey(
+        thread.source,
+        thread.id,
+        federationTarget,
+      );
+      const mutationId = nextReactionMutationIdRef.current++;
+      let queue = pendingThreadReactionsRef.current.get(mutationKey);
+      if (!queue) {
+        queue = { pending: [], tail: undefined };
+        pendingThreadReactionsRef.current.set(mutationKey, queue);
+      }
+      queue.pending.push({ id: mutationId, emoji, present });
+
+      // Optimistic update computed from live loaded rows so rapid multi-select
+      // toggles compose cleanly even within the same render tick.
       setState((current) => ({
         ...current,
-        rows: updateThreadReactionsInLoadedRows(current.rows, {
+        rows: toggleThreadReactionInLoadedRows(current.rows, {
           backend: thread.source,
-          federationTarget: thread.federation?.ref.target ??
-            readRendererFederationTarget(),
-          threadId: thread.id,
-          reactions: optimisticReactions,
-        }),
-      }));
-
-      try {
-        const result = await setThreadReactionRequest({
-          backend: thread.source,
-          federationTarget: thread.federation?.ref.target ??
-            readRendererFederationTarget(),
+          federationTarget,
           threadId: thread.id,
           emoji,
           present,
-        });
-        // Reconcile with the authoritative server response (handles races).
-        setState((current) => ({
-          ...current,
-          rows: updateThreadReactionsInLoadedRows(current.rows, {
+        }),
+      }));
+
+      const removePending = (): readonly PendingThreadReactionMutation[] => {
+        const currentQueue = pendingThreadReactionsRef.current.get(mutationKey);
+        if (!currentQueue) {
+          return [];
+        }
+        const index = currentQueue.pending.findIndex(
+          (item) => item.id === mutationId,
+        );
+        if (index >= 0) {
+          currentQueue.pending.splice(index, 1);
+        }
+        if (currentQueue.pending.length === 0) {
+          pendingThreadReactionsRef.current.delete(mutationKey);
+          return [];
+        }
+        return [...currentQueue.pending];
+      };
+
+      const run = async (): Promise<void> => {
+        try {
+          const result = await setThreadReactionRequest({
             backend: thread.source,
-            federationTarget: thread.federation?.ref.target ??
-              readRendererFederationTarget(),
+            federationTarget,
             threadId: thread.id,
-            reactions: result.reactions,
-          }),
-        }));
-      } catch {
-        // On failure, fall back to the next snapshot poll.
-      }
+            emoji,
+            present,
+          });
+          const remaining = removePending();
+          if (!mountedRef.current) {
+            return;
+          }
+          // Reconcile with the authoritative server response while preserving
+          // any newer toggles still queued behind this mutation.
+          const reconciled = remaining.length > 0
+            ? applyPendingThreadReactions(result.reactions, remaining)
+            : result.reactions;
+          setState((current) => ({
+            ...current,
+            rows: updateThreadReactionsInLoadedRows(current.rows, {
+              backend: thread.source,
+              federationTarget,
+              threadId: thread.id,
+              reactions: reconciled,
+            }),
+          }));
+        } catch {
+          removePending();
+          // On failure, fall back to the next snapshot poll.
+        }
+      };
+
+      const prevTail = queue.tail;
+      const task = prevTail ? prevTail.then(run, run) : run();
+      queue.tail = task.then(
+        () => undefined,
+        () => undefined,
+      );
+      await task;
     },
     [setThreadReactionRequest],
   );

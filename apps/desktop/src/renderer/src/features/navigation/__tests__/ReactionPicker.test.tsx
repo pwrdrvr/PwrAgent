@@ -250,6 +250,119 @@ describe("ReactionPicker", () => {
     }
   });
 
+  it("ignores synthetic stationary mouseleave after picking when layout shrinks during search or category switch", () => {
+    vi.useFakeTimers();
+    try {
+      const onDismiss = vi.fn();
+      render(<PickerHarness onDismiss={onDismiss} />);
+
+      const dialog = screen.getByRole("dialog", { name: "Add reaction" });
+      const searchInput = within(dialog).getByRole("searchbox", {
+        name: "Search emoji",
+      });
+
+      // Pointer enters and clicks an emoji at stationary coordinates (220, 300).
+      fireEvent.mouseEnter(dialog, { clientX: 220, clientY: 300 });
+      fireEvent.mouseMove(dialog, { clientX: 220, clientY: 300 });
+      fireEvent.mouseDown(dialog, { clientX: 220, clientY: 300 });
+      fireEvent.click(screen.getByRole("button", { name: "Thumbs up" }), {
+        clientX: 220,
+        clientY: 300,
+      });
+
+      // Typing shrinks the popover; Chromium fires a synthetic mouseleave at
+      // the exact same stationary coordinates. The picker must stay open.
+      fireEvent.change(searchInput, { target: { value: "rocket" } });
+      fireEvent.mouseLeave(dialog, { clientX: 220, clientY: 300 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(screen.getByRole("dialog", { name: "Add reaction" })).toBeInTheDocument();
+
+      // Same for switching to a category tab whose layout shift moves under the cursor.
+      fireEvent.click(within(dialog).getByRole("button", { name: "Clear search" }));
+      const flagsTab = within(dialog).getByRole("tab", { name: "Flags" });
+      fireEvent.mouseMove(dialog, { clientX: 180, clientY: 120 });
+      fireEvent.mouseDown(flagsTab, { clientX: 180, clientY: 120 });
+      fireEvent.click(flagsTab, { clientX: 180, clientY: 120 });
+      fireEvent.mouseLeave(dialog, { clientX: 180, clientY: 120 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Actually moving the pointer away from the popover closes after the grace delay.
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS);
+      });
+      expect(onDismiss).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels a pending leave timer on in-picker interactions while keeping post-pick leave-close armed", () => {
+    vi.useFakeTimers();
+    try {
+      const onDismiss = vi.fn();
+      render(<PickerHarness onDismiss={onDismiss} />);
+
+      const dialog = screen.getByRole("dialog", { name: "Add reaction" });
+      const searchInput = within(dialog).getByRole("searchbox", {
+        name: "Search emoji",
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "Thumbs up" }));
+
+      // Arm the leave timer, then type in search (interact_inside) before it fires.
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS - 50);
+      });
+      fireEvent.change(searchInput, { target: { value: "fire" } });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Arm again, then clear search (interact_inside).
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      fireEvent.click(within(dialog).getByRole("button", { name: "Clear search" }));
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Arm again, then switch category tab (interact_inside).
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      fireEvent.click(within(dialog).getByRole("tab", { name: "Numbers & Letters" }));
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // Arm again, then use keyboard ArrowDown from search (interact_inside).
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      fireEvent.keyDown(searchInput, { key: "ArrowDown" });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS + 100);
+      });
+      expect(onDismiss).not.toHaveBeenCalled();
+
+      // hasPicked was preserved across all interact_inside events, so a
+      // subsequent real pointer leave still closes after the grace delay.
+      fireEvent.mouseLeave(dialog, { clientX: 40, clientY: 120 });
+      act(() => {
+        vi.advanceTimersByTime(HOVER_TRANSITION_GRACE_MS);
+      });
+      expect(onDismiss).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("closes immediately on an outside click after picking without waiting for the leave delay", () => {
     vi.useFakeTimers();
     try {

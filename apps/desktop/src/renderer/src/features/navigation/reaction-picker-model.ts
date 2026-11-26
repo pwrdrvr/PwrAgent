@@ -653,6 +653,33 @@ export type ReactionPickerLeaveTransition = {
   effect: "none" | "arm_timer" | "cancel_timer" | "dismiss_now";
 };
 
+export type ReactionPickerPointerPoint = {
+  x: number;
+  y: number;
+};
+
+/**
+ * Returns true when a `mouseleave` event fires at the exact same viewport
+ * coordinates as the last pointer position observed inside the picker.
+ *
+ * That happens when layout shrinks or shifts out from under a stationary
+ * cursor (for example, hiding category tabs or narrowing search results, or
+ * repositioning an above-anchored picker), rather than when the user actually
+ * moved the pointer away.
+ */
+export function isSyntheticStationaryPointerLeave(
+  lastInsidePointer: ReactionPickerPointerPoint | undefined,
+  leavePointer: ReactionPickerPointerPoint,
+): boolean {
+  if (!lastInsidePointer) {
+    return false;
+  }
+  return (
+    lastInsidePointer.x === leavePointer.x
+    && lastInsidePointer.y === leavePointer.y
+  );
+}
+
 export const INITIAL_REACTION_PICKER_LEAVE_STATE: ReactionPickerLeaveState = {
   hasPicked: false,
   leaveTimerArmed: false,
