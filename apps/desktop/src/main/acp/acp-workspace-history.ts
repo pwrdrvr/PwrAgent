@@ -65,18 +65,33 @@ export function mergeAcpSyntheticHistory(
 
 function insertSyntheticEntries<T extends { id: string; createdAt?: number }>(entries: T[], synthetic: T[]): T[] {
   const ids = new Set(entries.map(({ id }) => id));
-  const missing = synthetic.filter(({ id }) => !ids.has(id))
-    .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
-  if (missing.length === 0) return entries;
+  const timed: Array<{ at: number; entry: T }> = [];
+  const untimed: T[] = [];
+  for (const entry of synthetic) {
+    if (ids.has(entry.id)) continue;
+    if (typeof entry.createdAt === "number") {
+      timed.push({ at: entry.createdAt, entry });
+    } else {
+      untimed.push(entry);
+    }
+  }
+  if (timed.length === 0 && untimed.length === 0) return entries;
+  timed.sort((left, right) => left.at - right.at);
   const combined: T[] = [];
   let index = 0;
   for (const entry of entries) {
-    while (index < missing.length && (missing[index]!.createdAt ?? 0) < (entry.createdAt ?? 0)) {
-      combined.push(missing[index++]!);
+    if (typeof entry.createdAt === "number") {
+      while (index < timed.length && timed[index]!.at < entry.createdAt) {
+        combined.push(timed[index++]!.entry);
+      }
     }
     combined.push(entry);
   }
-  return combined.concat(missing.slice(index));
+  for (; index < timed.length; index += 1) {
+    combined.push(timed[index]!.entry);
+  }
+  combined.push(...untimed);
+  return combined;
 }
 
 export function acpWorkspaceContinuationText(replay: AppServerThreadReplay): string {

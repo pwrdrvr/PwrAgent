@@ -48,6 +48,7 @@ type TranscriptHistoryTurnPage = {
 type TranscriptHistoryInsertionPoint = {
   entryIndex: number;
   page: TranscriptHistoryPage;
+  placement: "before" | "after";
 };
 
 type CachedRetainedEntryPlacement = {
@@ -686,9 +687,10 @@ export function combineTranscriptEntries(
     index,
   );
   const insertedEntryIds = new Set(
-    [...historyInsertions.values()].flatMap((insertionsByIndex) =>
-      [...insertionsByIndex.values()].flat().map((entry) => entry.id)
-    )
+    [...historyInsertions.values()].flatMap((pageInsertions) => [
+      ...[...pageInsertions.before.values()].flat().map((entry) => entry.id),
+      ...[...pageInsertions.after.values()].flat().map((entry) => entry.id),
+    ])
   );
   const source: SegmentedArraySource<AppServerThreadEntry> = {
     excludedHistoryIds,
@@ -771,9 +773,14 @@ export function combineTranscriptEntries(
   return entries;
 }
 
+type HistoryPageInsertions = {
+  before: Map<number, AppServerThreadEntry[]>;
+  after: Map<number, AppServerThreadEntry[]>;
+};
+
 type HistoryEntryInsertions = Map<
   TranscriptHistoryPage,
-  Map<number, AppServerThreadEntry[]>
+  HistoryPageInsertions
 >;
 
 function isTerminalRetainedArtifactEntry(
@@ -795,7 +802,14 @@ function isTerminalRetainedArtifactEntry(
 }
 
 function transcriptEntryTime(entry: AppServerThreadEntry): number | undefined {
-  return entry.createdAt ?? entry.turn?.completedAt ?? entry.turn?.startedAt;
+  const createdAt = entry.createdAt;
+  if (typeof createdAt === "number") {
+    return createdAt;
+  }
+  if (entry.type === "message" && entry.role === "user") {
+    return entry.turn?.startedAt;
+  }
+  return entry.turn?.completedAt ?? entry.turn?.startedAt;
 }
 
 /**
@@ -841,28 +855,32 @@ function findHistoryInsertionPoint(
       // The page's own turn total is no anchor: retained work belongs above
       // it, and a retained total beside it.
       if (turnUsageEntryTurnId(historyEntry) !== undefined) {
-        firstTurnTotal ??= { entryIndex, page: turnPage.page };
+        firstTurnTotal ??= { entryIndex, page: turnPage.page, placement: "before" };
         continue;
       }
       position += 1;
       const historyEntryTime = transcriptEntryTime(historyEntry);
+      const isOpeningPrompt =
+        position === 1 && historyEntry.type === "message" && historyEntry.role === "user";
       if (
         !laterEntry
+        && !isOpeningPrompt
         && typeof entryTime === "number"
         && typeof historyEntryTime === "number"
         && historyEntryTime > entryTime
       ) {
         // With no reply above it, this entry is the row's place.
         if (!lastAnswer) {
-          return { entryIndex, page: turnPage.page };
+          return { entryIndex, page: turnPage.page, placement: "before" };
         }
-        laterEntry = { entryIndex, page: turnPage.page, position };
+        laterEntry = { entryIndex, page: turnPage.page, placement: "before", position };
       }
       if (isTurnAnswer(historyEntry, turnId)) {
         lastAnswer = {
           answer: historyEntry,
           entryIndex,
           page: turnPage.page,
+          placement: "before",
           position,
         };
       }
@@ -877,18 +895,19 @@ function findHistoryInsertionPoint(
     && (!laterEntry || laterEntry.position > lastAnswer.position)
     && lateWorkBelongsAboveAnswer(entry, lastAnswer.answer)
   ) {
-    return { entryIndex: lastAnswer.entryIndex, page: lastAnswer.page };
+    return { entryIndex: lastAnswer.entryIndex, page: lastAnswer.page, placement: "before" };
   }
   if (laterEntry) {
-    return { entryIndex: laterEntry.entryIndex, page: laterEntry.page };
+    return { entryIndex: laterEntry.entryIndex, page: laterEntry.page, placement: "before" };
   }
 
   // A page split inside the turn can carry only the turn's total; the row
   // still belongs with its turn, just above that total.
   return lastTurnEntry
     ? {
-        entryIndex: lastTurnEntry.entryIndex + 1,
+        entryIndex: lastTurnEntry.entryIndex,
         page: lastTurnEntry.page,
+        placement: "after",
       }
     : firstTurnTotal;
 }
@@ -947,11 +966,18 @@ function placeRetainedArtifactsInHistory(
         turnPages,
       );
       if (insertionPoint) {
-        const insertionsByIndex = insertions.get(insertionPoint.page) ?? new Map();
-        const entries = insertionsByIndex.get(insertionPoint.entryIndex) ?? [];
+        const pageInsertions = insertions.get(insertionPoint.page) ?? {
+          before: new Map(),
+          after: new Map(),
+        };
+        const bucket =
+          insertionPoint.placement === "before"
+            ? pageInsertions.before
+            : pageInsertions.after;
+        const entries = bucket.get(insertionPoint.entryIndex) ?? [];
         entries.push(entry);
-        insertionsByIndex.set(insertionPoint.entryIndex, entries);
-        insertions.set(insertionPoint.page, insertionsByIndex);
+        bucket.set(insertionPoint.entryIndex, entries);
+        insertions.set(insertionPoint.page, pageInsertions);
         continue;
       }
     }
@@ -962,18 +988,20 @@ function placeRetainedArtifactsInHistory(
 
 function entriesWithHistoryInsertions(
   page: TranscriptHistoryPage,
-  insertionsByIndex: Map<number, AppServerThreadEntry[]> | undefined,
+  pageInsertions: HistoryPageInsertions | undefined,
 ): AppServerThreadEntry[] {
-  if (!insertionsByIndex || insertionsByIndex.size === 0) {
+  if (
+    !pageInsertions
+    || (pageInsertions.before.size === 0 && pageInsertions.after.size === 0)
+  ) {
     return page.entries;
   }
 
   const entries: AppServerThreadEntry[] = [];
-  for (let entryIndex = 0; entryIndex <= page.entries.length; entryIndex += 1) {
-    entries.push(...(insertionsByIndex.get(entryIndex) ?? []));
-    if (entryIndex < page.entries.length) {
-      entries.push(page.entries[entryIndex]!);
-    }
+  for (let entryIndex = 0; entryIndex < page.entries.length; entryIndex += 1) {
+    entries.push(...(pageInsertions.before.get(entryIndex) ?? []));
+    entries.push(page.entries[entryIndex]!);
+    entries.push(...(pageInsertions.after.get(entryIndex) ?? []));
   }
   return entries;
 }
