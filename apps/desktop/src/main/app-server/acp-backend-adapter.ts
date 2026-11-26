@@ -693,6 +693,19 @@ function verifiedJobMonitorCatalogBuild(agent: AcpInstalledAgentRecord): boolean
       && (agent.version === "1.0.45-pwragent.2" || agent.version === "1.0.77"));
 }
 
+function hasConfirmedAntigravityAccess(
+  agent: Pick<
+    AcpInstalledAgentRecord,
+    "lastDiscoveredAt" | "lastDiscoveryError" | "runtimeCapabilities"
+  >,
+): boolean {
+  if (agent.lastDiscoveryError !== undefined) {
+    return false;
+  }
+  return agent.lastDiscoveredAt !== undefined
+    || agent.runtimeCapabilities?.status === "discovered";
+}
+
 function normalizeInstalledAcpAgent(
   agent: AcpInstalledAgentRecord,
 ): AcpInstalledAgentRecord {
@@ -1590,7 +1603,12 @@ export class AcpBackendAdapter {
     if (this.closed) return;
     const selected = recoverLegacyAntigravitySelection(agent);
     const launch = selected.launchDescriptor;
-    if (!available || !launch || !this.isRuntimeSelectionCurrent(agent)) {
+    if (
+      !available
+      || !launch
+      || !this.isRuntimeSelectionCurrent(agent)
+      || !hasConfirmedAntigravityAccess(agent)
+    ) {
       this.invalidateAntigravityQuota();
       return;
     }

@@ -4286,6 +4286,78 @@ describe("AcpBackendAdapter", () => {
     expect(settled).toHaveBeenCalledTimes(1);
   });
 
+  it("does not probe Antigravity quota after install before account access is verified", async () => {
+    const freshlyInstalled: AcpInstalledAgentRecord = {
+      ...buildAntigravityQuotaAgent("/fake/agy"),
+      lastDiscoveredAt: undefined,
+      lastDiscoveryError: undefined,
+      runtimeCapabilities: undefined,
+    };
+    const readAntigravityUsage = vi.fn(async () => ({ rateLimits: [] }));
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => freshlyInstalled,
+        listInstalledAgents: () => [freshlyInstalled],
+        upsertInstalledAgent: vi.fn(),
+      },
+      readAntigravityUsage,
+      emit: async () => undefined,
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      await adapter.describeInstalledBackends(true);
+      expect(readAntigravityUsage).not.toHaveBeenCalled();
+    } finally {
+      await adapter.close();
+    }
+  });
+
+  it.each(
+    [undefined, 1_800_000_000_000].flatMap((lastDiscoveredAt) =>
+      [undefined, "Authentication required", "ACP probe timed out"].flatMap((lastDiscoveryError) =>
+        ([undefined, "stale", "discovered"] as const).map((capabilityStatus) => ({
+          lastDiscoveredAt,
+          lastDiscoveryError,
+          capabilityStatus,
+        })),
+      ),
+    ),
+  )("only probes Antigravity quota when account access has been confirmed without discovery errors [%#]", async ({
+    lastDiscoveredAt,
+    lastDiscoveryError,
+    capabilityStatus,
+  }) => {
+    const agent: AcpInstalledAgentRecord = {
+      ...buildAntigravityQuotaAgent("/fake/agy"),
+      lastDiscoveredAt,
+      lastDiscoveryError,
+      runtimeCapabilities: capabilityStatus
+        ? { schemaVersion: 1, status: capabilityStatus }
+        : undefined,
+    };
+    const readAntigravityUsage = vi.fn(async () => ({ rateLimits: [] }));
+    const adapter = createTestAcpBackendAdapter({
+      captureStores: [],
+      acpAgentStore: {
+        getInstalledAgent: () => agent,
+        listInstalledAgents: () => [agent],
+        upsertInstalledAgent: vi.fn(),
+      },
+      readAntigravityUsage,
+      emit: async () => undefined,
+      handleServerRequest: async () => ({}),
+    });
+    try {
+      await adapter.describeInstalledBackends(true);
+      const shouldProbe = lastDiscoveryError === undefined
+        && (lastDiscoveredAt !== undefined || capabilityStatus === "discovered");
+      expect(readAntigravityUsage).toHaveBeenCalledTimes(shouldProbe ? 1 : 0);
+    } finally {
+      await adapter.close();
+    }
+  });
+
   it("does not block backend discovery while Grok billing is pending", async () => {
     const backendId = "acp:grok" as AcpBackendId;
     const agent: AcpInstalledAgentRecord = {
@@ -6713,6 +6785,7 @@ function buildAntigravityQuotaAgent(command: string): AcpInstalledAgentRecord {
     backendId: "acp:antigravity",
     registryId: "antigravity",
     name: "Antigravity",
+    lastDiscoveredAt: 1000,
     launchDescriptor: {
       backendId: "acp:antigravity",
       registryId: "antigravity",
