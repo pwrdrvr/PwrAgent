@@ -1066,9 +1066,6 @@
     "apps/desktop/src/renderer/src/features/navigation/__tests__/project-jump-under-dock.property.test.ts": {
       "highNumRunsWithoutComment": 2
     },
-    "apps/desktop/src/renderer/src/features/navigation/__tests__/selected-thread-dock-work.property.test.tsx": {
-      "heavyFixture": 4
-    },
     "apps/desktop/src/renderer/src/features/navigation/__tests__/sidebar-remote-removal.property.test.tsx": {
       "heavyFixture": 1
     },
