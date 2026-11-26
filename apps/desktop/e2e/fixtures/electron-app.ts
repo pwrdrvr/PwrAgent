@@ -33,6 +33,7 @@ import {
   E2E_MEMORY_SECRET_STORAGE_ENV,
   SECRET_STORAGE_DISABLED_ENV,
 } from "../../src/main/settings/desktop-secret-store";
+import { E2E_ACP_DISCOVERY_ROOT_ENV } from "../../src/main/settings/desktop-settings-env";
 import {
   E2E_SHUTDOWN_DIAGNOSTICS_FILE_ENV,
   E2E_SHUTDOWN_LAUNCH_ID_ENV,
@@ -235,6 +236,8 @@ type LaunchElectronAppParams = {
    * `host` to exercise ambient discovery. Explicit per-launch CLI env/config
    * still wins, including an undefined env override for PATH-discovery tests. */
   replayCodexDiscovery?: "fixture" | "host";
+  /** Replay scopes automatic ACP discovery to its own root. Specs can seed
+   * another fixture root or supply an explicit CLI override here. */
   env?: Record<string, string | undefined>;
   homeRoot?: string;
   windowSize?: {
@@ -365,12 +368,29 @@ export async function launchElectronApp(
       : {}),
   });
   delete env.ELECTRON_RENDERER_URL;
-  for (const [key, value] of Object.entries(params.env ?? {})) {
+  const overrides = params.env ?? {};
+  const replayFixturePath = Object.hasOwn(overrides, "PWRAGENT_REPLAY_FIXTURE_PATH")
+    ? overrides.PWRAGENT_REPLAY_FIXTURE_PATH
+    : env.PWRAGENT_REPLAY_FIXTURE_PATH;
+  if (replayFixturePath) {
+    // Strip ambient ACP selections before applying the spec's own overrides.
+    // Environment key names are case-insensitive on Windows.
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase() === E2E_ACP_DISCOVERY_ROOT_ENV
+        || /^PWRAGENT_ACP_AGENTS_.*_CLI_PATH$/i.test(key)) {
+        delete env[key];
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) {
       delete env[key];
     } else {
       env[key] = value;
     }
+  }
+  if (replayFixturePath && !env[E2E_ACP_DISCOVERY_ROOT_ENV]) {
+    env[E2E_ACP_DISCOVERY_ROOT_ENV] = path.join(homeRoot, "replay-acp-discovery");
   }
   configureElectronE2eReleaseEnv(env);
   anchorWindowsPwragentRoot(env);

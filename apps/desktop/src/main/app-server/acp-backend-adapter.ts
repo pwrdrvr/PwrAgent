@@ -71,6 +71,7 @@ import type {
   AgentToolMcpServerLike,
 } from "../agent-tools/agent-tool-mcp-server.js";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
+import { resolveE2eAcpDiscoveryOptions } from "../acp/acp-e2e-discovery";
 import type { AcpLaunchDescriptor } from "../acp/acp-launch-descriptor";
 import { isManagedAntigravityCommand, MANAGED_ANTIGRAVITY_ENV } from "../acp/antigravity-managed-runtime";
 import { resolveAntigravityCommandPath } from "../acp/antigravity-runtime-retention";
@@ -284,7 +285,9 @@ export function createLocalAcpAgentDiscovery(params: {
         preferences[registryId] = { overridePath: override };
       }
     }
-    const env = await params.resolveEnv?.();
+    const isPackaged = app?.isPackaged;
+    const fixtureDiscovery = resolveE2eAcpDiscoveryOptions(isPackaged);
+    const env = fixtureDiscovery?.env ?? await params.resolveEnv?.();
     const records = await discoverLocalAcpAgentRecords({
       enabledRegistryIds,
       useManagedAntigravity: true,
@@ -297,13 +300,13 @@ export function createLocalAcpAgentDiscovery(params: {
           managedGrokBuildsEnabledFromSnapshot(
             providers,
             env ?? process.env,
-            app?.isPackaged === true,
+            isPackaged === true,
           ),
-        checkMode: app?.isPackaged === true ? "ttl" : "once-per-process",
-        requirePlatformSignature: app?.isPackaged === true,
+        checkMode: isPackaged ? "ttl" : "once-per-process",
+        requirePlatformSignature: isPackaged === true,
       },
       ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
-      ...(env ? { env } : {}),
+      ...(fixtureDiscovery ?? (env ? { env } : {})),
     });
     return records.map((record) => {
       const configDependencyFingerprint = providerProjectionForRegistryId(
