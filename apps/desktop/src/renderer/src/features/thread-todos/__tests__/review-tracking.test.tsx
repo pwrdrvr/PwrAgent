@@ -574,6 +574,25 @@ describe("review Auto-fix status", () => {
     await waitFor(() => expect(document.querySelector(`.review-todo__auto[data-phase="${phase}"]`)).toHaveTextContent(text!));
   });
 
+  it("names the owner's stack hold on a queued Auto-fix and drops it once admission resumes", async () => {
+    const base = installApi(review, review);
+    let changed: (event: ThreadTodosChangedEvent) => void = () => {};
+    vi.mocked(base.onThreadTodosChanged!).mockImplementation((listener) => { changed = listener; return () => {}; });
+    const api = installAutoFix(base,
+      { armedTurnIds: [], runs: { review: { phase: "queued", at: 1, hold: "Held by #12: CI running" } } });
+    render(<ThreadTodoCard todo={threadReviewTodo(review)} running={false}
+      onRun={vi.fn()} onStartReview={vi.fn()} onResolve={vi.fn()} onDoHere={vi.fn()} onSetItemChecked={vi.fn()} />);
+    await waitFor(() => expect(document.querySelector(`.review-todo__auto[data-phase="queued"]`))
+      .toHaveTextContent("Auto-fix waiting · Held by #12: CI running"));
+    expect(screen.queryByText("sends when the current turn ends", { exact: false })).not.toBeInTheDocument();
+    // The owner cleared the hold; a running turn is now what it waits on.
+    vi.mocked(api.readReviewAutoFix).mockResolvedValueOnce(
+      { status: { armedTurnIds: [], runs: { review: { phase: "queued", at: 1 } } } });
+    act(() => changed({ backend: "codex", threadId: "owner", at: 2 }));
+    await waitFor(() => expect(document.querySelector(`.review-todo__auto[data-phase="queued"]`))
+      .toHaveTextContent("Auto-fix queued · sends when the current turn ends"));
+  });
+
   it("hides a failed send once the card sends its own fix, and shows a new failure", async () => {
     const base = installApi(review, review);
     let changed: (event: ThreadTodosChangedEvent) => void = () => {};

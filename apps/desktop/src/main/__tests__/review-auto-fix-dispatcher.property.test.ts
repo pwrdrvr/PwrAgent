@@ -375,6 +375,52 @@ describe("review auto-fix dispatcher", () => {
     expect(autoFixStarts).toBe(1);
   });
 
+  it("reports the stack hold on the queued run, then the current turn once admission resumes", async () => {
+    // Counterexample: an idle thread held by a lower stack layer showed
+    // "sends when the current turn ends" because the run carried no hold.
+    const review = makeReview("rev-stack-hold", true);
+    const runs = new ReviewAutoFixRuns();
+    let stackHold: string | undefined = "Held by #12: CI running";
+    let activeTurn = false;
+    let clock = 1;
+
+    const dispatcher = new ReviewAutoFixDispatcher({
+      getReview: () => review,
+      isThreadArchived: () => false,
+      readStackHold: async () => stackHold,
+      threadHasActiveTurn: () => activeTurn,
+      submitTurn: async () => ({ status: "started" }),
+      submitTurnIfIdle: async ({ canAdmit }) => {
+        if (activeTurn || !(await canAdmit())) return { status: "busy" };
+        runs.record(THREAD, review.id, { kind: "queue", status: "started", at: clock });
+        return { status: "started" };
+      },
+      recordRun: (thread, id, event) => runs.record(thread, id, event),
+      now: () => clock,
+    });
+
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #12: CI running" });
+
+    // The lower layer's reason changes; the run says so and keeps its time.
+    clock = 2;
+    stackHold = "Held by #12: needs restack";
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #12: needs restack" });
+
+    // The stack clears while a turn runs: the run waits on that turn alone.
+    clock = 3;
+    stackHold = undefined;
+    activeTurn = true;
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1 });
+
+    clock = 4;
+    activeTurn = false;
+    await dispatcher.dispatch(review.id);
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "running", at: 4 });
+  });
+
   it("cancels queued run state when a thread is archived while Auto-fix is held", async () => {
     const review = makeReview("rev-archive-held", true);
     const runs = new ReviewAutoFixRuns();
@@ -396,7 +442,7 @@ describe("review auto-fix dispatcher", () => {
     });
 
     await dispatcher.dispatch(review.id);
-    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1 });
+    expect(runs.of(THREAD)[review.id]).toEqual({ phase: "queued", at: 1, hold: "Held by #1: CI running" });
 
     archived = true;
     dispatcher.onThreadArchived(THREAD);
