@@ -250,6 +250,11 @@ export const RESEARCH_WINDOW_SELECT_EVENT_CHANNEL = "research:window-select";
 export const RESEARCH_WITHDRAW_CHANNEL = "research:withdraw";
 export const RESEARCH_EVENTS_CHANNEL = "research:events";
 export const RESEARCH_CHANGES_CHANNEL = "research:changes";
+export const RESEARCH_DECISIONS_STATUS_CHANNEL = "research:decisions-status";
+export const RESEARCH_DECISIONS_CHANNEL = "research:decisions";
+export const RESEARCH_DECISION_BATCH_CHANNEL = "research:decision-batch";
+export const RESEARCH_DECISION_BATCH_ACTION_CHANNEL = "research:decision-batch-action";
+export const RESEARCH_DECISION_OPEN_RESULTS_CHANNEL = "research:decision-open-results";
 export const DECISIONS_RAIL_SNAPSHOT_CHANNEL = "decisions-rail:snapshot";
 /** The strip above the composer: a thread's running and error-stopped batches, from memory. */
 export const DECISIONS_RAIL_ACTIVE_CHANNEL = "decisions-rail:active";

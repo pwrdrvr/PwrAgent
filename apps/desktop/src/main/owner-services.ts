@@ -58,7 +58,10 @@ import { removeRetiredCiArtifactStore } from "./pr-status/forge-artifact-downloa
 import { hadExistingAppStateDatabase, initializeDesktopState } from "./storage/desktop-state-lifecycle";
 import { getDesktopStorageMaintenanceStorage } from "./storage/desktop-storage-maintenance";
 import { getDesktopOverlayStore } from "./storage/desktop-overlay-store";
-import { createOpenAIDecisionsAgentToolsHandler, flushOpenAIDecisionsUsage } from "./openai-decisions/openai-decisions-runtime";
+import { createOpenAIDecisionsAgentToolsHandler, flushOpenAIDecisionsUsage, getOpenAIDecisionsRail } from "./openai-decisions/openai-decisions-runtime";
+import { readDecisionProvidersReadiness } from "./openai-decisions/decision-provider-targets";
+import { readyDecisionProviders } from "@pwragent/shared/decision-models";
+import type { AppServerBackendKind } from "@pwragent/shared/contracts/normalized-app-server";
 import { createPwrAgentAppManagementHandler } from "./agent-tools/pwragent-app-management-service";
 import type {
   CreateInstanceThreadResult,
@@ -87,7 +90,7 @@ import type { AgentToolCallContext } from "./agent-tools/agent-tool-definition";
 import { createOwnerRoutedForgeReadHandler } from "./federation/federated-forge-read-service";
 import { navigationDiagnosticCause, navigationDiagnosticTrigger } from "../shared/navigation-diagnostic-cause";
 import { setBundledGitLfsAdvisory } from "./bundled-git-lfs-advisory";
-import { navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
+import { NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD, navigationQueryEventRequiresRefresh } from "@pwragent/shared/navigation-query-events";
 import { type AgentEvent } from "@pwragent/shared/contracts/agent";
 import { forgeRuleProjectLabel } from "@pwragent/shared/contracts/forge-agent-tools";
 import { AUTOMATIONS_SCHEDULING_STATUS_EVENT_CHANNEL, CODEX_RESTART_STATUS_CHANGED_EVENT_CHANNEL, THREAD_ARCHIVE_SWEEP_STATUS_CHANGED_EVENT_CHANNEL, RESEARCH_CHANGED_EVENT_CHANNEL } from "../shared/ipc";
@@ -158,6 +161,7 @@ function invalidateNavigationEvent(event: AgentEvent): void {
   if (navigationQueryEventRequiresRefresh(event.notification.method, event.notification.params)) {
     navigationQueryPool.invalidateQueryOwner(event.federationTarget, navigationDiagnosticCause(event), navigationDiagnosticTrigger(event), event);
   }
+  if (event.notification.method === NAVIGATION_SIDEBAR_ENRICHMENT_UPDATED_METHOD) return;
   navigationQueryPool.invalidateExactOwner(event.federationTarget,
     typeof threadId === "string" ? { backend: event.backend, threadId } : undefined);
 }
@@ -524,6 +528,7 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
   // A batch's moves are announced to its thread's windows (the Decisions
   // tab and the strip above the composer read it); a background batch
   // wakes the thread with a queued turn when it ends.
+  let researchServiceRef: ReturnType<typeof initializeResearchRuntime> | undefined;
   getDesktopBackendRegistry().setPwrAgentOpenAIDecisionsHandler(
     createOpenAIDecisionsAgentToolsHandler({
       settings: getDesktopSettingsService(),
@@ -536,9 +541,26 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
       resolveThreadRoots: async (caller) =>
         await getDesktopBackendRegistry().resolveThreadFileAccessRoots(caller.backend, caller.threadId),
       privateStorageRoots: () => getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
+      resolveCallerResearchRuns: (caller) => researchServiceRef?.memberRuns({
+        backend: caller.backend as AppServerBackendKind,
+        threadId: caller.threadId,
+      }) ?? [],
+      resolveResearchRunContext: (caller, runId) => researchServiceRef?.runParticipants(runId, {
+        backend: caller.backend as AppServerBackendKind,
+        threadId: caller.threadId,
+      }),
+      onBackgroundBatchSettled: (caller, woken) => {
+        if (woken) return;
+        researchServiceRef?.observeDecisionBatchFinished({
+          backend: caller.backend as AppServerBackendKind,
+          threadId: caller.threadId,
+        });
+      },
     }),
   );
   const researchEnabled = () => getDesktopSettingsService().resolveResearchEnabled?.() === true;
+  const readReadyDecisionProviders = async () =>
+    readyDecisionProviders(await readDecisionProvidersReadiness(getDesktopSettingsService()));
   const research = initializeResearchRuntime({
     enabled: researchEnabled,
     ...createResearchOwnerIdentity(),
@@ -553,9 +575,32 @@ async function constructOwnerServices(host: OwnerHostServices, options: OwnerSta
         notification: { method: "thread/research/changed", params: change },
       });
     },
+    readyDecisionProviders: readReadyDecisionProviders,
+    cancelDecisionBatches: async (thread, reason, options) => {
+      await getOpenAIDecisionsRail()?.cancelThreadBatches(thread, reason, options);
+    },
+    hasActiveBackgroundDecisionBatch: (thread, runId) =>
+      getOpenAIDecisionsRail()?.hasActiveBackgroundBatch(thread, runId) === true,
     ...createResearchRegistryPorts(registry),
   });
-  ownerSubscriptions.add(bindResearchRegistry(registry, research, researchEnabled));
+  researchServiceRef = research;
+  ownerSubscriptions.add(bindResearchRegistry(registry, research, researchEnabled, {
+    isReady: async () => (await readReadyDecisionProviders()).length > 0,
+    readBoardDecisions: async (actor, runId) => {
+      const readiness = await readDecisionProvidersReadiness(getDesktopSettingsService());
+      const providers = readyDecisionProviders(readiness);
+      const rail = getOpenAIDecisionsRail();
+      const ctx = research.runParticipants(runId, actor);
+      if (!rail || !ctx) return { readyProviders: providers };
+      const snapshot = await rail.researchRunDecisionsSnapshot(ctx, readiness);
+      return {
+        readyProviders: providers,
+        runDecisions: snapshot.decisions.length,
+        runBatches: snapshot.batches.length,
+        activeBatches: snapshot.batches.filter((batch) => batch.state === "queued" || batch.state === "running").length,
+      };
+    },
+  }));
   // Codex threads are offered research only while Codex Tool Discovery is on.
   const codexResearchOffered = () => researchToolsOffered("codex", { enabled: researchEnabled(), codexToolDiscovery: () => getDesktopSettingsService().resolveCodexToolDiscovery?.() !== false });
   let researchWasEnabled = researchEnabled();
@@ -780,6 +825,9 @@ wireOwnerRendererEvents();
       queues.events.emit("operatorRequestsChanged", { reason: "questions" });
     }
   }));
+  // The prewarm starts after the shell creates its window. Admit saved
+  // navigation before owner metadata or a window can start a live listing.
+  if (bootMode === "active-profile" && config.read("onboarding").completed) registry.markStartupProviderRefreshPending();
   void startAppServerOwnerNavigation().catch((error) => {
     mainLog.warn("failed to initialize owner navigation metadata", { error: String(error) });
   });

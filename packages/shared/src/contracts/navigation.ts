@@ -2697,7 +2697,7 @@ export type NavigationQueryRequest = {
   /** Viewer inventory includes this machine's mounts; it is never served over Federation. Defaults to owner. */
   inventory?: "owner" | "viewer";
   consumer: NavigationQueryConsumerClass;
-  /** Bounded diagnostic attribution; never part of query identity. */
+  /** Bounded diagnostic attribution. Pin refreshes also skip the archive planning wait. */
   readReason?: "demand" | "refresh" | "continuation" | "rebaseline" | "pins";
   /** Opaque counters and fixed vocabulary only; ignored by semantic query identity. */
   diagnostic?: {

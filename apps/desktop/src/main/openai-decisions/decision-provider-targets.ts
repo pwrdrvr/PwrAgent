@@ -1,7 +1,9 @@
 import {
   DECISION_JEV_ENDPOINT,
+  decisionProvidersReadiness,
   resolveDecisionModelSettings,
   type DecisionProviderId,
+  type DecisionProvidersReadiness,
   type DesktopDecisionModelSettings,
 } from "@pwragent/shared/decision-models";
 import type { RegisteredDecisionProvider } from "@pwragent/shared/openai-decisions";
@@ -66,4 +68,23 @@ export async function resolveDefaultDecisionProvider(
   if (chosen === "jev" || chosen === "local") return chosen;
   if (on("jev") && await settings.hasDecisionApiKey("jev")) return "jev";
   return (["openai", "jev", "local"] as const).find(on) ?? "openai";
+}
+
+/**
+ * Current readiness of OpenAI Decisions, TypeSafe Jev, and local Clef.
+ * Reads only settings and secret presence, never decrypting any key.
+ */
+export async function readDecisionProvidersReadiness(
+  settings: DecisionSettingsReader,
+): Promise<DecisionProvidersReadiness> {
+  const [openaiKey, jevKey] = await Promise.all([
+    settings.hasOpenAIDecisionsApiKey(),
+    settings.hasDecisionApiKey("jev"),
+  ]);
+  return decisionProvidersReadiness({
+    decisionModels: settings.resolveDecisionModelSettings(),
+    openaiEnabled: settings.resolveOpenAIDecisionsSettings().enabled !== false,
+    openaiKey,
+    jevKey,
+  });
 }

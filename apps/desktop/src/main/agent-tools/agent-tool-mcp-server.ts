@@ -179,7 +179,9 @@ export type AgentToolMcpAuthorization = {
 };
 
 export type AgentToolMcpServerOptions = {
-  resolveCatalogs: (context: AgentToolMcpClientContext) => AgentToolMcpCatalog[];
+  resolveCatalogs: (
+    context: AgentToolMcpClientContext,
+  ) => AgentToolMcpCatalog[] | Promise<AgentToolMcpCatalog[]>;
   resolveCallContext: (
     context: AgentToolMcpClientContext,
   ) =>
@@ -667,13 +669,12 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
         ({ name, args } = target);
       }
     }
-    const catalog = this.options
-      .resolveCatalogs(clientContext)
-      .find((candidate) =>
-        candidate.router.acceptsMcpToolCall({
-          tool: name,
-        }),
-      );
+    const catalogs = await this.options.resolveCatalogs(clientContext);
+    const catalog = catalogs.find((candidate) =>
+      candidate.router.acceptsMcpToolCall({
+        tool: name,
+      }),
+    );
     if (!catalog) {
       return unsupportedMcpTool();
     }
@@ -755,7 +756,8 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   /** One tool in the full allowed catalog, without checking the others. */
   private async resolveMcpTool(context: AgentToolMcpClientContext, name: string): Promise<AgentMcpTool | undefined> {
     if (!allowsStdioFallbackTool(context, name)) return undefined;
-    const matches = this.options.resolveCatalogs(context)
+    const catalogs = await this.options.resolveCatalogs(context);
+    const matches = catalogs
       .flatMap((catalog) => catalog.router.buildMcpTools())
       .filter((tool) => tool.name === name);
     if (matches.length !== 1) return undefined;
@@ -765,7 +767,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
 
   private async resolveMcpTools(context: AgentToolMcpClientContext): Promise<AgentMcpTool[]> {
     const toolsByName = new Map<string, AgentMcpTool>();
-    for (const catalog of this.options.resolveCatalogs(context)) {
+    for (const catalog of await this.options.resolveCatalogs(context)) {
       for (const tool of catalog.router.buildMcpTools()) {
         if (!allowsStdioFallbackTool(context, tool.name)) continue;
         if (!await this.isToolAdvertised(tool.name, context)) continue;

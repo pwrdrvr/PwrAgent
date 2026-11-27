@@ -71,7 +71,7 @@ export async function readDecisionInputsFile(
     }
     throw new DecisionFileError(
       "file_access_denied",
-      "inputsFile must be inside this thread's workspace, a scratch project, or the temporary directory, and outside private storage.",
+      "inputsFile must be inside this thread's workspace, a scratch project, or the per-user temporary directory ($TMPDIR / os.tmpdir(), not /tmp on macOS), and outside private storage.",
     );
   }
 
@@ -214,7 +214,7 @@ export async function resolveWritableDecisionOutputFile(
       case "forbidden":
         throw new DecisionFileError(
           "file_access_denied",
-          "outputFile must be inside this thread's workspace, a scratch project, or the temporary directory, and outside private storage.",
+          "outputFile must be inside this thread's workspace, a scratch project, or the per-user temporary directory ($TMPDIR / os.tmpdir(), not /tmp on macOS), and outside private storage.",
         );
       case "symlink":
         throw new DecisionFileError("invalid_input", "outputFile must not be a symbolic link.");

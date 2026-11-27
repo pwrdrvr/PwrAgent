@@ -226,7 +226,7 @@
     "statements": 1
   },
   "federation-directory-pin-actions": {"commits": 3, "note": "Pin, move and unpin use three owner commits; 100 actions/day at ~8 KiB/commit is ~0.8 MB/day; no idle writes", "observedWalBytes": 24720, "rowsChanged": 3, "statements": 3},
-  "headless-owner-lifecycle-idle-hour": {"commits": 384, "note": "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. Disabled Token Miser leaves its legacy migration marker untouched at boot. The To-do runtime initializes the review tracking boundary once per profile. Checkout ownership adds one Federation instance ID commit on the first boot. Wait for provider/navigation startup and join the archive sweep.", "observedWalBytes": 243112, "rowsChanged": 24, "statements": 416},
+  "headless-owner-lifecycle-idle-hour": {"commits": 383, "note": "Built Node root: boot an existing empty profile, one idle hour on fake timers, then shutdown. The To-do runtime initializes review tracking and checkout ownership writes the Federation instance ID. Failed Codex discovery leaves the unread baseline unset. Disabled Token Miser skips its legacy migration marker at boot. Wait for provider/navigation startup and join the archive sweep.", "observedWalBytes": 234872, "rowsChanged": 23, "statements": 415},
   "hourly-sweep-idle-day": {
     "commits": 0,
     "note": "24 hourly sweeps over a stale Codex thread and a stale ACP session with nothing to hibernate or delete. The sweep archives nothing, so it commits nothing.",

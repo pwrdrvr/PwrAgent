@@ -522,7 +522,7 @@ test("existing running thread keeps selected environment after pending state cle
 
   try {
     await app.window
-      .getByRole("button", { name: /Existing directory thread/ })
+      .getByRole("button", { name: "Existing directory thread", exact: true })
       .click();
     await expect(
       app.window.getByRole("heading", { level: 2, name: "Existing directory thread" }),
@@ -557,7 +557,7 @@ test("thread environment Run command uses the current cwd after workspace handof
 
   try {
     await app.window
-      .getByRole("button", { name: /Existing directory thread/ })
+      .getByRole("button", { name: "Existing directory thread", exact: true })
       .click();
     await expect(
       app.window.getByRole("heading", { level: 2, name: "Existing directory thread" }),

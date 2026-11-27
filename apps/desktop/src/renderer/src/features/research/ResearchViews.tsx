@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ResearchFinding, ResearchThread } from "@pwragent/shared/research";
+import type { ResearchDecisionBatchSummary, ResearchFinding, ResearchThread } from "@pwragent/shared/research";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { ResearchDecisionEvidenceList } from "./ResearchDecisionsView";
 import { ResearchThreadButton } from "./ResearchThreadButton";
 import { useResearchActivity } from "./useResearchActivity";
 import { ResearchSourceTag } from "./ResearchSourceTag";
@@ -61,8 +62,11 @@ function MapBranch({ run, branch, onOpenItem, onShowApproachItems, nested = fals
  * list and each card's record comes from the run's store. A filter matches
  * what the cards show, across every finding of the run, in the window.
  */
-export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailable, onOpenItem, onOpenEvidence }: {
-  api: DesktopApi; thread: ResearchThread; run: ResearchRunView; filter: string; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
+export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailable, batchesById, onOpenBatch, onOpenItem, onOpenEvidence }: {
+  api: DesktopApi; thread: ResearchThread; run: ResearchRunView; filter: string; evidenceAvailable: boolean;
+  batchesById?: ReadonlyMap<string, ResearchDecisionBatchSummary>;
+  onOpenBatch?: (batchId: string) => void;
+  onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
   const query = filter.trim().toLowerCase();
   const paged = useResearchFindings(api, thread, run.id, run.findings);
@@ -96,7 +100,7 @@ export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailab
   const noun = matches ? "matching finding" : "finding";
   return <div ref={list} tabIndex={-1} className="research-list" aria-label="Shared findings">
     {error && <p role="alert" className="research-error">{error}</p>}
-    {shown.map((finding) => <FindingCard key={finding.id} run={run} finding={finding} evidenceAvailable={evidenceAvailable} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} />)}
+    {shown.map((finding) => <FindingCard key={finding.id} run={run} finding={finding} evidenceAvailable={evidenceAvailable} batchesById={batchesById} onOpenBatch={onOpenBatch} onOpenItem={onOpenItem} onOpenEvidence={onOpenEvidence} />)}
     {!matches && !paged.available && <p className="context-empty">Findings are unavailable in this window.</p>}
     {!matches && paged.available && !loaded && !error && <p role="status" className="context-empty">Loading findings…</p>}
     {loaded && !run.findings && <p className="context-empty">Findings appear here as workers share evidence.</p>}
@@ -110,8 +114,11 @@ export function ResearchFindingsView({ api, thread, run, filter, evidenceAvailab
   </div>;
 }
 
-function FindingCard({ run, finding, evidenceAvailable, onOpenItem, onOpenEvidence }: {
-  run: ResearchRunView; finding: ResearchFinding; evidenceAvailable: boolean; onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
+function FindingCard({ run, finding, evidenceAvailable, batchesById, onOpenBatch, onOpenItem, onOpenEvidence }: {
+  run: ResearchRunView; finding: ResearchFinding; evidenceAvailable: boolean;
+  batchesById?: ReadonlyMap<string, ResearchDecisionBatchSummary>;
+  onOpenBatch?: (batchId: string) => void;
+  onOpenItem: Open; onOpenEvidence: (itemId: string, pathIndex: number) => void;
 }) {
   const relation = researchFindingRelation(run, finding);
   return <article className="research-entry" aria-label={`${researchLabel(finding.kind)} from ${approachTitle(run, finding.approachId)}`}>
@@ -120,6 +127,7 @@ function FindingCard({ run, finding, evidenceAvailable, onOpenItem, onOpenEviden
     {run.harness && <ResearchSourceTag run={run} itemId={finding.id} />}
     {relation && <button type="button" className="research-link" onClick={() => onOpenItem(finding.relatesTo!)}>{relation}</button>}
     {finding.paths.length > 0 && <EvidenceList paths={finding.paths} available={evidenceAvailable} onOpen={(index) => onOpenEvidence(finding.id, index)} />}
+    <ResearchDecisionEvidenceList text={finding.text} paths={finding.paths} batchesById={batchesById} onOpenBatch={onOpenBatch} />
     {finding.author && <ResearchThreadButton thread={finding.author} title="Open source thread" label={`Open source thread: ${approachTitle(run, finding.approachId)}`} />}
   </article>;
 }

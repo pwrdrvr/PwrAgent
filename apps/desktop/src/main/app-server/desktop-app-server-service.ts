@@ -463,7 +463,7 @@ import {
 import { getDesktopNavigationQueryStore } from "../app-server/navigation-query-store";
 import { searchNavigationOwners } from "../app-server/navigation-jump-search";
 import { appendViewerNavigationPins, archivedRemoteThreadPinMounts, attachRemoteThreadsToLocalDirectories, loadViewerNavigationPins, loadViewerWatchedNavigationRows } from "../app-server/navigation-viewer-pins";
-import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, navigationPullRequestProjection, navigationQueryShowsStacks } from "../app-server/navigation-query-source";
+import { awaitStartupProviderCoverage, loadLocalNavigationQueryIndex, loadSidebarNavigationQueryIndex, navigationPullRequestProjection, navigationQueryShowsStacks } from "../app-server/navigation-query-source";
 import { reconcileWindowsDirectoryAliases } from "../app-server/navigation-windows-directory-aliases";
 import type { NavigationQueryIndex } from "@pwragent/owner-core/navigation-query-projection";
 import { updateLocalSubthreadOrder } from "../app-server/subthread-order-actions";
@@ -2111,17 +2111,21 @@ class DesktopAppServerService {
       return Object.keys(directoryThreadsCollapsed).length
         ? { ...page, remoteOwner: { ...page.remoteOwner!, directoryThreadsCollapsed } } : page;
     }
+    const sidebar = request.consumer === "main-sidebar" && request.query.kind !== "group-members"
+      && request.query.kind !== "star-map";
     return await getDesktopNavigationQueryStore().readPage({
-      pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal: rpcOptions?.signal }),
+      pullRequests: navigationPullRequestProjection({ kind: request.query.kind, signal: rpcOptions?.signal, backgroundValidation: sidebar }),
       loadIndex: async () => {
         rpcOptions?.signal.throwIfAborted();
-        await awaitStartupProviderCoverage({ query: request.query,
+        await awaitStartupProviderCoverage({ query: request.query, readReason: request.readReason,
           deadlineAt: rpcOptions?.deadlineAt ?? request.deadlineAt, signal: rpcOptions?.signal });
         const summaries = request.inventory === "viewer"
           ? getDesktopFederationRuntime().remoteThreadSummaries() : undefined;
-        const index = await loadLocalNavigationQueryIndex({
+        const loadIndex = sidebar ? loadSidebarNavigationQueryIndex : loadLocalNavigationQueryIndex;
+        const index = await loadIndex({
           backend: request.backend,
           callerReason: "renderer-navigation-query",
+          useSavedStartupInventory: request.query.kind === "group-members",
           includeStacks: navigationQueryShowsStacks(request.query, request.consumer),
           signal: rpcOptions?.signal,
           ...(summaries ? { viewer: { source: summaries, project: async (local: NavigationQueryIndex) => {
@@ -3703,7 +3707,8 @@ class DesktopAppServerService {
       while (this.ownerNavigationActive) {
         const version = this.ownerNavigationMetadataVersion;
         const isCurrent = () => this.ownerNavigationActive && this.ownerNavigationMetadataVersion === version;
-        const index = await loadLocalNavigationQueryIndex({ backend: "all", callerReason: "owner-navigation-metadata", signal: abort.signal });
+        const index = await loadLocalNavigationQueryIndex({ backend: "all", callerReason: "owner-navigation-metadata",
+          useSavedStartupInventory: true, signal: abort.signal });
         if (!this.ownerNavigationActive) return;
         if (!isCurrent()) continue;
         if (index.coverage?.state === "checking") return;

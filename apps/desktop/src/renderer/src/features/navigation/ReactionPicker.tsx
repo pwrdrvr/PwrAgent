@@ -14,6 +14,7 @@ import { SearchIcon } from "../../icons/SearchIcon";
 import { SmileyIcon } from "../../icons/SmileyIcon";
 import { UserIcon } from "../../icons/UserIcon";
 import { useDismissableLayer } from "../../lib/useDismissableLayer";
+import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import {
   getCachedEmojiCatalog,
   loadEmojiCatalog,
@@ -21,21 +22,27 @@ import {
 import type { ReactionEmojiCatalog } from "./reaction-emoji-catalog";
 import {
   BASE_REACTION_ENTRIES,
+  INITIAL_REACTION_PICKER_LEAVE_STATE,
   LABEL_LETTER_REACTIONS,
   LABEL_NUMBER_REACTIONS,
   QUICK_REACTIONS,
   REACTION_CATEGORIES,
   REACTION_PICKER_COLUMNS,
   computeReactionPickerPosition,
+  isSyntheticStationaryPointerLeave,
   moveReactionGridIndex,
   normalizeEmojiKey,
   readRecentReactions,
   recordRecentReactionList,
   searchReactionEmojis,
+  transitionReactionPickerLeaveState,
   writeRecentReactions,
   type ReactionCategoryId,
   type ReactionEmojiEntry,
+  type ReactionPickerLeaveEvent,
+  type ReactionPickerLeaveState,
   type ReactionPickerPlacement,
+  type ReactionPickerPointerPoint,
 } from "./reaction-picker-model";
 
 const DEFAULT_PICKER_WIDTH = 316;
@@ -179,8 +186,69 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
   const [catalog, setCatalog] = useState<ReactionEmojiCatalog | undefined>(() =>
     getCachedEmojiCatalog(),
   );
-  const [recents, setRecents] = useState<string[]>(() => readRecentReactions());
+  // Snapshot recents and thread-only active rows on open so toggling multiple
+  // emojis in one session never shifts the Quick grid under the cursor.
+  const [initialRecents] = useState<string[]>(() => readRecentReactions());
+  const [initialCurrent] = useState<string[]>(() => current);
+  const latestRecentsRef = useRef<string[]>(initialRecents);
   const [previewEntry, setPreviewEntry] = useState<ReactionEmojiEntry | undefined>();
+
+  const {
+    cancelHoverDismiss,
+    dismissAfterGrace,
+    dismissImmediately,
+  } = useHoverTransitionGrace(onDismiss);
+
+  const leaveStateRef = useRef<ReactionPickerLeaveState>(
+    INITIAL_REACTION_PICKER_LEAVE_STATE,
+  );
+  const lastInsidePointerRef = useRef<ReactionPickerPointerPoint | undefined>(
+    undefined,
+  );
+
+  const recordInsidePointer = useCallback(
+    (event: { clientX: number; clientY: number }): void => {
+      // The picker always stays >= 8px inside viewport margins, so real
+      // in-picker pointer events have non-zero coordinates; ignore unpositioned
+      // synthetic events (0, 0) such as keyboard-activated clicks or bare DOM dispatches.
+      if (event.clientX === 0 && event.clientY === 0) {
+        return;
+      }
+      lastInsidePointerRef.current = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+    },
+    [],
+  );
+
+  const dispatchLeaveEvent = useCallback(
+    (event: ReactionPickerLeaveEvent): void => {
+      const transition = transitionReactionPickerLeaveState(
+        leaveStateRef.current,
+        event,
+      );
+      leaveStateRef.current = transition.state;
+      switch (transition.effect) {
+        case "arm_timer":
+          dismissAfterGrace();
+          break;
+        case "cancel_timer":
+          cancelHoverDismiss();
+          break;
+        case "dismiss_now":
+          dismissImmediately();
+          break;
+        case "none":
+          break;
+      }
+    },
+    [cancelHoverDismiss, dismissAfterGrace, dismissImmediately],
+  );
+
+  const handleImmediateDismiss = useCallback((): void => {
+    dispatchLeaveEvent("dismiss_immediate");
+  }, [dispatchLeaveEvent]);
 
   // Warm the full emoji catalog chunk lazily on first open so startup stays lean.
   // A transient import failure clears the cached promise so the next open retries.
@@ -209,7 +277,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
   // Escape closes only this popover and returns focus to the trigger.
   useDismissableLayer({
     open: true,
-    onDismiss,
+    onDismiss: handleImmediateDismiss,
     surfaceRef,
     triggerRef: anchorRef,
   });
@@ -273,7 +341,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", handleScroll, { capture: true });
     };
-  }, [anchorRef, isPlaced, activeCategory, query, catalog, recents.length, current.length]);
+  }, [anchorRef, isPlaced, activeCategory, query, catalog, initialRecents.length, initialCurrent.length]);
 
   // Focus the search field immediately once the picker is mounted and placed.
   useEffect(() => {
@@ -294,7 +362,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
       ) {
         return;
       }
-      onDismiss();
+      handleImmediateDismiss();
     };
     window.addEventListener("pointerdown", handlePointerDown, { capture: true });
     return () => {
@@ -302,7 +370,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
         capture: true,
       });
     };
-  }, [onDismiss, anchorRef]);
+  }, [handleImmediateDismiss, anchorRef]);
 
   // Map normalized key -> exact stored reaction string on the thread so
   // toggling off a stored VS16 variant (e.g. "❤" vs "❤️") removes the exact
@@ -340,7 +408,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
       const result: ReactionSection[] = [];
       const shownKeys = new Set<string>();
 
-      const recentEntries = recents.map((emoji) =>
+      const recentEntries = initialRecents.map((emoji) =>
         resolveEntryForEmoji(emoji, catalog),
       );
       if (recentEntries.length > 0) {
@@ -359,7 +427,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
       }
 
       const extraActive: ReactionEmojiEntry[] = [];
-      for (const emoji of current) {
+      for (const emoji of initialCurrent) {
         const key = normalizeEmojiKey(emoji);
         if (shownKeys.has(key)) {
           continue;
@@ -403,7 +471,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
         entries,
       },
     ];
-  }, [activeCategory, catalog, current, isSearching, recents, searchResults]);
+  }, [activeCategory, catalog, initialCurrent, initialRecents, isSearching, searchResults]);
 
   const sectionLengths = useMemo(
     () => sections.map((section) => section.entries.length),
@@ -416,20 +484,24 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
   );
 
   const handleSelectEntry = useCallback(
-    (entry: ReactionEmojiEntry, fromKeyboard: boolean) => {
+    (entry: ReactionEmojiEntry, fromSearchEnter: boolean) => {
       const key = normalizeEmojiKey(entry.emoji);
       const storedActive = currentByKey.get(key);
       if (storedActive === undefined) {
-        const nextRecents = recordRecentReactionList(recents, entry.emoji);
-        setRecents(nextRecents);
+        const nextRecents = recordRecentReactionList(
+          latestRecentsRef.current,
+          entry.emoji,
+        );
+        latestRecentsRef.current = nextRecents;
         writeRecentReactions(nextRecents);
       }
-      if (fromKeyboard) {
-        anchorRef.current?.focus();
+      dispatchLeaveEvent("pick");
+      if (fromSearchEnter) {
+        searchInputRef.current?.select();
       }
       onSelect(storedActive ?? entry.emoji);
     },
-    [anchorRef, currentByKey, onSelect, recents],
+    [currentByKey, dispatchLeaveEvent, onSelect],
   );
 
   const focusGridButton = useCallback((index: number): void => {
@@ -453,6 +525,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
     }
     if (event.key === "ArrowDown" && flatEntries.length > 0) {
       event.preventDefault();
+      dispatchLeaveEvent("interact_inside");
       focusGridButton(0);
     }
   };
@@ -464,7 +537,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
   ): void => {
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
-      handleSelectEntry(entry, true);
+      handleSelectEntry(entry, false);
       return;
     }
     if (
@@ -476,6 +549,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
       || event.key === "End"
     ) {
       event.preventDefault();
+      dispatchLeaveEvent("interact_inside");
       const next = moveReactionGridIndex(
         flatIndex,
         event.key,
@@ -498,6 +572,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
       && !event.altKey
     ) {
       event.preventDefault();
+      dispatchLeaveEvent("interact_inside");
       setQuery((prev) => prev + event.key);
       setPreviewEntry(undefined);
       if (gridBodyRef.current) {
@@ -508,6 +583,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
   };
 
   const handleCategoryChange = (category: ReactionCategoryId): void => {
+    dispatchLeaveEvent("interact_inside");
     setActiveCategory(category);
     setPreviewEntry(undefined);
     if (gridBodyRef.current) {
@@ -531,6 +607,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
       nextIndex = REACTION_CATEGORIES.length - 1;
     } else if (event.key === "ArrowDown" && flatEntries.length > 0) {
       event.preventDefault();
+      dispatchLeaveEvent("interact_inside");
       focusGridButton(0);
       return;
     }
@@ -563,6 +640,24 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
       data-placement={placement.side}
       style={{ top: placement.top, left: placement.left }}
       onClick={(event) => event.stopPropagation()}
+      onMouseEnter={(event) => {
+        recordInsidePointer(event);
+        dispatchLeaveEvent("pointer_enter");
+      }}
+      onMouseMove={recordInsidePointer}
+      onMouseDown={recordInsidePointer}
+      onMouseLeave={(event) => {
+        if (
+          isSyntheticStationaryPointerLeave(lastInsidePointerRef.current, {
+            x: event.clientX,
+            y: event.clientY,
+          })
+        ) {
+          return;
+        }
+        lastInsidePointerRef.current = undefined;
+        dispatchLeaveEvent("pointer_leave");
+      }}
     >
       <div className="reaction-picker__search">
         <SearchIcon
@@ -578,6 +673,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
           placeholder="Search emoji…"
           value={query}
           onChange={(event) => {
+            dispatchLeaveEvent("interact_inside");
             setQuery(event.currentTarget.value);
             setPreviewEntry(undefined);
             if (gridBodyRef.current) {
@@ -592,6 +688,7 @@ function OpenReactionPicker(props: OpenReactionPickerProps) {
             className="reaction-picker__search-clear"
             aria-label="Clear search"
             onClick={() => {
+              dispatchLeaveEvent("interact_inside");
               setQuery("");
               setPreviewEntry(undefined);
               searchInputRef.current?.focus();

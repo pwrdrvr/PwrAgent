@@ -7,6 +7,7 @@ import {
 } from "@pwragent/shared/research";
 import { useDesktopApi, type DesktopApi } from "../../lib/desktop-api";
 import { BrandLockup } from "../chrome/BrandLockup";
+import { ResearchDecisionsView } from "./ResearchDecisionsView";
 import { ResearchDiscoveryPanel } from "./ResearchDiscoveryPanel";
 import { ResearchItemDetail } from "./ResearchItemDetail";
 import { EMPTY_RESEARCH_ITEMS_QUERY, ResearchItemsPanel, type ResearchItemsQuery } from "./ResearchItemsPanel";
@@ -16,6 +17,7 @@ import { ResearchTabs } from "./ResearchTabs";
 import { ResearchThreadOpener } from "./ResearchThreadButton";
 import { ResearchActivityView, ResearchFindingsView, ResearchMapView } from "./ResearchViews";
 import { formatRunWhen, isResearchRunLive, researchRunPhase, researchRunView } from "./research-view-model";
+import { useResearchDecisions, useResearchDecisionsStatus } from "./useResearchDecisions";
 import { useResearchNow } from "./useResearchNow";
 import { useResearchProfileRuns } from "./useResearchProfileRuns";
 import { useResearchRunActions } from "./useResearchRunActions";
@@ -23,6 +25,10 @@ import { useResearchSync } from "./useResearchSync";
 import "./research.css";
 
 const VIEWS = [
+  { id: "map", label: "Map" }, { id: "findings", label: "Findings" }, { id: "review", label: "Review" },
+  { id: "items", label: "Items" }, { id: "decisions", label: "Decisions" }, { id: "activity", label: "Activity" },
+] as const;
+const HARNESS_VIEWS = [
   { id: "map", label: "Map" }, { id: "findings", label: "Findings" }, { id: "review", label: "Review" },
   { id: "items", label: "Items" }, { id: "activity", label: "Activity" },
 ] as const;
@@ -133,9 +139,36 @@ function ResearchWindowRun({ api, listed }: { api: DesktopApi; listed: ResearchP
   const [filter, setFilter] = useState("");
   const [itemsQuery, setItemsQuery] = useState<ResearchItemsQuery>(EMPTY_RESEARCH_ITEMS_QUERY);
   const [inspected, setInspected] = useState<string>();
+  const [selectedBatchId, setSelectedBatchId] = useState<string>();
   const writable = Boolean(run && state.writableRunIds.includes(run.id));
-  const views = run?.harness?.source === "discovery" ? DISCOVERY_VIEWS : VIEWS;
+  const views = run?.harness?.source === "discovery" ? DISCOVERY_VIEWS : run?.harness ? HARNESS_VIEWS : VIEWS;
   const currentView: View = views.some((entry) => entry.id === view) ? view : views[0]!.id;
+  const decisionsReadiness = useResearchDecisionsStatus(api);
+  const memberThreadKeys = useMemo(() => {
+    if (!run) return undefined;
+    const keys = new Set<string>([`${run.coordinator.backend}:${run.coordinator.threadId}`]);
+    for (const approach of run.approaches) {
+      if (approach.worker) keys.add(`${approach.worker.backend}:${approach.worker.threadId}`);
+    }
+    return keys;
+  }, [run]);
+  const decisionsState = useResearchDecisions({
+    api,
+    thread: identity,
+    runId: run && !run.harness ? run.id : undefined,
+    revision: run?.revision,
+    live,
+    open: currentView === "decisions",
+    memberThreadKeys,
+  });
+  const batchesById = useMemo(
+    () => new Map((decisionsState.snapshot?.batches ?? []).map((entry) => [entry.batchId, entry])),
+    [decisionsState.snapshot],
+  );
+  const openBatch = useCallback((batchId: string) => {
+    setSelectedBatchId(batchId);
+    setView("decisions");
+  }, []);
   const inspectedItem = inspected && run ? run.items.get(inspected) : undefined;
   const submission = inspectedItem?.type === "submission" ? run?.submissions.find((entry) => entry.id === inspectedItem.id) : undefined;
   const openEvidence = (itemId: string, index: number) => { void actions.openEvidence(itemId, index); };
@@ -148,22 +181,32 @@ function ResearchWindowRun({ api, listed }: { api: DesktopApi; listed: ResearchP
       {!run && !state.error && <p role="status" className="context-empty">{state.runs && !summary ? "This run is no longer among its thread’s runs." : "Loading run…"}</p>}
       {run && <>
         <ResearchRunCard run={run} now={now} coordinator writable={writable} busy={actions.busy}
+          decisions={decisionsState.snapshot}
+          onOpenDecisions={!run.harness ? () => { setView("decisions"); setFilter(""); } : undefined}
           onStop={() => { void actions.update({ action: "stop", reason: "Stopped by the operator" }); }}
           onFinish={() => { void actions.update({ action: "finish", reason: "Completed after operator review" }); }}
           onResume={() => { void actions.update({ action: "resume" }); }}
           onChangeBounds={(bounds) => actions.update({ action: "bounds", ...bounds })}
           onReconcile={api.reconcileResearchHarness ? () => { void actions.reconcile(); } : undefined} />
-        <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={run.unreviewed} onChoose={(next) => { setView(next); setFilter(""); }} />
+        <ResearchTabs idBase={tabsId} views={views} current={currentView} reviewCount={run.unreviewed}
+          decisionsCount={decisionsState.snapshot?.batches.length ?? 0}
+          onChoose={(next) => { setView(next); setFilter(""); if (next !== "decisions") setSelectedBatchId(undefined); }} />
         <div role="tabpanel" id={`${tabsId}-panel`} aria-labelledby={`${tabsId}-${currentView}`} className="research-tabpanel">
           {(currentView === "map" || currentView === "findings" || currentView === "activity") && <input className="research-filter" type="search" aria-label="Filter this view"
             placeholder={currentView === "map" ? "Filter approaches and findings" : currentView === "findings" ? "Filter findings" : "Filter activity"} value={filter} onChange={(event) => setFilter(event.target.value)} />}
           {currentView === "discovery" && run.harness?.discovery && <ResearchDiscoveryPanel snapshot={run.harness.discovery} />}
           {currentView === "map" && <ResearchMapView run={run} filter={filter} onOpenItem={setInspected}
             onShowApproachItems={(approachId) => { setItemsQuery({ ...EMPTY_RESEARCH_ITEMS_QUERY, approachId }); setView("items"); }} />}
-          {currentView === "findings" && <ResearchFindingsView api={api} thread={identity} run={run} filter={filter} evidenceAvailable={Boolean(api.openResearchEvidence)} onOpenItem={setInspected} onOpenEvidence={openEvidence} />}
+          {currentView === "findings" && <ResearchFindingsView api={api} thread={identity} run={run} filter={filter} evidenceAvailable={Boolean(api.openResearchEvidence)}
+            batchesById={batchesById} onOpenBatch={openBatch} onOpenItem={setInspected} onOpenEvidence={openEvidence} />}
           {currentView === "review" && <ResearchReviewView run={run} live={live} canReview={writable} busy={actions.busy} evidenceAvailable={Boolean(api.openResearchEvidence)}
+            batchesById={batchesById} onOpenBatch={openBatch}
             onReview={(submissionId, decision, reason) => actions.update({ action: "review", submissionId, decision, reason })} onOpenItem={setInspected} onOpenEvidence={openEvidence} />}
           {currentView === "items" && <ResearchItemsPanel api={api} thread={identity} run={run} query={itemsQuery} onQueryChange={setItemsQuery} onOpenItem={setInspected} />}
+          {currentView === "decisions" && !run.harness && <ResearchDecisionsView key={run.id} api={api} thread={identity} run={run}
+            snapshot={decisionsState.snapshot} readiness={decisionsReadiness} error={decisionsState.error}
+            onRefresh={decisionsState.refresh} onOpenItem={setInspected}
+            selectedBatchId={selectedBatchId} onSelectBatchId={setSelectedBatchId} />}
           {currentView === "activity" && <ResearchActivityView api={api} thread={identity} run={run} filter={filter} onOpenItem={setInspected} />}
         </div>
       </>}
@@ -171,6 +214,7 @@ function ResearchWindowRun({ api, listed }: { api: DesktopApi; listed: ResearchP
     {run && inspected && <aside className="research-window__inspector research-panel" aria-label="Selected item"
       onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) { event.preventDefault(); setInspected(undefined); } }}>
       <ResearchItemDetail key={`${run.id}:${inspected}`} api={api} thread={identity} run={run} itemId={inspected} writable={writable && !run.harness} coordinator
+        batchesById={batchesById} onOpenBatch={openBatch}
         onBack={() => setInspected(undefined)} backLabel="Close" onOpenItem={setInspected}>
         {submission && <CandidateDecision run={run} submission={submission} live={live} canReview={writable} busy={actions.busy}
           blocked="Another running PwrAgent process owns this run. Record the decision from that process."
