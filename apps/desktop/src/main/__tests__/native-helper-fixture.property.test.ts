@@ -12,13 +12,30 @@ describe("native helper fixture ownership", () => {
     const cargo = path.resolve("apps/desktop/src/main/__tests__/maintenance-cargo-output.property.test.ts");
     const allocation = path.resolve("apps/desktop/src/main/__tests__/maintenance-disk-usage.property.test.ts");
     const ipc = path.resolve("apps/desktop/src/main/__tests__/mcp-ipc-http.test.ts");
-    fc.assert(fc.property(fc.array(fc.constantFrom(cargo, allocation, ipc, path.resolve("unrelated.test.ts"))), (files) => {
-      expect(nativeHelperConsumers(files)).toEqual([
-        ...(files.includes(cargo) ? ["maintenanceCargo"] : []),
-        ...(files.includes(allocation) ? ["maintenanceAllocation"] : []),
-        ...(files.includes(ipc) ? ["mcpIpc"] : []),
-      ]);
-    }));
+    const launcher = path.resolve("apps/desktop/src/main/__tests__/windows-git-job-launcher.test.ts");
+    fc.assert(fc.property(
+      fc.array(fc.constantFrom(cargo, allocation, ipc, launcher, path.resolve("unrelated.test.ts"))),
+      (files) => {
+        const relayConsumers = [
+          ...(files.includes(cargo) ? ["maintenanceCargo"] : []),
+          ...(files.includes(allocation) ? ["maintenanceAllocation"] : []),
+          ...(files.includes(ipc) ? ["mcpIpc"] : []),
+        ];
+        expect(nativeHelperConsumers(files, "darwin")).toEqual(relayConsumers);
+        expect(nativeHelperConsumers(files, "win32")).toEqual([
+          ...relayConsumers,
+          ...(files.includes(launcher) ? ["windowsGitJobLauncher"] : []),
+        ]);
+      },
+    ), { examples: [[[launcher]]] });
+  });
+
+  it("prepares the native pipe probe only for its selected Windows x64 suite", () => {
+    const probe = path.resolve("apps/desktop/scripts/windows-pipe-observation.test.mjs");
+    expect(nativeHelperConsumers([probe], "win32", "x64")).toEqual(["windowsPipeProbe"]);
+    expect(nativeHelperConsumers([probe], "win32", "arm64")).toEqual([]);
+    expect(nativeHelperConsumers([probe], "darwin", "x64")).toEqual([]);
+    expect(nativeHelperConsumers([], "win32", "x64")).toEqual([]);
   });
 
   // Model: requesting teardown does not transfer output ownership away from

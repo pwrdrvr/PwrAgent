@@ -397,6 +397,13 @@ describe("desktop sidebar background stack Git reuse", () => {
     { catalogCount: 16, label: "sixteen warm catalogs" },
   ])("spends zero stack Git launches and zero user-refresh tokens across seen, reaction, rename, and unrelated PR status updates with $label", { timeout: 60_000 }, async ({ catalogCount }) => {
     const fixture = await createRealGitSidebarFixture(catalogCount);
+    const wallStart = Date.now();
+    const monotonicStart = performance.now();
+    let elapsed = 0;
+    // Both clocks participate in Git freshness. Advance past page retention
+    // between events and keep Git warm independently of runner speed.
+    const wallClock = vi.spyOn(Date, "now").mockImplementation(() => wallStart + elapsed);
+    const monotonicClock = vi.spyOn(performance, "now").mockImplementation(() => monotonicStart + elapsed);
     try {
       // Cold warm-up for both owner and viewer across exact, children, and directory pages.
       const warmOwner = await fixture.readPages("owner");
@@ -408,6 +415,7 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(countLaunches(fixture.launches).stackStatus).toBeGreaterThanOrEqual(catalogCount * 2);
 
       // 1. Mark row seen (updates SQLite threads -> advances owner navigation source version + event).
+      elapsed += 1_500;
       const ownerVersionBeforeSeen = fixture.overlayStore.readOwnerNavigationSourceVersion();
       fixture.resetCounters();
       await fixture.overlayStore.markThreadSeen({
@@ -429,6 +437,7 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(seenViewer.directory.entries.find((e) => e.row.id === "bound-parent")?.row.inbox.lastSeenUpdatedAt).toBe(2_000);
 
       // 2. Change reaction (updates SQLite threads -> advances owner navigation source version + event).
+      elapsed += 1_500;
       const ownerVersionBeforeReaction = fixture.overlayStore.readOwnerNavigationSourceVersion();
       fixture.resetCounters();
       await fixture.overlayStore.setThreadReaction({
@@ -449,6 +458,7 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(reactionViewer.exact.entries.find((e) => e.row.id === "bound-parent")?.row.reactions).toEqual(["rocket"]);
 
       // 3. Rename row (both row title AND stack layer thread title must update with zero Git launches).
+      elapsed += 1_500;
       fixture.resetCounters();
       fixture.setParentTitle("Renamed stack parent");
       fixture.setChildTitle("Renamed stack child");
@@ -466,6 +476,7 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(stackLayer?.layer.thread?.title).toBe("Renamed stack parent");
 
       // 4. Unrelated pullRequest/status/updated for a PR in another repository.
+      elapsed += 1_500;
       fixture.resetCounters();
       const unrelatedPr: PrSummary = {
         provider: "github.com",
@@ -489,6 +500,8 @@ describe("desktop sidebar background stack Git reuse", () => {
       expect(prOwner.exact.entries.find((e) => e.row.id === "bound-parent")?.row.stackMemberships).toHaveLength(1);
       expect(prViewer.exact.entries.find((e) => e.row.id === "bound-parent")?.row.stackMemberships).toHaveLength(1);
     } finally {
+      monotonicClock.mockRestore();
+      wallClock.mockRestore();
       await fixture.cleanup();
     }
   });
@@ -655,11 +668,19 @@ describe("desktop sidebar background stack Git reuse", () => {
       const afterCatalog = await fixture.readOwnerIndex();
       expect(readBoundLayer(afterCatalog)?.layer.health).toBe("in_sync");
 
-      // 6. Expired observation (advance past STACK_DETAIL_REUSE_MS) must re-run live stack-status Git.
+      // 6. A rename after expiry must refresh the two clones even though only the title changed.
       fixture.resetCounters();
       now += STACK_DETAIL_REUSE_MS + 1;
-      await fixture.readOwnerIndex();
-      expect(countLaunches(fixture.launches).stackStatus).toBeGreaterThanOrEqual(4);
+      const expiredTitle = "Renamed after Git status expired";
+      fixture.setParentTitle(expiredTitle);
+      fixture.emit("thread/name/updated", { threadId: "bound-parent", threadName: expiredTitle, titleSource: "explicit" });
+      const afterExpiry = await fixture.readOwnerIndex();
+      expect(readBoundLayer(afterExpiry)?.layer.thread?.title).toBe(expiredTitle);
+      const expiredLaunches = countLaunches(fixture.launches);
+      expect(expiredLaunches.stackStatus).toBe(4);
+      expect(expiredLaunches.byArgv.get("stack-status:worktree")).toBe(2);
+      expect(expiredLaunches.byArgv.get("stack-status:for-each-ref")).toBe(2);
+      expect(fixture.userRefreshSpy).not.toHaveBeenCalled();
 
       // 7. Authoritative scopes (scoped StackReader.read and invalidated selected-stack-detail) always run live Git.
       const reader = new StackReader(() => now);

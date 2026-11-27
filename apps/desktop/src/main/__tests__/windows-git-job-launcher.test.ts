@@ -3,8 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import { runGitCommand } from "../app-server/git-executable";
 import { PR_METADATA_PRIORITY, runPrMetadataGit } from "../pr-status/pr-metadata-process";
 import { readWindowsJobStartupTelemetry, windowsJobCleanupVerified, wrapCommandInWindowsJob } from "../windows-job-wrapper";
@@ -28,11 +27,10 @@ describe.skipIf(process.platform !== "win32")("compiled Windows stack Git launch
   }
 
   beforeAll(async () => {
+    const launcher = inject("nativeHelperFixtures").windowsGitJobLauncher;
+    if (!launcher || !existsSync(launcher)) throw new Error("The compiled Windows Job launcher fixture was not prepared");
+    fixture.launcher = launcher;
     sandbox = await mkdtemp(path.join(os.tmpdir(), "pwragent Windows Git job "));
-    const build = fileURLToPath(new URL("../../../scripts/build-windows-job-launcher.mjs", import.meta.url));
-    childProcess.execFileSync(process.execPath, [build, sandbox], { windowsHide: true });
-    fixture.launcher = path.join(sandbox, "pwragent-windows-job.exe");
-    expect(existsSync(fixture.launcher)).toBe(true);
     git = childProcess.execFileSync("where.exe", ["git.exe"], { encoding: "utf8", windowsHide: true }).split(/\r?\n/)[0]!;
     // A signing-enabled global config would break the fixture's first commit.
     const operatorConfig = path.join(sandbox, "operator-gitconfig");
