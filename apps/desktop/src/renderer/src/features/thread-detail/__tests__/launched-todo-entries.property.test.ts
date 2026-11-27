@@ -97,7 +97,10 @@ class ModelHarness {
               }
             : undefined,
         );
-        const mode = (key ? this.ownerModes.get(key) : undefined) ?? "ok";
+        const ownerMode = (key ? this.ownerModes.get(key) : undefined) ?? "ok";
+        // busyThreads describes remote threads. A local read in this mode
+        // returns its cards, so record the successful outcome for the model.
+        const mode = ownerMode === "busy-threads" && !request.federationTarget ? "ok" : ownerMode;
         // Snapshot the owner's cards at request dispatch time, plus occasional
         // stray cards from other threads/statuses to test filtering invariants.
         const responseTodos = key ? [...(this.ownerTodos.get(key) ?? [])] : [];
@@ -275,6 +278,25 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
+async function settleFetchAndAssertRetention(
+  harness: ModelHarness,
+  model: LoaderModel,
+  pick: number,
+): Promise<void> {
+  const before = harness.controller.getSnapshot();
+  const picked = harness.pendingFetches.length > 0
+    ? harness.pendingFetches[pick % harness.pendingFetches.length]
+    : undefined;
+  harness.settleFetch(pick);
+  await flushMicrotasks();
+  const after = harness.controller.getSnapshot();
+  // Transient errors or busy responses must never wipe cards already shown for the same thread.
+  if (picked && picked.mode !== "ok" && !model.disposed && after.threadKey === before.threadKey) {
+    expect(after.todos).toEqual(before.todos);
+  }
+  assertSnapshotInvariants(harness, model);
+}
+
 describe("LaunchedTodosController model-based tests", () => {
   it("preserves cross-thread isolation, busy/error retention, and eventual consistency across arbitrary interleavings", async () => {
     const targetArb = fc.option(fc.constantFrom(...THREAD_POOL), { nil: undefined });
@@ -386,25 +408,7 @@ describe("LaunchedTodosController model-based tests", () => {
         // 5. Settle an arbitrary pending fetch (out-of-order IPC completion!).
         fc.nat({ max: 10 }).map((pick) => ({
           check: async () => true,
-          run: async (model, harness) => {
-            const beforeTodos = harness.controller.getSnapshot().todos;
-            const beforeKey = harness.controller.getSnapshot().threadKey;
-            const picked = harness.pendingFetches.length > 0
-              ? harness.pendingFetches[pick % harness.pendingFetches.length]
-              : undefined;
-            harness.settleFetch(pick);
-            await flushMicrotasks();
-            // Transient errors or busy responses must never wipe cards already shown for the same thread.
-            if (
-              picked
-              && picked.mode !== "ok"
-              && !model.disposed
-              && harness.controller.getSnapshot().threadKey === beforeKey
-            ) {
-              expect(harness.controller.getSnapshot().todos).toEqual(beforeTodos);
-            }
-            assertSnapshotInvariants(harness, model);
-          },
+          run: (model, harness) => settleFetchAndAssertRetention(harness, model, pick),
           toString: () => `SettleFetch(${pick})`,
         })),
 
@@ -487,6 +491,26 @@ describe("LaunchedTodosController model-based tests", () => {
         }
       }),
     );
+  });
+
+  it("loads a local launched card when the model requests a remote-only busy payload", async () => {
+    const harness = new ModelHarness();
+    const target: LaunchedTodosTarget = { backend: "acp:antigravity", threadId: "local-2" };
+    const key = launchedTodosTargetKey(target)!;
+
+    harness.ownerModes.set(key, "busy-threads");
+    const card = makeLaunchedTodo({
+      id: "todo-1",
+      target,
+      startedBackend: "codex",
+      startedThreadId: "child-todo-1",
+      resolvedAt: 1_000,
+    });
+    harness.ownerTodos.set(key, [card]);
+    harness.controller.setTarget(target);
+    await settleFetchAndAssertRetention(harness, { target, disposed: false, lastEmittedCount: 0 }, 0);
+
+    expect(harness.controller.getSnapshot().todos).toEqual([card]);
   });
 
   it("caps busy retries at one per cycle, resets on change events, and survives ABA thread switches", async () => {
