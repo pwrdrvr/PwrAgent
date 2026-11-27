@@ -51,7 +51,7 @@ import {
   type OwnerHostName,
   type OwnerStepRecord,
 } from "./helpers/owner-conformance";
-import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon, type OutpostViewer } from "./helpers/outpost-daemon";
+import { OUTPOST_VIEWER_CAPABILITIES, startOutpostDaemon, type OutpostViewer } from "./helpers/vitest-outpost-daemon";
 import { createFederatedThreadMessageHandler } from "../federation/federated-thread-message-service";
 import {
   canonicalDurableSteerRequest,

@@ -7,7 +7,6 @@ import { createConnection } from "node:net";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { promisify } from "node:util";
-import { onTestFinished } from "vitest";
 import {
   FEDERATION_PROTOCOL_VERSION,
   type FederationCapability,
@@ -45,12 +44,7 @@ export type OutpostDaemon = OutpostViewer & {
   enrollViewer(capabilities: FederationCapability[]): Promise<OutpostViewer>;
 };
 
-/**
- * Starts the standalone Outpost on the fake Codex fixture
- * and enrolls one viewer through a real invite, Noise handshake and RPC
- * endpoint, the way a desktop viewer connects.
- */
-export function startOutpostDaemon(options: {
+type OutpostDaemonOptions = {
   workspaceKind?: "direct" | "symlink";
   capabilities?: FederationCapability[];
   profileRoot?: string;
@@ -62,19 +56,28 @@ export function startOutpostDaemon(options: {
   waitForCodexCommand?: boolean;
   /** Releases caller-owned startup barriers before waiting for the daemon to exit. */
   beforeFailedStartupClose?: () => Promise<void>;
-} = {}): Promise<OutpostDaemon> {
-  const owner = new AbortController();
-  const signal = options.signal ? AbortSignal.any([options.signal, owner.signal]) : owner.signal;
-  onTestFinished(async () => {
-    owner.abort();
-    const daemon = await starting.catch(() => undefined);
-    await daemon?.close();
-  });
-  const starting = spawnOutpostDaemon({ ...options, signal });
-  return starting;
+};
+
+/**
+ * Start the standalone Outpost on the fake Codex fixture and enroll a viewer
+ * through a real invite, Noise handshake and RPC endpoint. The caller's test
+ * runner owns the startup and daemon until its teardown finishes.
+ */
+export function createOutpostDaemonStarter(onFinished: (cleanup: () => Promise<void>) => void) {
+  return (options: OutpostDaemonOptions = {}): Promise<OutpostDaemon> => {
+    const owner = new AbortController();
+    const signal = options.signal ? AbortSignal.any([options.signal, owner.signal]) : owner.signal;
+    onFinished(async () => {
+      owner.abort();
+      const daemon = await starting.catch(() => undefined);
+      await daemon?.close();
+    });
+    const starting = spawnOutpostDaemon({ ...options, signal });
+    return starting;
+  };
 }
 
-async function spawnOutpostDaemon(options: NonNullable<Parameters<typeof startOutpostDaemon>[0]> & { signal: AbortSignal }): Promise<OutpostDaemon> {
+async function spawnOutpostDaemon(options: OutpostDaemonOptions & { signal: AbortSignal }): Promise<OutpostDaemon> {
   const { signal } = options;
   signal.throwIfAborted();
   // The outpost listens on $PWRAGENT_HOME/profiles/t/state/headless/rpc.sock

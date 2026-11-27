@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { startOutpostDaemon } from "./helpers/outpost-daemon";
+import { startOutpostDaemon } from "./helpers/vitest-outpost-daemon";
 
 it.skipIf(process.platform === "win32")("requires a top-level Outpost readiness record before enrolling a viewer", async ({ signal, onTestFinished }) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "pa-outpost-readiness-"));
