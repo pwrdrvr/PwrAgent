@@ -15,7 +15,9 @@ MAIN = Path("apps/desktop/src/main/__tests__")
 RENDERER = Path("apps/desktop/src/renderer/src/features/thread-detail/__tests__")
 PROPERTIES = json.loads((KIT / "properties.json").read_text())
 REVISIONS = json.loads((KIT / "revisions.json").read_text())
-CI = ["navigation", "sqlite", "terminal", "held-auto-fix", "pricing", "federation", "reopen", "stream", "properties"]
+MATCHED = ["navigation", "sqlite", "terminal", "held-auto-fix", "pricing", "federation", "reopen", "stream", "properties"]
+LIVE = "live-threads"
+CI = MATCHED + [LIVE]
 EXTRA = ["width", "pins", "git", "dispatcher", "incremental"]
 # Exact historical heads for workloads introduced during the investigation.
 HISTORICAL = {
@@ -30,7 +32,7 @@ def revision(repo):
 
 
 def select(args, historical):
-    available = HISTORICAL.get(historical, CI + EXTRA[:-1])
+    available = HISTORICAL.get(historical, (MATCHED if historical else CI) + EXTRA[:-1])
     if historical in ("v150", "v151"):
         available = [suite for suite in available if suite != "dispatcher"]
     if historical in ("main", "latest"):
@@ -81,9 +83,9 @@ def run(repo, output, suites, args):
                     projects[project].append(target.as_posix())
                     helpers.add(original.parent)
                 continue
-            folder = RENDERER if name in ("stream", "width") else MAIN
-            project = {"width": "desktop-renderer", "stream": "desktop-renderer-node"}.get(name, "desktop-main")
-            source = KIT / ("historical" if name == "incremental" else "probes") / (name + (".tsx" if name == "width" else ".ts"))
+            folder = RENDERER if name in ("stream", "width", LIVE) else MAIN
+            project = {"width": "desktop-renderer", LIVE: "desktop-renderer", "stream": "desktop-renderer-node"}.get(name, "desktop-main")
+            source = KIT / ("historical" if name == "incremental" else "probes") / (name + (".tsx" if name in ("width", LIVE) else ".ts"))
             probe(folder, name, source, project)
             helpers.add(folder)
 
@@ -101,7 +103,7 @@ def run(repo, output, suites, args):
         raw = output / "work.jsonl"
         raw.touch()
         env = dict(os.environ, PWRAGENT_HOME=home, PWRAGENT_PROFILE="default", UV_THREADPOOL_SIZE="4",
-                   AUDIT_FILES=json.dumps(projects), AUDIT_CASES=str(args.cases), AUDIT_RESULTS=str(raw),
+                   AUDIT_LIVE_THREADS=str(int(LIVE in suites)), AUDIT_FILES=json.dumps(projects), AUDIT_CASES=str(args.cases), AUDIT_RESULTS=str(raw),
                    AUDIT_COPIES=str(args.copies), AUDIT_ARCHIVED=str(args.archived),
                    AUDIT_LEGACY_OWNER=str(int(label in ("v150", "v151", "v152"))),
                    AUDIT_LIVE_INDEX=str(int((repo / MAIN.parent / "app-server/live-navigation-index.ts").is_file())),

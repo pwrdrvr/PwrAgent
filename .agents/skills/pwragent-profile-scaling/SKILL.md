@@ -8,6 +8,7 @@ description: Replay the matched PwrAgent 1.5.x large-profile performance investi
 Run commands from the harness checkout. Use Node and pnpm from the target checkout's repository guidance, Python 3.9+, and a separate frozen pnpm install in each target. Reserve four local CPU slots following [local CPU checkout](../../../docs/local-cpu-checkout.md). The launcher runs one Vitest worker with the measured revision's native setup and fixtures. Every workload uses synthetic rows or an isolated store.
 
 ```sh
+python3 scripts/scaling-audit/run.py --suites live-threads --output .local/live-threads
 python3 scripts/scaling-audit/run.py --suites terminal reopen --output .local/terminal-reopen
 python3 scripts/scaling-audit/run.py --base /path/to/installed-base --output .local/base-head --cases 25
 ```
@@ -28,6 +29,9 @@ The PR label `ci:scaling-audit` compares the pinned base and head with 25 cases 
 | Pricing | Start, meter and complete 64 turns while reading a four-row historical page after every completion. Sample cumulative publication rows/bytes, rows returned by SQL, full-ledger processing and page output at 8, 16, 32 and 64 turns. |
 | Federation | Vary 2–8 peers, queue depth 8–32 and 4–16 simultaneous redeliveries. Check admission and receipt identity, count warm label/ID/input accesses, queue copies and committed writes. |
 | Transcript | Cross 60–240 entries with 3–24 reviews, reopen 50–400 messages with legacy monitor attribution, and stream eight deltas across 8–64 historical edit turns. Count field reads and replaced edit objects. |
+| Live threads | Keep 1, 10 or 20 turns active in one renderer session cache with 8 or 64 prior messages each. Deliver four interleaved tool calls and assistant replies per thread, individually or in React batches. Check expanded output while it streams and reselect every thread to verify its completed transcript. |
+
+The live-thread suite models the renderer from its agent-event subscription through one visible transcript in jsdom. Each round sends nine events with three output chunks and three assistant deltas. A virtual frame per wave keeps the schedule reproducible. Each result includes its absolute budgets for retention and indicator visits, transcript builds and input rows, React commits, and owner reads. Background-only deliveries must cause zero visible transcript builds. The retention budget allows one scan of all active sessions per event, so doubling the number of equally active threads can quadruple this work. Compare both delivery modes to distinguish per-event work from per-batch work.
 
 Local defaults use 1,000 cases per assertion. The extra pin-demand, Git-cache, resize, dispatcher and historical incremental-index suites and headed control are locally selectable. Use `run.py --help` for suite names.
 

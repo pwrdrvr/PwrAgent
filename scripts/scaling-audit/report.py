@@ -5,6 +5,7 @@ import json
 # Work units that may decrease on a candidate. Timestamps, timings, serialized
 # byte lengths and query outputs remain in the raw evidence for interpretation.
 COUNTERS = {
+    "live-threads": ["indicatorVisits", "retentionVisits", "projections", "projectionRows", "backgroundProjections", "commits", "ownerReads"],
     "navigation": ["joined", "targeted", "directoryRows", "providerLists", "checkoutPaths", "slotCopies", "lensTests"],
     "shape-navigation": ["joined", "targeted", "directoryRows", "providerLists", "checkoutPaths", "slotCopies", "lensTests"],
     "sqlite": ["joined", "lists", "compact", "checkoutPaths"],
@@ -15,7 +16,7 @@ COUNTERS = {
     "reopen-monitor": ["reads"], "review-merge": ["reads"], "stream": ["replaced"],
     "resize": ["styleWrites", "observers"], "git": ["calls"], "pins": ["requests", "servedRows", "publications"],
 }
-DIMENSIONS = ("n", "copies", "projectRows", "pins", "archived", "phase", "k", "via", "events",
+DIMENSIONS = ("n", "history", "delivery", "copies", "projectRows", "pins", "archived", "phase", "k", "via", "events",
               "peerCount", "depth", "retries", "reviews", "deltas", "count", "stage", "owners", "density")
 
 
@@ -28,6 +29,7 @@ def verify_measurements(rows, suites, archived):
         "terminal": {"terminal": 14}, "held-auto-fix": {"held-auto-fix": 10},
         "pricing": {"pricing": 4}, "federation": {"federation": 9},
         "reopen": {"review-merge": 12, "reopen-monitor": 4}, "stream": {"stream": 4},
+        "live-threads": {"live-threads": 12},
         "width": {"resize": 3}, "git": {"git": 12}, "pins": {"pins": 12},
     }
     wanted = {kind: count for suite in suites for kind, count in expected.get(suite, {}).items()}

@@ -5,6 +5,23 @@ const selected = JSON.parse(process.env.AUDIT_FILES!);
 const projects = workspace.test.projects.filter(({ test }) => selected[test.name]);
 for (const project of projects) {
   project.test.include = selected[project.test.name];
+  if (project.test.name === "desktop-renderer" && process.env.AUDIT_LIVE_THREADS === "1") {
+    project.plugins = [...(project.plugins ?? []), {
+      name: "live-session-retention-work",
+      enforce: "pre",
+      transform(code, id) {
+        const sites = [
+          ["/lib/useThreadSessionState.ts", "for (const entry of Object.entries(sessions)) {", "retentionVisits"],
+          ["/lib/session-indicator-keys.ts", "const included = includes(sessions[key]!);", "indicatorVisits"],
+        ];
+        for (const [file, site, counter] of sites) {
+          if (!id.endsWith(file)) continue;
+          if (code.split(site).length !== 2) throw new Error("Inspect the live-thread counter site in " + file);
+          return code.replace(site, site + "\nif (globalThis.liveThreadWork) globalThis.liveThreadWork." + counter + "++;");
+        }
+      },
+    }];
+  }
   if (process.env.AUDIT_LIVE_INDEX === "1" && process.env.AUDIT_COUNT_PROJECTION === "1") {
     // Observe the two #4590 sites in memory. A moved counter must be ported before comparing budgets.
     project.plugins = [...(project.plugins ?? []), {
