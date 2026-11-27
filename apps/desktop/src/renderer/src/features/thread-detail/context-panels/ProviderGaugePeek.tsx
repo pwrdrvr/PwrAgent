@@ -17,6 +17,13 @@ import {
   usagePaceAccountKey,
   usagePaceRefreshKey,
 } from "../../federation-activity/useLocalUsagePace";
+import { describeLimitPace } from "../../federation-activity/usage-activity-presentation";
+import {
+  limitSeriesFor,
+  limitUsageDropped,
+  type LimitAccount,
+} from "../../federation-activity/usage-limits";
+import { fiveHourLatchKey, fiveHourLatches, type FiveHourSample } from "./five-hour-latch";
 import { RateLimitRow } from "./RateLimitRow";
 
 type PeekDesktopApi = Pick<DesktopApi, "openUsageActivity" | "readUsageActivity">;
@@ -33,6 +40,8 @@ export type ProviderPeekScope = {
   window: string;
   limit: BackendRateLimitSummary;
   usedPercent?: number;
+  /** The scope's 5h window, shown under its Weekly one while at risk. */
+  fiveHour?: BackendRateLimitSummary;
 };
 
 /** One provider in the peek: a line per allowance, or none reported. */
@@ -65,11 +74,13 @@ function providerPeekScopes(backend: BackendSummary, now: number): ProviderPeekS
     return scopes.map((group) => {
       const { limit, window } = group.windows[0]!;
       const usedPercent = usedPercentOf(limit);
+      const fiveHour = group.windows.find((entry) => entry !== group.windows[0] && entry.window.minutes === 300);
       return {
         scope: group.scope,
         window: window.label,
         limit,
         ...(usedPercent === undefined ? {} : { usedPercent }),
+        ...(fiveHour ? { fiveHour: fiveHour.limit } : {}),
       };
     });
   }
@@ -161,6 +172,11 @@ export function useProviderGaugePeek(options: {
     if (visible) bridge.shown(cardRef.current);
     else bridge.hidden(cardRef.current);
   }, [bridge, visible]);
+  // Every snapshot steps the 5h latches, open peek or not: a window that
+  // crossed 80% between glances shows on the next one.
+  useEffect(() => {
+    observeFiveHourWindows(options.backends, Date.now());
+  }, [options.backends]);
   // Fresh limits arrive with each turn; keep an open peek current.
   useEffect(() => {
     if (visible) update(content());
@@ -241,20 +257,30 @@ export function ProviderGaugePeekCard(props: {
                 <span aria-hidden="true" className="backend-status-list__dot" />
                 {backend.label}
               </span>
-              {scopes.length ? scopes.map((entry) => (
-                <div key={entry.scope ?? ""} className="provider-peek__scope">
-                  {/* Named only where the provider has more than one. */}
-                  {entry.scope !== null ? (
-                    <span className="provider-peek__scope-name">{entry.scope}</span>
-                  ) : null}
-                  <PeekLimitRow
-                    window={entry.window}
-                    limit={entry.limit}
-                    now={now}
-                    account={pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "")}
-                  />
-                </div>
-              )) : (
+              {scopes.length ? scopes.map((entry) => {
+                const account = pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "");
+                const fiveHour = entry.fiveHour
+                  ? observeFiveHour(backend, entry.scope, entry.fiveHour, account, now)
+                  : undefined;
+                return (
+                  <div key={entry.scope ?? ""} className="provider-peek__scope">
+                    {/* Named only where the provider has more than one. */}
+                    {entry.scope !== null ? (
+                      <span className="provider-peek__scope-name">{entry.scope}</span>
+                    ) : null}
+                    <PeekLimitRow window={entry.window} limit={entry.limit} now={now} account={account} />
+                    {fiveHour?.shown ? (
+                      <PeekLimitRow
+                        window="5h"
+                        limit={entry.fiveHour!}
+                        now={now}
+                        account={account}
+                        warning={fiveHour.warning}
+                      />
+                    ) : null}
+                  </div>
+                );
+              }) : (
                 <span className="provider-peek__none">
                   {backend.account?.planType
                     ? `${formatBackendPlanType(backend, backend.account.planType)} · no limits reported`
@@ -291,14 +317,71 @@ function PeekLimitRow(props: {
   window: string;
   limit: BackendRateLimitSummary;
   now: number;
-  account: Parameters<typeof RateLimitRow>[0]["account"];
+  account: LimitAccount | undefined;
+  /** On pace to run out before the reset. */
+  warning?: boolean;
 }) {
   return (
-    <div className="provider-peek__limit">
+    <div className={`provider-peek__limit${props.warning ? " is-warning" : ""}`}>
       <span className="provider-peek__window">{props.window}</span>
       <dl className="backend-status-list__metadata-grid provider-peek__stat">
         <RateLimitRow limit={props.limit} now={props.now} account={props.account} />
       </dl>
     </div>
   );
+}
+
+/**
+ * Where a limit's pace lands at its reset, exactly as `RateLimitRow`'s pace
+ * line reads it ("On pace for about N% at the reset"), so a 5h row that
+ * appears agrees with its own pace text; 100 when it runs out first.
+ * Undefined while unknown: under 30 minutes of the window, no pace, or a
+ * reading the series has not caught up with.
+ */
+export function projectedPercentAtReset(
+  limit: BackendRateLimitSummary,
+  account: LimitAccount | undefined,
+  now: number,
+): number | undefined {
+  const used = describeRateLimitRow(limit, now).usedPercent;
+  const series = limitSeriesFor(account, limit);
+  if (!series || used === undefined || used >= 100 || series.latest.usedPercent >= 100
+    || limitUsageDropped(series.latest.usedPercent, used) || series.latest.resetAt !== limit.resetAt
+    || (limit.resetAt !== undefined && limit.resetAt <= now)) return undefined;
+  const pace = describeLimitPace(series, now, true);
+  if (!pace) return undefined;
+  if (pace.projection.kind === "full") return 100;
+  return pace.projection.percent < used ? undefined : pace.projection.percent;
+}
+
+function fiveHourSample(limit: BackendRateLimitSummary, projectedPercent: number | undefined, now: number): FiveHourSample {
+  const usedPercent = describeRateLimitRow(limit, now).usedPercent;
+  return {
+    ...(usedPercent === undefined ? {} : { usedPercent }),
+    ...(projectedPercent === undefined ? {} : { projectedPercent }),
+    ...(limit.resetAt === undefined ? {} : { resetAt: limit.resetAt }),
+  };
+}
+
+/** Steps a scope's 5h latch with this reading and its pace. */
+function observeFiveHour(
+  backend: BackendSummary,
+  scope: string | null,
+  limit: BackendRateLimitSummary,
+  account: LimitAccount | undefined,
+  now: number,
+): { shown: boolean; warning: boolean } {
+  const projected = projectedPercentAtReset(limit, account, now);
+  const shown = fiveHourLatches.observe(fiveHourLatchKey(backend.kind, scope), fiveHourSample(limit, projected, now));
+  return { shown, warning: projected !== undefined && projected >= 100 };
+}
+
+/** A snapshot's readings, without a pace: they can show a row or start a window. */
+function observeFiveHourWindows(backends: readonly BackendSummary[], now: number): void {
+  for (const { backend, scopes } of providerPeekEntries(backends, now)) {
+    for (const entry of scopes) {
+      if (!entry.fiveHour) continue;
+      fiveHourLatches.observe(fiveHourLatchKey(backend.kind, entry.scope), fiveHourSample(entry.fiveHour, undefined, now));
+    }
+  }
 }

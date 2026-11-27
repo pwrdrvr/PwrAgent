@@ -10650,6 +10650,11 @@ button.stack-display__thread,
   grid-column: auto;
 }
 
+/* A 5h row on pace to run out before its reset. */
+.provider-peek__limit.is-warning .provider-peek__window {
+  color: var(--status-warning-text);
+}
+
 /* The panel's own label names the scope and "limit"; the window column
    above replaces it. */
 .provider-peek__stat dt {

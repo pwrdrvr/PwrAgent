@@ -9,6 +9,7 @@ import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace"
 import { TOOLTIP_HOVER_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { ThreadContextPanel } from "../ThreadContextPanel";
 import { providerPeekEntries } from "../context-panels/ProviderGaugePeek";
+import { fiveHourLatches } from "../context-panels/five-hour-latch";
 
 const HOVER_RAIL_REVEAL_DELAY_MS = 350;
 
@@ -16,6 +17,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  fiveHourLatches.clear();
 });
 
 beforeEach(() => {
@@ -146,6 +148,53 @@ describe("AI provider gauge peek", () => {
       // One plan: no scope, and its 5h window stays on the panel.
       ["OpenAI", [[null, "Weekly", "Weekly limit"]]],
     ]);
+  });
+
+  describe("a scope's 5h row", () => {
+    const RESET = Date.UTC(2030, 0, 1, 12);
+    const openAi = (fiveHourUsed: number) => backend("codex", "OpenAI", [
+      { name: "5h limit", usedPercent: fiveHourUsed, windowMinutes: 300, resetAt: RESET },
+      { name: "Weekly limit", usedPercent: 30, windowMinutes: 10_080 },
+    ]);
+    const panel = (backends: BackendSummary[]) => (
+      <ThreadContextPanel
+        activeTab="info"
+        backends={backends}
+        pinned={false}
+        thread={thread}
+        onActiveTabChange={vi.fn()}
+      />
+    );
+    const windows = (shown: HTMLElement) =>
+      [...shown.querySelectorAll(".provider-peek__window")].map((node) => node.textContent);
+
+    it("shows under the Weekly row while at risk, and stays across a remount", async () => {
+      mockLayout();
+      const view = render(panel([openAi(85)]));
+      let shown = await openPeek();
+      expect(windows(shown)).toEqual(["Weekly", "5h"]);
+      const rows = shown.querySelectorAll(".provider-peek__scope .provider-peek__limit");
+      expect(rows).toHaveLength(2);
+      expect(rows[1]).toHaveTextContent("85% used");
+
+      // The peek unmounts on the way out; the latch is not its state.
+      move(gauge(), document.body);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(HOVER_TRANSITION_GRACE_MS * 2);
+      });
+      expect(peek()).toBeNull();
+      // Between the bounds, with no pace to project from: it keeps its state.
+      view.rerender(panel([openAi(70)]));
+      shown = await openPeek();
+      expect(windows(shown)).toEqual(["Weekly", "5h"]);
+      expect(shown).toHaveTextContent("70% used");
+    });
+
+    it("stays hidden in the same band without a crossing", async () => {
+      mockLayout();
+      render(panel([openAi(70)]));
+      expect(windows(await openPeek())).toEqual(["Weekly"]);
+    });
   });
 
   it("names the pools as subheaders, and the rows by their window alone", async () => {
