@@ -66,7 +66,10 @@ const environmentThread: NavigationThreadSummary = {
     id: "demo",
     name: "Demo",
     sourcePath: "/repo/demo/environment.toml",
-    actions: [{ id: "work", name: "Work", command: "pnpm dev" }],
+    actions: [
+      { id: "work", name: "Work", command: "pnpm dev" },
+      { id: "test", name: "Test", command: "pnpm test" },
+    ],
   }],
 };
 
@@ -237,10 +240,12 @@ describe("composer controls layout", () => {
     // four 4px gaps, is 340. The Details-bound controls (120px each) and ▶
     // do not fit beside them.
     installRowLayout(345);
+    const runCodexEnvironmentAction = vi.fn<NonNullable<DesktopApi["runCodexEnvironmentAction"]>>();
+    const setCodexThreadEnvironment = vi.fn<NonNullable<DesktopApi["setCodexThreadEnvironment"]>>();
     const { container } = render(
       <Composer
         backends={[backendSummary()]}
-        desktopApi={{ pickFileFromDisk: vi.fn(), runCodexEnvironmentAction: vi.fn(), setCodexThreadEnvironment: vi.fn() }}
+        desktopApi={{ pickFileFromDisk: vi.fn(), runCodexEnvironmentAction, setCodexThreadEnvironment }}
         disabled={false}
         onSetExecutionMode={async () => undefined}
         skills={[]}
@@ -264,9 +269,23 @@ describe("composer controls layout", () => {
     const menu = screen.getByRole("menu", { name: "Thread options" });
     expect(within(menu).getByRole("menuitemradio", { name: /Demo/ })).toHaveAttribute("aria-checked", "true");
     expect(within(menu).getByRole("menuitemradio", { name: /Work/ })).toHaveAttribute("aria-checked", "true");
-    expect(within(menu).getByRole("menuitem", { name: "Run Work" })).toBeInTheDocument();
+    expect(within(menu).getByRole("menuitemradio", { name: /Test/ })).toHaveAttribute("aria-checked", "false");
+    // Each command has its own ▶, so ⋮ needs no separate Run item.
+    expect(within(menu).getAllByRole("menuitem", { name: "Run Work" })).toHaveLength(1);
     // Attach still fits, so ⋮ does not repeat it.
     expect(within(menu).queryByRole("menuitem", { name: "Add reference…" })).toBeNull();
+    // The menu opens above ⋮: its own switches stay on top, and what folded
+    // out of the row sits below them, nearest the trigger.
+    const agentThread = within(menu).getByRole("menuitemcheckbox", { name: /Agent thread/ });
+    const environment = within(menu).getByRole("menuitemradio", { name: /Demo/ });
+    expect(agentThread.compareDocumentPosition(environment) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // ▶ beside Test runs Test without making it the row's command.
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole("menuitem", { name: "Run Test" }));
+    });
+    expect(runCodexEnvironmentAction).toHaveBeenCalledWith(expect.objectContaining({ actionId: "test", threadId: "thread-env" }));
+    expect(setCodexThreadEnvironment).not.toHaveBeenCalled();
   });
 
   it("keeps every control in the row when it fits", async () => {

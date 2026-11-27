@@ -55473,6 +55473,42 @@ button.stepped-bar__tick:focus-visible {
   text-transform: uppercase;
 }
 
+/* A ⋮ command row: the command to choose, and a ▶ that runs it now. */
+.composer-thread-options__command {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.composer-thread-options__command .composer-dropdown__option {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-thread-options__command-run {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 28px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.composer-thread-options__command-run:hover:not(:disabled),
+.composer-thread-options__command-run:focus-visible {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.composer-thread-options__command-run:disabled {
+  color: var(--text-muted);
+}
+
 .composer__schedule-menu-separator {
   height: 1px;
   margin: 6px 2px;

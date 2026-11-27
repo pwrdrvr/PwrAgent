@@ -2472,12 +2472,6 @@ function ComposerThreadOptionsMenu(props: {
           tabIndex={-1}
           style={menuStyle}
         >
-          {foldedItems ? (
-            <>
-              {foldedItems}
-              <div className="composer-dropdown__separator" role="separator" />
-            </>
-          ) : null}
           <div
             className="composer-thread-options__item"
             onBlur={hideMenuTooltip}
@@ -2726,6 +2720,15 @@ function ComposerThreadOptionsMenu(props: {
                 {" MCPs"}&hellip;
               </span>
             </button>
+          ) : null}
+          {/* The menu opens above ⋮. Its own switches stay at the top, out of
+              the way, and the controls folded out of the row sit nearest the
+              trigger, the ones used most last. */}
+          {foldedItems ? (
+            <>
+              <div className="composer-dropdown__separator" role="separator" />
+              {foldedItems}
+            </>
           ) : null}
         </div>
       ) : null}
@@ -11898,19 +11901,22 @@ function useComposerController(props: ComposerProps) {
     filesystemFederationTarget?.scope,
   ]);
 
-  const runThreadCodexEnvironmentAction = async (): Promise<void> => {
+  // Runs the selected command (the row's ▶), or the one a ⋮ command row's ▶
+  // names, without making it the selection.
+  const runThreadCodexEnvironmentAction = async (
+    chosenAction: (typeof threadCodexEnvironmentActions)[number] | undefined = selectedThreadCodexAction,
+  ): Promise<void> => {
     if (
       !props.thread ||
       !props.desktopApi?.runCodexEnvironmentAction ||
-      !selectedThreadCodexAction ||
-      !currentThreadEnvActionStartingKey
+      !chosenAction
     ) {
       return;
     }
 
     const thread = props.thread;
-    const action = selectedThreadCodexAction;
-    const startingKey = currentThreadEnvActionStartingKey;
+    const action = chosenAction;
+    const startingKey = { actionId: action.id, backend: thread.source, threadId: thread.id };
     const cwd = workspaceOpenPath;
     setEnvironmentError(undefined);
     props.onPendingStatusChange?.(`Starting ${action.name}`);
@@ -12142,7 +12148,6 @@ function useComposerController(props: ComposerProps) {
     threadCodexEnvironmentActions,
     threadCodexEnvironmentPickerOptions,
     selectedThreadCodexAction,
-    currentThreadEnvActionStartingKey,
     currentThreadEnvActionStarting,
     threadEnvironmentBusy,
     threadEnvironmentValue,
@@ -13807,7 +13812,6 @@ function useComposerController(props: ComposerProps) {
       threadCodexEnvironmentActions,
       threadCodexEnvironmentPickerOptions,
       selectedThreadCodexAction,
-      currentThreadEnvActionStartingKey,
       currentThreadEnvActionStarting,
       threadEnvironmentBusy,
       threadEnvironmentValue,
@@ -16015,6 +16019,7 @@ function useComposerController(props: ComposerProps) {
     // action never reads as one of the choices above it.
     const actions: ReactNode[] = [];
     const groups: ReactNode[][] = [];
+    let commandGroup: ReactNode[] | undefined;
     const label = (text: string) => (
       <div className="composer-thread-options__section" key={`label:${text}`} role="presentation">
         {text}
@@ -16179,22 +16184,63 @@ function useComposerController(props: ComposerProps) {
         ));
       }
       if (props.thread?.codexEnvironmentRuntime && threadCodexEnvironmentActions.length > 0) {
-        groups.push(choices(
-          "command",
-          "Command",
-          threadCodexEnvironmentActions.map((environmentAction) => ({
-            label: environmentAction.name,
-            value: environmentAction.id,
-          })),
-          selectedThreadCodexAction?.id ?? "",
-          (value) => {
-            void setThreadCodexEnvironment(
-              props.thread?.codexEnvironmentRuntime?.environmentId,
-              value || undefined,
+        // Choosing a command sets what the row's ▶ runs; each command's own
+        // ▶ runs it now and leaves that choice alone.
+        const thread = props.thread;
+        const runUnavailable = threadEnvironmentBusy || !props.desktopApi?.runCodexEnvironmentAction;
+        commandGroup = [
+          label("Command"),
+          ...threadCodexEnvironmentActions.map((environmentAction) => {
+            const selected = environmentAction.id === selectedThreadCodexAction?.id;
+            const starting = sameThreadEnvActionStartingKey(threadEnvActionStarting, {
+              actionId: environmentAction.id,
+              backend: thread.source,
+              threadId: thread.id,
+            });
+            return (
+              <div className="composer-thread-options__command" key={`command:${environmentAction.id}`} role="none">
+                <button
+                  aria-checked={selected}
+                  className="composer-dropdown__option"
+                  disabled={threadEnvironmentBusy || !props.desktopApi?.runCodexEnvironmentAction}
+                  role="menuitemradio"
+                  type="button"
+                  onClick={() => {
+                    close();
+                    if (!selected) {
+                      void setThreadCodexEnvironment(thread.codexEnvironmentRuntime?.environmentId, environmentAction.id);
+                    }
+                  }}
+                >
+                  <span aria-hidden="true" className="composer-dropdown__check">
+                    {selected ? "✓" : ""}
+                  </span>
+                  {environmentAction.name}
+                </button>
+                <button
+                  aria-label={`Run ${environmentAction.name}`}
+                  className="composer-thread-options__command-run"
+                  disabled={runUnavailable || starting}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    close();
+                    void runThreadCodexEnvironmentAction(environmentAction);
+                  }}
+                >
+                  {starting ? (
+                    <PendingSpinner
+                      pairing="standalone"
+                      standaloneReason="A command's Run button swaps its play glyph for a bare ring; its only text is the aria-label."
+                    />
+                  ) : (
+                    <PlayIcon size={13} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
             );
-          },
-          threadEnvironmentBusy || !props.desktopApi?.runCodexEnvironmentAction,
-        ));
+          }),
+        ];
       }
       if (workspaceOpenPath && editorApplication) {
         actions.push(action("editor", `Open in ${editorApplication.name}`,
@@ -16210,7 +16256,7 @@ function useComposerController(props: ComposerProps) {
           () => setAgentPresetScope(presetLaunchpad.directoryKey), launchpadSubmitting));
       }
     }
-    if (composerTierFolded("run") && props.thread?.codexEnvironmentRuntime) {
+    if (composerTierFolded("run") && props.thread?.codexEnvironmentRuntime && !commandGroup) {
       actions.push(action(
         "run",
         selectedThreadCodexAction ? `Run ${selectedThreadCodexAction.name}` : "Run command",
@@ -16230,7 +16276,12 @@ function useComposerController(props: ComposerProps) {
         void refreshRecentFileReferences();
       }, launchpadSubmitting));
     }
-    const blocks = [...(actions.length > 0 ? [actions] : []), ...groups];
+    // Nearest ⋮ last: the choices, then the actions, then the commands to run.
+    const blocks = [
+      ...groups,
+      ...(actions.length > 0 ? [actions] : []),
+      ...(commandGroup ? [commandGroup] : []),
+    ];
     return blocks.length > 0
       ? blocks.flatMap((block, index) => index === 0 ? block : [
           <div className="composer-dropdown__separator" key={`separator:${index}`} role="separator" />,
