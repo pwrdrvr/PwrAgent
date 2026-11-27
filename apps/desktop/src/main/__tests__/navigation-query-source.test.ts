@@ -1209,28 +1209,17 @@ it("reuses membership across a PR status burst while pages observe the current r
   }
 });
 
-async function withNavigationStackCheckout(run: (fixture: {
+type NavigationStackSource = {
   source: ReturnType<typeof createSource>;
   read: (viewer?: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> }) => Promise<NavigationQueryIndex>;
   viewer: { source: object; project: (index: NavigationQueryIndex) => Promise<NavigationQueryIndex> };
-  retargetCatalog: () => Promise<void>;
-}) => Promise<void>) {
-  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-stack-work-")));
-  const restore = isolateProcessGitEnvironment(root);
+};
+
+async function withNavigationStackSource(root: string, run: (fixture: NavigationStackSource) => Promise<void>) {
   const source = createSource();
   source.registry.stackThreadHeld = () => true;
   const original = mocks.store.readNavigationQueryIndex.getMockImplementation()!;
   try {
-    const git = async (...args: string[]) => (await runIsolatedGit(root, args)).stdout.trim();
-    await git("init", "-b", "topic");
-    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture");
-    const head = await git("rev-parse", "HEAD");
-    await git("branch", "main");
-    const writeCatalog = (branch: string, commit: string) => writeFile(path.join(root, ".git", "gh-stack"), JSON.stringify({
-      schemaVersion: 1, repository: "github.com:fixture/stack",
-      stacks: [{ trunk: { branch: "main", head }, branches: [{ branch, head: commit, base: head }] }],
-    }));
-    await writeCatalog("topic", head);
     source.listThreads.mockImplementation(async () => [{
       id: "stacked", source: "codex", title: "Stacked", titleSource: "explicit",
       gitBranch: "topic", linkedDirectories: [{ id: root, path: root, kind: "local", label: "Fixture" }],
@@ -1246,14 +1235,35 @@ async function withNavigationStackCheckout(run: (fixture: {
     const read = (view?: typeof viewer) => loadLocalNavigationQueryIndex({
       registry: source.registry, callerReason: "renderer-navigation-query", includeStacks: true, viewer: view,
     });
-    await run({ source, read, viewer, retargetCatalog: async () => {
-      await git("branch", "other-topic");
-      const next = await git("rev-parse", "refs/heads/other-topic");
-      await writeCatalog("other-topic", next);
-    } });
+    await run({ source, read, viewer });
   } finally {
     source.emit("thread/name/updated");
     mocks.store.readNavigationQueryIndex.mockImplementation(original);
+  }
+}
+
+async function withNavigationStackCheckout(run: (fixture: NavigationStackSource & {
+  retargetCatalog: () => Promise<void>;
+}) => Promise<void>) {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "pwragent-nav-stack-work-")));
+  const restore = isolateProcessGitEnvironment(root);
+  try {
+    const git = async (...args: string[]) => (await runIsolatedGit(root, args)).stdout.trim();
+    await git("init", "-b", "topic");
+    await git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-m", "Fixture");
+    const head = await git("rev-parse", "HEAD");
+    await git("branch", "main");
+    const writeCatalog = (branch: string, commit: string) => writeFile(path.join(root, ".git", "gh-stack"), JSON.stringify({
+      schemaVersion: 1, repository: "github.com:fixture/stack",
+      stacks: [{ trunk: { branch: "main", head }, branches: [{ branch, head: commit, base: head }] }],
+    }));
+    await writeCatalog("topic", head);
+    await withNavigationStackSource(root, (fixture) => run({ ...fixture, retargetCatalog: async () => {
+      await git("branch", "other-topic");
+      const next = await git("rev-parse", "refs/heads/other-topic");
+      await writeCatalog("other-topic", next);
+    } }));
+  } finally {
     restore();
     await rm(root, { recursive: true, force: true });
   }
@@ -1371,9 +1381,18 @@ it("keeps the owner listing when a stacked viewer with peer pins nears the byte 
 });
 
 it("isolates local owner listing and stack projection from remote pin and peer-status churn", async () => {
-  await withNavigationStackCheckout(async ({ source, read, viewer }) => {
+  await withNavigationStackSource(path.resolve(os.tmpdir(), "fixture-stack"), async ({ source, read, viewer }) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const stackReads = vi.spyOn(StackReader.prototype, "read");
+    // Observe the navigation invalidation boundary. The checkout tests above
+    // exercise live Git stack discovery and its revalidation deadline.
+    const stack: StackSummary = {
+      key: "fixture-stack", name: "Fixture", repository: "github.com:fixture/stack", trunk: "main", inferred: false,
+      layers: [{
+        branch: "topic", parent: "main", role: "layer", health: "in_sync",
+        thread: { key: "codex:stacked", title: "Stacked" },
+      }],
+    };
+    const stackReads = vi.spyOn(StackReader.prototype, "read").mockResolvedValue({ stacks: [stack], catalogs: [] });
     const materialize = mocks.store.readNavigationQueryIndex;
     let pinTitle = "Viewer pin v0";
     let peerOnline = true;
@@ -1403,8 +1422,8 @@ it("isolates local owner listing and stack projection from remote pin and peer-s
           { minLength: 4, maxLength: 8, size: "max" },
         ),
         async (events) => {
-          // Advance both Date.now() and pool retention timers between runs so
-          // slow real-Git runs cannot expire the 1,000 ms owner snapshot mid-pass.
+          // Expire both the owner snapshot and pool entries between cases.
+          // Keep the clock fixed within each case to isolate event invalidation.
           vi.advanceTimersByTime(2_000);
           source.emit("thread/name/updated");
           pinTitle = "Viewer pin warm";
