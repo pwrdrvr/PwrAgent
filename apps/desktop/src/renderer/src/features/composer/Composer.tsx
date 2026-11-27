@@ -285,7 +285,6 @@ import {
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
   hashReferenceAnchorKey,
-  hashReferenceOptionKey,
   HASH_ANCHOR_COLD_QUERY_LENGTH,
 } from "../../lib/hash-references";
 import { normalizeImageFile } from "../../lib/image-normalization";
@@ -356,7 +355,7 @@ import {
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { EmojiAutocompleteList } from "./EmojiAutocompleteList";
 import { useComposerEmojiAutocomplete } from "./useComposerEmojiAutocomplete";
-import { resolveComposerAutocompleteProjection } from "./composer-autocomplete-projection";
+import { useComposerAutocomplete } from "./useComposerAutocomplete";
 import { SkillPickerHeader } from "./SkillPickerHeader";
 import { ComposerErrorRail, type ComposerErrorEntry } from "./ComposerErrorRail";
 import {
@@ -6347,39 +6346,24 @@ function useComposerController(props: ComposerProps) {
     mentionNavigation.threads,
     mentionNavigation.settledQuery,
   ]);
-  const hashReferenceOptionKeys = useMemo(
-    () => filteredHashReferenceOptions.map(hashReferenceOptionKey),
-    [filteredHashReferenceOptions],
-  );
-  const hashReferenceScope = hashReferenceQuery === undefined
-    ? undefined : JSON.stringify([composerScopeKey, hashReferenceQuery]);
-  const [hashReferenceSelection, setHashReferenceSelection] = useState<{ scope: string; key: string }>();
-  const selectedHashReferenceKey = hashReferenceSelection?.scope === hashReferenceScope
-    ? hashReferenceSelection?.key : undefined;
-  const activeHashReferenceIndex = Math.max(0,
-    selectedHashReferenceKey === undefined ? 0 : hashReferenceOptionKeys.indexOf(selectedHashReferenceKey),
-  );
-  const selectHashReferenceOption = (index: number): void => {
-    const key = hashReferenceOptionKeys[index];
-    if (key !== undefined && key !== selectedHashReferenceKey && hashReferenceScope !== undefined) {
-      setHashReferenceSelection({ scope: hashReferenceScope, key });
-    }
-  };
-  const hashReferenceCount = filteredHashReferenceOptions.length;
   const {
     activeAutocompleteIndex,
     activeAutocompleteOptionId,
+    activeHashReferenceIndex,
     autocompleteKey,
     autocompleteKind,
     autocompleteLength,
     autocompleteListboxId,
+    clearHashReferenceSelection,
+    hashReferenceOptionKeys,
     hasAutocompleteOptions,
-  } = resolveComposerAutocompleteProjection({
+    selectHashReferenceOption,
+  } = useComposerAutocomplete({
     activeDirectoryRefIndex,
     activeEmojiIndex: emojiAutocomplete.activeIndex,
-    activeHashReferenceIndex,
     activeSkillIndex,
     activeSlashIndex,
+    composerScopeKey,
     directoryRefCount: filteredDirectoryRefs.length,
     directoryRefListboxId,
     directoryRefTrigger,
@@ -6389,8 +6373,8 @@ function useComposerController(props: ComposerProps) {
     emojiTrigger: emojiAutocomplete.trigger,
     federatedHashSearchLoading,
     filteredSkillCount: filteredSkills.length,
-    hashReferenceCount,
     hashReferenceListboxId,
+    hashReferenceOptions: filteredHashReferenceOptions,
     hashReferenceTrigger,
     hasEnsureSkillsLoaded: Boolean(props.onEnsureSkillsLoaded),
     matchingSkillCount: matchingSkills.length,
@@ -6401,15 +6385,6 @@ function useComposerController(props: ComposerProps) {
     slashListboxId,
     slashTrigger,
   });
-  // Remember the initial highlight too. A late result can reorder the list
-  // before the operator moves the highlight or accepts it with Enter or Tab.
-  const visibleHashReferenceKey = autocompleteKind === "hash-references"
-    ? hashReferenceOptionKeys[activeHashReferenceIndex] : undefined;
-  if (visibleHashReferenceKey !== hashReferenceSelection?.key
-    || (visibleHashReferenceKey !== undefined && hashReferenceSelection?.scope !== hashReferenceScope)) {
-    setHashReferenceSelection(visibleHashReferenceKey !== undefined && hashReferenceScope !== undefined
-      ? { scope: hashReferenceScope, key: visibleHashReferenceKey } : undefined);
-  }
   // Directories the draft references: `@` chips only, from the token state
   // and the chips serialized in the draft. A path typed or pasted as plain
   // text is not a reference. Deleting a chip drops the reference.
@@ -10937,7 +10912,7 @@ function useComposerController(props: ComposerProps) {
     createToken: (index: number) => ComposerSkillToken,
   ): void => {
     inputRef.current?.replaceReference("#", [createToken(0)]);
-    setHashReferenceSelection(undefined);
+    clearHashReferenceSelection();
   };
 
   const applyEmojiShortcode = (emoji: string): void => {
@@ -13246,12 +13221,12 @@ function useComposerController(props: ComposerProps) {
       setActiveSkillIndex(0);
       setActiveSlashIndex(0);
       setActiveDirectoryRefIndex(0);
-      setHashReferenceSelection(undefined);
+      clearHashReferenceSelection();
       emojiAutocomplete.setActiveIndex(0);
       if (restoreFocus) {
         requestAnimationFrame(() => inputRef.current?.focus());
       }
-    }, [autocompleteKey, emojiAutocomplete.setActiveIndex]);
+    }, [autocompleteKey, clearHashReferenceSelection, emojiAutocomplete.setActiveIndex]);
 
     const handleAutocompleteKeyDown = (
       event: ReactKeyboardEvent<HTMLElement>,
