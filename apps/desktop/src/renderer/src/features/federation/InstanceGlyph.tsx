@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import type { CelestialIconId } from "@pwragent/shared/contracts/celestial";
+import { isCelestialIconId, type CelestialIconId } from "@pwragent/shared/contracts/celestial";
 import { CelestialIcon } from "../../icons";
 import { useFederationInstanceNames } from "../../lib/federation-display-label";
 
@@ -89,6 +89,7 @@ export function InstanceGlyph(props: {
  * remote thread rows so the operator can tell where a thread runs.
  */
 export function InstanceChip(props: {
+  descriptionId?: string;
   instanceId: string;
   label: string;
   icon?: CelestialIconId;
@@ -98,19 +99,21 @@ export function InstanceChip(props: {
   // also use live health for the icon until the owner stamps the thread.
   const { label, fullLabel, icon: liveIcon } = useFederationInstanceNames(props.instanceId, props.label);
   const name = label === fullLabel ? label : `${label} (${fullLabel})`;
+  const description = `Runs on ${name}`;
   const icon = props.icon ?? liveIcon;
   return (
     <span
-      aria-label={`Runs on ${name}`}
+      aria-label={description}
       className="chip chip--instance"
       title={`${fullLabel} · ${props.instanceId}`}
     >
-      {icon ? (
+      {isCelestialIconId(icon) ? (
         <CelestialIcon icon={icon} size={12} />
       ) : (
         <InstanceGlyph instanceId={props.instanceId} size={12} />
       )}
       <span className="chip--instance__label">{label}</span>
+      {props.descriptionId ? <span hidden id={props.descriptionId}>{description}</span> : null}
     </span>
   );
 }

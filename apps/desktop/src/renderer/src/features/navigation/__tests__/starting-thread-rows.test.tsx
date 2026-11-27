@@ -171,12 +171,15 @@ describe("a thread that is still starting", () => {
       </FederationDisplayLabelsProvider>
     );
     const { rerender } = render(pendingRow());
-    expect(screen.getByLabelText("Runs on fixture-peer")).toHaveClass("chip--instance");
-
+    const button = screen.getByRole("button", { name: "Add a crop tool, starting in PwrSnap" });
     rerender(pendingRow(PEER_HEALTH));
+    expect(button).toHaveAccessibleDescription("Runs on Studio (Fixture Studio)");
     const chip = screen.getByLabelText("Runs on Studio (Fixture Studio)");
-    expect(chip).toHaveTextContent(/^Studio$/);
+    expect(chip.querySelector(".chip--instance__label")).toHaveTextContent(/^Studio$/);
     expect(chip.querySelector("svg")).not.toHaveClass("instance-glyph");
+
+    rerender(pendingRow());
+    expect(button).toHaveAccessibleDescription("Runs on fixture-peer");
   });
 
   it("keeps machine chips out of local starts and dedicated Federation windows", () => {
@@ -187,10 +190,13 @@ describe("a thread that is still starting", () => {
     );
     const { rerender } = render(pendingRow(creation({ target: { scope: "local" } })));
     expect(screen.queryByLabelText(/^Runs on /)).not.toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Add a crop tool, starting in PwrSnap" });
+    expect(button).not.toHaveAccessibleDescription();
 
     vi.stubGlobal("__pwragentFederationTarget", PEER_TARGET);
     rerender(pendingRow(creation({ target: PEER_TARGET })));
     expect(screen.queryByLabelText(/^Runs on /)).not.toBeInTheDocument();
+    expect(button).not.toHaveAccessibleDescription();
   });
 
   it("takes the top unpinned slot in its project, as a thread row", () => {

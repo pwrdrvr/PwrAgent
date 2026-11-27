@@ -1,4 +1,4 @@
-import { useEffect, useRef, type CSSProperties } from "react";
+import { useEffect, useId, useRef, type CSSProperties } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared/contracts/navigation";
 import { BranchIcon, FolderIcon, WorktreeIcon } from "../../icons";
 import { useThreadProviderLabel } from "../../lib/thread-provider-label";
@@ -83,6 +83,7 @@ export function StartingThreadRow(props: {
   const remoteInstanceId = creation.target?.scope === "remote" && !isFederationViewerWindow()
     ? creation.target.instanceId
     : undefined;
+  const instanceDescriptionId = useId();
   const nested = props.nestedDepth !== undefined;
   const shellRef = useRef<HTMLDivElement>(null);
   // A selected starting row sits wherever its project or parent is, which can
@@ -115,6 +116,7 @@ export function StartingThreadRow(props: {
       >
         {selectable ? (
           <button
+            aria-describedby={remoteInstanceId ? instanceDescriptionId : undefined}
             aria-label={`${title}, starting in ${creation.directoryLabel}`}
             aria-pressed={props.selected}
             className="thread-row__open"
@@ -139,7 +141,11 @@ export function StartingThreadRow(props: {
         </span>
         <span className="thread-row__chips">
           {remoteInstanceId ? (
-            <InstanceChip instanceId={remoteInstanceId} label={remoteInstanceId} />
+            <InstanceChip
+              descriptionId={selectable ? instanceDescriptionId : undefined}
+              instanceId={remoteInstanceId}
+              label={remoteInstanceId}
+            />
           ) : null}
           {showProvider ? (
             <span aria-hidden="true" className="thread-row__chip thread-row__chip--backend">
