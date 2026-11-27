@@ -312,7 +312,7 @@ export function installThreadTodoRuntime(params: {
   /** The local Directories lens rows, for naming and filing projects. */
   listProjects: () => Promise<ThreadTodoProjectCandidate[]>;
   /** `[git] default_merge_method`. */
-  readReviewStackHold?: (thread: Pick<ThreadReview, "backend" | "threadId">) => Promise<string | undefined>;
+  readReviewStackHold?: (review: ThreadReview) => Promise<string | undefined>;
   readDefaultMergeMethod: () => ThreadTodoMergeMethod;
   /** The federation agent tools, which start threads on peers. */
   federation?: PwrAgentFederationHandler;

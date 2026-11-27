@@ -75,7 +75,6 @@ import { checkAgentAccessRequest, isAgentAccessRefusalMessage } from "../agent-t
 
 
 import type { ClaudeSelfStartedTurnSource } from "../claude/claude-self-started-turns";
-import { getReviewAutoFixRuns } from "../thread-reviews/review-auto-fix";
 import { isReviewFixTurnInput } from "./agent-review-submission";
 import type { ForgeReadHandler } from "../agent-tools/pwragent-forge-agent-tools";
 import type { ForgePrToolHandler, ForgePrToolPreflight } from "../agent-tools/pwragent-forge-pr-agent-tools";
@@ -184,6 +183,7 @@ import { buildIncomingWorkSummary } from "./thread-work-notification";
 import { stackFileReadsFromItem, ThreadCorrespondenceStore } from "./thread-correspondence-store";
 import type { StackNotice } from "@pwragent/shared/contracts/thread-system-messages";
 import type { StackThreadRef } from "@pwragent/owner-core/stacks/stack-coordinator";
+import type { StackThreadActivity } from "../stacks/stack-reader";
 import { PendingEnvironmentLaunchStore } from "./pending-environment-launch-store";
 import { mergeCausalMessagingContext } from "./causal-messaging-context";
 import { rememberBoundedMap } from "../bounded-map";
@@ -3840,6 +3840,15 @@ export class DesktopBackendRegistry {
   }
 
   private readonly stackHolds = new Map<string, Set<string>>();
+  private stackThreadActivityReader?: (key: string) => Promise<StackThreadActivity>;
+
+  setStackThreadActivityReader(reader: ((key: string) => Promise<StackThreadActivity>) | undefined): void {
+    this.stackThreadActivityReader = reader;
+  }
+
+  async readStackThreadActivity(key: string): Promise<StackThreadActivity> {
+    return await this.stackThreadActivityReader?.(key) ?? {};
+  }
 
   stackThreadHeld(thread: StackThreadRef): boolean {
     return Boolean(this.stackHolds.get(buildThreadIdentityKey(thread.backend, thread.threadId))?.size);
@@ -3864,6 +3873,9 @@ export class DesktopBackendRegistry {
   }
 
   async stackRepairActive(thread: StackThreadRef): Promise<boolean> {
+    // The queue owns the fix during preparation, before a backend turn has
+    // a starting origin. A review waiting for admission owns no queue entry.
+    if (this.threadTurnQueue.hasActiveReviewAutoFix(thread)) return true;
     const active = this.getActiveTurnForThread(thread);
     const starting = this.findStartingTurnOrigin(active ?? thread);
     const isRepair = (origin?: AppServerThreadMessageOrigin, reviewFix?: boolean) =>
@@ -3873,7 +3885,6 @@ export class DesktopBackendRegistry {
       || origin?.reviewAutoFix !== undefined;
     if (isRepair(starting?.origin, starting?.reviewFix)) return true;
     if (active && this.isReviewFixTurn({ ...thread, turnId: active.turnId })) return true;
-    if (Object.values(getReviewAutoFixRuns().of(thread)).some(({ phase }) => phase === "queued")) return true;
     for (const entry of this.threadTurnQueue.iterateQueuedEntries(thread)) {
       if (isRepair(entry.messageOrigin, entry.reviewFix)) return true;
     }

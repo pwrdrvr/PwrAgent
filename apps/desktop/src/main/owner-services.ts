@@ -805,7 +805,7 @@ wireOwnerRendererEvents();
   const queues = startOwnerQueues(federationRuntime, {
     registry,
     readDefaultMergeMethod: () => settings.resolveDefaultMergeMethod(),
-    readReviewStackHold: (thread) => getDesktopAppServerService().automationStackHold(thread),
+    readReviewStackHold: (review) => getDesktopAppServerService().automationStackHold(review),
     registerContinueAfter: async ({ backend, threadId, continueAfter }) => {
       await getDesktopAppServerService().manageThreadDependencies({
         action: "create",
@@ -1072,6 +1072,7 @@ export async function disposeAppServerOwnerServices(): Promise<void> {
   registry?.setThreadMaintenanceToolHandler(undefined);
   registry?.setThreadPullRequestStatusToolHandler(undefined);
   registry?.setThreadPullRequestCanonicalizer(undefined);
+  registry?.setStackThreadActivityReader(undefined);
   registry?.setPullRequestReferenceResolver(undefined);
   registry?.setThreadPrimaryGitRepositoryReader(undefined);
   registry?.setLocalPullRequestAuthorityResolver(undefined);
@@ -1217,6 +1218,7 @@ export function wireAppServerOwnerServices(): void {
     async (prs, demand, verifyAttachments) =>
       await appServerService.canonicalizeStoredPullRequests(prs, demand, verifyAttachments),
   );
+  getDesktopBackendRegistry().setStackThreadActivityReader((key) => appServerService.stackThreadActivity(key));
   getDesktopBackendRegistry().setPullRequestReferenceResolver(
     async (params) => await appServerService.resolvePullRequestReference(params),
   );

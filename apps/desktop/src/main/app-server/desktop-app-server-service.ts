@@ -1,4 +1,5 @@
 import { getResourceCheckoutService } from "../resource-checkouts/checkout-runtime";
+import { navigationPathIdentity } from "@pwragent/shared/directory-navigation";
 import type { AgentMemoryRequest, AgentMemoryResult } from "@pwragent/shared/contracts/agent-memory";
 import { DesktopDirectoryGitStatus } from "./desktop-directory-git-status";
 import { ThreadPullRequestLookup } from "./thread-pull-request-lookup";
@@ -41,7 +42,7 @@ import { ForgeReadError, type ForgeReadArgs, type ForgeReadOperation, type Forge
 import { readForgeRepositoryRemotes, type GitHubRepoRef } from "../pr-status/git-remote";
 import { createInventoryRemoteConfigReader } from "../pr-status/git-remote-inventory";
 import { prGitSubprocessCaller } from "../diagnostics/git-subprocess-diagnostics";
-import { getDesktopStackReader, StackReadObservation, stackMemberships } from "../stacks/stack-reader";
+import { getDesktopStackReader, StackReadObservation, stackMemberships, type StackReader, type StackThreadActivity } from "../stacks/stack-reader";
 import { GithubForgeStackDiscovery, githubForgeStackRepository, type GithubForgeStack } from "../stacks/github-forge-stacks";
 import { StackOperationsService } from "../stacks/stack-operations-service";
 import { StackOperationError } from "@pwragent/owner-core/stacks/stack-coordinator";
@@ -59,6 +60,7 @@ import {
 } from "../pr-status/pr-review-offer-owner";
 import { describePrReviewReadiness } from "../pr-status/pr-review-readiness";
 import { getThreadReviewService } from "../thread-reviews/thread-review-runtime";
+import { reviewContextPullRequests, type ThreadReview } from "@pwragent/shared/contracts/thread-reviews";
 import type { AgentToolCallContext } from "../agent-tools/agent-tool-definition";
 import { publishedPrCommitShas } from "../../shared/pull-request-publication";
 import {
@@ -3881,14 +3883,16 @@ class DesktopAppServerService {
     return [...this.prStatusRegistry.values()].map(({ pr }) => pr);
   }
 
-  private async stackThreadActivity(key: string) {
+  async stackThreadActivity(key: string): Promise<StackThreadActivity> {
     const identity = parseThreadIdentityKey(key);
     if (!identity) return {};
     const registry = getDesktopBackendRegistry();
-    const held = registry.stackThreadHeld?.(identity) ?? false;
-    const repair = !held && (Boolean(await this.getOverlayStore().getThreadPrAutoDispatchPending(identity))
-      || await registry.stackRepairActive?.(identity) === true);
-    return { held, repair };
+    if (registry.stackThreadHeld?.(identity)) return { held: true };
+    const pending = await this.getOverlayStore().getThreadPrAutoDispatchPending(identity);
+    return {
+      repair: await registry.stackRepairActive?.(identity),
+      pendingRepairPrKey: pending && this.prRepositoryAliases.canonicalizeKey(pending.pending.prKey),
+    };
   }
 
   private prStackDirectories(pr: PrSummary): string[] {
@@ -3899,27 +3903,57 @@ class DesktopAppServerService {
     }))];
   }
 
-  private async readPrStacks(pr: PrSummary, observation = new StackReadObservation()): Promise<readonly StackSummary[]> {
-    observation.demand.signal?.throwIfAborted();
+  private createPrStackScopeReader(demand: PrMetadataDemand = {}) {
+    const scopes = new Map<string, {
+      catalogs: ReturnType<StackReader["preflightCatalogs"]>;
+      project: () => ReturnType<StackReader["read"]>;
+    }>();
+    let listing: Promise<AppServerListThreadsResponse> | undefined;
+    let inventory: ReturnType<DesktopAppServerService["readScopedStackInventory"]> | undefined;
+    return (directories: readonly string[]) => {
+      demand.signal?.throwIfAborted();
+      if (!directories.length) return;
+      const key = JSON.stringify(directories);
+      const existing = scopes.get(key);
+      if (existing) return existing;
+      const observation = new StackReadObservation(demand);
+      let projection: ReturnType<StackReader["read"]> | undefined;
+      const project = async () => {
+        const { threads } = await (listing ??= this.listThreads({}));
+        await observation.revalidateAfterListing();
+        return await this.projectScopedStackInventory(
+          directories, observation, inventory ??= this.readScopedStackInventory(threads),
+        );
+      };
+      const scope = {
+        catalogs: this.stackReader.preflightCatalogs(directories, observation),
+        project: () => projection ??= project(),
+      };
+      scopes.set(key, scope);
+      return scope;
+    };
+  }
+
+  private async readPrStacks(pr: PrSummary, readScope = this.createPrStackScopeReader()): Promise<readonly StackSummary[]> {
     const repository = `${pr.provider}:${pr.org}/${pr.repo}`.toLowerCase();
     const matches = (stack: StackSummary) => stack.repository === repository
       && stack.layers.some((layer) => layer.pullRequest?.number === pr.number);
-    const directories = this.prStackDirectories(pr);
-    if (!directories.length) return this.publishedStacks.filter(matches);
-    const catalogs = await this.stackReader.preflightCatalogs(directories, observation);
+    const scope = readScope(this.prStackDirectories(pr));
+    if (!scope) return this.publishedStacks.filter(matches);
+    const catalogs = await scope.catalogs;
     if (catalogs.some(({ status }) => status === "unavailable")) throw new Error("Stack catalog evidence is unavailable.");
     const tracked = catalogs.some((read) => read.status === "ok" && read.catalog.repository.toLowerCase() === repository
       && read.catalog.stacks.some((stack) => stack.branches.some((layer) =>
         layer.pullRequest?.number === pr.number || layer.branch === pr.headRefName)));
     if (!tracked && !this.knownStackPullRequests().some((lower) => isObservedStackParent(lower, pr))) return [];
-    const scoped = await this.readScopedStacks(directories, undefined, observation);
+    const scoped = await scope.project();
     if (scoped.catalogs.some(({ status }) => status === "unavailable")) throw new Error("Stack catalog evidence is unavailable.");
     return scoped.stacks.filter(matches);
   }
 
-  private async prStackHoldEvidence(pr: PrSummary): Promise<{ reason: string; lowerKey?: string } | undefined> {
+  private async prStackHoldEvidence(pr: PrSummary, readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>): Promise<{ reason: string; lowerKey?: string } | undefined> {
     try {
-      for (const stack of await this.readPrStacks(pr)) {
+      for (const stack of await this.readPrStacks(pr, readScope)) {
         const layer = stack.layers.find((entry) => entry.pullRequest?.number === pr.number);
         const block = layer && stackDispatchBlock(layer);
         if (block) return {
@@ -3935,15 +3969,37 @@ class DesktopAppServerService {
     }
   }
 
-  private async prStackHold(pr: PrSummary): Promise<string | undefined> {
-    return (await this.prStackHoldEvidence(pr))?.reason;
+  private async prStackHold(pr: PrSummary, readScope?: ReturnType<DesktopAppServerService["createPrStackScopeReader"]>): Promise<string | undefined> {
+    return (await this.prStackHoldEvidence(pr, readScope))?.reason;
   }
 
-  async automationStackHold(thread: PrReviewOfferThread): Promise<string | undefined> {
-    const attachment = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(thread.backend, thread.threadId));
+  async automationStackHold(review: Pick<ThreadReview, "backend" | "threadId" | "context">): Promise<string | undefined> {
+    const reviewed = reviewContextPullRequests(review.context);
+    const reviewedKeys = new Set(reviewed.map((pr) => this.prRepositoryAliases.canonicalizeKey(getPrStatusKey(pr))));
+    const observed = review.context ? undefined : getDesktopBackendRegistry().getCachedThreadSummary(review);
+    const branch = review.context?.gitBranch ?? observed?.observedGitBranch ?? observed?.gitBranch;
+    if (!reviewedKeys.size && !branch) return;
+    const attachment = this.attachedPrsByThreadKey.get(buildThreadIdentityKey(review.backend, review.threadId));
+    const pathKey = (value: string) => navigationPathIdentity(value, process.platform === "win32");
+    const workspacePaths = new Set<string>();
+    if (!reviewedKeys.size && review.context) {
+      workspacePaths.add(pathKey(review.context.workspacePath));
+      if (review.context.repositoryPath) workspacePaths.add(pathKey(review.context.repositoryPath));
+    }
+    let threadPaths: string[] | undefined;
+    // Share one observation per checkout scope within this admission. The
+    // final admission guard creates a fresh reader and rechecks live state.
+    const readScope = this.createPrStackScopeReader();
     for (const pr of this.canonicalizePrs(attachment?.prs ?? [])) {
       if (isTerminalPullRequest(pr) || !this.matchesPrimaryRepository(pr, attachment?.primaryRepoKey)) continue;
-      const hold = await this.prStackHold(pr);
+      if (reviewedKeys.size ? !reviewedKeys.has(getPrStatusKey(pr)) : branch && pr.headRefName !== branch) continue;
+      if (workspacePaths.size) {
+        const paths = pr.linkedDirectoryPaths?.length ? pr.linkedDirectoryPaths
+          : threadPaths ??= resolveThreadPullRequestDirectoryPaths(attachment?.workspace
+            ?? getDesktopBackendRegistry().getCachedThreadSummary(review) ?? { linkedDirectories: [] });
+        if (!paths.some((value) => workspacePaths.has(pathKey(value)))) continue;
+      }
+      const hold = await this.prStackHold(pr, readScope);
       if (hold) return hold;
     }
   }
@@ -4085,16 +4141,10 @@ class DesktopAppServerService {
     }
   }
 
-  private async readScopedStacks(
-    directories: readonly string[],
+  private readScopedStackInventory(
+    threads: AppServerThreadSummary[],
     scope?: { backend: string; threadId: string; prs: PrSummary[] },
-    observation = new StackReadObservation(),
-    trackedPublishingRepositories?: ReadonlySet<string>,
   ) {
-    observation.demand.signal?.throwIfAborted();
-    if (!directories.length) return { stacks: [], catalogs: [] };
-    const { threads } = await this.listThreads({});
-    await observation.revalidateAfterListing();
     const attached = getDesktopOverlayStore().readNavigationPullRequests(threads.map((thread) => ({
       backend: thread.source, threadId: thread.id,
     })));
@@ -4106,7 +4156,31 @@ class DesktopAppServerService {
         prs: this.canonicalizePrs(isScope ? scope.prs : attachment?.prs ?? attached[index] ?? []),
       };
     });
-    return await this.stackReader.read(rows, this.knownStackPullRequests(), directories,
+    return { rows, knownPrs: this.knownStackPullRequests() };
+  }
+
+  private async readScopedStacks(
+    directories: readonly string[],
+    scope?: { backend: string; threadId: string; prs: PrSummary[] },
+    observation = new StackReadObservation(),
+    trackedPublishingRepositories?: ReadonlySet<string>,
+  ) {
+    observation.demand.signal?.throwIfAborted();
+    if (!directories.length) return { stacks: [], catalogs: [] };
+    const { threads } = await this.listThreads({});
+    await observation.revalidateAfterListing();
+    return await this.projectScopedStackInventory(
+      directories, observation, this.readScopedStackInventory(threads, scope), trackedPublishingRepositories,
+    );
+  }
+
+  private projectScopedStackInventory(
+    directories: readonly string[], observation: StackReadObservation,
+    inventory: ReturnType<DesktopAppServerService["readScopedStackInventory"]>,
+    trackedPublishingRepositories?: ReadonlySet<string>,
+  ) {
+    const { rows, knownPrs } = inventory;
+    return this.stackReader.read(rows, knownPrs, directories,
       (key) => this.stackThreadActivity(key), observation, undefined, trackedPublishingRepositories);
   }
 
@@ -4234,7 +4308,7 @@ class DesktopAppServerService {
       if (!context.turnId && (!this.ownerNavigationActive || !projectAllowsPrWatches(this.threadForgeAutomation(context)))) {
         throw new ForgeReadError("tools_disabled", "Project automation is paused.");
       }
-      const stacks = (await this.readPrStacks(live, new StackReadObservation({
+      const stacks = (await this.readPrStacks(live, this.createPrStackScopeReader({
         signal: context.signal,
         priority: () => context.turnId ? PR_METADATA_PRIORITY.selected : PR_METADATA_PRIORITY.background,
       }))).filter((stack) => !stack.inferred);
@@ -5424,7 +5498,8 @@ class DesktopAppServerService {
     prs: PrSummary[],
   ): Promise<Array<{ text: string; held?: boolean }>> {
     if (!prs.length) return [];
-    const scoped = await Promise.allSettled(prs.map((pr) => this.readPrStacks(pr)));
+    const readScope = this.createPrStackScopeReader();
+    const scoped = await Promise.allSettled(prs.map((pr) => this.readPrStacks(pr, readScope)));
     return prs.flatMap((pr, offset) => {
       const result = scoped[offset]!;
       if (result.status === "rejected") {
