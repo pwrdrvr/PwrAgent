@@ -117,6 +117,7 @@ export class AcpRolloutStore {
     const stat = statRolloutFile(rolloutPath);
     if (!stat) {
       this.recordCache.delete(rolloutPath);
+      this.knownRolloutPaths.delete(rolloutPath);
       return [];
     }
     const cached = this.recordCache.get(rolloutPath);
@@ -266,20 +267,53 @@ export class AcpRolloutStore {
       receivedAt: params.receivedAt,
       update: params.update,
     };
+    const line = `${JSON.stringify(record)}\n`;
+    const lineBytes = BigInt(Buffer.byteLength(line, "utf8"));
     const cached = this.recordCache.get(rolloutPath);
-    fs.appendFileSync(
-      rolloutPath,
-      `${JSON.stringify(record)}\n`,
-      // The owner commits the replacement provider ID after this boundary.
-      { encoding: "utf8", flush: params.update.kind === ACP_WORKSPACE_HANDOFF_RECORD },
-    );
+    let cachedMatchesPreAppend = false;
     if (cached) {
-      const stat = statRolloutFile(rolloutPath);
-      if (stat && stat.ino === cached.ino) {
+      const preStat = statRolloutFile(rolloutPath);
+      if (
+        preStat
+        && preStat.ino === cached.ino
+        && preStat.size === cached.size
+        && preStat.mtimeNs === cached.mtimeNs
+        && preStat.ctimeNs === cached.ctimeNs
+      ) {
+        cachedMatchesPreAppend = true;
+      } else {
+        this.recordCache.delete(rolloutPath);
+      }
+    }
+    const appendOptions = {
+      encoding: "utf8" as const,
+      // The owner commits the replacement provider ID after this boundary.
+      flush: params.update.kind === ACP_WORKSPACE_HANDOFF_RECORD,
+    };
+    try {
+      fs.appendFileSync(rolloutPath, line, appendOptions);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+        this.recordCache.delete(rolloutPath);
+        throw error;
+      }
+      fs.mkdirSync(path.dirname(rolloutPath), { recursive: true });
+      this.knownRolloutPaths.add(rolloutPath);
+      this.recordCache.delete(rolloutPath);
+      cachedMatchesPreAppend = false;
+      fs.appendFileSync(rolloutPath, line, appendOptions);
+    }
+    if (cached && cachedMatchesPreAppend) {
+      const postStat = statRolloutFile(rolloutPath);
+      if (
+        postStat
+        && postStat.ino === cached.ino
+        && postStat.size === cached.size + lineBytes
+      ) {
         cached.records.push(record);
-        cached.size = stat.size;
-        cached.mtimeNs = stat.mtimeNs;
-        cached.ctimeNs = stat.ctimeNs;
+        cached.size = postStat.size;
+        cached.mtimeNs = postStat.mtimeNs;
+        cached.ctimeNs = postStat.ctimeNs;
       } else {
         this.recordCache.delete(rolloutPath);
       }

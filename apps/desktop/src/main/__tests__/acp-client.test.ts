@@ -4108,6 +4108,89 @@ describe("AcpAgentClient", () => {
     ]);
   });
 
+  it("does not run endProviderPromptReplay on restored fallbackNormalizer when session/load fails", async () => {
+    const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts-failed-load"));
+    rolloutStore.appendUpdate({
+      backendId: "acp:grok",
+      sessionId: "session-fail-load",
+      receivedAt: 1_500,
+      update: {
+        kind: "pwragent_user_prompt",
+        prompt: "Original prompt",
+        turnId: "turn-1",
+      },
+    });
+    rolloutStore.appendUpdate({
+      backendId: "acp:grok",
+      sessionId: "session-fail-load",
+      receivedAt: 1_600,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "In-progress reply" },
+      },
+    });
+    rolloutStore.flushAll();
+
+    const transport = new FakeAcpAgentTransport({
+      initialize: {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: true },
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      rolloutStore,
+      store,
+      transport: {
+        request: async (method, params) => {
+          const result = await transport.request(method, params);
+          if (method === "session/load") {
+            transport.emitSessionUpdate("session-fail-load", {
+              sessionUpdate: "tool_call",
+              toolCallId: "late-tool",
+              title: "Ran check",
+              status: "completed",
+              timestamp: 1_200,
+            });
+          }
+          return result;
+        },
+        notify: (method, params) => transport.notify(method, params),
+        close: () => transport.close(),
+        onNotification: (listener) => transport.onNotification(listener),
+      },
+      mcpServers: () => ({
+        servers: [],
+        bindThread: async () => {
+          throw new Error("bindThread failed after session/load");
+        },
+      }),
+      now: () => 5_000,
+    });
+    store.upsertSession({
+      backendId: "acp:grok",
+      sessionId: "session-fail-load",
+      title: "Failed load fallback",
+      cwd: "/repo",
+      createdAt: 1_500,
+      updatedAt: 1_600,
+      executionMode: "default",
+      status: "active",
+      hasConversationHistory: true,
+    });
+
+    await client.initialize();
+    await expect(
+      client.loadSession(store.getSession("acp:grok", "session-fail-load")!),
+    ).rejects.toThrow("bindThread failed after session/load");
+
+    // Restored fallback normalizer must not have its open turn finished or timestamps clamped.
+    const restoredReplay = client.readReplay("session-fail-load");
+    expect(restoredReplay.messages.map((message) => message.createdAt)).toEqual([1_500, 1_600]);
+    expect(restoredReplay.entries.every((entry) => entry.createdAt !== 1_200)).toBe(true);
+    expect(restoredReplay.entries[0]?.turn?.status).not.toBe("completed");
+  });
+
   it("preserves newer metadata activity over complete local rollout history", async () => {
     const rolloutStore = new AcpRolloutStore(path.join(tempDir, "rollouts"));
     rolloutStore.appendUpdate({

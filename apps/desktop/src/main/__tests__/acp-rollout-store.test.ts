@@ -1118,4 +1118,80 @@ describe("AcpRolloutStore", () => {
       readFileSpy.mockRestore();
     }
   });
+
+  it("does not mask external same-inode appends when this store subsequently writes a record", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:antigravity" as AcpBackendId;
+    const sessionId = "concurrent-session";
+
+    store.appendUpdate({
+      backendId,
+      sessionId,
+      receivedAt: 1_000,
+      update: { kind: "pwragent_user_prompt", prompt: "Initial", turnId: "turn-1" },
+    });
+    store.flushAll();
+
+    // Prime the stat-validated record cache.
+    expect(store.readReplay({ backendId, sessionId }).messages.map((m) => m.text)).toEqual([
+      "Initial",
+    ]);
+
+    // Another writer appends in place (same inode) while the cache is warm.
+    const rolloutPath = path.join(tempDir, "acp_antigravity", sessionId, "rollout.jsonl");
+    fs.appendFileSync(
+      rolloutPath,
+      `${JSON.stringify({
+        type: "update",
+        receivedAt: 2_000,
+        update: { kind: "pwragent_user_prompt", prompt: "From other process", turnId: "turn-2" },
+      })}\n`,
+      "utf8",
+    );
+
+    // This store appends a third record; cache must invalidate rather than mask the external write.
+    store.appendUpdate({
+      backendId,
+      sessionId,
+      receivedAt: 3_000,
+      update: { kind: "pwragent_user_prompt", prompt: "After external write", turnId: "turn-3" },
+    });
+    store.flushAll();
+
+    expect(store.readReplay({ backendId, sessionId }).messages.map((m) => m.text)).toEqual([
+      "Initial",
+      "From other process",
+      "After external write",
+    ]);
+  });
+
+  it("recreates the session directory instead of throwing ENOENT if removed externally", () => {
+    const store = new AcpRolloutStore(tempDir);
+    const backendId = "acp:antigravity" as AcpBackendId;
+    const sessionId = "externally-deleted";
+
+    store.appendUpdate({
+      backendId,
+      sessionId,
+      receivedAt: 1_000,
+      update: { kind: "pwragent_user_prompt", prompt: "Before delete", turnId: "turn-1" },
+    });
+    store.flushAll();
+
+    fs.rmSync(path.join(tempDir, "acp_antigravity", sessionId), { recursive: true, force: true });
+
+    expect(() => {
+      store.appendUpdate({
+        backendId,
+        sessionId,
+        receivedAt: 2_000,
+        update: { kind: "pwragent_user_prompt", prompt: "After delete", turnId: "turn-2" },
+      });
+      store.flushAll();
+    }).not.toThrow();
+
+    expect(store.readReplay({ backendId, sessionId }).messages.map((m) => m.text)).toEqual([
+      "After delete",
+    ]);
+  });
 });

@@ -3440,4 +3440,64 @@ describe("AcpSessionReplayNormalizer", () => {
     ]);
     expect(replay.entries[0]?.turn?.durationMs).toBe(edit3Ts - edit1Ts);
   });
+
+  it("clamps entry.turn.startedAt and currentTurnStartedAt per turn rather than to Turn 1", () => {
+    const normalizer = new AcpSessionReplayNormalizer({ antigravity: true });
+
+    // Turn 1: historical timestamps 1_000..1_050.
+    normalizer.recordUserPrompt({
+      sessionId: "sess-multi",
+      prompt: "First turn",
+      turnId: "turn-1",
+      receivedAt: 1_000,
+    });
+    normalizer.apply({
+      sessionId: "sess-multi",
+      receivedAt: 1_050,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "First reply" },
+      },
+    });
+    normalizer.recordTurnFinished("turn-1", 1_050);
+
+    // Turn 2: prompt recorded at skewed/reload time 9_000, followed by historical tools at 2_000..2_050.
+    normalizer.recordUserPrompt({
+      sessionId: "sess-multi",
+      prompt: "Second turn",
+      turnId: "turn-2",
+      receivedAt: 9_000,
+    });
+    normalizer.apply({
+      sessionId: "sess-multi",
+      receivedAt: 2_000,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t2-tool-1",
+        title: "Edited 1 file",
+        status: "completed",
+        timestamp: 2_000,
+      },
+    });
+    normalizer.apply({
+      sessionId: "sess-multi",
+      receivedAt: 2_050,
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Second reply" },
+      },
+    });
+
+    normalizer.endProviderPromptReplay(2_050);
+    const replay = normalizer.replay();
+    const turn2Entries = replay.entries.filter((entry) => entry.turn?.id === "turn-2");
+    expect(turn2Entries).toHaveLength(3);
+    expect(turn2Entries.map((entry) => entry.createdAt)).toEqual([2_000, 2_000, 2_050]);
+    for (const entry of turn2Entries) {
+      // Must clamp to Turn 2's earliest timestamp (2_000), not Turn 1's (1_000) or skewed 9_000.
+      expect(entry.turn?.startedAt).toBe(2_000);
+      expect(entry.turn?.completedAt).toBe(2_050);
+      expect(entry.turn?.durationMs).toBe(50);
+    }
+  });
 });

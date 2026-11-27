@@ -508,31 +508,70 @@ export class AcpSessionReplayNormalizer {
   private clampNonMonotonicTimestamps(): void {
     let minFollowingCreatedAt: number | undefined;
     let clampedMessageIds: Map<string, number> | undefined;
+    const minCreatedAtByTurnId = new Map<string, number>();
+    let anyTurnStartedAtNeedsClamp = false;
     for (let index = this.entries.length - 1; index >= 0; index -= 1) {
       const entry = this.entries[index]!;
       const createdAt = entry.createdAt;
       if (typeof createdAt !== "number") {
         continue;
       }
+      let effectiveCreatedAt = createdAt;
       if (minFollowingCreatedAt !== undefined && createdAt > minFollowingCreatedAt) {
+        effectiveCreatedAt = minFollowingCreatedAt;
         this.entries[index] = {
           ...entry,
-          createdAt: minFollowingCreatedAt,
+          createdAt: effectiveCreatedAt,
         };
         if (entry.type === "message") {
           clampedMessageIds ??= new Map<string, number>();
-          clampedMessageIds.set(entry.id, minFollowingCreatedAt);
+          clampedMessageIds.set(entry.id, effectiveCreatedAt);
         }
       } else {
         minFollowingCreatedAt = createdAt;
       }
+      const turnId = entry.turn?.id;
+      if (turnId) {
+        const prevTurnMin = minCreatedAtByTurnId.get(turnId);
+        if (prevTurnMin === undefined || effectiveCreatedAt < prevTurnMin) {
+          minCreatedAtByTurnId.set(turnId, effectiveCreatedAt);
+        }
+        if (
+          typeof entry.turn?.startedAt === "number"
+          && entry.turn.startedAt > effectiveCreatedAt
+        ) {
+          anyTurnStartedAtNeedsClamp = true;
+        }
+      }
     }
-    if (
-      minFollowingCreatedAt !== undefined
-      && this.currentTurnStartedAt !== undefined
-      && this.currentTurnStartedAt > minFollowingCreatedAt
-    ) {
-      this.currentTurnStartedAt = minFollowingCreatedAt;
+    if (anyTurnStartedAtNeedsClamp) {
+      for (let index = 0; index < this.entries.length; index += 1) {
+        const entry = this.entries[index]!;
+        const turn = entry.turn;
+        if (!turn || typeof turn.startedAt !== "number") {
+          continue;
+        }
+        const turnMin = minCreatedAtByTurnId.get(turn.id);
+        if (turnMin !== undefined && turn.startedAt > turnMin) {
+          const nextTurn = {
+            ...turn,
+            startedAt: turnMin,
+            ...(typeof turn.completedAt === "number"
+              ? { durationMs: Math.max(0, turn.completedAt - turnMin) }
+              : {}),
+          };
+          this.entries[index] = {
+            ...entry,
+            turn: nextTurn,
+          };
+        }
+      }
+    }
+    if (this.currentTurnId && this.currentTurnStartedAt !== undefined) {
+      const currentTurnMin = minCreatedAtByTurnId.get(this.currentTurnId);
+      if (currentTurnMin !== undefined && this.currentTurnStartedAt > currentTurnMin) {
+        this.currentTurnStartedAt = currentTurnMin;
+      }
     }
     if (clampedMessageIds) {
       for (let index = 0; index < this.messages.length; index += 1) {

@@ -222,7 +222,9 @@ describe("inferLegacyTaskMonitorMessageOrigins", () => {
             type: "message",
             id: `user-${index}`,
             role: "user",
-            text: index === 0 ? "Monitor status\n[PwrAgent Monitor] checking" : `Normal prompt ${index}`,
+            text: index === 0
+              ? "A lightweight PwrAgent monitor subagent finished a long-running task.\nTask: Wait for CI\nOutcome: success\nCI passed"
+              : `Normal prompt ${index}`,
             createdAt: 1_000 + index,
           },
           {
@@ -243,12 +245,24 @@ describe("inferLegacyTaskMonitorMessageOrigins", () => {
           pagination: { supportsPagination: false, hasPreviousPage: false },
           threadStatus: "idle",
         },
+        subAgents: [
+          {
+            monitorId: "monitor-1",
+            task: "Wait for CI",
+            status: "success",
+            createdAt: 900,
+            updatedAt: 999,
+            completedAt: 999,
+            lastMessage: "CI passed",
+          },
+        ],
       });
       return idReads;
     };
 
     const smallReads = measureIdReads(50);
     const largeReads = measureIdReads(150);
+    expect(smallReads).toBeGreaterThan(0);
     // An O(U^2) findIndex dedup grows 9x for 3x user messages.
     expect(largeReads).toBeLessThanOrEqual(smallReads * 4);
   });
