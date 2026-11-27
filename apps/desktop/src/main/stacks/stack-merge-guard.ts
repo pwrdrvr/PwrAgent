@@ -37,6 +37,8 @@ export async function assertStackMergeAllowed(input: {
 }): Promise<void> {
   const { candidate } = input;
   let matched = false;
+  // Separate clones can carry overlapping catalogs for the same repository.
+  const merged = new Set<number>();
   for (const catalog of input.catalogs) {
     if (input.repository.provider !== "github" || catalog.repository.toLowerCase() !== githubStackRepository(input.repository)) continue;
     for (const stack of catalog.stacks) {
@@ -49,7 +51,6 @@ export async function assertStackMergeAllowed(input: {
       for (const branch of checked.slice(0, position)) {
         if (branch.pullRequest) input.observeLower?.(branch.pullRequest.number);
       }
-      const merged = new Set<number>();
       if (candidate.base === stack.trunk.branch) {
         for (let index = 0; index < position; index++) {
           const branch = checked[index]!;
@@ -58,8 +59,10 @@ export async function assertStackMergeAllowed(input: {
           if (!number) break;
           input.observeLower?.(number);
           checked[index] = { ...branch, pullRequest: { number } };
-          if (!(await input.readMerged(number))) break;
-          merged.add(number);
+          if (!merged.has(number)) {
+            if (!(await input.readMerged(number))) break;
+            merged.add(number);
+          }
         }
       }
       const block = catalogMergeBlock({ ...stack, branches: checked }, position, candidate.base, merged);
@@ -214,11 +217,7 @@ export async function checkGithubStackMerge(
   // stack orders them: its asynchronous merge lands them bottom first.
   if (nativeStack?.mergesWith?.length) return checked;
   const repo = `${repository.owner}/${repository.repo}`.toLowerCase();
-  const fromBranch = async (branch: string) => {
-    const params = new URLSearchParams({ state: "all", head: `${repository.owner}:${branch}`, per_page: "100" });
-    const parents = await get(`/pulls?${params}`) as GithubStackPull[];
-    return parents.filter((pr) => pr.head?.ref === branch && pr.head.repo?.full_name?.toLowerCase() === repo);
-  };
+  const layersByBranch = new Map<string, { base: string; number?: number }[]>();
   await assertStackMergeAllowed({
     repository, catalogs,
     observeLower,
@@ -232,8 +231,18 @@ export async function checkGithubStackMerge(
       }
     },
     findLayer: async (branch, bases) => {
-      const candidates = (await fromBranch(branch)).filter((pr) => pr.base?.ref && bases.includes(pr.base.ref)
-        && (pr.state === "open" || pr.merged_at));
+      let layers = layersByBranch.get(branch);
+      if (!layers) {
+        const params = new URLSearchParams({ state: "all", head: `${repository.owner}:${branch}`, per_page: "100" });
+        const parents = await get(`/pulls?${params}`) as GithubStackPull[];
+        layers = parents.flatMap((pr) => {
+          const base = pr.base?.ref;
+          return base && pr.head?.ref === branch && pr.head.repo?.full_name?.toLowerCase() === repo
+            && (pr.state === "open" || pr.merged_at) ? [{ base, number: pr.number }] : [];
+        });
+        layersByBranch.set(branch, layers);
+      }
+      const candidates = layers.filter((pr) => bases.includes(pr.base));
       return candidates.length === 1 ? candidates[0]?.number : undefined;
     },
     checkInferred: async () => {
