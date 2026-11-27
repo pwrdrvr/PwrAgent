@@ -1,0 +1,13 @@
+[package]
+name = "pwragent-mcp-stdio-relay"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.189"
+
+[target.'cfg(windows)'.dependencies]
+tokio = { version = "1", features = ["io-std", "io-util", "net", "rt", "time"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Threading", "Win32_System_Pipes", "Win32_System_IO", "Win32_Storage_FileSystem"] }

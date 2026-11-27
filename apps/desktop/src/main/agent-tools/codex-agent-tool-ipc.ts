@@ -3,7 +3,7 @@ import { chmod, mkdtemp, realpath, rmdir } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { nativeRelayPath } from "../native-relay-path";
+import { nativeStdioRelayPath } from "../native-relay-path";
 
 export const CODEX_AGENT_TOOL_SERVER_NAME = "pwragent_apps";
 export const CODEX_AGENT_TOOL_GRANT = "PWRAGENT_CODEX_MCP_GRANT";
@@ -62,7 +62,7 @@ export class CodexAgentToolIpc {
 
   constructor(
     private readonly onConnection: (socket: Socket, token: string, isAuthorized: () => boolean) => Promise<void>,
-    private readonly executable: () => string = nativeRelayPath,
+    private readonly executable: () => string = nativeStdioRelayPath,
   ) {}
 
   async configuration(token: string): Promise<CodexAgentToolStdioConfig> {

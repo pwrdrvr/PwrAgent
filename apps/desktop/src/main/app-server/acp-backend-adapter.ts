@@ -3661,6 +3661,17 @@ export class AcpBackendAdapter {
     }
     const readPreference = this.readJobMonitorCreationPreference;
     const observeJobMonitorCatalog = !!readPreference && verifiedJobMonitorCatalogBuild(agent);
+    const transport = this.createAcpTransport?.(agent) ?? new AcpStdioJsonRpcTransport({
+      launchDescriptor: agent.launchDescriptor,
+      observer: createCompositeJsonRpcObserver([
+        acpCapture?.observer,
+        createProtocolLogObserverFromEnv({ backend: agent.backendId }),
+      ]),
+    });
+    // The verified ACP launcher starts the MCP command under its local
+    // session worker. Other adapters and launch shapes keep their HTTP path.
+    const preferOwnedMcp = antigravity && agent.version === "1.5.18"
+      && agent.launchDescriptor.args.includes("--process-per-session") && !acpCapture;
     const client = new AcpAgentClient({
       backendId: agent.backendId,
       ...(antigravity ? {
@@ -3681,17 +3692,7 @@ export class AcpBackendAdapter {
       supportsTurnSteering: effectiveAcpAgentCapabilities(agent).steerTurn,
       rolloutStore: this.acpRolloutStore,
       store: this.acpSessionStore as AcpSessionStorage,
-      transport:
-        this.createAcpTransport?.(agent) ??
-        new AcpStdioJsonRpcTransport({
-          launchDescriptor: agent.launchDescriptor,
-          observer: createCompositeJsonRpcObserver([
-            acpCapture?.observer,
-            createProtocolLogObserverFromEnv({
-              backend: agent.backendId,
-            }),
-          ]),
-        }),
+      transport,
       onSessionUpdate: async ({
         assistantMessageItemId,
         completedAssistantMessage,
@@ -4306,16 +4307,24 @@ export class AcpBackendAdapter {
         }
         if (this.agentToolMcpServer) {
           try {
-            const registration = await this.agentToolMcpServer.registerClient({
+            const context = {
               backend: backendId,
               threadId: sessionId,
-              ...(!http ? { stdioFallback: true } : {}),
               ...(http && observeJobMonitorCatalog ? { observeJobMonitorCatalog: true } : {}),
+            };
+            const ownedProcess = http && preferOwnedMcp && transport instanceof AcpStdioJsonRpcTransport
+              ? transport.readOwnedMcpProcess() : undefined;
+            const native = ownedProcess
+              ? await this.agentToolMcpServer.registerOwnedClient?.(context, ownedProcess) : undefined;
+            const registration = native ?? await this.agentToolMcpServer.registerClient({
+              ...context, ...(!http ? { stdioFallback: true } : {}),
             });
             const readTool = registration.readTool;
             baseRegistration = {
-              servers: [http ? registration.server : buildAgentToolStdioServer(registration.server)],
+              servers: [registration.server.type === "stdio" || http
+                ? registration.server : buildAgentToolStdioServer(registration.server)],
               bindThread: registration.bindThread,
+              ...(native ? { release: native.revoke } : {}),
               ...(readTool ? {
                 hostApprovesToolCall: async (serverName: string, toolName: string, args?: unknown) => {
                   if (serverName !== registration.server.name) return false;

@@ -17,7 +17,7 @@ const supported = process.platform === "darwin"
   || (process.platform === "linux" && (kernel > 6 || (kernel === 6 && minor >= 5)));
 
 it.skipIf(!supported)("uses the native socket and preserves owner dispatch across a fork and runtime replacement", async () => {
-  const executable = inject("nativeHelperFixtures").mcpIpc!.relay;
+  const executable = inject("nativeHelperFixtures").mcpIpc!.stdioRelay!;
   const toolName = "get_current_turn_input_source";
   const dispatch = vi.fn(() => "desktop" as const);
   let activeThread: string | undefined = "parent";
@@ -119,3 +119,47 @@ function fixtureLauncher() {
     },
   };
 }
+
+it.skipIf(process.platform !== "darwin").each(["claude", "acp:antigravity"] as const)(
+  "authorizes the owned %s relay for only its bound active turn and revokes it",
+  async (backend) => {
+    const executable = inject("nativeHelperFixtures").mcpIpc!.stdioRelay!;
+    const dispatch = vi.fn(() => "desktop" as const);
+    const router = new AgentToolRouter([buildCurrentTurnInputSourceTool(dispatch)]);
+    let active = false;
+    const owner = new AgentToolMcpServer({
+      codexRelayExecutable: () => executable,
+      verifyCodexThreadId: true,
+      resolveCatalogs: async () => [{ id: "app_management", router }],
+      resolveCallContext: (context) => active && context.backend === backend && context.threadId === "owned-thread"
+        ? { backend, threadId: "owned-thread", turnId: "active-turn" } : undefined,
+    });
+    const runtime = fixtureLauncher();
+    const process = {
+      child: runtime.child,
+      isCurrent: () => runtime.child.exitCode === null && runtime.child.signalCode === null && !runtime.child.killed,
+    };
+    try {
+      const registration = await owner.registerOwnedClient({ backend }, process);
+      expect(registration?.server.type).toBe("stdio");
+      await runtime.connect(registration!.server);
+      const toolName = "get_current_turn_input_source";
+      expect((await runtime.client.listTools()).tools.map(({ name }) => name)).toEqual(backend === "claude"
+        ? [toolName] : [toolName, "tool_search", "call_pwragent_tool"]);
+      active = true;
+      await expect(runtime.client.callTool({ name: toolName })).resolves.toMatchObject({ isError: true });
+      registration!.bindThread("owned-thread");
+      await expect(runtime.client.callTool({ name: toolName })).resolves.toMatchObject({ structuredContent: { source: "desktop" } });
+      active = false;
+      await expect(runtime.client.callTool({ name: toolName })).resolves.toMatchObject({ isError: true });
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      const closed = once(runtime.child, "exit");
+      registration!.revoke();
+      await closed;
+      await expect(runtime.client.listTools()).rejects.toThrow();
+    } finally {
+      await owner.close();
+      runtime.child.kill();
+    }
+  },
+);

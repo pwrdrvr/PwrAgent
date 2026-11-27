@@ -1,6 +1,7 @@
 import { projectClaudeSessionThread } from "@pwragent/owner-core/claude-profile-storage";
 import { ThreadStartNotAdmittedError } from "@pwragent/owner-core/thread-creation-lifecycle";
 import { PWRAGENT_TOOL_NAMESPACE } from "@pwragent/shared/contracts/agent-tools";
+import type { ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -12,6 +13,7 @@ import type {
   SDKResultMessage, SDKUserMessage, SlashCommand, UserPromptSubmitHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
 import { loadClaudeAgentSdk } from "./claude-sdk";
+import type { OwnedAgentToolMcpRegistration } from "../agent-tools/agent-tool-mcp-server";
 import { isClaudeAuthenticationFailure } from "@pwragent/shared/claude-authentication";
 import { subAgentActivityChanges } from "@pwragent/shared/sub-agent-activity-lines";
 import type {
@@ -525,6 +527,7 @@ type LiveSession = {
   session: ClaudeSession;
   controller: AbortController;
   query?: Query;
+  ownedMcp?: OwnedAgentToolMcpRegistration;
   done?: Promise<void>;
   input: ClaudeInputStream;
   inputWrites: Promise<void>;
@@ -601,6 +604,7 @@ type ClaudeTurnParams = {
   executionMode?: ThreadExecutionMode; instructions?: string;
   readAgentMemory?: () => Promise<string | undefined>;
   mcpServers?: Options["mcpServers"];
+  registerOwnedMcp?: (child: ChildProcess, isCurrent: () => boolean) => Promise<OwnedAgentToolMcpRegistration | undefined>;
   strictMcpConfig?: boolean;
   /**
    * Names the agent tool catalog PwrAgent's MCP server lists now, such as a
@@ -1469,6 +1473,12 @@ export class ClaudeBackend {
       current.usesProviderAuth = sameConfigDir && env.ANTHROPIC_PROFILE === providerEnv.ANTHROPIC_PROFILE
         && env.HOME === providerEnv.HOME && env.USERPROFILE === providerEnv.USERPROFILE;
       const initializeMcp = supportsClaudeMcpInitialize(version);
+      const registerOwnedMcp = process.platform === "darwin" && config.mcpServers?.[PWRAGENT_TOOL_NAMESPACE]
+        ? params.registerOwnedMcp : undefined;
+      const initialMcpServers = registerOwnedMcp && config.mcpServers
+        ? Object.fromEntries(Object.entries(config.mcpServers).filter(([name]) => name !== PWRAGENT_TOOL_NAMESPACE))
+        : config.mcpServers;
+      let ownedChild: ChildProcess | undefined;
       // The thread id names its first SDK session. A rewind past the first
       // prompt leaves the thread with no session to resume, and that id is
       // taken, so the next session gets its own.
@@ -1479,7 +1489,10 @@ export class ClaudeBackend {
       const resumedSdkSessionId = session.ephemeral ? undefined : session.sdkSessionId ?? session.forkFromSdkSessionId;
       if (resumedSdkSessionId) current.resumed = { sdkSessionId: resumedSdkSessionId, fork: !session.sdkSessionId };
       const sdkOptions: Options = {
-        ...claudeHarnessOptions(executable, env),
+        ...claudeHarnessOptions(executable, env, registerOwnedMcp ? {
+          closing: () => controller.signal.aborted,
+          spawned: (child) => { ownedChild = child; },
+        } : undefined),
         cwd: session.cwd,
         ...(resumedSdkSessionId
           ? {
@@ -1503,7 +1516,7 @@ export class ClaudeBackend {
         ...(config.effort ? { effort: config.effort } : {}),
         abortController: controller,
         stderr: (data) => { current.stderr = (current.stderr + data).slice(-MAX_TURN_STDERR_LENGTH); },
-        ...(initializeMcp ? { mcpServers: config.mcpServers, mcpServersDelivery: "initialize" } : {}),
+        ...(initializeMcp ? { mcpServers: initialMcpServers, mcpServersDelivery: "initialize" } : {}),
         ...(config.strictMcpConfig ? { strictMcpConfig: true } : {}),
         // PwrAgent's gateway and forge policy ask for their own calls, so Claude
         // does not ask first.
@@ -1568,9 +1581,36 @@ export class ClaudeBackend {
       try {
         // The SDK buffers the prompt during initialize, so its query object
         // alone is not proof that Claude can accept the first message.
-        if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
-          await configureClaudeStartupMcp(current.query, config.mcpServers, initializeMcp, controller.signal,
-            this.options.mcpStartupTimeoutMs ?? CLAUDE_MCP_STARTUP_TIMEOUT_MS);
+        const mcpTimeout = this.options.mcpStartupTimeoutMs ?? CLAUDE_MCP_STARTUP_TIMEOUT_MS;
+        if (initialMcpServers && Object.keys(initialMcpServers).length > 0 && (initializeMcp || !registerOwnedMcp)) {
+          await configureClaudeStartupMcp(current.query, initialMcpServers, initializeMcp, controller.signal, mcpTimeout);
+        }
+        if (registerOwnedMcp && config.mcpServers) {
+          // Deliver the owned server only after the SDK's actual local child
+          // has been pinned. Modern initialize still delivers other servers.
+          if (!initializeMcp || !Object.keys(initialMcpServers ?? {}).length) {
+            await configureClaudeStartupMcp(current.query, {}, true, controller.signal, mcpTimeout);
+          }
+          const child = ownedChild;
+          const registration = child ? await registerOwnedMcp(child, () => !controller.signal.aborted
+            && ownedChild === child && !child.killed && child.exitCode === null && child.signalCode === null) : undefined;
+          if (registration) {
+            try {
+              await configureClaudeStartupMcp(current.query, {
+                ...config.mcpServers, [PWRAGENT_TOOL_NAMESPACE]: registration.server,
+              }, false, controller.signal, mcpTimeout);
+              const status = (await current.query.mcpServerStatus()).find(({ name }) => name === PWRAGENT_TOOL_NAMESPACE);
+              if (status?.status !== "connected") throw new Error("Claude did not connect the native PwrAgent MCP server.");
+              current.ownedMcp = registration;
+              current.onClosed.push(registration.revoke);
+            } catch {
+              registration.revoke();
+              controller.signal.throwIfAborted();
+            }
+          }
+          if (!current.ownedMcp) {
+            await configureClaudeStartupMcp(current.query, config.mcpServers, false, controller.signal, mcpTimeout);
+          }
         }
         if (config.jobMonitorCreationEnabled !== undefined) {
           // A startup status without a tool list gives no evidence of drift.
@@ -1733,7 +1773,10 @@ export class ClaudeBackend {
         live.config.permissionMode = config.permissionMode;
       }
       if (config.mcpKey !== live.config.mcpKey) {
-        await query.setMcpServers(config.mcpServers ?? {});
+        const servers = config.mcpServers ?? {};
+        await query.setMcpServers(live.ownedMcp && servers[PWRAGENT_TOOL_NAMESPACE]
+          ? { ...servers, [PWRAGENT_TOOL_NAMESPACE]: live.ownedMcp.server }
+          : servers);
         live.config.mcpServers = config.mcpServers;
         live.config.mcpKey = config.mcpKey;
       }

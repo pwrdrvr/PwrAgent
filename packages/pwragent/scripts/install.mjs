@@ -16,6 +16,14 @@ if (workerData?.kind === "pwragent-native-helper") {
   mkdirSync(helperDirectory, { recursive: true });
   buildMcpIpcRelay({ outputRoot: root, packaged: true, reuse: true,
     destination: path.join(helperDirectory, "mcp-ipc-relay") });
+  const { buildMcpStdioRelay } = await import("./build-mcp-stdio-relay.mjs");
+  try {
+    buildMcpStdioRelay({ outputRoot: root, packaged: true,
+      destination: path.join(root, "resources/mcp-stdio-relay/pwragent-mcp-stdio-relay") });
+  } catch (error) {
+    if (error.cause?.code !== "ENOENT") throw error;
+    console.warn("Cargo is unavailable. Native MCP stdio requires a Rust toolchain at Outpost install time.");
+  }
 } else {
   const { stageRuntime } = await import("./stage-runtime.mjs");
   // Both preparations use synchronous native probes. A worker lets the helper

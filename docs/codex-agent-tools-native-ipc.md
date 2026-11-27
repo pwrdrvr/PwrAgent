@@ -1,13 +1,13 @@
-# Prototype for Codex MCP over native IPC
+# PwrAgent tools over native MCP stdio
 
 [PR #4368](https://github.com/pwrdrvr/PwrAgent/pull/4368) introduced the
 default-off `pwragent_apps` experiment. The owner issued a loopback Streamable
 HTTP URL and a bearer grant for each thread. This follow-up issues a required
 stdio server configuration with an absolute relay command, a private endpoint
 argument, and an environment-scoped registration grant. The owner retains
-the MCP catalog, instructions, enumeration, and tool dispatcher. Claude, ACP,
-and the separate Codex PDF MCP server continue to use the existing HTTP entry
-point into the shared factory.
+the MCP catalog, instructions, enumeration, and tool dispatcher. Local
+Claude Code and the verified Antigravity ACP worker can use the same relay on
+macOS. The separate Codex PDF MCP server still uses HTTP.
 
 ## Transport comparison
 
@@ -16,7 +16,29 @@ point into the shared factory.
 | [PwrAgent connection bridge](../apps/desktop/src/main/mcp-connections/mcp-connection-bridge-entry.ts) and [gateway](../apps/desktop/src/main/mcp-connections/mcp-connection-gateway-service.ts) | The bridge is an MCP server for selected upstream connections. It mirrors discovery, tools, progress, and resources using grant-scoped RPC to the gateway. The gateway owns the upstream clients and session lifecycle. | Follow the gateway's short random endpoint and per-thread registration pattern. The agent-tool relay needs neither an SDK instance nor upstream RPC in the relay. |
 | [PwrSnap bundled relay](https://github.com/pwrdrvr/PwrSnap/blob/8686d6fb5626c364592a5f2960db9cd80d6df2ab/docs/mcp-third-party-agents.md) | Rust client and listener exchange a short greeting before passing bytes. The listener multiplexes connections over inherited stdio. Electron serves MCP and applies live consent. The build produces signed native resources for each platform. | Use the byte relay and private endpoint model. PwrAgent can listen in Node on Unix and pass only the connected descriptor to a short-lived identity probe. |
 | [PwrGit native relay](https://github.com/pwrdrvr/PwrGit/blob/c79d1ddeba52cc0f19f80c13c6c7a904fa22247f/docs/desktop-owned-mcp.md) | Builds on PwrSnap. Its Windows listener uses a protected SID-only DACL, rejects remote clients, reserves the first instance, and cancels outstanding I/O at teardown. Electron owns role grants and dispatch. | Use those owner-side controls for a future Windows listener. The native relay client already in PwrAgent has connected-server SID verification and overlapped pipe I/O. |
-| [PwrAgent packaged MCP IPC relay](../apps/desktop/native/mcp-ipc-relay/main.c) | A verified connection and byte pump for outgoing IPC HTTP, built by the existing desktop and Outpost resource paths. | Add a stdio mode with a versioned registration preamble and no stdout readiness byte. Retain the same Unix path, ACL, inode, and peer UID checks and the Windows connected pipe checks. The prototype adds no compiler, runtime dependency, or packaged binary. |
+| [PwrAgent MCP stdio relay](../apps/desktop/native/mcp-stdio-relay) | A Rust executable verifies a private Unix socket or Windows pipe and forwards stdio bytes after the registration preamble. | Reuse the same relay across providers. The existing C executable still serves HTTP IPC and the file and maintenance helpers. |
+
+The Rust crate records the PwrGit and PwrDisk MIT notices and the locked
+dependency notices. Desktop release preparation builds each target before
+signing. Outpost installs build the target from the packed Rust sources and
+lockfile. Outpost can still install without Cargo and use its existing HTTP
+and Dynamic Tools paths. A requested native configuration requires the relay.
+
+## Claude and ACP launch support
+
+- On macOS, PwrAgent obtains the actual Claude CLI child from the Agent SDK's
+  local spawn hook. It pins that child before delivering its owned MCP server
+  over the SDK control channel. If the proof or connection fails, Claude
+  receives the existing HTTP configuration. Other servers remain in their
+  normal SDK delivery path.
+- Antigravity ACP 1.5.18 with `--process-per-session` on macOS lets the owner pin
+  the local ACP process before sending `session/new` or `session/load`. The
+  session worker launches the relay under that process. The native grant
+  follows the session and is revoked when it closes or the root exits.
+- Other ACP builds, transports without an owned child, and full ACP protocol
+  captures use the existing HTTP registration or the stdio-to-HTTP bridge
+  selected by ACP capability. Managed reviews keep their own HTTP registration.
+  Linux and Windows Claude/ACP combinations use these existing paths.
 
 ## Admission and lifetime
 
@@ -27,7 +49,8 @@ point into the shared factory.
    with the existing native helper. The grant travels in the Codex launch
    environment. The grant stays out of command arguments and relay diagnostics,
    and the App Server protocol observer redacts MCP launch-environment values.
-2. The Codex desktop adapter binds the grant immediately before forwarding
+2. The provider adapter binds the grant before sending its MCP configuration.
+   The Codex desktop adapter does this immediately before forwarding
    the actual start, fork, or resume to the selected App Server generation.
    It takes the live child it owns from that generation's stdio transport.
    A native probe verifies that child belongs directly to this owner and
@@ -42,8 +65,8 @@ point into the shared factory.
    exited ancestor, a different runtime generation, or an unverifiable
    process observation cannot establish a session.
 4. Every MCP message stays scoped to the live grant and runtime. Tool
-   dispatch also requires a bound thread, the matching Codex
-   `_meta.threadId`, a unique active turn on that thread, and the owner's
+   dispatch also requires a bound thread, a unique active turn on that thread,
+   the matching `_meta.threadId` for Codex, and the owner's
    existing tool authorization. Initialization assigns the stdio stream a
    session identity for tools that key mutation admission by wire request
    ID. Acknowledgement-dependent effects wait for the owner socket write

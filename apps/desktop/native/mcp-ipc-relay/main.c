@@ -127,28 +127,17 @@ static DWORD WINAPI copy_bytes(void *arg) {
 }
 
 int wmain(int argc, wchar_t **argv) {
-  BOOL codex_stdio = argc == 3 && !wcscmp(argv[1], L"--codex-stdio");
   if (argc == 4 && !wcscmp(argv[1], L"--local-file-marker")) return local_file_marker(argv[2], argv[3]);
   if (argc == 3 && !wcscmp(argv[1], L"--maintenance-lock")) return file_lock(argv[2], 0);
   if (argc == 3 && !wcscmp(argv[1], L"--stack-lock")) return file_lock(argv[2], 1);
   if (argc == 4 && !wcscmp(argv[1], L"--stack-replace"))
     return MoveFileExW(argv[2], argv[3], MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ? 0 : 1;
   if (argc >= 3 && !wcscmp(argv[1], L"--maintenance-allocation")) return maintenance_allocation(argc - 2, argv + 2);
-  if (!codex_stdio && argc != 2) fail("expected one endpoint");
-  HANDLE pipe = verified_pipe(argv[codex_stdio ? 2 : 1]);
+  if (argc != 2) fail("expected one endpoint");
+  HANDLE pipe = verified_pipe(argv[1]);
   HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
   DWORD written;
-  if (codex_stdio) {
-    char greeting[64];
-    DWORD size = GetEnvironmentVariableA("PWRAGENT_CODEX_MCP_GRANT", greeting + 9, 44);
-    if (size != 43) fail("missing Codex MCP grant");
-    memcpy(greeting, "PWA-MCP1 ", 9);
-    greeting[52] = '\n';
-    HANDLE event = CreateEventW(NULL, TRUE, FALSE, NULL);
-    if (!event || !transfer(pipe, FALSE, TRUE, greeting, 53, &written, event) || written != 53)
-      fail("cannot write Codex MCP greeting");
-    CloseHandle(event);
-  } else if (!WriteFile(output, "\1", 1, &written, NULL) || written != 1) fail("parent closed");
+  if (!WriteFile(output, "\1", 1, &written, NULL) || written != 1) fail("parent closed");
   Copy up = { GetStdHandle(STD_INPUT_HANDLE), pipe, FALSE, TRUE };
   Copy down = { pipe, output, TRUE, FALSE };
   HANDLE worker = CreateThread(NULL, 0, copy_bytes, &up, 0, NULL);
@@ -272,8 +261,6 @@ static void check_peer(int fd) {
   if (uid != geteuid()) deny("connected socket peer belongs to another user");
 }
 
-#include "codex-peer.h"
-
 static int verified_socket(const char *path) {
   struct sockaddr_un addr;
   memset(&addr, 0, sizeof(addr));
@@ -336,19 +323,10 @@ int main(int argc, char **argv) {
   if (argc == 4 && !strcmp(argv[1], "--local-file-marker")) return local_file_marker(argv[2], argv[3]);
   if (argc == 3 && !strcmp(argv[1], "--maintenance-lock")) return file_lock(argv[2], 0);
   if (argc == 3 && !strcmp(argv[1], "--stack-lock")) return file_lock(argv[2], 1);
-  if (argc == 3 && !strcmp(argv[1], "--codex-root")) { codex_root(argv[2]); return 0; }
-  if (argc == 2 && !strcmp(argv[1], "--codex-peer")) { codex_ancestry(3); return 0; }
-  int codex_stdio = argc == 3 && !strcmp(argv[1], "--codex-stdio");
-  if (!codex_stdio && argc != 2) { errno = EINVAL; fail("expected one endpoint"); }
+  if (argc != 2) { errno = EINVAL; fail("expected one endpoint"); }
   signal(SIGPIPE, SIG_IGN);
-  int fd = verified_socket(argv[codex_stdio ? 2 : 1]);
-  if (codex_stdio) {
-    const char *grant = getenv("PWRAGENT_CODEX_MCP_GRANT");
-    if (!grant || strlen(grant) != 43) deny("missing Codex MCP grant");
-    char greeting[54];
-    snprintf(greeting, sizeof(greeting), "PWA-MCP1 %s\n", grant);
-    if (write(fd, greeting, 53) != 53) fail("cannot write Codex MCP greeting");
-  } else if (write(STDOUT_FILENO, "\1", 1) != 1) fail("parent closed");
+  int fd = verified_socket(argv[1]);
+  if (write(STDOUT_FILENO, "\1", 1) != 1) fail("parent closed");
   nonblocking(fd); nonblocking(STDIN_FILENO); nonblocking(STDOUT_FILENO);
   Buffer up = {{0}, 0, 0}, down = {{0}, 0, 0};
   for (;;) {

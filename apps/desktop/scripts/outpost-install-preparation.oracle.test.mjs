@@ -49,6 +49,9 @@ it("starts both preparations and joins the remaining owner when either one fails
         return options.destination;
       }
     `);
+    writeFileSync(join(scripts, "build-mcp-stdio-relay.mjs"), shared + `
+      export function buildMcpStdioRelay() { mark("stdio.ended"); }
+    `);
     writeFileSync(join(scripts, "stage-runtime.mjs"), shared + `
       import { setTimeout } from "node:timers/promises";
       const wait = async name => { while (!present(name)) await setTimeout(5); };
@@ -97,6 +100,7 @@ it("starts both preparations and joins the remaining owner when either one fails
     expect(result.ok).toBe(failure === "none");
     if (failure !== "none") expect(result.error.message).toContain(failure === "native" ? "modeled native failure" : "modeled Git failure");
     expect(existsSync(join(root, "native.ended"))).toBe(true);
+    expect(existsSync(join(root, "stdio.ended"))).toBe(failure !== "native");
     expect(existsSync(join(root, "git.ended"))).toBe(true);
   }
 });

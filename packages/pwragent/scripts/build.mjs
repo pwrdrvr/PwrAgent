@@ -13,10 +13,11 @@ const result = await buildHeadless({ outputDirectory: path.join(root, "dist"), p
   sourcemap, logLevel: sourcemap === false ? "warning" : "info" });
 await mkdir(path.join(root, "native/mcp-ipc-relay"), { recursive: true });
 await mkdir(path.join(root, "resources"), { recursive: true });
-for (const file of ["stage-runtime.mjs", "build-mcp-ipc-relay.mjs", "native-helper-cache.mjs"]) {
+for (const file of ["stage-runtime.mjs", "build-mcp-ipc-relay.mjs", "build-mcp-stdio-relay.mjs", "native-helper-cache.mjs"]) {
   await cp(new URL(`../../../apps/desktop/scripts/${file}`, import.meta.url), path.join(root, "scripts", file));
 }
 await cp(new URL("../../../apps/desktop/native/mcp-ipc-relay/", import.meta.url), path.join(root, "native/mcp-ipc-relay"), { recursive: true });
+await cp(new URL("../../../apps/desktop/native/mcp-stdio-relay/", import.meta.url), path.join(root, "native/mcp-stdio-relay"), { recursive: true });
 await cp(new URL("../../../apps/desktop/custom-git-runtime.json", import.meta.url), path.join(root, "resources/custom-git-runtime.json"));
 await cp(new URL("../../../apps/desktop/resources/embedded-git/", import.meta.url), path.join(root, "resources/git-notices"), { recursive: true });
 // Development builds also stage the current host. npm's files list deliberately

@@ -12707,6 +12707,11 @@ export class DesktopBackendRegistry {
             instructions,
             readAgentMemory: this.readAgentMemoryContext.bind(this, { backend: params.backend, threadId: params.threadId }),
             mcpServers,
+            ...(owned && this.agentToolMcpServer?.registerOwnedClient ? {
+              registerOwnedMcp: async (child, isCurrent) => await this.agentToolMcpServer?.registerOwnedClient?.({
+                backend: "claude", threadId: params.threadId,
+              }, { child, isCurrent }),
+            } : {}),
             ...(this.subAgentMonitorService.taskMonitorForThread(params) ? { strictMcpConfig: true } : {}),
             // PwrAgent's server lists tools by this member's containment.
             ...(owned ? { agentToolCatalogKey: localMemberRole() } : {}),

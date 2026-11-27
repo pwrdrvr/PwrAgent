@@ -96,6 +96,16 @@ extraResources:
     to: mcp-ipc-relay
     filter:
       - "mcp-ipc-relay{,.exe}"
+  - from: build/mcp-stdio-relay/packaged
+    to: mcp-stdio-relay
+    filter:
+      - "pwragent-mcp-stdio-relay{,.exe}"
+  - from: native/mcp-stdio-relay
+    to: mcp-stdio-relay
+    filter:
+      - "LICENSE"
+      - "LICENSE-PwrDisk"
+      - "THIRD_PARTY_LICENSES"
   - from: node_modules/dugite/git
     to: git
   - from: LICENSE

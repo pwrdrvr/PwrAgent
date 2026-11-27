@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { stageNativePrebuilds } from "./stage-native-prebuilds.mjs";
 import { stageRuntime } from "./stage-runtime.mjs";
 import { buildMcpIpcRelay } from "./build-mcp-ipc-relay.mjs";
+import { buildMcpStdioRelay, mcpStdioRelayName, stagedMcpStdioRelay } from "./build-mcp-stdio-relay.mjs";
 import { bundledGitFiles } from "./verify-bundled-git.mjs";
 
 const ARCH_NAMES = { 0: "ia32", 1: "x64", 2: "arm", 3: "arm64", 4: "universal" };
@@ -20,6 +21,14 @@ export default async function beforePack(context) {
   }
   const appDir = context.packager.info.appDir;
   buildMcpIpcRelay({ arch, outputRoot: appDir, packaged: true });
+  const relayInput = stagedMcpStdioRelay(appDir, platform, arch);
+  if (existsSync(relayInput)) {
+    const relayDirectory = join(appDir, "build/mcp-stdio-relay/packaged");
+    mkdirSync(relayDirectory, { recursive: true });
+    copyFileSync(relayInput, join(relayDirectory, mcpStdioRelayName(platform)));
+  } else {
+    buildMcpStdioRelay({ arch, outputRoot: appDir, packaged: true });
+  }
   stageNativePrebuilds({ appDir, platform, arch });
   const dugiteDir = join(appDir, "node_modules", "dugite");
   if (platform !== "win32") {

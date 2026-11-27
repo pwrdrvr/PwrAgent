@@ -23,6 +23,10 @@ const lock = path.join(temporary, "native-helper.lock"); fs.writeFileSync(lock, 
 const relay = spawnSync(path.join(installedRoot, "resources/mcp-ipc-relay/mcp-ipc-relay"), ["--maintenance-lock", lock], { input: "", encoding: "utf8" });
 assert.equal(relay.status, 0, relay.error?.message ?? relay.stderr);
 assert.equal(relay.stdout, "\x01");
+const stdioRelay = spawnSync(path.join(installedRoot, "resources/mcp-stdio-relay/pwragent-mcp-stdio-relay"),
+  ["--version"], { encoding: "utf8" });
+assert.equal(stdioRelay.status, 0, stdioRelay.error?.message ?? stdioRelay.stderr);
+assert.match(stdioRelay.stdout, /^pwragent-mcp-stdio-relay \S+\n$/u);
 
 const database = new (installed("better-sqlite3"))(":memory:");
 assert.equal(database.prepare("SELECT 42 AS n").get().n, 42); database.close();

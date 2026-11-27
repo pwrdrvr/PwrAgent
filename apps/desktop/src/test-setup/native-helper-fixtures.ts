@@ -16,7 +16,7 @@ const consumers = {
 const pipeProbeTest = path.join(desktop, "scripts/windows-pipe-observation.test.mjs");
 type Consumer = keyof typeof consumers | "windowsPipeProbe";
 type WindowsConsumer = "windowsGitJobLauncher" | "windowsPipeProbe";
-type HelperPaths = { relay: string; identity?: string };
+type HelperPaths = { relay: string; identity?: string; stdioRelay?: string };
 type FixturePaths = Partial<Record<Exclude<Consumer, WindowsConsumer>, HelperPaths> & Record<WindowsConsumer, string>>;
 
 declare module "vitest" {
@@ -34,18 +34,25 @@ export function nativeHelperConsumers(files: readonly string[], platform = proce
   return required;
 }
 
-async function buildHelpers(root: string, identity: boolean): Promise<HelperPaths> {
+async function buildHelpers(root: string, identity: boolean, stdio: boolean): Promise<HelperPaths> {
   const builder = pathToFileURL(path.join(desktop, "scripts/build-mcp-ipc-relay.mjs")).href;
+  const stdioBuilder = pathToFileURL(path.join(desktop, "scripts/build-mcp-stdio-relay.mjs")).href;
   await runNativeFixtureCommand(process.execPath, ["--input-type=module", "-e", `
     import { buildMcpIpcRelay } from ${JSON.stringify(builder)};
     buildMcpIpcRelay({ outputRoot: process.argv[1] });
     if (${identity}) buildMcpIpcRelay({ outputRoot: process.argv[1], identityTest: true });
+    if (${stdio}) {
+      const { buildMcpStdioRelay } = await import(${JSON.stringify(stdioBuilder)});
+      buildMcpStdioRelay({ outputRoot: process.argv[1] });
+    }
   `, root]);
   const directory = path.join(root, "build/mcp-ipc-relay", `${process.platform}-${process.arch}`);
   const suffix = process.platform === "win32" ? ".exe" : "";
   return {
     relay: path.join(directory, `mcp-ipc-relay${suffix}`),
     ...(identity ? { identity: path.join(directory, `mcp-ipc-identity-test${suffix}`) } : {}),
+    ...(stdio ? { stdioRelay: path.join(root, "build/mcp-stdio-relay", `${process.platform}-${process.arch}`,
+      `pwragent-mcp-stdio-relay${suffix}`) } : {}),
   };
 }
 
@@ -66,7 +73,7 @@ async function prepareHelper(root: string, consumer: Consumer): Promise<FixtureP
     await access(executable);
     return { windowsPipeProbe: executable };
   }
-  return { [consumer]: await buildHelpers(root, consumer === "mcpIpc" || consumer === "markerProbe") };
+  return { [consumer]: await buildHelpers(root, consumer === "mcpIpc" || consumer === "markerProbe", consumer === "mcpIpc") };
 }
 
 // A selected suite receives completed, run-owned outputs. No worker hook owns

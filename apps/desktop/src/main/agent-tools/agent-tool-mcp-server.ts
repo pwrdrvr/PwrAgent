@@ -19,7 +19,7 @@ import { type AppServerBackendKind } from "@pwragent/shared/contracts/normalized
 import { getMainLogger } from "../log.js";
 import { lazyModule } from "../lazy-module.js";
 import { loadedMcpTypes, mcpServer as mcpServerSdk, mcpServerStdio, mcpServerStreamableHttp, mcpTypes } from "../mcp-connections/mcp-sdk.js";
-import { CodexAgentToolIpc, type CodexAgentToolStdioConfig } from "./codex-agent-tool-ipc.js";
+import { CodexAgentToolIpc, type CodexAgentToolStdioConfig, type OwnedCodexProcess } from "./codex-agent-tool-ipc.js";
 import type { ResolvedAgentToolCatalog } from "./agent-tool-catalog-registry.js";
 import { agentToolFailure } from "./agent-tool-definition.js";
 import {
@@ -143,6 +143,10 @@ export type AgentToolHttpMcpServerConfig = {
 
 export type AgentToolMcpRegistration = AgentToolRegistration & { server: AgentToolHttpMcpServerConfig };
 export type CodexAgentToolMcpRegistration = AgentToolRegistration & { server: CodexAgentToolStdioConfig };
+export type OwnedAgentToolMcpRegistration = AgentToolRegistration & {
+  server: CodexAgentToolStdioConfig & { name: string; type: "stdio" };
+  revoke: () => void;
+};
 
 type AgentToolRegistration = {
   bindThread: (threadId: string) => void;
@@ -159,6 +163,10 @@ export type AgentToolMcpServerLike = {
     context: AgentToolMcpClientContext,
   ): Promise<AgentToolMcpRegistration>;
   registerCodexClient?(context: AgentToolMcpClientContext): Promise<CodexAgentToolMcpRegistration>;
+  registerOwnedClient?(
+    context: AgentToolMcpClientContext,
+    owned: OwnedCodexProcess,
+  ): Promise<OwnedAgentToolMcpRegistration | undefined>;
   close(): Promise<void>;
 };
 
@@ -220,6 +228,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
   private readonly codexStdioTokens = new Set<string>();
   private readonly tokensByBoundThread = new Map<string, string>();
   private readonly jobMonitorListings = new Map<string, JobMonitorCatalogListing>();
+  private readonly ownedClientReleases = new WeakMap<OwnedCodexProcess["child"], Set<() => void>>();
   private readonly sessionSigningKey = randomBytes(32);
   private readonly connectionsWithoutRequests = new Set<Socket>();
   /** Ends each open standalone event stream (a client's GET). */
@@ -283,7 +292,48 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
     }
   }
 
-  private registration(token: string, listing?: JobMonitorCatalogListing, transport: "http" | "stdio" = "http"): AgentToolRegistration {
+  async registerOwnedClient(
+    context: AgentToolMcpClientContext,
+    owned: OwnedCodexProcess,
+  ): Promise<OwnedAgentToolMcpRegistration | undefined> {
+    if (this.closed || process.platform !== "darwin" || context.backend === "codex") return undefined;
+    const token = randomBytes(32).toString("base64url");
+    const threadId = context.threadId?.trim() || undefined;
+    this.contextsByToken.set(token, { ...context, threadId });
+    this.codexStdioTokens.add(token);
+    const listing = context.observeJobMonitorCatalog ? { scope: randomUUID() } : undefined;
+    if (listing) this.jobMonitorListings.set(token, listing);
+    const releases = this.ownedClientReleases.get(owned.child) ?? new Set<() => void>();
+    if (!this.ownedClientReleases.has(owned.child)) {
+      this.ownedClientReleases.set(owned.child, releases);
+      owned.child.once("close", () => {
+        for (const release of releases) release();
+        this.ownedClientReleases.delete(owned.child);
+      });
+    }
+    const revoke = () => {
+      releases.delete(revoke);
+      this.contextsByToken.delete(token);
+      this.codexStdioTokens.delete(token);
+      this.jobMonitorListings.delete(token);
+      this.codexIpc.revoke(token);
+    };
+    releases.add(revoke);
+    try {
+      const server = await this.codexIpc.configuration(token);
+      await this.codexIpc.bindRuntime(token, owned);
+      return {
+        server: { name: PWRAGENT_TOOL_NAMESPACE, type: "stdio", ...server },
+        ...this.registration(token, listing, null),
+        revoke,
+      };
+    } catch {
+      revoke();
+      return undefined;
+    }
+  }
+
+  private registration(token: string, listing?: JobMonitorCatalogListing, transport: "http" | "stdio" | null = "http"): AgentToolRegistration {
     return {
       ...(listing ? {
         readListedJobMonitorCreation: () => this.jobMonitorListings.get(token) === listing ? listing.enabled : undefined,
@@ -321,9 +371,9 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
           previousThreadId: current.threadId ?? null,
           threadId: normalizedThreadId,
         });
-        const key = boundThreadKey(bound, normalizedThreadId, transport);
-        if (!this.tokensByBoundThread.has(key)) {
-          this.tokensByBoundThread.set(key, token);
+        if (transport) {
+          const key = boundThreadKey(bound, normalizedThreadId, transport);
+          if (!this.tokensByBoundThread.has(key)) this.tokensByBoundThread.set(key, token);
         }
       },
     };
@@ -702,6 +752,7 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
       token,
       sessionNonce: randomUUID(),
       disconnectSignal: disconnected.signal,
+      observedListing: this.jobMonitorListings.get(token),
       isAuthorized,
       responseFlushed: (id) => {
         const flush = createResponseFlush();
