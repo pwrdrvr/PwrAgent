@@ -1,10 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, type ReactNode } from "react";
 import type { BackendSummary } from "@pwragent/shared/contracts/backend";
 import { usageLimitProviderForBackend } from "@pwragent/shared/contracts/usage-activity";
 import { GaugeIcon, PopoutIcon } from "../../../icons";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   describeRateLimitRow,
+  formatUsedPercent,
   formatBackendPlanType,
   isCreditsRateLimit,
   isIndividualRateLimit,
@@ -19,14 +20,14 @@ import {
   usagePaceAccountKey,
   usagePaceRefreshKey,
 } from "../../federation-activity/useLocalUsagePace";
-import { describeLimitPace } from "../../federation-activity/usage-activity-presentation";
+import { describeLimitPace, limitPaceOutcomePhrases } from "../../federation-activity/usage-activity-presentation";
 import {
   limitSeriesFor,
   limitUsageDropped,
   type LimitAccount,
 } from "../../federation-activity/usage-limits";
 import { capLatchSample, fiveHourLatchKey, fiveHourLatches, type FiveHourSample } from "./five-hour-latch";
-import { RateLimitRow } from "./RateLimitRow";
+import { limitRowPace } from "./limit-pace";
 
 type PeekDesktopApi = Pick<DesktopApi, "openUsageActivity" | "readUsageActivity">;
 
@@ -379,11 +380,21 @@ export function ProviderGaugePeekCard(props: {
 }
 
 /**
- * The panel's limit row under a window-only label in one fixed column, so
- * every provider's bar starts at the same edge and runs the same width. The
- * panel's own label (the scope and "limit" too) stays on the panel.
+ * One limit in the peek's narrow card, laid out so nothing wraps mid-phrase:
+ *
+ *   WEEKLY  [bar...........] 53%
+ *           resets Tue 6:00 AM
+ *           +0.7%/h hits 100% Mon 3 PM,
+ *           14 h 55 m before the reset
+ *
+ * The window label, the bar and the percent share the first line, in fixed
+ * columns, so every bar in the peek starts and ends at the same edges. The
+ * count and reset take the next line, and the pace the one after. Each
+ * phrase is unbreakable, so a line breaks only between them: a time never
+ * loses its "PM" to the next line. A row with no bar (a credit balance)
+ * shows its value beside the label instead.
  */
-function PeekLimitRow(props: {
+export function PeekLimitRow(props: {
   window: string;
   limit: BackendRateLimitSummary;
   now: number;
@@ -391,12 +402,63 @@ function PeekLimitRow(props: {
   /** Out, or on pace to run out before the reset. */
   warning?: boolean;
 }) {
+  const row = describeRateLimitRow(props.limit, props.now);
+  const pace = limitRowPace(props.limit, row.usedPercent, props.account, props.now);
+  const used = row.usedPercent === undefined ? undefined : Math.min(100, Math.max(0, row.usedPercent));
+  const projected = pace?.projectedPercent;
+  const short = pace?.described.short ?? false;
+  // A count ("98 of 100 used") says more than its percent, on the detail line.
+  const count = used !== undefined && row.figure && !row.figure.endsWith("%")
+    ? `${row.figure} ${row.text ?? ""}`.trim()
+    : undefined;
+  const details = [count, row.reset].filter((detail): detail is string => Boolean(detail));
   return (
     <div className={`provider-peek__limit${props.warning ? " is-warning" : ""}`}>
       <span className="provider-peek__window">{props.window}</span>
-      <dl className="backend-status-list__metadata-grid provider-peek__stat">
-        <RateLimitRow limit={props.limit} now={props.now} account={props.account} />
-      </dl>
+      {used !== undefined ? (
+        <>
+          <span className="backend-status-list__meter provider-peek__bar" aria-hidden="true">
+            <i style={{ width: `${used}%` }} />
+            {projected !== undefined && projected > used ? (
+              <s
+                className={short ? "is-short" : undefined}
+                style={{ left: `${used}%`, width: `${projected - used}%` }}
+              />
+            ) : null}
+          </span>
+          <b className="backend-status-list__figure provider-peek__percent">{formatUsedPercent(used)}%</b>
+        </>
+      ) : (
+        <span className="provider-peek__value">
+          {row.figure ? <b className="backend-status-list__figure">{row.figure}</b> : null}
+          {row.figure && row.text ? " " : null}
+          {row.text}
+        </span>
+      )}
+      {details.length ? (
+        <span className="provider-peek__detail">
+          {details.map((detail, index) => (
+            <Fragment key={`${index}:${detail}`}>
+              {index ? " " : null}
+              <span className="provider-peek__phrase">
+                {detail}
+                {index < details.length - 1 ? " ·" : null}
+              </span>
+            </Fragment>
+          ))}
+        </span>
+      ) : null}
+      {pace && pace.sentence ? (
+        <span className={`usage-pace provider-peek__pace${short ? " is-short" : ""}`}>
+          <span>{pace.described.rate}</span>
+          {limitPaceOutcomePhrases(pace.described.projection, pace.series.latest, props.now).map((phrase) => (
+            <Fragment key={phrase}>
+              {" "}
+              <span className="provider-peek__phrase">{phrase}</span>
+            </Fragment>
+          ))}
+        </span>
+      ) : null}
     </div>
   );
 }

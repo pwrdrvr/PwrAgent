@@ -10625,16 +10625,23 @@ button.stack-display__thread,
   font-weight: 600;
 }
 
-/* One fixed window column, the same for every provider, so every bar
-   shares its left edge and width. "INDIVIDUAL", a cap's label, is the
-   longest word (60px at 10px bold) and keeps the 10px "WEEKLY" had. A stat
-   line too long for the column beside it wraps above the bar, never beside
-   a narrower one. */
+/* One limit: the window label, its bar and its percent on one line, in
+   fixed columns, so every bar in the peek starts and ends at the same
+   edges. "INDIVIDUAL", a cap's label, is the longest word (60px at 10px
+   bold) and keeps the 10px "WEEKLY" had; "100%" is the widest percent.
+   The count and reset take the next line and the pace the one after, each
+   made of unbreakable phrases, so a line breaks only between phrases and a
+   time never loses its "PM" to the next line. */
 .provider-peek__limit {
   display: grid;
-  grid-template-columns: 70px minmax(0, 1fr);
-  align-items: baseline;
-  margin: 4px 0 0 13px;
+  grid-template-columns: 70px minmax(0, 1fr) 34px;
+  column-gap: 8px;
+  row-gap: 3px;
+  align-items: center;
+  margin: 6px 0 0 13px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .provider-peek__window {
@@ -10646,20 +10653,59 @@ button.stack-display__thread,
   white-space: nowrap;
 }
 
-.provider-peek__stat {
-  display: block;
-  grid-column: auto;
-}
-
 /* A 5h row on pace to run out before its reset, or a cap that ran out. */
 .provider-peek__limit.is-warning .provider-peek__window {
   color: var(--status-warning-text);
 }
 
-/* The panel's own label names the scope and "limit"; the window column
-   above replaces it. */
-.provider-peek__stat dt {
-  display: none;
+.backend-status-list__meter.provider-peek__bar {
+  margin-top: 0;
+}
+
+.provider-peek__percent {
+  justify-self: end;
+  white-space: nowrap;
+}
+
+/* A row with no bar, such as a credit balance: its value beside the label. */
+.provider-peek__value,
+.provider-peek__detail,
+.usage-pace.provider-peek__pace {
+  grid-column: 2 / -1;
+}
+
+.provider-peek__value {
+  white-space: nowrap;
+}
+
+/* Plain inline text, so phrases sit a word space apart and a line can
+   break only at the spaces between them. */
+.provider-peek__detail {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.usage-pace.provider-peek__pace {
+  display: block;
+  line-height: 1.4;
+}
+
+.usage-pace.provider-peek__pace > span:first-child {
+  margin-right: 2px;
+}
+
+.provider-peek__phrase {
+  white-space: nowrap;
+}
+
+/* The pace line's phrases follow its rate chip; `.usage-pace > span` styles
+   only the chip. */
+.usage-pace.provider-peek__pace > .provider-peek__phrase {
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
 }
 
 .provider-peek__none {
