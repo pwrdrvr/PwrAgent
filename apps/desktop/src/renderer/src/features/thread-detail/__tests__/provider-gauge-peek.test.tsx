@@ -231,6 +231,81 @@ describe("AI provider gauge peek", () => {
     });
   });
 
+  // A Codex business account's Individual limit has no window, so it is no
+  // allowance's row; the peek used to lead with it as the fullest limit.
+  describe("a provider's Individual cap", () => {
+    const codex = (individualUsed: number) => backend("codex", "OpenAI", [
+      { name: "5h limit", usedPercent: 10, windowMinutes: 300 },
+      { name: "Weekly limit", usedPercent: 20, windowMinutes: 10_080 },
+      { name: "Individual limit", used: individualUsed, limit: 100 },
+    ]);
+    const panel = (backends: BackendSummary[]) => (
+      <ThreadContextPanel
+        activeTab="info"
+        backends={backends}
+        pinned={false}
+        thread={thread}
+        onActiveTabChange={vi.fn()}
+      />
+    );
+    const windows = (shown: HTMLElement) =>
+      [...shown.querySelectorAll(".provider-peek__window")].map((node) => node.textContent);
+    async function closePeek(): Promise<void> {
+      move(gauge(), document.body);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(HOVER_TRANSITION_GRACE_MS * 2);
+      });
+      expect(peek()).toBeNull();
+    }
+
+    it("leads its provider at 98 of 100 used, and the provider leads the peek", async () => {
+      mockLayout();
+      render(panel([BACKENDS[2]!, codex(98)]));
+      const shown = await openPeek();
+      const providers = [...shown.querySelectorAll<HTMLElement>(".provider-peek__provider")];
+      expect(providers.map((provider) => provider.querySelector(".provider-peek__name")!.textContent))
+        .toEqual(["OpenAI", "Claude"]);
+      // Still in the one window column, so its bar lines up with the rest.
+      expect(windows(providers[0]!)).toEqual(["Individual", "Weekly"]);
+      const rows = providers[0]!.querySelectorAll(".provider-peek__limit");
+      expect(rows[0]).toHaveTextContent("98 of 100 used");
+      expect(rows[0]).not.toHaveClass("is-warning");
+      expect(rows[1]).toHaveTextContent("20% used");
+    });
+
+    it("shows at 80%, holds between the bounds, and hides below 60%", async () => {
+      mockLayout();
+      const view = render(panel([codex(70)]));
+      // Never at risk yet: the band alone does not show it.
+      expect(windows(await openPeek())).toEqual(["Weekly"]);
+      await closePeek();
+      view.rerender(panel([codex(85)]));
+      expect(windows(await openPeek())).toEqual(["Individual", "Weekly"]);
+      await closePeek();
+      view.rerender(panel([codex(70)]));
+      expect(windows(await openPeek())).toEqual(["Individual", "Weekly"]);
+      await closePeek();
+      view.rerender(panel([codex(59)]));
+      expect(windows(await openPeek())).toEqual(["Weekly"]);
+    });
+
+    it("wears the warning tone once the cap has run out", async () => {
+      mockLayout();
+      render(panel([codex(100)]));
+      const rows = (await openPeek()).querySelectorAll(".provider-peek__limit");
+      expect(rows[0]).toHaveClass("is-warning");
+      expect(rows[1]).not.toHaveClass("is-warning");
+    });
+
+    it("stays the fullest limit's row for a provider with no window", async () => {
+      mockLayout();
+      render(panel([backend("codex", "OpenAI", [{ name: "Individual limit", used: 40, limit: 100 }])]));
+      const shown = await openPeek();
+      expect(windows(shown)).toHaveLength(1);
+      expect(shown).toHaveTextContent("40 of 100 used");
+    });
+  });
+
   it("names the pools as subheaders, and the rows by their window alone", async () => {
     mockLayout();
     render(

@@ -10625,13 +10625,14 @@ button.stack-display__thread,
   font-weight: 600;
 }
 
-/* One fixed window column ("WEEKLY" is the longest word), the same for
-   every provider, so every bar shares its left edge and width. A stat line
-   too long for the column beside it wraps above the bar, never beside a
-   narrower one. */
+/* One fixed window column, the same for every provider, so every bar
+   shares its left edge and width. "INDIVIDUAL", a cap's label, is the
+   longest word (60px at 10px bold) and keeps the 10px "WEEKLY" had. A stat
+   line too long for the column beside it wraps above the bar, never beside
+   a narrower one. */
 .provider-peek__limit {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr);
+  grid-template-columns: 70px minmax(0, 1fr);
   align-items: baseline;
   margin: 4px 0 0 13px;
 }
@@ -10650,7 +10651,7 @@ button.stack-display__thread,
   grid-column: auto;
 }
 
-/* A 5h row on pace to run out before its reset. */
+/* A 5h row on pace to run out before its reset, or a cap that ran out. */
 .provider-peek__limit.is-warning .provider-peek__window {
   color: var(--status-warning-text);
 }

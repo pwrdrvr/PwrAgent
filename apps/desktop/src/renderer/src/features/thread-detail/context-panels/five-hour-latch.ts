@@ -8,6 +8,9 @@
  * - between the two, and while the projection is unknown, it keeps its state;
  * - a new window (the reset moved) starts hidden.
  *
+ * A provider's cap with no window (Codex's Individual limit) latches the same
+ * way through `capLatchSample`.
+ *
  * The state lives here, in memory, not in the peek, which unmounts on every
  * hover-out. A restart starts every scope hidden.
  */
@@ -37,6 +40,14 @@ export type FiveHourSample = {
 };
 
 export type FiveHourLatch = { shown: boolean; resetAt?: number };
+
+/**
+ * A cap's reading. A cap has no pace, so where it lands is where it is: it
+ * shows at 80% used and hides only below 60% used.
+ */
+export function capLatchSample(usedPercent: number, resetAt?: number): FiveHourSample {
+  return { usedPercent, projectedPercent: usedPercent, ...(resetAt === undefined ? {} : { resetAt }) };
+}
 
 /** A reset this far from the last one starts a new window. */
 function isNewWindow(latch: FiveHourLatch, resetAt: number | undefined): boolean {

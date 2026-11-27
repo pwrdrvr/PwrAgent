@@ -254,6 +254,11 @@ export function isSparkRateLimit(limit: BackendRateLimitSummary): boolean {
   return isSparkName(limit.limitId) || isSparkName(limit.name);
 }
 
+/** A Codex business account's own cap, which has no window. */
+export function isIndividualRateLimit(limit: BackendRateLimitSummary): boolean {
+  return splitRateLimitName(limit.name).label === "Individual limit";
+}
+
 function isCreditsRateLimit(limit: BackendRateLimitSummary): boolean {
   return limit.windowKey === "credits"
     || limit.limitId?.toLowerCase() === "credits"

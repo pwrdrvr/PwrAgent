@@ -1,6 +1,7 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
+  capLatchSample,
   createFiveHourLatchStore,
   type FiveHourSample,
 } from "../context-panels/five-hour-latch";
@@ -95,6 +96,20 @@ describe("the 5h row's latch", () => {
     // So is Claude's stream rounding the snapshot's 14:07 up to 15:00.
     expect(run([...projected(85), { usedPercent: 12, projectedPercent: 70, resetAt: T0 + 53 * 60_000 }]))
       .toEqual([true, true]);
+  });
+
+  it("latches a cap on its used percent: on at 80, off below 60", () => {
+    fc.assert(fc.property(fc.array(fc.integer({ min: 0, max: 100 }), { maxLength: 40, size: "max" }), (used) => {
+      const shown = run(used.map((percent) => capLatchSample(percent)));
+      let expected = false;
+      used.forEach((percent, index) => {
+        if (percent >= 80) expected = true;
+        else if (percent < 60) expected = false;
+        expect(shown[index]).toBe(expected);
+      });
+    }));
+    // Codex's business account at 98 of 100, then a raised cap.
+    expect(run([98, 70, 59].map((percent) => capLatchSample(percent)))).toEqual([true, true, false]);
   });
 
   it("keeps each scope's state apart", () => {

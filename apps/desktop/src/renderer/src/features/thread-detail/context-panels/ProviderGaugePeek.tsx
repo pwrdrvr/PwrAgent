@@ -6,6 +6,7 @@ import type { DesktopApi } from "../../../lib/desktop-api";
 import {
   describeRateLimitRow,
   formatBackendPlanType,
+  isIndividualRateLimit,
   selectVisibleRateLimits,
   type BackendRateLimitSummary,
 } from "../../../lib/backend-status-format";
@@ -23,7 +24,7 @@ import {
   limitUsageDropped,
   type LimitAccount,
 } from "../../federation-activity/usage-limits";
-import { fiveHourLatchKey, fiveHourLatches, type FiveHourSample } from "./five-hour-latch";
+import { capLatchSample, fiveHourLatchKey, fiveHourLatches, type FiveHourSample } from "./five-hour-latch";
 import { RateLimitRow } from "./RateLimitRow";
 
 type PeekDesktopApi = Pick<DesktopApi, "openUsageActivity" | "readUsageActivity">;
@@ -44,11 +45,24 @@ export type ProviderPeekScope = {
   fiveHour?: BackendRateLimitSummary;
 };
 
+/**
+ * A provider's cap with no window, such as a Codex business account's
+ * Individual limit, shown above its allowances while at risk.
+ */
+export type ProviderPeekCap = {
+  /** The row label: "Individual". */
+  window: string;
+  limit: BackendRateLimitSummary;
+  usedPercent: number;
+};
+
 /** One provider in the peek: a line per allowance, or none reported. */
 export type ProviderPeekEntry = {
   backend: BackendSummary;
+  /** Its caps at risk; the latch decides, as for a 5h row. */
+  caps: ProviderPeekCap[];
   scopes: ProviderPeekScope[];
-  /** The fullest shown allowance, which orders the providers. */
+  /** The fullest shown allowance or cap, which orders the providers. */
   usedPercent?: number;
 };
 
@@ -63,7 +77,10 @@ function chartableBackends(backends: readonly BackendSummary[]): BackendSummary[
  * one; the 5h windows stay on the AI providers panel. A provider whose limits
  * have no window (a credit balance) shows its fullest one instead.
  */
-function providerPeekScopes(backend: BackendSummary, now: number): ProviderPeekScope[] {
+function providerPeekScopes(
+  backend: BackendSummary,
+  now: number,
+): { scopes: ProviderPeekScope[]; caps: ProviderPeekCap[] } {
   const visible = selectVisibleRateLimits(backend);
   // The panel's filter, in the provider's own order: Antigravity's pools
   // read as it reports them, not as the panel sorts its rows.
@@ -71,7 +88,7 @@ function providerPeekScopes(backend: BackendSummary, now: number): ProviderPeekS
   const scopes = groupRateLimitsByScope((backend.rateLimits ?? []).filter((limit) => shown.has(limit)));
   const usedPercentOf = (limit: BackendRateLimitSummary) => describeRateLimitRow(limit, now).usedPercent;
   if (scopes.length) {
-    return scopes.map((group) => {
+    return { scopes: scopes.map((group) => {
       const { limit, window } = group.windows[0]!;
       const usedPercent = usedPercentOf(limit);
       const fiveHour = group.windows.find((entry) => entry !== group.windows[0] && entry.window.minutes === 300);
@@ -82,7 +99,7 @@ function providerPeekScopes(backend: BackendSummary, now: number): ProviderPeekS
         ...(usedPercent === undefined ? {} : { usedPercent }),
         ...(fiveHour ? { fiveHour: fiveHour.limit } : {}),
       };
-    });
+    }), caps: providerPeekCaps(backend, visible, now) };
   }
   let fullest: ProviderPeekScope | undefined;
   for (const limit of visible) {
@@ -90,14 +107,34 @@ function providerPeekScopes(backend: BackendSummary, now: number): ProviderPeekS
     if (usedPercent === undefined || (fullest?.usedPercent ?? -1) >= usedPercent) continue;
     fullest = { scope: null, window: describeRateLimitRow(limit, now).label.replace(/ limit$/i, ""), limit, usedPercent };
   }
-  return fullest ? [fullest] : [];
+  // With no window to show, the fullest limit is the row, a cap included.
+  return { scopes: fullest ? [fullest] : [], caps: [] };
+}
+
+/**
+ * The provider's caps with no window that its latch shows: at 80% used, and
+ * until they fall below 60%. Steps each cap's latch with this reading.
+ */
+function providerPeekCaps(
+  backend: BackendSummary,
+  visible: readonly BackendRateLimitSummary[],
+  now: number,
+): ProviderPeekCap[] {
+  return visible.flatMap((limit) => {
+    if (!isIndividualRateLimit(limit)) return [];
+    const usedPercent = describeRateLimitRow(limit, now).usedPercent;
+    if (usedPercent === undefined) return [];
+    const shown = fiveHourLatches.observe(fiveHourLatchKey(backend.kind, limit), capLatchSample(usedPercent, limit.resetAt));
+    return shown ? [{ window: "Individual", limit, usedPercent }] : [];
+  });
 }
 
 /**
  * Each available provider with its allowances, fullest provider first. A
  * provider that reported no percentage sorts after every one that did, in
  * the panel's order, so the peek reads as "what runs out first". Scopes keep
- * the provider's own order.
+ * the provider's own order. Each call steps the caps' latches, so the first
+ * reading at 80% shows the cap.
  */
 export function providerPeekEntries(
   backends: readonly BackendSummary[],
@@ -106,12 +143,15 @@ export function providerPeekEntries(
   const entries = backends
     .filter((backend) => backend.available)
     .map((backend, order) => {
-      const scopes = providerPeekScopes(backend, now);
-      const percents = scopes.flatMap((scope) => scope.usedPercent === undefined ? [] : [scope.usedPercent]);
+      const { scopes, caps } = providerPeekScopes(backend, now);
+      const percents = [
+        ...caps.map((cap) => cap.usedPercent),
+        ...scopes.flatMap((scope) => scope.usedPercent === undefined ? [] : [scope.usedPercent]),
+      ];
       const usedPercent = percents.length ? Math.max(...percents) : undefined;
       return {
         order,
-        entry: { backend, scopes, ...(usedPercent === undefined ? {} : { usedPercent }) } satisfies ProviderPeekEntry,
+        entry: { backend, caps, scopes, ...(usedPercent === undefined ? {} : { usedPercent }) } satisfies ProviderPeekEntry,
       };
     });
   return entries
@@ -251,12 +291,27 @@ export function ProviderGaugePeekCard(props: {
       </div>
       {entries.length ? (
         <ul className="provider-peek__list">
-          {entries.map(({ backend, scopes }) => (
+          {entries.map(({ backend, caps, scopes }) => (
             <li key={backend.kind} className="provider-peek__provider">
               <span className="provider-peek__name">
                 <span aria-hidden="true" className="backend-status-list__dot" />
                 {backend.label}
               </span>
+              {/* The provider's own cap leads while at risk: it binds every scope. */}
+              {caps.length ? (
+                <div className="provider-peek__scope">
+                  {caps.map((cap) => (
+                    <PeekLimitRow
+                      key={cap.limit.name}
+                      window={cap.window}
+                      limit={cap.limit}
+                      now={now}
+                      account={pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "")}
+                      warning={cap.usedPercent >= 100}
+                    />
+                  ))}
+                </div>
+              ) : null}
               {scopes.length ? scopes.map((entry) => {
                 const account = pace?.accounts.get(usageLimitProviderForBackend(backend.kind) ?? "");
                 const fiveHour = entry.fiveHour
@@ -318,7 +373,7 @@ function PeekLimitRow(props: {
   limit: BackendRateLimitSummary;
   now: number;
   account: LimitAccount | undefined;
-  /** On pace to run out before the reset. */
+  /** Out, or on pace to run out before the reset. */
   warning?: boolean;
 }) {
   return (
